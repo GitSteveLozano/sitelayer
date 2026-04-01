@@ -52,7 +52,7 @@ export default function App() {
             projects={projects}
             loading={projLoading}
             onSelectProject={p => { setSelected(p.id); setView('project') }}
-            onNewTakeoff={() => navigate('takeoff')}
+            onNewProject={() => navigate('takeoff')}
           />
         )}
 
@@ -61,7 +61,7 @@ export default function App() {
             projects={projects}
             loading={projLoading}
             onSelectProject={p => { setSelected(p.id); setView('project') }}
-            onNewTakeoff={() => navigate('takeoff')}
+            onNewProject={() => navigate('takeoff')}
           />
         )}
 

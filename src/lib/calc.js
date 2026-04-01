@@ -18,7 +18,7 @@ export function calcProject(project, laborEntries = []) {
   const byItem = {}
   laborEntries.forEach(e => {
     if (!byItem[e.service_item]) byItem[e.service_item] = { hours: 0, sqft_done: 0 }
-    byItem[e.service_item].hours    += e.hours || 0
+    byItem[e.service_item].hours     += e.hours || 0
     byItem[e.service_item].sqft_done += e.sqft_done || 0
   })
 
@@ -29,7 +29,7 @@ export function calcProject(project, laborEntries = []) {
     rate:      d.hours > 0 ? d.sqft_done / d.hours : 0,
   }))
 
-  const avgSqftHr = rates.length
+  const avgSqftHr    = rates.length
     ? rates.reduce((s, r) => s + r.rate, 0) / rates.length : 0
 
   const targetSqftHr = project.target_sqft_per_hr || 0
@@ -39,15 +39,27 @@ export function calcProject(project, laborEntries = []) {
   const bonusFactor = Math.max(0, Math.min(1, 1 + speedDelta / 0.20))
   const bonusAmt    = (project.bonus_pool || 0) * bonusFactor
 
-  const sqftDone    = laborEntries.reduce((s, e) => s + (e.sqft_done || 0), 0)
-  const pctComplete = project.sqft > 0 ? Math.min(1, sqftDone / project.sqft) : 0
+  // Progress: use max sqft_done across all entries, capped at total sqft
+  // This handles cases where sqft_done > project.sqft (data entry error)
+  const totalSqftDone = laborEntries.reduce((s, e) => s + (e.sqft_done || 0), 0)
+  const sqftDone      = Math.min(totalSqftDone, project.sqft || 0)
+  const pctComplete   = (project.sqft || 0) > 0 ? sqftDone / project.sqft : 0
+
+  // At-risk: actPsf exceeds bid by more than threshold
+  const threshold = project.risk_threshold || 0.50
+  const isAtRisk  = psfVar !== null && psfVar > threshold
+
+  // Risk level for color coding
+  const riskLevel = !isAtRisk ? 'ok'
+    : psfVar > threshold * 2   ? 'critical'
+    : 'warning'
 
   return {
     laborHrs, laborCost, matCost, subCost, totalCost,
     bidTotal, actPsf, psfVar, margin,
     avgSqftHr, speedDelta, bonusFactor, bonusAmt,
-    pctComplete, sqftDone, byItem: rates,
-    isAtRisk: psfVar !== null && psfVar > (project.risk_threshold || 0.50),
+    pctComplete, sqftDone, totalSqftDone, byItem: rates,
+    isAtRisk, riskLevel, threshold,
   }
 }
 
