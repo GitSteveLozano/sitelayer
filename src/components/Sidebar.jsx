@@ -4,7 +4,6 @@ const NAV = [
   { id: 'dashboard', icon: '◉', label: 'Dashboard'     },
   { id: 'projects',  icon: '▤',  label: 'Projects'      },
   { id: 'time',      icon: '◷',  label: 'Time Tracking' },
-  { id: 'takeoff',   icon: '📐', label: 'New Project'    },
   { id: 'settings',  icon: '⚙', label: 'Settings'      },
 ]
 
@@ -26,7 +25,7 @@ export function Sidebar({ current, onChange, company, user, onSignOut }) {
           <div>
             <div style={{ fontSize: 14, fontWeight: 600, color: TH.text }}>SiteLayer</div>
             <div style={{ fontSize: 11, color: TH.muted, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 130 }}>
-              {company?.name || 'Loading...'}
+              {company?.name || '…'}
             </div>
           </div>
         </div>
@@ -59,13 +58,7 @@ export function Sidebar({ current, onChange, company, user, onSignOut }) {
         <div style={{ fontSize: 12, color: TH.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginBottom: 8 }}>
           {user?.email}
         </div>
-        <button
-          onClick={onSignOut}
-          style={{
-            fontSize: 12, color: TH.muted, background: 'none',
-            border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'inherit',
-          }}
-        >
+        <button onClick={onSignOut} style={{ fontSize: 12, color: TH.muted, background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontFamily: 'inherit' }}>
           Sign out
         </button>
       </div>

@@ -20,8 +20,8 @@ export default function App() {
   const [selectedId, setSelected]  = useState(null)
 
   const navigate = (v) => { setView(v); setSelected(null) }
+  const openNewProject = () => setView('takeoff')
 
-  // ── Full-page loading spinner ─────────────────────────────────────────────
   if (authLoading) {
     return (
       <div style={{ minHeight: '100vh', background: TH.bg, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -30,16 +30,15 @@ export default function App() {
     )
   }
 
-  // ── Not signed in ─────────────────────────────────────────────────────────
-  if (!user) {
-    return <Login onSignIn={signIn} />
-  }
+  if (!user) return <Login onSignIn={signIn} />
 
-  // ── Signed in ─────────────────────────────────────────────────────────────
+  // Dashboard and Projects both show the same view
+  const isDashboard = view === 'dashboard' || view === 'projects'
+
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: TH.bg, color: TH.text, fontFamily: 'system-ui, -apple-system, sans-serif' }}>
       <Sidebar
-        current={view === 'project' ? 'projects' : view}
+        current={['project', 'takeoff'].includes(view) ? 'projects' : view}
         onChange={navigate}
         company={company}
         user={user}
@@ -47,36 +46,27 @@ export default function App() {
       />
 
       <main style={{ flex: 1, overflowY: 'auto', minHeight: '100vh' }}>
-        {view === 'dashboard' && (
+        {isDashboard && (
           <Dashboard
             projects={projects}
             loading={projLoading}
             onSelectProject={p => { setSelected(p.id); setView('project') }}
-            onNewProject={() => navigate('takeoff')}
-          />
-        )}
-
-        {view === 'projects' && (
-          <Dashboard
-            projects={projects}
-            loading={projLoading}
-            onSelectProject={p => { setSelected(p.id); setView('project') }}
-            onNewProject={() => navigate('takeoff')}
+            onNewProject={openNewProject}
           />
         )}
 
         {view === 'project' && selectedId && (
           <ProjectDetail
             projectId={selectedId}
-            onBack={() => navigate('dashboard')}
+            onBack={() => navigate('projects')}
           />
         )}
 
         {view === 'takeoff' && (
           <NewTakeoff
             companyId={company?.id}
-            onBack={() => navigate('dashboard')}
-            onCreated={() => refresh()}
+            onBack={() => navigate('projects')}
+            onCreated={() => { refresh(); navigate('projects') }}
           />
         )}
 
