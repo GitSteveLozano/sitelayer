@@ -7,7 +7,7 @@ import { fmt } from '../lib/calc'
 const DIVISIONS     = ['EIFS', 'Stucco', 'Siding', 'Cultured Stone', 'Drywall', 'Other']
 const SERVICE_ITEMS = ['Air Barrier', 'EPS Foam', 'Scratch Coat', 'Finish Coat', 'Trim & Detail']
 
-const SCALE_CHECKS = [
+const BLUEPRINT_CHECKS = [
   {
     key:   'scale',
     title: 'Scale verified against floor plan dimensions',
@@ -15,7 +15,7 @@ const SCALE_CHECKS = [
   },
   {
     key:   'elevation',
-    title: 'Height confirmed from elevation drawings',
+    title: 'Building height confirmed from elevation drawings',
     desc:  'Confirm building height using the elevation view. Mismatched scale = wrong sqft.',
   },
   {
@@ -81,17 +81,17 @@ export function NewTakeoff({ companyId, onBack, onCreated }) {
         ← Dashboard
       </button>
       <h1 style={{ fontSize: 22, fontWeight: 500, color: TH.text, margin: 0, marginBottom: 4 }}>New Project</h1>
-      <div style={{ fontSize: 13, color: TH.muted, marginBottom: 28 }}>Enter project details and sqft measurements</div>
+      <div style={{ fontSize: 13, color: TH.muted, marginBottom: 28 }}>Enter project details and scope measurements</div>
 
       {/* Step bar */}
       <StepBar current={step} />
 
       <Card>
-        {/* ── Step 1: Job Details ── */}
+        {/* ── Step 1: Project Details ── */}
         {step === 1 && (
           <div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 20 }}>
-              <Input label="Job Name" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Riverdale Condos — Phase 1" />
+              <Input label="Project Name" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Riverdale Condos — Phase 1" />
               <Input label="Client Name" value={client} onChange={e => setClient(e.target.value)} placeholder="e.g. Riverdale Properties" />
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
                 <Select label="Division" value={division} onChange={e => setDivision(e.target.value)} options={DIVISIONS} />
@@ -104,22 +104,22 @@ export function NewTakeoff({ companyId, onBack, onCreated }) {
               </div>
             </div>
             <Btn disabled={!canStep1} onClick={() => setStep(2)} style={{ width: '100%' }}>
-              Continue to Scale Verification →
+              Continue →
             </Btn>
           </div>
         )}
 
-        {/* ── Step 2: Scale verification ── */}
+        {/* ── Step 2: Blueprint verification ── */}
         {step === 2 && (
           <div>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 6 }}>
               <span style={{ fontSize: 16, color: TH.amber }}>⚠</span>
-              <div style={{ fontSize: 15, fontWeight: 500, color: TH.amber }}>Scale verification required</div>
+              <div style={{ fontSize: 15, fontWeight: 500, color: TH.amber }}>Blueprint check — required</div>
             </div>
             <div style={{ fontSize: 13, color: TH.muted, marginBottom: 20, lineHeight: 1.7 }}>
-              All three items must be confirmed. A miscalibrated scale has caused 50%+ bidding errors on real jobs.
+              Confirm all three before entering measurements. A wrong scale means every number below is wrong.
             </div>
-            {SCALE_CHECKS.map(c => (
+            {BLUEPRINT_CHECKS.map(c => (
               <div
                 key={c.key}
                 onClick={() => setChecks(prev => ({ ...prev, [c.key]: !prev[c.key] }))}
@@ -148,18 +148,18 @@ export function NewTakeoff({ companyId, onBack, onCreated }) {
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
               <Btn variant="ghost" onClick={() => setStep(1)} style={{ flex: 1 }}>← Back</Btn>
               <Btn disabled={!allChecked} onClick={() => setStep(3)} style={{ flex: 2 }}>
-                {allChecked ? 'Verified — Continue →' : `${Object.values(checks).filter(Boolean).length}/3 confirmed`}
+                {allChecked ? 'Confirmed — Continue →' : `${Object.values(checks).filter(Boolean).length}/3 confirmed`}
               </Btn>
             </div>
           </div>
         )}
 
-        {/* ── Step 3: Measure ── */}
+        {/* ── Step 3: Scope measurements ── */}
         {step === 3 && (
           <div>
-            <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 4 }}>Enter sqft by scope</div>
+            <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 4 }}>Scope measurements</div>
             <div style={{ fontSize: 13, color: TH.muted, marginBottom: 18 }}>
-              Enter measured sqft for each service item from your blueprints.
+              Enter measured sqft for each scope item from your blueprints.
             </div>
             {SERVICE_ITEMS.map(item => (
               <div key={item} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
@@ -198,20 +198,20 @@ export function NewTakeoff({ companyId, onBack, onCreated }) {
         {/* ── Step 4: Review ── */}
         {step === 4 && (
           <div>
-            <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 4 }}>Review & Create Project</div>
+            <div style={{ fontSize: 15, fontWeight: 500, marginBottom: 4 }}>Review & Create</div>
             <div style={{ fontSize: 13, color: TH.muted, marginBottom: 18 }}>
-              Confirm the details before creating your project.
+              Confirm details before creating the project.
             </div>
             {[
-              ['Job Name',        name],
-              ['Client',          client || '—'],
-              ['Division',        division],
-              ['Total Sqft',      `${totalSqft.toLocaleString()} sqft`],
-              ['Bid $/sqft',      fmt.psf(parseFloat(bidPsf) || 0)],
-              ['Bid Total',       fmt.money(totalSqft * (parseFloat(bidPsf) || 0))],
-              ['Labor Rate',      `$${laborRate}/hr`],
-              ['Target sqft/hr',  targetSqHr || '—'],
-              ['Bonus Pool',      bonusPool ? fmt.money(parseFloat(bonusPool)) : '—'],
+              ['Project Name',  name],
+              ['Client',        client || '—'],
+              ['Division',      division],
+              ['Total Sqft',    `${totalSqft.toLocaleString()} sqft`],
+              ['Bid $/sqft',    fmt.psf(parseFloat(bidPsf) || 0)],
+              ['Bid Total',     fmt.money(totalSqft * (parseFloat(bidPsf) || 0))],
+              ['Labor Rate',    `$${laborRate}/hr`],
+              ['Target sqft/hr', targetSqHr || '—'],
+              ['Bonus Pool',    bonusPool ? fmt.money(parseFloat(bonusPool)) : '—'],
             ].map(([label, val]) => (
               <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: `1px solid ${TH.border}` }}>
                 <span style={{ fontSize: 13, color: TH.muted }}>{label}</span>
@@ -239,7 +239,12 @@ export function NewTakeoff({ companyId, onBack, onCreated }) {
 }
 
 function StepBar({ current }) {
-  const steps = [{ n: 1, l: 'Job Details' }, { n: 2, l: 'Verify Scale' }, { n: 3, l: 'Measure' }, { n: 4, l: 'Review' }]
+  const steps = [
+    { n: 1, l: 'Details'      },
+    { n: 2, l: 'Blueprints'   },
+    { n: 3, l: 'Measurements' },
+    { n: 4, l: 'Review'       },
+  ]
   return (
     <div style={{ display: 'flex', alignItems: 'center', marginBottom: 28 }}>
       {steps.map((s, i) => (
