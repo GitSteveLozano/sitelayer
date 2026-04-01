@@ -3,6 +3,8 @@ import { TH } from '../lib/theme'
 import { Card, Label, Btn, Spinner } from './Atoms'
 import { supabase } from '../lib/supabase'
 import { projects } from '../lib/db'
+import { lazy, Suspense } from 'react'
+const BlueprintCanvas = lazy(() => import('./BlueprintCanvas').then(m => ({ default: m.BlueprintCanvas })))
 
 // ─── PlanSwift CSV column mappings ────────────────────────────────────────────
 // PlanSwift exports different column names depending on version.
@@ -61,13 +63,38 @@ function parseCSV(text) {
 }
 
 export function Documents({ project, onUpdated }) {
-  const [uploading,   setUploading]   = useState(false)
-  const [csvParsed,   setCsvParsed]   = useState(null)
-  const [csvError,    setCsvError]    = useState(null)
-  const [csvApplying, setCsvApplying] = useState(false)
-  const [csvApplied,  setCsvApplied]  = useState(false)
-  const [pdfUrl,      setPdfUrl]      = useState(project.blueprint_url || null)
-  const [uploadError, setUploadError] = useState(null)
+  const [uploading,    setUploading]    = useState(false)
+  const [csvParsed,    setCsvParsed]    = useState(null)
+  const [csvError,     setCsvError]     = useState(null)
+  const [csvApplying,  setCsvApplying]  = useState(false)
+  const [csvApplied,   setCsvApplied]   = useState(false)
+  const [pdfUrl,       setPdfUrl]       = useState(project.blueprint_url || null)
+  const [uploadError,  setUploadError]  = useState(null)
+  const [showCanvas,   setShowCanvas]   = useState(false)
+
+  // ── Open blueprint canvas ───────────────────────────────────────────────────
+  if (showCanvas && pdfUrl) {
+    return (
+      <Suspense fallback={<div style={{ padding: 48, textAlign: 'center', color: TH.muted }}>Loading canvas…</div>}>
+      <BlueprintCanvas
+        project={project}
+        blueprintUrl={pdfUrl}
+        onBack={() => setShowCanvas(false)}
+        onMeasurementsApplied={async ({ summary, totalSqft }) => {
+          await projects.update(project.id, {
+            sqft:     Math.round(totalSqft),
+            metadata: {
+              ...(project.metadata || {}),
+              blueprint_measurements: { applied_at: new Date().toISOString(), summary, totalSqft },
+            }
+          })
+          setShowCanvas(false)
+          onUpdated?.()
+        }}
+      />
+      </Suspense>
+    )
+  }
 
   const pdfRef = useRef()
   const csvRef = useRef()
@@ -187,6 +214,12 @@ export function Documents({ project, onUpdated }) {
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
+                <Btn
+                  onClick={() => setShowCanvas(true)}
+                  style={{ fontSize: 11, padding: '6px 14px', background: TH.amber, color: '#000' }}
+                >
+                  ✏️ Measure
+                </Btn>
                 <Btn
                   variant="ghost"
                   onClick={() => window.open(pdfUrl, '_blank')}
