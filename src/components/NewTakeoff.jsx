@@ -80,8 +80,8 @@ export function NewTakeoff({ companyId, onBack, onCreated }) {
       <button onClick={onBack} style={{ fontSize: 13, color: TH.muted, cursor: 'pointer', marginBottom: 20, background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 5 }}>
         ← Dashboard
       </button>
-      <h1 style={{ fontSize: 22, fontWeight: 500, color: TH.text, margin: 0, marginBottom: 4 }}>New Takeoff</h1>
-      <div style={{ fontSize: 13, color: TH.muted, marginBottom: 28 }}>Create a project and capture sqft from blueprints</div>
+      <h1 style={{ fontSize: 22, fontWeight: 500, color: TH.text, margin: 0, marginBottom: 4 }}>New Project</h1>
+      <div style={{ fontSize: 13, color: TH.muted, marginBottom: 28 }}>Enter project details and sqft measurements</div>
 
       {/* Step bar */}
       <StepBar current={step} />

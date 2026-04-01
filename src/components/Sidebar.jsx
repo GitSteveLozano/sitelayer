@@ -4,7 +4,7 @@ const NAV = [
   { id: 'dashboard', icon: '◉', label: 'Dashboard'     },
   { id: 'projects',  icon: '▤',  label: 'Projects'      },
   { id: 'time',      icon: '◷',  label: 'Time Tracking' },
-  { id: 'takeoff',   icon: '📐', label: 'New Takeoff'   },
+  { id: 'takeoff',   icon: '📐', label: 'New Project'    },
   { id: 'settings',  icon: '⚙', label: 'Settings'      },
 ]
 

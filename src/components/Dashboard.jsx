@@ -33,7 +33,7 @@ export function Dashboard({ projects = [], loading, onSelectProject, onNewTakeof
             {active.length} active jobs · updated live
           </div>
         </div>
-        <Btn onClick={onNewTakeoff}>+ New Takeoff</Btn>
+        <Btn onClick={onNewTakeoff}>+ New Project</Btn>
       </div>
 
       {/* KPI bar */}
@@ -66,7 +66,7 @@ export function Dashboard({ projects = [], loading, onSelectProject, onNewTakeof
           <div style={{ fontSize: 14, color: TH.muted, marginBottom: 24 }}>
             Create your first project to start tracking job performance.
           </div>
-          <Btn onClick={onNewTakeoff}>+ New Takeoff</Btn>
+          <Btn onClick={onNewTakeoff}>+ New Project</Btn>
         </Card>
       ) : (
         <Card style={{ padding: 0, overflow: 'hidden' }}>
