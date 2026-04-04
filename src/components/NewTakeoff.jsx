@@ -3,9 +3,20 @@ import { TH } from '../lib/theme'
 import { Card, Label, Input, Select, Btn } from './Atoms'
 import { projects } from '../lib/db'
 import { fmt } from '../lib/calc'
+import { SCOPE_ITEMS } from './BlueprintCanvas'
 
-const DIVISIONS     = ['EIFS', 'Stucco', 'Siding', 'Cultured Stone', 'Drywall', 'Other']
-const SERVICE_ITEMS = ['Air Barrier', 'EPS Foam', 'Scratch Coat', 'Finish Coat', 'Trim & Detail']
+// L&A's 9 divisions — matches QBO class structure
+export const DIVISIONS = [
+  'D1-Stucco',
+  'D2-Masonry',
+  'D3-Siding',
+  'D4-EIFS',
+  'D5-Paper & Wire',
+  'D6-Snow Removal',
+  'D7-Warranty',
+  'D8-Overhead',
+  'D9-Scaffolding',
+]
 
 const BLUEPRINT_CHECKS = [
   {
@@ -33,7 +44,7 @@ export function NewTakeoff({ companyId, onBack, onCreated }) {
   // Step 1 fields
   const [name,       setName]       = useState('')
   const [client,     setClient]     = useState('')
-  const [division,   setDivision]   = useState('EIFS')
+  const [division,   setDivision]   = useState('D4-EIFS')
   const [bidPsf,     setBidPsf]     = useState('')
   const [laborRate,  setLaborRate]  = useState('38')
   const [targetSqHr, setTargetSqHr] = useState('')
@@ -44,7 +55,7 @@ export function NewTakeoff({ companyId, onBack, onCreated }) {
 
   // Step 3
   const [sqfts, setSqfts] = useState(
-    Object.fromEntries(SERVICE_ITEMS.map(i => [i, '']))
+    Object.fromEntries(SCOPE_ITEMS.map(s => [s.id, '']))
   )
 
   const totalSqft   = Object.values(sqfts).reduce((s, v) => s + (parseFloat(v) || 0), 0)
@@ -161,21 +172,25 @@ export function NewTakeoff({ companyId, onBack, onCreated }) {
             <div style={{ fontSize: 13, color: TH.muted, marginBottom: 18 }}>
               Enter measured sqft for each scope item from your blueprints.
             </div>
-            {SERVICE_ITEMS.map(item => (
-              <div key={item} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-                <div style={{ flex: 1, fontSize: 13, fontWeight: 500 }}>{item}</div>
+            {SCOPE_ITEMS.map(scope => (
+              <div key={scope.id} style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7, flex: 1 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: 2, background: scope.color, flexShrink: 0 }} />
+                  <span style={{ fontSize: 13, fontWeight: 500 }}>{scope.id}</span>
+                  <span style={{ fontSize: 10, color: TH.faint }}>{scope.div}</span>
+                </div>
                 <input
                   type="number"
-                  value={sqfts[item]}
-                  onChange={e => setSqfts(s => ({ ...s, [item]: e.target.value }))}
+                  value={sqfts[scope.id]}
+                  onChange={e => setSqfts(s => ({ ...s, [scope.id]: e.target.value }))}
                   placeholder="0"
                   style={{
-                    width: 100, background: TH.surf, border: `1px solid ${sqfts[item] ? TH.amber + '66' : TH.border}`,
+                    width: 90, background: TH.surf, border: `1px solid ${sqfts[scope.id] ? TH.amber + '66' : TH.border}`,
                     borderRadius: 5, padding: '8px 10px', color: TH.text, fontSize: 13,
                     fontFamily: 'inherit', textAlign: 'right', fontVariantNumeric: 'tabular-nums',
                   }}
                 />
-                <span style={{ fontSize: 12, color: TH.muted, width: 32 }}>sqft</span>
+                <span style={{ fontSize: 12, color: TH.muted, width: 32 }}>{scope.unit}</span>
               </div>
             ))}
             {totalSqft > 0 && (

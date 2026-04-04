@@ -9,13 +9,19 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url
 ).toString()
 
-// ─── Scope item config — matches L&A Stucco estimate line items ──────────────
+// ─── Scope items — synced from L&A QBO service items ─────────────────────────
+// Covers D1-Stucco, D2-Masonry, D4-EIFS, D5-Paper & Wire divisions
+// unit: sqft = area polygon | lf = linear feet polygon
 export const SCOPE_ITEMS = [
-  { id: 'Stucco',          color: '#f59e0b', unit: 'sqft', defaultRate: 4.50  },
-  { id: 'Cultured Stone',  color: '#8b5cf6', unit: 'sqft', defaultRate: 12.00 },
-  { id: 'Parging',         color: '#3b82f6', unit: 'sqft', defaultRate: 2.50  },
-  { id: 'Envelope Seal',   color: '#22c55e', unit: 'lf',   defaultRate: 75.00 },
-  { id: 'Trim & Flashing', color: '#ec4899', unit: 'sqft', defaultRate: 3.00  },
+  { id: 'EPS',             color: '#f59e0b', unit: 'sqft', defaultRate: 4.00,  div: 'EIFS'          },
+  { id: 'Basecoat',        color: '#fb923c', unit: 'sqft', defaultRate: 2.50,  div: 'EIFS'          },
+  { id: 'Finish Coat',     color: '#fbbf24', unit: 'sqft', defaultRate: 3.50,  div: 'EIFS/Stucco'   },
+  { id: 'Cultured Stone',  color: '#8b5cf6', unit: 'sqft', defaultRate: 12.00, div: 'Masonry'       },
+  { id: 'Air Barrier',     color: '#3b82f6', unit: 'sqft', defaultRate: 1.80,  div: 'Paper & Wire'  },
+  { id: 'Cementboard',     color: '#06b6d4', unit: 'sqft', defaultRate: 3.25,  div: 'Siding'        },
+  { id: 'Envelope Seal',   color: '#22c55e', unit: 'sqft', defaultRate: 2.00,  div: 'Paper & Wire'  },
+  { id: 'Caulking',        color: '#ec4899', unit: 'lf',   defaultRate: 4.50,  div: 'All'           },
+  { id: 'Flashing',        color: '#f43f5e', unit: 'lf',   defaultRate: 8.00,  div: 'All'           },
 ]
 
 // ─── Shoelace formula: polygon area in px² ───────────────────────────────────

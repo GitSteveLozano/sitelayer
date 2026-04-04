@@ -21,13 +21,16 @@ export const TH = {
   red:     '#ef4444',
   redLo:   '#ef444418',
 
-  // Division colors
+  // Division colors — matches L&A QBO class structure
   divColors: {
-    'EIFS':           '#f59e0b',
-    'Stucco':         '#3b82f6',
-    'Siding':         '#8b5cf6',
-    'Cultured Stone': '#ec4899',
-    'Drywall':        '#14b8a6',
-    'Other':          '#6b7280',
+    'D1-Stucco':      '#3b82f6',
+    'D2-Masonry':     '#8b5cf6',
+    'D3-Siding':      '#06b6d4',
+    'D4-EIFS':        '#f59e0b',
+    'D5-Paper & Wire':'#22c55e',
+    'D6-Snow Removal':'#94a3b8',
+    'D7-Warranty':    '#f97316',
+    'D8-Overhead':    '#6b7280',
+    'D9-Scaffolding': '#ec4899',
   }
 }
