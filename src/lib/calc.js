@@ -33,11 +33,23 @@ export function calcProject(project, laborEntries = []) {
     ? rates.reduce((s, r) => s + r.rate, 0) / rates.length : 0
 
   const targetSqftHr = project.target_sqft_per_hr || 0
-  const speedDelta   = targetSqftHr > 0
-    ? (avgSqftHr - targetSqftHr) / targetSqftHr : 0
 
-  const bonusFactor = Math.max(0, Math.min(1, 1 + speedDelta / 0.20))
-  const bonusAmt    = (project.bonus_pool || 0) * bonusFactor
+  // ── Bonus: L&A sliding scale (% over labor budget) ───────────────────────
+  // bonus_pool = bid_revenue × 2% (auto if not set)
+  // Factor:  ≤4% over → 100% | 5–9% → 75% | 10–14% → 50% | 15–19% → 25% | ≥20% → 0
+  const autoPool    = bidTotal * 0.02
+  const bonusPool   = (project.bonus_pool || 0) > 0 ? project.bonus_pool : autoPool
+  const laborBudget = project.labor_budget || (targetSqftHr > 0 && project.sqft > 0
+    ? (project.sqft / targetSqftHr) * (project.labor_rate || 38)
+    : 0)
+  const laborPctOver = laborBudget > 0 ? (laborCost - laborBudget) / laborBudget : 0
+  const bonusFactor = laborBudget === 0 ? 0
+    : laborPctOver <= 0.04 ? 1.00
+    : laborPctOver <= 0.09 ? 0.75
+    : laborPctOver <= 0.14 ? 0.50
+    : laborPctOver <= 0.19 ? 0.25
+    : 0
+  const bonusAmt    = bonusPool * bonusFactor
 
   // Progress: use max sqft_done across all entries, capped at total sqft
   // This handles cases where sqft_done > project.sqft (data entry error)
@@ -57,7 +69,8 @@ export function calcProject(project, laborEntries = []) {
   return {
     laborHrs, laborCost, matCost, subCost, totalCost,
     bidTotal, actPsf, psfVar, margin,
-    avgSqftHr, speedDelta, bonusFactor, bonusAmt,
+    avgSqftHr, bonusFactor, bonusAmt, bonusPool,
+    laborBudget, laborPctOver,
     pctComplete, sqftDone, totalSqftDone, byItem: rates,
     isAtRisk, riskLevel, threshold,
   }

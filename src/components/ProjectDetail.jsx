@@ -11,6 +11,27 @@ const TABS = [
   { id: 'documents',  label: 'Documents'   },
 ]
 
+function CrewBonusStats({ m, p, TH }) {
+  const budgetHrs = m.laborBudget > 0 ? Math.round(m.laborBudget / (p.labor_rate || 38)) : null
+  const pctOver   = m.laborBudget > 0 ? ((m.laborPctOver || 0) * 100).toFixed(1) + '%' : '—'
+  const overColor = (m.laborPctOver || 0) <= 0.04 ? TH.green : (m.laborPctOver || 0) <= 0.14 ? TH.amber : TH.red
+  const stats = [
+    { label: 'Budget hrs', value: budgetHrs ? budgetHrs.toLocaleString() + 'h' : '—', color: TH.muted },
+    { label: 'Actual hrs', value: Math.round(m.laborHrs).toLocaleString() + 'h',        color: overColor },
+    { label: '% Over',     value: pctOver,                                                color: overColor },
+  ]
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 12 }}>
+      {stats.map(s => (
+        <div key={s.label} style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 10, textTransform: 'uppercase', color: TH.muted, marginBottom: 3 }}>{s.label}</div>
+          <div style={{ fontSize: 20, fontWeight: 500, color: s.color }}>{s.value}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function ProjectDetail({ projectId, company, onBack }) {
   const { project: p, entries, loading, refresh } = useProject(projectId)
   const [tab, setTab] = useState('overview')
@@ -178,26 +199,37 @@ export function ProjectDetail({ projectId, company, onBack }) {
                 )}
               </Card>
 
-              {/* Bonus tracker */}
+              {/* Bonus tracker — L&A sliding scale */}
               {(p.target_sqft_per_hr || 0) > 0 && (
                 <Card>
-                  <Label>Crew Performance</Label>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14 }}>
+                  <Label>Crew Bonus</Label>
+                  <CrewBonusStats m={m} p={p} TH={TH} />
+                  {/* Sliding scale tiers */}
+                  <div style={{ display: 'flex', gap: 3, marginBottom: 8 }}>
                     {[
-                      { label: 'Target',      value: `${(p.target_sqft_per_hr || 0).toFixed(2)}`, sub: 'sqft/hr', color: TH.muted  },
-                      { label: 'Actual',      value: `${(m.avgSqftHr || 0).toFixed(2)}`,          sub: 'sqft/hr', color: (m.avgSqftHr || 0) >= (p.target_sqft_per_hr || 0) ? TH.green : TH.amber },
-                      { label: 'Eligibility', value: fmt.pct(m.bonusFactor || 0),                 sub: '',        color: (m.bonusFactor || 0) >= 0.8 ? TH.green : (m.bonusFactor || 0) >= 0.5 ? TH.amber : TH.red },
-                    ].map(s => (
-                      <div key={s.label} style={{ textAlign: 'center' }}>
-                        <div style={{ fontSize: 10, textTransform: 'uppercase', color: TH.muted, marginBottom: 3 }}>{s.label}</div>
-                        <div style={{ fontSize: 22, fontWeight: 500, color: s.color }}>{s.value}</div>
-                        {s.sub && <div style={{ fontSize: 10, color: TH.muted }}>{s.sub}</div>}
+                      { label: '≤4%', factor: 1.00, active: m.laborPctOver <= 0.04, color: TH.green },
+                      { label: '5–9%', factor: 0.75, active: m.laborPctOver > 0.04 && m.laborPctOver <= 0.09, color: TH.amber },
+                      { label: '10–14%', factor: 0.50, active: m.laborPctOver > 0.09 && m.laborPctOver <= 0.14, color: TH.amber },
+                      { label: '15–19%', factor: 0.25, active: m.laborPctOver > 0.14 && m.laborPctOver <= 0.19, color: TH.red },
+                      { label: '>20%', factor: 0.00, active: m.laborPctOver > 0.19, color: TH.red },
+                    ].map(tier => (
+                      <div key={tier.label} style={{
+                        flex: 1, textAlign: 'center', padding: '5px 2px', borderRadius: 4,
+                        background: tier.active ? tier.color + '33' : TH.surf,
+                        border: `1px solid ${tier.active ? tier.color : TH.border}`,
+                        fontSize: 9,
+                      }}>
+                        <div style={{ color: tier.active ? tier.color : TH.faint, fontWeight: tier.active ? 700 : 400 }}>{tier.label}</div>
+                        <div style={{ color: tier.active ? tier.color : TH.faint, marginTop: 2 }}>{(tier.factor * 100).toFixed(0)}%</div>
                       </div>
                     ))}
                   </div>
-                  <Bar value={m.bonusFactor || 0} color={(m.bonusFactor || 0) >= 0.8 ? TH.green : (m.bonusFactor || 0) >= 0.5 ? TH.amber : TH.red} h={5} />
-                  <div style={{ fontSize: 11, color: TH.muted, marginTop: 7 }}>
-                    Bonus pool: {fmt.money(m.bonusAmt || 0)} / {fmt.money(p.bonus_pool || 0)}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginTop: 4 }}>
+                    <span style={{ color: TH.muted }}>Bonus payable</span>
+                    <span style={{ fontWeight: 700, color: (m.bonusFactor || 0) > 0 ? TH.green : TH.faint }}>
+                      {fmt.money(m.bonusAmt || 0)}
+                      <span style={{ fontWeight: 400, color: TH.faint }}> / {fmt.money(m.bonusPool || 0)}</span>
+                    </span>
                   </div>
                 </Card>
               )}
