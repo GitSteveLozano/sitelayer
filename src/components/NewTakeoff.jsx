@@ -4,6 +4,7 @@ import { Card, Label, Input, Select, Btn } from './Atoms'
 import { projects } from '../lib/db'
 import { fmt } from '../lib/calc'
 import { SCOPE_ITEMS } from './BlueprintCanvas'
+import { useIsMobile } from '../hooks/useIsMobile'
 
 // L&A's 9 divisions — matches QBO class structure
 export const DIVISIONS = [
@@ -37,6 +38,7 @@ const BLUEPRINT_CHECKS = [
 ]
 
 export function NewTakeoff({ companyId, onBack, onCreated }) {
+  const isMobile = useIsMobile()
   const [step,     setStep]     = useState(1)
   const [saving,   setSaving]   = useState(false)
   const [error,    setError]    = useState(null)
@@ -87,7 +89,7 @@ export function NewTakeoff({ companyId, onBack, onCreated }) {
   }
 
   return (
-    <div style={{ padding: '32px 36px', maxWidth: 640 }}>
+    <div style={{ padding: isMobile ? '16px 14px' : '32px 36px', maxWidth: 640 }}>
       <button onClick={onBack} style={{ fontSize: 13, color: TH.muted, cursor: 'pointer', marginBottom: 20, background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 5 }}>
         ← Dashboard
       </button>
@@ -104,11 +106,11 @@ export function NewTakeoff({ companyId, onBack, onCreated }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 20 }}>
               <Input label="Project Name" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Riverdale Condos — Phase 1" />
               <Input label="Client Name" value={client} onChange={e => setClient(e.target.value)} placeholder="e.g. Riverdale Properties" />
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12 }}>
                 <Select label="Division" value={division} onChange={e => setDivision(e.target.value)} options={DIVISIONS} />
                 <Input label="Bid $/sqft" value={bidPsf} onChange={e => setBidPsf(e.target.value)} type="number" placeholder="13.50" />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '1fr 1fr 1fr', gap: 12 }}>
                 <Input label="Labor Rate ($/hr)" value={laborRate} onChange={e => setLaborRate(e.target.value)} type="number" placeholder="38" />
                 <Input label="Target sqft/hr" value={targetSqHr} onChange={e => setTargetSqHr(e.target.value)} type="number" placeholder="4.73" />
                 <Input label="Bonus Pool ($)" value={bonusPool} onChange={e => setBonusPool(e.target.value)} type="number" placeholder="5000" />

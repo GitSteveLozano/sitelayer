@@ -4,6 +4,7 @@ import { fmt } from '../lib/calc'
 import { Card, Badge, StatusDot, Bar, Label, Btn, Spinner } from './Atoms'
 import { Documents } from './Documents'
 import { useProject } from '../hooks/useProjects'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { projects } from '../lib/db'
 
 const TABS = [
@@ -35,6 +36,7 @@ function CrewBonusStats({ m, p, TH }) {
 export function ProjectDetail({ projectId, company, onBack }) {
   const { project: p, entries, loading, refresh } = useProject(projectId)
   const [tab, setTab] = useState('overview')
+  const isMobile = useIsMobile()
 
   if (loading) {
     return (
@@ -58,7 +60,7 @@ export function ProjectDetail({ projectId, company, onBack }) {
   }
 
   return (
-    <div style={{ padding: '32px 36px', maxWidth: 980 }}>
+    <div style={{ padding: isMobile ? '16px 14px' : '32px 36px', maxWidth: 980 }}>
       <button onClick={onBack} style={{ fontSize: 13, color: TH.muted, cursor: 'pointer', marginBottom: 20, background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 5 }}>
         ← All Projects
       </button>
@@ -148,7 +150,7 @@ export function ProjectDetail({ projectId, company, onBack }) {
             </Card>
           )}
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 12 }}>
             {/* Labor by item */}
             <Card>
               <Label>Labor by Scope Item</Label>

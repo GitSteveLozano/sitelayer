@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { TH } from './lib/theme'
 import { useAuth } from './hooks/useAuth'
 import { useProjects } from './hooks/useProjects'
+import { useIsMobile } from './hooks/useIsMobile'
 
 import { Login }         from './components/Login'
 import { Sidebar }       from './components/Sidebar'
@@ -19,6 +20,7 @@ export default function App() {
   const [view,       setView]      = useState('dashboard')
   const [selectedId, setSelected]  = useState(null)
 
+  const isMobile = useIsMobile()
   const navigate = (v) => { setView(v); setSelected(null) }
   const openNewProject = () => setView('takeoff')
 
@@ -45,7 +47,7 @@ export default function App() {
         onSignOut={signOut}
       />
 
-      <main style={{ flex: 1, overflowY: 'auto', minHeight: '100vh' }}>
+      <main style={{ flex: 1, overflowY: 'auto', minHeight: '100vh', paddingBottom: isMobile ? 68 : 0 }}>
         {isDashboard && (
           <Dashboard
             projects={projects}
