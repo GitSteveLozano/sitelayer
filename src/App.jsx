@@ -58,6 +58,7 @@ export default function App() {
         {view === 'project' && selectedId && (
           <ProjectDetail
             projectId={selectedId}
+            company={company}
             onBack={() => navigate('projects')}
           />
         )}

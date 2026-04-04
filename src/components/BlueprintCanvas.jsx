@@ -9,13 +9,13 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   import.meta.url
 ).toString()
 
-// ─── Scope item config ────────────────────────────────────────────────────────
-const SCOPE_ITEMS = [
-  { id: 'Air Barrier',   color: '#3b82f6' },
-  { id: 'EPS Foam',      color: '#f59e0b' },
-  { id: 'Scratch Coat',  color: '#8b5cf6' },
-  { id: 'Finish Coat',   color: '#22c55e' },
-  { id: 'Trim & Detail', color: '#ec4899' },
+// ─── Scope item config — matches L&A Stucco estimate line items ──────────────
+export const SCOPE_ITEMS = [
+  { id: 'Stucco',          color: '#f59e0b', unit: 'sqft', defaultRate: 4.50  },
+  { id: 'Cultured Stone',  color: '#8b5cf6', unit: 'sqft', defaultRate: 12.00 },
+  { id: 'Parging',         color: '#3b82f6', unit: 'sqft', defaultRate: 2.50  },
+  { id: 'Envelope Seal',   color: '#22c55e', unit: 'lf',   defaultRate: 75.00 },
+  { id: 'Trim & Flashing', color: '#ec4899', unit: 'sqft', defaultRate: 3.00  },
 ]
 
 // ─── Shoelace formula: polygon area in px² ───────────────────────────────────
@@ -36,7 +36,7 @@ function pxToSqft(pxArea, pxPerFt) {
   return pxArea / (pxPerFt * pxPerFt)
 }
 
-export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, onBack }) {
+export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, onBack, rates = {} }) {
   const containerRef  = useRef(null)
   const canvasRef     = useRef(null)
   const fabricRef     = useRef(null)
@@ -182,8 +182,21 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
 
   const totalSqft = Object.values(summary).reduce((s, v) => s + v, 0)
 
+  // ── Estimate line items ──────────────────────────────────────────────────────
+  const estimate = SCOPE_ITEMS
+    .filter(s => summary[s.id] > 0)
+    .map(s => {
+      const qty      = summary[s.id] || 0
+      const rate     = rates[s.id] ?? s.defaultRate
+      const amount   = Math.round(qty * rate * 100) / 100
+      return { item: s.id, qty: Math.round(qty * 10) / 10, unit: s.unit, rate, amount }
+    })
+  const subtotal = estimate.reduce((s, l) => s + l.amount, 0)
+  const gst      = Math.round(subtotal * 0.05 * 100) / 100
+  const total    = subtotal + gst
+
   function handleApply() {
-    onMeasurementsApplied?.({ summary, totalSqft, polygonCount: polygons.length })
+    onMeasurementsApplied?.({ summary, totalSqft, polygonCount: polygons.length, estimate, subtotal, gst, total })
   }
 
   // ── Render helpers ───────────────────────────────────────────────────────────
@@ -448,61 +461,106 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
           <div style={{ fontSize: 11, color: TH.muted, marginTop: 2 }}>Blueprint measurements</div>
         </div>
 
-        {/* Scope summary */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '12px 18px' }}>
+        {/* Scope summary with individual polygons */}
+        <div style={{ overflowY: 'auto', padding: '12px 18px', borderBottom: `1px solid ${TH.border}` }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: TH.muted, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+            Measurements
+          </div>
           {SCOPE_ITEMS.map(scope => {
-            const sqft     = summary[scope.id] || 0
-            const myPolys  = polygons.filter(p => p.scope === scope.id)
+            const qty     = summary[scope.id] || 0
+            const myPolys = polygons.filter(p => p.scope === scope.id)
             return (
-              <div key={scope.id} style={{ marginBottom: 14 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <div key={scope.id} style={{ marginBottom: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <div style={{ width: 10, height: 10, borderRadius: 2, background: scope.color }} />
+                    <div style={{ width: 9, height: 9, borderRadius: 2, background: scope.color }} />
                     <span style={{ fontSize: 12, fontWeight: 500 }}>{scope.id}</span>
                   </div>
-                  <span style={{ fontSize: 13, fontVariantNumeric: 'tabular-nums', color: sqft > 0 ? TH.text : TH.faint }}>
-                    {sqft > 0 ? `${sqft.toLocaleString()} sqft` : '—'}
+                  <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums', color: qty > 0 ? TH.text : TH.faint }}>
+                    {qty > 0 ? `${qty.toLocaleString()} ${scope.unit}` : '—'}
                   </span>
                 </div>
-                {myPolys.length > 0 && (
-                  <div style={{ paddingLeft: 16 }}>
-                    {myPolys.map(poly => (
-                      <div key={poly.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0' }}>
-                        <span style={{ fontSize: 11, color: TH.muted }}>
-                          Polygon {myPolys.indexOf(poly) + 1} · p{poly.page}
-                        </span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                          <span style={{ fontSize: 11, color: TH.muted, fontVariantNumeric: 'tabular-nums' }}>{poly.sqft}</span>
-                          <button
-                            onClick={() => deletePolygon(poly.id)}
-                            style={{ fontSize: 10, color: TH.faint, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px' }}
-                          >
-                            ×
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                {myPolys.map(poly => (
+                  <div key={poly.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '2px 0 2px 16px' }}>
+                    <span style={{ fontSize: 10, color: TH.muted }}>Zone {myPolys.indexOf(poly) + 1} · p{poly.page}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <span style={{ fontSize: 10, color: TH.muted }}>{poly.sqft}</span>
+                      <button onClick={() => deletePolygon(poly.id)}
+                        style={{ fontSize: 10, color: TH.faint, background: 'none', border: 'none', cursor: 'pointer', lineHeight: 1 }}>×</button>
+                    </div>
                   </div>
-                )}
+                ))}
               </div>
             )
           })}
         </div>
 
-        {/* Total + apply */}
-        <div style={{ padding: '14px 18px', borderTop: `1px solid ${TH.border}` }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 14 }}>
-            <span style={{ fontSize: 14, fontWeight: 600 }}>Total</span>
-            <span style={{ fontSize: 18, fontWeight: 600, color: TH.amber, fontVariantNumeric: 'tabular-nums' }}>
-              {totalSqft > 0 ? `${Math.round(totalSqft).toLocaleString()} sqft` : '—'}
-            </span>
+        {/* Estimate preview */}
+        <div style={{ overflowY: 'auto', padding: '12px 18px', flex: 1 }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: TH.muted, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
+            Estimate Preview
           </div>
+          {estimate.length === 0 ? (
+            <div style={{ fontSize: 12, color: TH.faint }}>Draw zones to generate estimate</div>
+          ) : (
+            <>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${TH.border}` }}>
+                    <th style={{ textAlign: 'left', color: TH.muted, fontWeight: 600, padding: '4px 0', fontSize: 10 }}>Item</th>
+                    <th style={{ textAlign: 'right', color: TH.muted, fontWeight: 600, padding: '4px 0', fontSize: 10 }}>Qty</th>
+                    <th style={{ textAlign: 'right', color: TH.muted, fontWeight: 600, padding: '4px 0', fontSize: 10 }}>Rate</th>
+                    <th style={{ textAlign: 'right', color: TH.muted, fontWeight: 600, padding: '4px 0', fontSize: 10 }}>Amt</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {estimate.map(line => (
+                    <tr key={line.item} style={{ borderBottom: `1px solid ${TH.border}22` }}>
+                      <td style={{ padding: '5px 0', color: TH.text }}>{line.item}</td>
+                      <td style={{ textAlign: 'right', padding: '5px 0', color: TH.muted, fontVariantNumeric: 'tabular-nums' }}>
+                        {line.qty.toLocaleString()} {line.unit}
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '5px 0', color: TH.muted, fontVariantNumeric: 'tabular-nums' }}>
+                        ${line.rate.toFixed(2)}
+                      </td>
+                      <td style={{ textAlign: 'right', padding: '5px 0', fontVariantNumeric: 'tabular-nums', color: TH.amber }}>
+                        ${line.amount.toLocaleString('en', { minimumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <div style={{ marginTop: 10, borderTop: `1px solid ${TH.border}`, paddingTop: 8 }}>
+                {[
+                  { label: 'Subtotal', value: subtotal },
+                  { label: 'GST (5%)', value: gst },
+                ].map(r => (
+                  <div key={r.label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+                    <span style={{ color: TH.muted }}>{r.label}</span>
+                    <span style={{ fontVariantNumeric: 'tabular-nums', color: TH.muted }}>
+                      ${r.value.toLocaleString('en', { minimumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700, marginTop: 6 }}>
+                  <span>Total</span>
+                  <span style={{ color: TH.amber, fontVariantNumeric: 'tabular-nums' }}>
+                    ${total.toLocaleString('en', { minimumFractionDigits: 2 })}
+                  </span>
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Apply + back */}
+        <div style={{ padding: '14px 18px', borderTop: `1px solid ${TH.border}` }}>
           <Btn
             onClick={handleApply}
             disabled={totalSqft === 0}
             style={{ width: '100%', background: TH.green, color: '#000', marginBottom: 8 }}
           >
-            Apply to Project →
+            Generate Estimate →
           </Btn>
           <Btn variant="ghost" onClick={onBack} style={{ width: '100%', fontSize: 12 }}>
             ← Back to Project

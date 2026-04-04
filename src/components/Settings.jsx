@@ -3,6 +3,7 @@ import { TH } from '../lib/theme'
 import { Card, Label, Input, Btn } from './Atoms'
 import { companies, integrations } from '../lib/db'
 import { supabase } from '../lib/supabase'
+import { SCOPE_ITEMS } from './BlueprintCanvas'
 
 export function Settings({ company, onUpdated }) {
   const [name,      setName]      = useState(company?.name || '')
@@ -10,6 +11,24 @@ export function Settings({ company, onUpdated }) {
   const [saved,     setSaved]     = useState(false)
   const [error,     setError]     = useState(null)
   const [qboStatus, setQboStatus] = useState('loading')
+
+  // ── Pricing rates ────────────────────────────────────────────────────────────
+  const existingRates = company?.metadata?.rates || {}
+  const [rates, setRates] = useState(
+    Object.fromEntries(SCOPE_ITEMS.map(s => [s.id, existingRates[s.id] ?? s.defaultRate]))
+  )
+  const [ratesSaved, setRatesSaved] = useState(false)
+
+  async function handleSaveRates() {
+    setSaving(true)
+    await companies.update(company.id, {
+      metadata: { ...(company.metadata || {}), rates }
+    })
+    setSaving(false)
+    setRatesSaved(true)
+    setTimeout(() => setRatesSaved(false), 3000)
+    onUpdated?.()
+  }
 
   useEffect(() => {
     if (!company?.id) return
@@ -81,6 +100,55 @@ export function Settings({ company, onUpdated }) {
           {saved && <div style={{ fontSize: 12, color: TH.green }}>✓ Saved</div>}
           <Btn type="submit" disabled={saving || !name.trim()}>{saving ? 'Saving…' : 'Save'}</Btn>
         </form>
+      </Card>
+
+      {/* Pricing rates */}
+      <Card style={{ marginBottom: 14 }}>
+        <Label>Pricing Rates</Label>
+        <div style={{ fontSize: 12, color: TH.muted, marginBottom: 14 }}>
+          Unit prices used to generate estimates from blueprint measurements.
+        </div>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ borderBottom: `1px solid ${TH.border}` }}>
+              <th style={{ textAlign: 'left', color: TH.muted, fontWeight: 600, padding: '6px 0', fontSize: 11 }}>Scope Item</th>
+              <th style={{ textAlign: 'right', color: TH.muted, fontWeight: 600, padding: '6px 0', fontSize: 11 }}>Unit</th>
+              <th style={{ textAlign: 'right', color: TH.muted, fontWeight: 600, padding: '6px 8px', fontSize: 11 }}>Rate ($/unit)</th>
+            </tr>
+          </thead>
+          <tbody>
+            {SCOPE_ITEMS.map(s => (
+              <tr key={s.id} style={{ borderBottom: `1px solid ${TH.border}22` }}>
+                <td style={{ padding: '8px 0', color: TH.text, display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <div style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0 }} />
+                  {s.id}
+                </td>
+                <td style={{ textAlign: 'right', padding: '8px 0', color: TH.muted, fontSize: 12 }}>{s.unit}</td>
+                <td style={{ textAlign: 'right', padding: '8px 0 8px 8px' }}>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.25"
+                    value={rates[s.id]}
+                    onChange={e => setRates(r => ({ ...r, [s.id]: parseFloat(e.target.value) || 0 }))}
+                    style={{
+                      width: 80, textAlign: 'right',
+                      background: TH.surf, border: `1px solid ${TH.border}`,
+                      borderRadius: 5, padding: '5px 8px',
+                      color: TH.text, fontSize: 13, fontFamily: 'inherit',
+                    }}
+                  />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Btn onClick={handleSaveRates} disabled={saving} style={{ fontSize: 12 }}>
+            {saving ? 'Saving…' : 'Save Rates'}
+          </Btn>
+          {ratesSaved && <span style={{ fontSize: 12, color: TH.green }}>✓ Rates saved</span>}
+        </div>
       </Card>
 
       {/* QBO integration */}

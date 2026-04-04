@@ -4,17 +4,24 @@ import { TH } from '../lib/theme'
 import { Card, Label, Btn, Spinner } from './Atoms'
 import { supabase } from '../lib/supabase'
 import { projects } from '../lib/db'
+import { generateEstimatePDF } from '../lib/generateEstimate'
 
 const BlueprintCanvas = lazy(() =>
   import('./BlueprintCanvas').then(m => ({ default: m.BlueprintCanvas }))
 )
 
-export function Documents({ project, onUpdated }) {
-  const [uploading,   setUploading]   = useState(false)
-  const [uploadError, setUploadError] = useState(null)
-  const [pdfUrl,      setPdfUrl]      = useState(project.blueprint_url || null)
-  const [showCanvas,  setShowCanvas]  = useState(false)
-  const [applied,     setApplied]     = useState(false)
+export function Documents({ project, company, onUpdated }) {
+  const [uploading,    setUploading]    = useState(false)
+  const [uploadError,  setUploadError]  = useState(null)
+  const [pdfUrl,       setPdfUrl]       = useState(project.blueprint_url || null)
+  const [showCanvas,   setShowCanvas]   = useState(false)
+  const [applied,      setApplied]      = useState(false)
+  const [estimateData, setEstimateData] = useState(
+    project.metadata?.blueprint_measurements || null
+  )
+
+  // Get saved rates from company settings
+  const rates = company?.metadata?.rates || {}
 
   const inputRef = useState(null)
 
@@ -29,19 +36,23 @@ export function Documents({ project, onUpdated }) {
         <BlueprintCanvas
           project={project}
           blueprintUrl={pdfUrl}
+          rates={rates}
           onBack={() => setShowCanvas(false)}
-          onMeasurementsApplied={async ({ summary, totalSqft }) => {
+          onMeasurementsApplied={async ({ summary, totalSqft, estimate, subtotal, gst, total }) => {
+            const measurements = {
+              applied_at: new Date().toISOString(),
+              summary,
+              totalSqft,
+              estimate,
+              subtotal,
+              gst,
+              total,
+            }
             await projects.update(project.id, {
               sqft:     Math.round(totalSqft),
-              metadata: {
-                ...(project.metadata || {}),
-                blueprint_measurements: {
-                  applied_at: new Date().toISOString(),
-                  summary,
-                  totalSqft,
-                },
-              },
+              metadata: { ...(project.metadata || {}), blueprint_measurements: measurements },
             })
+            setEstimateData(measurements)
             setShowCanvas(false)
             setApplied(true)
             onUpdated?.()
@@ -160,23 +171,69 @@ export function Documents({ project, onUpdated }) {
               </label>
             </div>
 
-            {/* Measurement summary if applied */}
-            {project.metadata?.blueprint_measurements?.summary && (
+            {/* Estimate summary + download */}
+            {estimateData?.estimate?.length > 0 && (
               <div style={{ marginTop: 20 }}>
-                <Label>Last Measurement</Label>
-                {Object.entries(project.metadata.blueprint_measurements.summary).map(([item, sqft]) => (
-                  <div key={item} style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: `1px solid ${TH.border}`, fontSize: 13 }}>
-                    <span style={{ color: TH.muted }}>{item}</span>
-                    <span style={{ fontVariantNumeric: 'tabular-nums', color: TH.amber }}>
-                      {Math.round(sqft).toLocaleString()} sqft
-                    </span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <Label style={{ margin: 0 }}>Generated Estimate</Label>
+                  <Btn
+                    onClick={() => {
+                      const doc = generateEstimatePDF({
+                        company,
+                        project,
+                        estimate:  estimateData.estimate,
+                        subtotal:  estimateData.subtotal,
+                        gst:       estimateData.gst,
+                        total:     estimateData.total,
+                      })
+                      doc.save(`${project.name || 'estimate'}-quote.pdf`)
+                    }}
+                    style={{ fontSize: 11, padding: '6px 14px', background: TH.amber, color: '#000' }}
+                  >
+                    ⬇ Download PDF
+                  </Btn>
+                </div>
+
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ borderBottom: `1px solid ${TH.border}` }}>
+                      <th style={{ textAlign: 'left', color: TH.muted, fontWeight: 600, padding: '5px 0', fontSize: 10, textTransform: 'uppercase' }}>Item</th>
+                      <th style={{ textAlign: 'right', color: TH.muted, fontWeight: 600, padding: '5px 0', fontSize: 10 }}>Qty</th>
+                      <th style={{ textAlign: 'right', color: TH.muted, fontWeight: 600, padding: '5px 0', fontSize: 10 }}>Rate</th>
+                      <th style={{ textAlign: 'right', color: TH.muted, fontWeight: 600, padding: '5px 0', fontSize: 10 }}>Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {estimateData.estimate.map(line => (
+                      <tr key={line.item} style={{ borderBottom: `1px solid ${TH.border}22` }}>
+                        <td style={{ padding: '6px 0', color: TH.text }}>{line.item}</td>
+                        <td style={{ textAlign: 'right', color: TH.muted, fontVariantNumeric: 'tabular-nums', fontSize: 11 }}>
+                          {line.qty.toLocaleString()} {line.unit}
+                        </td>
+                        <td style={{ textAlign: 'right', color: TH.muted, fontVariantNumeric: 'tabular-nums', fontSize: 11 }}>
+                          ${line.rate.toFixed(2)}
+                        </td>
+                        <td style={{ textAlign: 'right', color: TH.amber, fontVariantNumeric: 'tabular-nums' }}>
+                          ${line.amount.toLocaleString('en', { minimumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+
+                <div style={{ marginTop: 10, borderTop: `1px solid ${TH.border}`, paddingTop: 8 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                    <span style={{ color: TH.muted }}>Subtotal</span>
+                    <span style={{ color: TH.muted }}>${estimateData.subtotal?.toLocaleString('en', { minimumFractionDigits: 2 })}</span>
                   </div>
-                ))}
-                <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', fontWeight: 600, fontSize: 14 }}>
-                  <span>Total</span>
-                  <span style={{ color: TH.amber }}>
-                    {Math.round(project.metadata.blueprint_measurements.totalSqft).toLocaleString()} sqft
-                  </span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 8 }}>
+                    <span style={{ color: TH.muted }}>GST (5%)</span>
+                    <span style={{ color: TH.muted }}>${estimateData.gst?.toLocaleString('en', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 700 }}>
+                    <span>Total</span>
+                    <span style={{ color: TH.amber }}>${estimateData.total?.toLocaleString('en', { minimumFractionDigits: 2 })}</span>
+                  </div>
                 </div>
               </div>
             )}

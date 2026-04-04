@@ -11,7 +11,7 @@ const TABS = [
   { id: 'documents',  label: 'Documents'   },
 ]
 
-export function ProjectDetail({ projectId, onBack }) {
+export function ProjectDetail({ projectId, company, onBack }) {
   const { project: p, entries, loading, refresh } = useProject(projectId)
   const [tab, setTab] = useState('overview')
 
@@ -237,7 +237,7 @@ export function ProjectDetail({ projectId, onBack }) {
 
       {/* ── Documents Tab ── */}
       {tab === 'documents' && (
-        <Documents project={p} onUpdated={refresh} />
+        <Documents project={p} company={company} onUpdated={refresh} />
       )}
     </div>
   )
