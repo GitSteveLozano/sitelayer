@@ -7,6 +7,7 @@ import { useIsMobile } from './hooks/useIsMobile'
 import { Login }         from './components/Login'
 import { Sidebar }       from './components/Sidebar'
 import { Dashboard }     from './components/Dashboard'
+import { Projects }      from './components/Projects'
 import { ProjectDetail } from './components/ProjectDetail'
 import { NewTakeoff }    from './components/NewTakeoff'
 import { TimeTracking }  from './components/TimeTracking'
@@ -34,9 +35,6 @@ export default function App() {
 
   if (!user) return <Login onSignIn={signIn} />
 
-  // Dashboard and Projects both show the same view
-  const isDashboard = view === 'dashboard' || view === 'projects'
-
   return (
     <div style={{ display: 'flex', minHeight: '100vh', background: TH.bg, color: TH.text, fontFamily: 'system-ui, -apple-system, sans-serif' }}>
       <Sidebar
@@ -48,8 +46,17 @@ export default function App() {
       />
 
       <main style={{ flex: 1, overflowY: 'auto', minHeight: '100vh', paddingBottom: isMobile ? 68 : 0 }}>
-        {isDashboard && (
+        {view === 'dashboard' && (
           <Dashboard
+            projects={projects}
+            loading={projLoading}
+            onSelectProject={p => { setSelected(p.id); setView('project') }}
+            onNewProject={openNewProject}
+          />
+        )}
+
+        {view === 'projects' && (
+          <Projects
             projects={projects}
             loading={projLoading}
             onSelectProject={p => { setSelected(p.id); setView('project') }}
