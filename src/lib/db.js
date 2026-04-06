@@ -88,8 +88,23 @@ export const labor = {
       .eq('project_id', projectId)
       .order('logged_at', { ascending: false }),
 
+  listByDateRange: (companyId, start, end) =>
+    supabase
+      .from('labor_entries')
+      .select('*, project:projects(name)')
+      .eq('company_id', companyId)
+      .gte('work_date', start)
+      .lte('work_date', end)
+      .order('work_date', { ascending: false }),
+
   create: (entry) =>
     supabase.from('labor_entries').insert(entry).select().single(),
+
+  createBatch: (entries) =>
+    supabase.from('labor_entries').insert(entries).select(),
+
+  update: (id, updates) =>
+    supabase.from('labor_entries').update(updates).eq('id', id).select().single(),
 
   delete: (id) =>
     supabase.from('labor_entries').delete().eq('id', id),
@@ -102,6 +117,91 @@ export const labor = {
       .eq('project_id', projectId)
     return { data, error }
   },
+}
+
+// ── CREW SCHEDULES ────────────────────────────────────────────────────────────
+
+export const schedules = {
+  // Get schedule for a week (Mon-Sun)
+  getWeek: (companyId, weekStart) => {
+    const weekEnd = new Date(weekStart)
+    weekEnd.setDate(weekEnd.getDate() + 6)
+    return supabase
+      .from('crew_schedules')
+      .select('*, project:projects(id, name, division)')
+      .eq('company_id', companyId)
+      .gte('work_date', weekStart.toISOString().split('T')[0])
+      .lte('work_date', weekEnd.toISOString().split('T')[0])
+      .order('work_date', { ascending: true })
+  },
+
+  // Get schedule for a specific date
+  getByDate: (companyId, date) =>
+    supabase
+      .from('crew_schedules')
+      .select('*, project:projects(id, name, division)')
+      .eq('company_id', companyId)
+      .eq('work_date', date)
+      .order('created_at', { ascending: true }),
+
+  // Create or update schedule entry
+  upsert: (schedule) =>
+    supabase.from('crew_schedules').upsert(schedule).select().single(),
+
+  // Delete schedule entry
+  delete: (id) =>
+    supabase.from('crew_schedules').delete().eq('id', id),
+
+  // Copy previous week's schedule to current week
+  copyWeek: async (companyId, fromWeekStart, toWeekStart) => {
+    const { data: existing } = await supabase
+      .from('crew_schedules')
+      .select('*')
+      .eq('company_id', companyId)
+      .gte('work_date', fromWeekStart)
+      .lte('work_date', new Date(new Date(fromWeekStart).getTime() + 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0])
+
+    if (!existing?.length) return { data: [], error: null }
+
+    const newEntries = existing.map(e => {
+      const oldDate = new Date(e.work_date)
+      const dayOffset = oldDate.getDay() === 0 ? 6 : oldDate.getDay() - 1 // Mon=0, Sun=6
+      const newDate = new Date(toWeekStart)
+      newDate.setDate(newDate.getDate() + dayOffset)
+      return {
+        company_id: companyId,
+        project_id: e.project_id,
+        work_date: newDate.toISOString().split('T')[0],
+        scheduled_workers: e.scheduled_workers,
+        shift_start: e.shift_start,
+        shift_end: e.shift_end,
+        notes: e.notes,
+      }
+    })
+
+    return supabase.from('crew_schedules').insert(newEntries).select()
+  },
+}
+
+// ── WORKERS ───────────────────────────────────────────────────────────────────
+
+export const workers = {
+  list: (companyId) =>
+    supabase
+      .from('workers')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .order('name', { ascending: true }),
+
+  create: (worker) =>
+    supabase.from('workers').insert(worker).select().single(),
+
+  update: (id, updates) =>
+    supabase.from('workers').update(updates).eq('id', id).select().single(),
+
+  delete: (id) =>
+    supabase.from('workers').delete().eq('id', id),
 }
 
 // ── INTEGRATIONS ─────────────────────────────────────────────────────────────

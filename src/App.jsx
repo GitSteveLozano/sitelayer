@@ -10,7 +10,9 @@ import { Dashboard }     from './components/Dashboard'
 import { Projects }      from './components/Projects'
 import { ProjectDetail } from './components/ProjectDetail'
 import { NewTakeoff }    from './components/NewTakeoff'
-import { TimeTracking }  from './components/TimeTracking'
+import { Schedule }      from './components/Schedule'
+import { DailyConfirm }  from './components/DailyConfirm'
+import { Workers }       from './components/Workers'
 import { Settings }      from './components/Settings'
 import { Spinner }       from './components/Atoms'
 
@@ -81,10 +83,7 @@ export default function App() {
         )}
 
         {view === 'time' && (
-          <TimeTracking
-            projects={projects}
-            onLogged={() => refresh()}
-          />
+          <TimeTrackingTabs companyId={company?.id} />
         )}
 
         {view === 'settings' && (
