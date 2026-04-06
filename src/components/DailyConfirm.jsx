@@ -1,63 +1,39 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { TH } from '../lib/theme'
 import { Card, Label, Input, Select, Btn, Badge } from './Atoms'
-import { schedules, labor, workers } from '../lib/db'
+import { useCrewSchedule, useLaborEntry, useLaborStats } from '../hooks/useTimeTracking'
+import { useIsMobile } from '../hooks/useIsMobile'
 import { SCOPE_ITEMS } from './BlueprintCanvas'
 
 export function DailyConfirm({ companyId, onConfirmed }) {
+  const isMobile = useIsMobile()
   const [selectedDate, setSelectedDate] = useState(() => {
     const today = new Date()
     return today.toISOString().split('T')[0]
   })
-  const [schedule, setSchedule] = useState([])
-  const [workerList, setWorkerList] = useState([])
-  const [entries, setEntries] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [saving, setSaving] = useState(false)
+  const { data: schedData, workers: workerList, loading, error, refetch: loadSchedule } = useCrewSchedule(companyId, selectedDate)
+  const { saving, error: saveError, submit } = useLaborEntry()
+  const { entries: confirmedEntries } = useLaborStats(companyId, selectedDate, selectedDate)
 
-  useEffect(() => {
-    loadData()
-  }, [companyId, selectedDate])
+  // Build draft entries from schedule + existing entries
+  const draftEntries = useMemo(() => {
+    const scheduledMap = new Map(schedData?.scheduled_workers?.map(w => [w, {
+      worker_id: w,
+      project_id: schedData.project_id,
+      project_name: schedData.project?.name,
+      division: schedData.project?.division,
+    }]) || [])
+    const existingMap = new Map(confirmedEntries.map(e => [e.worker_id, e]))
 
-  async function loadData() {
-    setLoading(true)
-    const [schedRes, workerRes, laborRes] = await Promise.all([
-      schedules.getByDate(companyId, selectedDate),
-      workers.list(companyId),
-      labor.listByDateRange(companyId, selectedDate, selectedDate),
-    ])
-
-    if (workerRes.data) setWorkerList(workerRes.data)
-
-    // Build entries from schedule + existing labor entries
-    const scheduledWorkers = new Map()
-    schedRes.data?.forEach(s => {
-      s.scheduled_workers?.forEach(wid => {
-        if (!scheduledWorkers.has(wid)) {
-          scheduledWorkers.set(wid, {
-            worker_id: wid,
-            project_id: s.project_id,
-            project_name: s.project?.name,
-            division: s.project?.division,
-          })
-        }
-      })
-    })
-
-    // Check for existing confirmed entries
-    const existingEntries = laborRes.data || []
-    const existingByWorker = new Map(existingEntries.map(e => [e.worker_id, e]))
-
-    // Build draft entries
-    const draftEntries = []
+    const result = []
     
-    // From schedule
-    scheduledWorkers.forEach((info, wid) => {
-      const existing = existingByWorker.get(wid)
-      draftEntries.push({
+    // Scheduled workers first
+    scheduledMap.forEach((info, wid) => {
+      const existing = existingMap.get(wid)
+      result.push({
         id: existing?.id,
         worker_id: wid,
-        worker_name: workerRes.data?.find(w => w.id === wid)?.name || 'Unknown',
+        worker_name: workerList.find(w => w.id === wid)?.name || 'Unknown',
         project_id: info.project_id,
         project_name: info.project_name,
         division: info.division,
@@ -68,28 +44,21 @@ export function DailyConfirm({ companyId, onConfirmed }) {
       })
     })
 
-    // Add extra workers (sub/fill-in) not on schedule
-    const scheduledIds = new Set(scheduledWorkers.keys())
-    existingEntries.forEach(e => {
-      if (!scheduledIds.has(e.worker_id)) {
-        draftEntries.push({
-          id: e.id,
-          worker_id: e.worker_id,
-          worker_name: e.worker?.name || workerRes.data?.find(w => w.id === e.worker_id)?.name || 'Unknown',
-          project_id: e.project_id,
-          project_name: e.project?.name || 'Unknown',
-          hours: e.hours,
-          service_item: e.service_item,
-          status: e.status,
+    // Add unscheduled but confirmed
+    confirmedEntries.forEach(e => {
+      if (!scheduledMap.has(e.worker_id)) {
+        result.push({
+          ...e,
+          worker_name: workerList.find(w => w.id === e.worker_id)?.name || 'Unknown',
           confirmed: true,
         })
       }
     })
 
-    setSchedule(schedRes.data || [])
-    setEntries(draftEntries)
-    setLoading(false)
-  }
+    return result
+  }, [schedData, confirmedEntries, workerList])
+
+  const [entries, setEntries] = useState(draftEntries)
 
   function updateEntry(index, updates) {
     setEntries(prev => {
@@ -107,8 +76,8 @@ export function DailyConfirm({ companyId, onConfirmed }) {
     setEntries(prev => [...prev, {
       worker_id: '',
       worker_name: '',
-      project_id: schedule[0]?.project_id || '',
-      project_name: schedule[0]?.project?.name || '',
+      project_id: schedData?.[0]?.project_id || '',
+      project_name: schedData?.[0]?.project?.name || '',
       hours: 8,
       service_item: '',
       status: 'draft',
@@ -119,7 +88,6 @@ export function DailyConfirm({ companyId, onConfirmed }) {
 
   async function confirmDay() {
     setSaving(true)
-    
     const toSave = entries
       .filter(e => e.worker_id && e.hours > 0)
       .map(e => ({
@@ -133,27 +101,26 @@ export function DailyConfirm({ companyId, onConfirmed }) {
         status: 'confirmed',
       }))
 
-    // Batch upsert
-    const { error } = await labor.createBatch(toSave)
+    const { error } = await submit(toSave)
+    setSaving(false)
     
     if (!error && onConfirmed) onConfirmed()
-    setSaving(false)
   }
 
   const totalHours = entries.reduce((s, e) => s + (parseFloat(e.hours) || 0), 0)
   const allHaveServiceItem = entries.every(e => e.service_item)
 
-  if (loading) return <div style={{ padding: 40, textAlign: 'center' }}>Loading…</div>
+  if (loading || saving) return <div style={{ padding: 40, textAlign: 'center' }}>{loading ? 'Loading…' : 'Saving…'}</div>
 
   return (
-    <div style={{ padding: '24px 20px', maxWidth: 700 }}>
+    <div style={{ padding: isMobile ? '16px 14px' : '24px 20px', maxWidth: 700 }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: isMobile ? 12 : 20, flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h2 style={{ margin: '0 0 4px', fontSize: 20, color: TH.text }}>
+          <h2 style={{ margin: '0 0 4px', fontSize: isMobile ? 18 : 20, color: TH.text }}>
             Confirm Day's Work
           </h2>
-          <p style={{ margin: 0, fontSize: 13, color: TH.muted }}>
+          <p style={{ margin: 0, fontSize: isMobile ? 12 : 13, color: TH.muted }}>
             Review hours and assign service items for {formatDate(selectedDate)}
           </p>
         </div>
@@ -167,17 +134,17 @@ export function DailyConfirm({ companyId, onConfirmed }) {
 
       {/* Worker entries */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
-        {entries.length === 0 && schedule.length === 0 ? (
-          <Card style={{ textAlign: 'center', padding: 40, color: TH.muted }}>
+        {entries.length === 0 ? (
+          <Card style={{ textAlign: 'center', padding: isMobile ? 28 : 40, color: TH.muted }}>
             No crew scheduled for this date.<br />
             Set up the schedule first, or add workers manually below.
           </Card>
         ) : (
           entries.map((entry, i) => (
-            <Card key={`${entry.worker_id}-${i}`} style={{ padding: '14px 16px' }}>
-              <div style={{ display: 'grid', gap: 12, alignItems: 'center' }}>
+            <Card key={`${entry.worker_id}-${i}`} style={{ padding: isMobile ? '12px 14px' : '14px 16px' }}>
+              <div style={{ display: 'grid', gap: isMobile ? 10 : 12, alignItems: 'center' }}>
                 {/* Row 1: Worker + Project */}
-                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ display: 'flex', gap: isMobile ? 8 : 12, flexWrap: 'wrap' }}>
                   {entry.isExtra ? (
                     <Select
                       label="Worker"
@@ -188,16 +155,16 @@ export function DailyConfirm({ companyId, onConfirmed }) {
                         updateEntry(i, { worker_id: wid, worker_name: w?.name || '' })
                       }}
                       options={workerList.map(w => ({ value: w.id, label: w.name }))}
-                      style={{ minWidth: 150 }}
+                      style={{ minWidth: isMobile ? 120 : 150 }}
                     />
                   ) : (
-                    <div style={{ fontWeight: 600, color: TH.text, minWidth: 150 }}>
+                    <div style={{ fontWeight: 600, color: TH.text, minWidth: isMobile ? 120 : 150 }}>
                       {entry.worker_name}
                     </div>
                   )}
                   
-                  <div style={{ flex: 1, minWidth: 200 }}>
-                    <div style={{ fontSize: 11, color: TH.muted, marginBottom: 4 }}>Project</div>
+                  <div style={{ flex: 1, minWidth: isMobile ? 140 : 200 }}>
+                    <div style={{ fontSize: isMobile ? 10 : 11, color: TH.muted, marginBottom: 4 }}>Project</div>
                     <Badge 
                       label={entry.project_name || 'Unknown'} 
                       color={TH.divColors?.[entry.division] || TH.amber} 
@@ -206,7 +173,7 @@ export function DailyConfirm({ companyId, onConfirmed }) {
                 </div>
 
                 {/* Row 2: Hours + Service Item */}
-                <div style={{ display: 'grid', gridTemplateColumns: '100px 1fr auto', gap: 12, alignItems: 'end' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '100px 1fr auto', gap: isMobile ? 8 : 12, alignItems: 'end' }}>
                   <Input
                     label="Hours"
                     type="number"
@@ -219,12 +186,12 @@ export function DailyConfirm({ companyId, onConfirmed }) {
                     label="Service Item"
                     value={entry.service_item}
                     onChange={e => updateEntry(i, { service_item: e.target.value })}
-                    options={SCOPE_ITEMS.map(s => ({ value: s.name, label: `${s.name} (${s.unit})` }))}
+                    options={SCOPE_ITEMS.map(s => ({ value: s.name, label: isMobile ? s.name : `${s.name} (${s.unit})` }))}
                   />
 
                   {(entry.isExtra || entries.length > 1) && (
-                    <Btn variant="ghost" onClick={() => removeEntry(i)} style={{ height: 38 }}>
-                      Remove
+                    <Btn variant="ghost" onClick={() => removeEntry(i)} style={{ height: isMobile ? 36 : 38 }}>
+                      {isMobile ? '×' : 'Remove'}
                     </Btn>
                   )}
                 </div>
@@ -235,15 +202,15 @@ export function DailyConfirm({ companyId, onConfirmed }) {
       </div>
 
       {/* Actions */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: isMobile ? 12 : 16 }}>
         <Btn variant="ghost" onClick={addExtraWorker}>
           + Add Worker
         </Btn>
         
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 12, color: TH.muted }}>Total Hours</div>
-            <div style={{ fontSize: 20, fontWeight: 600, color: TH.text }}>{totalHours.toFixed(1)}</div>
+            <div style={{ fontSize: isMobile ? 11 : 12, color: TH.muted }}>Total Hours</div>
+            <div style={{ fontSize: isMobile ? 18 : 20, fontWeight: 600, color: TH.text }}>{totalHours.toFixed(1)}</div>
           </div>
           
           <Btn 
@@ -256,7 +223,7 @@ export function DailyConfirm({ companyId, onConfirmed }) {
       </div>
 
       {!allHaveServiceItem && entries.length > 0 && (
-        <div style={{ marginTop: 12, fontSize: 12, color: TH.amber }}>
+        <div style={{ marginTop: isMobile ? 10 : 12, fontSize: isMobile ? 11 : 12, color: TH.amber }}>
           ⚠ Assign a service item to all workers before confirming
         </div>
       )}
