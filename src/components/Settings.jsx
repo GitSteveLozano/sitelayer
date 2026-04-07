@@ -52,15 +52,45 @@ export function Settings({ company, onUpdated }) {
   const [useQboSandbox, setUseQboSandbox] = useState(company?.metadata?.qbo_sandbox ?? true)
 
   async function handleConnectQBO() {
-    const { data, error: err } = await supabase.functions.invoke('qbo-auth', {
-      body: { company_id: company.id, sandbox: useQboSandbox }
-    })
-    if (err || !data?.url) { setError('Failed to start QuickBooks connection.'); return }
-    // Store sandbox preference for later sync calls
-    await companies.update(company.id, { 
-      metadata: { ...(company.metadata || {}), qbo_sandbox: useQboSandbox } 
-    })
-    window.location.href = data.url
+    try {
+      // Store sandbox preference first
+      await companies.update(company.id, { 
+        metadata: { ...(company.metadata || {}), qbo_sandbox: useQboSandbox } 
+      })
+      
+      // Get current session for auth token
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData?.session?.access_token
+      
+      // Direct fetch to Edge Function with auth header
+      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/qbo-auth`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : '',
+        },
+        body: JSON.stringify({ company_id: company.id, sandbox: useQboSandbox })
+      })
+      
+      if (!response.ok) {
+        const errText = await response.text()
+        console.error('QBO auth error:', response.status, errText)
+        setError(`Failed to start QuickBooks connection: ${response.status}`)
+        return
+      }
+      
+      const data = await response.json()
+      
+      if (!data?.url) {
+        setError('No OAuth URL returned from server')
+        return
+      }
+      
+      window.location.href = data.url
+    } catch (e) {
+      console.error('QBO connect exception:', e)
+      setError(`Connection error: ${e.message}`)
+    }
   }
 
   async function handleToggleSandbox() {
