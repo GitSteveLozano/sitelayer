@@ -12,11 +12,25 @@ const QBO_CLIENT_SECRET    = Deno.env.get('QBO_CLIENT_SECRET')!
 const QBO_BASE_PROD        = 'https://quickbooks.api.intuit.com/v3/company'
 const QBO_BASE_SANDBOX     = 'https://sandbox-quickbooks.api.intuit.com/v3/company'
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
 serve(async (req) => {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: CORS_HEADERS })
+  }
+
   const { company_id, realm_id } = await req.json()
 
   if (!company_id || !realm_id) {
-    return new Response(JSON.stringify({ error: 'company_id and realm_id required' }), { status: 400 })
+    return new Response(JSON.stringify({ error: 'company_id and realm_id required' }), { 
+      status: 400,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
   }
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
@@ -30,13 +44,19 @@ serve(async (req) => {
     .single()
 
   if (!integration) {
-    return new Response(JSON.stringify({ error: 'QBO not connected' }), { status: 404 })
+    return new Response(JSON.stringify({ error: 'QBO not connected' }), { 
+      status: 404,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
   }
 
   // Refresh token if expired
   const token = await getValidToken(integration, supabase, company_id)
   if (!token) {
-    return new Response(JSON.stringify({ error: 'Token refresh failed' }), { status: 401 })
+    return new Response(JSON.stringify({ error: 'Token refresh failed' }), { 
+      status: 401,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
   }
 
   const useSandbox = integration.metadata?.sandbox ?? false
@@ -47,7 +67,7 @@ serve(async (req) => {
   // ── Sync Bills → material_cost on projects ────────────────────────────────
   try {
     const billsRes = await qboQuery(
-      realm_id, token,
+      realm_id, token, QBO_BASE,
       `SELECT * FROM Bill WHERE MetaData.LastUpdatedTime > '2020-01-01'`
     )
 
@@ -83,7 +103,7 @@ serve(async (req) => {
   // ── Sync Time Activities → labor_entries ─────────────────────────────────
   try {
     const timeRes = await qboQuery(
-      realm_id, token,
+      realm_id, token, QBO_BASE,
       `SELECT * FROM TimeActivity WHERE MetaData.LastUpdatedTime > '2020-01-01'`
     )
 
@@ -123,7 +143,7 @@ serve(async (req) => {
   // ── Sync Estimates → create/update projects ───────────────────────────────
   try {
     const estRes = await qboQuery(
-      realm_id, token,
+      realm_id, token, QBO_BASE,
       `SELECT * FROM Estimate WHERE TxnStatus = 'Accepted'`
     )
 
@@ -169,7 +189,7 @@ serve(async (req) => {
   }
 
   return new Response(JSON.stringify({ success: true, results }), {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   })
 })
 
@@ -216,9 +236,9 @@ async function getValidToken(integration: any, supabase: any, companyId: string)
 
 // ── QBO query helper ───────────────────────────────────────────────────────
 
-async function qboQuery(realmId: string, token: string, query: string) {
+async function qboQuery(realmId: string, token: string, baseUrl: string, query: string) {
   const res = await fetch(
-    `${QBO_BASE}/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`,
+    `${baseUrl}/${realmId}/query?query=${encodeURIComponent(query)}&minorversion=65`,
     {
       headers: {
         'Authorization': `Bearer ${token}`,

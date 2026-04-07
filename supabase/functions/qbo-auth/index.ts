@@ -8,12 +8,26 @@ const QBO_REDIRECT_URI  = Deno.env.get('QBO_REDIRECT_URI')!
 const QBO_SCOPE         = 'com.intuit.quickbooks.accounting'
 const QBO_AUTH_URL      = 'https://appcenter.intuit.com/connect/oauth2'
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+}
+
 serve(async (req) => {
+  // Handle CORS preflight
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { headers: CORS_HEADERS })
+  }
+
   const body = await req.json().catch(() => ({}))
   const { company_id, sandbox = true } = body
 
   if (!company_id) {
-    return new Response(JSON.stringify({ error: 'company_id required' }), { status: 400 })
+    return new Response(JSON.stringify({ error: 'company_id required' }), { 
+      status: 400,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
   }
 
   // state = base64(company_id + sandbox flag) — passed through OAuth flow
@@ -35,6 +49,6 @@ serve(async (req) => {
   const authUrl = `${QBO_AUTH_URL}?${params.toString()}`
 
   return new Response(JSON.stringify({ url: authUrl, sandbox }), {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },
   })
 })
