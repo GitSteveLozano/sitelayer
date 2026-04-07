@@ -58,24 +58,17 @@ export function Settings({ company, onUpdated }) {
         metadata: { ...(company.metadata || {}), qbo_sandbox: useQboSandbox } 
       })
       
-      // Get current session for auth token
-      const { data: sessionData } = await supabase.auth.getSession()
-      const token = sessionData?.session?.access_token
-      
-      // Direct fetch to Edge Function with auth header
+      // Public function - no auth header needed
       const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/qbo-auth`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': token ? `Bearer ${token}` : '',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ company_id: company.id, sandbox: useQboSandbox })
       })
       
       if (!response.ok) {
-        const errText = await response.text()
-        console.error('QBO auth error:', response.status, errText)
-        setError(`Failed to start QuickBooks connection: ${response.status}`)
+        const errData = await response.json().catch(() => ({ error: 'Unknown error' }))
+        console.error('QBO auth error:', response.status, errData)
+        setError(`Failed to start QuickBooks connection: ${errData.error || response.status}`)
         return
       }
       

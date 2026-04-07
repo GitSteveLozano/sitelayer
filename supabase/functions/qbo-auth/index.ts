@@ -2,11 +2,14 @@
 // Called from the frontend when user clicks "Connect QuickBooks"
 
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
 const QBO_CLIENT_ID     = Deno.env.get('QBO_CLIENT_ID')!
 const QBO_REDIRECT_URI  = Deno.env.get('QBO_REDIRECT_URI')!
 const QBO_SCOPE         = 'com.intuit.quickbooks.accounting'
 const QBO_AUTH_URL      = 'https://appcenter.intuit.com/connect/oauth2'
+const SUPABASE_URL      = Deno.env.get('SUPABASE_URL')!
+const SUPABASE_SERVICE_KEY = Deno.env.get('SL_SERVICE_ROLE_KEY')!
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -26,6 +29,21 @@ serve(async (req) => {
   if (!company_id) {
     return new Response(JSON.stringify({ error: 'company_id required' }), { 
       status: 400,
+      headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
+    })
+  }
+
+  // Verify company exists using service role
+  const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+  const { data: company, error: companyErr } = await supabase
+    .from('companies')
+    .select('id')
+    .eq('id', company_id)
+    .single()
+
+  if (companyErr || !company) {
+    return new Response(JSON.stringify({ error: 'Company not found' }), { 
+      status: 404,
       headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' }
     })
   }
