@@ -49,12 +49,26 @@ export function Settings({ company, onUpdated }) {
     setQboStatus(data?.find(i => i.provider === 'qbo') ? 'connected' : 'disconnected')
   }
 
+  const [useQboSandbox, setUseQboSandbox] = useState(company?.metadata?.qbo_sandbox ?? true)
+
   async function handleConnectQBO() {
     const { data, error: err } = await supabase.functions.invoke('qbo-auth', {
-      body: { company_id: company.id }
+      body: { company_id: company.id, sandbox: useQboSandbox }
     })
     if (err || !data?.url) { setError('Failed to start QuickBooks connection.'); return }
+    // Store sandbox preference for later sync calls
+    await companies.update(company.id, { 
+      metadata: { ...(company.metadata || {}), qbo_sandbox: useQboSandbox } 
+    })
     window.location.href = data.url
+  }
+
+  async function handleToggleSandbox() {
+    const newVal = !useQboSandbox
+    setUseQboSandbox(newVal)
+    await companies.update(company.id, { 
+      metadata: { ...(company.metadata || {}), qbo_sandbox: newVal } 
+    })
   }
 
   async function handleDisconnectQBO() {
@@ -187,6 +201,42 @@ export function Settings({ company, onUpdated }) {
             )}
           </div>
         </div>
+        
+        {/* Sandbox toggle */}
+        {qboStatus === 'disconnected' && (
+          <div style={{ marginTop: 16, padding: 12, background: TH.surf, borderRadius: 6, border: `1px solid ${TH.border}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, color: TH.text }}>Sandbox Mode</div>
+                <div style={{ fontSize: 11, color: TH.muted, marginTop: 2 }}>
+                  {useQboSandbox ? 'Connect to QuickBooks Sandbox (test data)' : 'Connect to Live QuickBooks (real data)'}
+                </div>
+              </div>
+              <button
+                onClick={handleToggleSandbox}
+                style={{
+                  width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer',
+                  background: useQboSandbox ? TH.amber : TH.surf,
+                  position: 'relative', transition: 'background 0.2s',
+                  boxShadow: `inset 0 0 0 1px ${TH.border}`,
+                }}
+              >
+                <div style={{
+                  width: 20, height: 20, borderRadius: 10, background: '#fff',
+                  position: 'absolute', top: 2,
+                  left: useQboSandbox ? 22 : 2,
+                  transition: 'left 0.2s',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                }} />
+              </button>
+            </div>
+            {useQboSandbox && (
+              <div style={{ marginTop: 10, fontSize: 11, color: TH.muted }}>
+                💡 <a href="https://developer.intuit.com" target="_blank" style={{ color: TH.amber }}>Create free sandbox</a> at Intuit Developer
+              </div>
+            )}
+          </div>
+        )}
       </Card>
     </div>
   )

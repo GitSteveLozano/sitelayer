@@ -9,7 +9,8 @@ const SUPABASE_URL         = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_KEY = Deno.env.get('SL_SERVICE_ROLE_KEY')!
 const QBO_CLIENT_ID        = Deno.env.get('QBO_CLIENT_ID')!
 const QBO_CLIENT_SECRET    = Deno.env.get('QBO_CLIENT_SECRET')!
-const QBO_BASE             = 'https://quickbooks.api.intuit.com/v3/company'
+const QBO_BASE_PROD        = 'https://quickbooks.api.intuit.com/v3/company'
+const QBO_BASE_SANDBOX     = 'https://sandbox-quickbooks.api.intuit.com/v3/company'
 
 serve(async (req) => {
   const { company_id, realm_id } = await req.json()
@@ -37,6 +38,9 @@ serve(async (req) => {
   if (!token) {
     return new Response(JSON.stringify({ error: 'Token refresh failed' }), { status: 401 })
   }
+
+  const useSandbox = integration.metadata?.sandbox ?? false
+  const QBO_BASE = useSandbox ? QBO_BASE_SANDBOX : QBO_BASE_PROD
 
   const results = { bills: 0, timeEntries: 0, projects: 0, errors: [] as string[] }
 

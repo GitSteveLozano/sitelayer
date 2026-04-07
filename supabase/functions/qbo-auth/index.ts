@@ -9,16 +9,15 @@ const QBO_SCOPE         = 'com.intuit.quickbooks.accounting'
 const QBO_AUTH_URL      = 'https://appcenter.intuit.com/connect/oauth2'
 
 serve(async (req) => {
-  // Get company_id from query param — we'll store it in state
-  const url       = new URL(req.url)
-  const companyId = url.searchParams.get('company_id')
+  const body = await req.json().catch(() => ({}))
+  const { company_id, sandbox = true } = body
 
-  if (!companyId) {
+  if (!company_id) {
     return new Response(JSON.stringify({ error: 'company_id required' }), { status: 400 })
   }
 
-  // state = base64(company_id) — passed through OAuth flow, verified on callback
-  const state = btoa(JSON.stringify({ company_id: companyId }))
+  // state = base64(company_id + sandbox flag) — passed through OAuth flow
+  const state = btoa(JSON.stringify({ company_id, sandbox }))
 
   const params = new URLSearchParams({
     client_id:     QBO_CLIENT_ID,
@@ -28,9 +27,14 @@ serve(async (req) => {
     state,
   })
 
+  // Add sandbox param for test environment
+  if (sandbox) {
+    params.append('environment', 'sandbox')
+  }
+
   const authUrl = `${QBO_AUTH_URL}?${params.toString()}`
 
-  return new Response(JSON.stringify({ url: authUrl }), {
+  return new Response(JSON.stringify({ url: authUrl, sandbox }), {
     headers: { 'Content-Type': 'application/json' },
   })
 })

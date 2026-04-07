@@ -21,11 +21,13 @@ serve(async (req) => {
     return Response.redirect(`${APP_URL}/settings?qbo=error`, 302)
   }
 
-  // Decode state to get company_id
+  // Decode state to get company_id and sandbox flag
   let companyId: string
+  let sandbox: boolean
   try {
     const decoded = JSON.parse(atob(state))
     companyId = decoded.company_id
+    sandbox = decoded.sandbox ?? true
   } catch {
     return Response.redirect(`${APP_URL}/settings?qbo=error`, 302)
   }
@@ -63,7 +65,7 @@ serve(async (req) => {
     access_token:  tokens.access_token,
     refresh_token: tokens.refresh_token,
     expires_at:    expiresAt,
-    metadata:      { realm_id: realmId, token_type: tokens.token_type },
+    metadata:      { realm_id: realmId, token_type: tokens.token_type, sandbox },
   }, { onConflict: 'company_id,provider' })
 
   // Trigger initial sync
