@@ -18,7 +18,7 @@ serve(async (req) => {
   const error = url.searchParams.get('error')
 
   if (error || !code || !state) {
-    return Response.redirect(`${APP_URL}/settings?qbo=error`, 302)
+    return Response.redirect(`${APP_URL}/?qbo=error`, 302)
   }
 
   // Decode state to get company_id and sandbox flag
@@ -29,7 +29,7 @@ serve(async (req) => {
     companyId = decoded.company_id
     sandbox = decoded.sandbox ?? true
   } catch {
-    return Response.redirect(`${APP_URL}/settings?qbo=error`, 302)
+    return Response.redirect(`${APP_URL}/?qbo=error`, 302)
   }
 
   // Exchange code for tokens
@@ -48,7 +48,7 @@ serve(async (req) => {
   })
 
   if (!tokenRes.ok) {
-    return Response.redirect(`${APP_URL}/settings?qbo=error`, 302)
+    return Response.redirect(`${APP_URL}/?qbo=error`, 302)
   }
 
   const tokens = await tokenRes.json()
@@ -73,5 +73,5 @@ serve(async (req) => {
     body: { company_id: companyId, realm_id: realmId },
   })
 
-  return Response.redirect(`${APP_URL}/settings?qbo=connected`, 302)
+  return Response.redirect(`${APP_URL}/?qbo=connected`, 302)
 })

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { TH } from './lib/theme'
 import { useAuth } from './hooks/useAuth'
 import { useProjects } from './hooks/useProjects'
@@ -18,7 +18,10 @@ export default function App() {
   const { user, company, loading: authLoading, signIn, signOut } = useAuth()
   const { projects, loading: projLoading, refresh } = useProjects(company?.id)
 
-  const [view,       setView]      = useState('dashboard')
+  const [view,       setView]      = useState(() => {
+    const qbo = new URLSearchParams(window.location.search).get('qbo')
+    return qbo ? 'settings' : 'dashboard'
+  })
   const [selectedId, setSelected]  = useState(null)
 
   const isMobile = useIsMobile()

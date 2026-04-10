@@ -11,6 +11,8 @@ export function Settings({ company, onUpdated }) {
   const [saved,     setSaved]     = useState(false)
   const [error,     setError]     = useState(null)
   const [qboStatus, setQboStatus] = useState('loading')
+  const [qboInteg, setQboInteg]   = useState(null)
+  const [syncResult, setSyncResult] = useState(null)
 
   // ── Pricing rates ────────────────────────────────────────────────────────────
   const existingRates = company?.metadata?.rates || {}
@@ -46,7 +48,9 @@ export function Settings({ company, onUpdated }) {
 
   async function checkQboStatus() {
     const { data } = await integrations.list(company.id)
-    setQboStatus(data?.find(i => i.provider === 'qbo') ? 'connected' : 'disconnected')
+    const qbo = data?.find(i => i.provider === 'qbo')
+    setQboInteg(qbo || null)
+    setQboStatus(qbo ? 'connected' : 'disconnected')
   }
 
   const [useQboSandbox, setUseQboSandbox] = useState(company?.metadata?.qbo_sandbox ?? true)
@@ -105,12 +109,14 @@ export function Settings({ company, onUpdated }) {
     const qbo = data?.find(i => i.provider === 'qbo')
     if (!qbo?.metadata?.realm_id) return
     setSaving(true)
-    await supabase.functions.invoke('qbo-sync', {
+    const { data: syncData } = await supabase.functions.invoke('qbo-sync', {
       body: { company_id: company.id, realm_id: qbo.metadata.realm_id }
     })
+    setSyncResult(syncData?.results || null)
     setSaving(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
+    await checkQboStatus()
   }
 
   async function handleSave(e) {
@@ -261,6 +267,52 @@ export function Settings({ company, onUpdated }) {
           </div>
         )}
       </Card>
+
+      {/* QBO Connected Details */}
+      {qboStatus === 'connected' && qboInteg && (
+        <Card style={{ marginTop: 14 }}>
+          <Label>Sync Details</Label>
+          <div style={{ fontSize: 12, color: TH.muted, marginBottom: 12 }}>
+            Last sync: {qboInteg.last_sync_at ? new Date(qboInteg.last_sync_at).toLocaleString() : 'Never'}
+          </div>
+
+          {(syncResult || qboInteg.metadata?.last_sync_results) && (() => {
+            const r = syncResult || qboInteg.metadata?.last_sync_results
+            return (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginBottom: 12 }}>
+                  <div style={{ background: '#2CA01C18', border: '1px solid #2CA01C44', borderRadius: 6, padding: '10px 12px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: '#2CA01C' }}>{r.bills ?? 0}</div>
+                    <div style={{ fontSize: 11, color: TH.muted }}>Bills</div>
+                  </div>
+                  <div style={{ background: '#3b82f618', border: '1px solid #3b82f644', borderRadius: 6, padding: '10px 12px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: '#3b82f6' }}>{r.timeEntries ?? 0}</div>
+                    <div style={{ fontSize: 11, color: TH.muted }}>Time entries</div>
+                  </div>
+                  <div style={{ background: '#f59e0b18', border: '1px solid #f59e0b44', borderRadius: 6, padding: '10px 12px', textAlign: 'center' }}>
+                    <div style={{ fontSize: 18, fontWeight: 700, color: '#f59e0b' }}>{r.projects ?? 0}</div>
+                    <div style={{ fontSize: 11, color: TH.muted }}>Projects</div>
+                  </div>
+                </div>
+                {r.errors?.length > 0 && (
+                  <div style={{ padding: '8px 12px', background: TH.redLo || '#fee2e2', borderRadius: 6, border: `1px solid ${TH.red}44`, marginBottom: 12 }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: TH.red, marginBottom: 4 }}>Sync errors</div>
+                    {r.errors.map((err, i) => (
+                      <div key={i} style={{ fontSize: 11, color: TH.red }}>{err}</div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )
+          })()}
+
+          {qboInteg.metadata?.sandbox && (
+            <div style={{ padding: '8px 12px', background: TH.amberLo || '#fef3c7', borderRadius: 6, border: `1px solid ${TH.amber}44`, fontSize: 12, color: TH.amber }}>
+              Sandbox mode — connected to QuickBooks test environment
+            </div>
+          )}
+        </Card>
+      )}
     </div>
   )
 }

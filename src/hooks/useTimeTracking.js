@@ -1,17 +1,16 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '../lib/supabase'
 
 // Get today's crew schedule for auto-population
 export function useCrewSchedule(companyId, date) {
-  const [data, setData] = useState({ schedule: null, workers: [], loading: true, error: null })
+  const [state, setState] = useState({ schedule: null, workers: [], loading: true, error: null })
 
-  useEffect(() => {
-    if (!companyId) { setData({ schedule: null, workers: [], loading: false, error: null }); return }
-    fetchData()
-  }, [companyId, date])
-
-  async function fetchData() {
-    setData({ ...data, loading: true })
+  const fetchData = useCallback(async () => {
+    if (!companyId) {
+      setState({ schedule: null, workers: [], loading: false, error: null })
+      return
+    }
+    setState(prev => ({ ...prev, loading: true }))
     const [schedRes, workerRes] = await Promise.all([
       supabase
         .from('crew_schedules')
@@ -22,15 +21,19 @@ export function useCrewSchedule(companyId, date) {
       supabase.from('workers').select('*').eq('company_id', companyId).eq('is_active', true),
     ])
 
-    setData({
+    setState({
       schedule: schedRes.data,
       workers: workerRes.data || [],
       loading: false,
       error: schedRes.error || workerRes.error,
     })
-  }
+  }, [companyId, date])
 
-  return { ...data, refetch: fetchData }
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
+
+  return { ...state, refetch: fetchData }
 }
 
 // Create labor entries from schedule confirmation
@@ -38,38 +41,62 @@ export function useLaborEntry() {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState(null)
 
-  return {
-    saving,
-    error,
-    submit: async (entries) => {
-      setSaving(true)
-      const { error } = await supabase.from('labor_entries').insert(entries)
-      setError(error?.message)
-      setSaving(false)
-      return { error }
-    },
-  }
+  const submit = useCallback(async (entries) => {
+    setSaving(true)
+    const { error: submitErr } = await supabase.from('labor_entries').insert(entries)
+    setError(submitErr?.message)
+    setSaving(false)
+    return { error: submitErr }
+  }, [])
+
+  return { saving, error, submit }
 }
 
-// Get confirmed entries for bonus calc
+// Get confirmed entries for bonus calc (project-level)
 export function useLaborStats(projectId, startDate, endDate) {
-  const [data, setData] = useState({ entries: [], loading: true, error: null })
+  const [state, setState] = useState({ entries: [], loading: true, error: null })
 
-  useEffect(() => {
-    fetchData()
-  }, [projectId, startDate, endDate])
-
-  async function fetchData() {
-    setData({ ...data, loading: true })
-    const { data, error } = await supabase
+  const fetchData = useCallback(async () => {
+    setState(prev => ({ ...prev, loading: true }))
+    const { data: rows, error: fetchErr } = await supabase
       .from('labor_entries')
       .select('*')
       .eq('project_id', projectId)
       .gte('work_date', startDate)
       .lte('work_date', endDate)
       .eq('status', 'confirmed')
-    setData({ entries: data || [], loading: false, error })
-  }
+    setState({ entries: rows || [], loading: false, error: fetchErr })
+  }, [projectId, startDate, endDate])
 
-  return { ...data, refetch: fetchData }
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
+
+  return { ...state, refetch: fetchData }
+}
+
+// Get confirmed entries for a company on a specific date (company-level, for DailyConfirm)
+export function useConfirmedByDate(companyId, date) {
+  const [state, setState] = useState({ entries: [], loading: true, error: null })
+
+  const fetchData = useCallback(async () => {
+    if (!companyId || !date) {
+      setState({ entries: [], loading: false, error: null })
+      return
+    }
+    setState(prev => ({ ...prev, loading: true }))
+    const { data: rows, error: fetchErr } = await supabase
+      .from('labor_entries')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('work_date', date)
+      .eq('status', 'confirmed')
+    setState({ entries: rows || [], loading: false, error: fetchErr })
+  }, [companyId, date])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
+
+  return { ...state, refetch: fetchData }
 }

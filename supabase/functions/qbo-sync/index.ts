@@ -123,16 +123,31 @@ serve(async (req) => {
 
       if (!project) continue
 
-      // Upsert by QBO entry ID to avoid duplicates
-      await supabase.from('labor_entries').upsert({
+      // Check if entry already exists by QBO ID
+      const { data: existing } = await supabase
+        .from('labor_entries')
+        .select('id')
+        .eq('company_id', company_id)
+        .contains('metadata', { qbo_id: entry.Id })
+        .maybeSingle()
+
+      const entryData = {
+        company_id,
         project_id:   project.id,
         service_item: serviceItem,
         hours,
+        work_date:    entry.TxnDate || new Date().toISOString().split('T')[0],
         sqft_done:    0, // QBO doesn't track sqft — filled manually
         notes:        `Synced from QBO — ${entry.EmployeeRef?.name || 'Unknown'}`,
         logged_at:    entry.TxnDate || new Date().toISOString(),
         metadata:     { qbo_id: entry.Id, source: 'qbo' },
-      }, { onConflict: 'metadata->qbo_id' })
+      }
+
+      if (existing) {
+        await supabase.from('labor_entries').update(entryData).eq('id', existing.id)
+      } else {
+        await supabase.from('labor_entries').insert(entryData)
+      }
 
       results.timeEntries++
     }
@@ -187,6 +202,15 @@ serve(async (req) => {
   } catch (e: any) {
     results.errors.push(`Estimates: ${e.message}`)
   }
+
+  // Update integration record with sync results
+  await supabase.from('integrations').update({
+    last_sync_at: new Date().toISOString(),
+    metadata: {
+      ...integration.metadata,
+      last_sync_results: results,
+    },
+  }).eq('company_id', company_id).eq('provider', 'qbo')
 
   return new Response(JSON.stringify({ success: true, results }), {
     headers: { ...CORS_HEADERS, 'Content-Type': 'application/json' },

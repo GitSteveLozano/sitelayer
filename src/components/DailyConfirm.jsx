@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { TH } from '../lib/theme'
 import { Card, Label, Input, Select, Btn, Badge } from './Atoms'
-import { useCrewSchedule, useLaborEntry, useLaborStats } from '../hooks/useTimeTracking'
+import { useCrewSchedule, useLaborEntry, useConfirmedByDate } from '../hooks/useTimeTracking'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { SCOPE_ITEMS } from './BlueprintCanvas'
 
@@ -11,9 +11,9 @@ export function DailyConfirm({ companyId, onConfirmed }) {
     const today = new Date()
     return today.toISOString().split('T')[0]
   })
-  const { data: schedData, workers: workerList, loading, error, refetch: loadSchedule } = useCrewSchedule(companyId, selectedDate)
+  const { schedule: schedData, workers: workerList, loading, error, refetch: loadSchedule } = useCrewSchedule(companyId, selectedDate)
   const { saving, error: saveError, submit } = useLaborEntry()
-  const { entries: confirmedEntries } = useLaborStats(companyId, selectedDate, selectedDate)
+  const { entries: confirmedEntries } = useConfirmedByDate(companyId, selectedDate)
 
   // Build draft entries from schedule + existing entries
   const draftEntries = useMemo(() => {
@@ -26,7 +26,7 @@ export function DailyConfirm({ companyId, onConfirmed }) {
     const existingMap = new Map(confirmedEntries.map(e => [e.worker_id, e]))
 
     const result = []
-    
+
     // Scheduled workers first
     scheduledMap.forEach((info, wid) => {
       const existing = existingMap.get(wid)
@@ -58,7 +58,11 @@ export function DailyConfirm({ companyId, onConfirmed }) {
     return result
   }, [schedData, confirmedEntries, workerList])
 
-  const [entries, setEntries] = useState(draftEntries)
+  const [entries, setEntries] = useState([])
+
+  useEffect(() => {
+    setEntries(draftEntries)
+  }, [draftEntries])
 
   function updateEntry(index, updates) {
     setEntries(prev => {
@@ -76,8 +80,8 @@ export function DailyConfirm({ companyId, onConfirmed }) {
     setEntries(prev => [...prev, {
       worker_id: '',
       worker_name: '',
-      project_id: schedData?.[0]?.project_id || '',
-      project_name: schedData?.[0]?.project?.name || '',
+      project_id: schedData?.project_id || '',
+      project_name: schedData?.project?.name || '',
       hours: 8,
       service_item: '',
       status: 'draft',
@@ -87,7 +91,6 @@ export function DailyConfirm({ companyId, onConfirmed }) {
   }
 
   async function confirmDay() {
-    setSaving(true)
     const toSave = entries
       .filter(e => e.worker_id && e.hours > 0)
       .map(e => ({
@@ -102,8 +105,7 @@ export function DailyConfirm({ companyId, onConfirmed }) {
       }))
 
     const { error } = await submit(toSave)
-    setSaving(false)
-    
+
     if (!error && onConfirmed) onConfirmed()
   }
 
@@ -162,12 +164,12 @@ export function DailyConfirm({ companyId, onConfirmed }) {
                       {entry.worker_name}
                     </div>
                   )}
-                  
+
                   <div style={{ flex: 1, minWidth: isMobile ? 140 : 200 }}>
                     <div style={{ fontSize: isMobile ? 10 : 11, color: TH.muted, marginBottom: 4 }}>Project</div>
-                    <Badge 
-                      label={entry.project_name || 'Unknown'} 
-                      color={TH.divColors?.[entry.division] || TH.amber} 
+                    <Badge
+                      label={entry.project_name || 'Unknown'}
+                      color={TH.divColors?.[entry.division] || TH.amber}
                     />
                   </div>
                 </div>
@@ -181,12 +183,12 @@ export function DailyConfirm({ companyId, onConfirmed }) {
                     value={entry.hours}
                     onChange={e => updateEntry(i, { hours: e.target.value })}
                   />
-                  
+
                   <Select
                     label="Service Item"
                     value={entry.service_item}
                     onChange={e => updateEntry(i, { service_item: e.target.value })}
-                    options={SCOPE_ITEMS.map(s => ({ value: s.name, label: isMobile ? s.name : `${s.name} (${s.unit})` }))}
+                    options={SCOPE_ITEMS.map(s => ({ value: s.id, label: isMobile ? s.id : `${s.id} (${s.unit})` }))}
                   />
 
                   {(entry.isExtra || entries.length > 1) && (
@@ -206,15 +208,15 @@ export function DailyConfirm({ companyId, onConfirmed }) {
         <Btn variant="ghost" onClick={addExtraWorker}>
           + Add Worker
         </Btn>
-        
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: isMobile ? 11 : 12, color: TH.muted }}>Total Hours</div>
             <div style={{ fontSize: isMobile ? 18 : 20, fontWeight: 600, color: TH.text }}>{totalHours.toFixed(1)}</div>
           </div>
-          
-          <Btn 
-            onClick={confirmDay} 
+
+          <Btn
+            onClick={confirmDay}
             disabled={saving || entries.length === 0 || !allHaveServiceItem}
           >
             {saving ? 'Saving…' : 'Confirm Day'}

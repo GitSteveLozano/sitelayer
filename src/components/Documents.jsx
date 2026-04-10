@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { lazy, Suspense } from 'react'
 import { TH } from '../lib/theme'
 import { Card, Label, Btn, Spinner } from './Atoms'
@@ -23,7 +23,7 @@ export function Documents({ project, company, onUpdated }) {
   // Get saved rates from company settings
   const rates = company?.metadata?.rates || {}
 
-  const inputRef = useState(null)
+  const inputRef = useRef(null)
 
   // ── Open canvas ─────────────────────────────────────────────────────────────
   if (showCanvas && pdfUrl) {
