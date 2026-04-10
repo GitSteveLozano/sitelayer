@@ -58,11 +58,12 @@ export function Bar({ value = 0, color, h = 4 }) {
   )
 }
 
-export function Label({ children }) {
+export function Label({ children, style }) {
   return (
     <div style={{
       fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.1em',
       color: TH.muted, fontWeight: 600, marginBottom: 10,
+      ...style,
     }}>{children}</div>
   )
 }

@@ -54,6 +54,10 @@ serve(async (req) => {
   const tokens = await tokenRes.json()
   const realmId = url.searchParams.get('realmId') // QBO company ID
 
+  if (!realmId) {
+    return Response.redirect(`${APP_URL}/?qbo=error`, 302)
+  }
+
   // Store tokens in Supabase
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
@@ -68,10 +72,10 @@ serve(async (req) => {
     metadata:      { realm_id: realmId, token_type: tokens.token_type, sandbox },
   }, { onConflict: 'company_id,provider' })
 
-  // Trigger initial sync
+  // Trigger initial sync (fire-and-forget, but catch to prevent unhandled rejection)
   supabase.functions.invoke('qbo-sync', {
     body: { company_id: companyId, realm_id: realmId },
-  })
+  }).catch(() => {})
 
   return Response.redirect(`${APP_URL}/?qbo=connected`, 302)
 })

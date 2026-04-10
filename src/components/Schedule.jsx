@@ -168,12 +168,7 @@ export function Schedule({ companyId }) {
                       }}
                       options={workerList.map(w => ({ value: w.id, label: w.name }))}
                       style={{ fontSize: 12 }}
-                    >
-                      <option value="">Assign workers…</option>
-                      {workerList.map(w => (
-                        <option key={w.id} value={w.id}>{w.name}</option>
-                      ))}
-                    </Select>
+                    />
 
                     {assign.scheduled_workers?.length > 0 && (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
