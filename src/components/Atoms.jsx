@@ -124,11 +124,15 @@ export function Select({ label, options = [], ...props }) {
           ...props.style,
         }}
       >
-        {options.map(o => (
-          <option key={o.value ?? o} value={o.value ?? o}>
-            {o.label ?? o}
-          </option>
-        ))}
+        {options.map(o => {
+          const val = typeof o === 'object' ? o.value : o
+          const lbl = typeof o === 'object' ? o.label : o
+          return (
+            <option key={val ?? ''} value={val ?? ''}>
+              {lbl ?? val ?? ''}
+            </option>
+          )
+        })}
       </select>
     </div>
   )

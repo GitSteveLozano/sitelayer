@@ -92,9 +92,9 @@ export function DailyConfirm({ companyId, onConfirmed }) {
 
   async function confirmDay() {
     const toSave = entries
-      .filter(e => e.worker_id && e.hours > 0)
+      .filter(e => e.worker_id && e.project_id && e.hours > 0)
       .map(e => ({
-        id: e.id,
+        ...(e.id ? { id: e.id } : {}),
         company_id: companyId,
         project_id: e.project_id,
         worker_id: e.worker_id,
@@ -104,9 +104,9 @@ export function DailyConfirm({ companyId, onConfirmed }) {
         status: 'confirmed',
       }))
 
-    const { error } = await submit(toSave)
+    const { error: submitError } = await submit(toSave)
 
-    if (!error && onConfirmed) onConfirmed()
+    if (!submitError && onConfirmed) onConfirmed()
   }
 
   const totalHours = entries.reduce((s, e) => s + (parseFloat(e.hours) || 0), 0)
@@ -156,7 +156,10 @@ export function DailyConfirm({ companyId, onConfirmed }) {
                         const w = workerList.find(x => x.id === wid)
                         updateEntry(i, { worker_id: wid, worker_name: w?.name || '' })
                       }}
-                      options={workerList.map(w => ({ value: w.id, label: w.name }))}
+                      options={[
+                        { value: '', label: 'Select worker…' },
+                        ...workerList.map(w => ({ value: w.id, label: w.name })),
+                      ]}
                       style={{ minWidth: isMobile ? 120 : 150 }}
                     />
                   ) : (

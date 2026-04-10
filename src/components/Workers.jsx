@@ -17,9 +17,9 @@ export function Workers({ companyId }) {
 
   async function loadWorkers() {
     setLoading(true)
-    const { data, error } = await workers.list(companyId)
-    if (error) setError(error.message)
-    else setWorkerList(data || [])
+    const { data: rows, error: listErr } = await workers.list(companyId)
+    if (listErr) setError(listErr.message)
+    else setWorkerList(rows || [])
     setLoading(false)
   }
 
@@ -27,13 +27,13 @@ export function Workers({ companyId }) {
     e.preventDefault()
     if (!newName.trim()) return
     setSaving(true)
-    const { error } = await workers.create({
+    const { error: createErr } = await workers.create({
       company_id: companyId,
       name: newName.trim(),
       role: newRole.trim() || null,
       is_active: true,
     })
-    if (error) setError(error.message)
+    if (createErr) setError(createErr.message)
     else {
       setNewName('')
       setNewRole('')

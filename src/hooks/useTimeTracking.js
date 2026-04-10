@@ -17,7 +17,7 @@ export function useCrewSchedule(companyId, date) {
         .select('*, project:projects(id, name, division)')
         .eq('company_id', companyId)
         .eq('work_date', date)
-        .single(),
+        .maybeSingle(),
       supabase.from('workers').select('*').eq('company_id', companyId).eq('is_active', true),
     ])
 
@@ -43,7 +43,7 @@ export function useLaborEntry() {
 
   const submit = useCallback(async (entries) => {
     setSaving(true)
-    const { error: submitErr } = await supabase.from('labor_entries').insert(entries)
+    const { error: submitErr } = await supabase.from('labor_entries').upsert(entries)
     setError(submitErr?.message)
     setSaving(false)
     return { error: submitErr }

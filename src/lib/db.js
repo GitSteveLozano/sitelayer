@@ -130,7 +130,7 @@ export const schedules = {
       .from('crew_schedules')
       .select('*, project:projects(id, name, division)')
       .eq('company_id', companyId)
-      .gte('work_date', weekStart.toISOString().split('T')[0])
+      .gte('work_date', weekStart)
       .lte('work_date', weekEnd.toISOString().split('T')[0])
       .order('work_date', { ascending: true })
   },

@@ -193,15 +193,14 @@ export function Schedule({ companyId }) {
                   addAssignment(date, e.target.value)
                   e.target.value = ''
                 }}
+                options={[
+                  { value: '', label: '+ Add project…' },
+                  ...projectList
+                    .filter(p => p.status === 'active')
+                    .map(p => ({ value: p.id, label: p.name })),
+                ]}
                 style={{ fontSize: 12 }}
-              >
-                <option value="">+ Add project…</option>
-                {projectList
-                  .filter(p => p.status === 'active')
-                  .map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-              </Select>
+              />
             </Card>
           )
         })}
