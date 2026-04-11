@@ -330,17 +330,18 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
         )}
 
         {/* Canvas container */}
-        <div style={{ padding: 24, display: 'flex', justifyContent: 'center' }}>
-          <div
-            style={{
-              position: 'relative',
-              transform: `scale(${zoom})`,
-              transformOrigin: 'top left',
-              cursor: mode === 'pan' ? 'grab' : mode === 'calibrate' ? 'crosshair' : 'crosshair',
-            }}
-            onClick={handleCanvasClick}
-            onDoubleClick={handleDoubleClick}
-          >
+        <div style={{ padding: 24 }}>
+          <div style={{ width: canvasSize.w * zoom, height: canvasSize.h * zoom }}>
+            <div
+              style={{
+                position: 'relative',
+                transform: `scale(${zoom})`,
+                transformOrigin: 'top left',
+                cursor: mode === 'pan' ? 'grab' : 'crosshair',
+              }}
+              onClick={handleCanvasClick}
+              onDoubleClick={handleDoubleClick}
+            >
             {/* PDF canvas */}
             <canvas ref={canvasRef} style={{ display: 'block' }} />
 
@@ -423,6 +424,7 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
                 <div style={{ color: TH.muted, fontSize: 14 }}>Loading page…</div>
               </div>
             )}
+            </div>
           </div>
         </div>
 
