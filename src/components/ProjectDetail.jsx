@@ -10,7 +10,7 @@ import { projects } from '../lib/db'
 
 const TABS = [
   { id: 'overview',   label: 'Overview'    },
-  { id: 'insights',   label: 'Insights'    },
+  { id: 'insights',   label: 'Labor'        },
   { id: 'documents',  label: 'Documents'   },
 ]
 
