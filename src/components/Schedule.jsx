@@ -51,10 +51,20 @@ export function Schedule({ companyId }) {
       company_id: companyId,
       project_id: projectId,
       work_date: date,
-      scheduled_workers: [],
+      scheduled_workers: workerList.map(w => w.id),
     })
     await loadData()
     setSaving(false)
+  }
+
+  function removeWorker(assign, workerId) {
+    const next = (assign.scheduled_workers || []).filter(id => id !== workerId)
+    updateWorkers(assign.id, next)
+  }
+
+  function addWorkerBack(assign, workerId) {
+    const next = [...(assign.scheduled_workers || []), workerId]
+    updateWorkers(assign.id, next)
   }
 
   async function updateWorkers(scheduleId, workerIds) {
@@ -156,46 +166,38 @@ export function Schedule({ companyId }) {
                       </button>
                     </div>
 
-                    {/* Worker checkboxes */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-                      {workerList.map(w => {
-                        const isAssigned = (assign.scheduled_workers || []).includes(w.id)
+                    {/* Assigned workers as chips */}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {(assign.scheduled_workers || []).map(wid => {
+                        const w = workerList.find(x => x.id === wid)
+                        if (!w) return null
                         return (
-                          <label key={w.id} style={{
-                            display: 'flex', alignItems: 'center', gap: 6,
-                            fontSize: 11, color: isAssigned ? TH.text : TH.muted,
-                            cursor: 'pointer', padding: '2px 0',
+                          <span key={wid} style={{
+                            display: 'inline-flex', alignItems: 'center', gap: 4,
+                            fontSize: 10, padding: '3px 8px', borderRadius: 10,
+                            background: TH.amber + '22', color: TH.amber, fontWeight: 500,
                           }}>
-                            <input
-                              type="checkbox"
-                              checked={isAssigned}
-                              onChange={() => {
-                                const current = assign.scheduled_workers || []
-                                const next = isAssigned
-                                  ? current.filter(id => id !== w.id)
-                                  : [...current, w.id]
-                                updateWorkers(assign.id, next)
+                            {w.name.split(' ')[0]}
+                            <button
+                              onClick={() => removeWorker(assign, wid)}
+                              style={{
+                                background: 'none', border: 'none', cursor: 'pointer',
+                                color: TH.amber, fontSize: 12, padding: 0, lineHeight: 1,
                               }}
-                              style={{ margin: 0 }}
-                            />
-                            {w.name}
-                          </label>
+                            >×</button>
+                          </span>
                         )
                       })}
+                      {/* Show add-back button if any workers are unassigned */}
+                      {workerList.filter(w => !(assign.scheduled_workers || []).includes(w.id)).length > 0 && (
+                        <span style={{ position: 'relative', display: 'inline-block' }}>
+                          <WorkerAddMenu
+                            workers={workerList.filter(w => !(assign.scheduled_workers || []).includes(w.id))}
+                            onAdd={wid => addWorkerBack(assign, wid)}
+                          />
+                        </span>
+                      )}
                     </div>
-
-                    {assign.scheduled_workers?.length > 0 && (
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
-                        {assign.scheduled_workers.map(wid => {
-                          const w = workerList.find(x => x.id === wid)
-                          return w ? (
-                            <span key={wid} style={{ fontSize: 10, padding: '2px 6px', background: TH.amber + '22', color: TH.amber, borderRadius: 3 }}>
-                              {w.name.split(' ')[0]}
-                            </span>
-                          ) : null
-                        })}
-                      </div>
-                    )}
                   </div>
                 ))}
               </div>
@@ -220,6 +222,46 @@ export function Schedule({ companyId }) {
         })}
       </div>
     </div>
+  )
+}
+
+function WorkerAddMenu({ workers, onAdd }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          fontSize: 10, padding: '3px 8px', borderRadius: 10,
+          background: 'transparent', border: `1px dashed ${TH.border}`,
+          color: TH.muted, cursor: 'pointer',
+        }}
+      >+</button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 10,
+          background: TH.card, border: `1px solid ${TH.border}`, borderRadius: 6,
+          padding: 4, minWidth: 120, boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+        }}>
+          {workers.map(w => (
+            <button
+              key={w.id}
+              onClick={() => { onAdd(w.id); setOpen(false) }}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left',
+                padding: '6px 8px', fontSize: 11, color: TH.text,
+                background: 'none', border: 'none', cursor: 'pointer',
+                borderRadius: 4,
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = TH.surf}
+              onMouseLeave={e => e.currentTarget.style.background = 'none'}
+            >
+              {w.name}
+            </button>
+          ))}
+        </div>
+      )}
+    </>
   )
 }
 
