@@ -13,12 +13,13 @@ const BlueprintCanvas = lazy(() =>
 export function Documents({ project, company, onUpdated }) {
   const [uploading,    setUploading]    = useState(false)
   const [uploadError,  setUploadError]  = useState(null)
-  const [pdfUrl,       setPdfUrl]       = useState(project.blueprint_url || null)
+  const [pdfUrl,       setPdfUrl]       = useState(null)
   const [showCanvas,   setShowCanvas]   = useState(false)
   const [applied,      setApplied]      = useState(false)
   const [estimateData, setEstimateData] = useState(
     project.metadata?.blueprint_measurements || null
   )
+  const hasBlueprint = !!project.blueprint_url
 
   // Get saved rates from company settings
   const rates = company?.metadata?.rates || {}
@@ -26,13 +27,18 @@ export function Documents({ project, company, onUpdated }) {
   const inputRef = useRef(null)
   const storagePath = `${project.company_id}/${project.id}/blueprint.pdf`
 
-  // Regenerate signed URL on mount (they expire after 7 days)
+  // Always generate a fresh signed URL — never use the stored one directly
   useEffect(() => {
-    if (!project.blueprint_url) return
+    if (!hasBlueprint) return
     supabase.storage.from('blueprints')
       .createSignedUrl(storagePath, 60 * 60 * 24 * 7)
-      .then(({ data }) => {
-        if (data?.signedUrl) setPdfUrl(data.signedUrl)
+      .then(({ data, error }) => {
+        if (data?.signedUrl) {
+          setPdfUrl(data.signedUrl)
+        } else {
+          setUploadError('Could not load blueprint — try re-uploading.')
+          console.error('Signed URL error:', error)
+        }
       })
   }, [project.id])
 
@@ -100,13 +106,14 @@ export function Documents({ project, company, onUpdated }) {
       return
     }
 
+    // Store the storage path as a flag — signed URLs are generated on demand
+    await projects.update(project.id, { blueprint_url: path })
+
     const { data: urlData } = await supabase.storage
       .from('blueprints')
       .createSignedUrl(path, 60 * 60 * 24 * 7)
 
-    const url = urlData?.signedUrl || null
-    await projects.update(project.id, { blueprint_url: url })
-    setPdfUrl(url)
+    setPdfUrl(urlData?.signedUrl || null)
     setUploading(false)
     setApplied(false)
     onUpdated?.()
@@ -135,7 +142,7 @@ export function Documents({ project, company, onUpdated }) {
           </div>
         )}
 
-        {pdfUrl ? (
+        {hasBlueprint ? (
           // ── Blueprint uploaded ────────────────────────────────────────────────
           <>
             <div style={{

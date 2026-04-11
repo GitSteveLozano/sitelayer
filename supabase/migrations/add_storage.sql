@@ -16,6 +16,12 @@ CREATE POLICY "blueprint_select" ON storage.objects
     AND auth.uid() IS NOT NULL
   );
 
+CREATE POLICY "blueprint_update" ON storage.objects
+  FOR UPDATE USING (
+    bucket_id = 'blueprints'
+    AND auth.uid() IS NOT NULL
+  );
+
 CREATE POLICY "blueprint_delete" ON storage.objects
   FOR DELETE USING (
     bucket_id = 'blueprints'
