@@ -159,10 +159,12 @@ serve(async (req) => {
   try {
     const estRes = await qboQuery(
       realm_id, token, QBO_BASE,
-      `SELECT * FROM Estimate WHERE TxnStatus = 'Accepted'`
+      `SELECT * FROM Estimate WHERE MetaData.LastUpdatedTime > '2020-01-01'`
     )
 
     for (const est of estRes?.QueryResponse?.Estimate || []) {
+      // Only sync accepted estimates
+      if (est.TxnStatus !== 'Accepted') continue
       const customerRef = est.CustomerRef?.value
       const jobName     = est.CustomerRef?.name || 'Unnamed Job'
       const bidTotal    = est.TotalAmt || 0
