@@ -5,6 +5,7 @@ import { Card, Label, Btn, Spinner } from './Atoms'
 import { supabase } from '../lib/supabase'
 import { projects } from '../lib/db'
 import { generateEstimatePDF } from '../lib/generateEstimate'
+import { SCOPE_ITEMS } from './BlueprintCanvas'
 
 const BlueprintCanvas = lazy(() =>
   import('./BlueprintCanvas').then(m => ({ default: m.BlueprintCanvas }))
@@ -22,8 +23,10 @@ export function Documents({ project, company, onUpdated }) {
   )
   const hasBlueprint = !!project.blueprint_url
 
-  // Get saved rates from company settings
-  const rates = company?.metadata?.rates || {}
+  // Project rates override company defaults
+  const companyRates = company?.metadata?.rates || {}
+  const projectRates = project.metadata?.rates || {}
+  const rates = { ...companyRates, ...projectRates }
 
   const inputRef = useRef(null)
   const storagePath = `${project.company_id}/${project.id}/blueprint.pdf`
@@ -345,6 +348,119 @@ export function Documents({ project, company, onUpdated }) {
           <div style={{ fontSize: 12, color: TH.red, marginTop: 10 }}>{uploadError}</div>
         )}
       </Card>
+
+      {/* Project-specific rates */}
+      <ProjectRates project={project} companyRates={companyRates} onUpdated={onUpdated} />
     </div>
+  )
+}
+
+function ProjectRates({ project, companyRates, onUpdated }) {
+  const existing = project.metadata?.rates || {}
+  const [editing, setEditing] = useState(false)
+  const [rates, setRates] = useState(
+    Object.fromEntries(SCOPE_ITEMS.map(s => [s.id, existing[s.id] ?? '']))
+  )
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+
+  const hasOverrides = Object.values(rates).some(v => v !== '')
+
+  async function handleSave() {
+    setSaving(true)
+    const overrides = {}
+    for (const [key, val] of Object.entries(rates)) {
+      if (val !== '' && val !== null) overrides[key] = parseFloat(val)
+    }
+    await projects.update(project.id, {
+      metadata: { ...(project.metadata || {}), rates: overrides }
+    })
+    setSaving(false)
+    setSaved(true)
+    setTimeout(() => setSaved(false), 3000)
+    onUpdated?.()
+  }
+
+  function handleReset() {
+    setRates(Object.fromEntries(SCOPE_ITEMS.map(s => [s.id, ''])))
+  }
+
+  return (
+    <Card style={{ marginTop: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: editing ? 14 : 0 }}>
+        <div>
+          <Label style={{ margin: 0 }}>Project Rates</Label>
+          <div style={{ fontSize: 11, color: TH.muted, marginTop: 2 }}>
+            {hasOverrides ? 'Custom rates for this project' : 'Using company default rates'}
+          </div>
+        </div>
+        <Btn
+          variant="ghost"
+          onClick={() => setEditing(!editing)}
+          style={{ fontSize: 11, padding: '5px 12px' }}
+        >
+          {editing ? 'Close' : hasOverrides ? 'Edit' : 'Customize'}
+        </Btn>
+      </div>
+
+      {editing && (
+        <>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${TH.border}` }}>
+                <th style={{ textAlign: 'left', color: TH.muted, fontWeight: 600, padding: '6px 0', fontSize: 11 }}>Scope Item</th>
+                <th style={{ textAlign: 'right', color: TH.muted, fontWeight: 600, padding: '6px 0', fontSize: 11 }}>Default</th>
+                <th style={{ textAlign: 'right', color: TH.muted, fontWeight: 600, padding: '6px 8px', fontSize: 11 }}>Project Rate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {SCOPE_ITEMS.map(s => {
+                const defaultRate = companyRates[s.id] ?? s.defaultRate
+                const hasOverride = rates[s.id] !== '' && rates[s.id] !== null
+                return (
+                  <tr key={s.id} style={{ borderBottom: `1px solid ${TH.border}22` }}>
+                    <td style={{ padding: '8px 0', color: TH.text, display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: 2, background: s.color, flexShrink: 0 }} />
+                      {s.id}
+                      <span style={{ fontSize: 10, color: TH.faint }}>/{s.unit}</span>
+                    </td>
+                    <td style={{ textAlign: 'right', padding: '8px 0', color: TH.faint, fontSize: 12 }}>
+                      ${defaultRate.toFixed(2)}
+                    </td>
+                    <td style={{ textAlign: 'right', padding: '8px 0 8px 8px' }}>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.25"
+                        value={rates[s.id]}
+                        onChange={e => setRates(r => ({ ...r, [s.id]: e.target.value }))}
+                        placeholder={defaultRate.toFixed(2)}
+                        style={{
+                          width: 80, textAlign: 'right',
+                          background: TH.surf, border: `1px solid ${hasOverride ? TH.amber + '66' : TH.border}`,
+                          borderRadius: 5, padding: '5px 8px',
+                          color: hasOverride ? TH.amber : TH.text, fontSize: 13, fontFamily: 'inherit',
+                        }}
+                      />
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Btn onClick={handleSave} disabled={saving} style={{ fontSize: 12 }}>
+              {saving ? 'Saving…' : 'Save Rates'}
+            </Btn>
+            {hasOverrides && (
+              <Btn variant="ghost" onClick={handleReset} style={{ fontSize: 11, padding: '5px 12px' }}>
+                Reset to Defaults
+              </Btn>
+            )}
+            {saved && <span style={{ fontSize: 12, color: TH.green }}>Saved</span>}
+          </div>
+        </>
+      )}
+    </Card>
   )
 }
