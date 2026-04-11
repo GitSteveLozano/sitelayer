@@ -84,7 +84,7 @@ export const labor = {
   listByProject: (projectId) =>
     supabase
       .from('labor_entries')
-      .select('*')
+      .select('*, worker:workers(name)')
       .eq('project_id', projectId)
       .order('logged_at', { ascending: false }),
 

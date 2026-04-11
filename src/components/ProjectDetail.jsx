@@ -3,12 +3,14 @@ import { TH } from '../lib/theme'
 import { fmt } from '../lib/calc'
 import { Card, Badge, StatusDot, Bar, Label, Btn, Spinner } from './Atoms'
 import { Documents } from './Documents'
+import { ProjectInsights } from './ProjectInsights'
 import { useProject } from '../hooks/useProjects'
 import { useIsMobile } from '../hooks/useIsMobile'
 import { projects } from '../lib/db'
 
 const TABS = [
   { id: 'overview',   label: 'Overview'    },
+  { id: 'insights',   label: 'Insights'    },
   { id: 'documents',  label: 'Documents'   },
 ]
 
@@ -267,6 +269,11 @@ export function ProjectDetail({ projectId, company, onBack }) {
             </div>
           </div>
         </>
+      )}
+
+      {/* ── Insights Tab ── */}
+      {tab === 'insights' && (
+        <ProjectInsights project={p} entries={entries} />
       )}
 
       {/* ── Documents Tab ── */}
