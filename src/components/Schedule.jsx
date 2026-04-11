@@ -60,14 +60,6 @@ export function Schedule({ companyId }) {
     setSaving(false)
   }
 
-  function removeWorker(assign, workerId) {
-    updateWorkers(assign.id, (assign.scheduled_workers || []).filter(id => id !== workerId))
-  }
-
-  function addWorkerBack(assign, workerId) {
-    updateWorkers(assign.id, [...(assign.scheduled_workers || []), workerId])
-  }
-
   async function updateWorkers(scheduleId, workerIds) {
     setSaving(true)
     await schedules.update(scheduleId, { scheduled_workers: workerIds })
@@ -333,73 +325,31 @@ export function Schedule({ companyId }) {
                     {parseInt(date.slice(8))}
                   </span>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  {workerCount > 0 && (
-                    <span style={{ fontSize: 9, color: TH.muted, background: TH.surf, padding: '2px 6px', borderRadius: 8 }}>
-                      {workerCount}w
-                    </span>
-                  )}
-                  {dayAssignments.length > 0 && !inCopyMode && (
-                    <button
-                      onClick={() => { setCopySource(date); setCopyTargets(new Set()) }}
-                      title="Copy this day"
-                      style={{
-                        fontSize: 10, padding: '2px 5px', borderRadius: 4,
-                        background: 'none', border: `1px solid ${TH.border}44`,
-                        color: TH.muted, cursor: 'pointer', lineHeight: 1,
-                      }}
-                    >⧉</button>
-                  )}
-                </div>
+                {dayAssignments.length > 0 && !inCopyMode && (
+                  <button
+                    onClick={() => { setCopySource(date); setCopyTargets(new Set()) }}
+                    style={{
+                      fontSize: 10, padding: '3px 8px', borderRadius: 4,
+                      background: TH.surf, border: `1px solid ${TH.border}66`,
+                      color: TH.muted, cursor: 'pointer', fontFamily: 'inherit',
+                    }}
+                  >
+                    Copy
+                  </button>
+                )}
               </div>
 
               {/* Assignments */}
               <div style={{ padding: '6px 8px', flex: 1, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {dayAssignments.map(assign => {
-                  const divColor = TH.divColors?.[assign.project?.division] || TH.amber
-                  const assignedWorkers = (assign.scheduled_workers || [])
-                    .map(wid => workerList.find(x => x.id === wid)).filter(Boolean)
-                  const unassigned = workerList.filter(w => !(assign.scheduled_workers || []).includes(w.id))
-
-                  return (
-                    <div key={assign.id} style={{
-                      padding: '6px 8px', borderRadius: 6,
-                      borderLeft: `3px solid ${divColor}`, background: divColor + '08',
-                    }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: assignedWorkers.length > 0 ? 5 : 0 }}>
-                        <span style={{ fontSize: 11, fontWeight: 600, color: TH.text }}>
-                          {assign.project?.name || 'Project'}
-                        </span>
-                        <button
-                          onClick={() => removeAssignment(assign.id)}
-                          style={{ fontSize: 13, color: TH.faint, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', lineHeight: 1 }}
-                        >×</button>
-                      </div>
-                      {assignedWorkers.length > 0 && (
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-                          {assignedWorkers.map(w => (
-                            <span key={w.id} style={{
-                              display: 'inline-flex', alignItems: 'center', gap: 3,
-                              fontSize: 9, padding: '2px 6px', borderRadius: 8,
-                              background: TH.card, border: `1px solid ${TH.border}66`, color: TH.text,
-                            }}>
-                              {w.name.split(' ')[0]}
-                              <button
-                                onClick={() => removeWorker(assign, w.id)}
-                                style={{ background: 'none', border: 'none', cursor: 'pointer', color: TH.faint, fontSize: 10, padding: 0, lineHeight: 1 }}
-                              >×</button>
-                            </span>
-                          ))}
-                          {unassigned.length > 0 && (
-                            <span style={{ position: 'relative', display: 'inline-block' }}>
-                              <WorkerAddMenu workers={unassigned} onAdd={wid => addWorkerBack(assign, wid)} />
-                            </span>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  )
-                })}
+                {dayAssignments.map(assign => (
+                  <AssignmentCard
+                    key={assign.id}
+                    assign={assign}
+                    workerList={workerList}
+                    onRemoveAssignment={() => removeAssignment(assign.id)}
+                    onUpdateWorkers={(workerIds) => updateWorkers(assign.id, workerIds)}
+                  />
+                ))}
 
                 <div style={{ marginTop: 'auto', paddingTop: dayAssignments.length > 0 ? 4 : 0 }}>
                   <select
@@ -427,42 +377,106 @@ export function Schedule({ companyId }) {
   )
 }
 
-function WorkerAddMenu({ workers, onAdd }) {
-  const [open, setOpen] = useState(false)
+function AssignmentCard({ assign, workerList, onRemoveAssignment, onUpdateWorkers }) {
+  const [editing, setEditing] = useState(false)
+  const divColor = TH.divColors?.[assign.project?.division] || TH.amber
+  const assignedIds = assign.scheduled_workers || []
+  const assignedWorkers = assignedIds.map(wid => workerList.find(x => x.id === wid)).filter(Boolean)
+  const allAssigned = assignedWorkers.length === workerList.length
+
+  function toggleWorker(wid) {
+    const next = assignedIds.includes(wid)
+      ? assignedIds.filter(id => id !== wid)
+      : [...assignedIds, wid]
+    onUpdateWorkers(next)
+  }
+
   return (
-    <>
-      <button
-        onClick={() => setOpen(o => !o)}
+    <div style={{
+      padding: '6px 8px', borderRadius: 6,
+      borderLeft: `3px solid ${divColor}`, background: divColor + '08',
+    }}>
+      {/* Project header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <span style={{ fontSize: 11, fontWeight: 600, color: TH.text }}>
+          {assign.project?.name || 'Project'}
+        </span>
+        <button
+          onClick={onRemoveAssignment}
+          style={{ fontSize: 13, color: TH.faint, background: 'none', border: 'none', cursor: 'pointer', padding: '0 2px', lineHeight: 1 }}
+        >×</button>
+      </div>
+
+      {/* Crew display — click to edit */}
+      <div
+        onClick={() => setEditing(e => !e)}
         style={{
-          fontSize: 9, padding: '2px 6px', borderRadius: 8,
-          background: 'transparent', border: `1px dashed ${TH.border}55`,
-          color: TH.muted, cursor: 'pointer', lineHeight: 1.4,
+          marginTop: 4, padding: '4px 0', cursor: 'pointer',
+          fontSize: 10, color: assignedWorkers.length > 0 ? TH.muted : TH.faint,
+          lineHeight: 1.5,
         }}
-      >+</button>
-      {open && (
+      >
+        {assignedWorkers.length > 0
+          ? assignedWorkers.map(w => w.name.split(' ')[0]).join(', ')
+          : 'No crew — tap to assign'
+        }
+        {!editing && assignedWorkers.length > 0 && (
+          <span style={{ marginLeft: 4, fontSize: 9, color: TH.faint }}>
+            ({assignedWorkers.length})
+          </span>
+        )}
+      </div>
+
+      {/* Crew toggle panel */}
+      {editing && (
         <div style={{
-          position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 10,
-          background: TH.card, border: `1px solid ${TH.border}`, borderRadius: 6,
-          padding: 3, minWidth: 110, boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+          marginTop: 4, padding: '6px 0',
+          borderTop: `1px solid ${TH.border}33`,
         }}>
-          {workers.map(w => (
-            <button
-              key={w.id}
-              onClick={() => { onAdd(w.id); setOpen(false) }}
-              style={{
-                display: 'block', width: '100%', textAlign: 'left',
-                padding: '5px 8px', fontSize: 11, color: TH.text,
-                background: 'none', border: 'none', cursor: 'pointer', borderRadius: 4,
-              }}
-              onMouseEnter={e => e.currentTarget.style.background = TH.surf}
-              onMouseLeave={e => e.currentTarget.style.background = 'none'}
-            >
-              {w.name}
-            </button>
-          ))}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {workerList.map(w => {
+              const isOn = assignedIds.includes(w.id)
+              return (
+                <button
+                  key={w.id}
+                  onClick={(e) => { e.stopPropagation(); toggleWorker(w.id) }}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    padding: '4px 6px', borderRadius: 4, fontSize: 10,
+                    background: isOn ? TH.green + '15' : 'transparent',
+                    border: 'none', cursor: 'pointer', color: TH.text,
+                    fontFamily: 'inherit', width: '100%', textAlign: 'left',
+                  }}
+                >
+                  <span style={{ color: isOn ? TH.text : TH.muted }}>{w.name}</span>
+                  <span style={{
+                    width: 16, height: 16, borderRadius: 3,
+                    border: isOn ? `2px solid ${TH.green}` : `2px solid ${TH.border}`,
+                    background: isOn ? TH.green : 'transparent',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    fontSize: 10, color: '#fff', lineHeight: 1,
+                    flexShrink: 0,
+                  }}>
+                    {isOn ? '✓' : ''}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+          <button
+            onClick={(e) => { e.stopPropagation(); setEditing(false) }}
+            style={{
+              marginTop: 4, fontSize: 10, color: TH.muted,
+              background: 'none', border: 'none', cursor: 'pointer',
+              fontFamily: 'inherit', width: '100%', textAlign: 'center',
+              padding: '3px 0',
+            }}
+          >
+            Done
+          </button>
         </div>
       )}
-    </>
+    </div>
   )
 }
 
