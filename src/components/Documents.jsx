@@ -266,8 +266,13 @@ export function Documents({ project, company, onUpdated }) {
                   Drop a PDF here, or click to browse.<br />
                   Then measure directly — no PlanSwift needed.
                 </div>
-                <label style={{ cursor: 'pointer' }}>
-                  <Btn style={{ pointerEvents: 'none' }}>Choose PDF</Btn>
+                <label style={{
+                  cursor: 'pointer', display: 'inline-block',
+                  padding: '10px 24px', borderRadius: 6, fontSize: 13,
+                  fontWeight: 500, fontFamily: 'inherit',
+                  background: TH.amber, color: '#000',
+                }}>
+                  Choose PDF
                   <input
                     type="file"
                     accept=".pdf,application/pdf"
