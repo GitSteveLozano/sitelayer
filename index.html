@@ -16,6 +16,10 @@
   </head>
   <body>
     <div id="root"></div>
+    <script>
+      // GitHub Pages SPA redirect restoration
+      (function(){var r=sessionStorage.redirect;delete sessionStorage.redirect;if(r&&r!==location.pathname.slice(1)){history.replaceState(null,null,'/sitelayer/'+r)}})();
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

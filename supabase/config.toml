@@ -1,0 +1,12 @@
+[project]
+id = ""
+
+# QBO OAuth functions must be publicly accessible (no JWT required)
+# qbo-auth: called from frontend without auth headers
+# qbo-callback: called by Intuit's OAuth redirect (browser navigation, no auth possible)
+
+[functions."qbo-auth"]
+verify_jwt = false
+
+[functions."qbo-callback"]
+verify_jwt = false
