@@ -57,14 +57,9 @@ export function Schedule({ companyId }) {
     setSaving(false)
   }
 
-  async function updateWorkers(scheduleId, date, workerIds) {
+  async function updateWorkers(scheduleId, workerIds) {
     setSaving(true)
-    await schedules.upsert({
-      id: scheduleId,
-      company_id: companyId,
-      work_date: date,
-      scheduled_workers: workerIds,
-    })
+    await schedules.update(scheduleId, { scheduled_workers: workerIds })
     await loadData()
     setSaving(false)
   }
@@ -166,7 +161,7 @@ export function Schedule({ companyId }) {
                       value={assign.scheduled_workers || []}
                       onChange={e => {
                         const opts = Array.from(e.target.selectedOptions)
-                        updateWorkers(assign.id, date, opts.map(o => o.value))
+                        updateWorkers(assign.id, opts.map(o => o.value))
                       }}
                       options={workerList.map(w => ({ value: w.id, label: w.name }))}
                       style={{ fontSize: 12 }}

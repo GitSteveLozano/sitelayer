@@ -147,7 +147,13 @@ export const schedules = {
 
   // Create or update schedule entry
   upsert: (schedule) =>
-    supabase.from('crew_schedules').upsert(schedule).select().single(),
+    supabase.from('crew_schedules')
+      .upsert(schedule, { onConflict: 'company_id,project_id,work_date' })
+      .select().single(),
+
+  // Update a schedule entry by ID
+  update: (id, updates) =>
+    supabase.from('crew_schedules').update(updates).eq('id', id),
 
   // Delete schedule entry
   delete: (id) =>
