@@ -78,8 +78,9 @@ export default function App() {
         {view === 'takeoff' && (
           <NewTakeoff
             companyId={company?.id}
+            company={company}
             onBack={() => navigate('projects')}
-            onCreated={() => { refresh(); navigate('projects') }}
+            onCreated={(proj) => { refresh(); if (proj?.id) { setSelected(proj.id); setView('project') } else { navigate('projects') } }}
           />
         )}
 
