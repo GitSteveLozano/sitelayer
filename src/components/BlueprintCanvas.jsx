@@ -250,46 +250,7 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
             </button>
           ))}
 
-          <div style={{ width: 1, height: 24, background: TH.border }} />
-
-          {/* Scope selector */}
-          {SCOPE_ITEMS.map(s => {
-            const isActive = activeScope === s.id
-            const div = getDivision(s.id)
-            return (
-              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
-                <button
-                  onClick={() => setActiveScope(s.id)}
-                  style={{
-                    padding: '5px 10px', borderRadius: '5px 0 0 5px', fontSize: 11, fontFamily: 'inherit',
-                    background: isActive ? s.color + '33' : 'transparent',
-                    color:      isActive ? s.color : TH.muted,
-                    border:     `1px solid ${isActive ? s.color : TH.border}`,
-                    borderRight: 'none',
-                    cursor:     'pointer',
-                  }}
-                >
-                  {s.id}
-                </button>
-                <select
-                  value={div}
-                  onChange={e => setDivOverrides(prev => ({ ...prev, [s.id]: e.target.value }))}
-                  style={{
-                    padding: '4px 14px 4px 5px', borderRadius: '0 5px 5px 0', fontSize: 9,
-                    fontFamily: 'inherit',
-                    background: isActive ? s.color + '15' : TH.surf,
-                    color:      isActive ? s.color : TH.faint,
-                    border:     `1px solid ${isActive ? s.color : TH.border}`,
-                    cursor:     'pointer',
-                  }}
-                >
-                  {DIVISIONS.map(d => <option key={d} value={d}>{d}</option>)}
-                </select>
-              </div>
-            )
-          })}
-
-          <div style={{ width: 1, height: 24, background: TH.border }} />
+          <div style={{ flex: 1 }} />
 
           {/* Zoom */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -492,21 +453,42 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
           <div style={{ fontSize: 11, color: TH.muted, marginTop: 2 }}>Blueprint measurements</div>
         </div>
 
-        {/* Scope summary with individual polygons */}
+        {/* Scope selector + measurements */}
         <div style={{ overflowY: 'auto', padding: '12px 18px', borderBottom: `1px solid ${TH.border}` }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: TH.muted, textTransform: 'uppercase', letterSpacing: '0.08em', marginBottom: 10 }}>
-            Measurements
+            Scope
           </div>
           {SCOPE_ITEMS.map(scope => {
+            const isActive = activeScope === scope.id
             const qty     = summary[scope.id] || 0
             const myPolys = polygons.filter(p => p.scope === scope.id)
+            const div = getDivision(scope.id)
             return (
-              <div key={scope.id} style={{ marginBottom: 12 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3 }}>
+              <div key={scope.id} style={{ marginBottom: 8 }}>
+                <div
+                  onClick={() => setActiveScope(scope.id)}
+                  style={{
+                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                    marginBottom: 3, padding: '4px 6px', borderRadius: 5, cursor: 'pointer',
+                    background: isActive ? scope.color + '18' : 'transparent',
+                    border: `1px solid ${isActive ? scope.color + '55' : 'transparent'}`,
+                  }}
+                >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <div style={{ width: 9, height: 9, borderRadius: 2, background: scope.color }} />
-                    <span style={{ fontSize: 12, fontWeight: 500 }}>{scope.id}</span>
-                    <span style={{ fontSize: 9, color: TH.faint }}>{getDivision(scope.id)}</span>
+                    <span style={{ fontSize: 12, fontWeight: isActive ? 600 : 500, color: isActive ? scope.color : TH.text }}>{scope.id}</span>
+                    <select
+                      value={div}
+                      onClick={e => e.stopPropagation()}
+                      onChange={e => setDivOverrides(prev => ({ ...prev, [scope.id]: e.target.value }))}
+                      style={{
+                        padding: '1px 2px', borderRadius: 3, fontSize: 9, fontFamily: 'inherit',
+                        background: 'transparent', color: TH.faint,
+                        border: `1px solid ${TH.border}55`, cursor: 'pointer',
+                      }}
+                    >
+                      {DIVISIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                    </select>
                   </div>
                   <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums', color: qty > 0 ? TH.text : TH.faint }}>
                     {qty > 0 ? `${qty.toLocaleString()} ${scope.unit}` : '—'}
