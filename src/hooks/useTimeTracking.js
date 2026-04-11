@@ -42,9 +42,23 @@ export function useLaborEntry() {
 
   const submit = useCallback(async (entries) => {
     setSaving(true)
-    const { error: submitErr } = await supabase
-      .from('labor_entries')
-      .upsert(entries, { onConflict: 'company_id,worker_id,work_date,project_id' })
+    const toUpdate = entries.filter(e => e.id)
+    const toInsert = entries.filter(e => !e.id)
+
+    let submitErr = null
+
+    // Update existing entries (have IDs from previous confirmation)
+    if (toUpdate.length > 0) {
+      const { error: upErr } = await supabase.from('labor_entries').upsert(toUpdate)
+      if (upErr) submitErr = upErr
+    }
+
+    // Insert new entries (first-time confirmation)
+    if (!submitErr && toInsert.length > 0) {
+      const { error: inErr } = await supabase.from('labor_entries').insert(toInsert)
+      if (inErr) submitErr = inErr
+    }
+
     setError(submitErr?.message)
     setSaving(false)
     return { error: submitErr }

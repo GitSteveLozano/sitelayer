@@ -8,8 +8,8 @@ import { SCOPE_ITEMS } from './BlueprintCanvas'
 export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
   const isMobile = useIsMobile()
   const [selectedDate, setSelectedDate] = useState(() => {
-    const today = new Date()
-    return today.toISOString().split('T')[0]
+    const d = new Date()
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
   })
   const { schedules, workers: workerList, loading, error, refetch: loadSchedule } = useCrewSchedule(companyId, selectedDate)
   const { saving, error: saveError, submit } = useLaborEntry()
