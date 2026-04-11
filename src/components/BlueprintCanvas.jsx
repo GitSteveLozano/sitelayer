@@ -218,13 +218,13 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
     <div style={{ display: 'flex', height: 'calc(100vh - 80px)', gap: 0, overflow: 'hidden' }}>
 
       {/* ── Left panel: canvas ── */}
-      <div style={{ flex: 1, overflow: 'auto', position: 'relative', background: '#1a1a2e' }}>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#1a1a2e' }}>
 
-        {/* Toolbar */}
+        {/* Toolbar — fixed above scroll area */}
         <div style={{
-          position: 'sticky', top: 0, zIndex: 10,
+          flexShrink: 0, zIndex: 10,
           background: TH.card, borderBottom: `1px solid ${TH.border}`,
-          padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+          padding: '6px 12px', display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
         }}>
           {/* Mode buttons */}
           {[
@@ -239,7 +239,7 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
               title={m.disabled ? 'Calibrate scale first' : ''}
               style={{
                 display: 'flex', alignItems: 'center', gap: 5,
-                padding: '6px 12px', borderRadius: 5, fontSize: 12, fontFamily: 'inherit',
+                padding: '5px 10px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit',
                 background: mode === m.id ? TH.amber : TH.surf,
                 color:      mode === m.id ? '#000'   : m.disabled ? TH.faint : TH.text,
                 border:     `1px solid ${mode === m.id ? TH.amber : TH.border}`,
@@ -247,6 +247,25 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
               }}
             >
               {m.icon} {m.label}
+            </button>
+          ))}
+
+          <div style={{ width: 1, height: 20, background: TH.border }} />
+
+          {/* Scope pills */}
+          {SCOPE_ITEMS.map(s => (
+            <button
+              key={s.id}
+              onClick={() => setActiveScope(s.id)}
+              style={{
+                padding: '4px 8px', borderRadius: 4, fontSize: 10, fontFamily: 'inherit',
+                background: activeScope === s.id ? s.color + '33' : 'transparent',
+                color:      activeScope === s.id ? s.color : TH.muted,
+                border:     `1px solid ${activeScope === s.id ? s.color : TH.border}`,
+                cursor:     'pointer',
+              }}
+            >
+              {s.id}
             </button>
           ))}
 
@@ -262,7 +281,7 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
           {/* Page nav */}
           {numPages > 1 && (
             <>
-              <div style={{ width: 1, height: 24, background: TH.border }} />
+              <div style={{ width: 1, height: 20, background: TH.border }} />
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <button onClick={() => setPageNum(p => Math.max(1, p - 1))} disabled={pageNum === 1} style={{ ...btnStyle }}>‹</button>
                 <span style={{ fontSize: 11, color: TH.muted }}>Page {pageNum} / {numPages}</span>
@@ -272,10 +291,13 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
           )}
         </div>
 
+        {/* Scrollable canvas area */}
+        <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+
         {/* Calibration input bar */}
         {mode === 'calibrate' && calibPoints.length === 2 && (
           <div style={{
-            position: 'sticky', top: 48, zIndex: 9,
+            position: 'sticky', top: 0, zIndex: 9,
             background: TH.amberLo, borderBottom: `1px solid ${TH.amber}44`,
             padding: '10px 16px', display: 'flex', alignItems: 'center', gap: 10,
           }}>
@@ -442,6 +464,7 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
             Double-click to close polygon
           </div>
         )}
+        </div>{/* end scrollable area */}
       </div>
 
       {/* ── Right panel: measurements ── */}
