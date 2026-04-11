@@ -15,6 +15,7 @@ export function Documents({ project, company, onUpdated }) {
   const [uploadError,  setUploadError]  = useState(null)
   const [pdfUrl,       setPdfUrl]       = useState(null)
   const [showCanvas,   setShowCanvas]   = useState(false)
+  const [loadingUrl,   setLoadingUrl]   = useState(false)
   const [applied,      setApplied]      = useState(false)
   const [estimateData, setEstimateData] = useState(
     project.metadata?.blueprint_measurements || null
@@ -27,20 +28,22 @@ export function Documents({ project, company, onUpdated }) {
   const inputRef = useRef(null)
   const storagePath = `${project.company_id}/${project.id}/blueprint.pdf`
 
-  // Always generate a fresh signed URL — never use the stored one directly
-  useEffect(() => {
-    if (!hasBlueprint) return
-    supabase.storage.from('blueprints')
+  // Generate a fresh signed URL on demand
+  async function openCanvas() {
+    setLoadingUrl(true)
+    setUploadError(null)
+    const { data, error } = await supabase.storage
+      .from('blueprints')
       .createSignedUrl(storagePath, 60 * 60 * 24 * 7)
-      .then(({ data, error }) => {
-        if (data?.signedUrl) {
-          setPdfUrl(data.signedUrl)
-        } else {
-          setUploadError('Could not load blueprint — try re-uploading.')
-          console.error('Signed URL error:', error)
-        }
-      })
-  }, [project.id])
+    setLoadingUrl(false)
+    if (data?.signedUrl) {
+      setPdfUrl(data.signedUrl)
+      setShowCanvas(true)
+    } else {
+      setUploadError('Could not load blueprint — try re-uploading.')
+      console.error('Signed URL error:', error)
+    }
+  }
 
   // ── Open canvas ─────────────────────────────────────────────────────────────
   if (showCanvas && pdfUrl) {
@@ -162,7 +165,11 @@ export function Documents({ project, company, onUpdated }) {
                 </div>
               </div>
               <button
-                onClick={() => window.open(pdfUrl, '_blank')}
+                onClick={async () => {
+                  const { data } = await supabase.storage.from('blueprints')
+                    .createSignedUrl(storagePath, 60 * 60)
+                  if (data?.signedUrl) window.open(data.signedUrl, '_blank')
+                }}
                 style={{ fontSize: 11, color: TH.muted, background: 'none', border: 'none', cursor: 'pointer', textDecoration: 'underline' }}
               >
                 View PDF
@@ -171,10 +178,11 @@ export function Documents({ project, company, onUpdated }) {
 
             {/* Primary CTA */}
             <Btn
-              onClick={() => setShowCanvas(true)}
+              onClick={openCanvas}
+              disabled={loadingUrl}
               style={{ width: '100%', padding: '14px', fontSize: 14, marginBottom: 10 }}
             >
-              ✏️ Open Measurement Canvas
+              {loadingUrl ? 'Loading…' : '✏️ Open Measurement Canvas'}
             </Btn>
 
             <div style={{ textAlign: 'center' }}>
