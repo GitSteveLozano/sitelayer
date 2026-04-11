@@ -38,7 +38,7 @@ export function Documents({ project, company, onUpdated }) {
           blueprintUrl={pdfUrl}
           rates={rates}
           onBack={() => setShowCanvas(false)}
-          onMeasurementsApplied={async ({ summary, totalSqft, estimate, subtotal, gst, total }) => {
+          onMeasurementsApplied={async ({ summary, totalSqft, estimate, subtotal, gst, total, divOverrides }) => {
             const measurements = {
               applied_at: new Date().toISOString(),
               summary,
@@ -50,7 +50,7 @@ export function Documents({ project, company, onUpdated }) {
             }
             await projects.update(project.id, {
               sqft:     Math.round(totalSqft),
-              metadata: { ...(project.metadata || {}), blueprint_measurements: measurements },
+              metadata: { ...(project.metadata || {}), blueprint_measurements: measurements, div_overrides: divOverrides || {} },
             })
             setEstimateData(measurements)
             setShowCanvas(false)
@@ -266,8 +266,13 @@ export function Documents({ project, company, onUpdated }) {
                   Drop a PDF here, or click to browse.<br />
                   Then measure directly — no PlanSwift needed.
                 </div>
-                <label style={{ cursor: 'pointer' }}>
-                  <Btn style={{ pointerEvents: 'none' }}>Choose PDF</Btn>
+                <label style={{
+                  cursor: 'pointer', display: 'inline-block',
+                  padding: '10px 24px', borderRadius: 6, fontSize: 13,
+                  fontWeight: 500, fontFamily: 'inherit',
+                  background: TH.amber, color: '#000',
+                }}>
+                  Choose PDF
                   <input
                     type="file"
                     accept=".pdf,application/pdf"

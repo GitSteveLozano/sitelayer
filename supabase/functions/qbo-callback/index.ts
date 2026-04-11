@@ -9,7 +9,7 @@ const QBO_CLIENT_SECRET  = Deno.env.get('QBO_CLIENT_SECRET')!
 const QBO_REDIRECT_URI   = Deno.env.get('QBO_REDIRECT_URI')!
 const SUPABASE_URL        = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE_KEY = Deno.env.get('SL_SERVICE_ROLE_KEY')!
-const APP_URL             = Deno.env.get('APP_URL') || 'https://gitstevelozano.github.io/sitelayer'
+const APP_URL             = (Deno.env.get('APP_URL') || 'https://gitstevelozano.github.io/sitelayer').replace(/\/+$/, '')
 
 serve(async (req) => {
   const url   = new URL(req.url)
