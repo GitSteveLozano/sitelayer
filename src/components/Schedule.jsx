@@ -61,10 +61,18 @@ export function Schedule({ companyId }) {
   }
 
   async function updateWorkers(scheduleId, workerIds) {
-    setSaving(true)
+    // Update local state immediately (no reload)
+    setScheduleData(prev => {
+      const next = { ...prev }
+      for (const date in next) {
+        next[date] = next[date].map(s =>
+          s.id === scheduleId ? { ...s, scheduled_workers: workerIds } : s
+        )
+      }
+      return next
+    })
+    // Save in background
     await schedules.update(scheduleId, { scheduled_workers: workerIds })
-    await loadData()
-    setSaving(false)
   }
 
   async function removeAssignment(scheduleId) {
