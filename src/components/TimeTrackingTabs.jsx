@@ -5,12 +5,12 @@ import { DailyConfirm } from './DailyConfirm'
 import { Workers } from './Workers'
 
 export function TimeTrackingTabs({ companyId }) {
-  const [tab, setTab] = useState('confirm')
+  const [tab, setTab] = useState('workers')
 
   const TABS = [
-    { id: 'confirm', label: 'Confirm Day', icon: '✓' },
-    { id: 'schedule', label: 'Schedule', icon: '📅' },
     { id: 'workers', label: 'Crew', icon: '👷' },
+    { id: 'schedule', label: 'Schedule', icon: '📅' },
+    { id: 'confirm', label: 'Confirm Day', icon: '✓' },
   ]
 
   return (
@@ -49,9 +49,9 @@ export function TimeTrackingTabs({ companyId }) {
 
       {/* Tab content */}
       <div>
-        {tab === 'confirm' && <DailyConfirm companyId={companyId} />}
-        {tab === 'schedule' && <Schedule companyId={companyId} />}
         {tab === 'workers' && <Workers companyId={companyId} />}
+        {tab === 'schedule' && <Schedule companyId={companyId} />}
+        {tab === 'confirm' && <DailyConfirm companyId={companyId} onNavigate={setTab} />}
       </div>
     </div>
   )

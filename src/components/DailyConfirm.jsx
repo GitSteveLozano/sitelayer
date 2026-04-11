@@ -5,7 +5,7 @@ import { useCrewSchedule, useLaborEntry, useConfirmedByDate } from '../hooks/use
 import { useIsMobile } from '../hooks/useIsMobile'
 import { SCOPE_ITEMS } from './BlueprintCanvas'
 
-export function DailyConfirm({ companyId, onConfirmed }) {
+export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
   const isMobile = useIsMobile()
   const [selectedDate, setSelectedDate] = useState(() => {
     const today = new Date()
@@ -13,7 +13,8 @@ export function DailyConfirm({ companyId, onConfirmed }) {
   })
   const { schedule: schedData, workers: workerList, loading, error, refetch: loadSchedule } = useCrewSchedule(companyId, selectedDate)
   const { saving, error: saveError, submit } = useLaborEntry()
-  const { entries: confirmedEntries } = useConfirmedByDate(companyId, selectedDate)
+  const { entries: confirmedEntries, refetch: refetchConfirmed } = useConfirmedByDate(companyId, selectedDate)
+  const [confirmed, setConfirmed] = useState(false)
 
   // Build draft entries from schedule + existing entries
   const draftEntries = useMemo(() => {
@@ -62,6 +63,7 @@ export function DailyConfirm({ companyId, onConfirmed }) {
 
   useEffect(() => {
     setEntries(draftEntries)
+    setConfirmed(false)
   }, [draftEntries])
 
   function updateEntry(index, updates) {
@@ -106,11 +108,17 @@ export function DailyConfirm({ companyId, onConfirmed }) {
 
     const { error: submitError } = await submit(toSave)
 
-    if (!submitError && onConfirmed) onConfirmed()
+    if (!submitError) {
+      setConfirmed(true)
+      refetchConfirmed()
+      onConfirmed?.()
+    }
   }
 
   const totalHours = entries.reduce((s, e) => s + (parseFloat(e.hours) || 0), 0)
   const allHaveServiceItem = entries.every(e => e.service_item)
+  const hasNoSchedule = !schedData && confirmedEntries.length === 0
+  const hasNoCrew = workerList.length === 0
 
   if (loading || saving) return <div style={{ padding: 40, textAlign: 'center' }}>{loading ? 'Loading…' : 'Saving…'}</div>
 
@@ -129,17 +137,85 @@ export function DailyConfirm({ companyId, onConfirmed }) {
         <Input
           type="date"
           value={selectedDate}
-          onChange={e => setSelectedDate(e.target.value)}
+          onChange={e => { setSelectedDate(e.target.value); setConfirmed(false) }}
           style={{ width: 'auto' }}
         />
       </div>
 
+      {/* Success banner */}
+      {confirmed && (
+        <div style={{
+          background: TH.greenLo || '#dcfce7', border: `1px solid ${TH.green}44`,
+          borderRadius: 6, padding: '12px 16px', marginBottom: 16,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <div style={{ fontSize: 13, color: TH.green, fontWeight: 500 }}>
+            Day confirmed — {entries.filter(e => e.worker_id).length} entries, {totalHours.toFixed(1)} total hours
+          </div>
+          <button
+            onClick={() => setConfirmed(false)}
+            style={{ background: 'none', border: 'none', color: TH.green, cursor: 'pointer', fontSize: 16, padding: 0 }}
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {/* Save error */}
+      {saveError && (
+        <div style={{
+          background: '#fef2f2', border: `1px solid ${TH.red}44`,
+          borderRadius: 6, padding: '12px 16px', marginBottom: 16,
+          fontSize: 13, color: TH.red,
+        }}>
+          Failed to save: {saveError}
+        </div>
+      )}
+
       {/* Worker entries */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
         {entries.length === 0 ? (
-          <Card style={{ textAlign: 'center', padding: isMobile ? 28 : 40, color: TH.muted }}>
-            No crew scheduled for this date.<br />
-            Set up the schedule first, or add workers manually below.
+          <Card style={{ textAlign: 'center', padding: isMobile ? 28 : 40 }}>
+            {hasNoCrew ? (
+              <div>
+                <div style={{ fontSize: 32, marginBottom: 12 }}>👷</div>
+                <div style={{ fontSize: 15, fontWeight: 500, color: TH.text, marginBottom: 6 }}>
+                  No crew members yet
+                </div>
+                <div style={{ fontSize: 13, color: TH.muted, marginBottom: 16, lineHeight: 1.6 }}>
+                  Add your workers first, then create a schedule to auto-populate this page.
+                </div>
+                {onNavigate && (
+                  <Btn onClick={() => onNavigate('workers')} style={{ fontSize: 13 }}>
+                    Go to Crew
+                  </Btn>
+                )}
+              </div>
+            ) : hasNoSchedule ? (
+              <div>
+                <div style={{ fontSize: 32, marginBottom: 12 }}>📅</div>
+                <div style={{ fontSize: 15, fontWeight: 500, color: TH.text, marginBottom: 6 }}>
+                  No schedule for {formatDate(selectedDate)}
+                </div>
+                <div style={{ fontSize: 13, color: TH.muted, marginBottom: 16, lineHeight: 1.6 }}>
+                  Set up a schedule to auto-fill the crew, or add workers manually below.
+                </div>
+                <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
+                  {onNavigate && (
+                    <Btn variant="ghost" onClick={() => onNavigate('schedule')} style={{ fontSize: 13 }}>
+                      Go to Schedule
+                    </Btn>
+                  )}
+                  <Btn onClick={addExtraWorker} style={{ fontSize: 13 }}>
+                    + Add Worker Manually
+                  </Btn>
+                </div>
+              </div>
+            ) : (
+              <div style={{ color: TH.muted }}>
+                No entries for this date.
+              </div>
+            )}
           </Card>
         ) : (
           entries.map((entry, i) => (
@@ -183,15 +259,19 @@ export function DailyConfirm({ companyId, onConfirmed }) {
                     label="Hours"
                     type="number"
                     step="0.5"
+                    min="0"
                     value={entry.hours}
                     onChange={e => updateEntry(i, { hours: e.target.value })}
                   />
 
                   <Select
-                    label="Service Item"
+                    label={<span>Service Item <span style={{ color: TH.red, fontWeight: 400 }}>*</span></span>}
                     value={entry.service_item}
                     onChange={e => updateEntry(i, { service_item: e.target.value })}
-                    options={SCOPE_ITEMS.map(s => ({ value: s.id, label: isMobile ? s.id : `${s.id} (${s.unit})` }))}
+                    options={[
+                      { value: '', label: 'Select…' },
+                      ...SCOPE_ITEMS.map(s => ({ value: s.id, label: isMobile ? s.id : `${s.id} (${s.unit})` })),
+                    ]}
                   />
 
                   {(entry.isExtra || entries.length > 1) && (
@@ -206,30 +286,34 @@ export function DailyConfirm({ companyId, onConfirmed }) {
         )}
       </div>
 
-      {/* Actions */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: isMobile ? 12 : 16 }}>
-        <Btn variant="ghost" onClick={addExtraWorker}>
-          + Add Worker
-        </Btn>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: isMobile ? 11 : 12, color: TH.muted }}>Total Hours</div>
-            <div style={{ fontSize: isMobile ? 18 : 20, fontWeight: 600, color: TH.text }}>{totalHours.toFixed(1)}</div>
-          </div>
-
-          <Btn
-            onClick={confirmDay}
-            disabled={saving || entries.length === 0 || !allHaveServiceItem}
-          >
-            {saving ? 'Saving…' : 'Confirm Day'}
+      {/* Actions — only show when there are entries */}
+      {(entries.length > 0 || !hasNoCrew) && (
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginTop: isMobile ? 12 : 16 }}>
+          <Btn variant="ghost" onClick={addExtraWorker}>
+            + Add Worker
           </Btn>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            {entries.length > 0 && (
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontSize: isMobile ? 11 : 12, color: TH.muted }}>Total Hours</div>
+                <div style={{ fontSize: isMobile ? 18 : 20, fontWeight: 600, color: TH.text }}>{totalHours.toFixed(1)}</div>
+              </div>
+            )}
+
+            <Btn
+              onClick={confirmDay}
+              disabled={saving || entries.length === 0 || !allHaveServiceItem}
+            >
+              {saving ? 'Saving…' : 'Confirm Day'}
+            </Btn>
+          </div>
         </div>
-      </div>
+      )}
 
       {!allHaveServiceItem && entries.length > 0 && (
         <div style={{ marginTop: isMobile ? 10 : 12, fontSize: isMobile ? 11 : 12, color: TH.amber }}>
-          ⚠ Assign a service item to all workers before confirming
+          Select a service item for each worker to enable confirmation
         </div>
       )}
     </div>

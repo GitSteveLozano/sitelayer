@@ -194,6 +194,14 @@ export const workers = {
       .eq('is_active', true)
       .order('name', { ascending: true }),
 
+  listAll: (companyId) =>
+    supabase
+      .from('workers')
+      .select('*')
+      .eq('company_id', companyId)
+      .order('is_active', { ascending: false })
+      .order('name', { ascending: true }),
+
   create: (worker) =>
     supabase.from('workers').insert(worker).select().single(),
 
