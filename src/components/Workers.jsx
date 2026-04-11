@@ -83,6 +83,9 @@ export function Workers({ companyId }) {
     setSaving(false)
   }
 
+  // Collect unique roles from existing workers
+  const existingRoles = [...new Set(workerList.map(w => w.role).filter(Boolean))].sort()
+
   const activeWorkers = workerList.filter(w => w.is_active)
   const inactiveWorkers = workerList.filter(w => !w.is_active)
   const displayList = showInactive ? workerList : activeWorkers
@@ -110,7 +113,39 @@ export function Workers({ companyId }) {
         <form onSubmit={addWorker}>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 12, alignItems: 'end' }}>
             <Input label="Name" value={newName} onChange={e => setNewName(e.target.value)} placeholder="Mike Smith" />
-            <Input label="Role (optional)" value={newRole} onChange={e => setNewRole(e.target.value)} placeholder="Foreman" />
+            <div>
+              <Label>Role (optional)</Label>
+              {existingRoles.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 6 }}>
+                  {existingRoles.map(role => (
+                    <button
+                      key={role}
+                      type="button"
+                      onClick={() => setNewRole(role)}
+                      style={{
+                        fontSize: 11, padding: '4px 10px', borderRadius: 12,
+                        border: newRole === role ? `1px solid ${TH.amber}` : `1px solid ${TH.border}`,
+                        background: newRole === role ? TH.amber + '22' : 'transparent',
+                        color: newRole === role ? TH.amber : TH.muted,
+                        cursor: 'pointer', fontFamily: 'inherit',
+                      }}
+                    >
+                      {role}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <input
+                value={newRole}
+                onChange={e => setNewRole(e.target.value)}
+                placeholder={existingRoles.length > 0 ? 'Or type a new role…' : 'Foreman'}
+                style={{
+                  width: '100%', background: TH.surf, border: `1px solid ${TH.border}`,
+                  borderRadius: 6, padding: '10px 12px', color: TH.text, fontSize: 13,
+                  fontFamily: 'inherit', boxSizing: 'border-box', outline: 'none',
+                }}
+              />
+            </div>
             <Btn type="submit" disabled={saving || !newName.trim()}>
               {saving ? 'Adding…' : 'Add Worker'}
             </Btn>
