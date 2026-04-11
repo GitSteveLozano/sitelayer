@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { lazy, Suspense } from 'react'
 import { TH } from '../lib/theme'
 import { Card, Label, Btn, Spinner } from './Atoms'
@@ -24,6 +24,17 @@ export function Documents({ project, company, onUpdated }) {
   const rates = company?.metadata?.rates || {}
 
   const inputRef = useRef(null)
+  const storagePath = `${project.company_id}/${project.id}/blueprint.pdf`
+
+  // Regenerate signed URL on mount (they expire after 7 days)
+  useEffect(() => {
+    if (!project.blueprint_url) return
+    supabase.storage.from('blueprints')
+      .createSignedUrl(storagePath, 60 * 60 * 24 * 7)
+      .then(({ data }) => {
+        if (data?.signedUrl) setPdfUrl(data.signedUrl)
+      })
+  }, [project.id])
 
   // ── Open canvas ─────────────────────────────────────────────────────────────
   if (showCanvas && pdfUrl) {
