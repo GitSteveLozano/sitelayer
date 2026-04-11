@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 
-// Get today's crew schedule for auto-population
+// Get today's crew schedules for auto-population (supports multiple projects per day)
 export function useCrewSchedule(companyId, date) {
-  const [state, setState] = useState({ schedule: null, workers: [], loading: true, error: null })
+  const [state, setState] = useState({ schedules: [], workers: [], loading: true, error: null })
 
   const fetchData = useCallback(async () => {
     if (!companyId) {
-      setState({ schedule: null, workers: [], loading: false, error: null })
+      setState({ schedules: [], workers: [], loading: false, error: null })
       return
     }
     setState(prev => ({ ...prev, loading: true }))
@@ -16,13 +16,12 @@ export function useCrewSchedule(companyId, date) {
         .from('crew_schedules')
         .select('*, project:projects(id, name, division)')
         .eq('company_id', companyId)
-        .eq('work_date', date)
-        .maybeSingle(),
+        .eq('work_date', date),
       supabase.from('workers').select('*').eq('company_id', companyId).eq('is_active', true),
     ])
 
     setState({
-      schedule: schedRes.data,
+      schedules: schedRes.data || [],
       workers: workerRes.data || [],
       loading: false,
       error: schedRes.error || workerRes.error,

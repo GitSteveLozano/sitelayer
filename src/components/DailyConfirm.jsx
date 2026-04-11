@@ -11,21 +11,29 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
     const today = new Date()
     return today.toISOString().split('T')[0]
   })
-  const { schedule: schedData, workers: workerList, loading, error, refetch: loadSchedule } = useCrewSchedule(companyId, selectedDate)
+  const { schedules, workers: workerList, loading, error, refetch: loadSchedule } = useCrewSchedule(companyId, selectedDate)
   const { saving, error: saveError, submit } = useLaborEntry()
   const { entries: confirmedEntries, refetch: refetchConfirmed } = useConfirmedByDate(companyId, selectedDate)
   const [confirmed, setConfirmed] = useState(false)
 
-  // Build draft entries from schedule + existing entries
+  // Build draft entries from all schedules + existing entries, deduplicated by worker
   const draftEntries = useMemo(() => {
-    const scheduledMap = new Map(schedData?.scheduled_workers?.map(w => [w, {
-      worker_id: w,
-      project_id: schedData.project_id,
-      project_name: schedData.project?.name,
-      division: schedData.project?.division,
-    }]) || [])
-    const existingMap = new Map(confirmedEntries.map(e => [e.worker_id, e]))
+    // Merge workers from all schedules — each worker appears once with their first project
+    const scheduledMap = new Map()
+    for (const sched of schedules) {
+      for (const wid of sched.scheduled_workers || []) {
+        if (!scheduledMap.has(wid)) {
+          scheduledMap.set(wid, {
+            worker_id: wid,
+            project_id: sched.project_id,
+            project_name: sched.project?.name,
+            division: sched.project?.division,
+          })
+        }
+      }
+    }
 
+    const existingMap = new Map(confirmedEntries.map(e => [e.worker_id, e]))
     const result = []
 
     // Scheduled workers first
@@ -57,7 +65,7 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
     })
 
     return result
-  }, [schedData, confirmedEntries, workerList])
+  }, [schedules, confirmedEntries, workerList])
 
   const [entries, setEntries] = useState([])
 
@@ -79,11 +87,12 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
   }
 
   function addExtraWorker() {
+    const firstSched = schedules[0]
     setEntries(prev => [...prev, {
       worker_id: '',
       worker_name: '',
-      project_id: schedData?.project_id || '',
-      project_name: schedData?.project?.name || '',
+      project_id: firstSched?.project_id || '',
+      project_name: firstSched?.project?.name || '',
       hours: 8,
       service_item: '',
       status: 'draft',
@@ -117,7 +126,7 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
 
   const totalHours = entries.reduce((s, e) => s + (parseFloat(e.hours) || 0), 0)
   const allHaveServiceItem = entries.every(e => e.service_item)
-  const hasNoSchedule = !schedData && confirmedEntries.length === 0
+  const hasNoSchedule = schedules.length === 0 && confirmedEntries.length === 0
   const hasNoCrew = workerList.length === 0
 
   if (loading || saving) return <div style={{ padding: 40, textAlign: 'center' }}>{loading ? 'Loading…' : 'Saving…'}</div>
