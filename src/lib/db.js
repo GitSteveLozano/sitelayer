@@ -168,7 +168,7 @@ export const schedules = {
 
     const newEntries = existing.map(e => {
       const oldDate = parseDate(e.work_date)
-      const dayOffset = oldDate.getDay() === 0 ? 6 : oldDate.getDay() - 1 // Mon=0, Sun=6
+      const dayOffset = oldDate.getDay() // Sun=0, Sat=6
       const newDate = parseDate(toWeekStart)
       newDate.setDate(newDate.getDate() + dayOffset)
       return {

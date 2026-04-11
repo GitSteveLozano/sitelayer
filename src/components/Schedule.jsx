@@ -4,7 +4,7 @@ import { Card, Label, Select, Btn, Badge } from './Atoms'
 import { schedules, projects, workers } from '../lib/db'
 import { toDateStr, parseDate } from '../lib/calc'
 
-const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 export function Schedule({ companyId }) {
   const [weekOffset, setWeekOffset] = useState(0)
@@ -15,7 +15,7 @@ export function Schedule({ companyId }) {
   const [saving, setSaving] = useState(false)
 
   // Get Monday of current week view
-  const weekStart = getMonday(new Date())
+  const weekStart = getSunday(new Date())
   weekStart.setDate(weekStart.getDate() + weekOffset * 7)
 
   useEffect(() => {
@@ -211,10 +211,9 @@ export function Schedule({ companyId }) {
   )
 }
 
-function getMonday(d) {
+function getSunday(d) {
   const day = d.getDay()
-  const diff = d.getDate() - day + (day === 0 ? -6 : 1)
-  return new Date(d.setDate(diff))
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() - day, 12)
 }
 
 function formatDate(dateStr) {
