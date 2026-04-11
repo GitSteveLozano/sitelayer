@@ -87,12 +87,16 @@ export function NewTakeoff({ companyId, company, onBack, onCreated }) {
   const measurements = createdProject?.metadata?.blueprint_measurements
 
   return (
-    <div style={{ padding: isMobile ? '16px 14px' : '32px 36px', maxWidth: 640 }}>
-      <button onClick={onBack} style={{ fontSize: 13, color: TH.muted, cursor: 'pointer', marginBottom: 20, background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 5 }}>
-        ← Dashboard
-      </button>
-      <h1 style={{ fontSize: 22, fontWeight: 500, color: TH.text, margin: 0, marginBottom: 4 }}>New Project</h1>
-      <div style={{ fontSize: 13, color: TH.muted, marginBottom: 28 }}>Enter project details and upload blueprints</div>
+    <div style={{ padding: step === 2 ? '16px' : (isMobile ? '16px 14px' : '32px 36px'), maxWidth: step === 2 ? 'none' : 640 }}>
+      {step !== 2 && (
+        <>
+          <button onClick={onBack} style={{ fontSize: 13, color: TH.muted, cursor: 'pointer', marginBottom: 20, background: 'none', border: 'none', display: 'flex', alignItems: 'center', gap: 5 }}>
+            ← Dashboard
+          </button>
+          <h1 style={{ fontSize: 22, fontWeight: 500, color: TH.text, margin: 0, marginBottom: 4 }}>New Project</h1>
+          <div style={{ fontSize: 13, color: TH.muted, marginBottom: 28 }}>Enter project details and upload blueprints</div>
+        </>
+      )}
 
       {/* Step bar */}
       <StepBar current={step} />
