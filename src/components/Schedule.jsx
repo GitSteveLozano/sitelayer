@@ -156,16 +156,33 @@ export function Schedule({ companyId }) {
                       </button>
                     </div>
 
-                    <Select
-                      multiple
-                      value={assign.scheduled_workers || []}
-                      onChange={e => {
-                        const opts = Array.from(e.target.selectedOptions)
-                        updateWorkers(assign.id, opts.map(o => o.value))
-                      }}
-                      options={workerList.map(w => ({ value: w.id, label: w.name }))}
-                      style={{ fontSize: 12 }}
-                    />
+                    {/* Worker checkboxes */}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      {workerList.map(w => {
+                        const isAssigned = (assign.scheduled_workers || []).includes(w.id)
+                        return (
+                          <label key={w.id} style={{
+                            display: 'flex', alignItems: 'center', gap: 6,
+                            fontSize: 11, color: isAssigned ? TH.text : TH.muted,
+                            cursor: 'pointer', padding: '2px 0',
+                          }}>
+                            <input
+                              type="checkbox"
+                              checked={isAssigned}
+                              onChange={() => {
+                                const current = assign.scheduled_workers || []
+                                const next = isAssigned
+                                  ? current.filter(id => id !== w.id)
+                                  : [...current, w.id]
+                                updateWorkers(assign.id, next)
+                              }}
+                              style={{ margin: 0 }}
+                            />
+                            {w.name}
+                          </label>
+                        )
+                      })}
+                    </div>
 
                     {assign.scheduled_workers?.length > 0 && (
                       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 6 }}>
