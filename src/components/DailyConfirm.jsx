@@ -16,53 +16,49 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
   const { entries: confirmedEntries, refetch: refetchConfirmed } = useConfirmedByDate(companyId, selectedDate)
   const [confirmed, setConfirmed] = useState(false)
 
-  // Build draft entries from all schedules + existing entries, deduplicated by worker
+  // Build draft entries from schedules + confirmed, deduplicated per worker+project
   const draftEntries = useMemo(() => {
-    // Merge workers from all schedules — each worker appears once with their first project
-    const scheduledMap = new Map()
-    for (const sched of schedules) {
-      for (const wid of sched.scheduled_workers || []) {
-        if (!scheduledMap.has(wid)) {
-          scheduledMap.set(wid, {
-            worker_id: wid,
-            project_id: sched.project_id,
-            project_name: sched.project?.name,
-            division: sched.project?.division,
-          })
-        }
-      }
-    }
-
-    const existingMap = new Map(confirmedEntries.map(e => [e.worker_id, e]))
     const result = []
+    const seen = new Set() // track worker_id+project_id combos
 
-    // Scheduled workers first
-    scheduledMap.forEach((info, wid) => {
-      const existing = existingMap.get(wid)
+    // Confirmed entries first (from DB) — deduplicate by worker+project
+    confirmedEntries.forEach(e => {
+      const key = `${e.worker_id}:${e.project_id}`
+      if (seen.has(key)) return
+      seen.add(key)
       result.push({
-        id: existing?.id,
-        worker_id: wid,
-        worker_name: workerList.find(w => w.id === wid)?.name || 'Unknown',
-        project_id: info.project_id,
-        project_name: info.project_name,
-        division: info.division,
-        hours: existing?.hours ?? 8,
-        service_item: existing?.service_item || '',
-        status: existing?.status || 'draft',
-        confirmed: !!existing,
+        id: e.id,
+        worker_id: e.worker_id,
+        worker_name: workerList.find(w => w.id === e.worker_id)?.name || 'Unknown',
+        project_id: e.project_id,
+        project_name: e.project?.name || null,
+        division: e.project?.division || null,
+        hours: e.hours,
+        service_item: e.service_item || '',
+        status: e.status,
+        confirmed: true,
       })
     })
 
-    // Add unscheduled but confirmed
-    confirmedEntries.forEach(e => {
-      if (!scheduledMap.has(e.worker_id)) {
+    // Then add scheduled workers not yet confirmed
+    for (const sched of schedules) {
+      for (const wid of sched.scheduled_workers || []) {
+        const key = `${wid}:${sched.project_id}`
+        if (seen.has(key)) continue
+        seen.add(key)
         result.push({
-          ...e,
-          worker_name: workerList.find(w => w.id === e.worker_id)?.name || 'Unknown',
-          confirmed: true,
+          worker_id: wid,
+          worker_name: workerList.find(w => w.id === wid)?.name || 'Unknown',
+          project_id: sched.project_id,
+          project_name: sched.project?.name,
+          division: sched.project?.division,
+          hours: 8,
+          service_item: '',
+          status: 'draft',
+          confirmed: false,
         })
       }
-    })
+    }
 
     return result
   }, [schedules, confirmedEntries, workerList])
@@ -93,6 +89,7 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
       worker_name: '',
       project_id: firstSched?.project_id || '',
       project_name: firstSched?.project?.name || '',
+      division: firstSched?.project?.division || null,
       hours: 8,
       service_item: '',
       status: 'draft',
@@ -126,8 +123,27 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
 
   const totalHours = entries.reduce((s, e) => s + (parseFloat(e.hours) || 0), 0)
   const allHaveServiceItem = entries.every(e => e.service_item)
+  const allAlreadyConfirmed = entries.length > 0 && entries.every(e => e.confirmed)
   const hasNoSchedule = schedules.length === 0 && confirmedEntries.length === 0
   const hasNoCrew = workerList.length === 0
+
+  // Group entries by project for display
+  const projectGroups = useMemo(() => {
+    const groups = new Map()
+    entries.forEach((e, i) => {
+      const pid = e.project_id || '_none'
+      if (!groups.has(pid)) {
+        groups.set(pid, {
+          project_id: e.project_id,
+          project_name: e.project_name,
+          division: e.division,
+          entries: [],
+        })
+      }
+      groups.get(pid).entries.push({ ...e, _index: i })
+    })
+    return [...groups.values()]
+  }, [entries])
 
   if (loading || saving) return <div style={{ padding: 40, textAlign: 'center' }}>{loading ? 'Loading…' : 'Saving…'}</div>
 
@@ -142,17 +158,6 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
           <p style={{ margin: 0, fontSize: isMobile ? 12 : 13, color: TH.muted }}>
             Review hours and assign service items for {formatDate(selectedDate)}
           </p>
-          {schedules.length > 0 && (
-            <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-              {schedules.map(s => (
-                <Badge
-                  key={s.id}
-                  label={s.project?.name || 'Unknown'}
-                  color={TH.divColors?.[s.project?.division] || TH.amber}
-                />
-              ))}
-            </div>
-          )}
         </div>
         <Input
           type="date"
@@ -163,7 +168,7 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
       </div>
 
       {/* Confirmed banner */}
-      {confirmed && (
+      {(confirmed || allAlreadyConfirmed) && (
         <div style={{
           background: TH.greenLo || '#dcfce7', border: `1px solid ${TH.green}44`,
           borderRadius: 6, padding: '14px 18px', marginBottom: 20,
@@ -172,10 +177,11 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
           <div style={{ fontSize: 20 }}>✓</div>
           <div>
             <div style={{ fontSize: 14, color: TH.green, fontWeight: 600 }}>
-              Day confirmed
+              {confirmed ? 'Day confirmed' : 'Already confirmed'}
             </div>
             <div style={{ fontSize: 12, color: TH.green, opacity: 0.8 }}>
-              {entries.filter(e => e.worker_id).length} entries saved · {totalHours.toFixed(1)} total hours
+              {entries.filter(e => e.worker_id).length} entries · {totalHours.toFixed(1)} total hours
+              {allAlreadyConfirmed && !confirmed ? ' · Edit below and re-confirm if needed' : ''}
             </div>
           </div>
         </div>
@@ -192,8 +198,8 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
         </div>
       )}
 
-      {/* Worker entries */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginBottom: 20 }}>
+      {/* Worker entries grouped by project */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, marginBottom: 20 }}>
         {entries.length === 0 ? (
           <Card style={{ textAlign: 'center', padding: isMobile ? 28 : 40 }}>
             {hasNoCrew ? (
@@ -232,76 +238,114 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
                 </div>
               </div>
             ) : (
-              <div style={{ color: TH.muted }}>
-                No entries for this date.
-              </div>
+              <div style={{ color: TH.muted }}>No entries for this date.</div>
             )}
           </Card>
         ) : (
-          entries.map((entry, i) => (
-            <Card key={`${entry.worker_id}-${i}`} style={{ padding: isMobile ? '12px 14px' : '14px 16px' }}>
-              <div style={{ display: 'grid', gap: isMobile ? 10 : 12, alignItems: 'center' }}>
-                {/* Row 1: Worker + Project */}
-                <div style={{ display: 'flex', gap: isMobile ? 8 : 12, flexWrap: 'wrap' }}>
-                  {entry.isExtra ? (
-                    <Select
-                      label="Worker"
-                      value={entry.worker_id}
-                      onChange={e => {
-                        const wid = e.target.value
-                        const w = workerList.find(x => x.id === wid)
-                        updateEntry(i, { worker_id: wid, worker_name: w?.name || '' })
-                      }}
-                      options={[
-                        { value: '', label: 'Select worker…' },
-                        ...workerList.map(w => ({ value: w.id, label: w.name })),
-                      ]}
-                      style={{ minWidth: isMobile ? 120 : 150 }}
-                    />
-                  ) : (
-                    <div style={{ fontWeight: 600, color: TH.text, minWidth: isMobile ? 120 : 150 }}>
-                      {entry.worker_name}
-                    </div>
-                  )}
-
-                  <div style={{ flex: 1, minWidth: isMobile ? 140 : 200 }}>
-                    <div style={{ fontSize: isMobile ? 10 : 11, color: TH.muted, marginBottom: 4 }}>Project</div>
-                    <Badge
-                      label={entry.project_name || 'Unknown'}
-                      color={TH.divColors?.[entry.division] || TH.amber}
-                    />
-                  </div>
-                </div>
-
-                {/* Row 2: Hours + Service Item */}
-                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '100px 1fr auto', gap: isMobile ? 8 : 12, alignItems: 'end' }}>
-                  <Input
-                    label="Hours"
-                    type="number"
-                    step="0.5"
-                    min="0"
-                    value={entry.hours}
-                    onChange={e => updateEntry(i, { hours: e.target.value })}
+          projectGroups.map(group => (
+            <div key={group.project_id || '_none'}>
+              {/* Project header */}
+              {projectGroups.length > 1 && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  marginBottom: 8, paddingLeft: 4,
+                }}>
+                  <Badge
+                    label={group.project_name || 'Unknown Project'}
+                    color={TH.divColors?.[group.division] || TH.amber}
                   />
-
-                  <Select
-                    label={<span>Service Item <span style={{ color: TH.red, fontWeight: 400 }}>*</span></span>}
-                    value={entry.service_item}
-                    onChange={e => updateEntry(i, { service_item: e.target.value })}
-                    options={[
-                      { value: '', label: 'Select…' },
-                      ...SCOPE_ITEMS.map(s => ({ value: s.id, label: isMobile ? s.id : `${s.id} (${s.unit})` })),
-                    ]}
-                  />
-
-                  {(entry.isExtra || entries.length > 1) && (
-                    <Btn variant="ghost" onClick={() => removeEntry(i)} style={{ height: isMobile ? 36 : 38 }}>
-                      {isMobile ? '×' : 'Remove'}
-                    </Btn>
-                  )}
+                  <span style={{ fontSize: 11, color: TH.muted }}>
+                    {group.entries.length} {group.entries.length === 1 ? 'worker' : 'workers'}
+                  </span>
                 </div>
+              )}
+
+              {/* Single project — show project in each card normally */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {group.entries.map(entry => {
+                  const i = entry._index
+                  return (
+                    <Card key={`${entry.worker_id}-${i}`} style={{
+                      padding: isMobile ? '12px 14px' : '14px 16px',
+                      borderLeft: projectGroups.length > 1
+                        ? `3px solid ${TH.divColors?.[group.division] || TH.amber}`
+                        : undefined,
+                    }}>
+                      <div style={{ display: 'grid', gap: isMobile ? 10 : 12, alignItems: 'center' }}>
+                        {/* Row 1: Worker + Project */}
+                        <div style={{ display: 'flex', gap: isMobile ? 8 : 12, flexWrap: 'wrap', alignItems: 'center' }}>
+                          {entry.isExtra ? (
+                            <Select
+                              label="Worker"
+                              value={entry.worker_id}
+                              onChange={e => {
+                                const wid = e.target.value
+                                const w = workerList.find(x => x.id === wid)
+                                updateEntry(i, { worker_id: wid, worker_name: w?.name || '' })
+                              }}
+                              options={[
+                                { value: '', label: 'Select worker…' },
+                                ...workerList.map(w => ({ value: w.id, label: w.name })),
+                              ]}
+                              style={{ minWidth: isMobile ? 120 : 150 }}
+                            />
+                          ) : (
+                            <div style={{ fontWeight: 600, color: TH.text, minWidth: isMobile ? 120 : 150 }}>
+                              {entry.worker_name}
+                            </div>
+                          )}
+
+                          {/* Show project badge when there's only 1 project (no group header) */}
+                          {projectGroups.length <= 1 && (
+                            <div style={{ flex: 1, minWidth: isMobile ? 140 : 200 }}>
+                              <div style={{ fontSize: isMobile ? 10 : 11, color: TH.muted, marginBottom: 4 }}>Project</div>
+                              <Badge
+                                label={entry.project_name || 'Unknown'}
+                                color={TH.divColors?.[entry.division] || TH.amber}
+                              />
+                            </div>
+                          )}
+
+                          {entry.confirmed && (
+                            <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 4, background: TH.green + '22', color: TH.green, fontWeight: 600 }}>
+                              Confirmed
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Row 2: Hours + Service Item */}
+                        <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr 1fr' : '100px 1fr auto', gap: isMobile ? 8 : 12, alignItems: 'end' }}>
+                          <Input
+                            label="Hours"
+                            type="number"
+                            step="0.5"
+                            min="0"
+                            value={entry.hours}
+                            onChange={e => updateEntry(i, { hours: e.target.value })}
+                          />
+
+                          <Select
+                            label={<span>Service Item <span style={{ color: TH.red, fontWeight: 400 }}>*</span></span>}
+                            value={entry.service_item}
+                            onChange={e => updateEntry(i, { service_item: e.target.value })}
+                            options={[
+                              { value: '', label: 'Select…' },
+                              ...SCOPE_ITEMS.map(s => ({ value: s.id, label: isMobile ? s.id : `${s.id} (${s.unit})` })),
+                            ]}
+                          />
+
+                          {(entry.isExtra || entries.length > 1) && (
+                            <Btn variant="ghost" onClick={() => removeEntry(i)} style={{ height: isMobile ? 36 : 38 }}>
+                              {isMobile ? '×' : 'Remove'}
+                            </Btn>
+                          )}
+                        </div>
+                      </div>
+                    </Card>
+                  )
+                })}
               </div>
-            </Card>
+            </div>
           ))
         )}
       </div>
@@ -325,7 +369,7 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
               onClick={confirmDay}
               disabled={saving || entries.length === 0 || !allHaveServiceItem}
             >
-              {saving ? 'Saving…' : confirmed ? 'Re-confirm' : 'Confirm Day'}
+              {saving ? 'Saving…' : allAlreadyConfirmed ? 'Update' : 'Confirm Day'}
             </Btn>
           </div>
         </div>

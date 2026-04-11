@@ -42,7 +42,9 @@ export function useLaborEntry() {
 
   const submit = useCallback(async (entries) => {
     setSaving(true)
-    const { error: submitErr } = await supabase.from('labor_entries').upsert(entries)
+    const { error: submitErr } = await supabase
+      .from('labor_entries')
+      .upsert(entries, { onConflict: 'company_id,worker_id,work_date,project_id' })
     setError(submitErr?.message)
     setSaving(false)
     return { error: submitErr }
@@ -128,7 +130,7 @@ export function useConfirmedByDate(companyId, date) {
     setState(prev => ({ ...prev, loading: true }))
     const { data: rows, error: fetchErr } = await supabase
       .from('labor_entries')
-      .select('*')
+      .select('*, project:projects(name, division)')
       .eq('company_id', companyId)
       .eq('work_date', date)
       .eq('status', 'confirmed')
