@@ -24,6 +24,8 @@ export const SCOPE_ITEMS = [
   { id: 'Flashing',        color: '#f43f5e', unit: 'lf',   defaultRate: 8.00,  div: 'All'           },
 ]
 
+const DIVISIONS = [...new Set(SCOPE_ITEMS.map(s => s.div))]
+
 // ─── Shoelace formula: polygon area in px² ───────────────────────────────────
 function polygonArea(points) {
   let area = 0
@@ -63,6 +65,7 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
   const [canvasSize,    setCanvasSize]    = useState({ w: 900, h: 600 })
   const [zoom,          setZoom]          = useState(1)
   const [showHelp,      setShowHelp]      = useState(true)
+  const [divOverrides,  setDivOverrides]  = useState(project.metadata?.div_overrides || {})
 
   // ── Load PDF ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -180,6 +183,8 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
     setPolygons(prev => prev.filter(p => p.id !== id))
   }
 
+  const getDivision = (scopeId) => divOverrides[scopeId] || SCOPE_ITEMS.find(s => s.id === scopeId)?.div || 'All'
+
   // ── Summary: sqft by scope ───────────────────────────────────────────────────
   const summary = polygons.reduce((acc, poly) => {
     acc[poly.scope] = (acc[poly.scope] || 0) + poly.sqft
@@ -202,7 +207,7 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
   const total    = subtotal + gst
 
   function handleApply() {
-    onMeasurementsApplied?.({ summary, totalSqft, polygonCount: polygons.length, estimate, subtotal, gst, total })
+    onMeasurementsApplied?.({ summary, totalSqft, polygonCount: polygons.length, estimate, subtotal, gst, total, divOverrides })
   }
 
   // ── Render helpers ───────────────────────────────────────────────────────────
@@ -248,21 +253,41 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
           <div style={{ width: 1, height: 24, background: TH.border }} />
 
           {/* Scope selector */}
-          {SCOPE_ITEMS.map(s => (
-            <button
-              key={s.id}
-              onClick={() => setActiveScope(s.id)}
-              style={{
-                padding: '5px 10px', borderRadius: 5, fontSize: 11, fontFamily: 'inherit',
-                background: activeScope === s.id ? s.color + '33' : 'transparent',
-                color:      activeScope === s.id ? s.color : TH.muted,
-                border:     `1px solid ${activeScope === s.id ? s.color : TH.border}`,
-                cursor:     'pointer',
-              }}
-            >
-              {s.id}
-            </button>
-          ))}
+          {SCOPE_ITEMS.map(s => {
+            const isActive = activeScope === s.id
+            const div = getDivision(s.id)
+            return (
+              <div key={s.id} style={{ display: 'flex', alignItems: 'center', gap: 0 }}>
+                <button
+                  onClick={() => setActiveScope(s.id)}
+                  style={{
+                    padding: '5px 10px', borderRadius: '5px 0 0 5px', fontSize: 11, fontFamily: 'inherit',
+                    background: isActive ? s.color + '33' : 'transparent',
+                    color:      isActive ? s.color : TH.muted,
+                    border:     `1px solid ${isActive ? s.color : TH.border}`,
+                    borderRight: 'none',
+                    cursor:     'pointer',
+                  }}
+                >
+                  {s.id}
+                </button>
+                <select
+                  value={div}
+                  onChange={e => setDivOverrides(prev => ({ ...prev, [s.id]: e.target.value }))}
+                  style={{
+                    padding: '4px 14px 4px 5px', borderRadius: '0 5px 5px 0', fontSize: 9,
+                    fontFamily: 'inherit',
+                    background: isActive ? s.color + '15' : TH.surf,
+                    color:      isActive ? s.color : TH.faint,
+                    border:     `1px solid ${isActive ? s.color : TH.border}`,
+                    cursor:     'pointer',
+                  }}
+                >
+                  {DIVISIONS.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+            )
+          })}
 
           <div style={{ width: 1, height: 24, background: TH.border }} />
 
@@ -481,6 +506,7 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <div style={{ width: 9, height: 9, borderRadius: 2, background: scope.color }} />
                     <span style={{ fontSize: 12, fontWeight: 500 }}>{scope.id}</span>
+                    <span style={{ fontSize: 9, color: TH.faint }}>{getDivision(scope.id)}</span>
                   </div>
                   <span style={{ fontSize: 12, fontVariantNumeric: 'tabular-nums', color: qty > 0 ? TH.text : TH.faint }}>
                     {qty > 0 ? `${qty.toLocaleString()} ${scope.unit}` : '—'}
