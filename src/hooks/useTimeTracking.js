@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
 
 // Get today's crew schedule for auto-population
@@ -73,6 +73,48 @@ export function useLaborStats(projectId, startDate, endDate) {
   }, [fetchData])
 
   return { ...state, refetch: fetchData }
+}
+
+// Get confirmed entries for the week containing a given date (company-level)
+export function useWeekEntries(companyId, date) {
+  const [state, setState] = useState({ entries: [], loading: true, error: null })
+
+  const weekRange = useMemo(() => {
+    if (!date) return { start: null, end: null }
+    const d = new Date(date)
+    const day = d.getDay()
+    const mon = new Date(d)
+    mon.setDate(d.getDate() - (day === 0 ? 6 : day - 1))
+    const sun = new Date(mon)
+    sun.setDate(mon.getDate() + 6)
+    return {
+      start: mon.toISOString().split('T')[0],
+      end: sun.toISOString().split('T')[0],
+    }
+  }, [date])
+
+  const fetchData = useCallback(async () => {
+    if (!companyId || !weekRange.start) {
+      setState({ entries: [], loading: false, error: null })
+      return
+    }
+    setState(prev => ({ ...prev, loading: true }))
+    const { data: rows, error: fetchErr } = await supabase
+      .from('labor_entries')
+      .select('*, worker:workers(name)')
+      .eq('company_id', companyId)
+      .gte('work_date', weekRange.start)
+      .lte('work_date', weekRange.end)
+      .eq('status', 'confirmed')
+      .order('work_date', { ascending: true })
+    setState({ entries: rows || [], loading: false, error: fetchErr })
+  }, [companyId, weekRange.start, weekRange.end])
+
+  useEffect(() => {
+    fetchData()
+  }, [fetchData])
+
+  return { ...state, weekRange, refetch: fetchData }
 }
 
 // Get confirmed entries for a company on a specific date (company-level, for DailyConfirm)
