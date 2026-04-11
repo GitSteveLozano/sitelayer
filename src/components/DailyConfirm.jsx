@@ -142,6 +142,17 @@ export function DailyConfirm({ companyId, onConfirmed, onNavigate }) {
           <p style={{ margin: 0, fontSize: isMobile ? 12 : 13, color: TH.muted }}>
             Review hours and assign service items for {formatDate(selectedDate)}
           </p>
+          {schedules.length > 0 && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+              {schedules.map(s => (
+                <Badge
+                  key={s.id}
+                  label={s.project?.name || 'Unknown'}
+                  color={TH.divColors?.[s.project?.division] || TH.amber}
+                />
+              ))}
+            </div>
+          )}
         </div>
         <Input
           type="date"
