@@ -156,7 +156,7 @@ export const schedules = {
   copyWeek: async (companyId, fromWeekStart, toWeekStart) => {
     const { data: existing } = await supabase
       .from('crew_schedules')
-      .select('*')
+      .select('project_id, work_date, scheduled_workers, notes')
       .eq('company_id', companyId)
       .gte('work_date', fromWeekStart)
       .lte('work_date', new Date(new Date(fromWeekStart).getTime() + 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0])
@@ -172,14 +172,15 @@ export const schedules = {
         company_id: companyId,
         project_id: e.project_id,
         work_date: newDate.toISOString().split('T')[0],
-        scheduled_workers: e.scheduled_workers,
-        shift_start: e.shift_start,
-        shift_end: e.shift_end,
-        notes: e.notes,
+        scheduled_workers: e.scheduled_workers || [],
+        notes: e.notes || null,
       }
     })
 
-    return supabase.from('crew_schedules').insert(newEntries).select()
+    return supabase
+      .from('crew_schedules')
+      .upsert(newEntries, { onConflict: 'company_id,project_id,work_date' })
+      .select()
   },
 }
 
