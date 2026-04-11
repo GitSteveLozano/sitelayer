@@ -2,6 +2,7 @@
 // Components never call supabase directly
 
 import { supabase } from './supabase'
+import { toDateStr, parseDate } from './calc'
 
 // ── AUTH ──────────────────────────────────────────────────────────────────────
 
@@ -124,14 +125,14 @@ export const labor = {
 export const schedules = {
   // Get schedule for a week (Mon-Sun)
   getWeek: (companyId, weekStart) => {
-    const weekEnd = new Date(weekStart)
+    const weekEnd = parseDate(weekStart)
     weekEnd.setDate(weekEnd.getDate() + 6)
     return supabase
       .from('crew_schedules')
       .select('*, project:projects(id, name, division)')
       .eq('company_id', companyId)
       .gte('work_date', weekStart)
-      .lte('work_date', weekEnd.toISOString().split('T')[0])
+      .lte('work_date', toDateStr(weekEnd))
       .order('work_date', { ascending: true })
   },
 
@@ -154,24 +155,26 @@ export const schedules = {
 
   // Copy previous week's schedule to current week
   copyWeek: async (companyId, fromWeekStart, toWeekStart) => {
+    const fromEnd = parseDate(fromWeekStart)
+    fromEnd.setDate(fromEnd.getDate() + 6)
     const { data: existing } = await supabase
       .from('crew_schedules')
       .select('project_id, work_date, scheduled_workers, notes')
       .eq('company_id', companyId)
       .gte('work_date', fromWeekStart)
-      .lte('work_date', new Date(new Date(fromWeekStart).getTime() + 6 * 24 * 60 * 60 * 1000).toISOString().split('T')[0])
+      .lte('work_date', toDateStr(fromEnd))
 
     if (!existing?.length) return { data: [], error: null }
 
     const newEntries = existing.map(e => {
-      const oldDate = new Date(e.work_date)
+      const oldDate = parseDate(e.work_date)
       const dayOffset = oldDate.getDay() === 0 ? 6 : oldDate.getDay() - 1 // Mon=0, Sun=6
-      const newDate = new Date(toWeekStart)
+      const newDate = parseDate(toWeekStart)
       newDate.setDate(newDate.getDate() + dayOffset)
       return {
         company_id: companyId,
         project_id: e.project_id,
-        work_date: newDate.toISOString().split('T')[0],
+        work_date: toDateStr(newDate),
         scheduled_workers: e.scheduled_workers || [],
         notes: e.notes || null,
       }

@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { supabase } from '../lib/supabase'
+import { toDateStr } from '../lib/calc'
 
 // Get today's crew schedules for auto-population (supports multiple projects per day)
 export function useCrewSchedule(companyId, date) {
@@ -96,15 +97,16 @@ export function useWeekEntries(companyId, date) {
 
   const weekRange = useMemo(() => {
     if (!date) return { start: null, end: null }
-    const d = new Date(date)
+    const [y, m, dy] = date.split('-').map(Number)
+    const d = new Date(y, m - 1, dy, 12)
     const day = d.getDay()
     const mon = new Date(d)
     mon.setDate(d.getDate() - (day === 0 ? 6 : day - 1))
     const sun = new Date(mon)
     sun.setDate(mon.getDate() + 6)
     return {
-      start: mon.toISOString().split('T')[0],
-      end: sun.toISOString().split('T')[0],
+      start: toDateStr(mon),
+      end: toDateStr(sun),
     }
   }, [date])
 

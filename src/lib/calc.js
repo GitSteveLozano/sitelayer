@@ -83,3 +83,15 @@ export const fmt = {
   hrs:   n => `${(n || 0).toFixed(1)}h`,
   sqft:  n => `${(n || 0).toLocaleString()} sqft`,
 }
+
+// Format a Date as YYYY-MM-DD in local timezone (NOT UTC)
+// Use this instead of d.toISOString().split('T')[0] which shifts dates in western timezones
+export function toDateStr(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+// Parse a YYYY-MM-DD string as a local-timezone Date at noon (avoids UTC shift)
+export function parseDate(str) {
+  const [y, m, d] = str.split('-').map(Number)
+  return new Date(y, m - 1, d, 12, 0, 0)
+}

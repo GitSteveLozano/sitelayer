@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { TH } from '../lib/theme'
 import { Card, Label, Bar } from './Atoms'
-import { fmt } from '../lib/calc'
+import { fmt, toDateStr } from '../lib/calc'
 import { SCOPE_ITEMS } from './BlueprintCanvas'
 
 export function ProjectInsights({ project, entries }) {
@@ -16,8 +16,8 @@ export function ProjectInsights({ project, entries }) {
     mon.setHours(0, 0, 0, 0)
     const sun = new Date(mon)
     sun.setDate(mon.getDate() + 6)
-    const monStr = mon.toISOString().split('T')[0]
-    const sunStr = sun.toISOString().split('T')[0]
+    const monStr = toDateStr(mon)
+    const sunStr = toDateStr(sun)
 
     // This week's entries
     const thisWeek = entries.filter(e =>
@@ -28,7 +28,7 @@ export function ProjectInsights({ project, entries }) {
     const weekDays = Array.from({ length: 7 }, (_, i) => {
       const d = new Date(mon)
       d.setDate(mon.getDate() + i)
-      const dateStr = d.toISOString().split('T')[0]
+      const dateStr = toDateStr(d)
       const dayEntries = thisWeek.filter(e => e.work_date === dateStr)
       const hours = dayEntries.reduce((s, e) => s + (parseFloat(e.hours) || 0), 0)
       return {
@@ -36,7 +36,7 @@ export function ProjectInsights({ project, entries }) {
         label: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'][i],
         hours,
         workers: new Set(dayEntries.map(e => e.worker_id)).size,
-        isToday: dateStr === now.toISOString().split('T')[0],
+        isToday: dateStr === toDateStr(now),
         confirmed: dayEntries.length > 0,
       }
     })
@@ -81,8 +81,8 @@ export function ProjectInsights({ project, entries }) {
       wMon.setDate(mon.getDate() - w * 7)
       const wSun = new Date(wMon)
       wSun.setDate(wMon.getDate() + 6)
-      const wMonStr = wMon.toISOString().split('T')[0]
-      const wSunStr = wSun.toISOString().split('T')[0]
+      const wMonStr = toDateStr(wMon)
+      const wSunStr = toDateStr(wSun)
       const wEntries = entries.filter(e =>
         e.work_date && e.work_date >= wMonStr && e.work_date <= wSunStr
       )

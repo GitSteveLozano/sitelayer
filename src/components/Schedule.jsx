@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { TH } from '../lib/theme'
 import { Card, Label, Select, Btn, Badge } from './Atoms'
 import { schedules, projects, workers } from '../lib/db'
+import { toDateStr, parseDate } from '../lib/calc'
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
@@ -26,7 +27,7 @@ export function Schedule({ companyId }) {
     const [projRes, workerRes, schedRes] = await Promise.all([
       projects.list(companyId),
       workers.list(companyId),
-      schedules.getWeek(companyId, weekStart.toISOString().split('T')[0]),
+      schedules.getWeek(companyId, toDateStr(weekStart)),
     ])
 
     if (projRes.data) setProjectList(projRes.data)
@@ -81,17 +82,18 @@ export function Schedule({ companyId }) {
     setSaving(true)
     await schedules.copyWeek(
       companyId,
-      prevWeek.toISOString().split('T')[0],
-      weekStart.toISOString().split('T')[0]
+      toDateStr(prevWeek),
+      toDateStr(weekStart)
     )
     await loadData()
     setSaving(false)
   }
 
+  const todayStr = toDateStr(new Date())
   const weekDates = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(weekStart)
     d.setDate(d.getDate() + i)
-    return d.toISOString().split('T')[0]
+    return toDateStr(d)
   })
 
   if (loading) return <div style={{ padding: 40, textAlign: 'center' }}>Loading…</div>
@@ -110,7 +112,7 @@ export function Schedule({ companyId }) {
           <Btn variant="ghost" onClick={() => setWeekOffset(o => o - 1)} disabled={saving}>← Prev</Btn>
           <Btn variant="ghost" onClick={() => setWeekOffset(0)} disabled={weekOffset === 0 || saving}>This Week</Btn>
           <Btn variant="ghost" onClick={() => setWeekOffset(o => o + 1)} disabled={saving}>Next →</Btn>
-          <Btn onClick={copyPreviousWeek} disabled={weekOffset !== 0 || saving}>
+          <Btn onClick={copyPreviousWeek} disabled={saving}>
             {saving ? 'Copying…' : 'Copy Last Week'}
           </Btn>
         </div>
@@ -121,7 +123,7 @@ export function Schedule({ companyId }) {
         {DAYS.map((dayLabel, i) => {
           const date = weekDates[i]
           const dayAssignments = scheduleData[date] || []
-          const isToday = date === new Date().toISOString().split('T')[0]
+          const isToday = date === todayStr
 
           return (
             <Card
@@ -216,5 +218,6 @@ function getMonday(d) {
 }
 
 function formatDate(dateStr) {
-  return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  const d = parseDate(dateStr)
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 }
