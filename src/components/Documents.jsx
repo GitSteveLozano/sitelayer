@@ -257,10 +257,39 @@ export function Documents({ project, company, onUpdated }) {
                     <span style={{ color: TH.muted }}>${estimateData.gst?.toLocaleString('en', { minimumFractionDigits: 2 })}</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 15, fontWeight: 700 }}>
-                    <span>Total</span>
+                    <span>Scope Total</span>
                     <span style={{ color: TH.amber }}>${estimateData.total?.toLocaleString('en', { minimumFractionDigits: 2 })}</span>
                   </div>
                 </div>
+
+                {/* Bid vs Scope comparison */}
+                {project.bid_psf > 0 && estimateData.totalSqft > 0 && (() => {
+                  const bidTotal = Math.round(estimateData.totalSqft * project.bid_psf * 100) / 100
+                  const diff = bidTotal - (estimateData.subtotal || 0)
+                  const isOver = diff < 0
+                  return (
+                    <div style={{
+                      marginTop: 12, padding: '10px 14px', borderRadius: 6,
+                      background: isOver ? (TH.redLo || '#fee2e222') : (TH.greenLo || '#dcfce722'),
+                      border: `1px solid ${isOver ? TH.red + '44' : TH.green + '44'}`,
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 4 }}>
+                        <span style={{ color: TH.muted }}>Bid ({`$${project.bid_psf}/sqft`})</span>
+                        <span style={{ fontVariantNumeric: 'tabular-nums', color: TH.muted }}>
+                          ${bidTotal.toLocaleString('en', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12 }}>
+                        <span style={{ color: isOver ? TH.red : TH.green, fontWeight: 600 }}>
+                          {isOver ? 'Scope exceeds bid by' : 'Under bid by'}
+                        </span>
+                        <span style={{ fontVariantNumeric: 'tabular-nums', color: isOver ? TH.red : TH.green, fontWeight: 600 }}>
+                          ${Math.abs(diff).toLocaleString('en', { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })()}
               </div>
             )}
           </>

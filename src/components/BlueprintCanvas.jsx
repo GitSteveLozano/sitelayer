@@ -582,12 +582,41 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
                   </div>
                 ))}
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 14, fontWeight: 700, marginTop: 6 }}>
-                  <span>Total</span>
+                  <span>Scope Total</span>
                   <span style={{ color: TH.amber, fontVariantNumeric: 'tabular-nums' }}>
                     ${total.toLocaleString('en', { minimumFractionDigits: 2 })}
                   </span>
                 </div>
               </div>
+
+              {/* Bid vs Scope comparison */}
+              {project.bid_psf > 0 && totalSqft > 0 && (() => {
+                const bidTotal = Math.round(totalSqft * project.bid_psf * 100) / 100
+                const diff = bidTotal - subtotal
+                const isOver = diff < 0
+                return (
+                  <div style={{
+                    marginTop: 10, padding: '8px 10px', borderRadius: 5,
+                    background: isOver ? (TH.redLo || '#fee2e222') : (TH.greenLo || '#dcfce722'),
+                    border: `1px solid ${isOver ? TH.red + '44' : TH.green + '44'}`,
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
+                      <span style={{ color: TH.muted }}>Bid ({`$${project.bid_psf}/sqft`})</span>
+                      <span style={{ fontVariantNumeric: 'tabular-nums', color: TH.muted }}>
+                        ${bidTotal.toLocaleString('en', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11 }}>
+                      <span style={{ color: isOver ? TH.red : TH.green, fontWeight: 600 }}>
+                        {isOver ? 'Over bid by' : 'Under bid by'}
+                      </span>
+                      <span style={{ fontVariantNumeric: 'tabular-nums', color: isOver ? TH.red : TH.green, fontWeight: 600 }}>
+                        ${Math.abs(diff).toLocaleString('en', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                  </div>
+                )
+              })()}
             </>
           )}
         </div>
