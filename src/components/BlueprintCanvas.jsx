@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { TH } from '../lib/theme'
 import { Btn, Card, Label } from './Atoms'
-import { projects } from '../lib/db'
+import { projects, drafts } from '../lib/db'
 
 // ─── PDF.js worker setup ─────────────────────────────────────────────────────
 import * as pdfjsLib from 'pdfjs-dist'
@@ -45,7 +45,7 @@ function pxToSqft(pxArea, pxPerFt) {
   return pxArea / (pxPerFt * pxPerFt)
 }
 
-export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, onBack, rates = {} }) {
+export function BlueprintCanvas({ project, draft, blueprintUrl, onMeasurementsApplied, onBack, rates = {} }) {
   const containerRef  = useRef(null)
   const canvasRef     = useRef(null)
   const fabricRef     = useRef(null)
@@ -56,7 +56,7 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
   const [numPages,      setNumPages]      = useState(0)
   const [loading,       setLoading]       = useState(true)
   const [loadError,     setLoadError]     = useState(null)
-  const saved = project.metadata?.canvas_state || {}
+  const saved = draft?.canvas_state || project.metadata?.canvas_state || {}
   const [mode,          setMode]          = useState('pan') // pan | calibrate | draw
   const [activeScope,   setActiveScope]   = useState('Air Barrier')
   const [pxPerFt,       setPxPerFt]       = useState(saved.pxPerFt || null)
@@ -75,9 +75,13 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
     if (saveTimeout.current) clearTimeout(saveTimeout.current)
     saveTimeout.current = setTimeout(() => {
       const state = { polygons, pxPerFt }
-      projects.update(project.id, {
-        metadata: { ...(project.metadata || {}), canvas_state: state }
-      })
+      if (draft?.id) {
+        drafts.update(draft.id, { canvas_state: state })
+      } else {
+        projects.update(project.id, {
+          metadata: { ...(project.metadata || {}), canvas_state: state }
+        })
+      }
     }, 1500)
     return () => clearTimeout(saveTimeout.current)
   }, [polygons, pxPerFt])
