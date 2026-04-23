@@ -68,6 +68,19 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
   const [zoom,          setZoom]          = useState(1)
   const [showHelp,      setShowHelp]      = useState(!saved.pxPerFt)
   const [divOverrides,  setDivOverrides]  = useState(project.metadata?.div_overrides || {})
+
+  // ── Auto-save canvas state ──────────────────────────────────────────────────
+  const saveTimeout = useRef(null)
+  useEffect(() => {
+    if (saveTimeout.current) clearTimeout(saveTimeout.current)
+    saveTimeout.current = setTimeout(() => {
+      const state = { polygons, pxPerFt }
+      projects.update(project.id, {
+        metadata: { ...(project.metadata || {}), canvas_state: state }
+      })
+    }, 1500)
+    return () => clearTimeout(saveTimeout.current)
+  }, [polygons, pxPerFt])
   const scrollRef = useRef(null)
   const isPanning = useRef(false)
   const panStart  = useRef({ x: 0, y: 0, scrollX: 0, scrollY: 0 })
