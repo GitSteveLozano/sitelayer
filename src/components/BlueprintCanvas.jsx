@@ -136,69 +136,6 @@ export function BlueprintCanvas({ project, draft, blueprintUrl, onMeasurementsAp
     }
   }
 
-  // ── Auto-save canvas state ──────────────────────────────────────────────────
-  const saveTimeout = useRef(null)
-  useEffect(() => {
-    if (saveTimeout.current) clearTimeout(saveTimeout.current)
-    saveTimeout.current = setTimeout(() => {
-      const state = { polygons, pxPerFt }
-      projects.update(project.id, {
-        metadata: { ...(project.metadata || {}), canvas_state: state }
-      })
-    }, 1500)
-    return () => clearTimeout(saveTimeout.current)
-  }, [polygons, pxPerFt])
-  const scrollRef = useRef(null)
-  const isPanning = useRef(false)
-  const panStart  = useRef({ x: 0, y: 0, scrollX: 0, scrollY: 0 })
-
-  // ── Wheel zoom to cursor ────────────────────────────────────────────────────
-  useEffect(() => {
-    const el = scrollRef.current
-    if (!el) return
-    function handleWheel(e) {
-      if (!e.ctrlKey && !e.metaKey) return
-      e.preventDefault()
-      const rect = el.getBoundingClientRect()
-      const mx = e.clientX - rect.left + el.scrollLeft
-      const my = e.clientY - rect.top + el.scrollTop
-      const oldZoom = zoom
-      const delta = e.deltaY > 0 ? -0.1 : 0.1
-      const newZoom = Math.min(3, Math.max(0.3, oldZoom + delta))
-      const scale = newZoom / oldZoom
-      setZoom(newZoom)
-      requestAnimationFrame(() => {
-        el.scrollLeft = mx * scale - (e.clientX - rect.left)
-        el.scrollTop  = my * scale - (e.clientY - rect.top)
-      })
-    }
-    el.addEventListener('wheel', handleWheel, { passive: false })
-    return () => el.removeEventListener('wheel', handleWheel)
-  }, [zoom])
-
-  // ── Right-click / middle-click pan ──────────────────────────────────────────
-  function handlePanStart(e) {
-    if (e.button === 2 || e.button === 1 || mode === 'pan') {
-      e.preventDefault()
-      isPanning.current = true
-      const el = scrollRef.current
-      panStart.current = { x: e.clientX, y: e.clientY, scrollX: el.scrollLeft, scrollY: el.scrollTop }
-      el.style.cursor = 'grabbing'
-    }
-  }
-  function handlePanMove(e) {
-    if (!isPanning.current) return
-    const el = scrollRef.current
-    el.scrollLeft = panStart.current.scrollX - (e.clientX - panStart.current.x)
-    el.scrollTop  = panStart.current.scrollY - (e.clientY - panStart.current.y)
-  }
-  function handlePanEnd() {
-    if (isPanning.current) {
-      isPanning.current = false
-      if (scrollRef.current) scrollRef.current.style.cursor = ''
-    }
-  }
-
   // ── Load PDF ────────────────────────────────────────────────────────────────
   useEffect(() => {
     if (!blueprintUrl) return
