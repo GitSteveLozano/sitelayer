@@ -234,3 +234,57 @@ export const integrations = {
   delete: (id) =>
     supabase.from('integrations').delete().eq('id', id),
 }
+
+// ── DRAFTS ───────────────────────────────────────────────────────────────────
+
+export const drafts = {
+  list: (projectId, type = null) => {
+    let q = supabase
+      .from('drafts')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('created_at', { ascending: false })
+    if (type) q = q.eq('type', type)
+    return q
+  },
+
+  get: (id) =>
+    supabase.from('drafts').select('*').eq('id', id).single(),
+
+  getActive: (projectId, type = 'measurement') =>
+    supabase
+      .from('drafts')
+      .select('*')
+      .eq('project_id', projectId)
+      .eq('type', type)
+      .eq('is_active', true)
+      .maybeSingle(),
+
+  create: (draft) =>
+    supabase.from('drafts').insert(draft).select().single(),
+
+  update: (id, updates) =>
+    supabase
+      .from('drafts')
+      .update({ ...updates, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .select()
+      .single(),
+
+  setActive: async (projectId, draftId, type = 'measurement') => {
+    await supabase
+      .from('drafts')
+      .update({ is_active: false })
+      .eq('project_id', projectId)
+      .eq('type', type)
+    return supabase
+      .from('drafts')
+      .update({ is_active: true, updated_at: new Date().toISOString() })
+      .eq('id', draftId)
+      .select()
+      .single()
+  },
+
+  delete: (id) =>
+    supabase.from('drafts').delete().eq('id', id),
+}
