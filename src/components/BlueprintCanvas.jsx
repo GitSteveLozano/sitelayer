@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { TH } from '../lib/theme'
 import { Btn, Card, Label } from './Atoms'
+import { projects } from '../lib/db'
 
 // ─── PDF.js worker setup ─────────────────────────────────────────────────────
 import * as pdfjsLib from 'pdfjs-dist'
@@ -55,17 +56,31 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
   const [numPages,      setNumPages]      = useState(0)
   const [loading,       setLoading]       = useState(true)
   const [loadError,     setLoadError]     = useState(null)
+  const saved = project.metadata?.canvas_state || {}
   const [mode,          setMode]          = useState('pan') // pan | calibrate | draw
   const [activeScope,   setActiveScope]   = useState('Air Barrier')
-  const [pxPerFt,       setPxPerFt]       = useState(null)
+  const [pxPerFt,       setPxPerFt]       = useState(saved.pxPerFt || null)
   const [calibPoints,   setCalibPoints]   = useState([]) // two clicks for calibration
   const [calibDist,     setCalibDist]     = useState('')  // user-entered real distance
   const [drawPoints,    setDrawPoints]    = useState([])  // current polygon in progress
-  const [polygons,      setPolygons]      = useState([])  // completed polygons
+  const [polygons,      setPolygons]      = useState(saved.polygons || [])
   const [canvasSize,    setCanvasSize]    = useState({ w: 900, h: 600 })
   const [zoom,          setZoom]          = useState(1)
-  const [showHelp,      setShowHelp]      = useState(true)
+  const [showHelp,      setShowHelp]      = useState(!saved.pxPerFt)
   const [divOverrides,  setDivOverrides]  = useState(project.metadata?.div_overrides || {})
+
+  // ── Auto-save canvas state ──────────────────────────────────────────────────
+  const saveTimeout = useRef(null)
+  useEffect(() => {
+    if (saveTimeout.current) clearTimeout(saveTimeout.current)
+    saveTimeout.current = setTimeout(() => {
+      const state = { polygons, pxPerFt }
+      projects.update(project.id, {
+        metadata: { ...(project.metadata || {}), canvas_state: state }
+      })
+    }, 1500)
+    return () => clearTimeout(saveTimeout.current)
+  }, [polygons, pxPerFt])
   const scrollRef = useRef(null)
   const isPanning = useRef(false)
   const panStart  = useRef({ x: 0, y: 0, scrollX: 0, scrollY: 0 })
