@@ -66,6 +66,56 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
   const [zoom,          setZoom]          = useState(1)
   const [showHelp,      setShowHelp]      = useState(true)
   const [divOverrides,  setDivOverrides]  = useState(project.metadata?.div_overrides || {})
+  const scrollRef = useRef(null)
+  const isPanning = useRef(false)
+  const panStart  = useRef({ x: 0, y: 0, scrollX: 0, scrollY: 0 })
+
+  // ── Wheel zoom to cursor ────────────────────────────────────────────────────
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    function handleWheel(e) {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      const rect = el.getBoundingClientRect()
+      const mx = e.clientX - rect.left + el.scrollLeft
+      const my = e.clientY - rect.top + el.scrollTop
+      const oldZoom = zoom
+      const delta = e.deltaY > 0 ? -0.1 : 0.1
+      const newZoom = Math.min(3, Math.max(0.3, oldZoom + delta))
+      const scale = newZoom / oldZoom
+      setZoom(newZoom)
+      requestAnimationFrame(() => {
+        el.scrollLeft = mx * scale - (e.clientX - rect.left)
+        el.scrollTop  = my * scale - (e.clientY - rect.top)
+      })
+    }
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheel)
+  }, [zoom])
+
+  // ── Right-click / middle-click pan ──────────────────────────────────────────
+  function handlePanStart(e) {
+    if (e.button === 2 || e.button === 1 || mode === 'pan') {
+      e.preventDefault()
+      isPanning.current = true
+      const el = scrollRef.current
+      panStart.current = { x: e.clientX, y: e.clientY, scrollX: el.scrollLeft, scrollY: el.scrollTop }
+      el.style.cursor = 'grabbing'
+    }
+  }
+  function handlePanMove(e) {
+    if (!isPanning.current) return
+    const el = scrollRef.current
+    el.scrollLeft = panStart.current.scrollX - (e.clientX - panStart.current.x)
+    el.scrollTop  = panStart.current.scrollY - (e.clientY - panStart.current.y)
+  }
+  function handlePanEnd() {
+    if (isPanning.current) {
+      isPanning.current = false
+      if (scrollRef.current) scrollRef.current.style.cursor = ''
+    }
+  }
 
   // ── Load PDF ────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -126,6 +176,7 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
 
   // ── Canvas click handler ─────────────────────────────────────────────────────
   function handleCanvasClick(e) {
+    if (e.button !== 0 || mode === 'pan') return
     const rect  = e.currentTarget.getBoundingClientRect()
     const x     = (e.clientX - rect.left) / zoom
     const y     = (e.clientY - rect.top)  / zoom
@@ -292,7 +343,15 @@ export function BlueprintCanvas({ project, blueprintUrl, onMeasurementsApplied, 
         </div>
 
         {/* Scrollable canvas area */}
-        <div style={{ flex: 1, overflow: 'auto', position: 'relative' }}>
+        <div
+          ref={scrollRef}
+          onMouseDown={handlePanStart}
+          onMouseMove={handlePanMove}
+          onMouseUp={handlePanEnd}
+          onMouseLeave={handlePanEnd}
+          onContextMenu={e => e.preventDefault()}
+          style={{ flex: 1, overflow: 'auto', position: 'relative' }}
+        >
 
         {/* Calibration input bar */}
         {mode === 'calibrate' && calibPoints.length === 2 && (
