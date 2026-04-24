@@ -12,6 +12,7 @@
     "dev:web": "npm run dev --workspace @sitelayer/web",
     "dev:worker": "npm run dev --workspace @sitelayer/worker",
     "build": "npm run build --workspace @sitelayer/domain && npm run build --workspace @sitelayer/api && npm run build --workspace @sitelayer/web && npm run build --workspace @sitelayer/worker",
+    "seed:dev": "tsx apps/api/scripts/seed-dev.ts",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run test --workspaces --if-present",
     "lint": "npm run lint --workspaces",

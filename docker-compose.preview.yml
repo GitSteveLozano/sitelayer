@@ -9,6 +9,7 @@ services:
         VITE_API_URL: ${VITE_API_URL:-}
         VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
         VITE_USER_ID: ${VITE_USER_ID:-demo-user}
+        VITE_APP_TIER: ${VITE_APP_TIER:-preview}
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
         VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-preview}
         VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
@@ -17,7 +18,10 @@ services:
       - ${PREVIEW_STACK_ENV_FILE:-.env}
     environment:
       NODE_ENV: production
+      APP_TIER: ${APP_TIER:-preview}
+      FEATURE_FLAGS: ${FEATURE_FLAGS:-}
       PORT: "3001"
+      DATABASE_URL_PROD_RO: ${DATABASE_URL_PROD_RO:-}
       BLUEPRINT_STORAGE_ROOT: /app/storage/blueprints
     volumes:
       - blueprint_storage:/app/storage/blueprints
@@ -44,6 +48,7 @@ services:
         VITE_API_URL: ${VITE_API_URL:-}
         VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
         VITE_USER_ID: ${VITE_USER_ID:-demo-user}
+        VITE_APP_TIER: ${VITE_APP_TIER:-preview}
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
         VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-preview}
         VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
@@ -71,6 +76,7 @@ services:
         VITE_API_URL: ${VITE_API_URL:-}
         VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
         VITE_USER_ID: ${VITE_USER_ID:-demo-user}
+        VITE_APP_TIER: ${VITE_APP_TIER:-preview}
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
         VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-preview}
         VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
@@ -79,6 +85,9 @@ services:
       - ${PREVIEW_STACK_ENV_FILE:-.env}
     environment:
       NODE_ENV: production
+      APP_TIER: ${APP_TIER:-preview}
+      FEATURE_FLAGS: ${FEATURE_FLAGS:-}
+      DATABASE_URL_PROD_RO: ${DATABASE_URL_PROD_RO:-}
     profiles:
       - worker
     restart: unless-stopped

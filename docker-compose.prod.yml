@@ -8,14 +8,18 @@ services:
         VITE_API_URL: ${VITE_API_URL:-}
         VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
         VITE_USER_ID: ${VITE_USER_ID:-demo-user}
+        VITE_APP_TIER: ${VITE_APP_TIER:-prod}
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
         VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
         VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
     command: npm start -w @sitelayer/api
     environment:
       NODE_ENV: production
+      APP_TIER: ${APP_TIER:-prod}
+      FEATURE_FLAGS: ${FEATURE_FLAGS:-}
       PORT: "3001"
       DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL_PROD_RO: ${DATABASE_URL_PROD_RO:-}
       DATABASE_SSL_REJECT_UNAUTHORIZED: ${DATABASE_SSL_REJECT_UNAUTHORIZED:-true}
       ACTIVE_COMPANY_SLUG: ${ACTIVE_COMPANY_SLUG:-la-operations}
       ACTIVE_USER_ID: ${ACTIVE_USER_ID:-demo-user}
@@ -28,8 +32,8 @@ services:
       CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
       DO_SPACES_KEY: ${DO_SPACES_KEY:-}
       DO_SPACES_SECRET: ${DO_SPACES_SECRET:-}
-      DO_SPACES_REGION: ${DO_SPACES_REGION:-nyc3}
-      DO_SPACES_BUCKET: ${DO_SPACES_BUCKET:-sitelayer-blueprints}
+      DO_SPACES_REGION: ${DO_SPACES_REGION:-tor1}
+      DO_SPACES_BUCKET: ${DO_SPACES_BUCKET:-sitelayer-blueprints-prod}
       BLUEPRINT_STORAGE_ROOT: ${BLUEPRINT_STORAGE_ROOT:-/app/storage/blueprints}
       SENTRY_DSN: ${SENTRY_DSN:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
@@ -48,6 +52,7 @@ services:
         VITE_API_URL: ${VITE_API_URL:-}
         VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
         VITE_USER_ID: ${VITE_USER_ID:-demo-user}
+        VITE_APP_TIER: ${VITE_APP_TIER:-prod}
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
         VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
         VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
@@ -67,13 +72,17 @@ services:
         VITE_API_URL: ${VITE_API_URL:-}
         VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
         VITE_USER_ID: ${VITE_USER_ID:-demo-user}
+        VITE_APP_TIER: ${VITE_APP_TIER:-prod}
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
         VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
         VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
     command: npm start -w @sitelayer/worker
     environment:
       NODE_ENV: production
+      APP_TIER: ${APP_TIER:-prod}
+      FEATURE_FLAGS: ${FEATURE_FLAGS:-}
       DATABASE_URL: ${DATABASE_URL}
+      DATABASE_URL_PROD_RO: ${DATABASE_URL_PROD_RO:-}
       DATABASE_SSL_REJECT_UNAUTHORIZED: ${DATABASE_SSL_REJECT_UNAUTHORIZED:-true}
       SENTRY_DSN: ${SENTRY_DSN:-}
     restart: always

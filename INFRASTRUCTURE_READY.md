@@ -108,9 +108,11 @@ DATABASE_URL=<set-in-deployment-environment>
 DATABASE_SSL_REJECT_UNAUTHORIZED=false
 
 # DigitalOcean Spaces (optional until storage is provisioned)
-DO_SPACES_ENDPOINT=https://sitelayer.tor1.digitaloceanspaces.com
+DO_SPACES_ENDPOINT=https://tor1.digitaloceanspaces.com
 DO_SPACES_KEY=
 DO_SPACES_SECRET=
+DO_SPACES_REGION=tor1
+DO_SPACES_BUCKET=sitelayer-blueprints-prod
 
 # Local durable blueprint storage fallback
 BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
@@ -141,7 +143,7 @@ DOMAIN=sitelayer.sandolab.xyz
 ### 1. Create DO Spaces Bucket (2 min)
 1. Go to https://cloud.digitalocean.com/spaces
 2. Click **Create Spaces Bucket**
-3. Name: `sitelayer`
+3. Name: `sitelayer-blueprints-prod` (or run `scripts/provision-spaces-buckets.sh` to create dev/preview/prod buckets)
 4. Region: Toronto (tor1)
 5. Click Create
 6. Go to **Settings** → **API Keys** (tab)

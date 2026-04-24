@@ -1,7 +1,5 @@
 import { Sentry } from './instrument.js'
 import http from 'node:http'
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
-import path from 'node:path'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { Pool, type PoolConfig } from 'pg'
 import {
@@ -13,6 +11,37 @@ import {
   calculateProjectCost,
   formatMoney,
 } from '@sitelayer/domain'
+import { loadAppConfig, logAppConfigBanner, TierConfigError } from './tier.js'
+import {
+  assertKeyInCompany,
+  buildBlueprintStorageKey,
+  createBlueprintStorage,
+  getBlueprintMimeType,
+  readStorageEnv,
+  StorageError,
+  type BlueprintStorage,
+} from './storage.js'
+
+let appConfig: ReturnType<typeof loadAppConfig>
+try {
+  appConfig = loadAppConfig()
+  logAppConfigBanner(appConfig)
+} catch (err) {
+  if (err instanceof TierConfigError) {
+    console.error(`[tier] refusing to start: ${err.message}`)
+    process.exit(1)
+  }
+  throw err
+}
+
+let storage: BlueprintStorage
+try {
+  storage = await createBlueprintStorage(readStorageEnv(process.env, appConfig.tier))
+  console.log(`[storage] backend=${storage.backend} bucket=${storage.bucket ?? '(local fs)'}`)
+} catch (err) {
+  console.error(`[storage] refusing to start: ${err instanceof Error ? err.message : err}`)
+  process.exit(1)
+}
 
 type ActiveCompany = {
   id: string
@@ -66,7 +95,6 @@ const qboEnvironment = (process.env.QBO_ENVIRONMENT ?? 'sandbox') as 'sandbox' |
 const qboBaseUrl = process.env.QBO_BASE_URL ?? (qboEnvironment === 'sandbox' ? 'https://sandbox-quickbooks.api.intuit.com' : 'https://quickbooks.api.intuit.com')
 const qboStateSecret = process.env.QBO_STATE_SECRET ?? qboClientSecret
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)
-const blueprintStorageRoot = path.resolve(process.env.BLUEPRINT_STORAGE_ROOT ?? path.join(process.cwd(), 'storage', 'blueprints'))
 
 function getPoolConfig(connectionString: string): PoolConfig {
   try {
@@ -87,6 +115,12 @@ function getPoolConfig(connectionString: string): PoolConfig {
 }
 
 const pool = new Pool(getPoolConfig(databaseUrl))
+pool.on('connect', (client) => {
+  // Tags origin column defaults on newly-inserted rows for cross-tier forensics.
+  client.query('select set_config($1, $2, false)', ['app.tier', appConfig.tier]).catch((err) => {
+    console.warn(`[tier] failed to set app.tier on pool connect: ${err instanceof Error ? err.message : err}`)
+  })
+})
 
 class HttpError extends Error {
   constructor(
@@ -110,48 +144,37 @@ function sanitizeFileName(fileName: string): string {
   return cleaned || 'blueprint.pdf'
 }
 
-function getBlueprintFilePath(companyId: string, blueprintId: string, fileName: string) {
-  return path.join(blueprintStorageRoot, companyId, blueprintId, sanitizeFileName(fileName))
+function getBlueprintFilePath(companyId: string, blueprintId: string, fileName: string): string {
+  return buildBlueprintStorageKey(companyId, blueprintId, fileName)
 }
 
-function assertBlueprintFilePath(companyId: string, filePath: string) {
-  const companyRoot = path.resolve(blueprintStorageRoot, companyId)
-  const resolvedPath = path.resolve(filePath)
-  const relative = path.relative(companyRoot, resolvedPath)
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
-    throw new HttpError(400, 'blueprint storage_path must stay inside controlled blueprint storage')
+function assertBlueprintFilePath(companyId: string, filePath: string): string {
+  try {
+    return assertKeyInCompany(companyId, filePath)
+  } catch (err) {
+    if (err instanceof StorageError) throw new HttpError(err.status, err.message)
+    throw err
   }
-  return resolvedPath
 }
 
-function resolveBlueprintStoragePath(companyId: string, blueprintId: string, fileName: string, requestedPath?: string | null) {
-  const cleanRequestedPath = requestedPath?.trim()
-  if (!cleanRequestedPath) return getBlueprintFilePath(companyId, blueprintId, fileName)
-  return assertBlueprintFilePath(companyId, cleanRequestedPath)
+function resolveBlueprintStoragePath(companyId: string, blueprintId: string, fileName: string, requestedPath?: string | null): string {
+  const cleanRequested = requestedPath?.trim()
+  if (!cleanRequested) return buildBlueprintStorageKey(companyId, blueprintId, fileName)
+  return assertBlueprintFilePath(companyId, cleanRequested)
 }
 
-function getBlueprintMimeType(fileName: string): string {
-  const lower = fileName.toLowerCase()
-  if (lower.endsWith('.pdf')) return 'application/pdf'
-  if (lower.endsWith('.png')) return 'image/png'
-  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
-  return 'application/octet-stream'
-}
-
-async function persistBlueprintFile(companyId: string, blueprintId: string, fileName: string, contentsBase64: string) {
-  const filePath = getBlueprintFilePath(companyId, blueprintId, fileName)
-  await mkdir(path.dirname(filePath), { recursive: true })
+async function persistBlueprintFile(companyId: string, blueprintId: string, fileName: string, contentsBase64: string): Promise<string> {
+  const key = buildBlueprintStorageKey(companyId, blueprintId, fileName)
   const source = contentsBase64.includes(',') ? contentsBase64.split(',', 2)[1] ?? '' : contentsBase64
-  await writeFile(filePath, Buffer.from(source, 'base64'))
-  return filePath
+  await storage.put(key, Buffer.from(source, 'base64'), getBlueprintMimeType(fileName))
+  return key
 }
 
-async function copyBlueprintFile(companyId: string, blueprintId: string, sourcePath: string, fileName: string) {
-  assertBlueprintFilePath(companyId, sourcePath)
-  const filePath = getBlueprintFilePath(companyId, blueprintId, fileName)
-  await mkdir(path.dirname(filePath), { recursive: true })
-  await writeFile(filePath, await readFile(sourcePath))
-  return filePath
+async function copyBlueprintFile(companyId: string, blueprintId: string, sourcePath: string, fileName: string): Promise<string> {
+  const sourceKey = assertBlueprintFilePath(companyId, sourcePath)
+  const destKey = buildBlueprintStorageKey(companyId, blueprintId, fileName)
+  await storage.copy(sourceKey, destKey)
+  return destKey
 }
 
 async function qboGet<T>(endpoint: string, realmId: string, accessToken: string): Promise<T> {
@@ -1130,6 +1153,15 @@ const server = http.createServer(async (req, res) => {
         service: 'api',
         stage: 'foundation',
         money: formatMoney(1234.56),
+      })
+      return
+    }
+
+    if (req.method === 'GET' && url.pathname === '/api/features') {
+      sendJson(res, 200, {
+        tier: appConfig.tier,
+        flags: Array.from(appConfig.flags).sort(),
+        ribbon: appConfig.ribbon,
       })
       return
     }
@@ -3315,8 +3347,8 @@ const server = http.createServer(async (req, res) => {
         return
       }
       try {
-        const storagePath = assertBlueprintFilePath(company.id, String(blueprint.storage_path))
-        const content = await readFile(storagePath)
+        const storageKey = assertBlueprintFilePath(company.id, String(blueprint.storage_path))
+        const content = await storage.get(storageKey)
         const mimeType = getBlueprintMimeType(String(blueprint.file_name))
         res.writeHead(200, {
           'content-type': mimeType,

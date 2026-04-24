@@ -4,6 +4,7 @@ const databaseUrl = process.env.DATABASE_URL ?? 'postgres://sitelayer:sitelayer@
 const databaseSslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false'
 const activeCompanySlug = process.env.ACTIVE_COMPANY_SLUG ?? 'la-operations'
 const pollIntervalMs = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 10_000)
+const appTier = (process.env.APP_TIER ?? 'local').trim()
 
 function getPoolConfig(connectionString: string): PoolConfig {
   try {
@@ -24,6 +25,11 @@ function getPoolConfig(connectionString: string): PoolConfig {
 }
 
 const pool = new Pool(getPoolConfig(databaseUrl))
+pool.on('connect', (client) => {
+  client.query('select set_config($1, $2, false)', ['app.tier', appTier]).catch((err) => {
+    console.warn(`[worker] failed to set app.tier on pool connect: ${err instanceof Error ? err.message : err}`)
+  })
+})
 
 async function getCompanyId(): Promise<string | null> {
   const result = await pool.query<{ id: string }>(

@@ -15,6 +15,7 @@
     "test:integration": "RUN_API_INTEGRATION=1 vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.645.0",
     "@sentry/node": "^10.50.0",
     "@sitelayer/domain": "file:../../packages/domain",
     "pg": "^8.13.1"

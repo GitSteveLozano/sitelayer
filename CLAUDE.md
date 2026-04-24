@@ -136,6 +136,9 @@ sitelayer/
 
 **Environment Variables**:
 ```
+APP_TIER=local|dev|preview|prod          # Tier marker; startup guard enforced
+FEATURE_FLAGS=read-prod-ro,qbo-live,...  # See DEPLOYMENT.md → Tier Isolation
+DATABASE_URL_PROD_RO=...                 # Read-only prod pool (only for read-prod-ro flag)
 PORT=3001
 DATABASE_URL=postgres://sitelayer:sitelayer@localhost:5432/sitelayer
 ACTIVE_COMPANY_SLUG=la-operations        # Hardcoded tenant demo
@@ -145,6 +148,8 @@ QBO_ENVIRONMENT=sandbox|production
 BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
 ALLOWED_ORIGINS=http://localhost:5173,...
 ```
+
+**Tier isolation.** The API refuses to boot if `APP_TIER` disagrees with `DATABASE_URL` (e.g. `APP_TIER=dev` pointing at `sitelayer_prod`) or with `DO_SPACES_BUCKET`. Full rules + feature-flag semantics live in `DEPLOYMENT.md` → Tier Isolation. The web UI shows a colored ribbon reflecting the tier; absence of the ribbon means production. Claude Desktop / MCP agents must never be handed prod credentials.
 
 ### Frontend (apps/web/src/App.tsx)
 
@@ -383,7 +388,7 @@ Background job processor (currently minimal):
 ### Phase 1 — Environment & Secrets (Week 1, Day 1-2)
 
 - [ ] Domain registration (sitelayer.{local|site})
-- [ ] DigitalOcean Spaces bucket (`sitelayer-blueprints`)
+- [ ] DigitalOcean Spaces buckets (`sitelayer-blueprints-dev`, `sitelayer-blueprints-preview`, `sitelayer-blueprints-prod`)
 - [ ] DigitalOcean database (Postgres 15+, 1GB RAM minimum)
 - [ ] Clerk organization setup + OAuth credentials
 - [ ] Environment file (`.env.local`)

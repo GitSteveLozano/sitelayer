@@ -117,8 +117,8 @@ CLERK_SECRET_KEY=
 # DigitalOcean Spaces (optional until file storage is provisioned)
 DO_SPACES_KEY=
 DO_SPACES_SECRET=
-DO_SPACES_BUCKET=sitelayer-blueprints
-DO_SPACES_REGION=nyc3
+DO_SPACES_BUCKET=sitelayer-blueprints-prod
+DO_SPACES_REGION=tor1
 
 # Local durable blueprint storage fallback.
 # docker-compose.prod.yml persists this path in the blueprint_storage volume.
@@ -197,11 +197,81 @@ The GitHub Actions workflow will:
 6. Start services with `docker compose up -d --remove-orphans`
 7. Verify API health on `127.0.0.1:3001/health`
 
+## Tier Isolation
+
+Sitelayer runs in one of four tiers, declared explicitly via `APP_TIER`:
+
+| Tier | DB (DigitalOcean managed Postgres) | Spaces bucket | Purpose |
+|------|-----------------------------------|---------------|---------|
+| `local` | `postgres` in `docker-compose.yml` | MinIO (TBD) | Laptop-only development |
+| `dev` | `sitelayer_dev` | `sitelayer-blueprints-dev` (TBD) | Shared sandbox; Claude Desktop / MCP agents |
+| `preview` | `sitelayer_preview` | `sitelayer-blueprints-preview` (TBD) | Per-PR stacks, non-technical demos |
+| `prod` | `sitelayer_prod` | `sitelayer-blueprints-prod` | Real customers only |
+
+**Startup guard.** On boot the API reads `APP_TIER`, `DATABASE_URL`, and `DO_SPACES_BUCKET` and refuses to start on mismatch. Concrete rules:
+
+- `APP_TIER=prod` requires `DATABASE_URL` to reference `sitelayer_prod`.
+- Any non-prod tier that points at a `sitelayer_prod` database crashes at startup.
+- `APP_TIER=prod` requires `DO_SPACES_BUCKET` to end in `-prod` (or equal the legacy `sitelayer-blueprints`).
+- Any non-prod tier pointed at a `*-prod*` bucket crashes.
+
+This prevents an accidentally-copied `.env` from letting a dev stack overwrite customer data.
+
+**Feature flags.** `FEATURE_FLAGS` is a comma-separated allowlist. Recognized values:
+
+- `read-prod-ro` — unlocks a separate read-only pool via `DATABASE_URL_PROD_RO` (user must be a `_ro` or `readonly` role). Forbidden in prod.
+- `qbo-live` — preview can hit real QBO sandbox instead of fixtures.
+- `pdf-ocr-experimental` — opt in to unstable OCR path.
+
+Unknown flags are logged and ignored. The active tier and flags are returned by `GET /api/features` and displayed as a ribbon at the top of the web UI (non-prod only).
+
+**Non-technical collaborator rules.**
+
+- They use the `main.preview.sitelayer.sandolab.xyz` URL (or equivalent) — never prod directly.
+- No prod creds on their machine. If they use Claude Desktop with an MCP server, it connects to `sitelayer_dev` only.
+- The ribbon is the ground truth: if they don't see "PREVIEW" or "DEV DATA" they're in the wrong place.
+
+**Enabling `read-prod-ro` for a preview.**
+
+1. Run `psql "$PROD_DATABASE_URL" -v password="'…'" -f scripts/sitelayer_prod_ro.sql` against the prod cluster. The script is idempotent.
+2. Put the resulting connection string in `DATABASE_URL_PROD_RO` in the preview stack's `.env.shared`.
+3. Add `read-prod-ro` to `FEATURE_FLAGS` for that stack.
+4. The preview bootstraps a second pg pool; any accidental write is rejected at the Postgres role level, not just by app logic.
+
+**Provisioning per-tier Spaces buckets.**
+
+```
+DO_SPACES_KEY=… DO_SPACES_SECRET=… ./scripts/provision-spaces-buckets.sh
+```
+
+Creates `sitelayer-blueprints-{dev,preview,prod}`, private ACL + public-access-block. Idempotent — existing buckets are skipped. Then put the matching name in each tier's `DO_SPACES_BUCKET`.
+
+**Storage adapter.** `apps/api/src/storage.ts` picks a backend at startup:
+- If `DO_SPACES_KEY` + `DO_SPACES_SECRET` + `DO_SPACES_BUCKET` are all set → S3/Spaces client (works for DO Spaces, MinIO, or any S3-compatible endpoint via `DO_SPACES_ENDPOINT`).
+- Otherwise → local filesystem at `BLUEPRINT_STORAGE_ROOT`.
+
+`storage_path` column is now an opaque key (`<companyId>/<blueprintId>/<filename>`), not an absolute path. Legacy rows with `/app/storage/blueprints/...` still resolve via a prefix-strip compatibility shim.
+
+Local compose ships a MinIO container at `http://minio:9000` with console at `:9001` (`sitelayerlocal`/`sitelayerlocal`). The `minio-init` one-shot creates `sitelayer-blueprints-local` on boot.
+
+**Write-origin audit column.** Migration `docker/postgres/init/002_tier_origin.sql` adds an `origin text` column to `projects`, `blueprint_documents`, `takeoff_measurements`, `labor_entries`, `material_bills`, `crew_schedules`, `estimate_lines`. Defaults to `current_setting('app.tier', true)`. The API/worker pools call `set_config('app.tier', '<tier>', false)` on every connection so newly-inserted rows are self-labeled.
+
+Applying to existing deployed DBs:
+```
+psql "$DATABASE_URL" -f docker/postgres/init/002_tier_origin.sql
+```
+Idempotent (`ADD COLUMN IF NOT EXISTS`). Existing rows stay NULL in the origin column — that's fine, only future writes get tagged.
+
+**Dev data seeding.** `npm run seed:dev` attaches the PDFs in `blueprints_sample/` to the LA Operations demo project and uploads them through the active storage adapter. Idempotent. Refuses to run when `APP_TIER=prod`. Run this manually for local/dev/preview seed refreshes.
+
 ## Environment Variables Reference
 
 | Variable | Required | Description |
 |----------|----------|-------------|
+| `APP_TIER` | ✅ in prod | `local`\|`dev`\|`preview`\|`prod`. Startup guard refuses to boot on mismatch. |
+| `FEATURE_FLAGS` | ❌ | Comma-separated. See Tier Isolation above. |
 | `DATABASE_URL` | ✅ | PostgreSQL connection string (use managed database) |
+| `DATABASE_URL_PROD_RO` | ❌ | Read-only prod pool for `read-prod-ro` flag; user must be `_ro`/readonly role. |
 | `PORT` | ❌ | API port; Compose sets `3001` |
 | `NODE_ENV` | ❌ | Compose sets `production` |
 | `QBO_CLIENT_ID` | ❌ | QuickBooks Online client ID; defaults to demo placeholders until configured |
