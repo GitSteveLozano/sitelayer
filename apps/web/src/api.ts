@@ -226,8 +226,22 @@ export type SessionResponse = {
 }
 
 export type CompaniesResponse = {
-  companies: Array<{ id: string; slug: string; name: string; created_at: string }>
-  activeCompany: { id: string; name: string; slug: string }
+  companies: Array<{ id: string; slug: string; name: string; created_at: string; role?: string }>
+}
+
+export type CreateCompanyResponse = {
+  company: { id: string; slug: string; name: string; created_at: string }
+  role: string
+}
+
+export type CreateMembershipResponse = {
+  membership: {
+    id: string
+    company_id: string
+    clerk_user_id: string
+    role: string
+    created_at: string
+  }
 }
 
 export type SyncStatusResponse = {
@@ -445,6 +459,21 @@ export async function apiPatch<T>(path: string, body: unknown, companySlug: stri
 
 export async function apiDelete<T>(path: string, companySlug: string, body?: unknown): Promise<T> {
   return apiMutate<T>('DELETE', path, body, companySlug)
+}
+
+export async function createCompany(
+  input: { slug: string; name: string; seed_defaults?: boolean },
+  companySlug: string,
+): Promise<CreateCompanyResponse> {
+  return apiPost<CreateCompanyResponse>('/api/companies', input, companySlug)
+}
+
+export async function inviteMembership(
+  companyId: string,
+  input: { clerk_user_id: string; role?: string },
+  companySlug: string,
+): Promise<CreateMembershipResponse> {
+  return apiPost<CreateMembershipResponse>(`/api/companies/${companyId}/memberships`, input, companySlug)
 }
 
 export async function replayOfflineMutations(companySlug: string) {

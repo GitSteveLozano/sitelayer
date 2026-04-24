@@ -1,5 +1,5 @@
 import { LA_TEMPLATE } from '@sitelayer/domain'
-import { apiDelete, apiPatch, apiPost } from '../api.js'
+import { apiDelete, apiPatch, apiPost, createCompany, inviteMembership } from '../api.js'
 import type {
   BonusRuleRow,
   BootstrapResponse,
@@ -150,6 +150,64 @@ export function ProjectsView({
           <Input name="company_slug_manual" defaultValue={companySlug} placeholder="Or type a company slug" />
         </FormRow>
       </section>
+
+      <section className="panel">
+        <h2>Create Company</h2>
+        <p className="muted">
+          Provisions a new tenant with default divisions, service items, pricing profile, and bonus rule. The current
+          user becomes admin.
+        </p>
+        <FormRow
+          actionLabel="Create company"
+          busy={busy === 'create-company'}
+          onSubmit={(form) =>
+            runAction('create-company', async () => {
+              const slug = String(form.get('new_company_slug') ?? '')
+                .trim()
+                .toLowerCase()
+              const name = String(form.get('new_company_name') ?? '').trim()
+              if (!slug) throw new Error('slug is required')
+              if (!name) throw new Error('name is required')
+              const response = await createCompany({ slug, name }, companySlug)
+              setCompanySlug(response.company.slug)
+            })
+          }
+        >
+          <Input name="new_company_slug" placeholder="acme-construction" />
+          <Input name="new_company_name" placeholder="Acme Construction" />
+        </FormRow>
+      </section>
+
+      {session?.user.role === 'admin' && session?.activeCompany.id ? (
+        <section className="panel">
+          <h2>Invite Member</h2>
+          <p className="muted">Add another Clerk user to the active company. Admins can promote/demote roles here.</p>
+          <FormRow
+            actionLabel="Invite"
+            busy={busy === 'invite-member'}
+            onSubmit={(form) =>
+              runAction(
+                'invite-member',
+                async () => {
+                  const inviteUserId = String(form.get('invite_user_id') ?? '').trim()
+                  const role = String(form.get('invite_role') ?? 'member').trim()
+                  if (!inviteUserId) throw new Error('user id is required')
+                  await inviteMembership(session.activeCompany.id, { clerk_user_id: inviteUserId, role }, companySlug)
+                },
+                { skipRefresh: true },
+              )
+            }
+          >
+            <Input name="invite_user_id" placeholder="Clerk user id (user_xxxxxxxx)" />
+            <Select name="invite_role" defaultValue="member">
+              <option value="admin">admin</option>
+              <option value="foreman">foreman</option>
+              <option value="office">office</option>
+              <option value="member">member</option>
+            </Select>
+          </FormRow>
+        </section>
+      ) : null}
 
       <section className="panel">
         <h2>Workflow Backbone</h2>

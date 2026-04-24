@@ -5,6 +5,8 @@ export interface RequestContext {
   requestId: string
   companySlug?: string
   userId?: string
+  actorUserId?: string
+  actorRole?: string
   route?: string
   method?: string
 }

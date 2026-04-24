@@ -31,6 +31,10 @@ import {
   StorageError,
   type BlueprintStorage,
 } from './storage.js'
+import { recordAudit, isAuditableEntity } from './audit.js'
+import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
+import { AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
+import { attachPool, observeAudit, observeRequest, renderMetrics } from './metrics.js'
 
 const logger = createLogger('api')
 const CORS_ALLOW_HEADERS =
@@ -152,6 +156,10 @@ const databaseUrl = appConfig.databaseUrl
 const databaseSslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false'
 const activeCompanySlug = process.env.ACTIVE_COMPANY_SLUG ?? 'la-operations'
 const activeUserId = process.env.ACTIVE_USER_ID ?? 'demo-user'
+const authConfig = loadAuthConfig(process.env)
+const buildSha = process.env.APP_BUILD_SHA ?? process.env.SENTRY_RELEASE ?? 'unknown'
+const startedAt = new Date().toISOString()
+const metricsToken = process.env.API_METRICS_TOKEN?.trim() || null
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:5173,http://localhost:3000')
   .split(',')
   .map((o) => o.trim())
@@ -189,6 +197,7 @@ function getPoolConfig(connectionString: string): PoolConfig {
 }
 
 const pool = new Pool(getPoolConfig(databaseUrl))
+attachPool(pool)
 
 class HttpError extends Error {
   constructor(
@@ -344,6 +353,8 @@ function getHeaderValue(req: http.IncomingMessage | undefined, key: string): str
 }
 
 function getCurrentUserId(req?: http.IncomingMessage): string {
+  const ctxUser = getRequestContext()?.actorUserId
+  if (ctxUser) return ctxUser
   return getHeaderValue(req, 'x-sitelayer-user-id') ?? activeUserId
 }
 
@@ -550,6 +561,23 @@ async function recordSyncEvent(
       requestId,
     ],
   )
+  if (isAuditableEntity(entityType)) {
+    const action = typeof payload.action === 'string' ? payload.action : 'event'
+    const after = (payload as Record<string, unknown>)[entityType] ?? payload
+    try {
+      await recordAudit(pool, {
+        companyId,
+        entityType,
+        entityId,
+        action,
+        after,
+        sentryTrace,
+      })
+      observeAudit(entityType, action)
+    } catch (err) {
+      logger.warn({ err, entityType, entityId, action }, 'audit insert failed')
+    }
+  }
 }
 
 async function recordMutationOutbox(
@@ -1372,6 +1400,7 @@ async function listAnalytics(companyId: string) {
 }
 
 const server = http.createServer(async (req, res) => {
+  const requestStartedAt = Date.now()
   const headerRequestId = typeof req.headers['x-request-id'] === 'string' ? req.headers['x-request-id'].trim() : ''
   const requestId = headerRequestId || randomUUID()
   res.setHeader('x-request-id', requestId)
@@ -1393,6 +1422,9 @@ const server = http.createServer(async (req, res) => {
     ...(companySlugHeader ? { companySlug: companySlugHeader } : {}),
     ...(userIdHeader ? { userId: userIdHeader } : {}),
   }
+  res.on('finish', () => {
+    observeRequest(method, requestContext.route ?? initialRoute, res.statusCode || 0, Date.now() - requestStartedAt)
+  })
 
   await runWithRequestContext(requestContext, () =>
     Sentry.withIsolationScope((scope) => {
@@ -1433,8 +1465,22 @@ const server = http.createServer(async (req, res) => {
             }
 
             if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/health') {
+              const probe = await Promise.race([
+                pool
+                  .query('select 1 as ok')
+                  .then(() => ({ db: 'healthy' as const, error: null as string | null }))
+                  .catch((err) => ({
+                    db: 'down' as const,
+                    error: err instanceof Error ? err.message : String(err),
+                  })),
+                new Promise<{ db: 'timeout'; error: string }>((resolve) =>
+                  setTimeout(() => resolve({ db: 'timeout', error: 'db probe exceeded 2s' }), 2000),
+                ),
+              ])
+              const ok = probe.db === 'healthy'
+              const status = ok ? 200 : 503
               if (req.method === 'HEAD') {
-                res.writeHead(200, {
+                res.writeHead(status, {
                   'content-type': 'application/json; charset=utf-8',
                   'access-control-allow-origin': getCorsOrigin(req),
                   'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
@@ -1443,13 +1489,46 @@ const server = http.createServer(async (req, res) => {
                 res.end()
                 return
               }
-
-              sendJson(res, 200, {
-                ok: true,
+              sendJson(res, status, {
+                ok,
                 service: 'api',
-                stage: 'foundation',
+                tier: appConfig.tier,
+                build_sha: buildSha,
+                started_at: startedAt,
+                db: probe,
                 money: formatMoney(1234.56),
               })
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname === '/api/version') {
+              sendJson(res, 200, {
+                service: 'api',
+                tier: appConfig.tier,
+                build_sha: buildSha,
+                started_at: startedAt,
+                node_version: process.version,
+              })
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname === '/api/metrics') {
+              if (metricsToken) {
+                const header = req.headers['authorization']
+                const value = Array.isArray(header) ? header[0] : header
+                const presented = value?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() ?? null
+                if (!presented || presented !== metricsToken) {
+                  res.setHeader('www-authenticate', 'Bearer realm="sitelayer-metrics"')
+                  sendJson(res, 401, { error: 'metrics token required' })
+                  return
+                }
+              }
+              const { contentType, body } = await renderMetrics()
+              res.writeHead(200, {
+                'content-type': contentType,
+                'access-control-allow-origin': getCorsOrigin(req),
+              })
+              res.end(body)
               return
             }
 
@@ -1459,6 +1538,146 @@ const server = http.createServer(async (req, res) => {
                 flags: Array.from(appConfig.flags).sort(),
                 ribbon: appConfig.ribbon,
               })
+              return
+            }
+
+            const isPublicPath = url.pathname === '/api/integrations/qbo/callback'
+            let identity: Identity
+            try {
+              identity = isPublicPath
+                ? { userId: 'qbo-oauth-redirect', source: 'default' }
+                : resolveIdentity(req, authConfig)
+            } catch (err) {
+              if (err instanceof AuthError) {
+                if (err.status === 401) {
+                  res.setHeader('www-authenticate', 'Bearer realm="sitelayer"')
+                }
+                sendJson(res, err.status, { error: err.message, request_id: requestId })
+                return
+              }
+              throw err
+            }
+            requestContext.actorUserId = identity.userId
+            scope.setUser({ id: identity.userId })
+            scope.setTag('auth_source', identity.source)
+
+            if (req.method === 'GET' && url.pathname === '/api/companies') {
+              const memberships = await getMemberships(identity.userId)
+              const companies = memberships.map((m) => ({
+                id: m.company_id,
+                slug: m.slug,
+                name: m.name,
+                created_at: m.created_at,
+                role: m.role,
+              }))
+              sendJson(res, 200, { companies })
+              return
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/companies') {
+              const body = await readBody(req)
+              const slug = String(body.slug ?? '')
+                .trim()
+                .toLowerCase()
+              const name = String(body.name ?? '').trim()
+              if (!slug || !COMPANY_SLUG_PATTERN.test(slug)) {
+                sendJson(res, 400, { error: 'slug must be 2-64 chars, lowercase letters/digits/dashes' })
+                return
+              }
+              if (!name) {
+                sendJson(res, 400, { error: 'name is required' })
+                return
+              }
+              const seedDefaults = body.seed_defaults !== false
+              const client = await pool.connect()
+              try {
+                await client.query('begin')
+                const existing = await client.query('select id from companies where slug = $1 limit 1', [slug])
+                if (existing.rows[0]) {
+                  await client.query('rollback')
+                  sendJson(res, 409, { error: 'slug already in use' })
+                  return
+                }
+                const created = await client.query<{ id: string; slug: string; name: string; created_at: string }>(
+                  `insert into companies (slug, name) values ($1, $2)
+                   returning id, slug, name, created_at`,
+                  [slug, name],
+                )
+                const newCompany = created.rows[0]!
+                await client.query(
+                  `insert into company_memberships (company_id, clerk_user_id, role)
+                   values ($1, $2, 'admin')`,
+                  [newCompany.id, identity.userId],
+                )
+                if (seedDefaults) {
+                  await seedCompanyDefaults(client, newCompany.id)
+                }
+                await client.query('commit')
+                await recordAudit(pool, {
+                  companyId: newCompany.id,
+                  actorUserId: identity.userId,
+                  entityType: 'company',
+                  entityId: newCompany.id,
+                  action: 'create',
+                  after: newCompany,
+                })
+                observeAudit('company', 'create')
+                sendJson(res, 201, { company: newCompany, role: 'admin' })
+              } catch (err) {
+                await client.query('rollback').catch(() => {})
+                throw err
+              } finally {
+                client.release()
+              }
+              return
+            }
+
+            const companyMembershipMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/memberships$/)
+            if (req.method === 'POST' && companyMembershipMatch) {
+              const targetCompanyId = companyMembershipMatch[1]!
+              const adminCheck = await pool.query<{ role: string }>(
+                'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+                [targetCompanyId, identity.userId],
+              )
+              if (!adminCheck.rows[0] || adminCheck.rows[0].role !== 'admin') {
+                sendJson(res, 403, { error: 'admin role required' })
+                return
+              }
+              const body = await readBody(req)
+              const inviteUserId = String(body.clerk_user_id ?? body.user_id ?? '').trim()
+              const role = String(body.role ?? 'member').trim() || 'member'
+              if (!inviteUserId) {
+                sendJson(res, 400, { error: 'clerk_user_id is required' })
+                return
+              }
+              if (!['admin', 'member', 'foreman', 'office'].includes(role)) {
+                sendJson(res, 400, { error: 'role must be admin, member, foreman, or office' })
+                return
+              }
+              const inserted = await pool.query<{
+                id: string
+                company_id: string
+                clerk_user_id: string
+                role: string
+                created_at: string
+              }>(
+                `insert into company_memberships (company_id, clerk_user_id, role)
+                 values ($1, $2, $3)
+                 on conflict (company_id, clerk_user_id) do update set role = excluded.role
+                 returning id, company_id, clerk_user_id, role, created_at`,
+                [targetCompanyId, inviteUserId, role],
+              )
+              const membership = inserted.rows[0]!
+              await recordAudit(pool, {
+                companyId: targetCompanyId,
+                actorUserId: identity.userId,
+                entityType: 'company_membership',
+                entityId: membership.id,
+                action: 'upsert',
+                after: membership,
+              })
+              observeAudit('company_membership', 'upsert')
+              sendJson(res, 201, { membership })
               return
             }
 
@@ -1491,19 +1710,6 @@ const server = http.createServer(async (req, res) => {
                 activeCompany: company,
                 memberships: membershipRows,
               })
-              return
-            }
-
-            if (req.method === 'GET' && url.pathname === '/api/companies') {
-              const userId = getCurrentUserId(req)
-              const memberships = await getMemberships(userId)
-              const companies = memberships.map((m) => ({
-                id: m.company_id,
-                slug: m.slug,
-                name: m.name,
-                created_at: m.created_at,
-              }))
-              sendJson(res, 200, { companies, activeCompany: company })
               return
             }
 

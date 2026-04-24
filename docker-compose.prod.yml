@@ -18,6 +18,7 @@ services:
         SENTRY_ORG: ${SENTRY_ORG:-sandolabs}
         SENTRY_WEB_PROJECT: ${SENTRY_WEB_PROJECT:-sitelayer-web}
         SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+        GIT_SHA: ${GIT_SHA:-unknown}
       secrets:
         - sentry_auth_token
     command: npm start -w @sitelayer/api
@@ -50,9 +51,27 @@ services:
       DEBUG_TRACE_TOKEN: ${DEBUG_TRACE_TOKEN:-}
       DEBUG_ALLOW_PROD: ${DEBUG_ALLOW_PROD:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
+      CLERK_JWT_KEY: ${CLERK_JWT_KEY:-}
+      CLERK_ISSUER: ${CLERK_ISSUER:-}
+      INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-}
+      AUTH_ALLOW_HEADER_FALLBACK: ${AUTH_ALLOW_HEADER_FALLBACK:-}
+      API_METRICS_TOKEN: ${API_METRICS_TOKEN:-}
+      APP_BUILD_SHA: ${GIT_SHA:-unknown}
     volumes:
       - blueprint_storage:/app/storage/blueprints
     restart: always
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('node:http').get('http://127.0.0.1:3001/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     networks:
       - sitelayer
 
@@ -75,6 +94,7 @@ services:
         SENTRY_ORG: ${SENTRY_ORG:-sandolabs}
         SENTRY_WEB_PROJECT: ${SENTRY_WEB_PROJECT:-sitelayer-web}
         SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+        GIT_SHA: ${GIT_SHA:-unknown}
       secrets:
         - sentry_auth_token
     command: npm start -w @sitelayer/web
@@ -103,6 +123,7 @@ services:
         SENTRY_ORG: ${SENTRY_ORG:-sandolabs}
         SENTRY_WEB_PROJECT: ${SENTRY_WEB_PROJECT:-sitelayer-web}
         SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+        GIT_SHA: ${GIT_SHA:-unknown}
       secrets:
         - sentry_auth_token
     command: npm start -w @sitelayer/worker
@@ -118,6 +139,7 @@ services:
       SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
       SENTRY_RELEASE: ${SENTRY_RELEASE:-}
       DEBUG_TRACE_TOKEN: ${DEBUG_TRACE_TOKEN:-}
+      APP_BUILD_SHA: ${GIT_SHA:-unknown}
     restart: always
     networks:
       - sitelayer

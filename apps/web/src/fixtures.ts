@@ -401,8 +401,15 @@ export function getFixtureResponse<T>(path: string, companySlug: string): T {
 
   if (path === '/api/companies') {
     return clone({
-      companies: [{ id: company.id, slug: companySlug, name: company.name, created_at: '2026-04-18T00:00:00.000Z' }],
-      activeCompany: { ...company, slug: companySlug },
+      companies: [
+        {
+          id: company.id,
+          slug: companySlug,
+          name: company.name,
+          created_at: '2026-04-18T00:00:00.000Z',
+          role: 'admin',
+        },
+      ],
     } satisfies CompaniesResponse) as T
   }
 
