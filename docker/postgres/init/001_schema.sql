@@ -325,43 +325,100 @@ WHERE companies.slug IN ('la-operations', 'beta-build')
 ON CONFLICT (company_id, code) DO NOTHING;
 
 INSERT INTO pricing_profiles (company_id, name, is_default, config)
-SELECT id, CASE WHEN slug = 'la-operations' THEN 'Default' ELSE 'Beta Default' END, true, jsonb_build_object('template', slug)
-FROM companies
-WHERE slug IN ('la-operations', 'beta-build')
+SELECT c.id, CASE WHEN c.slug = 'la-operations' THEN 'Default' ELSE 'Beta Default' END, true, jsonb_build_object('template', c.slug)
+FROM companies c
+WHERE c.slug IN ('la-operations', 'beta-build')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM pricing_profiles p
+    WHERE p.company_id = c.id
+      AND p.name = CASE WHEN c.slug = 'la-operations' THEN 'Default' ELSE 'Beta Default' END
+      AND p.deleted_at IS NULL
+  )
 ON CONFLICT DO NOTHING;
 
 INSERT INTO bonus_rules (company_id, name, config, is_active)
-SELECT id, 'Default Margin Bonus', '{"basis":"margin","threshold":0.15}'::jsonb, true
-FROM companies
-WHERE slug IN ('la-operations', 'beta-build')
+SELECT c.id, 'Default Margin Bonus', '{"basis":"margin","threshold":0.15}'::jsonb, true
+FROM companies c
+WHERE c.slug IN ('la-operations', 'beta-build')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM bonus_rules b
+    WHERE b.company_id = c.id
+      AND b.name = 'Default Margin Bonus'
+      AND b.deleted_at IS NULL
+  )
 ON CONFLICT DO NOTHING;
 
 INSERT INTO workers (company_id, name, role)
-SELECT id, 'Crew Lead', 'foreman'
-FROM companies
-WHERE slug IN ('la-operations', 'beta-build')
+SELECT c.id, 'Crew Lead', 'foreman'
+FROM companies c
+WHERE c.slug IN ('la-operations', 'beta-build')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM workers w
+    WHERE w.company_id = c.id
+      AND w.name = 'Crew Lead'
+      AND w.role = 'foreman'
+      AND w.deleted_at IS NULL
+  )
 ON CONFLICT DO NOTHING;
 
 INSERT INTO customers (company_id, name, source)
-SELECT id, 'Foxridge Homes', 'seed'
-FROM companies
-WHERE slug IN ('la-operations', 'beta-build')
+SELECT c.id, 'Foxridge Homes', 'seed'
+FROM companies c
+WHERE c.slug IN ('la-operations', 'beta-build')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM customers customer
+    WHERE customer.company_id = c.id
+      AND customer.name = 'Foxridge Homes'
+      AND customer.source = 'seed'
+      AND customer.external_id IS NULL
+      AND customer.deleted_at IS NULL
+  )
 ON CONFLICT DO NOTHING;
 
 INSERT INTO customers (company_id, name, source)
-SELECT id, 'Streetside Developments', 'seed'
-FROM companies
-WHERE slug IN ('la-operations', 'beta-build')
+SELECT c.id, 'Streetside Developments', 'seed'
+FROM companies c
+WHERE c.slug IN ('la-operations', 'beta-build')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM customers customer
+    WHERE customer.company_id = c.id
+      AND customer.name = 'Streetside Developments'
+      AND customer.source = 'seed'
+      AND customer.external_id IS NULL
+      AND customer.deleted_at IS NULL
+  )
 ON CONFLICT DO NOTHING;
 
 INSERT INTO projects (company_id, customer_name, name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool)
-SELECT id, 'Foxridge Homes', CASE WHEN slug = 'la-operations' THEN '215 Cinnamon Teal' ELSE 'Beta Townhomes' END, 'D4', 'lead', 19267.50, 38, 4.73, 5000
-FROM companies
-WHERE slug IN ('la-operations', 'beta-build')
+SELECT c.id, 'Foxridge Homes', CASE WHEN c.slug = 'la-operations' THEN '215 Cinnamon Teal' ELSE 'Beta Townhomes' END, 'D4', 'lead', 19267.50, 38, 4.73, 5000
+FROM companies c
+WHERE c.slug IN ('la-operations', 'beta-build')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM projects p
+    WHERE p.company_id = c.id
+      AND p.customer_name = 'Foxridge Homes'
+      AND p.name = CASE WHEN c.slug = 'la-operations' THEN '215 Cinnamon Teal' ELSE 'Beta Townhomes' END
+      AND p.division_code = 'D4'
+      AND p.deleted_at IS NULL
+  )
 ON CONFLICT DO NOTHING;
 
 INSERT INTO integration_connections (company_id, provider, provider_account_id, status)
-SELECT id, 'qbo', CASE WHEN slug = 'la-operations' THEN 'sandbox-la' ELSE 'sandbox-beta' END, 'connected'
-FROM companies
-WHERE slug IN ('la-operations', 'beta-build')
+SELECT c.id, 'qbo', CASE WHEN c.slug = 'la-operations' THEN 'sandbox-la' ELSE 'sandbox-beta' END, 'connected'
+FROM companies c
+WHERE c.slug IN ('la-operations', 'beta-build')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM integration_connections i
+    WHERE i.company_id = c.id
+      AND i.provider = 'qbo'
+      AND i.provider_account_id = CASE WHEN c.slug = 'la-operations' THEN 'sandbox-la' ELSE 'sandbox-beta' END
+      AND i.deleted_at IS NULL
+  )
 ON CONFLICT DO NOTHING;

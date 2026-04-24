@@ -163,7 +163,8 @@ ENV_FILE=/app/sitelayer/.env scripts/check-db-schema.sh
 
 The production GitHub Actions deploy runs both commands before rebuilding the
 containers. The SQL files are currently idempotent; review this before adding
-any destructive migration.
+any destructive migration. Keep seed data guarded by `NOT EXISTS` checks unless
+a real unique constraint exists.
 
 For the local Docker database, use the Compose network instead of opening the
 database port:
