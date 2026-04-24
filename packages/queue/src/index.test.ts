@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { QueryResult, QueryResultRow } from 'pg'
-import { processQueue, processQueueWithClient, type QueueClient, type ReleasableQueueClient } from './index.js'
+import {
+  processOutboxBatch,
+  processQueue,
+  processQueueWithClient,
+  type QueueClient,
+  type ReleasableQueueClient,
+} from './index.js'
 
 type QueuedResponse<T extends QueryResultRow = QueryResultRow> = Pick<QueryResult<T>, 'rows' | 'rowCount'> | Error
 
@@ -98,6 +104,36 @@ describe('queue processing', () => {
     expect(result.processedOutboxCount).toBe(0)
     expect(result.processedSyncEventCount).toBe(0)
     expect(sqlCalls(client).some((query) => query.includes('update integration_connections'))).toBe(false)
+  })
+
+  it('returns persisted trace context on processed outbox rows', async () => {
+    const client = new FakeQueueClient([
+      { rows: [{ id: '00000000-0000-0000-0000-000000000003' }], rowCount: 1 },
+      {
+        rows: [
+          {
+            id: '00000000-0000-0000-0000-000000000003',
+            entity_type: 'project',
+            entity_id: 'project-1',
+            mutation_type: 'create',
+            attempt_count: 1,
+            created_at: '2026-04-24T00:00:00.000Z',
+            sentry_trace: '0123456789abcdef0123456789abcdef-0123456789abcdef-1',
+            sentry_baggage: 'sentry-environment=preview',
+            request_id: 'req_trace',
+          },
+        ],
+        rowCount: 1,
+      },
+    ])
+
+    const rows = await processOutboxBatch(client, 'company-1', 10)
+
+    expect(rows[0]).toMatchObject({
+      sentry_trace: '0123456789abcdef0123456789abcdef-0123456789abcdef-1',
+      sentry_baggage: 'sentry-environment=preview',
+      request_id: 'req_trace',
+    })
   })
 
   it('commits and releases the client on success', async () => {

@@ -59,6 +59,9 @@ jobs:
             git fetch origin
             git checkout -B main origin/main
             git reset --hard origin/main
+            export SENTRY_RELEASE="$(git rev-parse --short HEAD)"
+            export VITE_SENTRY_RELEASE="$SENTRY_RELEASE"
+            export SENTRY_WEB_PROJECT="${SENTRY_WEB_PROJECT:-sitelayer-web}"
 
             # docker compose reads this automatically from the working directory.
             if [ ! -f .env ]; then

@@ -11,7 +11,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "npm run typecheck",
     "format": "npm run typecheck",
-    "test": "npm run typecheck"
+    "test": "vitest run"
   },
   "dependencies": {
     "@sentry/node": "^10.50.0",
@@ -21,6 +21,7 @@
     "pg": "^8.13.1"
   },
   "devDependencies": {
-    "@types/pg": "^8.11.11"
+    "@types/pg": "^8.11.11",
+    "vitest": "^4.1.5"
   }
 }

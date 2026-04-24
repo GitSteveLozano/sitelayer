@@ -53,6 +53,8 @@ rsync -az --delete \
   printf 'DB_SCHEMA=%s\n' "$preview_db_schema"
   printf 'PGOPTIONS=-c search_path=%s,public\n' "$preview_db_schema"
   printf 'PREVIEW_IMAGE_TAG=%s\n' "${PREVIEW_IMAGE_TAG:-$preview_slug}"
+  printf 'SENTRY_RELEASE=%s\n' "${SENTRY_RELEASE:-$(git -C "$SOURCE_DIR" rev-parse --short HEAD 2>/dev/null || printf '%s' "$preview_slug")}"
+  printf 'VITE_SENTRY_RELEASE=%s\n' "${VITE_SENTRY_RELEASE:-${SENTRY_RELEASE:-$(git -C "$SOURCE_DIR" rev-parse --short HEAD 2>/dev/null || printf '%s' "$preview_slug")}}"
   printf 'ALLOWED_ORIGINS=https://%s\n' "$preview_host"
   printf 'QBO_REDIRECT_URI=https://%s/api/integrations/qbo/callback\n' "$preview_host"
   printf 'QBO_SUCCESS_REDIRECT_URI=https://%s/?qbo=connected\n' "$preview_host"

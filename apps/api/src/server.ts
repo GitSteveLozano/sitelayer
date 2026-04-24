@@ -1,9 +1,15 @@
 import { Sentry } from './instrument.js'
 import http from 'node:http'
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
+import { createHmac, randomUUID } from 'node:crypto'
 import { Pool, type PoolConfig } from 'pg'
 import { processQueue as processDatabaseQueue } from '@sitelayer/queue'
 import { createLogger, getRequestContext, runWithRequestContext, type RequestContext } from '@sitelayer/logger'
+import {
+  authorizeDebugTraceRequest,
+  DebugTraceError,
+  fetchSentryTrace,
+  parseTraceIdFromSentryTraceHeader,
+} from './debug-trace.js'
 import {
   DEFAULT_BONUS_RULE,
   LA_TEMPLATE,
@@ -27,6 +33,8 @@ import {
 } from './storage.js'
 
 const logger = createLogger('api')
+const CORS_ALLOW_HEADERS =
+  'content-type, authorization, baggage, sentry-trace, traceparent, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id'
 
 function currentTraceHeaders(): { sentryTrace: string | null; baggage: string | null } {
   try {
@@ -54,35 +62,6 @@ function debugRateLimit(key: string, capacity = 10, refillPerMs = 10 / 60_000): 
   return true
 }
 
-function safeTokenEqual(received: string, expected: string): boolean {
-  const a = Buffer.from(received)
-  const b = Buffer.from(expected)
-  if (a.length !== b.length) return false
-  return timingSafeEqual(a, b)
-}
-
-async function fetchSentryTrace(traceId: string, signal: AbortSignal): Promise<unknown> {
-  const org = process.env.SENTRY_ORG
-  const token = process.env.SENTRY_AUTH_TOKEN
-  if (!org || !token) {
-    throw new HttpError(503, 'debug trace lookup requires SENTRY_ORG and SENTRY_AUTH_TOKEN')
-  }
-  const host = process.env.SENTRY_HOST ?? 'sentry.io'
-  const url = `https://${host}/api/0/organizations/${encodeURIComponent(org)}/events-trace/${encodeURIComponent(traceId)}/`
-  const response = await fetch(url, {
-    headers: { authorization: `Bearer ${token}`, accept: 'application/json' },
-    signal,
-  })
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new HttpError(
-      response.status === 404 ? 404 : 502,
-      `sentry trace fetch failed: ${response.status} ${body.slice(0, 256)}`,
-    )
-  }
-  return response.json()
-}
-
 async function fetchQueueRowsForTraceOrRequest(params: { traceId?: string; requestId?: string }) {
   const clauses: string[] = []
   const values: unknown[] = []
@@ -107,12 +86,6 @@ async function fetchQueueRowsForTraceOrRequest(params: { traceId?: string; reque
     values,
   )
   return { outbox: outbox.rows, syncEvents: syncEvents.rows }
-}
-
-function parseTraceIdFromSentryTraceHeader(header: string | null): string | null {
-  if (!header) return null
-  const match = header.match(/^([0-9a-f]{32})-/i)
-  return match?.[1] ?? null
 }
 
 let appConfig: ReturnType<typeof loadAppConfig>
@@ -425,8 +398,7 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown, req?:
     'content-type': 'application/json; charset=utf-8',
     'access-control-allow-origin': req ? getCorsOrigin(req) : '*',
     'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
-    'access-control-allow-headers':
-      'content-type, authorization, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id',
+    'access-control-allow-headers': CORS_ALLOW_HEADERS,
   })
   res.end(JSON.stringify(body, null, 2))
 }
@@ -1454,8 +1426,7 @@ const server = http.createServer(async (req, res) => {
               res.writeHead(204, {
                 'access-control-allow-origin': getCorsOrigin(req),
                 'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
-                'access-control-allow-headers':
-                  'content-type, authorization, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id',
+                'access-control-allow-headers': CORS_ALLOW_HEADERS,
               })
               res.end()
               return
@@ -1467,8 +1438,7 @@ const server = http.createServer(async (req, res) => {
                   'content-type': 'application/json; charset=utf-8',
                   'access-control-allow-origin': getCorsOrigin(req),
                   'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
-                  'access-control-allow-headers':
-                    'content-type, authorization, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id',
+                  'access-control-allow-headers': CORS_ALLOW_HEADERS,
                 })
                 res.end()
                 return
@@ -4038,8 +4008,7 @@ const server = http.createServer(async (req, res) => {
                   'content-disposition': `inline; filename="${sanitizeFileName(String(blueprint.file_name))}"`,
                   'access-control-allow-origin': getCorsOrigin(req),
                   'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-                  'access-control-allow-headers':
-                    'content-type, authorization, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id',
+                  'access-control-allow-headers': CORS_ALLOW_HEADERS,
                 })
                 res.end(content)
               } catch {
@@ -4327,23 +4296,21 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'GET' && url.pathname.startsWith('/api/debug/traces/')) {
-              const debugToken = process.env.DEBUG_TRACE_TOKEN
-              if (!debugToken) {
-                sendJson(res, 404, { error: 'not found' })
+              const authResult = authorizeDebugTraceRequest({
+                debugToken: process.env.DEBUG_TRACE_TOKEN,
+                tier: appConfig.tier,
+                allowProd: process.env.DEBUG_ALLOW_PROD,
+                authorizationHeader: req.headers['authorization'],
+                requestId,
+              })
+              if (!authResult.ok) {
+                if (authResult.authenticate) {
+                  res.setHeader('www-authenticate', 'Bearer realm="sitelayer-debug"')
+                }
+                sendJson(res, authResult.status, authResult.body)
                 return
               }
-              if (appConfig.tier === 'prod' && process.env.DEBUG_ALLOW_PROD !== '1') {
-                sendJson(res, 403, { error: 'debug endpoint disabled in prod', request_id: requestId })
-                return
-              }
-              const authHeader = req.headers['authorization']
-              const presented =
-                typeof authHeader === 'string' && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : ''
-              if (!presented || !safeTokenEqual(presented, debugToken)) {
-                res.setHeader('www-authenticate', 'Bearer realm="sitelayer-debug"')
-                sendJson(res, 401, { error: 'invalid debug token', request_id: requestId })
-                return
-              }
+              const presented = authResult.presentedToken
               const rlKey = (req.socket.remoteAddress ?? 'unknown') + ':' + presented.slice(0, 8)
               if (!debugRateLimit(rlKey)) {
                 res.setHeader('retry-after', '6')
@@ -4376,7 +4343,7 @@ const server = http.createServer(async (req, res) => {
                   try {
                     sentryPayload = await fetchSentryTrace(traceId, controller.signal)
                   } catch (err) {
-                    if (err instanceof HttpError) {
+                    if (err instanceof DebugTraceError) {
                       sentryError = err.message
                     } else {
                       sentryError = err instanceof Error ? err.message : 'sentry fetch failed'
@@ -4398,7 +4365,7 @@ const server = http.createServer(async (req, res) => {
                 })
               } catch (err) {
                 logger.error({ err, scope: 'debug_trace' }, 'debug trace lookup failed')
-                const status = err instanceof HttpError ? err.status : 500
+                const status = err instanceof DebugTraceError ? err.status : err instanceof HttpError ? err.status : 500
                 sendJson(res, status, {
                   error: err instanceof Error ? err.message : 'debug trace lookup failed',
                   request_id: requestId,

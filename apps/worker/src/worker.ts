@@ -1,8 +1,9 @@
 import { Sentry } from './instrument.js'
 import { loadAppConfig, postgresOptionsForTier, TierConfigError } from '@sitelayer/config'
-import { createLogger, runWithRequestContext } from '@sitelayer/logger'
-import { processQueueWithClient, type ProcessedOutboxRow, type ProcessedSyncEventRow } from '@sitelayer/queue'
+import { createLogger } from '@sitelayer/logger'
+import { processQueueWithClient } from '@sitelayer/queue'
 import { Pool, type PoolConfig } from 'pg'
+import { spanForAppliedRow } from './trace.js'
 
 const logger = createLogger('worker')
 
@@ -45,41 +46,6 @@ function getPoolConfig(connectionString: string): PoolConfig {
 }
 
 const pool = new Pool(getPoolConfig(databaseUrl))
-
-type RowWithTrace = Pick<
-  ProcessedOutboxRow | ProcessedSyncEventRow,
-  'id' | 'entity_type' | 'sentry_trace' | 'sentry_baggage' | 'request_id'
-> & { kind: 'outbox' | 'sync_event' }
-
-function spanForAppliedRow(row: RowWithTrace) {
-  const continueParams = {
-    sentryTrace: row.sentry_trace ?? undefined,
-    baggage: row.sentry_baggage ?? undefined,
-  }
-  const ctx = { requestId: row.request_id ?? `worker-${row.id}` }
-  Sentry.continueTrace(continueParams, () => {
-    runWithRequestContext(ctx, () => {
-      Sentry.startSpan(
-        {
-          name: `queue.apply ${row.kind} ${row.entity_type}`,
-          op: 'queue.process',
-          attributes: {
-            'queue.kind': row.kind,
-            'queue.row_id': row.id,
-            'queue.entity_type': row.entity_type,
-            request_id: row.request_id ?? undefined,
-          },
-        },
-        () => {
-          logger.info(
-            { queue_kind: row.kind, row_id: row.id, entity_type: row.entity_type, request_id: row.request_id },
-            'queue row applied',
-          )
-        },
-      )
-    })
-  })
-}
 
 async function processQueue(companyId: string, limit = 25) {
   const client = await pool.connect()

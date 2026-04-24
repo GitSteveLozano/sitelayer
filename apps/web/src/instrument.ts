@@ -1,4 +1,6 @@
 import * as Sentry from '@sentry/react'
+import { createRoutesFromChildren, matchRoutes, useLocation, useNavigationType } from 'react-router-dom'
+import { useEffect } from 'react'
 
 const dsn = import.meta.env.VITE_SENTRY_DSN
 
@@ -17,7 +19,13 @@ if (dsn) {
     tracesSampleRate: Number(import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE ?? 1.0),
     tracePropagationTargets: propagationTargets,
     integrations: [
-      Sentry.browserTracingIntegration(),
+      Sentry.reactRouterV7BrowserTracingIntegration({
+        useEffect,
+        useLocation,
+        useNavigationType,
+        createRoutesFromChildren,
+        matchRoutes,
+      }),
       Sentry.replayIntegration({
         maskAllText: true,
         maskAllInputs: true,

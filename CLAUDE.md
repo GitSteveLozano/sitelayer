@@ -101,11 +101,12 @@ Layer 3: Derived Insight & Workflow UI
 | **Backend**         | Node.js (plain http module) + Postgres                    | No framework; minimal HTTP server                                                                             |
 | **Frontend**        | React 19 + Vite SPA                                       | Client-side only; no SSR                                                                                      |
 | **Worker**          | Node.js background tasks                                  | Postgres-backed leased queue; no Hatchet yet                                                                  |
-| **Monorepo**        | npm workspaces                                            | apps: api, web, worker; packages: domain                                                                      |
+| **Monorepo**        | npm workspaces                                            | apps: api, web, worker; packages: config, domain, logger, queue                                               |
 | **Database**        | Postgres (pg driver)                                      | Direct SQL queries in server.ts; no ORM                                                                       |
 | **Auth**            | TBD (hardcoded demo user)                                 | Clerk planned but not yet integrated                                                                          |
 | **File Storage**    | Local Docker volume fallback; DigitalOcean Spaces planned | Blueprint PDFs persist under `BLUEPRINT_STORAGE_ROOT`; Spaces/off-host copy still needed before customer data |
 | **QBO Integration** | OAuth + REST API (direct HTTP)                            | Connector layer; sync state in `integration_mappings` table                                                   |
+| **Observability**   | Sentry v10 + Pino                                         | Trace propagation through browser/API/worker; request-scoped JSON logs via `@sitelayer/logger`                |
 
 ## Project Structure
 
@@ -116,7 +117,10 @@ sitelayer/
 │   ├── web/                 # Frontend React SPA (2444 lines)
 │   └── worker/              # Background job processor
 ├── packages/
-│   └── domain/              # Shared types, business logic, constants
+│   ├── config/              # Tier/env loading and deployment safety checks
+│   ├── domain/              # Shared types, business logic, constants
+│   ├── logger/              # Pino logger with request and Sentry trace context
+│   └── queue/               # Shared Postgres queue claiming/apply helpers
 ├── docker/
 │   └── postgres/init/       # Schema initialization
 ├── docs/                    # Architecture, requirements, findings
@@ -130,7 +134,7 @@ sitelayer/
 - **HTTP Server**: Plain Node.js `http` module; no framework overhead
 - **Routing**: Manual request parsing; CORS handling for frontend/worker origins
 - **Database**: Direct pg client queries; no ORM
-- **Dependencies**: Only `pg` and `@sitelayer/domain`
+- **Dependencies**: `pg`, `@sentry/node`, `@sitelayer/config`, `@sitelayer/domain`, `@sitelayer/logger`, `@sitelayer/queue`
 
 **Endpoints**:
 
@@ -414,7 +418,7 @@ Background job processor:
 - `apps/api/src/instrument.ts` and `apps/worker/src/instrument.ts` are imported first and enable `httpIntegration`, `nativeNodeFetchIntegration`, `postgresIntegration`, and `contextLinesIntegration`. HTTP server spans and `pg` query spans are automatic.
 - Every request gets a UUID `x-request-id` (echoed in response headers and error bodies), attached to the active Sentry scope and to an AsyncLocalStorage slot consumed by `@sitelayer/logger`.
 - `recordSyncEvent` and `recordMutationOutbox` persist `sentry_trace`, `sentry_baggage`, and `request_id` on every enqueue (migration `005_trace_propagation.sql`). The worker calls `Sentry.continueTrace()` on each applied row so the queue hop shows up as a child span of the originating HTTP request.
-- Web SDK ships `browserTracingIntegration` + `replayIntegration` (masks text, inputs, and media). `Sentry.ErrorBoundary` wraps the app in `main.tsx`. Offline-queue replay emits an `offline_queue.replay` span with depth/replayed/dropped/conflict counts.
+- Web SDK ships `reactRouterV7BrowserTracingIntegration` + `replayIntegration` (masks text, inputs, and media). `Sentry.ErrorBoundary` wraps the app in `main.tsx`. Offline-queue replay emits an `offline_queue.replay` span with depth/replayed/dropped/conflict counts.
 
 **Agent trace lookup:** `GET /api/debug/traces/:traceId` (or `?by=request_id`) — Bearer `DEBUG_TRACE_TOKEN`, tier-gated against prod unless `DEBUG_ALLOW_PROD=1`, rate-limited. Proxies Sentry's `events-trace` API and joins local `mutation_outbox` and `sync_events` rows matching the trace or request id.
 

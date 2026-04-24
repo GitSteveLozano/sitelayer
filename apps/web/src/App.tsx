@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ComponentProps } from 'react'
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
+import { Sentry } from './instrument.js'
 import {
   apiGet,
   DEFAULT_COMPANY_SLUG,
@@ -40,6 +41,8 @@ import { EstimatesView } from './views/estimates.js'
 import { IntegrationsView } from './views/integrations.js'
 import { ProjectsView } from './views/projects.js'
 import { TakeoffsView } from './views/takeoffs.js'
+
+const SentryRoutes = Sentry.withSentryReactRouterV7Routing(Routes)
 
 export function App() {
   return (
@@ -277,7 +280,7 @@ function AppShell() {
         <NavLink to="/integrations">Integrations</NavLink>
         {devSurfaceEnabled ? <NavLink to="/dev/scratch">Dev</NavLink> : null}
       </nav>
-      <Routes>
+      <SentryRoutes>
         <Route path="/" element={<Navigate to="/projects" replace />} />
         <Route
           path="/projects"
@@ -394,7 +397,7 @@ function AppShell() {
           element={devSurfaceEnabled ? <DevScratchView features={features} /> : <Navigate to="/projects" replace />}
         />
         <Route path="*" element={<Navigate to="/projects" replace />} />
-      </Routes>
+      </SentryRoutes>
     </main>
   )
 }

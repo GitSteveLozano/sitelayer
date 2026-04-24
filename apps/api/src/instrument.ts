@@ -1,6 +1,6 @@
 import * as Sentry from '@sentry/node'
+import { loadLocalEnv } from '@sitelayer/config'
 import { registerSentry } from '@sitelayer/logger'
-import { loadLocalEnv } from './env.js'
 
 loadLocalEnv()
 

@@ -11,7 +11,15 @@ services:
         VITE_APP_TIER: ${VITE_APP_TIER:-prod}
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
         VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
+        VITE_SENTRY_RELEASE: ${VITE_SENTRY_RELEASE:-}
         VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
+        VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}
+        VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}
+        SENTRY_ORG: ${SENTRY_ORG:-sandolabs}
+        SENTRY_WEB_PROJECT: ${SENTRY_WEB_PROJECT:-sitelayer-web}
+        SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      secrets:
+        - sentry_auth_token
     command: npm start -w @sitelayer/api
     environment:
       NODE_ENV: production
@@ -36,6 +44,11 @@ services:
       DO_SPACES_BUCKET: ${DO_SPACES_BUCKET:-sitelayer-blueprints-prod}
       BLUEPRINT_STORAGE_ROOT: ${BLUEPRINT_STORAGE_ROOT:-/app/storage/blueprints}
       SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ORG: ${SENTRY_ORG:-sandolabs}
+      SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      DEBUG_TRACE_TOKEN: ${DEBUG_TRACE_TOKEN:-}
+      DEBUG_ALLOW_PROD: ${DEBUG_ALLOW_PROD:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
     volumes:
       - blueprint_storage:/app/storage/blueprints
@@ -55,7 +68,15 @@ services:
         VITE_APP_TIER: ${VITE_APP_TIER:-prod}
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
         VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
+        VITE_SENTRY_RELEASE: ${VITE_SENTRY_RELEASE:-}
         VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
+        VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}
+        VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}
+        SENTRY_ORG: ${SENTRY_ORG:-sandolabs}
+        SENTRY_WEB_PROJECT: ${SENTRY_WEB_PROJECT:-sitelayer-web}
+        SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      secrets:
+        - sentry_auth_token
     command: npm start -w @sitelayer/web
     environment:
       NODE_ENV: production
@@ -75,7 +96,15 @@ services:
         VITE_APP_TIER: ${VITE_APP_TIER:-prod}
         VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
         VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
+        VITE_SENTRY_RELEASE: ${VITE_SENTRY_RELEASE:-}
         VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
+        VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}
+        VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}
+        SENTRY_ORG: ${SENTRY_ORG:-sandolabs}
+        SENTRY_WEB_PROJECT: ${SENTRY_WEB_PROJECT:-sitelayer-web}
+        SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      secrets:
+        - sentry_auth_token
     command: npm start -w @sitelayer/worker
     environment:
       NODE_ENV: production
@@ -85,6 +114,10 @@ services:
       DATABASE_URL_PROD_RO: ${DATABASE_URL_PROD_RO:-}
       DATABASE_SSL_REJECT_UNAUTHORIZED: ${DATABASE_SSL_REJECT_UNAUTHORIZED:-true}
       SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_ORG: ${SENTRY_ORG:-sandolabs}
+      SENTRY_AUTH_TOKEN: ${SENTRY_AUTH_TOKEN:-}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      DEBUG_TRACE_TOKEN: ${DEBUG_TRACE_TOKEN:-}
     restart: always
     networks:
       - sitelayer
@@ -113,3 +146,7 @@ volumes:
   blueprint_storage:
   caddy_data:
   caddy_config:
+
+secrets:
+  sentry_auth_token:
+    environment: SENTRY_AUTH_TOKEN
