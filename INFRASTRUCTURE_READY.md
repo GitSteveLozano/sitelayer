@@ -45,19 +45,21 @@ This document is infrastructure inventory only. Deployment procedure lives in `D
 - **Size:** 1 vCPU, 1GB RAM, 10GB Storage
 - **Region:** Toronto (tor1)
 - **Status:** Online
-- **Databases:** `defaultdb`, `sitelayer_preview` as of 2026-04-23. Create `sitelayer_prod` and `sitelayer_dev` with separate app users before splitting production and dev deploys.
+- **Databases:** `defaultdb`, `sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev`
+- **Production user:** `sitelayer_prod_app` for `sitelayer_prod`
 - **Preview user:** `sitelayer_preview_app` for `sitelayer_preview`
+- **Dev user:** `sitelayer_dev_app` for `sitelayer_dev`
 - **Connection String:** stored outside git in the project secret store / deployment environment.
 - **Security note:** a live database URL was previously committed here. Rotate that credential before any production or pilot use.
 - **Cost:** $15.15/mo
-- **Backup status:** DigitalOcean managed backups are available. Independent logical backup scripts exist in `scripts/backup-postgres.sh`, but the production backup timer is not installed until `/app/sitelayer/.env` exists.
+- **Backup status:** DigitalOcean managed backups are available. Independent logical backup timer is installed on production and uses `postgres:18-alpine` pg_dump.
 
 ### Firewall
 - **ID:** 63b5d4f6-0949-4658-ba91-48e119c53ee3
 - **Name:** sitelayer-tor
-- **Rules:** HTTP (80), HTTPS (443), SSH (22), API (3000)
+- **Rules:** HTTP (80), HTTPS (443), SSH (22 from `50.71.113.46/32` and preview droplet `566806040`)
 - **Status:** Active
-- **Follow-up:** port 3000 is no longer required by committed production Compose, which exposes only port 80. Close public 3000 after confirming no temporary service depends on it.
+- **Security note:** no public 3000/3001/etc. Production traffic enters through Caddy on 80/443 only.
 
 ### Preview Firewall
 - **ID:** 7a8f443e-cd74-4867-af8a-118559f33561
@@ -203,10 +205,9 @@ sudo ls -l /app/sitelayer/.env
 
 ## Next Steps
 
-1. **Add TLS** after DNS and certs are ready; committed nginx is currently HTTP-only.
-2. **Provision optional services** (Clerk, Spaces, QBO production credentials) when ready.
-3. **Create `sitelayer_dev` DB/user** before a dev deploy starts mutating shared data.
-4. **Verify production at:** http://sitelayer.sandolab.xyz or reserved IP until TLS is enabled.
+1. **Provision optional services** (Clerk, Spaces, QBO production credentials) when ready.
+2. **Decide dev deploy topology** before wiring `sitelayer_dev` into a long-lived environment.
+3. **Verify production at:** https://sitelayer.sandolab.xyz.
 
 Preview has been verified at:
 
@@ -255,8 +256,8 @@ curl https://main.preview.sitelayer.sandolab.xyz/api/bootstrap
 - ✅ `/app/sitelayer/.env` on droplet
 - ✅ GitHub Actions `DEPLOY_HOST` and `DEPLOY_SSH_KEY`
 - ✅ Separate Postgres database/user for prod
-- ⏳ Separate Postgres database/user for dev
+- ✅ Separate Postgres database/user for dev
 - ⏳ Spaces/Clerk/QBO optional service credentials
-- ⏳ TLS enablement
+- ✅ TLS enablement
 
 **Total:** ~27 minutes to full deployment

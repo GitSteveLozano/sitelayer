@@ -33,22 +33,20 @@
 - [x] GitHub Actions `DEPLOY_HOST` and `DEPLOY_SSH_KEY`
 - [x] Separate managed Postgres DB/user for production (`sitelayer_prod`, `sitelayer_prod_app`)
 - [x] Deploy user public SSH key installed on production droplet
-- [x] First bootable Docker Compose deploy verified at `http://sitelayer.sandolab.xyz`
+- [x] First bootable Docker Compose deploy verified at `https://sitelayer.sandolab.xyz`
 - [x] Managed Postgres trusted sources restricted to production and preview droplets
 - [x] Production logical backup timer installed and smoke-tested with Postgres 18 pg_dump
+- [x] Production TLS enabled with Caddy and Let's Encrypt (`https://sitelayer.sandolab.xyz`)
+- [x] Separate managed Postgres DB/user for dev (`sitelayer_dev`, `sitelayer_dev_app`)
 
 ### ⏳ In Progress
-- [ ] TLS strategy finalized and enabled
-- [ ] Separate managed Postgres DB/user for dev before dev deploys mutate shared data
 - [x] GitHub self-hosted preview runner registered on `sitelayer-preview`
 
 ### 🔴 Blockers for Pilot
 1. **Clerk auth integration** — hardcoded demo user blocks real multi-tenant onboarding.
-2. **TLS** — production is HTTP-only until certificate automation is added.
-3. **Dev database separation** — create `sitelayer_dev` with its own app user before dev deploys start mutating shared data.
-4. **DO Spaces file upload** — blueprint persistence not yet wired.
-5. **PDF viewer + annotation** — canvas drawing/takeoff workflow needs end-to-end validation.
-6. **Job queue** — QBO sync requires background jobs beyond the current heartbeat worker.
+2. **DO Spaces file upload** — blueprint persistence not yet wired.
+3. **PDF viewer + annotation** — canvas drawing/takeoff workflow needs end-to-end validation.
+4. **Job queue** — QBO sync requires background jobs beyond the current heartbeat worker.
 
 ---
 
@@ -102,10 +100,10 @@ PHASE 3: DEPLOYMENT (Week 2-3)
 ├─ Apply Postgres schema through managed DB connection
 ├─ Build monorepo with Dockerfile
 ├─ Deploy via `.github/workflows/deploy-droplet.yml`
-├─ Start api/web/worker/nginx through `docker compose -f docker-compose.prod.yml`
-├─ Verify API health at `127.0.0.1:3001/health` on droplet
-├─ Verify public HTTP through containerized nginx
-└─ Add TLS after certs/DNS are ready
+├─ Start api/web/worker/Caddy through `docker compose -f docker-compose.prod.yml`
+├─ Verify public HTTPS health at `https://sitelayer.sandolab.xyz/health`
+├─ Verify HTTP redirects to HTTPS
+└─ Keep only ports 80/443 public
    └─ Prerequisite for: pilot launch
 
 PHASE 4: PILOT LAUNCH (Week 3+)
@@ -164,7 +162,7 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 - [ ] PDF viewer + polygon drawing working (user can annotate)
 - [ ] Annotations save to DB (reload page, annotation persists)
 - [ ] API responds in <500ms (Sentry tracks 100% of errors)
-- [ ] nginx reverse proxy working (https://yourdomain.com returns app)
+- [x] Caddy reverse proxy working (`https://sitelayer.sandolab.xyz` returns app/API)
 - [ ] Postgres logical backups automated and restore-drilled. DO managed Postgres automatic backups exist, but keep an independent `pg_dump` retention path before pilot data.
 - [ ] UptimeRobot green (all monitors passing)
 - [ ] QBO OAuth flow working (sandbox test)
@@ -232,7 +230,7 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 ### Gate 1: End of Week 1
 **Question:** Can we deploy app to Droplet and see homepage?  
 **Criterion:** `curl https://yourdomain.com` returns HTML  
-**If No:** Fix deployment issues (nginx config, DNS, SSL cert)  
+**If No:** Fix deployment issues (Caddy config, DNS, SSL cert)  
 **If Yes:** Proceed to code changes
 
 ### Gate 2: End of Week 2
@@ -251,12 +249,12 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 
 ## Immediate Action Items (Next 24 Hours)
 
-- [ ] **Create:** `sitelayer_prod` and `sitelayer_dev` DBs plus separate app users on existing managed Postgres.
-- [ ] **Install:** deployment public key for `sitelayer` user on droplet.
-- [ ] **Set:** GitHub Actions `DEPLOY_HOST` and `DEPLOY_SSH_KEY`.
-- [ ] **Create:** `/app/sitelayer/.env` on droplet with `DATABASE_URL` and optional integration placeholders.
-- [ ] **Deploy:** run the GitHub Actions droplet workflow once.
-- [ ] **Tighten:** remove public firewall port 3000 if no temporary service needs it.
+- [x] **Create:** `sitelayer_prod` and `sitelayer_dev` DBs plus separate app users on existing managed Postgres.
+- [x] **Install:** deployment public key for `sitelayer` user on droplet.
+- [x] **Set:** GitHub Actions `DEPLOY_HOST` and `DEPLOY_SSH_KEY`.
+- [x] **Create:** `/app/sitelayer/.env` on droplet with `DATABASE_URL` and optional integration placeholders.
+- [x] **Deploy:** run the GitHub Actions droplet workflow once.
+- [x] **Tighten:** remove public firewall port 3000 if no temporary service needs it.
 - [ ] **Decide:** same droplet dev deploy vs separate small dev droplet.
 
 **Expected completion:** All setup by EOD tomorrow, ready to deploy by EOD Week 1

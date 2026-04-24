@@ -80,14 +80,14 @@ The preview stack should not publish arbitrary host ports. Traefik owns ports `8
 
 ## Compose Shape
 
-Production uses `docker-compose.prod.yml` with its own nginx container. Preview uses `docker-compose.preview.yml`, which omits per-stack nginx and adds Traefik labels to `web` and `api`.
+Production uses `docker-compose.prod.yml` with its own Caddy edge container for automatic TLS. Preview uses `docker-compose.preview.yml`, which omits per-stack edge proxies and adds Traefik labels to `web` and `api`.
 
 Target preview services:
 
 - `web`: static Vite app served internally on `3000`
 - `api`: API internally on `3001`
 - `worker`: optional; disable for UI-only previews unless the branch needs sync behavior
-- no per-preview `nginx`
+- no per-preview nginx/Caddy
 
 Routing:
 

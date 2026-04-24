@@ -148,13 +148,11 @@ source .env
 psql "$DATABASE_URL" < docker/postgres/init/001_schema.sql
 ```
 
-### 8. Configure SSL Certificate
+### 8. TLS Certificate
 
-```bash
-# The committed nginx.conf is HTTP-only so the container can start before
-# certificates are provisioned. Add host-level TLS or update the nginx service
-# with certificate volumes and an HTTPS server block only after certs exist.
-```
+Caddy is the production reverse proxy in `docker-compose.prod.yml`. It binds
+ports `80` and `443`, automatically obtains a Let's Encrypt certificate for
+`sitelayer.sandolab.xyz`, and redirects HTTP to HTTPS.
 
 ### 9. Start Services
 

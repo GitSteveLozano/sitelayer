@@ -59,11 +59,11 @@ Runner package state: `/home/sitelayer/actions-runner` exists on `sitelayer-prev
 | Reserved production IP | `159.203.51.158`, assigned to droplet `566798325` |
 | Preview droplet | `sitelayer-preview`, ID `566806040`, Ubuntu 22.04, Toronto `tor1`, 2 vCPU, 4GB RAM, reserved IPv4 `159.203.53.218` |
 | Managed Postgres | `sitelayer-db`, ID `9948c96b-b6b6-45ad-adf7-d20e4c206c66`, Postgres 18, `db-s-1vcpu-1gb`, Toronto `tor1`, online |
-| Managed Postgres databases | `defaultdb`, `sitelayer_prod`, `sitelayer_preview`; create separate `sitelayer_dev` before dev deploys mutate data |
+| Managed Postgres databases | `defaultdb`, `sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev` |
 | Managed Postgres trusted sources | Droplet `566798325` (`sitelayer`) and droplet `566806040` (`sitelayer-preview`) |
 | Production deploy path | GitHub Actions runs on the self-hosted `sitelayer-preview` runner, SSHs to `sitelayer@10.118.0.4`, deploys `/app/sitelayer` with Docker Compose, `.env` at `/app/sitelayer/.env` |
 | Preview deploy path | `docker-compose.preview.yml` behind Traefik on `sitelayer-preview`; shared env at `/app/previews/.env.shared`; smoke stack at `main.preview.sitelayer.sandolab.xyz` |
-| Public HTTP | Containerized nginx on port 80; HTTPS is not enabled in committed compose/nginx until certs are provisioned |
+| Public edge | Containerized Caddy on ports 80/443; automatic Let's Encrypt TLS for `sitelayer.sandolab.xyz`; HTTP redirects to HTTPS |
 | Backups | DO managed Postgres automatic backups exist; independent logical backup scripts are added and production timer uses `postgres:18-alpine` pg_dump |
 | Optional integrations | Clerk, DigitalOcean Spaces, QBO, and Sentry can stay blank/placeholders for bootable deploy; `DATABASE_URL` is the hard requirement |
 
