@@ -1,7 +1,7 @@
 # Sitelayer Preview Deployments
 
-**Status:** Preview droplet, Traefik routing, shared preview DB, deploy scripts, GitHub self-hosted runner, TTL cleanup timer, and `main` smoke preview are live
-**Last updated:** 2026-04-23
+**Status:** Preview droplet, Traefik routing, shared preview DB with per-preview schemas, deploy scripts, GitHub self-hosted runner, TTL cleanup timer, and `main` smoke preview are live
+**Last updated:** 2026-04-24
 
 ## Goal
 
@@ -32,9 +32,9 @@ Do not create a second managed Postgres cluster yet. Use the existing `sitelayer
 | Firewall outbound | TCP/UDP egress plus ICMP egress to `0.0.0.0/0` for package installs, Docker pulls, ACME, and update checks |
 | Router | Traefik v3 at `/opt/sitelayer-preview-router`, Docker network `sitelayer-preview-router` |
 | Shared env | `/app/previews/.env.shared`, owner `sitelayer:sitelayer`, mode `600` |
-| Shared preview DB | `sitelayer_preview` on managed cluster `sitelayer-db`, user `sitelayer_preview_app` |
+| Shared preview DB | `sitelayer_preview` on managed cluster `sitelayer-db`, user `sitelayer_preview_app`, per-preview schemas such as `sitelayer_pr_42` |
 | GitHub runner | `sitelayer-preview`, service `actions.runner.GitSteveLozano-sitelayer.sitelayer-preview.service` |
-| TTL cleanup | `sitelayer-preview-prune.timer`, daily, 14-day default |
+| TTL cleanup | `sitelayer-preview-prune.timer`, daily, 14-day default, installed by `scripts/setup-preview-host.sh` / `scripts/install-preview-prune-systemd.sh` |
 | Smoke preview | `https://main.preview.sitelayer.sandolab.xyz` |
 
 The firewall does not expose public preview app ports such as `3000`. Traefik should be the only public ingress path.
@@ -97,21 +97,21 @@ Routing:
 
 ## Database Policy
 
-Use three levels depending on preview needs:
+Use two levels depending on preview needs:
 
-1. **UI-only preview:** web points at a shared preview API/database with seeded demo data.
-2. **Full-stack preview:** create `sitelayer_preview_<slug>` on the existing managed Postgres cluster and apply schema/seed data.
-3. **Migration-risk preview:** require explicit approval. Branch migrations can drift or destroy preview data, so do not run them automatically against shared databases.
+1. **UI-only preview:** web can run locally with `VITE_FIXTURES=1` and skip the backend.
+2. **Full-stack preview:** use the shared `sitelayer_preview` database with an isolated schema per slug. `pr-42` maps to `sitelayer_pr_42`; deploy sets `PGOPTIONS=-c search_path=<schema>,public`, creates the schema, applies migrations, and checks that schema before starting containers.
 
 Never point previews at production data. Never reuse production DB credentials in preview stacks.
 
 Current default:
 
 - Shared database: `sitelayer_preview`
+- Per-preview schema: `sitelayer_<slug with hyphens changed to underscores>`, for example `sitelayer_pr_42`
 - Shared app user: `sitelayer_preview_app`
 - Shared env path on preview host: `/app/previews/.env.shared`
 - App URL uses normal `sslmode=require` plus `DATABASE_SSL_REJECT_UNAUTHORIZED=false` because DigitalOcean managed Postgres presents a certificate chain that Node `pg` rejects unless a CA bundle is configured.
-- Maintenance commands can still use the same URL with `psql` because `sslmode=require` remains libpq-compatible.
+- Maintenance commands use the same URL with `psql`; deploy and cleanup pass `PGOPTIONS` so migrations, checks, and application connections hit the preview schema instead of `public`.
 
 ## GitHub Actions Flow
 
@@ -131,7 +131,8 @@ Current workflow design:
 - Computes `pr-<number>` for PRs or uses a manual dispatch slug.
 - Runs `scripts/deploy-preview.sh` from the checked-out commit.
 - Stages code under `/app/previews/<slug>`.
-- Renders `.env` from `/app/previews/.env.shared` plus slug-specific host values.
+- Renders `.env` from `/app/previews/.env.shared` plus slug-specific host and schema values.
+- Creates the preview schema, runs migrations in that schema, and checks that schema.
 - Runs `docker compose -p sitelayer-<slug> -f docker-compose.preview.yml up -d --build --remove-orphans`.
 - Health-checks `https://<slug>.preview.sitelayer.sandolab.xyz/health`.
 
@@ -139,9 +140,11 @@ Cleanup workflow:
 
 1. On PR close, run on the `sitelayer-preview` self-hosted runner.
 2. Run `scripts/cleanup-preview.sh` for `pr-<number>`.
-3. Remove `/app/previews/<slug>`.
-4. Delete branch-specific preview DB if one was created manually.
+3. Stop containers and drop the preview schema if `.env` contains `PREVIEW_DB_SCHEMA`.
+4. Remove `/app/previews/<slug>`.
 5. Prune old images/volumes with a TTL guard.
+
+Fresh preview hosts install the same TTL guard during `scripts/setup-preview-host.sh`. The service points at `/app/previews/main/scripts/prune-preview-stacks.sh`; before the `main` preview exists it exits cleanly, then becomes active after the first `main` deploy.
 
 Runner registration completed on 2026-04-24 using an owner-provided token. The runner package is installed at `/home/sitelayer/actions-runner`, and the service is active/enabled:
 

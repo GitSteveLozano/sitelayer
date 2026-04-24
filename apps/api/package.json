@@ -17,6 +17,7 @@
   "dependencies": {
     "@aws-sdk/client-s3": "^3.645.0",
     "@sentry/node": "^10.50.0",
+    "@sitelayer/config": "file:../../packages/config",
     "@sitelayer/domain": "file:../../packages/domain",
     "@sitelayer/queue": "file:../../packages/queue",
     "pg": "^8.13.1"

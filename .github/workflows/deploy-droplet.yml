@@ -12,6 +12,9 @@ concurrency:
 jobs:
   deploy:
     runs-on: [self-hosted, sitelayer-preview]
+    environment:
+      name: production
+      url: https://sitelayer.sandolab.xyz
     steps:
       - uses: actions/checkout@v6
 

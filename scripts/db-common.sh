@@ -26,14 +26,45 @@ read_env_value() {
   printf '%s' "$value"
 }
 
+validate_db_schema_name() {
+  local schema="$1"
+
+  if [[ ! "$schema" =~ ^[a-z_][a-z0-9_]*$ ]]; then
+    echo "ERROR: invalid database schema name: $schema" >&2
+    echo "Schema names must match ^[a-z_][a-z0-9_]*$" >&2
+    exit 1
+  fi
+}
+
 load_database_url() {
   local env_file="${ENV_FILE:-.env}"
   DATABASE_URL="${DATABASE_URL:-$(read_env_value "$env_file" DATABASE_URL)}"
+  PREVIEW_DB_SCHEMA="${PREVIEW_DB_SCHEMA:-$(read_env_value "$env_file" PREVIEW_DB_SCHEMA)}"
+  PGOPTIONS="${PGOPTIONS:-$(read_env_value "$env_file" PGOPTIONS)}"
 
   if [ -z "${DATABASE_URL:-}" ]; then
     echo "ERROR: set DATABASE_URL or provide ENV_FILE with DATABASE_URL (default: .env)" >&2
     exit 1
   fi
+
+  if [ -n "${PREVIEW_DB_SCHEMA:-}" ]; then
+    validate_db_schema_name "$PREVIEW_DB_SCHEMA"
+    if [ -z "${PGOPTIONS:-}" ]; then
+      PGOPTIONS="-c search_path=${PREVIEW_DB_SCHEMA},public"
+    fi
+  fi
+}
+
+load_database_schema() {
+  local env_file="${ENV_FILE:-.env}"
+  DB_SCHEMA="${DB_SCHEMA:-$(read_env_value "$env_file" DB_SCHEMA)}"
+
+  if [ -z "${DB_SCHEMA:-}" ]; then
+    DB_SCHEMA="${PREVIEW_DB_SCHEMA:-$(read_env_value "$env_file" PREVIEW_DB_SCHEMA)}"
+  fi
+
+  DB_SCHEMA="${DB_SCHEMA:-public}"
+  validate_db_schema_name "$DB_SCHEMA"
 }
 
 select_psql_runner() {
@@ -65,12 +96,19 @@ run_psql_file() {
 
   case "${PSQL_RUNNER:-}" in
     local)
-      psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f "$file"
+      if [ -n "${PGOPTIONS:-}" ]; then
+        PGOPTIONS="$PGOPTIONS" psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f "$file"
+      else
+        psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f "$file"
+      fi
       ;;
     docker)
       local docker_args=(docker run --rm)
       if [ -n "${PSQL_DOCKER_NETWORK:-}" ]; then
         docker_args+=(--network "$PSQL_DOCKER_NETWORK")
+      fi
+      if [ -n "${PGOPTIONS:-}" ]; then
+        docker_args+=(-e "PGOPTIONS=$PGOPTIONS")
       fi
       docker_args+=(-v "$PWD:/work:ro" -w /work "$PSQL_DOCKER_IMAGE" psql)
       "${docker_args[@]}" -v ON_ERROR_STOP=1 "$DATABASE_URL" -f "$file"
@@ -87,12 +125,19 @@ run_psql_query() {
 
   case "${PSQL_RUNNER:-}" in
     local)
-      psql -v ON_ERROR_STOP=1 -At "$DATABASE_URL" -c "$query"
+      if [ -n "${PGOPTIONS:-}" ]; then
+        PGOPTIONS="$PGOPTIONS" psql -v ON_ERROR_STOP=1 -At "$DATABASE_URL" -c "$query"
+      else
+        psql -v ON_ERROR_STOP=1 -At "$DATABASE_URL" -c "$query"
+      fi
       ;;
     docker)
       local docker_args=(docker run --rm)
       if [ -n "${PSQL_DOCKER_NETWORK:-}" ]; then
         docker_args+=(--network "$PSQL_DOCKER_NETWORK")
+      fi
+      if [ -n "${PGOPTIONS:-}" ]; then
+        docker_args+=(-e "PGOPTIONS=$PGOPTIONS")
       fi
       docker_args+=("$PSQL_DOCKER_IMAGE" psql)
       "${docker_args[@]}" -v ON_ERROR_STOP=1 -At "$DATABASE_URL" -c "$query"

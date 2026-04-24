@@ -6,6 +6,7 @@ ACME_EMAIL="${ACME_EMAIL:-admin@sandolab.xyz}"
 TRAEFIK_ROOT="/opt/sitelayer-preview-router"
 TRAEFIK_NETWORK="sitelayer-preview-router"
 PREVIEW_ROOT="/app/previews"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "ERROR: run this script as root" >&2
@@ -81,6 +82,12 @@ EOF
 
 docker network inspect "$TRAEFIK_NETWORK" >/dev/null 2>&1 || docker network create "$TRAEFIK_NETWORK"
 docker compose -f "$TRAEFIK_ROOT/docker-compose.yml" up -d
+
+if [ -f "$SCRIPT_DIR/install-preview-prune-systemd.sh" ]; then
+  PREVIEW_ROOT="$PREVIEW_ROOT" APP_DIR="$PREVIEW_ROOT/main" SKIP_PRUNE_SCRIPT_CHECK=1 "$SCRIPT_DIR/install-preview-prune-systemd.sh"
+else
+  echo "WARNING: preview prune systemd installer not found at $SCRIPT_DIR/install-preview-prune-systemd.sh" >&2
+fi
 
 ufw default deny incoming
 ufw default allow outgoing

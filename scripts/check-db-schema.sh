@@ -8,7 +8,9 @@ cd "$REPO_ROOT"
 source "$SCRIPT_DIR/db-common.sh"
 
 load_database_url
+load_database_schema
 select_psql_runner
+schema_name="$DB_SCHEMA"
 
 schema_failures="$(run_psql_query "
 with expected_tables(table_name) as (
@@ -58,7 +60,7 @@ missing_tables as (
   select 'missing table: ' || e.table_name as failure
   from expected_tables e
   left join information_schema.tables t
-    on t.table_schema = 'public'
+    on t.table_schema = '$schema_name'
    and t.table_name = e.table_name
   where t.table_name is null
 ),
@@ -66,7 +68,7 @@ missing_origin_columns as (
   select 'missing origin column: ' || e.table_name || '.origin' as failure
   from expected_origin_columns e
   left join information_schema.columns c
-    on c.table_schema = 'public'
+    on c.table_schema = '$schema_name'
    and c.table_name = e.table_name
    and c.column_name = 'origin'
   where c.column_name is null
@@ -75,7 +77,7 @@ missing_queue_columns as (
   select 'missing queue column: ' || e.table_name || '.' || e.column_name as failure
   from expected_queue_columns e
   left join information_schema.columns c
-    on c.table_schema = 'public'
+    on c.table_schema = '$schema_name'
    and c.table_name = e.table_name
    and c.column_name = e.column_name
   where c.column_name is null
@@ -94,4 +96,4 @@ if [ -n "$schema_failures" ]; then
   exit 1
 fi
 
-echo "Database schema check passed"
+echo "Database schema check passed for schema: $schema_name"

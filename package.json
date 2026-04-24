@@ -11,19 +11,22 @@
     "dev:api": "npm run dev --workspace @sitelayer/api",
     "dev:web": "npm run dev --workspace @sitelayer/web",
     "dev:worker": "npm run dev --workspace @sitelayer/worker",
-    "build": "npm run build --workspace @sitelayer/domain && npm run build --workspace @sitelayer/queue && npm run build --workspace @sitelayer/api && npm run build --workspace @sitelayer/web && npm run build --workspace @sitelayer/worker",
+    "build": "npm run build --workspace @sitelayer/config && npm run build --workspace @sitelayer/domain && npm run build --workspace @sitelayer/queue && npm run build --workspace @sitelayer/api && npm run build --workspace @sitelayer/web && npm run build --workspace @sitelayer/worker",
     "db:migrate": "scripts/migrate-db.sh",
     "db:check": "scripts/check-db-schema.sh",
     "seed:dev": "tsx apps/api/scripts/seed-dev.ts",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run test --workspaces --if-present",
+    "e2e": "npm run e2e --workspace @sitelayer/web",
+    "ci:quality": "bash -n scripts/*.sh && npm run typecheck && npm run test && npm run build && VITE_FIXTURES=1 npm run build --workspace @sitelayer/web && npm run e2e",
     "lint": "npm run lint --workspaces",
     "format": "npm run format --workspaces"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/node": "^22.13.0",
     "concurrently": "^9.1.2",
-    "typescript": "^5.8.3",
-    "tsx": "^4.20.3"
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3"
   }
 }

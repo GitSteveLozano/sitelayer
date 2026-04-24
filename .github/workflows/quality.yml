@@ -1,0 +1,44 @@
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Shell syntax
+        run: bash -n scripts/*.sh
+
+      - run: npm run typecheck
+
+      - run: npm run test
+
+      - run: npm run build
+
+      - name: Fixture web build
+        run: VITE_FIXTURES=1 npm run build --workspace @sitelayer/web
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - run: npm run e2e

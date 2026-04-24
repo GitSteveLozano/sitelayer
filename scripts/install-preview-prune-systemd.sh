@@ -12,7 +12,7 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-if [ ! -f "$APP_DIR/scripts/prune-preview-stacks.sh" ]; then
+if [ "${SKIP_PRUNE_SCRIPT_CHECK:-0}" != "1" ] && [ ! -f "$APP_DIR/scripts/prune-preview-stacks.sh" ]; then
   echo "ERROR: prune script not found at $APP_DIR/scripts/prune-preview-stacks.sh" >&2
   exit 1
 fi
@@ -28,10 +28,11 @@ Type=oneshot
 User=root
 Group=root
 WorkingDirectory=$APP_DIR
+Environment=APP_DIR=$APP_DIR
 Environment=PREVIEW_ROOT=$PREVIEW_ROOT
 Environment=MAX_AGE_DAYS=$MAX_AGE_DAYS
 Environment=DRY_RUN=0
-ExecStart=$APP_DIR/scripts/prune-preview-stacks.sh
+ExecStart=/bin/bash -lc 'if [ -x "$APP_DIR/scripts/prune-preview-stacks.sh" ]; then exec "$APP_DIR/scripts/prune-preview-stacks.sh"; fi; echo "prune script missing: $APP_DIR/scripts/prune-preview-stacks.sh"'
 EOF
 
 cat >"/etc/systemd/system/$SERVICE_NAME.timer" <<EOF

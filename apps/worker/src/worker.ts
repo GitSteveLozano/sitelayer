@@ -1,40 +1,25 @@
+import { loadAppConfig, postgresOptionsForTier, TierConfigError } from '@sitelayer/config'
 import { processQueue as processDatabaseQueue } from '@sitelayer/queue'
 import { Pool, type PoolConfig } from 'pg'
 
-const databaseUrl = process.env.DATABASE_URL ?? 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer'
+let appConfig: ReturnType<typeof loadAppConfig>
+try {
+  appConfig = loadAppConfig()
+} catch (err) {
+  if (err instanceof TierConfigError) {
+    console.error(`[tier] refusing to start: ${err.message}`)
+    process.exit(1)
+  }
+  throw err
+}
+
+const databaseUrl = appConfig.databaseUrl
 const databaseSslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false'
 const activeCompanySlug = process.env.ACTIVE_COMPANY_SLUG ?? 'la-operations'
 const pollIntervalMs = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 10_000)
-const appTier = parseAppTier(process.env.APP_TIER)
-
-type AppTier = 'local' | 'dev' | 'preview' | 'prod'
-
-function parseAppTier(raw: string | undefined): AppTier {
-  const normalized = raw?.trim().toLowerCase() || 'local'
-  if (normalized === 'local' || normalized === 'dev' || normalized === 'preview' || normalized === 'prod') return normalized
-  throw new Error(`APP_TIER must be one of local|dev|preview|prod (got "${raw}")`)
-}
-
-function getDatabaseName(connectionString: string): string {
-  try {
-    return new URL(connectionString).pathname.replace(/^\//, '')
-  } catch {
-    return ''
-  }
-}
-
-function assertDatabaseMatchesTier(tier: AppTier, connectionString: string) {
-  const dbName = getDatabaseName(connectionString)
-  if (tier === 'prod' && !/sitelayer_prod\b/.test(dbName)) {
-    throw new Error(`APP_TIER=prod but DATABASE_URL database name is "${dbName}"`)
-  }
-  if (tier !== 'prod' && /sitelayer_prod\b/.test(dbName) && !dbName.endsWith('_ro')) {
-    throw new Error(`APP_TIER=${tier} but DATABASE_URL points at prod database "${dbName}"`)
-  }
-}
 
 function withTierOptions(config: PoolConfig): PoolConfig {
-  return { ...config, options: `-c app.tier=${appTier}` }
+  return { ...config, options: postgresOptionsForTier(appConfig.tier, config.options || process.env.PGOPTIONS) }
 }
 
 function getPoolConfig(connectionString: string): PoolConfig {
@@ -54,8 +39,6 @@ function getPoolConfig(connectionString: string): PoolConfig {
 
   return withTierOptions({ connectionString })
 }
-
-assertDatabaseMatchesTier(appTier, databaseUrl)
 
 const pool = new Pool(getPoolConfig(databaseUrl))
 

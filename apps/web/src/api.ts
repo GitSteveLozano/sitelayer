@@ -172,35 +172,65 @@ export type OfflineMutation = {
   createdAt: string
 }
 
+export type TierRibbon = { label: string; tone: 'info' | 'warn' | 'danger' } | null
+
+export type FeaturesResponse = {
+  tier: 'local' | 'dev' | 'preview' | 'prod'
+  flags: string[]
+  ribbon: TierRibbon
+}
+
+export type SessionResponse = {
+  user: { id: string; role: string }
+  activeCompany: { id: string; name: string; slug: string }
+  memberships: Array<{ id: string; company_id: string; clerk_user_id: string; role: string; created_at: string; slug: string; name: string }>
+}
+
+export type CompaniesResponse = {
+  companies: Array<{ id: string; slug: string; name: string; created_at: string }>
+  activeCompany: { id: string; name: string; slug: string }
+}
+
+export type SyncStatusResponse = {
+  company: { id: string; name: string; slug: string }
+  pendingOutboxCount: number
+  pendingSyncEventCount: number
+  latestSyncEvent: { created_at: string; entity_type: string; entity_id: string; direction: string; status: string } | null
+  connections: Array<{
+    id: string
+    provider: string
+    provider_account_id: string | null
+    sync_cursor: string | null
+    last_synced_at: string | null
+    status: string
+    version: number
+    created_at: string
+  }>
+}
+
+export type QboConnectionResponse = {
+  connection: SyncStatusResponse['connections'][number] | null
+  status: SyncStatusResponse
+}
+
+type QboAuthResponse = {
+  authUrl: string
+}
+
+class QueueableMutationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'QueueableMutationError'
+  }
+}
+
 // Configuration
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001'
+export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001'
 export const DEFAULT_COMPANY_SLUG = import.meta.env.VITE_COMPANY_SLUG ?? 'la-operations'
 export const DEFAULT_USER_ID = import.meta.env.VITE_USER_ID ?? 'demo-user'
+export const FIXTURES_ENABLED = import.meta.env.VITE_FIXTURES === '1' || import.meta.env.VITE_FIXTURES === 'true'
 const RESPONSE_CACHE_PREFIX = 'sitelayer.cache'
-const DB_NAME = 'sitelayer'
-const QUEUE_STORE = 'offlineQueue'
-
-let dbPromise: Promise<IDBDatabase> | null = null
-
-function getDB(): Promise<IDBDatabase> {
-  if (dbPromise) return dbPromise
-  if (typeof window === 'undefined') return Promise.reject(new Error('No window'))
-
-  dbPromise = new Promise((resolve, reject) => {
-    const request = window.indexedDB.open(DB_NAME, 1)
-
-    request.onerror = () => reject(request.error)
-    request.onsuccess = () => resolve(request.result)
-    request.onupgradeneeded = () => {
-      const db = request.result
-      if (!db.objectStoreNames.contains(QUEUE_STORE)) {
-        db.createObjectStore(QUEUE_STORE, { keyPath: 'id' })
-      }
-    }
-  })
-
-  return dbPromise
-}
+const MUTATION_QUEUE_KEY = 'sitelayer.offlineQueue'
 
 // User storage
 export function getStoredUserId() {
@@ -255,18 +285,14 @@ function invalidateCompanyCache(companySlug: string) {
   }
 }
 
-// Offline queue (IndexedDB - native API)
-async function readOfflineQueue(): Promise<OfflineMutation[]> {
+// Offline queue
+export async function readOfflineQueue(): Promise<OfflineMutation[]> {
   if (typeof window === 'undefined') return []
+  const raw = window.localStorage.getItem(MUTATION_QUEUE_KEY)
+  if (!raw) return []
   try {
-    const db = await getDB()
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(QUEUE_STORE, 'readonly')
-      const store = tx.objectStore(QUEUE_STORE)
-      const request = store.getAll()
-      request.onsuccess = () => resolve(request.result as OfflineMutation[])
-      request.onerror = () => reject(request.error)
-    })
+    const parsed = JSON.parse(raw) as OfflineMutation[]
+    return Array.isArray(parsed) ? parsed : []
   } catch {
     return []
   }
@@ -274,61 +300,27 @@ async function readOfflineQueue(): Promise<OfflineMutation[]> {
 
 async function writeOfflineQueue(queue: OfflineMutation[]) {
   if (typeof window === 'undefined') return
-  try {
-    const db = await getDB()
-    return new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(QUEUE_STORE, 'readwrite')
-      const store = tx.objectStore(QUEUE_STORE)
-      const clearRequest = store.clear()
-      clearRequest.onsuccess = () => {
-        let completed = 0
-        const total = queue.length
-        if (total === 0) {
-          resolve()
-          return
-        }
-        queue.forEach((mutation) => {
-          const addRequest = store.add(mutation)
-          addRequest.onsuccess = () => {
-            completed++
-            if (completed === total) resolve()
-          }
-          addRequest.onerror = () => reject(addRequest.error)
-        })
-      }
-      clearRequest.onerror = () => reject(clearRequest.error)
-    })
-  } catch (error) {
-    console.error('[offline] Failed to write queue:', error)
-  }
+  window.localStorage.setItem(MUTATION_QUEUE_KEY, JSON.stringify(queue))
 }
 
 export async function enqueueOfflineMutation(mutation: Omit<OfflineMutation, 'id' | 'createdAt'>) {
   if (typeof window === 'undefined') return
-  try {
-    const db = await getDB()
-    const newMutation: OfflineMutation = {
-      ...mutation,
-      id: `${mutation.method.toLowerCase()}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      createdAt: new Date().toISOString(),
-    }
-    return new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(QUEUE_STORE, 'readwrite')
-      const store = tx.objectStore(QUEUE_STORE)
-      const request = store.add(newMutation)
-      request.onsuccess = () => {
-        window.dispatchEvent(new Event('sitelayer:offline-queue'))
-        resolve()
-      }
-      request.onerror = () => reject(request.error)
-    })
-  } catch (error) {
-    console.error('[offline] Failed to enqueue mutation:', error)
-  }
+  const queue = await readOfflineQueue()
+  queue.push({
+    ...mutation,
+    id: `${mutation.method.toLowerCase()}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    createdAt: new Date().toISOString(),
+  })
+  await writeOfflineQueue(queue)
+  window.dispatchEvent(new Event('sitelayer:offline-queue'))
 }
 
 // API methods
 export async function apiGet<T>(path: string, companySlug: string): Promise<T> {
+  if (FIXTURES_ENABLED) {
+    const { getFixtureResponse } = await import('./fixtures.js')
+    return getFixtureResponse<T>(path, companySlug)
+  }
   const userId = getStoredUserId()
   const response = await fetch(`${API_URL}${path}`, {
     headers: {
@@ -347,6 +339,10 @@ export async function apiGet<T>(path: string, companySlug: string): Promise<T> {
 }
 
 async function apiMutate<T>(method: 'POST' | 'PATCH' | 'DELETE', path: string, body: unknown, companySlug: string): Promise<T> {
+  if (FIXTURES_ENABLED) {
+    const { mutateFixtureResponse } = await import('./fixtures.js')
+    return mutateFixtureResponse<T>(method, path, body, companySlug)
+  }
   const userId = getStoredUserId()
   try {
     const requestInit: RequestInit = {
@@ -363,6 +359,9 @@ async function apiMutate<T>(method: 'POST' | 'PATCH' | 'DELETE', path: string, b
     const response = await fetch(`${API_URL}${path}`, requestInit)
     if (!response.ok) {
       const fallback = await response.text()
+      if (response.status >= 500) {
+        throw new QueueableMutationError(`${method} ${path} failed: ${response.status} ${fallback}`)
+      }
       throw new Error(`${method} ${path} failed: ${response.status} ${fallback}`)
     }
     const parsed = (await response.json()) as T
@@ -370,6 +369,9 @@ async function apiMutate<T>(method: 'POST' | 'PATCH' | 'DELETE', path: string, b
     cacheResponse(companySlug, path, parsed)
     return parsed
   } catch (error) {
+    if (!(error instanceof QueueableMutationError)) {
+      throw error
+    }
     await enqueueOfflineMutation({ method, path, body, companySlug, userId })
     console.warn(`[offline] queued ${method} ${path}`, error)
     return (body ?? { queued: true }) as T
@@ -389,6 +391,7 @@ export async function apiDelete<T>(path: string, companySlug: string, body?: unk
 }
 
 export async function replayOfflineMutations(companySlug: string) {
+  if (FIXTURES_ENABLED) return
   if (typeof window === 'undefined') return
   const queue = await readOfflineQueue()
   if (!queue.length) return
@@ -418,6 +421,10 @@ export async function replayOfflineMutations(companySlug: string) {
           remaining.push(mutation)
           continue
         }
+        if (response.status >= 400 && response.status < 500) {
+          console.warn(`[offline] dropping invalid mutation ${mutation.method} ${mutation.path}: ${response.status}`)
+          continue
+        }
         throw new Error(`${mutation.method} ${mutation.path} failed: ${response.status}`)
       }
       const parsed = await response.json().catch(() => null)
@@ -431,4 +438,22 @@ export async function replayOfflineMutations(companySlug: string) {
   }
   await writeOfflineQueue(remaining)
   window.dispatchEvent(new Event('sitelayer:offline-queue'))
+}
+
+export async function startQboOAuth(companySlug: string) {
+  if (FIXTURES_ENABLED) return
+  const userId = getStoredUserId()
+  const response = await fetch(`${API_URL}/api/integrations/qbo/auth`, {
+    headers: {
+      'x-sitelayer-company-slug': companySlug,
+      'x-sitelayer-user-id': userId,
+    },
+  })
+  if (!response.ok) {
+    const fallback = await response.text()
+    throw new Error(`GET /api/integrations/qbo/auth failed: ${response.status} ${fallback}`)
+  }
+  const payload = (await response.json()) as QboAuthResponse
+  if (!payload.authUrl) throw new Error('QBO auth URL was not returned')
+  window.location.assign(payload.authUrl)
 }

@@ -4,8 +4,13 @@ import { fileURLToPath, URL } from 'node:url'
 
 export default defineConfig({
   plugins: [react()],
-  cacheDir: '.vite-cache',
+  cacheDir: process.env.VITE_CACHE_DIR ?? '.vite-cache',
   envDir: fileURLToPath(new URL('../..', import.meta.url)),
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   server: {
     host: '0.0.0.0',
     port: 3000,

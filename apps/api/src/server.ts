@@ -14,7 +14,7 @@ import {
   formatMoney,
   normalizePolygonGeometry,
 } from '@sitelayer/domain'
-import { loadAppConfig, logAppConfigBanner, TierConfigError } from './tier.js'
+import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigError } from './tier.js'
 import {
   assertKeyInCompany,
   buildBlueprintStorageKey,
@@ -85,7 +85,7 @@ type BlueprintDocumentRow = {
 }
 
 const port = Number(process.env.PORT ?? 3001)
-const databaseUrl = process.env.DATABASE_URL ?? 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer'
+const databaseUrl = appConfig.databaseUrl
 const databaseSslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false'
 const activeCompanySlug = process.env.ACTIVE_COMPANY_SLUG ?? 'la-operations'
 const activeUserId = process.env.ACTIVE_USER_ID ?? 'demo-user'
@@ -100,7 +100,7 @@ const qboStateSecret = process.env.QBO_STATE_SECRET ?? qboClientSecret
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)
 
 function withTierOptions(config: PoolConfig): PoolConfig {
-  return { ...config, options: `-c app.tier=${appConfig.tier}` }
+  return { ...config, options: postgresOptionsForTier(appConfig.tier, config.options || process.env.PGOPTIONS) }
 }
 
 function getPoolConfig(connectionString: string): PoolConfig {
