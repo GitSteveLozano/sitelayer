@@ -41,26 +41,16 @@ jobs:
               exit 1
             fi
 
-            # Bootstrap the checkout. The deploy-user setup creates /app/sitelayer,
-            # so handle the "directory exists but is not a git repo yet" case.
-            mkdir -p /app
-            if [ ! -d /app/sitelayer/.git ]; then
-              env_backup=""
-              if [ -f /app/sitelayer/.env ]; then
-                env_backup="$(mktemp)"
-                cp /app/sitelayer/.env "$env_backup"
-              fi
-
-              rm -rf /app/sitelayer
-              git clone --branch main --single-branch https://github.com/GitSteveLozano/sitelayer.git /app/sitelayer
-
-              if [ -n "$env_backup" ]; then
-                mv "$env_backup" /app/sitelayer/.env
-                chmod 600 /app/sitelayer/.env
-              fi
-            fi
-
+            # Bootstrap the checkout in-place. /app is root-owned, but
+            # /app/sitelayer is owned by the deploy user and also stores .env.
+            mkdir -p /app/sitelayer
             cd /app/sitelayer
+            if [ ! -d .git ]; then
+              git init
+              git remote add origin https://github.com/GitSteveLozano/sitelayer.git
+            else
+              git remote set-url origin https://github.com/GitSteveLozano/sitelayer.git
+            fi
 
             # Update code
             git fetch origin
