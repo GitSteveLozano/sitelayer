@@ -71,8 +71,8 @@ jobs:
             # Wait for services to be ready
             sleep 5
 
-            # Check API health
-            curl -fsS http://127.0.0.1:3001/health
+            # Check API health through the only public listener.
+            curl -fsS http://127.0.0.1/health
 
             echo "Deployment completed successfully"
           EOF
