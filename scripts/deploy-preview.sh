@@ -66,6 +66,9 @@ if [ "$PREVIEW_ENABLE_WORKER" = "1" ]; then
   services=(api web worker)
 fi
 
+PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" ENV_FILE="$target_dir/.env" "$target_dir/scripts/migrate-db.sh"
+PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" ENV_FILE="$target_dir/.env" "$target_dir/scripts/check-db-schema.sh"
+
 docker compose "${compose_args[@]}" config >/dev/null
 docker compose "${compose_args[@]}" "${profile_args[@]}" up -d --build --remove-orphans "${services[@]}"
 
