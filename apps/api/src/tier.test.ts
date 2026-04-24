@@ -4,7 +4,8 @@ import { loadAppConfig, TierConfigError } from './tier.js'
 const localDatabaseUrl = 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer'
 const prodDatabaseUrl = 'postgres://sitelayer_prod_app:secret@db.example.com:25060/sitelayer_prod?sslmode=require'
 const devDatabaseUrl = 'postgres://sitelayer_dev_app:secret@db.example.com:25060/sitelayer_dev?sslmode=require'
-const previewDatabaseUrl = 'postgres://sitelayer_preview_app:secret@db.example.com:25060/sitelayer_preview?sslmode=require'
+const previewDatabaseUrl =
+  'postgres://sitelayer_preview_app:secret@db.example.com:25060/sitelayer_preview?sslmode=require'
 const prodReadOnlyUrl = 'postgres://sitelayer_prod_ro:secret@db.example.com:25060/sitelayer_prod?sslmode=require'
 
 describe('loadAppConfig', () => {

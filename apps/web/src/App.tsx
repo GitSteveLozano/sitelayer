@@ -1,4 +1,4 @@
-import { useEffect, useState, type ComponentProps } from 'react'
+import { useCallback, useEffect, useState, type ComponentProps } from 'react'
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import {
   apiGet,
@@ -27,7 +27,14 @@ import type {
 } from './api.js'
 import { EnvironmentRibbon } from './components/environment-ribbon.js'
 import { Button } from './components/ui/button.js'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from './components/ui/dialog.js'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from './components/ui/dialog.js'
 import { Input } from './components/ui/input.js'
 import { EstimatesView } from './views/estimates.js'
 import { IntegrationsView } from './views/integrations.js'
@@ -85,8 +92,11 @@ function AppShell() {
     setStoredUserId(userId)
   }, [userId])
 
-  async function refresh() {
-    const [sessionData, data] = await Promise.all([apiGet<SessionResponse>('/api/session', companySlug), apiGet<BootstrapResponse>('/api/bootstrap', companySlug)])
+  const refresh = useCallback(async () => {
+    const [sessionData, data] = await Promise.all([
+      apiGet<SessionResponse>('/api/session', companySlug),
+      apiGet<BootstrapResponse>('/api/bootstrap', companySlug),
+    ])
     setSession(sessionData)
     try {
       const companyData = await apiGet<CompaniesResponse>('/api/companies', companySlug)
@@ -111,7 +121,7 @@ function AppShell() {
     }
     setOfflineQueue(await readOfflineQueue())
     setSyncRefreshKey((current) => current + 1)
-  }
+  }, [companySlug])
 
   useEffect(() => {
     setSelectedProjectId('')
@@ -121,8 +131,7 @@ function AppShell() {
       .catch((caught: unknown) => {
         setError(caught instanceof Error ? caught.message : 'unknown error')
       })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companySlug])
+  }, [refresh])
 
   useEffect(() => {
     let active = true
@@ -132,9 +141,7 @@ function AppShell() {
       })
     }
     const replay = () => {
-      replayOfflineMutations(companySlug)
-        .then(refreshQueueState)
-        .catch(refreshQueueState)
+      replayOfflineMutations(companySlug).then(refreshQueueState).catch(refreshQueueState)
     }
 
     replay()
@@ -149,36 +156,49 @@ function AppShell() {
     }
   }, [companySlug])
 
-  async function refreshSummary(projectId: string) {
-    if (!projectId) {
-      setSummary(null)
-      return
-    }
-    const data = await apiGet<ProjectSummary>(`/api/projects/${projectId}/summary`, companySlug)
-    setSummary(data)
-  }
+  const refreshSummary = useCallback(
+    async (projectId: string) => {
+      if (!projectId) {
+        setSummary(null)
+        return
+      }
+      const data = await apiGet<ProjectSummary>(`/api/projects/${projectId}/summary`, companySlug)
+      setSummary(data)
+    },
+    [companySlug],
+  )
 
-  async function refreshTakeoff(projectId: string) {
-    if (!projectId) {
-      setBlueprints([])
-      setMeasurements([])
-      setSchedules([])
-      setMaterialBills([])
-      setSelectedBlueprintId('')
-      return
-    }
-    const [blueprintData, measurementData, billData] = await Promise.all([
-      apiGet<{ blueprints: BlueprintRow[] }>(`/api/projects/${projectId}/blueprints`, companySlug),
-      apiGet<{ measurements: MeasurementRow[] }>(`/api/projects/${projectId}/takeoff/measurements`, companySlug),
-      apiGet<{ materialBills: MaterialBillRow[] }>(`/api/projects/${projectId}/material-bills`, companySlug),
-    ])
-    setBlueprints(blueprintData.blueprints)
-    setMeasurements(measurementData.measurements)
-    setMaterialBills(billData.materialBills)
-    setSelectedBlueprintId((current) => (current && blueprintData.blueprints.some((blueprint) => blueprint.id === current) ? current : blueprintData.blueprints[0]?.id ?? ''))
-    const scheduleData = await apiGet<{ schedules: ScheduleRow[] }>(`/api/projects/${projectId}/schedules`, companySlug)
-    setSchedules(scheduleData.schedules)
-  }
+  const refreshTakeoff = useCallback(
+    async (projectId: string) => {
+      if (!projectId) {
+        setBlueprints([])
+        setMeasurements([])
+        setSchedules([])
+        setMaterialBills([])
+        setSelectedBlueprintId('')
+        return
+      }
+      const [blueprintData, measurementData, billData] = await Promise.all([
+        apiGet<{ blueprints: BlueprintRow[] }>(`/api/projects/${projectId}/blueprints`, companySlug),
+        apiGet<{ measurements: MeasurementRow[] }>(`/api/projects/${projectId}/takeoff/measurements`, companySlug),
+        apiGet<{ materialBills: MaterialBillRow[] }>(`/api/projects/${projectId}/material-bills`, companySlug),
+      ])
+      setBlueprints(blueprintData.blueprints)
+      setMeasurements(measurementData.measurements)
+      setMaterialBills(billData.materialBills)
+      setSelectedBlueprintId((current) =>
+        current && blueprintData.blueprints.some((blueprint) => blueprint.id === current)
+          ? current
+          : (blueprintData.blueprints[0]?.id ?? ''),
+      )
+      const scheduleData = await apiGet<{ schedules: ScheduleRow[] }>(
+        `/api/projects/${projectId}/schedules`,
+        companySlug,
+      )
+      setSchedules(scheduleData.schedules)
+    },
+    [companySlug],
+  )
 
   useEffect(() => {
     void refreshSummary(selectedProjectId).catch((caught: unknown) => {
@@ -187,7 +207,7 @@ function AppShell() {
     void refreshTakeoff(selectedProjectId).catch((caught: unknown) => {
       setError(caught instanceof Error ? caught.message : 'unknown error')
     })
-  }, [selectedProjectId, companySlug])
+  }, [refreshSummary, refreshTakeoff, selectedProjectId])
 
   async function runAction(label: string, action: () => Promise<void>, options?: { skipRefresh?: boolean }) {
     try {
@@ -215,19 +235,31 @@ function AppShell() {
   const bonusRules = bootstrap?.bonusRules ?? []
   const integrationMappings = bootstrap?.integrationMappings ?? []
   const mappedCustomerRefs = new Set(
-    integrationMappings.filter((mapping) => mapping.entity_type === 'customer' && mapping.deleted_at === null).map((mapping) => mapping.local_ref),
+    integrationMappings
+      .filter((mapping) => mapping.entity_type === 'customer' && mapping.deleted_at === null)
+      .map((mapping) => mapping.local_ref),
   )
   const mappedServiceItemRefs = new Set(
-    integrationMappings.filter((mapping) => mapping.entity_type === 'service_item' && mapping.deleted_at === null).map((mapping) => mapping.local_ref),
+    integrationMappings
+      .filter((mapping) => mapping.entity_type === 'service_item' && mapping.deleted_at === null)
+      .map((mapping) => mapping.local_ref),
   )
   const mappedDivisionRefs = new Set(
-    integrationMappings.filter((mapping) => mapping.entity_type === 'division' && mapping.deleted_at === null).map((mapping) => mapping.local_ref),
+    integrationMappings
+      .filter((mapping) => mapping.entity_type === 'division' && mapping.deleted_at === null)
+      .map((mapping) => mapping.local_ref),
   )
   const mappedProjectRefs = new Set(
-    integrationMappings.filter((mapping) => mapping.entity_type === 'project' && mapping.deleted_at === null).map((mapping) => mapping.local_ref),
+    integrationMappings
+      .filter((mapping) => mapping.entity_type === 'project' && mapping.deleted_at === null)
+      .map((mapping) => mapping.local_ref),
   )
-  const suggestedCustomerMappings = customers.filter((customer) => customer.external_id && !mappedCustomerRefs.has(customer.id))
-  const suggestedServiceItemMappings = serviceItems.filter((item) => (item.source === 'qbo' || item.code.startsWith('qbo-')) && !mappedServiceItemRefs.has(item.code))
+  const suggestedCustomerMappings = customers.filter(
+    (customer) => customer.external_id && !mappedCustomerRefs.has(customer.id),
+  )
+  const suggestedServiceItemMappings = serviceItems.filter(
+    (item) => (item.source === 'qbo' || item.code.startsWith('qbo-')) && !mappedServiceItemRefs.has(item.code),
+  )
   const suggestedDivisionMappings = divisions.filter((division) => !mappedDivisionRefs.has(division.code))
   const suggestedProjectMappings = bootstrap?.projects.filter((project) => !mappedProjectRefs.has(project.id)) ?? []
 
@@ -357,7 +389,10 @@ function AppShell() {
             />
           }
         />
-        <Route path="/dev/*" element={devSurfaceEnabled ? <DevScratchView features={features} /> : <Navigate to="/projects" replace />} />
+        <Route
+          path="/dev/*"
+          element={devSurfaceEnabled ? <DevScratchView features={features} /> : <Navigate to="/projects" replace />}
+        />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Routes>
     </main>
@@ -415,7 +450,9 @@ function DevScratchView({ features }: { features: FeaturesResponse | null }) {
               <DialogContent>
                 <DialogHeader>
                   <DialogTitle>Dev Surface</DialogTitle>
-                  <DialogDescription className="sr-only">Tailwind and shadcn primitives are available in this route.</DialogDescription>
+                  <DialogDescription className="sr-only">
+                    Tailwind and shadcn primitives are available in this route.
+                  </DialogDescription>
                 </DialogHeader>
                 <Input aria-label="Current app tier" readOnly value={features?.tier ?? 'loading'} />
               </DialogContent>

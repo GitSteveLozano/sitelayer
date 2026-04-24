@@ -77,17 +77,23 @@ function assertDatabaseMatchesTier(tier: AppTier, databaseUrl: string) {
 
   if (tier === 'prod') {
     if (!/sitelayer_prod\b/.test(dbName)) {
-      throw new TierConfigError(`APP_TIER=prod but DATABASE_URL database name is "${dbName}" (expected to contain "sitelayer_prod")`)
+      throw new TierConfigError(
+        `APP_TIER=prod but DATABASE_URL database name is "${dbName}" (expected to contain "sitelayer_prod")`,
+      )
     }
     return
   }
 
   if (/sitelayer_prod\b/.test(dbName) && !dbName.endsWith('_ro')) {
-    throw new TierConfigError(`APP_TIER=${tier} but DATABASE_URL points at prod database "${dbName}". Refusing to start.`)
+    throw new TierConfigError(
+      `APP_TIER=${tier} but DATABASE_URL points at prod database "${dbName}". Refusing to start.`,
+    )
   }
 
   if (tier === 'preview' && !/sitelayer_preview\b/.test(dbName) && !isLocalHost) {
-    throw new TierConfigError(`APP_TIER=preview but DATABASE_URL database name is "${dbName}" (expected "sitelayer_preview")`)
+    throw new TierConfigError(
+      `APP_TIER=preview but DATABASE_URL database name is "${dbName}" (expected "sitelayer_preview")`,
+    )
   }
 
   if (tier === 'dev' && !/sitelayer_dev\b/.test(dbName) && !isLocalHost) {
@@ -99,12 +105,16 @@ function assertSpacesMatchesTier(tier: AppTier, bucket: string | null) {
   if (!bucket) return
   if (tier === 'prod') {
     if (!/(-prod$|^sitelayer-blueprints$)/.test(bucket)) {
-      throw new TierConfigError(`APP_TIER=prod but DO_SPACES_BUCKET="${bucket}" (expected suffix "-prod" or legacy "sitelayer-blueprints")`)
+      throw new TierConfigError(
+        `APP_TIER=prod but DO_SPACES_BUCKET="${bucket}" (expected suffix "-prod" or legacy "sitelayer-blueprints")`,
+      )
     }
     return
   }
   if (/(^|-)prod(-|$)/.test(bucket) && bucket !== 'sitelayer-blueprints') {
-    throw new TierConfigError(`APP_TIER=${tier} but DO_SPACES_BUCKET="${bucket}" looks like a prod bucket. Refusing to start.`)
+    throw new TierConfigError(
+      `APP_TIER=${tier} but DO_SPACES_BUCKET="${bucket}" looks like a prod bucket. Refusing to start.`,
+    )
   }
 }
 
@@ -146,7 +156,9 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     try {
       const parsed = new URL(url)
       if (!/_ro$|readonly/i.test(parsed.username)) {
-        throw new TierConfigError(`DATABASE_URL_PROD_RO user "${parsed.username}" must be a read-only role (suffix "_ro" or contain "readonly")`)
+        throw new TierConfigError(
+          `DATABASE_URL_PROD_RO user "${parsed.username}" must be a read-only role (suffix "_ro" or contain "readonly")`,
+        )
       }
     } catch (err) {
       if (err instanceof TierConfigError) throw err
@@ -175,5 +187,7 @@ export function logAppConfigBanner(config: AppConfig) {
   const bucket = config.spacesBucket ?? '(none)'
   const dbName = extractDatabaseName(config.databaseUrl) ?? '(unknown)'
   const flags = config.flags.size > 0 ? Array.from(config.flags).join(',') : '(none)'
-  console.log(`[tier] APP_TIER=${config.tier} db=${dbName} spaces=${bucket} flags=${flags}${config.databaseUrlProdRo ? ' +prod-ro' : ''}`)
+  console.log(
+    `[tier] APP_TIER=${config.tier} db=${dbName} spaces=${bucket} flags=${flags}${config.databaseUrlProdRo ? ' +prod-ro' : ''}`,
+  )
 }

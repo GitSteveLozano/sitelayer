@@ -19,6 +19,7 @@
     "@sentry/node": "^10.50.0",
     "@sitelayer/config": "file:../../packages/config",
     "@sitelayer/domain": "file:../../packages/domain",
+    "@sitelayer/logger": "file:../../packages/logger",
     "@sitelayer/queue": "file:../../packages/queue",
     "pg": "^8.13.1"
   },

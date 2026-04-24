@@ -8,15 +8,15 @@ Do not overload one QBO identifier for multiple concepts. In particular, the QBO
 
 ## Entity Mapping
 
-| QBO Concept | Sitelayer Concept | Mapping Rule |
-| --- | --- | --- |
-| Realm / Company ID | `integration_connections.provider_account_id` | One QBO company per connection. Used only as API realm context. |
-| Class | `divisions` | QBO Class maps to division code/name, e.g. D1-D9. Store external class ID in `integration_mappings` with `entity_type='division'`. |
-| Item | `service_items` | QBO Item maps to service item. Classify locally as measurable, billing/accounting, or future cost category. Store external item ID with `entity_type='service_item'`. |
-| Customer / Job | `customers` and `projects` | QBO customer/job records can represent builders, contractors, or address-style jobs. Store customer refs separately from project/estimate refs. |
-| Estimate | `estimate_lines` plus project mapping | Sitelayer generates estimate lines from takeoff/pricing. QBO estimate ID maps to the local project with `entity_type='project'` or a future `estimate` entity. |
-| Bill | `material_bills` | Inbound actual material/sub cost. Store QBO bill ID on `material_bills.external_id` and/or mapping row. |
-| TimeActivity | `labor_entries` | Inbound or reconciled labor actuals. Preserve worker/date/project/service item where available. |
+| QBO Concept        | Sitelayer Concept                             | Mapping Rule                                                                                                                                                          |
+| ------------------ | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Realm / Company ID | `integration_connections.provider_account_id` | One QBO company per connection. Used only as API realm context.                                                                                                       |
+| Class              | `divisions`                                   | QBO Class maps to division code/name, e.g. D1-D9. Store external class ID in `integration_mappings` with `entity_type='division'`.                                    |
+| Item               | `service_items`                               | QBO Item maps to service item. Classify locally as measurable, billing/accounting, or future cost category. Store external item ID with `entity_type='service_item'`. |
+| Customer / Job     | `customers` and `projects`                    | QBO customer/job records can represent builders, contractors, or address-style jobs. Store customer refs separately from project/estimate refs.                       |
+| Estimate           | `estimate_lines` plus project mapping         | Sitelayer generates estimate lines from takeoff/pricing. QBO estimate ID maps to the local project with `entity_type='project'` or a future `estimate` entity.        |
+| Bill               | `material_bills`                              | Inbound actual material/sub cost. Store QBO bill ID on `material_bills.external_id` and/or mapping row.                                                               |
+| TimeActivity       | `labor_entries`                               | Inbound or reconciled labor actuals. Preserve worker/date/project/service item where available.                                                                       |
 
 ## Estimate Push Contract
 

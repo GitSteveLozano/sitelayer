@@ -45,6 +45,9 @@ describe('queue processing', () => {
             mutation_type: 'update',
             attempt_count: 1,
             created_at: '2026-04-24T00:00:00.000Z',
+            sentry_trace: null,
+            sentry_baggage: null,
+            request_id: null,
           },
         ],
         rowCount: 1,
@@ -59,6 +62,9 @@ describe('queue processing', () => {
             direction: 'inbound',
             attempt_count: 1,
             created_at: '2026-04-24T00:00:00.000Z',
+            sentry_trace: null,
+            sentry_baggage: null,
+            request_id: null,
           },
         ],
         rowCount: 1,
@@ -118,7 +124,10 @@ describe('queue processing', () => {
   })
 
   it('accepts pg-compatible clients structurally', async () => {
-    const client: QueueClient = new FakeQueueClient([{ rows: [], rowCount: 0 }, { rows: [], rowCount: 0 }])
+    const client: QueueClient = new FakeQueueClient([
+      { rows: [], rowCount: 0 },
+      { rows: [], rowCount: 0 },
+    ])
 
     await expect(processQueueWithClient(client, 'company-1')).resolves.toMatchObject({
       processedOutboxCount: 0,

@@ -23,6 +23,11 @@ import type {
   WorkerRow,
 } from '../api.js'
 import { FormRow } from './forms.js'
+import { Button } from './ui/button.js'
+import { Checkbox } from './ui/checkbox.js'
+import { Input } from './ui/input.js'
+import { Select } from './ui/select.js'
+import { Textarea } from './ui/textarea.js'
 
 export function AnalyticsWidget({ companySlug }: { companySlug: string }) {
   const [data, setData] = useState<{
@@ -82,7 +87,8 @@ export function AnalyticsWidget({ companySlug }: { companySlug: string }) {
             <li key={division.divisionCode}>
               <strong>{division.divisionCode}</strong>
               <span>
-                Revenue {formatMoney(division.revenue)} · Cost {formatMoney(division.cost)} · Margin {formatMoney(division.margin)}
+                Revenue {formatMoney(division.revenue)} · Cost {formatMoney(division.cost)} · Margin{' '}
+                {formatMoney(division.margin)}
               </span>
             </li>
           ))}
@@ -134,27 +140,45 @@ export function ProjectEditor({
         </div>
       </div>
       <FormRow actionLabel="Save project" busy={busy} onSubmit={onSubmit}>
-        <input name="expected_version" type="hidden" defaultValue={project.version} />
-        <input name="name" defaultValue={project.name} placeholder="Project name" />
-        <input name="customer_name" defaultValue={project.customer_name} placeholder="Customer / builder" />
-        <select name="division_code" defaultValue={project.division_code}>
+        <Input name="expected_version" type="hidden" defaultValue={project.version} />
+        <Input name="name" defaultValue={project.name} placeholder="Project name" />
+        <Input name="customer_name" defaultValue={project.customer_name} placeholder="Customer / builder" />
+        <Select name="division_code" defaultValue={project.division_code}>
           {divisions.map((division) => (
             <option key={division.code} value={division.code}>
               {division.code} - {division.name}
             </option>
           ))}
-        </select>
-        <input name="status" defaultValue={project.status} placeholder="Status" />
-        <input name="bid_total" defaultValue={Number(project.bid_total)} type="number" step="0.01" placeholder="Bid total" />
-        <input name="labor_rate" defaultValue={Number(project.labor_rate)} type="number" step="0.01" placeholder="Labor rate" />
-        <input
+        </Select>
+        <Input name="status" defaultValue={project.status} placeholder="Status" />
+        <Input
+          name="bid_total"
+          defaultValue={Number(project.bid_total)}
+          type="number"
+          step="0.01"
+          placeholder="Bid total"
+        />
+        <Input
+          name="labor_rate"
+          defaultValue={Number(project.labor_rate)}
+          type="number"
+          step="0.01"
+          placeholder="Labor rate"
+        />
+        <Input
           name="target_sqft_per_hr"
           defaultValue={project.target_sqft_per_hr ? Number(project.target_sqft_per_hr) : ''}
           type="number"
           step="0.01"
           placeholder="Target sqft/hr"
         />
-        <input name="bonus_pool" defaultValue={Number(project.bonus_pool)} type="number" step="0.01" placeholder="Bonus pool" />
+        <Input
+          name="bonus_pool"
+          defaultValue={Number(project.bonus_pool)}
+          type="number"
+          step="0.01"
+          placeholder="Bonus pool"
+        />
       </FormRow>
     </div>
   )
@@ -176,7 +200,9 @@ export function CustomerEditor({
       <div className="rowBetween">
         <div className="stacked">
           <strong>{customer.name}</strong>
-          <span className="muted compact">{customer.external_id ? `External ID ${customer.external_id}` : 'Local-only customer'}</span>
+          <span className="muted compact">
+            {customer.external_id ? `External ID ${customer.external_id}` : 'Local-only customer'}
+          </span>
         </div>
         <div className="stacked alignRight">
           <span className="badge">{customer.source}</span>
@@ -184,15 +210,15 @@ export function CustomerEditor({
         </div>
       </div>
       <FormRow actionLabel="Save customer" busy={busy} onSubmit={onSubmit}>
-        <input name="expected_version" type="hidden" defaultValue={customer.version} />
-        <input name="name" defaultValue={customer.name} placeholder="Customer name" />
-        <input name="external_id" defaultValue={customer.external_id ?? ''} placeholder="External ID" />
-        <input name="source" defaultValue={customer.source} placeholder="Source" />
+        <Input name="expected_version" type="hidden" defaultValue={customer.version} />
+        <Input name="name" defaultValue={customer.name} placeholder="Customer name" />
+        <Input name="external_id" defaultValue={customer.external_id ?? ''} placeholder="External ID" />
+        <Input name="source" defaultValue={customer.source} placeholder="Source" />
       </FormRow>
       <div className="actions">
-        <button type="button" onClick={() => void onDelete()}>
+        <Button type="button" onClick={() => void onDelete()}>
           Delete
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -222,42 +248,65 @@ export function BlueprintEditor({
         </div>
         <div className="stacked alignRight">
           <span className="badge">{blueprint.preview_type}</span>
-          <span className="muted compact">
-            {blueprint.replaces_blueprint_document_id ? 'revision' : 'source'}
-          </span>
+          <span className="muted compact">{blueprint.replaces_blueprint_document_id ? 'revision' : 'source'}</span>
         </div>
       </div>
       <p className="muted compact">History: {lineage}</p>
       <FormRow actionLabel="Save blueprint" busy={busy} onSubmit={onSubmit}>
-        <input name="expected_version" type="hidden" defaultValue={blueprint.version} />
-        <input name="file_name" defaultValue={blueprint.file_name} placeholder="Blueprint file name" />
-        <input name="storage_path" defaultValue={blueprint.storage_path} placeholder="Storage path" />
-        <input name="preview_type" defaultValue={blueprint.preview_type} placeholder="Preview type" />
-        <input name="calibration_length" defaultValue={blueprint.calibration_length ?? ''} placeholder="Calibration length" type="number" step="0.01" />
-        <input name="calibration_unit" defaultValue={blueprint.calibration_unit ?? ''} placeholder="Calibration unit" />
-        <input name="sheet_scale" defaultValue={blueprint.sheet_scale ?? ''} placeholder="Sheet scale" type="number" step="0.0001" />
-        <input name="blueprint_file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/*" />
+        <Input name="expected_version" type="hidden" defaultValue={blueprint.version} />
+        <Input name="file_name" defaultValue={blueprint.file_name} placeholder="Blueprint file name" />
+        <Input name="storage_path" defaultValue={blueprint.storage_path} placeholder="Storage path" />
+        <Input name="preview_type" defaultValue={blueprint.preview_type} placeholder="Preview type" />
+        <Input
+          name="calibration_length"
+          defaultValue={blueprint.calibration_length ?? ''}
+          placeholder="Calibration length"
+          type="number"
+          step="0.01"
+        />
+        <Input name="calibration_unit" defaultValue={blueprint.calibration_unit ?? ''} placeholder="Calibration unit" />
+        <Input
+          name="sheet_scale"
+          defaultValue={blueprint.sheet_scale ?? ''}
+          placeholder="Sheet scale"
+          type="number"
+          step="0.0001"
+        />
+        <Input name="blueprint_file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/*" />
       </FormRow>
       <FormRow actionLabel="Create version" busy={busy} onSubmit={onCreateVersion}>
-        <input name="file_name" defaultValue={blueprint.file_name} placeholder="Version file name" />
-        <input name="storage_path" defaultValue={blueprint.storage_path} placeholder="Storage path" />
-        <input name="preview_type" defaultValue={blueprint.preview_type} placeholder="Preview type" />
-        <input name="calibration_length" defaultValue={blueprint.calibration_length ?? ''} placeholder="Calibration length" type="number" step="0.01" />
-        <input name="calibration_unit" defaultValue={blueprint.calibration_unit ?? ''} placeholder="Calibration unit" />
-        <input name="sheet_scale" defaultValue={blueprint.sheet_scale ?? ''} placeholder="Sheet scale" type="number" step="0.0001" />
-        <input name="blueprint_file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/*" />
+        <Input name="file_name" defaultValue={blueprint.file_name} placeholder="Version file name" />
+        <Input name="storage_path" defaultValue={blueprint.storage_path} placeholder="Storage path" />
+        <Input name="preview_type" defaultValue={blueprint.preview_type} placeholder="Preview type" />
+        <Input
+          name="calibration_length"
+          defaultValue={blueprint.calibration_length ?? ''}
+          placeholder="Calibration length"
+          type="number"
+          step="0.01"
+        />
+        <Input name="calibration_unit" defaultValue={blueprint.calibration_unit ?? ''} placeholder="Calibration unit" />
+        <Input
+          name="sheet_scale"
+          defaultValue={blueprint.sheet_scale ?? ''}
+          placeholder="Sheet scale"
+          type="number"
+          step="0.0001"
+        />
+        <Input name="blueprint_file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/*" />
         <label className="checkbox">
-          <input name="copy_measurements" type="checkbox" defaultChecked />
+          <Checkbox name="copy_measurements" type="checkbox" defaultChecked />
           <span>Copy measurements forward</span>
         </label>
       </FormRow>
       <p className="muted compact">
-        File preview: {blueprint.file_url ? blueprint.file_url : 'not stored yet'} · Base storage: {blueprint.storage_path}
+        File preview: {blueprint.file_url ? blueprint.file_url : 'not stored yet'} · Base storage:{' '}
+        {blueprint.storage_path}
       </p>
       <div className="actions">
-        <button type="button" onClick={() => void onDelete()}>
+        <Button type="button" onClick={() => void onDelete()}>
           Delete
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -280,18 +329,14 @@ export function PricingProfileEditor({
         <strong>{profile.name}</strong>
         <span className="muted">{profile.is_default ? 'default' : 'custom'}</span>
       </div>
-      <FormRow
-        actionLabel="Save pricing profile"
-        busy={busy}
-        onSubmit={(form) => onSubmit(form)}
-      >
-        <input name="expected_version" type="hidden" defaultValue={profile.version} />
-        <input name="name" defaultValue={profile.name} placeholder="Profile name" />
+      <FormRow actionLabel="Save pricing profile" busy={busy} onSubmit={(form) => onSubmit(form)}>
+        <Input name="expected_version" type="hidden" defaultValue={profile.version} />
+        <Input name="name" defaultValue={profile.name} placeholder="Profile name" />
         <label className="checkbox">
-          <input name="is_default" type="checkbox" defaultChecked={profile.is_default} />
+          <Checkbox name="is_default" type="checkbox" defaultChecked={profile.is_default} />
           <span>Default profile</span>
         </label>
-        <textarea
+        <Textarea
           name="config"
           rows={4}
           defaultValue={JSON.stringify(profile.config, null, 2)}
@@ -299,9 +344,9 @@ export function PricingProfileEditor({
         />
       </FormRow>
       <div className="actions">
-        <button type="button" onClick={() => void onDelete()}>
+        <Button type="button" onClick={() => void onDelete()}>
           Delete
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -325,13 +370,13 @@ export function BonusRuleEditor({
         <span className="muted">{rule.is_active ? 'active' : 'inactive'}</span>
       </div>
       <FormRow actionLabel="Save bonus rule" busy={busy} onSubmit={(form) => onSubmit(form)}>
-        <input name="expected_version" type="hidden" defaultValue={rule.version} />
-        <input name="name" defaultValue={rule.name} placeholder="Rule name" />
+        <Input name="expected_version" type="hidden" defaultValue={rule.version} />
+        <Input name="name" defaultValue={rule.name} placeholder="Rule name" />
         <label className="checkbox">
-          <input name="is_active" type="checkbox" defaultChecked={rule.is_active} />
+          <Checkbox name="is_active" type="checkbox" defaultChecked={rule.is_active} />
           <span>Active rule</span>
         </label>
-        <textarea
+        <Textarea
           name="config"
           rows={4}
           defaultValue={JSON.stringify(rule.config, null, 2)}
@@ -339,9 +384,9 @@ export function BonusRuleEditor({
         />
       </FormRow>
       <div className="actions">
-        <button type="button" onClick={() => void onDelete()}>
+        <Button type="button" onClick={() => void onDelete()}>
           Delete
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -365,23 +410,23 @@ export function IntegrationMappingEditor({
         <span className="muted">v{mapping.version}</span>
       </div>
       <FormRow actionLabel="Save mapping" busy={busy} onSubmit={onSubmit}>
-        <input name="expected_version" type="hidden" defaultValue={mapping.version} />
-        <select name="entity_type" defaultValue={mapping.entity_type}>
+        <Input name="expected_version" type="hidden" defaultValue={mapping.version} />
+        <Select name="entity_type" defaultValue={mapping.entity_type}>
           <option value="customer">customer</option>
           <option value="service_item">service_item</option>
           <option value="division">division</option>
           <option value="project">project</option>
-        </select>
-        <input name="local_ref" defaultValue={mapping.local_ref} placeholder="Local ref" />
-        <input name="external_id" defaultValue={mapping.external_id} placeholder="QBO external id" />
-        <input name="label" defaultValue={mapping.label ?? ''} placeholder="Label" />
-        <input name="status" defaultValue={mapping.status} placeholder="Status" />
-        <input name="notes" defaultValue={mapping.notes ?? ''} placeholder="Notes" />
+        </Select>
+        <Input name="local_ref" defaultValue={mapping.local_ref} placeholder="Local ref" />
+        <Input name="external_id" defaultValue={mapping.external_id} placeholder="QBO external id" />
+        <Input name="label" defaultValue={mapping.label ?? ''} placeholder="Label" />
+        <Input name="status" defaultValue={mapping.status} placeholder="Status" />
+        <Input name="notes" defaultValue={mapping.notes ?? ''} placeholder="Notes" />
       </FormRow>
       <div className="actions">
-        <button type="button" onClick={() => void onDelete()}>
+        <Button type="button" onClick={() => void onDelete()}>
           Delete
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -405,14 +450,14 @@ export function WorkerEditor({
         <span className="muted">v{worker.version}</span>
       </div>
       <FormRow actionLabel="Save worker" busy={busy} onSubmit={onSubmit}>
-        <input name="expected_version" type="hidden" defaultValue={worker.version} />
-        <input name="name" defaultValue={worker.name} placeholder="Worker name" />
-        <input name="role" defaultValue={worker.role} placeholder="Role" />
+        <Input name="expected_version" type="hidden" defaultValue={worker.version} />
+        <Input name="name" defaultValue={worker.name} placeholder="Worker name" />
+        <Input name="role" defaultValue={worker.role} placeholder="Role" />
       </FormRow>
       <div className="actions">
-        <button type="button" onClick={() => void onDelete()}>
+        <Button type="button" onClick={() => void onDelete()}>
           Delete
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -438,22 +483,22 @@ export function MeasurementEditor({
         <span className="muted">v{measurement.version}</span>
       </div>
       <FormRow actionLabel="Save measurement" busy={busy} onSubmit={onSubmit}>
-        <input name="expected_version" type="hidden" defaultValue={measurement.version} />
-        <select name="service_item_code" defaultValue={measurement.service_item_code}>
+        <Input name="expected_version" type="hidden" defaultValue={measurement.version} />
+        <Select name="service_item_code" defaultValue={measurement.service_item_code}>
           {serviceItems.map((item) => (
             <option key={item.code} value={item.code}>
               {item.code} - {item.name}
             </option>
           ))}
-        </select>
-        <input name="quantity" defaultValue={Number(measurement.quantity)} type="number" step="0.01" />
-        <input name="unit" defaultValue={measurement.unit} placeholder="Unit" />
-        <input name="notes" defaultValue={measurement.notes ?? ''} placeholder="Notes" />
+        </Select>
+        <Input name="quantity" defaultValue={Number(measurement.quantity)} type="number" step="0.01" />
+        <Input name="unit" defaultValue={measurement.unit} placeholder="Unit" />
+        <Input name="notes" defaultValue={measurement.notes ?? ''} placeholder="Notes" />
       </FormRow>
       <div className="actions">
-        <button type="button" onClick={() => void onDelete()}>
+        <Button type="button" onClick={() => void onDelete()}>
           Delete
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -477,17 +522,17 @@ export function MaterialBillEditor({
         <span className="muted">v{bill.version}</span>
       </div>
       <FormRow actionLabel="Save bill" busy={busy} onSubmit={onSubmit}>
-        <input name="expected_version" type="hidden" defaultValue={bill.version} />
-        <input name="vendor" defaultValue={bill.vendor} placeholder="Vendor" />
-        <input name="amount" defaultValue={Number(bill.amount)} type="number" step="0.01" />
-        <input name="bill_type" defaultValue={bill.bill_type} placeholder="Type" />
-        <input name="description" defaultValue={bill.description ?? ''} placeholder="Description" />
-        <input name="occurred_on" defaultValue={bill.occurred_on ?? ''} placeholder="Occurred on" />
+        <Input name="expected_version" type="hidden" defaultValue={bill.version} />
+        <Input name="vendor" defaultValue={bill.vendor} placeholder="Vendor" />
+        <Input name="amount" defaultValue={Number(bill.amount)} type="number" step="0.01" />
+        <Input name="bill_type" defaultValue={bill.bill_type} placeholder="Type" />
+        <Input name="description" defaultValue={bill.description ?? ''} placeholder="Description" />
+        <Input name="occurred_on" defaultValue={bill.occurred_on ?? ''} placeholder="Occurred on" />
       </FormRow>
       <div className="actions">
-        <button type="button" onClick={() => void onDelete()}>
+        <Button type="button" onClick={() => void onDelete()}>
           Delete
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -515,31 +560,37 @@ export function LaborEditor({
         <span className="muted">v{laborEntry.version}</span>
       </div>
       <FormRow actionLabel="Save labor entry" busy={busy} onSubmit={onSubmit}>
-        <input name="expected_version" type="hidden" defaultValue={laborEntry.version} />
-        <select name="worker_id" defaultValue={laborEntry.worker_id ?? ''}>
+        <Input name="expected_version" type="hidden" defaultValue={laborEntry.version} />
+        <Select name="worker_id" defaultValue={laborEntry.worker_id ?? ''}>
           <option value="">Worker</option>
           {workers.map((worker) => (
             <option key={worker.id} value={worker.id}>
               {worker.name}
             </option>
           ))}
-        </select>
-        <select name="service_item_code" defaultValue={laborEntry.service_item_code}>
+        </Select>
+        <Select name="service_item_code" defaultValue={laborEntry.service_item_code}>
           {serviceItems.map((item) => (
             <option key={item.code} value={item.code}>
               {item.code} - {item.name}
             </option>
           ))}
-        </select>
-        <input name="hours" defaultValue={Number(laborEntry.hours)} type="number" step="0.25" placeholder="Hours" />
-        <input name="sqft_done" defaultValue={Number(laborEntry.sqft_done)} type="number" step="0.1" placeholder="Sqft done" />
-        <input name="status" defaultValue={laborEntry.status} placeholder="Status" />
-        <input name="occurred_on" defaultValue={laborEntry.occurred_on} type="date" />
+        </Select>
+        <Input name="hours" defaultValue={Number(laborEntry.hours)} type="number" step="0.25" placeholder="Hours" />
+        <Input
+          name="sqft_done"
+          defaultValue={Number(laborEntry.sqft_done)}
+          type="number"
+          step="0.1"
+          placeholder="Sqft done"
+        />
+        <Input name="status" defaultValue={laborEntry.status} placeholder="Status" />
+        <Input name="occurred_on" defaultValue={laborEntry.occurred_on} type="date" />
       </FormRow>
       <div className="actions">
-        <button type="button" onClick={() => void onDelete()}>
+        <Button type="button" onClick={() => void onDelete()}>
           Delete
-        </button>
+        </Button>
       </div>
     </div>
   )
@@ -575,7 +626,9 @@ export function TakeoffWorkspace({
   const [calibrationUnit, setCalibrationUnit] = useState('ft')
 
   const activeBlueprint = blueprints.find((blueprint) => blueprint.id === selectedBlueprintId) ?? blueprints[0] ?? null
-  const blueprintMeasurements = measurements.filter((measurement) => measurement.blueprint_document_id === activeBlueprint?.id)
+  const blueprintMeasurements = measurements.filter(
+    (measurement) => measurement.blueprint_document_id === activeBlueprint?.id,
+  )
   const quantityMultiplierValue = Number.isFinite(quantityMultiplier) && quantityMultiplier > 0 ? quantityMultiplier : 1
   const draftArea = calculatePolygonArea(draftPoints)
   const draftQuantity = calculateTakeoffQuantity(draftPoints, quantityMultiplierValue)
@@ -595,7 +648,12 @@ export function TakeoffWorkspace({
     setQuantityMultiplier(Number.isFinite(sheetScale) && sheetScale > 0 ? sheetScale : 1)
     setCalibrationLength(activeBlueprint?.calibration_length ?? '100')
     setCalibrationUnit(activeBlueprint?.calibration_unit ?? 'ft')
-  }, [activeBlueprint?.id])
+  }, [
+    activeBlueprint?.calibration_length,
+    activeBlueprint?.calibration_unit,
+    activeBlueprint?.id,
+    activeBlueprint?.sheet_scale,
+  ])
 
   useEffect(() => {
     if (!serviceItemCode && serviceItems[0]) {
@@ -664,40 +722,57 @@ export function TakeoffWorkspace({
       <div className="takeoffToolbar">
         <label className="selectWrap">
           <span>Blueprint</span>
-          <select value={activeBlueprint?.id ?? ''} onChange={(event) => onSelectBlueprint(event.target.value)}>
+          <Select value={activeBlueprint?.id ?? ''} onChange={(event) => onSelectBlueprint(event.target.value)}>
             <option value="">Choose blueprint</option>
             {blueprints.map((blueprint) => (
               <option key={blueprint.id} value={blueprint.id}>
                 {blueprint.file_name} · v{blueprint.version}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         <label className="selectWrap">
           <span>Service item</span>
-          <select value={serviceItemCode} onChange={(event) => setServiceItemCode(event.target.value)}>
+          <Select value={serviceItemCode} onChange={(event) => setServiceItemCode(event.target.value)}>
             {serviceItems.map((item) => (
               <option key={item.code} value={item.code}>
                 {item.code} · {item.name}
               </option>
             ))}
-          </select>
+          </Select>
         </label>
         <label className="selectWrap">
           <span>Quantity multiplier</span>
-          <input value={quantityMultiplier} onChange={(event) => setQuantityMultiplier(Number(event.target.value))} type="number" step="0.01" />
+          <Input
+            value={quantityMultiplier}
+            onChange={(event) => setQuantityMultiplier(Number(event.target.value))}
+            type="number"
+            step="0.01"
+          />
         </label>
         <label className="selectWrap">
           <span>Calibration length</span>
-          <input value={calibrationLength} onChange={(event) => setCalibrationLength(event.target.value)} type="number" step="0.01" />
+          <Input
+            value={calibrationLength}
+            onChange={(event) => setCalibrationLength(event.target.value)}
+            type="number"
+            step="0.01"
+          />
         </label>
         <label className="selectWrap">
           <span>Calibration unit</span>
-          <input value={calibrationUnit} onChange={(event) => setCalibrationUnit(event.target.value)} />
+          <Input value={calibrationUnit} onChange={(event) => setCalibrationUnit(event.target.value)} />
         </label>
         <label className="selectWrap">
           <span>Zoom</span>
-          <input value={zoom} onChange={(event) => setZoom(Number(event.target.value))} type="range" min="0.6" max="2.2" step="0.1" />
+          <Input
+            value={zoom}
+            onChange={(event) => setZoom(Number(event.target.value))}
+            type="range"
+            min="0.6"
+            max="2.2"
+            step="0.1"
+          />
         </label>
       </div>
 
@@ -733,23 +808,22 @@ export function TakeoffWorkspace({
                 <line x1={0} y1={pointerPoint.y} x2={100} y2={pointerPoint.y} className="takeoffCrosshair" />
               </>
             ) : null}
-            {blueprintMeasurements
-              .map((measurement) => {
-                const geometry = normalizePolygonGeometry(measurement.geometry)
-                if (!geometry) return null
-                const points = geometry.points
-                const labelPoint = calculatePolygonCentroid(points)
-                return (
-                  <g key={measurement.id}>
-                    <polygon points={polygonPointsToString(points)} className="takeoffPolygon measurementPolygon" />
-                    {labelPoint ? (
-                      <text x={labelPoint.x} y={labelPoint.y} className="takeoffLabel">
-                        {measurement.service_item_code} · {measurement.quantity} {measurement.unit}
-                      </text>
-                    ) : null}
-                  </g>
-                )
-              })}
+            {blueprintMeasurements.map((measurement) => {
+              const geometry = normalizePolygonGeometry(measurement.geometry)
+              if (!geometry) return null
+              const points = geometry.points
+              const labelPoint = calculatePolygonCentroid(points)
+              return (
+                <g key={measurement.id}>
+                  <polygon points={polygonPointsToString(points)} className="takeoffPolygon measurementPolygon" />
+                  {labelPoint ? (
+                    <text x={labelPoint.x} y={labelPoint.y} className="takeoffLabel">
+                      {measurement.service_item_code} · {measurement.quantity} {measurement.unit}
+                    </text>
+                  ) : null}
+                </g>
+              )
+            })}
             {draftPoints.length > 0 ? (
               <>
                 <polyline points={polygonPointsToString(draftPoints)} className="takeoffLine draftLine" />
@@ -769,37 +843,50 @@ export function TakeoffWorkspace({
       </div>
 
       <div className="takeoffActions">
-        <button type="button" onClick={() => setDraftPoints([])} disabled={busy || !draftPoints.length}>
+        <Button type="button" onClick={() => setDraftPoints([])} disabled={busy || !draftPoints.length}>
           Clear draft
-        </button>
-        <button type="button" onClick={() => setDraftPoints((current) => current.slice(0, -1))} disabled={busy || !draftPoints.length}>
+        </Button>
+        <Button
+          type="button"
+          onClick={() => setDraftPoints((current) => current.slice(0, -1))}
+          disabled={busy || !draftPoints.length}
+        >
           Undo point
-        </button>
-        <button type="button" onClick={() => void saveDraftMeasurement()} disabled={busy || draftPoints.length < 3}>
+        </Button>
+        <Button type="button" onClick={() => void saveDraftMeasurement()} disabled={busy || draftPoints.length < 3}>
           Save polygon
-        </button>
+        </Button>
       </div>
 
       <div className="takeoffMeta">
         <div>
           <strong>{activeBlueprint?.file_name ?? 'No blueprint selected'}</strong>
           <p className="muted">
-            {activeBlueprint ? `v${activeBlueprint.version} · ${activeBlueprint.deleted_at ? 'deleted' : 'active'}` : 'Choose a blueprint to start drawing.'}
+            {activeBlueprint
+              ? `v${activeBlueprint.version} · ${activeBlueprint.deleted_at ? 'deleted' : 'active'}`
+              : 'Choose a blueprint to start drawing.'}
           </p>
         </div>
         <div>
-          <strong>{draftQuantity} {selectedUnit}</strong>
-          <p className="muted">{draftPoints.length} points · board area {draftArea.toFixed(2)} × {quantityMultiplierValue}</p>
+          <strong>
+            {draftQuantity} {selectedUnit}
+          </strong>
+          <p className="muted">
+            {draftPoints.length} points · board area {draftArea.toFixed(2)} × {quantityMultiplierValue}
+          </p>
         </div>
         <div>
-          <strong>{calibrationLength || '0'} {calibrationUnit}</strong>
+          <strong>
+            {calibrationLength || '0'} {calibrationUnit}
+          </strong>
           <p className="muted">Calibration metadata is saved with each measurement for later refinement.</p>
         </div>
       </div>
 
       {error ? <p className="error">{error}</p> : null}
       <p className="muted takeoffHint">
-        Click or tap the board to place vertices. The current draft is highlighted with numbered points and a live crosshair.
+        Click or tap the board to place vertices. The current draft is highlighted with numbered points and a live
+        crosshair.
       </p>
       <ul className="list compact takeoffMeasurements">
         {blueprintMeasurements.length ? (
@@ -832,7 +919,7 @@ export function getBlueprintLineageLabel(blueprints: BlueprintRow[], blueprintId
   while (current && !seen.has(current.id)) {
     chain.push(current)
     seen.add(current.id)
-    current = current.replaces_blueprint_document_id ? byId.get(current.replaces_blueprint_document_id) ?? null : null
+    current = current.replaces_blueprint_document_id ? (byId.get(current.replaces_blueprint_document_id) ?? null) : null
   }
   const labels = chain
     .slice()
@@ -842,13 +929,23 @@ export function getBlueprintLineageLabel(blueprints: BlueprintRow[], blueprintId
 }
 
 export function MutationOutboxWidget({ companySlug, refreshKey }: { companySlug: string; refreshKey: number }) {
-  const [data, setData] = useState<{ outbox: Array<{ entity_type: string; entity_id: string; mutation_type: string; status: string; created_at: string }> } | null>(null)
+  const [data, setData] = useState<{
+    outbox: Array<{ entity_type: string; entity_id: string; mutation_type: string; status: string; created_at: string }>
+  } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     let active = true
     const load = () =>
-    apiGet<{ outbox: Array<{ entity_type: string; entity_id: string; mutation_type: string; status: string; created_at: string }> }>('/api/sync/outbox?limit=5', companySlug)
+      apiGet<{
+        outbox: Array<{
+          entity_type: string
+          entity_id: string
+          mutation_type: string
+          status: string
+          created_at: string
+        }>
+      }>('/api/sync/outbox?limit=5', companySlug)
         .then((next) => {
           if (active) setData(next)
         })
@@ -910,8 +1007,12 @@ export function OfflineQueueWidget({ companySlug, queue }: { companySlug: string
         <ul className="list compact">
           {scopedQueue.map((mutation) => (
             <li key={mutation.id}>
-              <strong>{mutation.method} {mutation.path}</strong>
-              <span>{mutation.createdAt} · {mutation.userId}</span>
+              <strong>
+                {mutation.method} {mutation.path}
+              </strong>
+              <span>
+                {mutation.createdAt} · {mutation.userId}
+              </span>
             </li>
           ))}
         </ul>

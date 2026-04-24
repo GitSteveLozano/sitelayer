@@ -212,6 +212,7 @@ git push origin main
 ```
 
 The GitHub Actions workflow will:
+
 1. Check out the code
 2. SSH into the droplet
 3. Pull latest changes from GitHub
@@ -226,12 +227,12 @@ The GitHub Actions workflow will:
 
 Sitelayer runs in one of four tiers, declared explicitly via `APP_TIER`:
 
-| Tier | DB (DigitalOcean managed Postgres) | Spaces bucket | Purpose |
-|------|-----------------------------------|---------------|---------|
-| `local` | `postgres` in `docker-compose.yml` | MinIO (TBD) | Laptop-only development |
-| `dev` | `sitelayer_dev` | `sitelayer-blueprints-dev` (TBD) | Shared sandbox; Claude Desktop / MCP agents |
-| `preview` | `sitelayer_preview` | `sitelayer-blueprints-preview` (TBD) | Per-PR stacks, non-technical demos |
-| `prod` | `sitelayer_prod` | `sitelayer-blueprints-prod` | Real customers only |
+| Tier      | DB (DigitalOcean managed Postgres) | Spaces bucket                        | Purpose                                     |
+| --------- | ---------------------------------- | ------------------------------------ | ------------------------------------------- |
+| `local`   | `postgres` in `docker-compose.yml` | MinIO (TBD)                          | Laptop-only development                     |
+| `dev`     | `sitelayer_dev`                    | `sitelayer-blueprints-dev` (TBD)     | Shared sandbox; Claude Desktop / MCP agents |
+| `preview` | `sitelayer_preview`                | `sitelayer-blueprints-preview` (TBD) | Per-PR stacks, non-technical demos          |
+| `prod`    | `sitelayer_prod`                   | `sitelayer-blueprints-prod`          | Real customers only                         |
 
 **Startup guard.** On boot the API reads `APP_TIER`, `DATABASE_URL`, and `DO_SPACES_BUCKET` and refuses to start on mismatch. Concrete rules:
 
@@ -272,6 +273,7 @@ DO_SPACES_KEY=… DO_SPACES_SECRET=… ./scripts/provision-spaces-buckets.sh
 Creates `sitelayer-blueprints-{dev,preview,prod}`, private ACL + public-access-block. Idempotent — existing buckets are skipped. Then put the matching name in each tier's `DO_SPACES_BUCKET`.
 
 **Storage adapter.** `apps/api/src/storage.ts` picks a backend at startup:
+
 - If `DO_SPACES_KEY` + `DO_SPACES_SECRET` + `DO_SPACES_BUCKET` are all set → S3/Spaces client (works for DO Spaces, MinIO, or any S3-compatible endpoint via `DO_SPACES_ENDPOINT`).
 - Otherwise → local filesystem at `BLUEPRINT_STORAGE_ROOT`.
 
@@ -282,9 +284,11 @@ Local compose ships a MinIO container at `http://minio:9000` with console at `:9
 **Write-origin audit column.** Migration `docker/postgres/init/002_tier_origin.sql` adds an `origin text` column to `projects`, `blueprint_documents`, `takeoff_measurements`, `labor_entries`, `material_bills`, `crew_schedules`, `estimate_lines`. Defaults to `current_setting('app.tier', true)`. The API/worker pools pass Postgres startup options (`-c app.tier=<tier>`) so newly-inserted rows are self-labeled before any query can race the connection setup.
 
 Applying to existing deployed DBs:
+
 ```
 ENV_FILE=/app/sitelayer/.env MIGRATION_FILES="docker/postgres/init/002_tier_origin.sql" scripts/migrate-db.sh
 ```
+
 Idempotent (`ADD COLUMN IF NOT EXISTS`). Existing rows stay NULL in the origin column — that's fine, only future writes get tagged.
 
 **Dev data seeding.** `npm run seed:dev` attaches the PDFs in `blueprints_sample/` to the LA Operations demo project and uploads them through the active storage adapter. Idempotent. Refuses to run when `APP_TIER=prod`. Run this manually for local/dev/preview seed refreshes.
@@ -295,25 +299,25 @@ Idempotent (`ADD COLUMN IF NOT EXISTS`). Existing rows stay NULL in the origin c
 
 ## Environment Variables Reference
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `APP_TIER` | ✅ in prod | `local`\|`dev`\|`preview`\|`prod`. Startup guard refuses to boot on mismatch. |
-| `FEATURE_FLAGS` | ❌ | Comma-separated. See Tier Isolation above. |
-| `DATABASE_URL` | ✅ | PostgreSQL connection string (use managed database) |
-| `DATABASE_URL_PROD_RO` | ❌ | Read-only prod pool for `read-prod-ro` flag; user must be `_ro`/readonly role. |
-| `PORT` | ❌ | API port; Compose sets `3001` |
-| `NODE_ENV` | ❌ | Compose sets `production` |
-| `QBO_CLIENT_ID` | ❌ | QuickBooks Online client ID; defaults to demo placeholders until configured |
-| `QBO_CLIENT_SECRET` | ❌ | QuickBooks Online client secret; defaults to demo placeholders until configured |
-| `QBO_REDIRECT_URI` | ❌ | OAuth redirect URI for QBO |
-| `QBO_SUCCESS_REDIRECT_URI` | ❌ | UI redirect after QBO OAuth success |
-| `QBO_STATE_SECRET` | ❌ | Secret used to sign QBO OAuth state |
-| `CLERK_SECRET_KEY` | ❌ | Clerk authentication secret |
-| `DO_SPACES_KEY` | ❌ | DigitalOcean Spaces API key |
-| `DO_SPACES_SECRET` | ❌ | DigitalOcean Spaces API secret |
-| `BLUEPRINT_STORAGE_ROOT` | ❌ | Local filesystem blueprint storage path; production Compose persists `/app/storage/blueprints` in a named Docker volume |
-| `SENTRY_DSN` | ❌ | Sentry error tracking URL |
-| `ALLOWED_ORIGINS` | ❌ | CORS allowed origins (comma-separated) |
+| Variable                   | Required   | Description                                                                                                             |
+| -------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `APP_TIER`                 | ✅ in prod | `local`\|`dev`\|`preview`\|`prod`. Startup guard refuses to boot on mismatch.                                           |
+| `FEATURE_FLAGS`            | ❌         | Comma-separated. See Tier Isolation above.                                                                              |
+| `DATABASE_URL`             | ✅         | PostgreSQL connection string (use managed database)                                                                     |
+| `DATABASE_URL_PROD_RO`     | ❌         | Read-only prod pool for `read-prod-ro` flag; user must be `_ro`/readonly role.                                          |
+| `PORT`                     | ❌         | API port; Compose sets `3001`                                                                                           |
+| `NODE_ENV`                 | ❌         | Compose sets `production`                                                                                               |
+| `QBO_CLIENT_ID`            | ❌         | QuickBooks Online client ID; defaults to demo placeholders until configured                                             |
+| `QBO_CLIENT_SECRET`        | ❌         | QuickBooks Online client secret; defaults to demo placeholders until configured                                         |
+| `QBO_REDIRECT_URI`         | ❌         | OAuth redirect URI for QBO                                                                                              |
+| `QBO_SUCCESS_REDIRECT_URI` | ❌         | UI redirect after QBO OAuth success                                                                                     |
+| `QBO_STATE_SECRET`         | ❌         | Secret used to sign QBO OAuth state                                                                                     |
+| `CLERK_SECRET_KEY`         | ❌         | Clerk authentication secret                                                                                             |
+| `DO_SPACES_KEY`            | ❌         | DigitalOcean Spaces API key                                                                                             |
+| `DO_SPACES_SECRET`         | ❌         | DigitalOcean Spaces API secret                                                                                          |
+| `BLUEPRINT_STORAGE_ROOT`   | ❌         | Local filesystem blueprint storage path; production Compose persists `/app/storage/blueprints` in a named Docker volume |
+| `SENTRY_DSN`               | ❌         | Sentry error tracking URL                                                                                               |
+| `ALLOWED_ORIGINS`          | ❌         | CORS allowed origins (comma-separated)                                                                                  |
 
 ## Monitoring & Troubleshooting
 

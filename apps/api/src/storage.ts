@@ -13,7 +13,10 @@ export interface BlueprintStorage {
 }
 
 function sanitizeFileName(fileName: string): string {
-  const cleaned = fileName.trim().replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^[.-]+/, '')
+  const cleaned = fileName
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, '-')
+    .replace(/^[.-]+/, '')
   return cleaned || 'blueprint.pdf'
 }
 
@@ -129,9 +132,9 @@ class S3Storage implements BlueprintStorage {
   }
 
   async get(key: string): Promise<Buffer> {
-    const res = (await this.client.send(
-      new this.mod.GetObjectCommand({ Bucket: this.bucket, Key: key }),
-    )) as { Body?: { transformToByteArray(): Promise<Uint8Array> } }
+    const res = (await this.client.send(new this.mod.GetObjectCommand({ Bucket: this.bucket, Key: key }))) as {
+      Body?: { transformToByteArray(): Promise<Uint8Array> }
+    }
     if (!res.Body) throw new StorageError(404, `blueprint ${key} not found in ${this.bucket}`)
     const bytes = await res.Body.transformToByteArray()
     return Buffer.from(bytes)
@@ -162,9 +165,7 @@ export function readStorageEnv(env: NodeJS.ProcessEnv = process.env, tier: AppTi
   const spacesRegion = env.DO_SPACES_REGION?.trim() || 'tor1'
   return {
     tier,
-    blueprintStorageRoot: path.resolve(
-      env.BLUEPRINT_STORAGE_ROOT ?? path.join(process.cwd(), 'storage', 'blueprints'),
-    ),
+    blueprintStorageRoot: path.resolve(env.BLUEPRINT_STORAGE_ROOT ?? path.join(process.cwd(), 'storage', 'blueprints')),
     spacesBucket: env.DO_SPACES_BUCKET?.trim() || null,
     spacesKey: env.DO_SPACES_KEY?.trim() || null,
     spacesSecret: env.DO_SPACES_SECRET?.trim() || null,

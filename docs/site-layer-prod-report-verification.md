@@ -9,6 +9,7 @@
 ## Executive Summary
 
 The site-layer-prod-report.md is **95% accurate** with minor discrepancies in:
+
 1. **Postmark Pro pricing** (tier structure needs clarification)
 2. **Hatchet launch date** (March 24, not April 2025)
 3. **Procore market volume** (search shows $1T, report claims $1.7T)
@@ -23,25 +24,25 @@ The **infrastructure stack is sound**, the **technology recommendations are curr
 
 ### DigitalOcean Pricing (Core of Stack)
 
-| Component | Report Claim | Verified | Status | Notes |
-|-----------|--------------|----------|--------|-------|
-| Premium Intel 4vCPU/8GB Droplet | $48/mo | **Unconfirmed** | ⚠️ Ambiguous | Current DO pricing shows General Purpose 4vCPU/16GB at $126/mo and CPU-Opt 4vCPU/8GB at $84/mo. The exact "Premium Intel 4vCPU/8GB" doesn't exist on current pricing page. **Action:** Verify directly with DO support—this may be legacy naming or a regional variance. |
-| Managed Postgres 1GB shared | $15.23/mo | **$15.15/mo** | ✓ Current | Difference of $0.08/mo (negligible rounding) |
-| Managed Postgres 4GB dedicated | $61/mo | **$60.90/mo** | ✓ Current | Difference of $0.10/mo (negligible rounding) |
-| Managed Valkey 1GB | $15/mo | **$15/mo** | ✓ Current | Verified exact match |
-| Spaces 250GB + 1TB egress | $5/mo | **$5/mo** | ✓ Current | Verified exact match |
-| Weekly backups (20% of Droplet) | $9.60/mo | **20% of Droplet price** | ✓ Current | Verified: backups = 20% of Droplet cost. On a $48 droplet = $9.60/mo |
+| Component                       | Report Claim | Verified                 | Status       | Notes                                                                                                                                                                                                                                                                    |
+| ------------------------------- | ------------ | ------------------------ | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Premium Intel 4vCPU/8GB Droplet | $48/mo       | **Unconfirmed**          | ⚠️ Ambiguous | Current DO pricing shows General Purpose 4vCPU/16GB at $126/mo and CPU-Opt 4vCPU/8GB at $84/mo. The exact "Premium Intel 4vCPU/8GB" doesn't exist on current pricing page. **Action:** Verify directly with DO support—this may be legacy naming or a regional variance. |
+| Managed Postgres 1GB shared     | $15.23/mo    | **$15.15/mo**            | ✓ Current    | Difference of $0.08/mo (negligible rounding)                                                                                                                                                                                                                             |
+| Managed Postgres 4GB dedicated  | $61/mo       | **$60.90/mo**            | ✓ Current    | Difference of $0.10/mo (negligible rounding)                                                                                                                                                                                                                             |
+| Managed Valkey 1GB              | $15/mo       | **$15/mo**               | ✓ Current    | Verified exact match                                                                                                                                                                                                                                                     |
+| Spaces 250GB + 1TB egress       | $5/mo        | **$5/mo**                | ✓ Current    | Verified exact match                                                                                                                                                                                                                                                     |
+| Weekly backups (20% of Droplet) | $9.60/mo     | **20% of Droplet price** | ✓ Current    | Verified: backups = 20% of Droplet cost. On a $48 droplet = $9.60/mo                                                                                                                                                                                                     |
 
 **Recommendation:** Before committing to the $48 Droplet figure, ping DigitalOcean support to confirm current tier. If unavailable, substitute the CPU-Opt 4vCPU/8GB at $84/mo (higher cost but explicitly available).
 
 ### Alternative Providers
 
-| Provider | Report Claim | Current Verification | Status |
-|----------|--------------|----------------------|--------|
-| **Hetzner CPX21** | $14/mo post-April 2026 | 30-40% increase confirmed | ✓ Accurate (increase verified, exact new price hard to find) |
-| **Cloudflare R2** | ~$30 (2TB storage) | **$30.57** | ✓ Accurate |
-| **AWS S3 ca-central-1** | $951/mo (2TB/10TB egress) | Cannot independently verify | ⚠️ Plausible but unconfirmed |
-| **OVHcloud** | $6-20/mo + $59 storage (2TB/10TB) | Pricing page structure changed | ⚠️ Concept still valid, exact prices hard to extract |
+| Provider                | Report Claim                      | Current Verification           | Status                                                       |
+| ----------------------- | --------------------------------- | ------------------------------ | ------------------------------------------------------------ |
+| **Hetzner CPX21**       | $14/mo post-April 2026            | 30-40% increase confirmed      | ✓ Accurate (increase verified, exact new price hard to find) |
+| **Cloudflare R2**       | ~$30 (2TB storage)                | **$30.57**                     | ✓ Accurate                                                   |
+| **AWS S3 ca-central-1** | $951/mo (2TB/10TB egress)         | Cannot independently verify    | ⚠️ Plausible but unconfirmed                                 |
+| **OVHcloud**            | $6-20/mo + $59 storage (2TB/10TB) | Pricing page structure changed | ⚠️ Concept still valid, exact prices hard to extract         |
 
 **Key Finding:** The single-provider DigitalOcean bias is financially justified. All-in-one ecosystems (managed DB, storage, compute, redis) save operational complexity worth much more than the marginal cost.
 
@@ -51,12 +52,13 @@ The **infrastructure stack is sound**, the **technology recommendations are curr
 
 ### Critical Error Found: Postmark Pro Pricing
 
-| Service | Report Claim | Actual Current Pricing | Discrepancy |
-|---------|--------------|----------------------|-------------|
-| **Postmark Basic** | $15/mo (10K emails) | **$15/mo** | ✓ Correct |
-| **Postmark Pro** | $69/mo (50K emails) | **$16.50/mo** (starts at 10K emails) | ❌ **ERROR** |
+| Service            | Report Claim        | Actual Current Pricing               | Discrepancy  |
+| ------------------ | ------------------- | ------------------------------------ | ------------ |
+| **Postmark Basic** | $15/mo (10K emails) | **$15/mo**                           | ✓ Correct    |
+| **Postmark Pro**   | $69/mo (50K emails) | **$16.50/mo** (starts at 10K emails) | ❌ **ERROR** |
 
 **Issue:** Report states "Pro at $69/mo for 50K emails," but Postmark's actual tiers are:
+
 - Basic: $15/mo (10K emails)
 - Pro: $16.50/mo (10K emails, advanced features)
 - Escalation tiers: Custom pricing above 10K
@@ -65,24 +67,24 @@ The **infrastructure stack is sound**, the **technology recommendations are curr
 
 ### Other Third-Party Services (Verified)
 
-| Service | Claim | Status | Verification |
-|---------|-------|--------|--------------|
-| **Clerk free tier** | 10K MAU (conservative) | ✓ Better than reported | Actually **50K MAU free** — 5× upgrade from what report assumed. **This improves the economics significantly.** |
-| **Clerk Pro** | $25/mo | ✓ Current | Verified exact match |
-| **Sentry Team** | $26/mo (50K errors) | ✓ Current | Verified exact match |
-| **Grafana Cloud free** | 10K metrics, 50GB logs, 3 users | ✓ Current | Verified exact match |
-| **Resend Pro** | $20/mo (50K emails) | ✓ Current | Verified exact match |
-| **Hatchet Lite** | MIT, self-hosted | ✓ Current | Verified; running 200M+ tasks/month in production |
-| **Trigger.dev Pro** | $50/mo | ✓ Current | Verified exact match |
+| Service                | Claim                           | Status                 | Verification                                                                                                    |
+| ---------------------- | ------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------- |
+| **Clerk free tier**    | 10K MAU (conservative)          | ✓ Better than reported | Actually **50K MAU free** — 5× upgrade from what report assumed. **This improves the economics significantly.** |
+| **Clerk Pro**          | $25/mo                          | ✓ Current              | Verified exact match                                                                                            |
+| **Sentry Team**        | $26/mo (50K errors)             | ✓ Current              | Verified exact match                                                                                            |
+| **Grafana Cloud free** | 10K metrics, 50GB logs, 3 users | ✓ Current              | Verified exact match                                                                                            |
+| **Resend Pro**         | $20/mo (50K emails)             | ✓ Current              | Verified exact match                                                                                            |
+| **Hatchet Lite**       | MIT, self-hosted                | ✓ Current              | Verified; running 200M+ tasks/month in production                                                               |
+| **Trigger.dev Pro**    | $50/mo                          | ✓ Current              | Verified exact match                                                                                            |
 
 ### Service Status Updates (All Verified)
 
-| Service | Report Status | Verification | Notes |
-|---------|--------------|--------------|-------|
-| **Lucia Auth** | Deprecated | ✓ Confirmed | Fully deprecated as of March 2025 |
-| **MinIO CE** | Archived Feb 2026 | ✓ Confirmed | Feb 13, 2026; community forks exist |
-| **Highlight.io** | Shutdown Feb 28, 2026 | ✓ Confirmed | Migrated to LaunchDarkly Observability |
-| **SendGrid free tier** | Removed May 2025 | ✓ Confirmed | Actually July 26, 2025 (slightly later than reported) |
+| Service                | Report Status         | Verification | Notes                                                 |
+| ---------------------- | --------------------- | ------------ | ----------------------------------------------------- |
+| **Lucia Auth**         | Deprecated            | ✓ Confirmed  | Fully deprecated as of March 2025                     |
+| **MinIO CE**           | Archived Feb 2026     | ✓ Confirmed  | Feb 13, 2026; community forks exist                   |
+| **Highlight.io**       | Shutdown Feb 28, 2026 | ✓ Confirmed  | Migrated to LaunchDarkly Observability                |
+| **SendGrid free tier** | Removed May 2025      | ✓ Confirmed  | Actually July 26, 2025 (slightly later than reported) |
 
 ---
 
@@ -90,18 +92,19 @@ The **infrastructure stack is sound**, the **technology recommendations are curr
 
 ### CorePlus Metering
 
-| Claim | Report | Current (April 2026) | Accuracy |
-|-------|--------|----------------------|----------|
-| **Metering introduced** | 2024–2025 | July 28, 2025 (live date) | Partially accurate; more precise: announced May 2025, live July 28, 2025 |
-| **Builder tier credits** | 500K free CorePlus/mo | 500K credits/month | ✓ Verified |
-| **Silver tier** | $300/mo | $300/mo | ✓ Verified |
-| **minorversion=75** | Current standard | Mandatory as of Aug 1, 2025 | ✓ Verified |
+| Claim                    | Report                | Current (April 2026)        | Accuracy                                                                 |
+| ------------------------ | --------------------- | --------------------------- | ------------------------------------------------------------------------ |
+| **Metering introduced**  | 2024–2025             | July 28, 2025 (live date)   | Partially accurate; more precise: announced May 2025, live July 28, 2025 |
+| **Builder tier credits** | 500K free CorePlus/mo | 500K credits/month          | ✓ Verified                                                               |
+| **Silver tier**          | $300/mo               | $300/mo                     | ✓ Verified                                                               |
+| **minorversion=75**      | Current standard      | Mandatory as of Aug 1, 2025 | ✓ Verified                                                               |
 
 ### Refresh Token Policy (Change Since Report)
 
 **Report states:** "100-day expiry if not used"
 
-**Current policy (February 2026 update):** 
+**Current policy (February 2026 update):**
+
 - Rolling 100-day expiry still applies IF token is used at least every 100 days
 - **NEW:** Absolute 5-year maximum validity cap (tokens generated October 2023+ expire October 2028)
 
@@ -115,12 +118,12 @@ The **infrastructure stack is sound**, the **technology recommendations are curr
 
 ### Next.js 15
 
-| Claim | Current Status (April 2026) | Accuracy |
-|-------|---------------------------|----------|
+| Claim                                | Current Status (April 2026)                         | Accuracy   |
+| ------------------------------------ | --------------------------------------------------- | ---------- |
 | Production stable since October 2024 | v15.2.4 current; 5+ months production use confirmed | ✓ Verified |
-| React 19 support | Confirmed | ✓ Verified |
-| Turbopack stable in dev | Confirmed | ✓ Verified |
-| Standalone output mode current | Confirmed; VPS deployment path still valid | ✓ Verified |
+| React 19 support                     | Confirmed                                           | ✓ Verified |
+| Turbopack stable in dev              | Confirmed                                           | ✓ Verified |
+| Standalone output mode current       | Confirmed; VPS deployment path still valid          | ✓ Verified |
 
 **Assessment:** Next.js 15 remains the correct choice for this stack.
 
@@ -129,6 +132,7 @@ The **infrastructure stack is sound**, the **technology recommendations are curr
 **Claim:** "Drizzle passed Prisma in weekly npm downloads in late 2025"
 
 **Verification:**
+
 - Q1 2025: Prisma ~3.8M/week, Drizzle ~2.9M/week
 - Q4 2025: Prisma ~4.1M/week, Drizzle ~4.4M/week (crossover)
 - Q1 2026: Prisma ~4.3M/week, Drizzle ~5.1M/week
@@ -145,11 +149,11 @@ The **infrastructure stack is sound**, the **technology recommendations are curr
 
 ### Konva.js (react-konva)
 
-| Claim | Status | Verification |
-|-------|--------|--------------|
-| Production maturity | ✓ Current | v19.2.3 (updated Feb 2026), 14+ years active |
-| Coordinate system suitability | ✓ Verified | Used in production annotation/design tools |
-| MIT license | ✓ Verified | Confirmed |
+| Claim                         | Status     | Verification                                 |
+| ----------------------------- | ---------- | -------------------------------------------- |
+| Production maturity           | ✓ Current  | v19.2.3 (updated Feb 2026), 14+ years active |
+| Coordinate system suitability | ✓ Verified | Used in production annotation/design tools   |
+| MIT license                   | ✓ Verified | Confirmed                                    |
 
 **Assessment:** Konva is production-ready and the coordinate system discipline (PDF space vs canvas pixels) is sound.
 
@@ -189,13 +193,13 @@ The **infrastructure stack is sound**, the **technology recommendations are curr
 
 ## Summary of Accuracy by Section
 
-| Section | Accuracy | Confidence | Key Issues |
-|---------|----------|------------|-----------|
-| **Infrastructure Pricing** | 95% | High | DO Droplet tier naming ambiguous; pricing logic sound |
-| **Third-Party Services** | 92% | High | Postmark Pro pricing misstatement; Clerk tier better than reported |
-| **QBO API** | 90% | High | Refresh token 5-year cap not mentioned; otherwise accurate |
-| **Technology Stack** | 96% | High | PDF.js CAD % unverified; minor Hatchet date error |
-| **Competitive Landscape** | 85% | Medium | Procore $1.7T vs $1T discrepancy; Apryse pricing unverifiable |
+| Section                    | Accuracy | Confidence | Key Issues                                                         |
+| -------------------------- | -------- | ---------- | ------------------------------------------------------------------ |
+| **Infrastructure Pricing** | 95%      | High       | DO Droplet tier naming ambiguous; pricing logic sound              |
+| **Third-Party Services**   | 92%      | High       | Postmark Pro pricing misstatement; Clerk tier better than reported |
+| **QBO API**                | 90%      | High       | Refresh token 5-year cap not mentioned; otherwise accurate         |
+| **Technology Stack**       | 96%      | High       | PDF.js CAD % unverified; minor Hatchet date error                  |
+| **Competitive Landscape**  | 85%      | Medium     | Procore $1.7T vs $1T discrepancy; Apryse pricing unverifiable      |
 
 ---
 
@@ -227,4 +231,4 @@ The **infrastructure stack is sound**, the **technology recommendations are curr
 
 ---
 
-*Verification completed April 23, 2026. All links and pricing verified against live vendor pages on verification date.*
+_Verification completed April 23, 2026. All links and pricing verified against live vendor pages on verification date._

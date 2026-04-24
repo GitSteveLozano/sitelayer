@@ -4,7 +4,8 @@ import { loadAppConfig, postgresOptionsForTier, TierConfigError } from './index.
 const localDatabaseUrl = 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer'
 const prodDatabaseUrl = 'postgres://sitelayer_prod_app:secret@db.example.com:25060/sitelayer_prod?sslmode=require'
 const devDatabaseUrl = 'postgres://sitelayer_dev_app:secret@db.example.com:25060/sitelayer_dev?sslmode=require'
-const previewDatabaseUrl = 'postgres://sitelayer_preview_app:secret@db.example.com:25060/sitelayer_preview?sslmode=require'
+const previewDatabaseUrl =
+  'postgres://sitelayer_preview_app:secret@db.example.com:25060/sitelayer_preview?sslmode=require'
 const prodReadOnlyUrl = 'postgres://sitelayer_prod_ro:secret@db.example.com:25060/sitelayer_prod?sslmode=require'
 
 describe('loadAppConfig', () => {
@@ -55,6 +56,8 @@ describe('loadAppConfig', () => {
 describe('postgresOptionsForTier', () => {
   it('adds tier options without discarding existing options', () => {
     expect(postgresOptionsForTier('preview')).toBe('-c app.tier=preview')
-    expect(postgresOptionsForTier('prod', '-c statement_timeout=5000')).toBe('-c statement_timeout=5000 -c app.tier=prod')
+    expect(postgresOptionsForTier('prod', '-c statement_timeout=5000')).toBe(
+      '-c statement_timeout=5000 -c app.tier=prod',
+    )
   })
 })

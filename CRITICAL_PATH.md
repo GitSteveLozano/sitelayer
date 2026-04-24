@@ -11,6 +11,7 @@
 ## Current Status
 
 ### ✅ Completed
+
 - [x] Architecture documentation (CLAUDE.md)
 - [x] Tech stack evaluation (Node.js plain HTTP, React SPA, Postgres, Clerk, DO Spaces)
 - [x] Pilot setup plan (PILOT_SETUP_PLAN.md)
@@ -42,9 +43,11 @@
 - [x] Takeoff polygon annotations append to DB without replacing existing measurements
 
 ### ⏳ In Progress
+
 - [x] GitHub self-hosted preview runner registered on `sitelayer-preview`
 
 ### 🔴 Blockers for Pilot
+
 1. **Clerk auth integration** — hardcoded demo user blocks real multi-tenant onboarding.
 2. **DO Spaces/off-host file storage** — local blueprint persistence works, but off-host/object storage is still needed before customer data.
 3. **PDF viewer + annotation validation** — polygon drawing persists to DB and server-side geometry validation exists; still needs pilot-device validation against real PDFs.
@@ -54,14 +57,14 @@
 
 ## Mandatory Services (Can't Launch Without These)
 
-| Service | Cost | Time to Setup | Blocker If Missing |
-|---------|------|----------------|-------------------|
-| **DigitalOcean** (Droplet, DB, Spaces) | $73.75/mo | 1 hour | Yes — infrastructure required |
-| **Domain** (yourdomain.com) | ~$10/year | 10 min | Yes — DNS required for SSL |
-| **Clerk** | Free (pilot) | 20 min | Yes — auth required for multi-tenant |
-| **Intuit QBO** | Free | 15 min | Yes — integration required for sync |
-| **Sentry** | Free (pilot) | 10 min | No — nice to have for debugging |
-| **UptimeRobot** | Free | 10 min | No — useful for alerts |
+| Service                                | Cost         | Time to Setup | Blocker If Missing                   |
+| -------------------------------------- | ------------ | ------------- | ------------------------------------ |
+| **DigitalOcean** (Droplet, DB, Spaces) | $73.75/mo    | 1 hour        | Yes — infrastructure required        |
+| **Domain** (yourdomain.com)            | ~$10/year    | 10 min        | Yes — DNS required for SSL           |
+| **Clerk**                              | Free (pilot) | 20 min        | Yes — auth required for multi-tenant |
+| **Intuit QBO**                         | Free         | 15 min        | Yes — integration required for sync  |
+| **Sentry**                             | Free (pilot) | 10 min        | No — nice to have for debugging      |
+| **UptimeRobot**                        | Free         | 10 min        | No — useful for alerts               |
 
 **Total setup time:** ~2 hours  
 **Total cost:** ~$102/mo (infrastructure only; auth/observability/monitoring free)
@@ -138,19 +141,23 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 ## Week-by-Week Timeline
 
 ### Week 1
+
 - **Days 1-2:** Infrastructure setup (DO, Domain, Clerk, Intuit)
 - **Days 3-4:** Code changes 1-3 (Clerk auth, DO Spaces, PDF viewer)
 - **Day 5:** Deployment to Droplet + initial testing
 
 ### Week 2
+
 - **Days 1-3:** Code changes 4-5 (Job queue, observability) + refinement
 - **Days 4-5:** Full end-to-end test (upload → annotate → sync simulation)
 
 ### Week 3
+
 - **Days 1-2:** QBO sandbox integration testing
 - **Days 3-5:** Pilot customer prep + onboarding
 
 ### Weeks 4-6
+
 - **Weekly check-ins** with customer
 - **Bug fixes** as they arise
 - **Iterate** on UX based on feedback
@@ -177,6 +184,7 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 ## Cost Breakdown (Month 1 + Year 1)
 
 ### Month 1 (Pilot Setup)
+
 - DO Droplet 8GB: $48
 - DO Backups: $9.60
 - DO Postgres 1GB: $15.15
@@ -189,11 +197,13 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 - **Total:** ~$93.75 (or ~$108.75 with email)
 
 ### Year 1 (12 months of pilot)
+
 - Infrastructure: ~$102/mo × 12 = ~$1,224
 - Domain: ~$10/year
 - **Total:** ~$1,234
 
 ### Post-Pilot (5 customers)
+
 - Upgrade Postgres 4GB: $60.90/mo
 - Add Valkey cache: $15/mo
 - Postmark Basic: $15/mo (if not already)
@@ -204,26 +214,32 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 ## Key Decision Points
 
 ### 1. Job Queue: pg-boss vs Hatchet?
+
 **Recommendation:** **pg-boss** for MVP (free, Postgres-native, lightweight)
 
 **When to migrate:** Post-pilot, once you need:
+
 - Workflow orchestration (not just queue)
 - Distributed execution (multiple workers)
 - Audit trail of job executions
 - Then evaluate Hatchet ($0 for lite, $$$ for cloud)
 
 ### 2. Auth: Clerk vs Auth0 vs DIY?
+
 **Recommendation:** **Clerk** (multi-tenant built-in, no-code orgs)
 
-**Cost at scale:** 
+**Cost at scale:**
+
 - Pilot: Free
 - 100 users: ~$20/mo
 - 1000 users: ~$100/mo
 
 ### 3. Monitoring: Sentry vs DataDog vs Axiom?
+
 **Recommendation:** **Sentry** for now (free until 5K events/month)
 
 **Upgrade path:**
+
 - If errors > 5K/month: Consider Axiom ($20/mo) or DataDog ($100+/mo)
 - But unlikely at pilot scale
 
@@ -232,18 +248,21 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 ## Go/No-Go Decision Gates
 
 ### Gate 1: End of Week 1
+
 **Question:** Can we deploy app to Droplet and see homepage?  
 **Criterion:** `curl https://yourdomain.com` returns HTML  
 **If No:** Fix deployment issues (Caddy config, DNS, SSL cert)  
 **If Yes:** Proceed to code changes
 
 ### Gate 2: End of Week 2
+
 **Question:** Can customer sign in and upload a blueprint?  
 **Criterion:** Clerk OAuth works + DO Spaces has blueprint file  
 **If No:** Debug auth or file upload  
 **If Yes:** Proceed to annotation UI
 
 ### Gate 3: End of Week 3
+
 **Question:** Does full workflow work end-to-end without errors?  
 **Criterion:** Sentry shows zero errors in pilot user session  
 **If No:** Fix critical bugs, defer QBO sync  
@@ -267,13 +286,13 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 
 ## Documentation Reference
 
-| Document | Purpose | Audience |
-|-----------|---------|----------|
-| **CLAUDE.md** | Architecture, tech decisions, migration roadmap | You + future team |
-| **PILOT_SETUP_PLAN.md** | Detailed 9-phase plan with exact commands | Deployment guide |
-| **SERVICES_CHECKLIST.md** | Comprehensive checklist for all services + config | Verification |
-| **SERVICES_QUICK_START.md** | TL;DR for setup (7 services, 5 code changes) | Quick reference |
-| **CRITICAL_PATH.md** | This document — timeline, decisions, gates | Project planning |
+| Document                    | Purpose                                           | Audience          |
+| --------------------------- | ------------------------------------------------- | ----------------- |
+| **CLAUDE.md**               | Architecture, tech decisions, migration roadmap   | You + future team |
+| **PILOT_SETUP_PLAN.md**     | Detailed 9-phase plan with exact commands         | Deployment guide  |
+| **SERVICES_CHECKLIST.md**   | Comprehensive checklist for all services + config | Verification      |
+| **SERVICES_QUICK_START.md** | TL;DR for setup (7 services, 5 code changes)      | Quick reference   |
+| **CRITICAL_PATH.md**        | This document — timeline, decisions, gates        | Project planning  |
 
 ---
 

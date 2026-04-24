@@ -37,6 +37,7 @@ jq --version
 ## Step 1: Create DigitalOcean Infrastructure via doctl
 
 ### 1.1 Setup doctl
+
 ```bash
 # Create DO token: https://cloud.digitalocean.com/account/api/tokens
 # Then:
@@ -47,6 +48,7 @@ doctl account get
 ```
 
 ### 1.2 Create Droplet
+
 ```bash
 # List available sizes/regions
 doctl compute size list
@@ -67,6 +69,7 @@ DROPLET_IP=1.2.3.4
 ```
 
 ### 1.3 Create Database
+
 ```bash
 # Create managed Postgres 1GB in TOR1
 doctl databases create sitelayer-db \
@@ -82,6 +85,7 @@ doctl databases create sitelayer-db \
 ```
 
 ### 1.4 Create Spaces Bucket
+
 ```bash
 # Create Spaces bucket (S3-compatible)
 doctl compute spaces create sitelayer-blueprints --region tor1
@@ -99,6 +103,7 @@ doctl compute spaces create-key sitelayer-blueprints \
 ```
 
 ### 1.5 Assign Static IP
+
 ```bash
 # Create static IP in TOR1
 doctl compute reserved-ip create --region tor1 \
@@ -111,6 +116,7 @@ doctl compute reserved-ip assign $RESERVED_IP $DROPLET_ID
 ```
 
 ### 1.6 Create Firewall
+
 ```bash
 doctl compute firewall create sitelayer \
   --inbound-rules protocol:tcp,ports:22,sources.type:address,sources.addresses:YOUR_IP \
@@ -123,6 +129,7 @@ doctl compute firewall create sitelayer \
 ```
 
 ### 1.7 Enable Backups
+
 ```bash
 # Enable weekly backups on Droplet (20% of cost)
 doctl compute droplet-action enable-backups $DROPLET_ID
@@ -133,6 +140,7 @@ doctl compute droplet-action enable-backups $DROPLET_ID
 ## Step 2: Domain Registration & DNS (Varies by Registrar)
 
 **Porkbun CLI:**
+
 ```bash
 # Install porkbun CLI (requires Python)
 pip install porkbun-cli
@@ -153,6 +161,7 @@ porkbun dns-update sitelayer.com \
 ```
 
 **Cloudflare CLI:**
+
 ```bash
 # Install Cloudflare CLI
 npm install -g wrangler
@@ -164,6 +173,7 @@ wrangler login
 ```
 
 **Generic approach (works everywhere):**
+
 ```bash
 # Just use curl to update DNS via your registrar's API
 # Example: Namecheap, Route53, etc. all have REST APIs
@@ -175,6 +185,7 @@ wrangler login
 ## Step 3: Clerk Auth Setup via CLI
 
 ### 3.1 Create Clerk App
+
 ```bash
 # Install Clerk CLI
 npm install -g @clerk/cli
@@ -193,6 +204,7 @@ CLERK_SECRET_KEY=$(clerk apps list --format json | jq -r '.[] | select(.name=="s
 ```
 
 ### 3.2 Configure Organization Model
+
 ```bash
 # This part must be done in Clerk dashboard (no CLI support yet)
 # But you can do it in 2 minutes:
@@ -208,6 +220,7 @@ echo "export CLERK_SECRET_KEY=$CLERK_SECRET_KEY" >> ~/.env.sitelayer
 ```
 
 ### 3.3 Configure OAuth Providers (Optional but Recommended)
+
 ```bash
 # This also must be done in UI, but CLI can validate:
 clerk apps get sitelayer --format json | jq '.oauth_providers'
@@ -238,6 +251,7 @@ echo "export QBO_ENVIRONMENT=sandbox" >> ~/.env.sitelayer
 ## Step 5: Sentry Setup via CLI
 
 ### 5.1 Create Organization + Projects
+
 ```bash
 sentry login  # Opens browser
 
@@ -260,6 +274,7 @@ echo "export NEXT_PUBLIC_SENTRY_DSN=https://..." >> ~/.env.sitelayer
 ```
 
 ### 5.2 Configure Error Routing
+
 ```bash
 # Set up default error routing via API
 curl -X POST https://sentry.io/api/0/organizations/sitelayer/rules/ \
@@ -462,23 +477,23 @@ echo "4. Copy credentials to ~/.env.sitelayer"
 
 ## Summary: What's Automated vs Manual
 
-| Task | CLI | UI | Time |
-|------|-----|----|----|
-| Create Droplet | ✅ doctl | ❌ | 2 min |
-| Create Database | ✅ doctl | ❌ | 2 min |
-| Create Spaces bucket | ✅ doctl | ❌ | 1 min |
-| Assign static IP | ✅ doctl | ❌ | 1 min |
-| Setup firewall | ✅ doctl | ❌ | 1 min |
-| Enable backups | ✅ doctl | ❌ | 1 min |
-| Register domain | ✅ porkbun-cli | ❌ | 2 min |
-| Update DNS | ✅ CLI/API | ❌ | 1 min |
-| Create Clerk app | ✅ clerk-cli | ❌ | 1 min |
-| Configure org model | ❌ | ✅ | 2 min |
-| Configure OAuth providers | ❌ | ✅ | 2 min |
-| Create QBO app | ❌ | ✅ | 2 min |
-| Setup Sentry | ✅ sentry-cli | ⚠️ | 2 min |
-| Create UptimeRobot monitors | ✅ curl API | ❌ | 2 min |
-| Create Postmark account | ❌ | ✅ | 1 min |
+| Task                        | CLI            | UI  | Time  |
+| --------------------------- | -------------- | --- | ----- |
+| Create Droplet              | ✅ doctl       | ❌  | 2 min |
+| Create Database             | ✅ doctl       | ❌  | 2 min |
+| Create Spaces bucket        | ✅ doctl       | ❌  | 1 min |
+| Assign static IP            | ✅ doctl       | ❌  | 1 min |
+| Setup firewall              | ✅ doctl       | ❌  | 1 min |
+| Enable backups              | ✅ doctl       | ❌  | 1 min |
+| Register domain             | ✅ porkbun-cli | ❌  | 2 min |
+| Update DNS                  | ✅ CLI/API     | ❌  | 1 min |
+| Create Clerk app            | ✅ clerk-cli   | ❌  | 1 min |
+| Configure org model         | ❌             | ✅  | 2 min |
+| Configure OAuth providers   | ❌             | ✅  | 2 min |
+| Create QBO app              | ❌             | ✅  | 2 min |
+| Setup Sentry                | ✅ sentry-cli  | ⚠️  | 2 min |
+| Create UptimeRobot monitors | ✅ curl API    | ❌  | 2 min |
+| Create Postmark account     | ❌             | ✅  | 1 min |
 
 **Total automated:** ~18 minutes  
 **Total manual (UI):** ~9 minutes  

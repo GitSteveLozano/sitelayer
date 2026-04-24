@@ -10,6 +10,7 @@ This document is infrastructure inventory only. Deployment procedure lives in `D
 ## Infrastructure Details
 
 ### Droplet
+
 - **ID:** 566798325
 - **Name:** sitelayer
 - **Region:** Toronto (tor1)
@@ -21,6 +22,7 @@ This document is infrastructure inventory only. Deployment procedure lives in `D
 - **Cost:** ~$48/mo
 
 ### Preview Droplet
+
 - **ID:** 566806040
 - **Name:** sitelayer-preview
 - **Region:** Toronto (tor1)
@@ -39,6 +41,7 @@ This document is infrastructure inventory only. Deployment procedure lives in `D
 - **Smoke preview:** `https://main.preview.sitelayer.sandolab.xyz`
 
 ### Database
+
 - **ID:** 9948c96b-b6b6-45ad-adf7-d20e4c206c66
 - **Name:** sitelayer-db
 - **Engine:** PostgreSQL 18
@@ -55,6 +58,7 @@ This document is infrastructure inventory only. Deployment procedure lives in `D
 - **Backup status:** DigitalOcean managed backups are available. Independent logical backup timer is installed on production and uses `postgres:18-alpine` pg_dump.
 
 ### Firewall
+
 - **ID:** 63b5d4f6-0949-4658-ba91-48e119c53ee3
 - **Name:** sitelayer-tor
 - **Rules:** HTTP (80), HTTPS (443), SSH (22 from `50.71.113.46/32` and preview droplet `566806040`)
@@ -62,6 +66,7 @@ This document is infrastructure inventory only. Deployment procedure lives in `D
 - **Security note:** no public 3000/3001/etc. Production traffic enters through Caddy on 80/443 only.
 
 ### Preview Firewall
+
 - **ID:** 7a8f443e-cd74-4867-af8a-118559f33561
 - **Name:** sitelayer-preview
 - **Rules:** SSH (22) from `50.71.113.46/32`, HTTP (80), HTTPS (443)
@@ -75,22 +80,23 @@ This document is infrastructure inventory only. Deployment procedure lives in `D
 
 Add an A record to your Cloudflare zone (sandolab.xyz):
 
-| Type | Name      | Content       | Proxied |
-|------|-----------|---------------|---------|
+| Type | Name      | Content        | Proxied |
+| ---- | --------- | -------------- | ------- |
 | A    | sitelayer | 159.203.51.158 | No      |
 
 ⚠️ **Important:** Keep proxied = No (gray cloud) so Let's Encrypt certificate validation works.
 
 For preview deployments, add records under the main site hostname:
 
-| Type | Cloudflare Name       | Full Hostname                         | Content        | Proxied |
-|------|------------------------|---------------------------------------|----------------|---------|
-| A    | preview.sitelayer      | preview.sitelayer.sandolab.xyz       | 159.203.53.218 | No      |
-| A    | *.preview.sitelayer    | *.preview.sitelayer.sandolab.xyz     | 159.203.53.218 | No      |
+| Type | Cloudflare Name      | Full Hostname                     | Content        | Proxied |
+| ---- | -------------------- | --------------------------------- | -------------- | ------- |
+| A    | preview.sitelayer    | preview.sitelayer.sandolab.xyz    | 159.203.53.218 | No      |
+| A    | \*.preview.sitelayer | \*.preview.sitelayer.sandolab.xyz | 159.203.53.218 | No      |
 
 Keep preview records DNS-only initially. Traefik can request per-preview certificates through HTTP-01. If you later want orange-cloud proxying, switch after origin TLS is working and Cloudflare SSL mode is set deliberately.
 
 After DNS propagates (usually ~5 min):
+
 ```bash
 dig sitelayer.sandolab.xyz  # Should resolve to 159.203.51.158
 ```
@@ -141,6 +147,7 @@ DOMAIN=sitelayer.sandolab.xyz
 ## Manual Setup Required (9 minutes via UI)
 
 ### 1. Create DO Spaces Bucket (2 min)
+
 1. Go to https://cloud.digitalocean.com/spaces
 2. Click **Create Spaces Bucket**
 3. Name: `sitelayer-blueprints-prod` (or run `scripts/provision-spaces-buckets.sh` to create dev/preview/prod buckets)
@@ -151,6 +158,7 @@ DOMAIN=sitelayer.sandolab.xyz
 8. Copy the key and secret to your `.env`
 
 ### 2. Create Clerk Organization (2 min)
+
 1. Go to https://dashboard.clerk.com
 2. Create app (if not done): choose "Google OAuth + Email"
 3. Go to **JWT Templates** tab
@@ -163,6 +171,7 @@ DOMAIN=sitelayer.sandolab.xyz
 5. Copy Secret Key and Publishable Key to `.env`
 
 ### 3. Create Intuit QBO App (2 min)
+
 1. Go to https://developer.intuit.com
 2. Create app, choose "QuickBooks Online"
 3. Copy Client ID and Secret to `.env`
@@ -170,12 +179,14 @@ DOMAIN=sitelayer.sandolab.xyz
 5. Production redirect URI, after deployment exists: `https://sitelayer.sandolab.xyz/api/integrations/qbo/callback`
 
 ### 4. Create Sentry Projects (2 min)
+
 1. Go to https://sentry.io
 2. Create project → Node.js for backend
 3. Create project → React for frontend
 4. Copy DSNs to `.env`
 
 ### 5. UptimeRobot Monitors (optional, 1 min)
+
 1. Go to https://uptimerobot.com
 2. Add monitor: `https://sitelayer.sandolab.xyz`
 3. Add monitor: `https://sitelayer.sandolab.xyz/api/bootstrap`
@@ -192,6 +203,7 @@ ssh -i ~/.ssh/id_rsa ubuntu@159.203.51.158
 ```
 
 Once connected:
+
 ```bash
 # Update system
 sudo apt update && sudo apt upgrade -y
@@ -226,36 +238,40 @@ curl https://main.preview.sitelayer.sandolab.xyz/api/bootstrap
 
 ## Cost Summary (Month 1)
 
-| Service      | Cost   |
-|--------------|--------|
-| Droplet      | $48.00 |
-| Database     | $15.15 |
-| Reserved IP  | $3.60  |
-| Spaces       | $5.00  |
-| Domain       | $0.83  |
-| **Total**    | **$72.58** |
+| Service     | Cost       |
+| ----------- | ---------- |
+| Droplet     | $48.00     |
+| Database    | $15.15     |
+| Reserved IP | $3.60      |
+| Spaces      | $5.00      |
+| Domain      | $0.83      |
+| **Total**   | **$72.58** |
 
-*(Plus free tier: Clerk, Sentry, UptimeRobot, Intuit)*
+_(Plus free tier: Clerk, Sentry, UptimeRobot, Intuit)_
 
 ---
 
 ## Troubleshooting
 
 **Droplet not accessible:**
+
 - Check firewall rules in DO console
 - Verify DNS record in Cloudflare
 
 **Database connection fails:**
+
 - Ensure firewall allows egress to DigitalOcean (should be default)
 - Test: `psql $DATABASE_URL -c "SELECT 1;"`
 
 **SSL certificate fails:**
+
 - Ensure DNS is propagated and points to correct IP
 - Run: `dig sitelayer.sandolab.xyz` to verify
 
 ---
 
 **Automation Summary:**
+
 - ✅ Droplet created (5 min, automated)
 - ✅ Database created (5 min, automated)
 - ✅ Firewall configured (1 min, automated)

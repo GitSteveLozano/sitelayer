@@ -287,4 +287,3 @@ Primary screens:
 If a feature increases normalized cross-tool visibility without introducing new state ownership, it fits this architecture.
 
 If it turns the platform into a system of record for someone else’s data, it does not.
-

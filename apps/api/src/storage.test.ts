@@ -26,7 +26,9 @@ afterEach(async () => {
 
 describe('blueprint storage', () => {
   it('builds company-scoped keys with sanitized filenames', () => {
-    expect(buildBlueprintStorageKey('company-1', 'blueprint-1', '../bad plan.pdf')).toBe('company-1/blueprint-1/bad-plan.pdf')
+    expect(buildBlueprintStorageKey('company-1', 'blueprint-1', '../bad plan.pdf')).toBe(
+      'company-1/blueprint-1/bad-plan.pdf',
+    )
   })
 
   it('rejects storage paths outside the company scope', () => {
@@ -35,7 +37,9 @@ describe('blueprint storage', () => {
   })
 
   it('reads legacy absolute local paths as company-scoped keys', () => {
-    expect(assertKeyInCompany('company-1', '/app/storage/blueprints/company-1/blueprint-1/file.pdf')).toBe('company-1/blueprint-1/file.pdf')
+    expect(assertKeyInCompany('company-1', '/app/storage/blueprints/company-1/blueprint-1/file.pdf')).toBe(
+      'company-1/blueprint-1/file.pdf',
+    )
   })
 
   it('uses local filesystem storage when Spaces credentials are missing', async () => {
@@ -56,7 +60,9 @@ describe('blueprint storage', () => {
 
   it('defaults Spaces endpoint to Toronto and formats S3 copy source keys safely', () => {
     expect(readStorageEnv({}, 'prod').spacesEndpoint).toBe('https://tor1.digitaloceanspaces.com')
-    expect(formatS3CopySource('bucket', 'company id/blueprint 1/file #1.pdf')).toBe('bucket/company%20id/blueprint%201/file%20%231.pdf')
+    expect(formatS3CopySource('bucket', 'company id/blueprint 1/file #1.pdf')).toBe(
+      'bucket/company%20id/blueprint%201/file%20%231.pdf',
+    )
   })
 
   it('maps common blueprint MIME types', () => {

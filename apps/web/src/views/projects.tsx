@@ -1,8 +1,19 @@
 import { LA_TEMPLATE } from '@sitelayer/domain'
 import { apiDelete, apiPatch, apiPost } from '../api.js'
-import type { BonusRuleRow, BootstrapResponse, CompaniesResponse, PricingProfileRow, SessionResponse, WorkerRow } from '../api.js'
+import type {
+  BonusRuleRow,
+  BootstrapResponse,
+  CompaniesResponse,
+  PricingProfileRow,
+  SessionResponse,
+  WorkerRow,
+} from '../api.js'
 import { BonusRuleEditor, CustomerEditor, PricingProfileEditor, WorkerEditor } from '../components/operations.js'
 import { FormRow } from '../components/forms.js'
+import { Checkbox } from '../components/ui/checkbox.js'
+import { Input } from '../components/ui/input.js'
+import { Select } from '../components/ui/select.js'
+import { Textarea } from '../components/ui/textarea.js'
 import type { RunAction } from './types.js'
 
 type ProjectsViewProps = {
@@ -50,7 +61,8 @@ export function ProjectsView({
         <p className="eyebrow">Greenfield reset</p>
         <h1>Sitelayer</h1>
         <p className="lede">
-          A construction operations layer with a fixed workflow backbone, tenant-scoped data, and adapter-first integrations.
+          A construction operations layer with a fixed workflow backbone, tenant-scoped data, and adapter-first
+          integrations.
         </p>
         <p className="lede compact">
           Tenant: {bootstrap?.company.name ?? 'loading...'} · Template: {bootstrap?.template.name ?? LA_TEMPLATE.name}
@@ -81,7 +93,9 @@ export function ProjectsView({
 
       <section className="panel">
         <h2>Clerk Bridge</h2>
-        <p className="muted">The app speaks in Clerk-shaped user ids and company memberships, even while running locally.</p>
+        <p className="muted">
+          The app speaks in Clerk-shaped user ids and company memberships, even while running locally.
+        </p>
         <FormRow
           actionLabel="Load user"
           busy={busy === 'user'}
@@ -97,8 +111,8 @@ export function ProjectsView({
             )
           }
         >
-          <input name="user_id" defaultValue={userId} placeholder="Clerk user id" />
-          <input name="display_name" defaultValue={session?.user.id ?? userId} placeholder="Display name" disabled />
+          <Input name="user_id" defaultValue={userId} placeholder="Clerk user id" />
+          <Input name="display_name" defaultValue={session?.user.id ?? userId} placeholder="Display name" disabled />
         </FormRow>
       </section>
 
@@ -119,22 +133,30 @@ export function ProjectsView({
             )
           }
         >
-          <select name="company_slug" defaultValue={companySlug} onChange={(event) => setCompanySlug(event.target.value)}>
+          <Select
+            name="company_slug"
+            defaultValue={companySlug}
+            onChange={(event) => setCompanySlug(event.target.value)}
+          >
             {companies.map((company) => (
               <option key={company.id} value={company.slug}>
                 {company.name} · {company.slug}
               </option>
             ))}
-            {!companies.some((company) => company.slug === companySlug) ? <option value={companySlug}>{companySlug}</option> : null}
-          </select>
-          <input name="company_slug_manual" defaultValue={companySlug} placeholder="Or type a company slug" />
+            {!companies.some((company) => company.slug === companySlug) ? (
+              <option value={companySlug}>{companySlug}</option>
+            ) : null}
+          </Select>
+          <Input name="company_slug_manual" defaultValue={companySlug} placeholder="Or type a company slug" />
         </FormRow>
       </section>
 
       <section className="panel">
         <h2>Workflow Backbone</h2>
         <ol className="stages">
-          {bootstrap?.workflowStages?.map((stage) => <li key={stage}>{stage}</li>) ?? <li>Loading workflow stages...</li>}
+          {bootstrap?.workflowStages?.map((stage) => <li key={stage}>{stage}</li>) ?? (
+            <li>Loading workflow stages...</li>
+          )}
         </ol>
       </section>
 
@@ -187,8 +209,8 @@ export function ProjectsView({
             })
           }
         >
-          <input name="name" placeholder="Customer name" />
-          <input name="external_id" placeholder="External ID (optional)" />
+          <Input name="name" placeholder="Customer name" />
+          <Input name="external_id" placeholder="External ID (optional)" />
         </FormRow>
       </section>
 
@@ -216,7 +238,9 @@ export function ProjectsView({
                 }
                 onDelete={() =>
                   runAction(`customer:${customer.id}`, async () => {
-                    await apiDelete(`/api/customers/${customer.id}`, companySlug, { expected_version: customer.version })
+                    await apiDelete(`/api/customers/${customer.id}`, companySlug, {
+                      expected_version: customer.version,
+                    })
                   })
                 }
               />
@@ -249,19 +273,19 @@ export function ProjectsView({
             })
           }
         >
-          <input name="name" placeholder="Project name" />
-          <input name="customer_name" placeholder="Customer / builder" />
-          <select name="division_code" defaultValue={primaryDivision}>
+          <Input name="name" placeholder="Project name" />
+          <Input name="customer_name" placeholder="Customer / builder" />
+          <Select name="division_code" defaultValue={primaryDivision}>
             {divisions.map((division) => (
               <option key={division.code} value={division.code}>
                 {division.code} - {division.name}
               </option>
             ))}
-          </select>
-          <input name="bid_total" placeholder="Bid total" type="number" step="0.01" />
-          <input name="labor_rate" placeholder="Labor rate" type="number" step="0.01" defaultValue="38" />
-          <input name="target_sqft_per_hr" placeholder="Target sqft/hr" type="number" step="0.01" />
-          <input name="bonus_pool" placeholder="Bonus pool" type="number" step="0.01" />
+          </Select>
+          <Input name="bid_total" placeholder="Bid total" type="number" step="0.01" />
+          <Input name="labor_rate" placeholder="Labor rate" type="number" step="0.01" defaultValue="38" />
+          <Input name="target_sqft_per_hr" placeholder="Target sqft/hr" type="number" step="0.01" />
+          <Input name="bonus_pool" placeholder="Bonus pool" type="number" step="0.01" />
         </FormRow>
       </section>
 
@@ -283,8 +307,8 @@ export function ProjectsView({
             })
           }
         >
-          <input name="name" placeholder="Worker name" />
-          <input name="role" placeholder="Role" defaultValue="crew" />
+          <Input name="name" placeholder="Worker name" />
+          <Input name="role" placeholder="Role" defaultValue="crew" />
         </FormRow>
       </section>
 
@@ -342,12 +366,17 @@ export function ProjectsView({
               })
             }
           >
-            <input name="name" placeholder="Profile name" defaultValue="Default" />
+            <Input name="name" placeholder="Profile name" defaultValue="Default" />
             <label className="checkbox">
-              <input name="is_default" type="checkbox" defaultChecked />
+              <Checkbox name="is_default" type="checkbox" defaultChecked />
               <span>Default profile</span>
             </label>
-            <textarea name="config" placeholder={`{\n  "template": "la-default"\n}`} rows={4} defaultValue={JSON.stringify({ template: 'la-default' }, null, 2)} />
+            <Textarea
+              name="config"
+              placeholder={`{\n  "template": "la-default"\n}`}
+              rows={4}
+              defaultValue={JSON.stringify({ template: 'la-default' }, null, 2)}
+            />
           </FormRow>
           <ul className="list compact">
             {pricingProfiles.map((profile) => (
@@ -373,7 +402,9 @@ export function ProjectsView({
                   }
                   onDelete={() =>
                     runAction(`pricing-profile:${profile.id}`, async () => {
-                      await apiDelete(`/api/pricing-profiles/${profile.id}`, companySlug, { expected_version: profile.version })
+                      await apiDelete(`/api/pricing-profiles/${profile.id}`, companySlug, {
+                        expected_version: profile.version,
+                      })
                     })
                   }
                 />
@@ -403,12 +434,12 @@ export function ProjectsView({
               })
             }
           >
-            <input name="name" placeholder="Rule name" defaultValue="Default Margin Bonus" />
+            <Input name="name" placeholder="Rule name" defaultValue="Default Margin Bonus" />
             <label className="checkbox">
-              <input name="is_active" type="checkbox" defaultChecked />
+              <Checkbox name="is_active" type="checkbox" defaultChecked />
               <span>Active rule</span>
             </label>
-            <textarea
+            <Textarea
               name="config"
               placeholder={`{\n  "basis": "margin",\n  "threshold": 0.15\n}`}
               rows={4}

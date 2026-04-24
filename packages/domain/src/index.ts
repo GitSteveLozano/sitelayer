@@ -1,10 +1,4 @@
-export type WorkflowStage =
-  | 'foundation'
-  | 'takeoff'
-  | 'field'
-  | 'sync'
-  | 'analytics'
-  | 'extensions'
+export type WorkflowStage = 'foundation' | 'takeoff' | 'field' | 'sync' | 'analytics' | 'extensions'
 
 export interface TenantTemplate {
   slug: string
@@ -57,14 +51,7 @@ export interface PolygonGeometry {
   calibration_unit?: string | null
 }
 
-export const WORKFLOW_STAGES: WorkflowStage[] = [
-  'foundation',
-  'takeoff',
-  'field',
-  'sync',
-  'analytics',
-  'extensions',
-]
+export const WORKFLOW_STAGES: WorkflowStage[] = ['foundation', 'takeoff', 'field', 'sync', 'analytics', 'extensions']
 
 export const LA_TEMPLATE: TenantTemplate = {
   slug: 'la-operations',
@@ -104,9 +91,9 @@ export const DEFAULT_BONUS_RULE = {
   threshold: 0.15,
   tiers: [
     { minMargin: 0.15, payoutPercent: 0.04 },
-    { minMargin: 0.20, payoutPercent: 0.09 },
+    { minMargin: 0.2, payoutPercent: 0.09 },
     { minMargin: 0.25, payoutPercent: 0.14 },
-    { minMargin: 0.30, payoutPercent: 0.19 },
+    { minMargin: 0.3, payoutPercent: 0.19 },
   ],
 } as const
 

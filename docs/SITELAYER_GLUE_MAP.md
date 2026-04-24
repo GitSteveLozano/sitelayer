@@ -1,4 +1,5 @@
 # SITELAYER GLUE OPPORTUNITY MAP
+
 **Synthesized from API research — April 2026**
 **Audience: Sitelayer founder. No softening. No fluff.**
 
@@ -14,7 +15,7 @@ Why glue works for construction SMB specifically:
 
 1. **Tool proliferation is real and permanent.** A 50-person stucco subcontractor runs QBO, QB Time, Workyard, STACK, DocuSign or PandaDoc, Google Drive, and maybe CompanyCam. None of these talk to each other in any meaningful analytic way. The contractor's PM lives in their head, not in any of these tools.
 
-2. **The insight gap is the moat.** APIs let you pull data. But pulling data is table stakes — any developer can do it. The moat is what you *do* with the data: normalized job IDs across systems, estimated vs. actual labor in the same view, division-level margin by pulling QBO classes and time data together. None of those tools will build this for you. They have no incentive to — cross-tool insight undermines each platform's stickiness.
+2. **The insight gap is the moat.** APIs let you pull data. But pulling data is table stakes — any developer can do it. The moat is what you _do_ with the data: normalized job IDs across systems, estimated vs. actual labor in the same view, division-level margin by pulling QBO classes and time data together. None of those tools will build this for you. They have no incentive to — cross-tool insight undermines each platform's stickiness.
 
 3. **Benchmark data is the long-term moat.** Once Sitelayer has normalized job-cost and time data across 200 subcontractors, you can tell a stucco contractor in Calgary whether their $28/sqft labor cost for EIFS is high or low for their market segment. No individual tool can do this. AI cannot replicate it without the underlying data. This is the real play.
 
@@ -26,62 +27,62 @@ Why glue works for construction SMB specifically:
 
 Sorted by highest Value / lowest Effort first. This is the prioritization lens.
 
-| Tool | Category | API Quality (1–5) | Integration Effort (days) | Data Freshness | Gotcha Level | Sitelayer Value (1–5) |
-|------|----------|--------------------|--------------------------|---------------|--------------|----------------------|
-| QuickBooks Online | Accounting | 5 | 3–5 | Webhooks + CDC (excellent) | Low | 5 |
-| Xero | Accounting | 5 | 3–5 | Webhooks + modified filter | Low | 5 |
-| QB Time (TSheets) | Time tracking | 4 | 2–4 | Polling (last_modified) | Low | 5 |
-| ClockShark | Time tracking | 3 | 3–7 | Polling | Low | 4 |
-| Workyard | Time tracking | 4 | 5–10 | Polling (60 req/min limit) | Low | 4 |
-| CompanyCam | Photos/docs | 4 | 3–7 | Webhooks (via Make confirmed) | Low | 3 |
-| STACK | Takeoff/estimating | 4 | 3–5 | Polling | Low | 4 |
-| Procore | PM platform | 5 | 5–10 | Webhooks (full) | Low | 4 |
-| Dropbox Sign | E-signature | 4 | 1–2 | Webhooks | Low | 4 |
-| PandaDoc | E-signature | 4 | 1–3 | Webhooks | Low | 4 |
-| HubSpot | CRM | 5 | 1–2 | Webhooks | Low | 3 |
-| Pipedrive | CRM | 4 | 1–2 | Webhooks | Low | 3 |
-| Samsara | Fleet/GPS | 5 | 2–3 | Webhooks (beta) | Low | 3 |
-| Google Drive | File storage | 5 | 1–2 | Webhooks (files.watch) | Low | 3 |
-| Dropbox | File storage | 4 | 1–2 | Webhooks | Low | 3 |
-| OneDrive/SharePoint | File storage | 4 | 2–3 | Webhooks (delta) | Low | 3 |
-| Buildxact | Estimating | 4 | 3–5 | Polling (100 req/30s) | Low | 3 |
-| BILL (bill.com) | AP/payments | 4 | 2–3 | Polling | Low | 3 |
-| Ramp | Corporate card | 4 | 2–3 | Polling | Low | 3 |
-| SafetyCulture | Safety | 4 | 5–10 | Webhooks | Medium | 2 |
-| Motive | Fleet/GPS | 4 | 2–3 | Webhooks | Low | 3 |
-| Fleetio | Fleet/equipment | 4 | 1–2 | Webhooks (plan-dependent) | Low | 3 |
-| JobTread | PM/CRM | 3 | 5–10 | Webhooks (confirmed) | Low | 3 |
-| Raken | Daily reports | 3 | 7–14 | Polling (portal blocked) | Medium | 3 |
-| Bluebeam Studio | Takeoff/docs | 3 | 7–14 | Polling (no webhooks) | Medium | 3 |
-| Followup CRM | CRM | 3 | 2–3 | Polling (no webhooks confirmed) | Low | 2 |
-| AccuLynx | CRM | 3 | 2–3 | Polling | Medium | 2 |
-| DocuSign | E-signature | 3 | 2–4 | Webhooks (Business Pro req.) | Medium | 4 |
-| Adobe Sign | E-signature | 3 | 2–3 | Webhooks | Low | 3 |
-| Gusto | Payroll | 3 | 5–10 (after partner approval) | Webhooks | Medium | 3 |
-| Sage Intacct | Accounting | 3 | 7–14 | Polling (no webhooks) | Medium | 3 |
-| Paychex Flex | Payroll | 3 | 7–14 | Polling/limited webhooks | Medium | 2 |
-| BuildingConnected | Bid platform | 3 | 7–14 | Webhooks (contacts nightly) | Medium | 2 |
-| Rippling | HR/Payroll | 3 | 7–14 | Webhooks | Medium | 2 |
-| busybusy | Time tracking | 2 | 10–20 | Zapier only | High | 3 |
-| SiteDocs | Safety | 2 | 3–5 (token provisioning) | Polling | Medium | 2 |
-| Fieldwire | Field mgmt | 2 | 7–14 (enterprise add-on req.) | Webhooks (once unlocked) | High | 2 |
-| Kreo | Takeoff/AI | 2 | 3–5 (contact required) | Polling | Medium | 3 |
-| Verizon Connect | Fleet | 2 | 3–5 | Polling | Medium | 2 |
-| NetSuite | Accounting | 3 | 14–21 | Polling (no webhooks) | Medium | 2 |
-| WorkMax | Time tracking | 2 | 10–20 | Polling | High | 2 |
-| Sage 100 Contractor | Accounting | 1 | 10–15 (Ei Dynamics req.) | Polling | High | 2 |
-| ADP | Payroll | 1 | 20–30 | Limited webhooks | Blocker | 2 |
-| Sage 300 CRE | Accounting | 1 | 15–30+ (agent install req.) | Polling | Blocker | 2 |
-| Foundation Software | Accounting | 1 | 20–40 (partnership req.) | None | Blocker | 1 |
-| Buildertrend | PM platform | 1 | Not feasible (no public API) | None | Blocker | 0 |
-| PlanSwift | Takeoff | 1 | Export-only | None | Blocker | 0 |
-| Melio | Payments | 1 | Not feasible | None | Blocker | 0 |
-| Stampli | AP automation | 1 | Not feasible | None | Blocker | 0 |
-| AvidXchange | AP automation | 1 | Not feasible | None | Blocker | 0 |
-| Siteline | Billing | 1 | Not feasible | None | Blocker | 0 |
-| Paycom | Payroll | 1 | Not feasible | None | Blocker | 0 |
-| eBacon | Payroll | 1 | Not feasible | None | Blocker | 0 |
-| Home Depot Pro | Supply | 1 | Not feasible | None | Blocker | 0 |
+| Tool                | Category           | API Quality (1–5) | Integration Effort (days)     | Data Freshness                  | Gotcha Level | Sitelayer Value (1–5) |
+| ------------------- | ------------------ | ----------------- | ----------------------------- | ------------------------------- | ------------ | --------------------- |
+| QuickBooks Online   | Accounting         | 5                 | 3–5                           | Webhooks + CDC (excellent)      | Low          | 5                     |
+| Xero                | Accounting         | 5                 | 3–5                           | Webhooks + modified filter      | Low          | 5                     |
+| QB Time (TSheets)   | Time tracking      | 4                 | 2–4                           | Polling (last_modified)         | Low          | 5                     |
+| ClockShark          | Time tracking      | 3                 | 3–7                           | Polling                         | Low          | 4                     |
+| Workyard            | Time tracking      | 4                 | 5–10                          | Polling (60 req/min limit)      | Low          | 4                     |
+| CompanyCam          | Photos/docs        | 4                 | 3–7                           | Webhooks (via Make confirmed)   | Low          | 3                     |
+| STACK               | Takeoff/estimating | 4                 | 3–5                           | Polling                         | Low          | 4                     |
+| Procore             | PM platform        | 5                 | 5–10                          | Webhooks (full)                 | Low          | 4                     |
+| Dropbox Sign        | E-signature        | 4                 | 1–2                           | Webhooks                        | Low          | 4                     |
+| PandaDoc            | E-signature        | 4                 | 1–3                           | Webhooks                        | Low          | 4                     |
+| HubSpot             | CRM                | 5                 | 1–2                           | Webhooks                        | Low          | 3                     |
+| Pipedrive           | CRM                | 4                 | 1–2                           | Webhooks                        | Low          | 3                     |
+| Samsara             | Fleet/GPS          | 5                 | 2–3                           | Webhooks (beta)                 | Low          | 3                     |
+| Google Drive        | File storage       | 5                 | 1–2                           | Webhooks (files.watch)          | Low          | 3                     |
+| Dropbox             | File storage       | 4                 | 1–2                           | Webhooks                        | Low          | 3                     |
+| OneDrive/SharePoint | File storage       | 4                 | 2–3                           | Webhooks (delta)                | Low          | 3                     |
+| Buildxact           | Estimating         | 4                 | 3–5                           | Polling (100 req/30s)           | Low          | 3                     |
+| BILL (bill.com)     | AP/payments        | 4                 | 2–3                           | Polling                         | Low          | 3                     |
+| Ramp                | Corporate card     | 4                 | 2–3                           | Polling                         | Low          | 3                     |
+| SafetyCulture       | Safety             | 4                 | 5–10                          | Webhooks                        | Medium       | 2                     |
+| Motive              | Fleet/GPS          | 4                 | 2–3                           | Webhooks                        | Low          | 3                     |
+| Fleetio             | Fleet/equipment    | 4                 | 1–2                           | Webhooks (plan-dependent)       | Low          | 3                     |
+| JobTread            | PM/CRM             | 3                 | 5–10                          | Webhooks (confirmed)            | Low          | 3                     |
+| Raken               | Daily reports      | 3                 | 7–14                          | Polling (portal blocked)        | Medium       | 3                     |
+| Bluebeam Studio     | Takeoff/docs       | 3                 | 7–14                          | Polling (no webhooks)           | Medium       | 3                     |
+| Followup CRM        | CRM                | 3                 | 2–3                           | Polling (no webhooks confirmed) | Low          | 2                     |
+| AccuLynx            | CRM                | 3                 | 2–3                           | Polling                         | Medium       | 2                     |
+| DocuSign            | E-signature        | 3                 | 2–4                           | Webhooks (Business Pro req.)    | Medium       | 4                     |
+| Adobe Sign          | E-signature        | 3                 | 2–3                           | Webhooks                        | Low          | 3                     |
+| Gusto               | Payroll            | 3                 | 5–10 (after partner approval) | Webhooks                        | Medium       | 3                     |
+| Sage Intacct        | Accounting         | 3                 | 7–14                          | Polling (no webhooks)           | Medium       | 3                     |
+| Paychex Flex        | Payroll            | 3                 | 7–14                          | Polling/limited webhooks        | Medium       | 2                     |
+| BuildingConnected   | Bid platform       | 3                 | 7–14                          | Webhooks (contacts nightly)     | Medium       | 2                     |
+| Rippling            | HR/Payroll         | 3                 | 7–14                          | Webhooks                        | Medium       | 2                     |
+| busybusy            | Time tracking      | 2                 | 10–20                         | Zapier only                     | High         | 3                     |
+| SiteDocs            | Safety             | 2                 | 3–5 (token provisioning)      | Polling                         | Medium       | 2                     |
+| Fieldwire           | Field mgmt         | 2                 | 7–14 (enterprise add-on req.) | Webhooks (once unlocked)        | High         | 2                     |
+| Kreo                | Takeoff/AI         | 2                 | 3–5 (contact required)        | Polling                         | Medium       | 3                     |
+| Verizon Connect     | Fleet              | 2                 | 3–5                           | Polling                         | Medium       | 2                     |
+| NetSuite            | Accounting         | 3                 | 14–21                         | Polling (no webhooks)           | Medium       | 2                     |
+| WorkMax             | Time tracking      | 2                 | 10–20                         | Polling                         | High         | 2                     |
+| Sage 100 Contractor | Accounting         | 1                 | 10–15 (Ei Dynamics req.)      | Polling                         | High         | 2                     |
+| ADP                 | Payroll            | 1                 | 20–30                         | Limited webhooks                | Blocker      | 2                     |
+| Sage 300 CRE        | Accounting         | 1                 | 15–30+ (agent install req.)   | Polling                         | Blocker      | 2                     |
+| Foundation Software | Accounting         | 1                 | 20–40 (partnership req.)      | None                            | Blocker      | 1                     |
+| Buildertrend        | PM platform        | 1                 | Not feasible (no public API)  | None                            | Blocker      | 0                     |
+| PlanSwift           | Takeoff            | 1                 | Export-only                   | None                            | Blocker      | 0                     |
+| Melio               | Payments           | 1                 | Not feasible                  | None                            | Blocker      | 0                     |
+| Stampli             | AP automation      | 1                 | Not feasible                  | None                            | Blocker      | 0                     |
+| AvidXchange         | AP automation      | 1                 | Not feasible                  | None                            | Blocker      | 0                     |
+| Siteline            | Billing            | 1                 | Not feasible                  | None                            | Blocker      | 0                     |
+| Paycom              | Payroll            | 1                 | Not feasible                  | None                            | Blocker      | 0                     |
+| eBacon              | Payroll            | 1                 | Not feasible                  | None                            | Blocker      | 0                     |
+| Home Depot Pro      | Supply             | 1                 | Not feasible                  | None                            | Blocker      | 0                     |
 
 ---
 
@@ -178,6 +179,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 1: Unified Job Margin View
+
 **Sources:** QBO (or Xero) + QB Time (or ClockShark/Workyard)
 **Derived output:** Per-job view showing: estimated amount (from QBO Estimate), billed-to-date (Invoices), costs incurred (Bills), and labor hours + imputed labor cost (time data × loaded labor rate). Net margin per job updated on a configurable schedule.
 
@@ -196,6 +198,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 2: Division/Class-Based Margin Rollup
+
 **Sources:** QBO or Xero (Classes/Tracking Categories required)
 **Derived output:** Margin by division for the current period and trailing 12 months. Revenue, direct costs, indirect allocations, and gross margin % per division — the view a CFO would build in Excel from QBO class reports but with no manual work.
 
@@ -214,6 +217,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 3: Change Order Reconciliation
+
 **Sources:** DocuSign / Dropbox Sign / PandaDoc + QBO or Xero
 **Derived output:** A reconciliation table: executed change orders (from e-sig) matched against invoices (from accounting). Unmatched COs (executed but not yet invoiced) flagged as uncaptured revenue.
 
@@ -232,6 +236,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 4: Field Hours → Cost Code Reconciliation
+
 **Sources:** Workyard / ClockShark / QB Time + QBO job list
 **Derived output:** Time entries from the field tool, mapped to QBO job codes, ready to push to payroll. Shows hours by employee by job by cost code, with a flag on any entry that has no matching QBO job.
 
@@ -250,6 +255,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 5: Daily Burn-Rate Alert
+
 **Sources:** QBO (or Xero) Bills + QB Time (or equivalent) hours
 **Derived output:** For open jobs, a running cost burn rate (committed costs + accrued labor) vs. the estimated budget. Alert when burn rate implies overrun of >15% (configurable threshold).
 
@@ -268,6 +274,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 6: Bonus Pool Calculator
+
 **Sources:** QBO Classes/Xero Tracking Categories + QB Time labor data
 **Derived output:** Per-division gross margin and labor cost for the period. Apply a configurable bonus formula (e.g., 20% of net profit above threshold, split by labor hours contributed) to produce a bonus pool allocation per employee.
 
@@ -286,6 +293,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 7: Assembly-Level Bid vs. Actual
+
 **Sources:** STACK (or Bluebeam + BAX) + QBO actuals
 **Derived output:** Takeoff line items (estimated quantities and costs per assembly/phase) matched against QBO job costs. Variance by assembly: e.g., "EIFS base coat — estimated $18,400, actual $22,100, +20% over."
 
@@ -306,6 +314,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 8: Labor Productivity Benchmarking
+
 **Sources:** QB Time / Workyard / ClockShark + QBO job metadata + STACK (optional)
 **Derived output:** Hours per unit of work across jobs. Example: average hours per 1,000 sqft of EIFS on multi-story residential, trailing 6 jobs. Highlights which jobs ran efficiently and which didn't.
 
@@ -324,6 +333,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 9: Blueprint Version Tracking
+
 **Sources:** Google Drive / Dropbox / OneDrive (webhook on file change)
 **Derived output:** A per-job log of when drawing files changed, with version history. Alert when a file in a project folder is replaced.
 
@@ -342,6 +352,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 10: Photo + Daily Report Audit Trail
+
 **Sources:** CompanyCam photos + Raken or SafetyCulture daily reports
 **Derived output:** Per-job evidence timeline: daily reports aggregated with geotagged photos, showing what work was done, when, by which crew, with visual documentation.
 
@@ -360,6 +371,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 11: Equipment Utilization per Job
+
 **Sources:** Samsara / Motive / Fleetio + QBO job list + time entries (optional)
 **Derived output:** Hours of GPS-confirmed equipment presence at each job site, mapped to QBO jobs, with imputed equipment cost allocation.
 
@@ -378,6 +390,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 12: Bid Pipeline Visibility
+
 **Sources:** HubSpot / Pipedrive / Followup CRM + BuildingConnected (optional)
 **Derived output:** Bid win rate by GC, by project type, by trade. Weighted pipeline value. Backlog forecast.
 
@@ -396,6 +409,7 @@ These are the 6 integrations Sitelayer builds first. The selection criterion is 
 ---
 
 ### Workflow 13: Supplier Invoice Allocation Helper
+
 **Sources:** QBO Bills + job context (from QBO)
 **Derived output:** For bills that span multiple jobs, a UI to allocate the bill across jobs by percentage or amount. One-time write-back (the only exception to no-write-back, justified because the alternative is the customer doing this manually in QBO with higher error rate).
 
@@ -424,18 +438,23 @@ For Canadian construction, the equivalent workflow would be: pull hours by emplo
 ## 5. Integration Combinations That Unlock Outsized Value
 
 ### Combo 1: STACK + QBO + QB Time = Closed-Loop Estimating
+
 The estimate in STACK gives you quantities and budget. QBO gives you what was actually spent. QB Time gives you actual labor hours. Together, these three produce an assembly-level performance view: estimated cost, actual cost, estimated hours, actual hours, variance. This is the information a superintendent needs to improve the next bid. None of these tools can produce it alone, and none of them are trying to. Effort to reach this view: 12–18 days of integration + 5–8 days of workflow UI. This is the first "wow" demo for a Bluebeam-or-STACK customer.
 
 ### Combo 2: QBO + QB Time + Division Classes = Bonus Calculator
+
 For L&A specifically: division-level margin (QBO Classes) + per-division labor hours (QB Time job codes mapped to divisions) + configurable bonus formula = the bonus pool prep report. The founder can walk into the quarterly review with a number instead of a spreadsheet. Effort: 8–12 days incremental after QBO and QB Time are live.
 
 ### Combo 3: Xero + ClockShark + STACK = Xero Customer Equivalent of Combo 1
+
 For customers not on the Intuit stack. Xero Tracking Categories replace QBO Classes. ClockShark replaces QB Time. STACK stays the same. Build this after Combo 1 is proven — the architecture is nearly identical, just different adapters.
 
 ### Combo 4: DocuSign (or Dropbox Sign) + QBO = Change Order Integrity
+
 Executed COs in e-sig are matched to invoices in QBO. Any CO signed more than 30 days ago with no corresponding invoice in QBO is flagged. This is a high-value, low-engineering alert for accounts receivable staff. Effort: 4–6 days incremental after both integrations are live.
 
 ### Combo 5: Procore + QBO + CompanyCam = Subcontractor-Facing-GC Workflow
+
 For subcontractors whose GC runs Procore, this is the most complete workflow: pull the approved budget and RFIs from Procore, match invoices in QBO, attach CompanyCam photos to the job record. The subcontractor has a single view of everything related to a GC job. Effort: 15–20 days (Procore integration is 5–10 days alone, data model is complex). This is a Tier 2 build, not Day 1.
 
 ---
@@ -503,11 +522,13 @@ Starting assumption: VPS stack is live (Next.js + DigitalOcean + Hatchet + Clerk
 ### Month 1: Accounting Foundation
 
 **Build:**
+
 - QBO integration: OAuth, CDC sync, Invoices, Bills, Estimates, Classes, Time Activities, Customers, Vendors. Webhook handler. Token refresh lifecycle.
 - Xero integration: OAuth, modified-since sync, Invoices, Bills, Quotes, Tracking Categories. Webhook handler.
 - Internal job normalization layer: every downstream workflow depends on having a stable job identifier that maps across tools. Build this data model now, not later.
 
 **Ship to customers:**
+
 - Division margin view (QBO Classes / Xero Tracking Categories)
 - Job cost summary: estimated vs. billed vs. cost per job
 - Invoice aging per job
@@ -519,10 +540,12 @@ Starting assumption: VPS stack is live (Next.js + DigitalOcean + Hatchet + Clerk
 ### Month 2: Labor Data
 
 **Build:**
+
 - QB Time integration: OAuth, timesheets, job code assignments, GPS geolocation pulls. Job code → QBO job mapping layer (semi-automatic with customer review).
 - ClockShark integration: API key pull, timesheets, jobs, cost codes. Same mapping layer.
 
 **Ship to customers:**
+
 - Labor hours by job (job cost view now includes hours alongside dollars)
 - Field hours → cost code reconciliation export (weekly CSV for payroll review)
 - Daily burn-rate alert (basic version: committed costs + estimated accrued labor vs. budget)
@@ -532,15 +555,18 @@ Starting assumption: VPS stack is live (Next.js + DigitalOcean + Hatchet + Clerk
 ### Month 3: E-Signature and Change Orders
 
 **Build:**
+
 - Dropbox Sign integration: API key, signature requests, signed document download, webhooks.
 - PandaDoc integration: OAuth, documents, status, webhooks.
 - Change order reconciliation workflow: executed CO matching vs. QBO invoices, unmatched CO alert.
 
 **Ship to customers:**
+
 - Change order reconciliation table (live, updated via webhooks)
 - Executed CO list per job with invoice match status
 
 **Optional if demand exists:**
+
 - DocuSign integration (adds 2–4 days, only build if specific customers are on DocuSign Business Pro)
 
 ---
@@ -548,11 +574,13 @@ Starting assumption: VPS stack is live (Next.js + DigitalOcean + Hatchet + Clerk
 ### Month 4: Takeoff + Estimating
 
 **Build:**
+
 - STACK integration: OAuth, project list, takeoff line items, estimate proposals.
 - Assembly-to-cost-code mapping UI: one-time setup per customer.
 - File upload path for Bluebeam: CSV/Excel export from Bluebeam ingested as estimate baseline.
 
 **Ship to customers:**
+
 - Assembly-level bid vs. actual (for STACK customers)
 - Estimated vs. actual variance table per assembly
 - Bluebeam file upload workflow (manual, not API-based)
@@ -562,11 +590,13 @@ Starting assumption: VPS stack is live (Next.js + DigitalOcean + Hatchet + Clerk
 ### Month 5: Bonus Calculator + Advanced Labor Analytics
 
 **Build:**
+
 - Bonus pool calculator: configuration UI for formula (margin threshold, bonus rate, division split method), calculation engine, output CSV.
 - Labor productivity metrics: hours per unit of work (requires customer to input job scope in Sitelayer).
 - Workyard integration (if customer base justifies): bearer token, time cards, projects, cost codes.
 
 **Ship to customers:**
+
 - Bonus pool calculator (live demo to L&A equivalent customers immediately)
 - Labor productivity view (per-job hours vs. customer's own average)
 
@@ -575,15 +605,18 @@ Starting assumption: VPS stack is live (Next.js + DigitalOcean + Hatchet + Clerk
 ### Month 6: File Watching + Fleet (Selective)
 
 **Build:**
+
 - Google Drive webhook integration: folder watch, file change log, per-job version audit.
 - Samsara integration (if fleet-heavy customers exist): vehicle locations, geofence matching.
 - CompanyCam integration (if customers use it): photos by project, GPS metadata.
 
 **Ship to customers:**
+
 - Blueprint version tracking (Drive/Dropbox)
 - Photo audit trail (CompanyCam) — if demand exists
 
 **Explicitly NOT on the 6-month roadmap:**
+
 - Procore (build only if a specific Procore GC relationship appears; the data model is large and the value for a sub-only product is lower than for GCs)
 - BuildingConnected / bid platform integrations (too early for this ICP)
 - Certified payroll (Canadian version is complex; no customer demand yet)
@@ -611,4 +644,4 @@ The correct framing for the next 12 months: earn the right to be the derived-ins
 
 ---
 
-*Sources: glue_research_accounting_payroll.md, glue_research_timefield.md, glue_research_takeoff_misc.md — all verified against official API documentation as of April 2026.*
+_Sources: glue_research_accounting_payroll.md, glue_research_timefield.md, glue_research_takeoff_misc.md — all verified against official API documentation as of April 2026._

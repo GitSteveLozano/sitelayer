@@ -188,4 +188,3 @@ The product is successful if:
 - QBO sync is reliable and explainable
 - margin and bonus views reflect real job economics
 - the system improves visibility without becoming a second accounting stack
-

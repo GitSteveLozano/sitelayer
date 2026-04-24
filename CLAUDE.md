@@ -61,19 +61,19 @@ Runner package state: `/home/sitelayer/actions-runner` exists on `sitelayer-prev
 
 **Verified with `doctl` and production smoke checks on 2026-04-24.**
 
-| Resource | Current State |
-|----------|---------------|
-| Production droplet | `sitelayer`, ID `566798325`, Ubuntu 22.04, Toronto `tor1`, 4 vCPU, 8GB RAM, public IPv4 `165.245.230.3` |
-| Reserved production IP | `159.203.51.158`, assigned to droplet `566798325` |
-| Preview droplet | `sitelayer-preview`, ID `566806040`, Ubuntu 22.04, Toronto `tor1`, 2 vCPU, 4GB RAM, reserved IPv4 `159.203.53.218` |
-| Managed Postgres | `sitelayer-db`, ID `9948c96b-b6b6-45ad-adf7-d20e4c206c66`, Postgres 18, `db-s-1vcpu-1gb`, Toronto `tor1`, online |
-| Managed Postgres databases | `defaultdb`, `sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev` |
-| Managed Postgres trusted sources | Droplet `566798325` (`sitelayer`) and droplet `566806040` (`sitelayer-preview`) |
-| Production deploy path | GitHub Actions runs on the self-hosted `sitelayer-preview` runner, SSHs to `sitelayer@10.118.0.4`, deploys `/app/sitelayer` with Docker Compose, `.env` at `/app/sitelayer/.env` |
-| Preview deploy path | `docker-compose.preview.yml` behind Traefik on `sitelayer-preview`; shared env at `/app/previews/.env.shared`; smoke stack at `main.preview.sitelayer.sandolab.xyz` |
-| Public edge | Containerized Caddy on ports 80/443; automatic Let's Encrypt TLS for `sitelayer.sandolab.xyz`; HTTP redirects to HTTPS |
-| Backups | DO managed Postgres automatic backups exist; independent logical backup scripts are added and production timer uses `postgres:18-alpine` pg_dump |
-| Optional integrations | Clerk, DigitalOcean Spaces, QBO, and Sentry can stay blank/placeholders for bootable deploy; `DATABASE_URL` is the hard requirement |
+| Resource                         | Current State                                                                                                                                                                    |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Production droplet               | `sitelayer`, ID `566798325`, Ubuntu 22.04, Toronto `tor1`, 4 vCPU, 8GB RAM, public IPv4 `165.245.230.3`                                                                          |
+| Reserved production IP           | `159.203.51.158`, assigned to droplet `566798325`                                                                                                                                |
+| Preview droplet                  | `sitelayer-preview`, ID `566806040`, Ubuntu 22.04, Toronto `tor1`, 2 vCPU, 4GB RAM, reserved IPv4 `159.203.53.218`                                                               |
+| Managed Postgres                 | `sitelayer-db`, ID `9948c96b-b6b6-45ad-adf7-d20e4c206c66`, Postgres 18, `db-s-1vcpu-1gb`, Toronto `tor1`, online                                                                 |
+| Managed Postgres databases       | `defaultdb`, `sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev`                                                                                                              |
+| Managed Postgres trusted sources | Droplet `566798325` (`sitelayer`) and droplet `566806040` (`sitelayer-preview`)                                                                                                  |
+| Production deploy path           | GitHub Actions runs on the self-hosted `sitelayer-preview` runner, SSHs to `sitelayer@10.118.0.4`, deploys `/app/sitelayer` with Docker Compose, `.env` at `/app/sitelayer/.env` |
+| Preview deploy path              | `docker-compose.preview.yml` behind Traefik on `sitelayer-preview`; shared env at `/app/previews/.env.shared`; smoke stack at `main.preview.sitelayer.sandolab.xyz`              |
+| Public edge                      | Containerized Caddy on ports 80/443; automatic Let's Encrypt TLS for `sitelayer.sandolab.xyz`; HTTP redirects to HTTPS                                                           |
+| Backups                          | DO managed Postgres automatic backups exist; independent logical backup scripts are added and production timer uses `postgres:18-alpine` pg_dump                                 |
+| Optional integrations            | Clerk, DigitalOcean Spaces, QBO, and Sentry can stay blank/placeholders for bootable deploy; `DATABASE_URL` is the hard requirement                                              |
 
 Security note: the deploy user is in the Docker group. That avoids root SSH but Docker access is root-equivalent. Treat `DEPLOY_SSH_KEY` as production-root-equivalent.
 
@@ -87,7 +87,7 @@ Three-layer architecture designed to decouple external integrations (QBO, Clerk)
 Layer 1: Source Connectors
   └─ QBO OAuth integration, sync state tracking
 
-Layer 2: Normalized Operational Model  
+Layer 2: Normalized Operational Model
   └─ Domain types, business logic, accounting mapping
 
 Layer 3: Derived Insight & Workflow UI
@@ -96,16 +96,16 @@ Layer 3: Derived Insight & Workflow UI
 
 ### Tech Stack
 
-| Component | Technology | Notes |
-|-----------|-----------|-------|
-| **Backend** | Node.js (plain http module) + Postgres | No framework; minimal HTTP server |
-| **Frontend** | React 19 + Vite SPA | Client-side only; no SSR |
-| **Worker** | Node.js background tasks | Postgres-backed leased queue; no Hatchet yet |
-| **Monorepo** | npm workspaces | apps: api, web, worker; packages: domain |
-| **Database** | Postgres (pg driver) | Direct SQL queries in server.ts; no ORM |
-| **Auth** | TBD (hardcoded demo user) | Clerk planned but not yet integrated |
-| **File Storage** | Local Docker volume fallback; DigitalOcean Spaces planned | Blueprint PDFs persist under `BLUEPRINT_STORAGE_ROOT`; Spaces/off-host copy still needed before customer data |
-| **QBO Integration** | OAuth + REST API (direct HTTP) | Connector layer; sync state in `integration_mappings` table |
+| Component           | Technology                                                | Notes                                                                                                         |
+| ------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| **Backend**         | Node.js (plain http module) + Postgres                    | No framework; minimal HTTP server                                                                             |
+| **Frontend**        | React 19 + Vite SPA                                       | Client-side only; no SSR                                                                                      |
+| **Worker**          | Node.js background tasks                                  | Postgres-backed leased queue; no Hatchet yet                                                                  |
+| **Monorepo**        | npm workspaces                                            | apps: api, web, worker; packages: domain                                                                      |
+| **Database**        | Postgres (pg driver)                                      | Direct SQL queries in server.ts; no ORM                                                                       |
+| **Auth**            | TBD (hardcoded demo user)                                 | Clerk planned but not yet integrated                                                                          |
+| **File Storage**    | Local Docker volume fallback; DigitalOcean Spaces planned | Blueprint PDFs persist under `BLUEPRINT_STORAGE_ROOT`; Spaces/off-host copy still needed before customer data |
+| **QBO Integration** | OAuth + REST API (direct HTTP)                            | Connector layer; sync state in `integration_mappings` table                                                   |
 
 ## Project Structure
 
@@ -133,6 +133,7 @@ sitelayer/
 - **Dependencies**: Only `pg` and `@sitelayer/domain`
 
 **Endpoints**:
+
 - POST `/api/projects` — create project
 - GET `/api/bootstrap` — list projects and app seed data
 - POST `/api/projects/:id/blueprints` — upload blueprint PDF/image to local storage fallback
@@ -145,6 +146,7 @@ sitelayer/
 - GET `/api/sync/status` — sync state
 
 **Environment Variables**:
+
 ```
 APP_TIER=local|dev|preview|prod          # Tier marker; startup guard enforced
 FEATURE_FLAGS=read-prod-ro,qbo-live,...  # See DEPLOYMENT.md → Tier Isolation
@@ -170,6 +172,7 @@ ALLOWED_ORIGINS=http://localhost:5173,...
 - **Storage**: LocalStorage for drafts, IndexedDB for offline queue
 
 **Key Views**:
+
 - Projects dashboard
 - Blueprint upload + PDF viewer
 - Polygon annotation layer
@@ -202,6 +205,7 @@ Takeoff geometry is intentionally shared between API and web. The web uses it fo
 ### Queue Package (packages/queue/src/index.ts)
 
 Shared Postgres queue lease implementation used by both API-triggered sync and the background worker:
+
 - Claims `mutation_outbox` and `sync_events` with `FOR UPDATE SKIP LOCKED`.
 - Uses short processing leases through `next_attempt_at` so stale work can be retried.
 - Wraps claim/apply/update in one transaction and rolls back on failure.
@@ -210,14 +214,16 @@ Shared Postgres queue lease implementation used by both API-triggered sync and t
 ### Worker (apps/worker/src/worker.ts)
 
 Background job processor:
+
 - Calls `@sitelayer/queue` for the shared Postgres queue lease/transaction behavior.
 - Marks simulated local queue work as `applied`; live QBO sync still needs sandbox credential validation.
 
 ### Database Schema
 
 **Core Tables**:
+
 - `companies` — multi-tenant isolation
-- `users` — user accounts  
+- `users` — user accounts
 - `projects` — construction projects (customer, location, divisions)
 - `blueprint_documents` — uploaded PDF/image documents with local storage path and revision lineage
 - `takeoff_measurements` — measurements extracted from blueprints, including persisted polygon geometry
@@ -228,6 +234,7 @@ Background job processor:
 - `sync_state` — last sync timestamp, pending changes, error log
 
 **Source of Truth Rules**:
+
 - **QBO Authoritative**: Customer, division, service item definitions
 - **Sitelayer Authoritative**: Measurements, schedules, labor entries, costing
 
@@ -238,6 +245,7 @@ Background job processor:
 **Decision**: Use only Node.js core `http` module; no Express/Fastify/Hono.
 
 **Rationale**:
+
 - Minimal startup overhead for containerized deployment
 - Direct control over request handling
 - Easier to reason about CORS, auth middleware
@@ -252,6 +260,7 @@ Background job processor:
 **Decision**: Pure client-side React 19 with Vite bundler.
 
 **Rationale**:
+
 - Construction crews use this on-site with intermittent connectivity
 - Offline-first priority (IndexedDB queue for sync when online)
 - Simple deployment (static build artifacts)
@@ -266,6 +275,7 @@ Background job processor:
 **Decision**: All database queries written as string SQL directly in handler functions.
 
 **Rationale**:
+
 - Transparent, reviewable queries
 - No ORM initialization overhead
 - Type-safe via TypeScript if using pg client correctly
@@ -274,6 +284,7 @@ Background job processor:
 **Tradeoff**: String interpolation risks SQL injection; verbose; no query builder abstractions; schema changes require code edits.
 
 **Recommendation**: ⚠️ **Unsustainable beyond 100 queries**. At ~500 queries per pilot, already at threshold. Consider:
+
 - **Option A** (Minimal): Migrate to Postgres.js (same client, better ergonomics, typed queries)
 - **Option B** (Recommended): Introduce Drizzle or Prisma when schema stabilizes post-pilot
 - **Option C** (Overkill): Pair Node.js with Temporal.io for workflow + transactional guarantees
@@ -283,6 +294,7 @@ Background job processor:
 **Decision**: Single repository with apps (api, web, worker) and packages (domain).
 
 **Rationale**:
+
 - Shared domain types across backend, frontend, worker
 - Single deploy pipeline
 - Coordinated schema + API + UI changes
@@ -294,6 +306,7 @@ Background job processor:
 **Decision**: LocalStorage + IndexedDB queue for offline capture, sync when online.
 
 **Rationale**:
+
 - Construction sites have unreliable connectivity
 - Allow crews to capture measurements offline
 - Sync queue when connection restored
@@ -307,12 +320,12 @@ Background job processor:
 **Current**: Plain Node.js http module  
 **Verdict**: ✅ OK for MVP; plan migration to Fastify/Hono before 500+ endpoints
 
-| Framework | Upside | Downside | Fit for Sitelayer |
-|-----------|--------|---------|-------------------|
-| **Fastify** | Lightweight, TypeScript-first, schema validation, streaming | Smaller ecosystem than Express | ✅ Best choice for post-pilot |
-| **Hono** | Minimal footprint, edge-first, great types | Very new; less mature | 🟡 Alternative if edge deployment needed |
-| **Express** | Largest ecosystem, mature | Heavy middleware pattern; bloated | ❌ Avoid; contradicts minimal approach |
-| **Nest.js** | Full framework, dependency injection | Opinionated; adds layer of indirection | ❌ Overkill for this domain |
+| Framework   | Upside                                                      | Downside                               | Fit for Sitelayer                        |
+| ----------- | ----------------------------------------------------------- | -------------------------------------- | ---------------------------------------- |
+| **Fastify** | Lightweight, TypeScript-first, schema validation, streaming | Smaller ecosystem than Express         | ✅ Best choice for post-pilot            |
+| **Hono**    | Minimal footprint, edge-first, great types                  | Very new; less mature                  | 🟡 Alternative if edge deployment needed |
+| **Express** | Largest ecosystem, mature                                   | Heavy middleware pattern; bloated      | ❌ Avoid; contradicts minimal approach   |
+| **Nest.js** | Full framework, dependency injection                        | Opinionated; adds layer of indirection | ❌ Overkill for this domain              |
 
 **Recommendation**: If you must pick a framework now, choose **Fastify**. It fills the gap between raw Node and Express without the bloat. But plain http is defensible for the next 3 months.
 
@@ -321,12 +334,12 @@ Background job processor:
 **Current**: React 19 + Vite  
 **Verdict**: ✅ Correct choice; no change needed
 
-| Framework | Upside | Downside | Fit for Sitelayer |
-|-----------|--------|---------|-------------------|
-| **React 19** | Latest hooks, stable, largest ecosystem | Largest bundle size | ✅ Good choice |
-| **Svelte** | Smallest bundle, great ergonomics | Smaller ecosystem | 🟡 Viable if bundle size critical |
-| **Solid.js** | Fine-grained reactivity, small | Still young; smaller community | 🟡 Not worth risk |
-| **Vue 3** | Balanced, good for forms | Smaller US community | 🟡 OK but React better for team |
+| Framework    | Upside                                  | Downside                       | Fit for Sitelayer                 |
+| ------------ | --------------------------------------- | ------------------------------ | --------------------------------- |
+| **React 19** | Latest hooks, stable, largest ecosystem | Largest bundle size            | ✅ Good choice                    |
+| **Svelte**   | Smallest bundle, great ergonomics       | Smaller ecosystem              | 🟡 Viable if bundle size critical |
+| **Solid.js** | Fine-grained reactivity, small          | Still young; smaller community | 🟡 Not worth risk                 |
+| **Vue 3**    | Balanced, good for forms                | Smaller US community           | 🟡 OK but React better for team   |
 
 **Recommendation**: Stay with React. It's the safe, productive choice. Vite is already excellent.
 
@@ -335,14 +348,15 @@ Background job processor:
 **Current**: Direct pg client SQL strings  
 **Verdict**: ⚠️ OK for now; **must migrate by post-pilot**
 
-| Tool | Upside | Downside | Fit for Sitelayer |
-|------|--------|---------|-------------------|
-| **Prisma** | Best DX, auto-migrations, type-safe | Runtime overhead, lock-in to schema.prisma | ✅ Recommended |
-| **Drizzle** | Lightweight, fully typed, SQL-in-TS | Smaller ecosystem | ✅ Alternative if performance critical |
-| **Postgres.js** | Drop-in pg replacement, typed queries | Still manual composition | 🟡 Bridge solution, not long-term |
-| **Raw pg** | Total control, transparent | String concatenation risks | ❌ Don't scale this |
+| Tool            | Upside                                | Downside                                   | Fit for Sitelayer                      |
+| --------------- | ------------------------------------- | ------------------------------------------ | -------------------------------------- |
+| **Prisma**      | Best DX, auto-migrations, type-safe   | Runtime overhead, lock-in to schema.prisma | ✅ Recommended                         |
+| **Drizzle**     | Lightweight, fully typed, SQL-in-TS   | Smaller ecosystem                          | ✅ Alternative if performance critical |
+| **Postgres.js** | Drop-in pg replacement, typed queries | Still manual composition                   | 🟡 Bridge solution, not long-term      |
+| **Raw pg**      | Total control, transparent            | String concatenation risks                 | ❌ Don't scale this                    |
 
 **Recommendation**: Plan **Prisma migration** before production. It gives you:
+
 - Type safety for queries
 - Auto-migration generation from schema changes
 - Clear schema-of-record (schema.prisma)
@@ -353,12 +367,12 @@ Background job processor:
 **Current**: Hardcoded demo user  
 **Verdict**: 🔴 **Must implement before pilot**
 
-| Solution | Upside | Downside | Fit for Sitelayer |
-|----------|--------|---------|-------------------|
-| **Clerk** | Multi-tenant orgs, RBAC, webhooks | Per-action pricing (~$0.02 per user) | ✅ Matches requirements |
-| **Auth0** | Mature, flexible rules | Higher pricing than Clerk | 🟡 More expensive |
-| **Supabase Auth** | Open-source, free tier exists | Limited multi-tenant features | 🟡 OK for single-tenant MVP |
-| **NextAuth.js** | Self-hosted, flexible | OAuth provider setup overhead | 🟡 Consider if avoiding third-party |
+| Solution          | Upside                            | Downside                             | Fit for Sitelayer                   |
+| ----------------- | --------------------------------- | ------------------------------------ | ----------------------------------- |
+| **Clerk**         | Multi-tenant orgs, RBAC, webhooks | Per-action pricing (~$0.02 per user) | ✅ Matches requirements             |
+| **Auth0**         | Mature, flexible rules            | Higher pricing than Clerk            | 🟡 More expensive                   |
+| **Supabase Auth** | Open-source, free tier exists     | Limited multi-tenant features        | 🟡 OK for single-tenant MVP         |
+| **NextAuth.js**   | Self-hosted, flexible             | OAuth provider setup overhead        | 🟡 Consider if avoiding third-party |
 
 **Recommendation**: **Integrate Clerk before pilot** (required for multi-tenant demo). Estimated cost: ~$20-50/month for pilot scale.
 
@@ -367,12 +381,12 @@ Background job processor:
 **Current**: Local filesystem fallback implemented and persisted by Docker Compose through the `blueprint_storage` volume.
 **Verdict**: 🟡 **Off-host/object storage still needed before customer data**
 
-| Service | Upside | Downside | Cost | Fit |
-|---------|--------|---------|------|-----|
-| **DigitalOcean Spaces** | $5/mo, 250GB included, S3-compatible | Smaller ecosystem | $5-15/mo | ✅ Planned choice |
-| **AWS S3** | Industry standard, mature | Per-request pricing, more complex setup | $10+/mo | 🟡 Overkill for MVP |
-| **Supabase Storage** | Built on S3, PostgreSQL-native | Different S3 endpoint | ~$10/mo | 🟡 Adds dependency |
-| **Cloudinary** | Image optimization built-in | Per-request pricing, vendor lock-in | $10+/mo | ❌ Overkill for PDFs |
+| Service                 | Upside                               | Downside                                | Cost     | Fit                  |
+| ----------------------- | ------------------------------------ | --------------------------------------- | -------- | -------------------- |
+| **DigitalOcean Spaces** | $5/mo, 250GB included, S3-compatible | Smaller ecosystem                       | $5-15/mo | ✅ Planned choice    |
+| **AWS S3**              | Industry standard, mature            | Per-request pricing, more complex setup | $10+/mo  | 🟡 Overkill for MVP  |
+| **Supabase Storage**    | Built on S3, PostgreSQL-native       | Different S3 endpoint                   | ~$10/mo  | 🟡 Adds dependency   |
+| **Cloudinary**          | Image optimization built-in          | Per-request pricing, vendor lock-in     | $10+/mo  | ❌ Overkill for PDFs |
 
 **Recommendation**: **Use DigitalOcean Spaces** as planned ($5/mo, S3-compatible, simple setup) for off-host retention and backup. Keep the local volume fallback for dev, preview, and early smoke testing.
 
@@ -381,28 +395,30 @@ Background job processor:
 **Current**: Inline worker.ts backed by `mutation_outbox` and `sync_events` leases.  
 **Verdict**: 🟡 **OK for pilot simulation; live QBO connector still needs validation**
 
-| Solution | Upside | Downside | Cost | Fit |
-|----------|--------|---------|------|-----|
-| **Hatchet** | Purpose-built for workflows, no infra | Pricing TBD (currently free) | Free? | ✅ Planned choice |
-| **Bull** (Redis) | Lightweight, mature | Need Redis instance | $0-15/mo | 🟡 Works, adds Redis |
-| **Postgres pg-boss** | No external dep, uses your DB | Less mature than Bull, slower | $0 | 🟡 Simpler for MVP |
-| **Temporal.io** | Enterprise-grade, durable | Significant overhead, learning curve | $0 (OSS) | ❌ Too much for MVP |
+| Solution             | Upside                                | Downside                             | Cost     | Fit                  |
+| -------------------- | ------------------------------------- | ------------------------------------ | -------- | -------------------- |
+| **Hatchet**          | Purpose-built for workflows, no infra | Pricing TBD (currently free)         | Free?    | ✅ Planned choice    |
+| **Bull** (Redis)     | Lightweight, mature                   | Need Redis instance                  | $0-15/mo | 🟡 Works, adds Redis |
+| **Postgres pg-boss** | No external dep, uses your DB         | Less mature than Bull, slower        | $0       | 🟡 Simpler for MVP   |
+| **Temporal.io**      | Enterprise-grade, durable             | Significant overhead, learning curve | $0 (OSS) | ❌ Too much for MVP  |
 
 **Recommendation**: Keep the current Postgres-backed queue for pilot unless sync complexity grows. Revisit pg-boss or Hatchet after live QBO behavior is known.
 
 ### Monitoring & Observability
 
-**Current**: None (logging via console.log)  
-**Verdict**: 🟡 **OK for pilot, implement post-MVP**
+**Current**: Sentry (v10, OpenTelemetry-native) across `api`, `worker`, and `web`; Pino JSON logs stamped with `trace_id` / `span_id` / `request_id` via AsyncLocalStorage.
+**Verdict**: ✅ **Live as of 2026-04-24.** Keep `tracesSampleRate=1.0` through pilot; revisit once volume justifies sampling.
 
-| Solution | Upside | Downside | Cost |
-|----------|--------|---------|------|
-| **Sentry** | Error tracking, release tracking | Third-party, pricing per event | $20-50/mo |
-| **DataDog** | Metrics + logs + traces | Expensive, steep learning curve | $100+/mo |
-| **Axiom** | Log aggregation, good DX | Newer, smaller ecosystem | $20/mo |
-| **Logdna** | Simple log management | Limited structured query | $15/mo |
+**What is wired:**
 
-**Recommendation**: **Defer Sentry until post-MVP**. For now, use structured logging to stdout (JSON logs), which your Docker host can aggregate.
+- `apps/api/src/instrument.ts` and `apps/worker/src/instrument.ts` are imported first and enable `httpIntegration`, `nativeNodeFetchIntegration`, `postgresIntegration`, and `contextLinesIntegration`. HTTP server spans and `pg` query spans are automatic.
+- Every request gets a UUID `x-request-id` (echoed in response headers and error bodies), attached to the active Sentry scope and to an AsyncLocalStorage slot consumed by `@sitelayer/logger`.
+- `recordSyncEvent` and `recordMutationOutbox` persist `sentry_trace`, `sentry_baggage`, and `request_id` on every enqueue (migration `005_trace_propagation.sql`). The worker calls `Sentry.continueTrace()` on each applied row so the queue hop shows up as a child span of the originating HTTP request.
+- Web SDK ships `browserTracingIntegration` + `replayIntegration` (masks text, inputs, and media). `Sentry.ErrorBoundary` wraps the app in `main.tsx`. Offline-queue replay emits an `offline_queue.replay` span with depth/replayed/dropped/conflict counts.
+
+**Agent trace lookup:** `GET /api/debug/traces/:traceId` (or `?by=request_id`) — Bearer `DEBUG_TRACE_TOKEN`, tier-gated against prod unless `DEBUG_ALLOW_PROD=1`, rate-limited. Proxies Sentry's `events-trace` API and joins local `mutation_outbox` and `sync_events` rows matching the trace or request id.
+
+**Required env** (see `.env.example`): `SENTRY_DSN`, `VITE_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN`, `DEBUG_TRACE_TOKEN`. Trace sample rate defaults to `1.0`; on-error replay `1.0`; session replay `0.1`.
 
 ## Pending Infrastructure & Setup
 
@@ -438,20 +454,16 @@ Background job processor:
    - Migrate schema.prisma from SQL
    - Auto-generate migrations
    - Type-safe queries
-   
 2. **Clerk Auth** (1 week)
    - Replace hardcoded demo user
    - Per-company isolation
    - RBAC for crew vs. admin
-   
 3. **Sentry + Axiom** (3 days)
    - Error tracking
    - Structured logging
-   
 4. **Hatchet Evaluation** (1 week research)
    - Assess QBO sync reliability with pg-boss
    - Plan migration if needed
-   
 5. **Fastify Migration** (2 weeks, optional)
    - Only if endpoint count > 200 and code smell
    - Low priority; raw Node.js still fine

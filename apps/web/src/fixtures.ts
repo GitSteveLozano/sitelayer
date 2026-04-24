@@ -56,14 +56,42 @@ const projects: BootstrapResponse['projects'] = [
 ]
 
 const workers: BootstrapResponse['workers'] = [
-  { id: 'worker-ana', name: 'Ana Castillo', role: 'lead', version: 2, deleted_at: null, created_at: '2026-04-19T09:00:00.000Z' },
-  { id: 'worker-marcus', name: 'Marcus Lee', role: 'crew', version: 1, deleted_at: null, created_at: '2026-04-19T09:00:00.000Z' },
+  {
+    id: 'worker-ana',
+    name: 'Ana Castillo',
+    role: 'lead',
+    version: 2,
+    deleted_at: null,
+    created_at: '2026-04-19T09:00:00.000Z',
+  },
+  {
+    id: 'worker-marcus',
+    name: 'Marcus Lee',
+    role: 'crew',
+    version: 1,
+    deleted_at: null,
+    created_at: '2026-04-19T09:00:00.000Z',
+  },
 ]
 
 const serviceItems: BootstrapResponse['serviceItems'] = [
-  { code: 'EPS', name: 'Exterior panel system', category: 'measurable', unit: 'sqft', default_rate: '8.75', source: 'manual' },
+  {
+    code: 'EPS',
+    name: 'Exterior panel system',
+    category: 'measurable',
+    unit: 'sqft',
+    default_rate: '8.75',
+    source: 'manual',
+  },
   { code: 'TRIM', name: 'Trim package', category: 'measurable', unit: 'lf', default_rate: '5.20', source: 'manual' },
-  { code: 'qbo-112', name: 'Sealant allowance', category: 'material', unit: 'each', default_rate: '95.00', source: 'qbo' },
+  {
+    code: 'qbo-112',
+    name: 'Sealant allowance',
+    category: 'material',
+    unit: 'each',
+    default_rate: '95.00',
+    source: 'qbo',
+  },
 ]
 
 const blueprints: BlueprintRow[] = [
@@ -202,18 +230,47 @@ const bootstrap: BootstrapResponse = {
   ],
   serviceItems,
   customers: [
-    { id: 'customer-1', name: 'Hillcrest Homes', external_id: 'qbo-cust-1042', source: 'qbo', version: 2, deleted_at: null },
+    {
+      id: 'customer-1',
+      name: 'Hillcrest Homes',
+      external_id: 'qbo-cust-1042',
+      source: 'qbo',
+      version: 2,
+      deleted_at: null,
+    },
     { id: 'customer-2', name: 'Northline Builders', external_id: null, source: 'manual', version: 1, deleted_at: null },
   ],
   projects,
   workers,
   pricingProfiles: [
-    { id: 'pricing-default', name: 'Default LA Pricing', is_default: true, config: { template: 'la-default' }, version: 1, created_at: '2026-04-18T00:00:00.000Z' },
+    {
+      id: 'pricing-default',
+      name: 'Default LA Pricing',
+      is_default: true,
+      config: { template: 'la-default' },
+      version: 1,
+      created_at: '2026-04-18T00:00:00.000Z',
+    },
   ],
   bonusRules: [
-    { id: 'bonus-margin', name: 'Margin Bonus', config: { basis: 'margin', threshold: 0.15 }, is_active: true, version: 1, created_at: '2026-04-18T00:00:00.000Z' },
+    {
+      id: 'bonus-margin',
+      name: 'Margin Bonus',
+      config: { basis: 'margin', threshold: 0.15 },
+      is_active: true,
+      version: 1,
+      created_at: '2026-04-18T00:00:00.000Z',
+    },
   ],
-  integrations: [{ id: 'integration-qbo', provider: 'qbo', provider_account_id: 'realm-fixture', sync_cursor: '42', status: 'connected' }],
+  integrations: [
+    {
+      id: 'integration-qbo',
+      provider: 'qbo',
+      provider_account_id: 'realm-fixture',
+      sync_cursor: '42',
+      status: 'connected',
+    },
+  ],
   integrationMappings: [
     {
       id: 'mapping-customer-1',
@@ -273,7 +330,12 @@ const summaries: Record<string, ProjectSummary> = {
       margin: { revenue: 184250, cost: 12944.55, profit: 171305.45, margin: 0.9297 },
       bonus: { eligible: true, payoutPercent: 0.12, payout: 540 },
     },
-    measurements: measurements.map(({ service_item_code, quantity, unit, notes }) => ({ service_item_code, quantity, unit, notes })),
+    measurements: measurements.map(({ service_item_code, quantity, unit, notes }) => ({
+      service_item_code,
+      quantity,
+      unit,
+      notes,
+    })),
     estimateLines: [
       { service_item_code: 'EPS', quantity: '1284.50', unit: 'sqft', rate: '8.75', amount: '11239.38' },
       { service_item_code: 'TRIM', quantity: '310.00', unit: 'lf', rate: '4.80', amount: '1488.00' },
@@ -319,7 +381,17 @@ export function getFixtureResponse<T>(path: string, companySlug: string): T {
     return clone({
       user: { id: 'demo-user', role: 'owner' },
       activeCompany: { ...company, slug: companySlug },
-      memberships: [{ id: 'membership-fixture', company_id: company.id, clerk_user_id: 'demo-user', role: 'owner', created_at: '2026-04-18T00:00:00.000Z', slug: companySlug, name: company.name }],
+      memberships: [
+        {
+          id: 'membership-fixture',
+          company_id: company.id,
+          clerk_user_id: 'demo-user',
+          role: 'owner',
+          created_at: '2026-04-18T00:00:00.000Z',
+          slug: companySlug,
+          name: company.name,
+        },
+      ],
     } satisfies SessionResponse) as T
   }
 
@@ -372,7 +444,15 @@ export function getFixtureResponse<T>(path: string, companySlug: string): T {
 
   if (path.startsWith('/api/sync/outbox')) {
     return clone({
-      outbox: [{ entity_type: 'project', entity_id: 'project-hillcrest', mutation_type: 'upsert', status: 'pending', created_at: '2026-04-23T18:00:00.000Z' }],
+      outbox: [
+        {
+          entity_type: 'project',
+          entity_id: 'project-hillcrest',
+          mutation_type: 'upsert',
+          status: 'pending',
+          created_at: '2026-04-23T18:00:00.000Z',
+        },
+      ],
     }) as T
   }
 
@@ -396,7 +476,12 @@ export function getFixtureResponse<T>(path: string, companySlug: string): T {
   throw new Error(`No fixture response for ${path}`)
 }
 
-export function mutateFixtureResponse<T>(method: 'POST' | 'PATCH' | 'DELETE', path: string, body: unknown, _companySlug: string): T {
+export function mutateFixtureResponse<T>(
+  method: 'POST' | 'PATCH' | 'DELETE',
+  path: string,
+  body: unknown,
+  _companySlug: string,
+): T {
   if (method === 'POST' && path.includes('/blueprints/') && path.endsWith('/versions')) {
     return clone({
       ...blueprints[0]!,

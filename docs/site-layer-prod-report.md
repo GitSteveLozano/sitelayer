@@ -1,4 +1,5 @@
 # Sitelayer Tech Stack Report
+
 **Construction SaaS — Blueprint Takeoff, QBO-Integrated, Multi-Tenant B2B**
 **April 2026 — Decision-Ready Reference (Pricing Verified April 23, 2026)**
 
@@ -22,31 +23,31 @@
 
 ### The Final Recommended Stack
 
-| Layer | Pick | Monthly Cost (1 customer) | Monthly Cost (200 customers) |
-|-------|------|:---:|:---:|
-| VPS (Premium Intel) | DigitalOcean TOR1 (4 vCPU / 8 GB) | $48 | $96–$192 |
-| Droplet Backups (20% add-on) | DO Weekly Backups | $9.60 | $19.20–$38.40 |
-| Managed Postgres | DO Managed Postgres (1 GB start → 4 GB HA) | $15.23 | $122 |
-| Managed Valkey (Redis) | DO Managed Valkey 1 GB | $0 (on-VPS) | $30 |
-| Object Storage | DigitalOcean Spaces TOR1 | $5 | $60–$130 |
-| Auth | Clerk (free tier — see note on ambiguity) | $0 | $0–$25 |
-| Background Jobs | Hatchet (self-hosted Lite) | $0 | $0 |
-| Email | Postmark Basic (10K emails) | $15 | $15–$69 |
-| Error Tracking | Sentry Team | $26 | $26 |
-| Logs + Metrics | Grafana Cloud free → paid | $0 | $0–$70 |
-| Uptime | UptimeRobot free | $0 | $0 |
-| Deploy Orchestration | Coolify (self-hosted) | $0 | $0 |
-| Source Control / CI | GitHub Team ($4/user × 2) + Actions | $8 | $8–$15 |
-| Frontend | Next.js 15 (standalone) | $0 (OSS) | $0 (OSS) |
-| PDF + Canvas | PDF.js 5.x + Konva.js | $0 (OSS) | $0 (OSS) |
-| ORM | Drizzle ORM + postgres.js | $0 (OSS) | $0 (OSS) |
-| UI Components | shadcn/ui + Mantine + Tremor | $0 (OSS) | $0 (OSS) |
-| QBO SDK | intuit-oauth + @apigrate/quickbooks | $0 | $0 |
-| Analytics | PostHog Cloud (free tier) | $0 | $0 |
-| BI (internal) | Metabase OSS (self-hosted) | ~$5 | ~$5 |
-| Domain (.com, amortized) | Registrar (Cloudflare/Porkbun) | ~$1 | ~$1 |
-| **TOTAL (1 customer)** | | **~$102/mo** | — |
-| **TOTAL (200 customers)** | | — | **~$762–$1,075/mo** |
+| Layer                        | Pick                                       | Monthly Cost (1 customer) | Monthly Cost (200 customers) |
+| ---------------------------- | ------------------------------------------ | :-----------------------: | :--------------------------: |
+| VPS (Premium Intel)          | DigitalOcean TOR1 (4 vCPU / 8 GB)          |            $48            |           $96–$192           |
+| Droplet Backups (20% add-on) | DO Weekly Backups                          |           $9.60           |        $19.20–$38.40         |
+| Managed Postgres             | DO Managed Postgres (1 GB start → 4 GB HA) |          $15.23           |             $122             |
+| Managed Valkey (Redis)       | DO Managed Valkey 1 GB                     |        $0 (on-VPS)        |             $30              |
+| Object Storage               | DigitalOcean Spaces TOR1                   |            $5             |           $60–$130           |
+| Auth                         | Clerk (free tier — see note on ambiguity)  |            $0             |            $0–$25            |
+| Background Jobs              | Hatchet (self-hosted Lite)                 |            $0             |              $0              |
+| Email                        | Postmark Basic (10K emails)                |            $15            |           $15–$69            |
+| Error Tracking               | Sentry Team                                |            $26            |             $26              |
+| Logs + Metrics               | Grafana Cloud free → paid                  |            $0             |            $0–$70            |
+| Uptime                       | UptimeRobot free                           |            $0             |              $0              |
+| Deploy Orchestration         | Coolify (self-hosted)                      |            $0             |              $0              |
+| Source Control / CI          | GitHub Team ($4/user × 2) + Actions        |            $8             |            $8–$15            |
+| Frontend                     | Next.js 15 (standalone)                    |         $0 (OSS)          |           $0 (OSS)           |
+| PDF + Canvas                 | PDF.js 5.x + Konva.js                      |         $0 (OSS)          |           $0 (OSS)           |
+| ORM                          | Drizzle ORM + postgres.js                  |         $0 (OSS)          |           $0 (OSS)           |
+| UI Components                | shadcn/ui + Mantine + Tremor               |         $0 (OSS)          |           $0 (OSS)           |
+| QBO SDK                      | intuit-oauth + @apigrate/quickbooks        |            $0             |              $0              |
+| Analytics                    | PostHog Cloud (free tier)                  |            $0             |              $0              |
+| BI (internal)                | Metabase OSS (self-hosted)                 |            ~$5            |             ~$5              |
+| Domain (.com, amortized)     | Registrar (Cloudflare/Porkbun)             |            ~$1            |             ~$1              |
+| **TOTAL (1 customer)**       |                                            |       **~$102/mo**        |              —               |
+| **TOTAL (200 customers)**    |                                            |             —             |     **~$762–$1,075/mo**      |
 
 All prices USD, verified against live vendor pricing pages on April 23, 2026. DigitalOcean is the single-provider anchor. Clerk, Postmark, Sentry, GitHub, and Grafana Cloud are the justified exceptions to that anchor — each one plugs a gap DigitalOcean cannot fill at comparable price or quality.
 
@@ -62,26 +63,26 @@ All prices USD, verified against live vendor pricing pages on April 23, 2026. Di
 
 ### Total Monthly Cost at 3 Scale Points (verified April 23, 2026)
 
-| Line Item | 1 Customer | 20 Customers | 200 Customers |
-|-----------|:----------:|:------------:|:-------------:|
-| VPS — app server(s) (Premium Intel) | $48 (4vCPU/8GB) | $96 (2× 8 GB) | $192 (4× 8 GB) |
-| Droplet weekly backups (20% of Droplet) | $9.60 | $19.20 | $38.40 |
-| Managed Postgres | $15.23 (1 GB shared) | $61 (4 GB ded.) | $122 (4 GB + standby) |
-| Managed Valkey/Redis | $0 (on VPS) | $15 (1 GB DO) | $30 (2 GB DO) |
-| Object Storage (DO Spaces TOR1) | $5 | $20 | $60–$130 |
-| Auth (Clerk free tier) | $0 (under 10K MAU) | $0 | $0–$25 |
-| Email (Postmark Basic 10K) | $15 | $15 | $69 (Pro @ 50K) |
-| Error Tracking (Sentry Team) | $26 | $26 | $26 |
-| Logs/Metrics (Grafana Cloud) | $0 | $0 | $0–$70 |
-| Background Jobs (Hatchet Lite) | $0 | $0 | $0 |
-| Deploy Tool (Coolify) | $0 | $0 | $18 (mgmt VPS) |
-| Uptime (UptimeRobot) | $0 | $7 (Pro) | $7 |
-| GitHub Team (2 users) + Actions | $8–$10 | $8–$12 | $8–$15 |
-| Analytics (PostHog free) | $0 | $0 | $0 |
-| BI (Metabase OSS VPS share) | $0 (on app VPS) | $10 | $10 |
-| Load Balancer (DO) | $0 | $0 | $12 |
-| Domain (amortized) | $1 | $1 | $1 |
-| **Total** | **~$102/mo** | **~$283–$289/mo** | **~$762–$1,075/mo** |
+| Line Item                               |      1 Customer      |   20 Customers    |     200 Customers     |
+| --------------------------------------- | :------------------: | :---------------: | :-------------------: |
+| VPS — app server(s) (Premium Intel)     |   $48 (4vCPU/8GB)    |   $96 (2× 8 GB)   |    $192 (4× 8 GB)     |
+| Droplet weekly backups (20% of Droplet) |        $9.60         |      $19.20       |        $38.40         |
+| Managed Postgres                        | $15.23 (1 GB shared) |  $61 (4 GB ded.)  | $122 (4 GB + standby) |
+| Managed Valkey/Redis                    |     $0 (on VPS)      |   $15 (1 GB DO)   |     $30 (2 GB DO)     |
+| Object Storage (DO Spaces TOR1)         |          $5          |        $20        |       $60–$130        |
+| Auth (Clerk free tier)                  |  $0 (under 10K MAU)  |        $0         |        $0–$25         |
+| Email (Postmark Basic 10K)              |         $15          |        $15        |    $69 (Pro @ 50K)    |
+| Error Tracking (Sentry Team)            |         $26          |        $26        |          $26          |
+| Logs/Metrics (Grafana Cloud)            |          $0          |        $0         |        $0–$70         |
+| Background Jobs (Hatchet Lite)          |          $0          |        $0         |          $0           |
+| Deploy Tool (Coolify)                   |          $0          |        $0         |    $18 (mgmt VPS)     |
+| Uptime (UptimeRobot)                    |          $0          |     $7 (Pro)      |          $7           |
+| GitHub Team (2 users) + Actions         |        $8–$10        |      $8–$12       |        $8–$15         |
+| Analytics (PostHog free)                |          $0          |        $0         |          $0           |
+| BI (Metabase OSS VPS share)             |   $0 (on app VPS)    |        $10        |          $10          |
+| Load Balancer (DO)                      |          $0          |        $0         |          $12          |
+| Domain (amortized)                      |          $1          |        $1         |          $1           |
+| **Total**                               |     **~$102/mo**     | **~$283–$289/mo** |  **~$762–$1,075/mo**  |
 
 The 200-customer scenario does not require a dramatic infrastructure rebuild. You double your app server count, upgrade Postgres to HA, and add a managed Redis. That's it. The stack at 1 customer is architecturally the same stack at 200 customers.
 
@@ -134,6 +135,7 @@ At face value, Hetzner CPX31 ($25/mo, 4 vCPU, 8 GB, post-April-2026 pricing) is 
 DigitalOcean TOR1 offers compute, managed Postgres, managed Redis (Valkey), S3-compatible object storage with Canadian residency, load balancers, block storage, and Kubernetes — all in one region, one dashboard, one billing account, and one support ticket queue. The managed Postgres entry tier is $15/mo (1 GB shared) or $30/mo (2 GB dedicated), which is the cheapest managed Postgres available from a serious provider with a Canadian datacenter.
 
 Compare the all-DigitalOcean bill at 1 customer (~$131/mo) against a theoretical "best price for each service" bill:
+
 - Hetzner CPX21 (compute): $14
 - Neon (Postgres): $19
 - Upstash (Redis): $10–20
@@ -155,11 +157,13 @@ The savings evaporate under any honest accounting of time.
 ### Build-vs-Buy Heuristics for This Product
 
 Build it if:
+
 - It is your core product (PDF canvas, takeoff logic, QBO sync)
 - The vendor would price you out by the time you have real revenue
 - The build is a one-time investment with low ongoing maintenance
 
 Buy it if:
+
 - Failure of this component at 2am means customer impact
 - The vendor's code surface area is larger than you want to own (auth, email deliverability, error aggregation)
 - The cost is below your hourly rate multiplied by the hours to build and maintain
@@ -186,13 +190,14 @@ Premature optimization at this stage is wasted time. Late schema design — `com
 
 Start with a Basic 8 GB Droplet ($48/mo, 4 vCPU, 160 GB SSD, 5 TB bandwidth). Run your Next.js app, Hatchet worker, and Redis all on this box at 1–10 customers. At 20+ customers, split into separate app and worker droplets.
 
-| Tier | Plan | vCPU | RAM | Bandwidth | Price/mo |
-|------|------|------|-----|-----------|----------|
-| Start | Basic 4 GB | 2 | 4 GB | 4 TB | $24 |
-| Default | Basic 8 GB | 4 | 8 GB | 5 TB | $48 |
-| Scaled | CPU-Opt 16 GB | 8 | 16 GB | 6 TB | $168 |
+| Tier    | Plan          | vCPU | RAM   | Bandwidth | Price/mo |
+| ------- | ------------- | ---- | ----- | --------- | -------- |
+| Start   | Basic 4 GB    | 2    | 4 GB  | 4 TB      | $24      |
+| Default | Basic 8 GB    | 4    | 8 GB  | 5 TB      | $48      |
+| Scaled  | CPU-Opt 16 GB | 8    | 16 GB | 6 TB      | $168     |
 
 Why DigitalOcean:
+
 - The only VPS provider with managed Postgres, managed Redis, AND object storage all in a Canadian datacenter (TOR1)
 - 99.99% SLA on Droplets
 - Best developer dashboard of any non-hyperscaler
@@ -207,13 +212,13 @@ When to pick OVH instead: You've validated product-market fit, you have 50+ cust
 
 **Alternatives Rejected**
 
-| Provider | Reason Rejected |
-|----------|----------------|
-| Hetzner | No managed DB, no Canadian datacenter, no Canadian object storage — breaks consolidation entirely |
-| Vultr | Managed Postgres starts at $90/mo (6× DO's entry tier); object storage $18/mo minimum |
-| Linode/Akamai | No Canadian object storage cluster despite Toronto compute DC; managed DB starts at $82/mo |
-| Scaleway | EU-only, no North American presence |
-| Contabo | No managed services, CPU oversubscription, 99.6% SLA, no load balancer product |
+| Provider      | Reason Rejected                                                                                   |
+| ------------- | ------------------------------------------------------------------------------------------------- |
+| Hetzner       | No managed DB, no Canadian datacenter, no Canadian object storage — breaks consolidation entirely |
+| Vultr         | Managed Postgres starts at $90/mo (6× DO's entry tier); object storage $18/mo minimum             |
+| Linode/Akamai | No Canadian object storage cluster despite Toronto compute DC; managed DB starts at $82/mo        |
+| Scaleway      | EU-only, no North American presence                                                               |
+| Contabo       | No managed services, CPU oversubscription, 99.6% SLA, no load balancer product                    |
 
 **Pushback:** DigitalOcean has had incidents. Their January 2026 Kubernetes networking event and October 2025 DOKS incident are real. Individual Droplets have historically been very stable, but if you're running everything on one droplet and DigitalOcean has a bad day in TOR1, you're down. The mitigation is: separate managed DB (survives compute incidents), object storage on a different failure domain, and Coolify/Kamal for rapid redeploy if a Droplet needs replacement.
 
@@ -223,12 +228,12 @@ When to pick OVH instead: You've validated product-market fit, you have 50+ cust
 
 **The Pick: DigitalOcean Managed Postgres (TOR1)**
 
-| Tier | vCPU | RAM | Storage | Price/mo | When |
-|------|------|-----|---------|----------|------|
-| Entry | 1 shared | 2 GB | 30 GB | $30 | 1–30 customers |
-| Mid | 2 ded. | 4 GB | 60 GB | $61 | 30–100 customers |
-| HA | 2 ded. + standby | 4 GB | 60 GB | $122 | When MRR commitments exist |
-| Scale | 4 ded. + standby | 8 GB | 140 GB | $244 | 100–200+ customers |
+| Tier  | vCPU             | RAM  | Storage | Price/mo | When                       |
+| ----- | ---------------- | ---- | ------- | -------- | -------------------------- |
+| Entry | 1 shared         | 2 GB | 30 GB   | $30      | 1–30 customers             |
+| Mid   | 2 ded.           | 4 GB | 60 GB   | $61      | 30–100 customers           |
+| HA    | 2 ded. + standby | 4 GB | 60 GB   | $122     | When MRR commitments exist |
+| Scale | 4 ded. + standby | 8 GB | 140 GB  | $244     | 100–200+ customers         |
 
 Why: same VPC as your droplets (sub-1ms latency, zero egress charges), automatic daily backups, PITR, one-click standby replica, PG16/17 support, `pg_stat_statements` enabled by default.
 
@@ -238,13 +243,13 @@ Crunchy employs more Postgres core contributors than any other company. Their Ho
 
 **Alternatives Rejected**
 
-| Option | Reason Rejected |
-|--------|----------------|
-| Self-hosted on VPS | Saves $30/mo, costs you every backup, upgrade, and disk-full incident |
-| Neon (serverless) | Cold starts on always-on multi-tenant app; per-CU-hour billing unpredictable; Databricks acquisition adds uncertainty |
-| Supabase | BaaS pricing model assumes you use auth/storage/realtime; DB-only is paying for features you don't need |
-| Vultr Managed Postgres | $90/mo minimum — 3× DigitalOcean for the same hardware |
-| OVH Managed Postgres | $87/mo minimum in US — similar problem |
+| Option                 | Reason Rejected                                                                                                       |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Self-hosted on VPS     | Saves $30/mo, costs you every backup, upgrade, and disk-full incident                                                 |
+| Neon (serverless)      | Cold starts on always-on multi-tenant app; per-CU-hour billing unpredictable; Databricks acquisition adds uncertainty |
+| Supabase               | BaaS pricing model assumes you use auth/storage/realtime; DB-only is paying for features you don't need               |
+| Vultr Managed Postgres | $90/mo minimum — 3× DigitalOcean for the same hardware                                                                |
+| OVH Managed Postgres   | $87/mo minimum in US — similar problem                                                                                |
 
 **Dev/CI: Neon Free Tier**
 
@@ -262,16 +267,16 @@ $5/mo includes 250 GiB storage and 1 TiB outbound. Additional storage at $0.02/G
 
 Why over R2 or B2: Canadian data residency, zero configuration complexity, one bill. At 100 GB stored and 500 GB egress (early-stage), the bill is $5. At 500 GB stored and 2 TB egress (20 customers), it's ~$20. At 2 TB stored and 10 TB egress (200 customers), it's ~$130. That $130 at 200 customers is the cost of simplicity — R2 would be ~$30, a saving of $100/mo, which is real money at scale.
 
-| Provider | 100GB/500GB egress | 500GB/2TB | 2TB/10TB | Canadian Region |
-|----------|:-:|:-:|:-:|:-:|
-| Cloudflare R2 | $1 | $7 | $30 | No (global edge) |
-| Backblaze B2 + Cloudflare CDN | $3 | $8 | $14 | No (US-West) |
-| OVHcloud (BHS/TOR) | $3 | $15 | $59 | Yes |
-| **DigitalOcean Spaces TOR1** | **$5** | **$20** | **$130** | **Yes (Toronto)** |
-| Wasabi Toronto | $7* | $7* | $14* | Yes |
-| AWS S3 ca-central-1 | $47 | $193 | $951 | Yes |
+| Provider                      | 100GB/500GB egress | 500GB/2TB | 2TB/10TB |  Canadian Region  |
+| ----------------------------- | :----------------: | :-------: | :------: | :---------------: |
+| Cloudflare R2                 |         $1         |    $7     |   $30    | No (global edge)  |
+| Backblaze B2 + Cloudflare CDN |         $3         |    $8     |   $14    |   No (US-West)    |
+| OVHcloud (BHS/TOR)            |         $3         |    $15    |   $59    |        Yes        |
+| **DigitalOcean Spaces TOR1**  |       **$5**       |  **$20**  | **$130** | **Yes (Toronto)** |
+| Wasabi Toronto                |        $7\*        |   $7\*    |  $14\*   |        Yes        |
+| AWS S3 ca-central-1           |        $47         |   $193    |   $951   |        Yes        |
 
-*Wasabi numbers are storage-only. Their 1:1 egress-to-storage ratio limit means a construction SaaS that actively serves blueprints will be throttled or suspended. See Appendix.
+\*Wasabi numbers are storage-only. Their 1:1 egress-to-storage ratio limit means a construction SaaS that actively serves blueprints will be throttled or suspended. See Appendix.
 
 **Runner-Up: OVHcloud Object Storage (Beauharnois or Toronto)**
 
@@ -279,13 +284,13 @@ At 2 TB stored with 10 TB egress, OVHcloud costs ~$59/mo vs DO's $130/mo because
 
 **Alternatives Considered**
 
-| Option | Status |
-|--------|--------|
-| Cloudflare R2 | Best cost option, but no dedicated Canadian region without Enterprise tier |
-| Backblaze B2 | Price increase to $6.95/TB effective May 2026; no Canadian region |
-| Wasabi | Do not use — egress ratio rule will throttle a serving-heavy SaaS |
-| Self-hosted (MinIO CE) | Archived February 2026 — no longer an option. AIStor is commercial |
-| AWS S3 ca-central-1 | $951/mo at scale vs $130 DO or $59 OVH — unjustifiable without enterprise contracts |
+| Option                 | Status                                                                              |
+| ---------------------- | ----------------------------------------------------------------------------------- |
+| Cloudflare R2          | Best cost option, but no dedicated Canadian region without Enterprise tier          |
+| Backblaze B2           | Price increase to $6.95/TB effective May 2026; no Canadian region                   |
+| Wasabi                 | Do not use — egress ratio rule will throttle a serving-heavy SaaS                   |
+| Self-hosted (MinIO CE) | Archived February 2026 — no longer an option. AIStor is commercial                  |
+| AWS S3 ca-central-1    | $951/mo at scale vs $130 DO or $59 OVH — unjustifiable without enterprise contracts |
 
 **Pushback:** The consolidation rationale for DO Spaces is entirely valid at Phase 1. At 200 customers with 2 TB of blueprints and heavy download patterns, you're spending $130/mo on storage when OVHcloud or Cloudflare R2 would cost $30–59/mo. That is worth a migration conversation — especially since it's an S3 API swap and a rclone sync. Don't let consolidation dogma cost you $70–100/mo at scale.
 
@@ -299,13 +304,13 @@ At 2 TB stored with 10 TB egress, OVHcloud costs ~$59/mo vs DO's $130/mo because
 
 What Clerk buys you: multi-organization support, impersonation (critical for support), MFA, branded emails, SAML/SSO readiness (metered when needed), and Next.js components that are better than anything you'd build in a month. The organization model maps directly to Sitelayer's tenant model.
 
-| Auth Option | B2B Org Model | Impersonation | Next.js Native | Cost at 2K MAU |
-|-------------|:-:|:-:|:-:|:-:|
-| **Clerk** | ✅ | ✅ | ✅ Best | $0 |
-| Kinde | ✅ | Unclear | Good | $0 (10.5K MAU free) |
-| WorkOS/AuthKit | ✅ | ✅ | Good | $0 (1M MAU free) |
-| Better Auth (library) | ✅ (build it) | Build it | Native | $0 (no vendor) |
-| Auth0 | ✅ | ✅ | Good | ❌ 5-org limit on free |
+| Auth Option           | B2B Org Model | Impersonation | Next.js Native |     Cost at 2K MAU     |
+| --------------------- | :-----------: | :-----------: | :------------: | :--------------------: |
+| **Clerk**             |      ✅       |      ✅       |    ✅ Best     |           $0           |
+| Kinde                 |      ✅       |    Unclear    |      Good      |  $0 (10.5K MAU free)   |
+| WorkOS/AuthKit        |      ✅       |      ✅       |      Good      |    $0 (1M MAU free)    |
+| Better Auth (library) | ✅ (build it) |   Build it    |     Native     |     $0 (no vendor)     |
+| Auth0                 |      ✅       |      ✅       |      Good      | ❌ 5-org limit on free |
 
 **Runner-Up: Kinde**
 
@@ -313,13 +318,13 @@ Kinde's $75/mo flat rate for unlimited SSO connections is better than Clerk's pe
 
 **Alternatives Rejected**
 
-| Option | Reason Rejected |
-|--------|----------------|
-| Auth0 | 5-organization limit on free tier — immediately insufficient for a multi-tenant SaaS |
+| Option                | Reason Rejected                                                                                                                                                                        |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auth0                 | 5-organization limit on free tier — immediately insufficient for a multi-tenant SaaS                                                                                                   |
 | Better Auth (library) | Legitimate option, but: build vs. buy analysis favors Clerk when impersonation, org management, and SAML are all needed; budget 3–4 weeks of engineering to match Clerk's B2B features |
-| WorkOS | Excellent product but the $125/SSO-connection model is expensive when you're adding construction company customers one by one; better fit for enterprise-first products |
-| Lucia Auth | Deprecated — see Appendix |
-| AWS Cognito | DX is genuinely bad; building multi-tenant org model on Cognito requires Lambda triggers and custom attribute mapping; not worth the cost savings at this scale |
+| WorkOS                | Excellent product but the $125/SSO-connection model is expensive when you're adding construction company customers one by one; better fit for enterprise-first products                |
+| Lucia Auth            | Deprecated — see Appendix                                                                                                                                                              |
+| AWS Cognito           | DX is genuinely bad; building multi-tenant org model on Cognito requires Lambda triggers and custom attribute mapping; not worth the cost savings at this scale                        |
 
 **Pushback:** Clerk is a hosted service that holds your user data. At 200 customers it's still likely free, but a Clerk outage is an authentication outage. The mitigation is a well-designed session token strategy (JWTs with 15-minute expiry, refresh in background) so that a 5-minute Clerk outage doesn't log everyone out. Better Auth is a real option if data sovereignty ever becomes a requirement — it's a library that runs on your VPS with your Postgres.
 
@@ -335,13 +340,13 @@ License: MIT. Cost: $0. Operational overhead: one Docker container that uses you
 
 Why step-level workflows matter for QBO: A complete sync involves (1) check token expiry/refresh, (2) fetch QBO webhook events, (3) call CDC for changed entities, (4) reconcile against local DB, (5) write results and update `last_synced_at`. If the CDC call on step 3 hits a rate limit after you've already refreshed tokens, BullMQ restarts from step 1. With Hatchet, step 1 is already persisted and you retry from step 3.
 
-| Option | Step Durability | Dashboard | Infra Added | Cost |
-|--------|:-:|:-:|:-:|:-:|
-| **Hatchet (self-hosted)** | ✅ | ✅ | 1 Docker container | $0 |
-| Trigger.dev Cloud (Pro) | ✅ | ✅ | None (managed) | $50/mo |
-| Graphile Worker | ❌ | ❌ | None (Postgres only) | $0 |
-| BullMQ (OSS) | ❌ | Requires third-party | Redis required | $0 |
-| Temporal Cloud | ✅ | ✅ | None (managed) | $100+/mo |
+| Option                    | Step Durability |      Dashboard       |     Infra Added      |   Cost   |
+| ------------------------- | :-------------: | :------------------: | :------------------: | :------: |
+| **Hatchet (self-hosted)** |       ✅        |          ✅          |  1 Docker container  |    $0    |
+| Trigger.dev Cloud (Pro)   |       ✅        |          ✅          |    None (managed)    |  $50/mo  |
+| Graphile Worker           |       ❌        |          ❌          | None (Postgres only) |    $0    |
+| BullMQ (OSS)              |       ❌        | Requires third-party |    Redis required    |    $0    |
+| Temporal Cloud            |       ✅        |          ✅          |    None (managed)    | $100+/mo |
 
 **Runner-Up: Graphile Worker + manual state machine**
 
@@ -349,13 +354,13 @@ If Hatchet feels like unnecessary overhead, Graphile Worker (pure Postgres, LIST
 
 **Alternatives Rejected**
 
-| Option | Reason Rejected |
-|--------|----------------|
-| BullMQ Pro | $139/mo per deployment for step durability you get free from Hatchet; wrong tool for long-running workflows |
-| Inngest Cloud | $75/mo for Pro; HTTP-callback architecture is a different model from VPS queues |
-| Temporal | Cassandra + Elasticsearch self-hosting is SRE-level overhead; $100+/mo cloud minimum; overkill |
-| Defer.run | Dead since May 2024 |
-| Cloudflare Queues | Requires Cloudflare Workers runtime; incompatible with Node.js VPS stack |
+| Option            | Reason Rejected                                                                                             |
+| ----------------- | ----------------------------------------------------------------------------------------------------------- |
+| BullMQ Pro        | $139/mo per deployment for step durability you get free from Hatchet; wrong tool for long-running workflows |
+| Inngest Cloud     | $75/mo for Pro; HTTP-callback architecture is a different model from VPS queues                             |
+| Temporal          | Cassandra + Elasticsearch self-hosting is SRE-level overhead; $100+/mo cloud minimum; overkill              |
+| Defer.run         | Dead since May 2024                                                                                         |
+| Cloudflare Queues | Requires Cloudflare Workers runtime; incompatible with Node.js VPS stack                                    |
 
 **Pushback:** Hatchet v1 launched April 2025 — it is younger than BullMQ by years. For a system as critical as QBO sync, younger projects carry real risk. If the project stalls or a major bug appears, you're running unpatched MIT software on your critical background job infrastructure. The mitigation: Hatchet is MIT, so you can fork it. The alternative mitigation: Trigger.dev Cloud Pro at $50/mo is the managed version of the same concept with an established team behind it.
 
@@ -379,13 +384,13 @@ If Clerk handles auth emails (magic links, password resets), your actual email v
 
 **Alternatives Rejected**
 
-| Option | Reason Rejected |
-|--------|----------------|
-| AWS SES | $1/mo at 10K emails, but requires sandbox exit process, manual bounce/complaint handling, SPF/DKIM setup; saves $15/mo, costs 4–8 hours setup |
-| SendGrid | Removed free tier May 2025; deliverability issues on shared IPs; declining developer experience post-Twilio acquisition |
-| Mailgun | 100% Flex plan price increase December 2025; now $2/1K for legacy users |
-| Self-hosted | Not viable — port 25 blocked by DO; IP reputation building takes months |
-| Mailtrap | Better for dev sandbox than production deliverability |
+| Option      | Reason Rejected                                                                                                                               |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| AWS SES     | $1/mo at 10K emails, but requires sandbox exit process, manual bounce/complaint handling, SPF/DKIM setup; saves $15/mo, costs 4–8 hours setup |
+| SendGrid    | Removed free tier May 2025; deliverability issues on shared IPs; declining developer experience post-Twilio acquisition                       |
+| Mailgun     | 100% Flex plan price increase December 2025; now $2/1K for legacy users                                                                       |
+| Self-hosted | Not viable — port 25 blocked by DO; IP reputation building takes months                                                                       |
+| Mailtrap    | Better for dev sandbox than production deliverability                                                                                         |
 
 **Pushback:** If cost at scale matters more than deliverability premium, AWS SES at $20/mo for 200K emails vs Postmark's $259/mo is a $239/mo difference. That is real money at 200 customers. The setup investment (4–8 hours) pays back in 1 month. If you have the operational discipline to configure SPF/DKIM/DMARC correctly and build a bounce handler webhook, SES is the honest cost-optimized choice. Most founders don't, and then they wonder why their invoices are in spam.
 
@@ -405,12 +410,12 @@ GlitchTip is a Sentry-compatible error tracker — the Sentry SDK sends to Glitc
 
 **Alternatives Rejected**
 
-| Option | Reason Rejected |
-|--------|----------------|
-| Highlight.io | Dead since February 2026 (acquired by LaunchDarkly, standalone service discontinued) |
-| Datadog | $15/host + $31/host APM + log indexing charges = budget trap; enterprise sales motion; 14-day trial only |
+| Option             | Reason Rejected                                                                                                                        |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Highlight.io       | Dead since February 2026 (acquired by LaunchDarkly, standalone service discontinued)                                                   |
+| Datadog            | $15/host + $31/host APM + log indexing charges = budget trap; enterprise sales motion; 14-day trial only                               |
 | Self-hosted Sentry | Requires Kafka + ClickHouse + Postgres + Redis; needs 8 GB RAM dedicated server; $40–60/mo infrastructure for a $26/mo SaaS equivalent |
-| Rollbar | Less feature-rich than Sentry; $15.83/mo for 25K events compares poorly to Sentry's 50K at $26 |
+| Rollbar            | Less feature-rich than Sentry; $15.83/mo for 25K events compares poorly to Sentry's 50K at $26                                         |
 
 **Pushback:** Sentry's pricing model has a history of escalation. The Team plan at $26/mo is fine now. When you add session replays, performance monitoring, and cron monitoring, the overage billing on spans and errors kicks in quickly. Set budget alerts, configure spike protection, and monitor your monthly usage. At 100K+ errors/month, GlitchTip becomes compelling.
 
@@ -432,12 +437,12 @@ Better Stack consolidates logs, metrics, uptime monitoring, error tracking, and 
 
 **Alternatives Rejected**
 
-| Option | Reason Rejected |
-|--------|----------------|
-| Datadog | See Layer 7 notes; the per-host + APM host + log index triple-billing structure creates surprise invoices |
-| New Relic | $99/user/month for Standard plan; user-based pricing punishes small teams |
+| Option             | Reason Rejected                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------ |
+| Datadog            | See Layer 7 notes; the per-host + APM host + log index triple-billing structure creates surprise invoices    |
+| New Relic          | $99/user/month for Standard plan; user-based pricing punishes small teams                                    |
 | Self-hosted SigNoz | Apache 2.0, excellent Datadog alternative, but ClickHouse requires 8 GB RAM dedicated; solid option at scale |
-| Axiom | $25/mo base is fine; SaaS-only (no self-host for production); SAML/RBAC as $100/mo add-ons |
+| Axiom              | $25/mo base is fine; SaaS-only (no self-host for production); SAML/RBAC as $100/mo add-ons                   |
 
 **Pushback:** Grafana Cloud's free tier sounds like a good deal — and it is — but the moment you need multi-tenant log filtering at scale, Loki's label-based model requires careful planning. Designing your log schema (`{service="qbo-sync", tenant_id="acme"}`) from day one avoids re-indexing pain later. Set this up before you go to production, not after you're debugging a multi-tenant data leak.
 
@@ -469,12 +474,12 @@ Kamal 2 is a CLI tool from 37signals (Basecamp, HEY). Zero web dashboard. SSH-ba
 
 **Alternatives Rejected**
 
-| Option | Reason Rejected |
-|--------|----------------|
-| Dokploy | Newer codebase (2024 launch), five update failures in six months per mid-2026 reviews; good PR preview environments but instability concern for production |
-| CapRover | Showing its age; UI dated; no preview environments; licensing controversy in 2024 |
-| Dokku | Git-push Heroku clone; excellent for solo devs; less suited when Docker Compose is your standard artifact |
-| Portainer | Management UI, not a deploy tool; use alongside Kamal 2, not as a deploy solution |
+| Option    | Reason Rejected                                                                                                                                            |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dokploy   | Newer codebase (2024 launch), five update failures in six months per mid-2026 reviews; good PR preview environments but instability concern for production |
+| CapRover  | Showing its age; UI dated; no preview environments; licensing controversy in 2024                                                                          |
+| Dokku     | Git-push Heroku clone; excellent for solo devs; less suited when Docker Compose is your standard artifact                                                  |
+| Portainer | Management UI, not a deploy tool; use alongside Kamal 2, not as a deploy solution                                                                          |
 
 **Pushback:** Coolify is still in beta (v4.0.0-beta.437 as of October 2025). The encryption key handling has a documented footgun — a double-click can destroy it, and if the key is lost, you lose access to all environment variables stored in Coolify. Back up the encryption key. Run Coolify on a separate management server from your application servers, so a Coolify issue does not take your app down.
 
@@ -496,12 +501,12 @@ Zero vendor lock-in, loaders/actions mental model simpler than RSC + Server Acti
 
 **Alternatives Rejected**
 
-| Option | Reason Rejected |
-|--------|----------------|
-| TanStack Start | RC status as of January 2026; don't start a production SaaS on RC software |
-| SvelteKit | Different language; react-konva has no Svelte equivalent at the same maturity level |
-| Astro | Content-site framework; wrong tool for complex interactive SaaS |
-| SolidStart | Dev server instability reported through November 2025; ecosystem too small |
+| Option         | Reason Rejected                                                                     |
+| -------------- | ----------------------------------------------------------------------------------- |
+| TanStack Start | RC status as of January 2026; don't start a production SaaS on RC software          |
+| SvelteKit      | Different language; react-konva has no Svelte equivalent at the same maturity level |
+| Astro          | Content-site framework; wrong tool for complex interactive SaaS                     |
+| SolidStart     | Dev server instability reported through November 2025; ecosystem too small          |
 
 **Pushback:** Next.js is Vercel's product. The self-hosting story is fine, but major features are designed with Vercel's edge infrastructure in mind. ISR, edge middleware, and Image Optimization all have VPS workarounds that add friction. None of these are blockers for Sitelayer, but be aware that the framework's main development path is Vercel-optimized.
 
@@ -522,6 +527,7 @@ For blueprints >20 MB: use HTTP Range Requests (PDF.js handles this automaticall
 **Commercial Alternative: Apryse WebViewer**
 
 When to seriously consider it:
+
 - You have paying customers and $25K+/year budget
 - CAD-generated PDFs are common in your customer base (PDF.js handles ~97–99% of standard PDFs; CAD edge cases are Apryse's specific advantage)
 - Mobile field access is a day-1 requirement (Apryse's touch support is better than what you'll build)
@@ -531,12 +537,12 @@ Apryse WebViewer: [~$27,590/year median buyer cost (Vendr data, 37 purchases)](h
 
 **Alternatives Rejected**
 
-| Option | Reason Rejected |
-|--------|----------------|
-| Fabric.js | No native React bindings; SVG-based rendering slower than Konva's canvas for annotation scenes |
-| Pixi.js | WebGL overhead; no built-in selection/transformer; overkill for annotation overlays |
-| PSPDFKit/Nutrient | $33,443/year median Vendr cost; more expensive than Apryse |
-| Custom Canvas API | 4–6 weeks to rebuild what react-konva provides; wrong tradeoff for a small team |
+| Option            | Reason Rejected                                                                                |
+| ----------------- | ---------------------------------------------------------------------------------------------- |
+| Fabric.js         | No native React bindings; SVG-based rendering slower than Konva's canvas for annotation scenes |
+| Pixi.js           | WebGL overhead; no built-in selection/transformer; overkill for annotation overlays            |
+| PSPDFKit/Nutrient | $33,443/year median Vendr cost; more expensive than Apryse                                     |
+| Custom Canvas API | 4–6 weeks to rebuild what react-konva provides; wrong tradeoff for a small team                |
 
 **Pushback:** The PDF.js + Konva integration is the hardest part of this stack. Coordinate system management at zoom-to-pointer level, HiDPI handling, touch event normalization, and the rotation edge case are each a half-day of debugging. Budget 3–5 weeks for a production-quality canvas implementation, not 3–5 days. The research documents specific production failures: 35-second load times on dense 5 MB CAD drawings, PDF rotation coordinate drift, mobile pinch-zoom requiring full custom touch event handling. These are not edge cases in construction blueprints.
 
@@ -556,11 +562,11 @@ Prisma 7 (November 2025) removed the Rust engine entirely — pure TypeScript, 3
 
 **Alternatives Rejected**
 
-| Option | Reason Rejected |
-|--------|----------------|
-| Kysely | Query builder, not ORM — no schema/migration management; requires more boilerplate |
+| Option  | Reason Rejected                                                                     |
+| ------- | ----------------------------------------------------------------------------------- |
+| Kysely  | Query builder, not ORM — no schema/migration management; requires more boilerplate  |
 | TypeORM | Active-record pattern causes N+1 issues at scale; less TypeScript-safe than Drizzle |
-| raw SQL | Maximum control; not worth the boilerplate for a standard CRUD-heavy app |
+| raw SQL | Maximum control; not worth the boilerplate for a standard CRUD-heavy app            |
 
 **Pushback:** Drizzle's relational query API syntax is idiosyncratic compared to Prisma's `.findMany({ include: {...} })`. For developers coming from Prisma or a traditional ORM, the Drizzle mental model takes a few days to internalize. This is not a reason to avoid it — just budget onboarding time.
 
@@ -596,15 +602,16 @@ Tremor provides chart primitives (bar charts, line charts, area charts) built on
 
 ```typescript
 async function qboRequest(realmId: string, method: string, path: string, body?: object) {
-  const accessToken = await getValidAccessToken(realmId); // refresh + lock logic here
-  const base = process.env.QBO_SANDBOX === 'true'
-    ? 'https://sandbox-quickbooks.api.intuit.com'
-    : 'https://quickbooks.api.intuit.com';
+  const accessToken = await getValidAccessToken(realmId) // refresh + lock logic here
+  const base =
+    process.env.QBO_SANDBOX === 'true'
+      ? 'https://sandbox-quickbooks.api.intuit.com'
+      : 'https://quickbooks.api.intuit.com'
   return fetch(`${base}/v3/company/${realmId}${path}?minorversion=75`, {
     method,
     headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
-  });
+  })
 }
 ```
 
@@ -644,26 +651,26 @@ For customer-facing analytics at scale (Phase 3+): build a Cube.dev semantic lay
 
 ### 1 Customer — Learning & Validation Phase
 
-| Item | Service | Monthly Cost |
-|------|---------|:------------:|
-| App server | DO TOR1 Premium Intel 4vCPU/8GB (160 GB SSD, 5 TB BW) | $48.00 |
-| Droplet weekly backups (20% add-on) | DO Backups | $9.60 |
-| Managed Postgres | DO Managed Postgres 1 GB (shared, start tier) | $15.23 |
-| Redis/Valkey | On-VPS (Docker, no managed needed yet) | $0 |
-| Object storage | DO Spaces TOR1 (250 GB + 1 TB included) | $5.00 |
-| Auth | Clerk free tier (under 10K MAU confirmed) | $0 |
-| Background jobs | Hatchet Lite (self-hosted, Postgres-backed) | $0 |
-| Email | Postmark Basic (10K emails/mo) | $15.00 |
-| Error tracking | Sentry Developer (5K errors/mo free) | $0 |
-| Logs + metrics | Grafana Cloud free tier | $0 |
-| Uptime | UptimeRobot free (50 monitors) | $0 |
-| Deploy tool | Coolify (self-hosted, shared on app VPS) | $0 |
-| Source control + CI | GitHub Team ($4/user × 2) + Actions usage | $8–$10 |
-| Product analytics | PostHog Cloud free | $0 |
-| BI dashboards | Metabase OSS (shared on app VPS) | $0 |
-| Domain (.com, amortized) | Registrar | ~$1 |
-| QBO API | Builder tier (0–500K CorePlus calls/mo) | $0 |
-| **Total** | | **~$101.83–$103.83/mo** |
+| Item                                | Service                                               |      Monthly Cost       |
+| ----------------------------------- | ----------------------------------------------------- | :---------------------: |
+| App server                          | DO TOR1 Premium Intel 4vCPU/8GB (160 GB SSD, 5 TB BW) |         $48.00          |
+| Droplet weekly backups (20% add-on) | DO Backups                                            |          $9.60          |
+| Managed Postgres                    | DO Managed Postgres 1 GB (shared, start tier)         |         $15.23          |
+| Redis/Valkey                        | On-VPS (Docker, no managed needed yet)                |           $0            |
+| Object storage                      | DO Spaces TOR1 (250 GB + 1 TB included)               |          $5.00          |
+| Auth                                | Clerk free tier (under 10K MAU confirmed)             |           $0            |
+| Background jobs                     | Hatchet Lite (self-hosted, Postgres-backed)           |           $0            |
+| Email                               | Postmark Basic (10K emails/mo)                        |         $15.00          |
+| Error tracking                      | Sentry Developer (5K errors/mo free)                  |           $0            |
+| Logs + metrics                      | Grafana Cloud free tier                               |           $0            |
+| Uptime                              | UptimeRobot free (50 monitors)                        |           $0            |
+| Deploy tool                         | Coolify (self-hosted, shared on app VPS)              |           $0            |
+| Source control + CI                 | GitHub Team ($4/user × 2) + Actions usage             |         $8–$10          |
+| Product analytics                   | PostHog Cloud free                                    |           $0            |
+| BI dashboards                       | Metabase OSS (shared on app VPS)                      |           $0            |
+| Domain (.com, amortized)            | Registrar                                             |           ~$1           |
+| QBO API                             | Builder tier (0–500K CorePlus calls/mo)               |           $0            |
+| **Total**                           |                                                       | **~$101.83–$103.83/mo** |
 
 At 1 customer you are near $100/mo for the entire stack. The forced spending: compute ($48), backups ($9.60), managed DB ($15.23), email ($15), GitHub ($8–10). Everything else is free until you need more capacity.
 
@@ -677,26 +684,26 @@ Note on Sentry: the free Developer tier (5,000 errors/month) may be sufficient i
 
 ### 20 Customers — Post-Proof, Early Growth
 
-| Item | Service | Monthly Cost |
-|------|---------|:------------:|
-| App servers | 2× DO Premium Intel 4vCPU/8GB (app + worker) | $96.00 |
-| Droplet weekly backups (2× $9.60) | DO Backups | $19.20 |
-| Managed Postgres | DO Managed Postgres 4 GB (dedicated) | $61.00 |
-| Managed Redis/Valkey | DO Managed Valkey 1 GB | $15.00 |
-| Object storage | DO Spaces TOR1 (~200 GB stored, ~1 TB egress) | $7.00 |
-| Auth | Clerk free (still under 10K MAU at 100–200 users) | $0 |
-| Background jobs | Hatchet Lite (self-hosted) | $0 |
-| Email | Postmark Basic → Pro tier (15–20K emails/mo) | $15–$17 |
-| Error tracking | Sentry Team | $26.00 |
-| Logs + metrics | Grafana Cloud free tier | $0 |
-| Uptime | UptimeRobot Pro (1-minute checks) | $7.00 |
-| Deploy tool | Coolify (self-hosted, dedicated 2 GB VPS) | $18.00 |
-| Source control + CI | GitHub Team + Actions | $8–$12 |
-| Product analytics | PostHog Cloud free | $0 |
-| BI dashboards | Metabase OSS ($20 VPS shared with observability) | $10.00 |
-| Domain | Registrar | ~$1 |
-| QBO API | Builder tier | $0 |
-| **Total** | | **~$283–$289/mo** |
+| Item                              | Service                                           |   Monthly Cost    |
+| --------------------------------- | ------------------------------------------------- | :---------------: |
+| App servers                       | 2× DO Premium Intel 4vCPU/8GB (app + worker)      |      $96.00       |
+| Droplet weekly backups (2× $9.60) | DO Backups                                        |      $19.20       |
+| Managed Postgres                  | DO Managed Postgres 4 GB (dedicated)              |      $61.00       |
+| Managed Redis/Valkey              | DO Managed Valkey 1 GB                            |      $15.00       |
+| Object storage                    | DO Spaces TOR1 (~200 GB stored, ~1 TB egress)     |       $7.00       |
+| Auth                              | Clerk free (still under 10K MAU at 100–200 users) |        $0         |
+| Background jobs                   | Hatchet Lite (self-hosted)                        |        $0         |
+| Email                             | Postmark Basic → Pro tier (15–20K emails/mo)      |      $15–$17      |
+| Error tracking                    | Sentry Team                                       |      $26.00       |
+| Logs + metrics                    | Grafana Cloud free tier                           |        $0         |
+| Uptime                            | UptimeRobot Pro (1-minute checks)                 |       $7.00       |
+| Deploy tool                       | Coolify (self-hosted, dedicated 2 GB VPS)         |      $18.00       |
+| Source control + CI               | GitHub Team + Actions                             |      $8–$12       |
+| Product analytics                 | PostHog Cloud free                                |        $0         |
+| BI dashboards                     | Metabase OSS ($20 VPS shared with observability)  |      $10.00       |
+| Domain                            | Registrar                                         |        ~$1        |
+| QBO API                           | Builder tier                                      |        $0         |
+| **Total**                         |                                                   | **~$283–$289/mo** |
 
 At 20 customers you add a managed Redis ($15), upgrade to a dedicated Postgres ($61), pay for real uptime monitoring ($7), and split your application and worker processes onto separate droplets ($96 vs $48). The stack roughly doubles in infrastructure cost but remains under $300/mo.
 
@@ -706,27 +713,27 @@ At 20 customers generating meaningful MRR, $283/mo infrastructure is a rounding 
 
 ### 200 Customers — Scaled, Revenue is Real
 
-| Item | Service | Monthly Cost |
-|------|---------|:------------:|
-| App servers | 3× DO Premium Intel 8 GB + 1× worker (4 droplets) | $192.00 |
-| Droplet weekly backups (4× $9.60) | DO Backups | $38.40 |
-| Managed Postgres | DO Managed Postgres 4 GB + HA standby | $122.00 |
-| Managed Redis/Valkey | DO Managed Valkey 2 GB | $30.00 |
-| Object storage | DO Spaces TOR1 (~2 TB stored, ~10 TB egress) | $130.00 |
-| Auth | Clerk Pro (custom domain; MAU likely still under limit) | $25.00 |
-| Background jobs | Hatchet Lite (self-hosted, upgraded VPS) | $0 |
-| Email | Postmark Pro (50K emails/mo) | $69.00 |
-| Error tracking | Sentry Team | $26.00 |
-| Logs + metrics | Grafana Cloud Pro (~$70 at moderate volume) | $70.00 |
-| Uptime | UptimeRobot Pro | $7.00 |
-| Deploy tool | Coolify (self-hosted, dedicated management server) | $18.00 |
-| Load balancer | DO Load Balancer | $12.00 |
-| Source control + CI | GitHub Team (~3 users) + Actions | $12–$15 |
-| Product analytics | PostHog Cloud (likely still free or ~$10) | $0–$10 |
-| BI dashboards | Metabase OSS | $10.00 |
-| Domain | Registrar | ~$1 |
-| QBO API | Builder tier (model carefully at 200 customers) | $0–$300 |
-| **Total** | | **~$762–$1,075/mo** |
+| Item                              | Service                                                 |    Monthly Cost     |
+| --------------------------------- | ------------------------------------------------------- | :-----------------: |
+| App servers                       | 3× DO Premium Intel 8 GB + 1× worker (4 droplets)       |       $192.00       |
+| Droplet weekly backups (4× $9.60) | DO Backups                                              |       $38.40        |
+| Managed Postgres                  | DO Managed Postgres 4 GB + HA standby                   |       $122.00       |
+| Managed Redis/Valkey              | DO Managed Valkey 2 GB                                  |       $30.00        |
+| Object storage                    | DO Spaces TOR1 (~2 TB stored, ~10 TB egress)            |       $130.00       |
+| Auth                              | Clerk Pro (custom domain; MAU likely still under limit) |       $25.00        |
+| Background jobs                   | Hatchet Lite (self-hosted, upgraded VPS)                |         $0          |
+| Email                             | Postmark Pro (50K emails/mo)                            |       $69.00        |
+| Error tracking                    | Sentry Team                                             |       $26.00        |
+| Logs + metrics                    | Grafana Cloud Pro (~$70 at moderate volume)             |       $70.00        |
+| Uptime                            | UptimeRobot Pro                                         |        $7.00        |
+| Deploy tool                       | Coolify (self-hosted, dedicated management server)      |       $18.00        |
+| Load balancer                     | DO Load Balancer                                        |       $12.00        |
+| Source control + CI               | GitHub Team (~3 users) + Actions                        |       $12–$15       |
+| Product analytics                 | PostHog Cloud (likely still free or ~$10)               |       $0–$10        |
+| BI dashboards                     | Metabase OSS                                            |       $10.00        |
+| Domain                            | Registrar                                               |         ~$1         |
+| QBO API                           | Builder tier (model carefully at 200 customers)         |       $0–$300       |
+| **Total**                         |                                                         | **~$762–$1,075/mo** |
 
 At 200 customers: object storage egress ($130) becomes the largest single line item after compute. This is the point where OVHcloud (free egress, Canadian residency) or Cloudflare R2 (zero egress) become worth a migration conversation.
 
@@ -777,7 +784,7 @@ function tenantQuery(db: DrizzleDB, companyId: string) {
   return {
     projects: db.select().from(projects).where(eq(projects.companyId, companyId)),
     // ...
-  };
+  }
 }
 ```
 
@@ -792,12 +799,12 @@ Install Hatchet Lite before you write a single QBO sync line. The QBO sync workf
 The specific Hatchet pattern for QBO sync:
 
 ```typescript
-const qboSyncWorkflow = hatchet.workflow({ name: 'qbo-sync' });
-qboSyncWorkflow.step('validate-token', validateToken);     // retries: 3, backoff: exponential
-qboSyncWorkflow.step('fetch-webhooks', fetchWebhooks, ['validate-token']);
-qboSyncWorkflow.step('cdc-sweep', cdcSweep, ['fetch-webhooks']);
-qboSyncWorkflow.step('reconcile', reconcile, ['cdc-sweep']);
-qboSyncWorkflow.step('write-results', writeResults, ['reconcile']);
+const qboSyncWorkflow = hatchet.workflow({ name: 'qbo-sync' })
+qboSyncWorkflow.step('validate-token', validateToken) // retries: 3, backoff: exponential
+qboSyncWorkflow.step('fetch-webhooks', fetchWebhooks, ['validate-token'])
+qboSyncWorkflow.step('cdc-sweep', cdcSweep, ['fetch-webhooks'])
+qboSyncWorkflow.step('reconcile', reconcile, ['cdc-sweep'])
+qboSyncWorkflow.step('write-results', writeResults, ['reconcile'])
 ```
 
 If `cdc-sweep` fails, Hatchet retries from `cdc-sweep`. Your token was already validated. Your webhook events were already fetched. No wasted API calls.
@@ -842,6 +849,7 @@ Never store canvas pixels. On every coordinate save: call `viewport.convertToPdf
 ### 5. Auth Org/Tenancy from Commit #1
 
 Configure Clerk's Organization model before any other application code. The decisions:
+
 - One Clerk Organization = one construction company (tenant)
 - Roles: `owner`, `admin`, `estimator`, `field` — define these before building routes
 - JWT claims shape: include `orgId`, `orgRole` in every JWT so API routes can authorize without an extra DB query
@@ -997,6 +1005,7 @@ The protection: define what is "product" (works for any GC doing takeoff with QB
 - [ ] Customer onboarding flow: self-serve QBO connection, blueprint upload, first estimate creation
 
 **Defer to Month 6+**
+
 - HA Postgres standby replica (add when MRR justifies it)
 - Apryse WebViewer evaluation (revisit when customer is paying and CAD edge cases appear)
 - Read replicas (revisit when query time degrades on primary)
@@ -1058,29 +1067,30 @@ Any pricing comparison to Hetzner made before April 2026 is outdated. The post-i
 
 ---
 
-*All prices verified against live vendor pricing pages on April 23, 2026. VPS pricing reflects Hetzner's post-April-2026 increase. Backblaze pricing reflects May 2026 increase. Verify current pricing before making procurement decisions.*
+_All prices verified against live vendor pricing pages on April 23, 2026. VPS pricing reflects Hetzner's post-April-2026 increase. Backblaze pricing reflects May 2026 increase. Verify current pricing before making procurement decisions._
 
 ### Verification Delta From Prior Draft
 
-| Component | Prior Draft | Verified April 23, 2026 | Delta |
-|---|---|---|---|
-| DO Droplet Premium Intel 4vCPU/8GB | $48/mo | $48/mo | ✓ |
-| DO Managed PG (1 GB shared) | $15/mo | $15.23/mo | +$0.23 |
-| DO Managed Valkey 1 GB | $15/mo | $15/mo | ✓ |
-| DO Spaces (250GB + 1TB egress) | $5/mo | $5/mo | ✓ |
-| DO Droplet weekly backups | $5/mo (flat) | 20% of Droplet = $9.60/mo | **+$4.60** |
-| Postmark Basic (10K emails) | $16.50/mo | $15/mo | −$1.50 |
-| Sentry Team | $26/mo | $26/mo (50K errors) | ✓ |
-| Clerk free tier | "50K MAU" (unverified) | 10K MAU on Clerk's own page; 50K claimed by aggregators | **Assume 10K** |
-| GitHub Team | $4/user/mo | $4/user/mo | ✓ |
-| GitHub Actions self-hosted runners | Free | $0.002/min starting March 1, 2026 | **New fee** |
-| Coolify self-hosted | Free | Free, Apache 2.0, v4 (52K+ GH stars) | ✓ |
-| Hatchet self-hosted Lite | Free | Free, single Docker image | ✓ |
-| .com domain | ~$1/mo | $10–$20/year | ✓ |
+| Component                          | Prior Draft            | Verified April 23, 2026                                 | Delta          |
+| ---------------------------------- | ---------------------- | ------------------------------------------------------- | -------------- |
+| DO Droplet Premium Intel 4vCPU/8GB | $48/mo                 | $48/mo                                                  | ✓              |
+| DO Managed PG (1 GB shared)        | $15/mo                 | $15.23/mo                                               | +$0.23         |
+| DO Managed Valkey 1 GB             | $15/mo                 | $15/mo                                                  | ✓              |
+| DO Spaces (250GB + 1TB egress)     | $5/mo                  | $5/mo                                                   | ✓              |
+| DO Droplet weekly backups          | $5/mo (flat)           | 20% of Droplet = $9.60/mo                               | **+$4.60**     |
+| Postmark Basic (10K emails)        | $16.50/mo              | $15/mo                                                  | −$1.50         |
+| Sentry Team                        | $26/mo                 | $26/mo (50K errors)                                     | ✓              |
+| Clerk free tier                    | "50K MAU" (unverified) | 10K MAU on Clerk's own page; 50K claimed by aggregators | **Assume 10K** |
+| GitHub Team                        | $4/user/mo             | $4/user/mo                                              | ✓              |
+| GitHub Actions self-hosted runners | Free                   | $0.002/min starting March 1, 2026                       | **New fee**    |
+| Coolify self-hosted                | Free                   | Free, Apache 2.0, v4 (52K+ GH stars)                    | ✓              |
+| Hatchet self-hosted Lite           | Free                   | Free, single Docker image                               | ✓              |
+| .com domain                        | ~$1/mo                 | $10–$20/year                                            | ✓              |
 
 **Net impact at 1 customer:** +$3.10/mo (backups $+4.60, Postmark $−1.50). Revised total is ~$102/mo vs. $100/mo previously quoted.
 
 **Primary sources:**
+
 - DigitalOcean Droplet pricing: https://www.digitalocean.com/pricing/droplets
 - DigitalOcean Managed Databases: https://www.digitalocean.com/pricing/managed-databases
 - DigitalOcean Spaces: https://www.digitalocean.com/pricing/spaces-object-storage

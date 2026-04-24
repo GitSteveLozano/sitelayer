@@ -10,17 +10,17 @@
 
 L&A Operations organizes work into **9 divisions** (QBO Classes):
 
-| Division | Code | Purpose |
-|----------|------|---------|
-| Stucco | D1 | Exterior stucco finish work |
-| Masonry | D2 | Brick, stone, masonry work |
-| Siding | D3 | Exterior siding installation |
-| EIFS | D4 | Exterior Insulation & Finish System (primary focus) |
-| Paper & Wire | D5 | Substrate prep, air barriers, underlayment |
-| Snow Removal | D6 | Seasonal snow removal services |
-| Warranty | D7 | Warranty/service callbacks |
-| Overhead | D8 | Administrative, project mgmt, non-billable |
-| Scaffolding | D9 | Temporary scaffolding/equipment rental |
+| Division     | Code | Purpose                                             |
+| ------------ | ---- | --------------------------------------------------- |
+| Stucco       | D1   | Exterior stucco finish work                         |
+| Masonry      | D2   | Brick, stone, masonry work                          |
+| Siding       | D3   | Exterior siding installation                        |
+| EIFS         | D4   | Exterior Insulation & Finish System (primary focus) |
+| Paper & Wire | D5   | Substrate prep, air barriers, underlayment          |
+| Snow Removal | D6   | Seasonal snow removal services                      |
+| Warranty     | D7   | Warranty/service callbacks                          |
+| Overhead     | D8   | Administrative, project mgmt, non-billable          |
+| Scaffolding  | D9   | Temporary scaffolding/equipment rental              |
 
 **Key insight:** D4-EIFS is the core business (primary revenue driver). Other divisions support or complement EIFS work.
 
@@ -33,6 +33,7 @@ L&A Operations organizes work into **9 divisions** (QBO Classes):
 QBO contains a comprehensive service item master with 50+ line items covering:
 
 ### A. Core Scope Items (Measured in Takeoff)
+
 - **EPS** — Expanded Polystyrene foam board
 - **Basecoat** — Stucco base layer
 - **Finish Coat** — Final stucco/coating layer
@@ -44,6 +45,7 @@ QBO contains a comprehensive service item master with 50+ line items covering:
 - **Flashing** — Linear feet of flashing
 
 ### B. Material/Supply Items
+
 - Aluminum (framing, trim)
 - Brick, Brick-Tex
 - Blueskin (membrane brand)
@@ -54,6 +56,7 @@ QBO contains a comprehensive service item master with 50+ line items covering:
 - Insulation
 
 ### C. Trade Work Items
+
 - Carpentry
 - Direct Apply Walls/Ceiling (spray application)
 - HVAC
@@ -61,6 +64,7 @@ QBO contains a comprehensive service item master with 50+ line items covering:
 - Fireplace
 
 ### D. Administrative/Billing Items
+
 - Billable Income (general billing catch-all)
 - Change Order (scope additions)
 - Credit Card Surcharge 2.4%
@@ -71,6 +75,7 @@ QBO contains a comprehensive service item master with 50+ line items covering:
 - Extra (misc charges)
 
 ### E. Accounting Entries (Non-Billable)
+
 - Credit (reversal)
 - CEWS Subsidy Receivable
 - Holdback (retainage held by customer)
@@ -78,10 +83,12 @@ QBO contains a comprehensive service item master with 50+ line items covering:
 - Labour for L&A Scaffolding (crew time for rental division)
 
 ### F. Discounts/Allowances
+
 - Exclusions (scope removal)
 - Inflation (price adjustment)
 
 **Key insight:** QBO service items serve **dual purpose:**
+
 1. **Billable to customers** (scope items, materials, trades)
 2. **Internal accounting** (deposits, holdback, subsidies, credits)
 
@@ -92,12 +99,14 @@ Not all 50+ items are suitable for takeoff/estimation. The system needs to disti
 ## 3. Customer Base
 
 ### Active/Primary Customers
+
 - **Foxridge Homes** — Residential builder (multiple projects)
 - **Streetside Developments** — Commercial/multi-unit developer
 - **6 Thompson Court project** — Specific job address in Oak Bluff, MB
 - **Vulcan Construction** (10173913 Manitoba Ltd) — Contractor/partner
 
 ### Secondary/Occasional Customers
+
 - 0812 Building Solutions
 - 10001659 Manitoba Ltd
 - 10055596 Manitoba Ltd
@@ -113,29 +122,32 @@ Not all 50+ items are suitable for takeoff/estimation. The system needs to disti
 ## 4. Rate Structure & Pricing
 
 ### Explicitly Visible Rates (from QBO)
+
 - **Credit Card Surcharge:** 2.4% (markup for card payments)
 - **Service item rates:** Present in QBO item master but not visible in these select-list screenshots
 
 ### Inferred Rate Categories
+
 1. **Labor rates** (hourly)
    - Base labor rate: ~$38/hour (industry standard for trades)
    - Varies by trade (HVAC, Carpentry likely different)
-   
 2. **Material rates** (per unit)
    - Per SqFt: EPS, Basecoat, Finish Coat, Air Barrier, Envelope Seal, Cementboard, Cultured Stone
    - Per Linear Foot: Caulking, Flashing, Downspouts, Evestrough
 
-3. **Project markup** 
+3. **Project markup**
    - Bid rates set per project ($/SqFt or $/job)
    - Varies by builder, project complexity, market conditions
 
 ### Bonus Structure (from chat context, April 10)
+
 - Supervisor bonus tied to project margin performance
 - Historical data tracked in Google Sheet (confidential)
 - Bonus tiers: 4%, 9%, 14%, 19% of labor (based on profit margin%)
 - Currently only calculated for EIFS division (Cavy's core business)
 
-**Sitelayer implication:** 
+**Sitelayer implication:**
+
 - Dual rate system: labor hourly + material unit rates
 - Project-level bid rate for quick estimation
 - Bonus calculation must track actual vs. bid margin per project
@@ -146,28 +158,33 @@ Not all 50+ items are suitable for takeoff/estimation. The system needs to disti
 ## 5. Project Lifecycle in QBO
 
 ### Estimate Phase
+
 - QBO Estimates created for customer bids
 - Estimate status tracks: Draft → Sent → Accepted → Invoice
 - Once accepted, becomes basis for project creation
 
 ### Project/Job Tracking
+
 - QBO Jobs (customer-linked) represent active projects
 - Job can have multiple tasks/milestones
 - Customer is linked to Job (enables cost rollup)
 
 ### Time Tracking
+
 - TimeActivity records associate worker hours with specific Job
 - Service item selected per time entry (what work was done)
 - Captures date, hours, employee ref
 - **Gap in QBO:** No productivity metrics (SqFt done per hour)
 
 ### Billing
+
 - Bills for materials/subcontractor costs linked to Job
 - Sales Receipts for direct material purchases
 - Invoices created from Job data (labor + materials)
 - Progress billing common (milestone-based)
 
 ### Financial Reporting
+
 - Division-level P&L (profit per division)
 - Job costing (actual hours vs. budgeted)
 - Supervisor/crew profitability (bonus basis)
@@ -179,12 +196,14 @@ Not all 50+ items are suitable for takeoff/estimation. The system needs to disti
 ## 6. Data Architecture Implications
 
 ### Master Data (Static, QBO Source)
+
 - **Divisions:** 9 fixed categories (rarely change)
 - **Service Items:** 50+ billable/internal line items (grow over time)
 - **Customers:** 20-100+ (dynamic, added as new business acquired)
 - **Rates:** Labor hourly + material unit rates (configured in QBO)
 
 ### Transactional Data (Project-Specific)
+
 - **Estimates:** Customer bids (before project starts)
 - **Projects:** Active jobs with scope, schedule, budget
 - **Time Entries:** Daily crew hours by service item
@@ -193,6 +212,7 @@ Not all 50+ items are suitable for takeoff/estimation. The system needs to disti
 - **Bonus Tracking:** Actual margin vs. bid margin per project
 
 ### Key Relationships
+
 ```
 Division
   ├── Service Items (multiple per division)
@@ -211,6 +231,7 @@ Division
 ## 7. Critical Business Metrics (From Chat Context)
 
 ### Per-Project Tracking
+
 - **Bid total:** $/SqFt × SqFt (customer quote)
 - **Actual cost:** Labor + Material + Subs
 - **Margin:** Bid − Actual (profit/loss)
@@ -218,16 +239,19 @@ Division
 - **Bonus eligibility:** If margin > threshold, supervisor gets bonus tier payout
 
 ### Per-Division (Cavy's Main Gap)
+
 - EIFS division has historical bonus data (one year tracked)
 - Other divisions lack formalized cost tracking
 - Goal: Extend bonus structure company-wide (all 9 divisions)
 
 ### Per-Supervisor/Crew
+
 - Track which supervisor managed the project
 - Compare actual margin vs. estimate
 - Identify high-performing and at-risk crews
 
 **Sitelayer implication:** System must provide real-time visibility into:
+
 1. Project profitability (bid vs. actual) during execution, not post-mortem
 2. Labor efficiency (hours vs. SqFt) by crew/trade
 3. Bonus calculation (margin tiers) for supervisor accountability
@@ -238,6 +262,7 @@ Division
 ## 8. Current Pain Points (From Workflow Analysis PDF)
 
 ### The Problem: Data Fragmentation
+
 - **Blueprints** trapped in email/Google Drive (no searchable, no measurement linkage)
 - **Takeoff measurements** isolated in PlanSwift (not synced to budget/billing systems)
 - **Estimates** manually keyed into QuickBooks (data entry error prone)
@@ -247,6 +272,7 @@ Division
 - **Bonus calculation** manual (one spreadsheet for EIFS only; requires hours of data compilation)
 
 ### The Opportunity: Real-Time Data Integration
+
 - Blueprints → Digital takeoff (measurements, scope breakdown, estimate)
 - Estimate → Project setup (auto-populate budget, scope items, labor rates)
 - Field crew → Time entry (daily confirm, scope item breakdown, crew schedule)
@@ -259,6 +285,7 @@ Division
 ## 9. Design Requirements Summary
 
 ### From QBO Setup
+
 1. **Multi-division support** — Projects assigned to one of 9 divisions for P&L
 2. **Service item flexibility** — 50+ items in QBO; takeoff uses ~9 measurable items
 3. **Customer/Builder tracking** — 20-100+ active customers, project address tracking
@@ -270,6 +297,7 @@ Division
 9. **Division P&L** — Profitability reporting by division (not just company-wide)
 
 ### Architectural Implications
+
 - **Master data source:** QBO divisions, service items, customers, rates
 - **Sidelayer as digital layer:** Takeoff, project mgmt, time entry, bonus tracking
 - **Data flow:** Blueprint → Estimate → Project → QBO Estimate/Job → Sitelayer time/cost tracking → Margin analysis

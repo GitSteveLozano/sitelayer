@@ -23,7 +23,7 @@ describe('domain functions', () => {
     })
 
     it('formats negative currency correctly', () => {
-      expect(formatMoney(-100.50)).toBe('-$100.50')
+      expect(formatMoney(-100.5)).toBe('-$100.50')
     })
 
     it('formats large amounts correctly', () => {
@@ -111,13 +111,13 @@ describe('domain functions', () => {
     })
 
     it('pays at second tier', () => {
-      const result = calculateBonusPayout(0.20, 10000, DEFAULT_BONUS_RULE.tiers)
+      const result = calculateBonusPayout(0.2, 10000, DEFAULT_BONUS_RULE.tiers)
       expect(result.eligible).toBe(true)
       expect(result.payout).toBe(900)
     })
 
     it('pays at highest applicable tier', () => {
-      const result = calculateBonusPayout(0.30, 10000, DEFAULT_BONUS_RULE.tiers)
+      const result = calculateBonusPayout(0.3, 10000, DEFAULT_BONUS_RULE.tiers)
       expect(result.eligible).toBe(true)
       expect(result.payout).toBe(1900)
     })
@@ -188,7 +188,16 @@ describe('domain functions', () => {
     it('rejects malformed polygon geometry', () => {
       expect(normalizePolygonGeometry({ kind: 'line', points: square })).toBeNull()
       expect(normalizePolygonGeometry({ kind: 'polygon', points: square.slice(0, 2) })).toBeNull()
-      expect(normalizePolygonGeometry({ kind: 'polygon', points: [{ x: 0, y: 0 }, { x: 110, y: 0 }, { x: 0, y: 10 }] })).toBeNull()
+      expect(
+        normalizePolygonGeometry({
+          kind: 'polygon',
+          points: [
+            { x: 0, y: 0 },
+            { x: 110, y: 0 },
+            { x: 0, y: 10 },
+          ],
+        }),
+      ).toBeNull()
     })
   })
 })

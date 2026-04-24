@@ -1,13 +1,17 @@
+import { Sentry } from './instrument.js'
 import { loadAppConfig, postgresOptionsForTier, TierConfigError } from '@sitelayer/config'
-import { processQueue as processDatabaseQueue } from '@sitelayer/queue'
+import { createLogger, runWithRequestContext } from '@sitelayer/logger'
+import { processQueueWithClient, type ProcessedOutboxRow, type ProcessedSyncEventRow } from '@sitelayer/queue'
 import { Pool, type PoolConfig } from 'pg'
+
+const logger = createLogger('worker')
 
 let appConfig: ReturnType<typeof loadAppConfig>
 try {
   appConfig = loadAppConfig()
 } catch (err) {
   if (err instanceof TierConfigError) {
-    console.error(`[tier] refusing to start: ${err.message}`)
+    logger.fatal({ err }, '[tier] refusing to start')
     process.exit(1)
   }
   throw err
@@ -42,26 +46,76 @@ function getPoolConfig(connectionString: string): PoolConfig {
 
 const pool = new Pool(getPoolConfig(databaseUrl))
 
+type RowWithTrace = Pick<
+  ProcessedOutboxRow | ProcessedSyncEventRow,
+  'id' | 'entity_type' | 'sentry_trace' | 'sentry_baggage' | 'request_id'
+> & { kind: 'outbox' | 'sync_event' }
+
+function spanForAppliedRow(row: RowWithTrace) {
+  const continueParams = {
+    sentryTrace: row.sentry_trace ?? undefined,
+    baggage: row.sentry_baggage ?? undefined,
+  }
+  const ctx = { requestId: row.request_id ?? `worker-${row.id}` }
+  Sentry.continueTrace(continueParams, () => {
+    runWithRequestContext(ctx, () => {
+      Sentry.startSpan(
+        {
+          name: `queue.apply ${row.kind} ${row.entity_type}`,
+          op: 'queue.process',
+          attributes: {
+            'queue.kind': row.kind,
+            'queue.row_id': row.id,
+            'queue.entity_type': row.entity_type,
+            request_id: row.request_id ?? undefined,
+          },
+        },
+        () => {
+          logger.info(
+            { queue_kind: row.kind, row_id: row.id, entity_type: row.entity_type, request_id: row.request_id },
+            'queue row applied',
+          )
+        },
+      )
+    })
+  })
+}
+
 async function processQueue(companyId: string, limit = 25) {
-  const result = await processDatabaseQueue(pool, companyId, limit)
-  return {
-    processedOutbox: result.processedOutboxCount,
-    processedSyncEvents: result.processedSyncEventCount,
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const result = await processQueueWithClient(client, companyId, limit)
+    await client.query('commit')
+    for (const row of result.outbox) {
+      spanForAppliedRow({ ...row, kind: 'outbox' })
+    }
+    for (const row of result.syncEvents) {
+      spanForAppliedRow({ ...row, kind: 'sync_event' })
+    }
+    return {
+      processedOutbox: result.processedOutboxCount,
+      processedSyncEvents: result.processedSyncEventCount,
+    }
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
   }
 }
 
 async function getCompanyId(): Promise<string | null> {
-  const result = await pool.query<{ id: string }>(
-    'select id from companies where slug = $1 limit 1',
-    [activeCompanySlug],
-  )
+  const result = await pool.query<{ id: string }>('select id from companies where slug = $1 limit 1', [
+    activeCompanySlug,
+  ])
   return result.rows[0]?.id ?? null
 }
 
 async function heartbeat() {
   const companyId = await getCompanyId()
   if (!companyId) {
-    console.log(`[worker] waiting for company slug ${activeCompanySlug}`)
+    logger.info({ company_slug: activeCompanySlug }, '[worker] waiting for company slug')
     return
   }
 
@@ -81,20 +135,33 @@ async function heartbeat() {
 
   if (pendingOutbox || pendingSyncEvents) {
     const processed = await processQueue(companyId)
-    console.log(
-      `[worker] company=${activeCompanySlug} pending_outbox=${pendingOutbox} pending_sync_events=${pendingSyncEvents} processed_outbox=${processed.processedOutbox} processed_sync_events=${processed.processedSyncEvents}`,
+    logger.info(
+      {
+        company_slug: activeCompanySlug,
+        pending_outbox: pendingOutbox,
+        pending_sync_events: pendingSyncEvents,
+        processed_outbox: processed.processedOutbox,
+        processed_sync_events: processed.processedSyncEvents,
+      },
+      '[worker] tick',
     )
     return
   }
 
-  console.log(
-    `[worker] company=${activeCompanySlug} pending_outbox=${pendingOutbox} pending_sync_events=${pendingSyncEvents} processed_outbox=0 processed_sync_events=0`,
+  logger.debug(
+    {
+      company_slug: activeCompanySlug,
+      pending_outbox: pendingOutbox,
+      pending_sync_events: pendingSyncEvents,
+    },
+    '[worker] idle',
   )
 }
 
 await heartbeat()
 setInterval(() => {
   void heartbeat().catch((error) => {
-    console.error('[worker] heartbeat failed', error)
+    logger.error({ err: error }, '[worker] heartbeat failed')
+    Sentry.captureException(error)
   })
 }, pollIntervalMs)

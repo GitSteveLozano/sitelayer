@@ -104,6 +104,7 @@
 Create `.env` files on Droplet with the following (never commit to git):
 
 ### apps/api/.env
+
 ```bash
 # Database
 DATABASE_URL=postgres://user:pass@db.digitalocean.com:5432/sitelayer
@@ -141,6 +142,7 @@ ACTIVE_USER_ID=demo-user
 ```
 
 ### apps/web/.env.local
+
 ```bash
 # Public URLs
 VITE_API_URL=https://yourdomain.com
@@ -282,6 +284,7 @@ server {
 ```
 
 Enable and start:
+
 ```bash
 sudo ln -s /etc/nginx/sites-available/sitelayer /etc/nginx/sites-enabled/
 sudo systemctl enable nginx
@@ -364,12 +367,14 @@ curl https://yourdomain.com
 
 - [ ] Install: `npm install pg-boss`
 - [ ] Initialize in `apps/api/src/server.ts`:
+
   ```typescript
-  import PgBoss from 'pg-boss';
-  
-  const boss = new PgBoss(process.env.DATABASE_URL);
-  await boss.start();
+  import PgBoss from 'pg-boss'
+
+  const boss = new PgBoss(process.env.DATABASE_URL)
+  await boss.start()
   ```
+
 - [ ] Create `POST /api/integrations/qbo/sync` endpoint:
   - [ ] Queue job: `boss.send('qbo-sync', { companyId })`
   - [ ] Return job ID
@@ -390,19 +395,23 @@ curl https://yourdomain.com
   npm install @sentry/node @sentry/react
   ```
 - [ ] Initialize in API `server.ts`:
+
   ```typescript
-  import * as Sentry from "@sentry/node";
-  
-  Sentry.init({ dsn: process.env.SENTRY_DSN });
-  app.use(Sentry.Handlers.requestHandler());
-  app.use(Sentry.Handlers.errorHandler());
+  import * as Sentry from '@sentry/node'
+
+  Sentry.init({ dsn: process.env.SENTRY_DSN })
+  app.use(Sentry.Handlers.requestHandler())
+  app.use(Sentry.Handlers.errorHandler())
   ```
+
 - [ ] Initialize in frontend `main.tsx`:
+
   ```typescript
-  import * as Sentry from "@sentry/react";
-  
-  Sentry.init({ dsn: process.env.NEXT_PUBLIC_SENTRY_DSN });
+  import * as Sentry from '@sentry/react'
+
+  Sentry.init({ dsn: process.env.NEXT_PUBLIC_SENTRY_DSN })
   ```
+
 - [ ] Add structured logging:
   - [ ] Install: `npm install winston`
   - [ ] Log all API requests (timestamp, method, path, status, duration)
@@ -483,15 +492,15 @@ curl https://yourdomain.com
 
 ## Service Summary Table
 
-| Service | Purpose | Cost | Required? | Notes |
-|---------|---------|------|-----------|-------|
-| **DigitalOcean** | Cloud hosting + DB + storage | $73.75/mo | ✅ Required | Only Toronto region |
-| **Clerk** | Multi-tenant auth | Free (pilot) | ✅ Required | Must replace hardcoded user |
-| **Intuit QBO** | Accounting integration | Free | ✅ Required | Start with sandbox |
-| **Sentry** | Error tracking | Free (pilot) | 🟡 Recommended | Helps debug production issues |
-| **UptimeRobot** | Health monitoring | Free | 🟡 Recommended | Early warning of downtime |
-| **Postmark/SendGrid** | Email service | $15/mo | 🟡 Recommended | For invite links, sync notifications |
-| **Domain** | DNS + branding | ~$10/year | ✅ Required | yourdomain.com |
+| Service               | Purpose                      | Cost         | Required?      | Notes                                |
+| --------------------- | ---------------------------- | ------------ | -------------- | ------------------------------------ |
+| **DigitalOcean**      | Cloud hosting + DB + storage | $73.75/mo    | ✅ Required    | Only Toronto region                  |
+| **Clerk**             | Multi-tenant auth            | Free (pilot) | ✅ Required    | Must replace hardcoded user          |
+| **Intuit QBO**        | Accounting integration       | Free         | ✅ Required    | Start with sandbox                   |
+| **Sentry**            | Error tracking               | Free (pilot) | 🟡 Recommended | Helps debug production issues        |
+| **UptimeRobot**       | Health monitoring            | Free         | 🟡 Recommended | Early warning of downtime            |
+| **Postmark/SendGrid** | Email service                | $15/mo       | 🟡 Recommended | For invite links, sync notifications |
+| **Domain**            | DNS + branding               | ~$10/year    | ✅ Required    | yourdomain.com                       |
 
 ---
 
@@ -520,28 +529,33 @@ curl https://yourdomain.com
 ## Troubleshooting Guide (Bookmark This)
 
 ### "Can't connect to database from Droplet"
+
 - [ ] Check DATABASE_URL in .env matches DO console
 - [ ] Verify Droplet is in same region as DB
 - [ ] Check firewall allows 5432 from Droplet IP
 - [ ] Test: `psql $DATABASE_URL -c "SELECT 1"`
 
 ### "Clerk OAuth fails"
+
 - [ ] Verify `CLERK_SECRET_KEY` is from live environment (not dev)
 - [ ] Check redirect URI matches exactly: `https://yourdomain.com/api/integrations/clerk/callback`
 - [ ] Verify JWT template includes org_id
 
 ### "Blueprint upload fails"
+
 - [ ] Check DO_SPACES_KEY and DO_SPACES_SECRET in .env
 - [ ] Verify bucket is public or endpoint has read permissions
 - [ ] Test: `aws s3 ls s3://sitelayer/ --endpoint-url https://tor1.digitaloceanspaces.com`
 
 ### "nginx returns 502 Bad Gateway"
+
 - [ ] Check API is running: `curl localhost:3001`
 - [ ] Check nginx config: `sudo nginx -t`
 - [ ] Check nginx logs: `sudo tail -f /var/log/nginx/error.log`
 - [ ] Check API logs: `pm2 logs sitelayer-api`
 
 ### "PDF viewer shows blank canvas"
+
 - [ ] Verify PDF file is valid: `file blueprint.pdf`
 - [ ] Check browser console for CORS errors
 - [ ] Verify signed URL is within 1-hour expiry

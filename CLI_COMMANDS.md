@@ -11,6 +11,7 @@ ssh -i ~/.ssh/id_rsa root@165.245.231.199
 ```
 
 Or if you've configured a domain:
+
 ```bash
 ssh -i ~/.ssh/id_rsa root@sitelayer.example.com
 ```
@@ -35,6 +36,7 @@ docker compose version  # Verify installation
 ### 2. Create deployment user
 
 Run the setup script:
+
 ```bash
 # Copy script to droplet first (from your local machine)
 scp -i ~/.ssh/id_rsa scripts/setup-deploy-user.sh root@165.245.231.199:/tmp/
@@ -44,6 +46,7 @@ ssh -i ~/.ssh/id_rsa root@165.245.231.199 'bash /tmp/setup-deploy-user.sh'
 ```
 
 Or manually:
+
 ```bash
 useradd --create-home --shell /bin/bash --user-group sitelayer
 usermod -aG docker sitelayer
@@ -231,6 +234,7 @@ DEPLOY_SSH_KEY=$(cat ~/.ssh/sitelayer_deploy)
 ```
 
 In GitHub UI:
+
 1. Go to repository Settings
 2. Click "Secrets and variables" → "Actions"
 3. Click "New repository secret"

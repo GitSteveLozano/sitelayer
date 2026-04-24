@@ -11,22 +11,30 @@
     "dev:api": "npm run dev --workspace @sitelayer/api",
     "dev:web": "npm run dev --workspace @sitelayer/web",
     "dev:worker": "npm run dev --workspace @sitelayer/worker",
-    "build": "npm run build --workspace @sitelayer/config && npm run build --workspace @sitelayer/domain && npm run build --workspace @sitelayer/queue && npm run build --workspace @sitelayer/api && npm run build --workspace @sitelayer/web && npm run build --workspace @sitelayer/worker",
+    "build": "npm run build --workspace @sitelayer/config && npm run build --workspace @sitelayer/domain && npm run build --workspace @sitelayer/logger && npm run build --workspace @sitelayer/queue && npm run build --workspace @sitelayer/api && npm run build --workspace @sitelayer/web && npm run build --workspace @sitelayer/worker",
     "db:migrate": "scripts/migrate-db.sh",
     "db:check": "scripts/check-db-schema.sh",
     "seed:dev": "tsx apps/api/scripts/seed-dev.ts",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run test --workspaces --if-present",
     "e2e": "npm run e2e --workspace @sitelayer/web",
-    "ci:quality": "bash -n scripts/*.sh && npm run typecheck && npm run test && npm run build && VITE_FIXTURES=1 npm run build --workspace @sitelayer/web && npm run e2e",
-    "lint": "npm run lint --workspaces",
-    "format": "npm run format --workspaces"
+    "ci:quality": "bash -n scripts/*.sh && npm run lint && npm run format && npm run typecheck && npm run test && npm run build && VITE_FIXTURES=1 npm run build --workspace @sitelayer/web && npm run e2e",
+    "lint": "eslint . --max-warnings=0",
+    "format": "prettier --check \"**/*.{ts,tsx,js,cjs,mjs,json,css,md,yml,yaml}\"",
+    "format:write": "prettier --write \"**/*.{ts,tsx,js,cjs,mjs,json,css,md,yml,yaml}\""
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.59.1",
     "@types/node": "^22.13.0",
     "concurrently": "^9.1.2",
+    "eslint": "^10.2.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.5.0",
+    "prettier": "^3.8.3",
     "tsx": "^4.20.3",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.59.0"
   }
 }

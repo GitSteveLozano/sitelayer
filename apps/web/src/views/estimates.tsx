@@ -2,6 +2,7 @@ import { formatMoney } from '@sitelayer/domain'
 import { apiPatch, apiPost } from '../api.js'
 import type { BootstrapResponse, ProjectSummary } from '../api.js'
 import { AnalyticsWidget, ProjectEditor } from '../components/operations.js'
+import { Button } from '../components/ui/button.js'
 import type { RunAction } from './types.js'
 
 type EstimatesViewProps = {
@@ -39,7 +40,8 @@ export function EstimatesView({
           {summary ? (
             <div className="summary">
               <p>
-                <strong>{summary.project.name}</strong> · {summary.project.customer_name} · {summary.project.division_code}
+                <strong>{summary.project.name}</strong> · {summary.project.customer_name} ·{' '}
+                {summary.project.division_code}
               </p>
               <p className="muted">
                 Status: {summary.project.status}
@@ -74,7 +76,7 @@ export function EstimatesView({
               </dl>
 
               <div className="actions">
-                <button
+                <Button
                   type="button"
                   onClick={() =>
                     void runAction('estimate-recompute', async () => {
@@ -84,19 +86,23 @@ export function EstimatesView({
                   }
                 >
                   Recompute estimate
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
                   onClick={() =>
                     void runAction('project-closeout', async () => {
-                      await apiPost(`/api/projects/${summary.project.id}/closeout`, { expected_version: summary.project.version }, companySlug)
+                      await apiPost(
+                        `/api/projects/${summary.project.id}/closeout`,
+                        { expected_version: summary.project.version },
+                        companySlug,
+                      )
                       await refreshSummary(summary.project.id)
                       await refresh()
                     })
                   }
                 >
                   Close out project
-                </button>
+                </Button>
               </div>
 
               <div className="summaryLists">
@@ -172,7 +178,11 @@ export function EstimatesView({
           <h2>Project List</h2>
           <ul className="list">
             {bootstrap?.projects?.map((project) => (
-              <li key={project.id} className={project.id === selectedProjectId ? 'active' : ''} onClick={() => setSelectedProjectId(project.id)}>
+              <li
+                key={project.id}
+                className={project.id === selectedProjectId ? 'active' : ''}
+                onClick={() => setSelectedProjectId(project.id)}
+              >
                 <div className="stacked">
                   <strong>{project.name}</strong>
                   <span className="muted compact">

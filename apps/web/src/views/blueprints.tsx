@@ -2,6 +2,7 @@ import { apiDelete, apiPatch, apiPost } from '../api.js'
 import type { BlueprintRow } from '../api.js'
 import { BlueprintEditor, getBlueprintLineageLabel } from '../components/operations.js'
 import { FormRow } from '../components/forms.js'
+import { Input } from '../components/ui/input.js'
 import type { RunAction } from './types.js'
 
 type BlueprintDocumentsViewProps = {
@@ -20,7 +21,7 @@ async function fileToBase64(file: File): Promise<string> {
     reader.onerror = () => reject(reader.error ?? new Error('failed to read file'))
     reader.onload = () => {
       const result = typeof reader.result === 'string' ? reader.result : ''
-      resolve(result.includes(',') ? result.split(',', 2)[1] ?? result : result)
+      resolve(result.includes(',') ? (result.split(',', 2)[1] ?? result) : result)
     }
     reader.readAsDataURL(file)
   })
@@ -76,14 +77,14 @@ export function BlueprintDocumentsView({
           })
         }
       >
-        <input name="file_name" placeholder="Blueprint file name" />
-        <input name="blueprint_file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/*" />
-        <input name="storage_path" placeholder="storage/path.pdf" />
-        <input name="preview_type" placeholder="Preview type" defaultValue="storage_path" />
-        <input name="calibration_length" placeholder="Calibration length" type="number" step="0.01" />
-        <input name="calibration_unit" placeholder="Calibration unit" />
-        <input name="sheet_scale" placeholder="Sheet scale" type="number" step="0.0001" />
-        <input name="version" placeholder="Version" type="number" step="1" defaultValue="1" />
+        <Input name="file_name" placeholder="Blueprint file name" />
+        <Input name="blueprint_file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/*" />
+        <Input name="storage_path" placeholder="storage/path.pdf" />
+        <Input name="preview_type" placeholder="Preview type" defaultValue="storage_path" />
+        <Input name="calibration_length" placeholder="Calibration length" type="number" step="0.01" />
+        <Input name="calibration_unit" placeholder="Calibration unit" />
+        <Input name="sheet_scale" placeholder="Sheet scale" type="number" step="0.0001" />
+        <Input name="version" placeholder="Version" type="number" step="1" defaultValue="1" />
       </FormRow>
       <ul className="list compact">
         {blueprints.map((blueprint) => (
@@ -123,8 +124,10 @@ export function BlueprintDocumentsView({
                       file_name: String(form.get('file_name') ?? upload?.file_name ?? blueprint.file_name).trim(),
                       storage_path: String(form.get('storage_path') ?? '').trim(),
                       preview_type: String(form.get('preview_type') ?? blueprint.preview_type).trim(),
-                      calibration_length: Number(form.get('calibration_length') ?? 0) || blueprint.calibration_length || null,
-                      calibration_unit: String(form.get('calibration_unit') ?? '').trim() || blueprint.calibration_unit || null,
+                      calibration_length:
+                        Number(form.get('calibration_length') ?? 0) || blueprint.calibration_length || null,
+                      calibration_unit:
+                        String(form.get('calibration_unit') ?? '').trim() || blueprint.calibration_unit || null,
                       sheet_scale: Number(form.get('sheet_scale') ?? 0) || blueprint.sheet_scale || null,
                       copy_measurements: form.get('copy_measurements') !== 'off',
                       file_contents_base64: upload?.contents_base64 ?? undefined,
@@ -139,7 +142,9 @@ export function BlueprintDocumentsView({
               }
               onDelete={() =>
                 runAction(`blueprint:${blueprint.id}`, async () => {
-                  await apiDelete(`/api/blueprints/${blueprint.id}`, companySlug, { expected_version: blueprint.version })
+                  await apiDelete(`/api/blueprints/${blueprint.id}`, companySlug, {
+                    expected_version: blueprint.version,
+                  })
                   await refreshTakeoff(selectedProjectId)
                 })
               }

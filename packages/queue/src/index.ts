@@ -12,6 +12,12 @@ export interface QueuePool {
   connect(): Promise<ReleasableQueueClient>
 }
 
+export interface TraceContext {
+  sentry_trace: string | null
+  sentry_baggage: string | null
+  request_id: string | null
+}
+
 export type ProcessedOutboxRow = {
   id: string
   entity_type: string
@@ -19,7 +25,7 @@ export type ProcessedOutboxRow = {
   mutation_type: string
   attempt_count: number
   created_at: string
-}
+} & TraceContext
 
 export type ProcessedSyncEventRow = {
   id: string
@@ -28,7 +34,7 @@ export type ProcessedSyncEventRow = {
   direction: string
   attempt_count: number
   created_at: string
-}
+} & TraceContext
 
 export type QueueProcessResult = {
   processedOutboxCount: number
@@ -37,7 +43,11 @@ export type QueueProcessResult = {
   syncEvents: ProcessedSyncEventRow[]
 }
 
-export async function processOutboxBatch(client: QueueClient, companyId: string, limit: number): Promise<ProcessedOutboxRow[]> {
+export async function processOutboxBatch(
+  client: QueueClient,
+  companyId: string,
+  limit: number,
+): Promise<ProcessedOutboxRow[]> {
   const claimed = await client.query<{ id: string }>(
     `
     update mutation_outbox
@@ -71,14 +81,19 @@ export async function processOutboxBatch(client: QueueClient, companyId: string,
     update mutation_outbox
     set status = 'applied', applied_at = now(), error = null
     where company_id = $1 and id = any($2::uuid[])
-    returning id, entity_type, entity_id, mutation_type, attempt_count, created_at
+    returning id, entity_type, entity_id, mutation_type, attempt_count, created_at,
+      sentry_trace, sentry_baggage, request_id
     `,
     [companyId, ids],
   )
   return applied.rows
 }
 
-export async function processSyncEventBatch(client: QueueClient, companyId: string, limit: number): Promise<ProcessedSyncEventRow[]> {
+export async function processSyncEventBatch(
+  client: QueueClient,
+  companyId: string,
+  limit: number,
+): Promise<ProcessedSyncEventRow[]> {
   const claimed = await client.query<{ id: string }>(
     `
     update sync_events
@@ -112,14 +127,19 @@ export async function processSyncEventBatch(client: QueueClient, companyId: stri
     update sync_events
     set status = 'applied', applied_at = now(), error = null
     where company_id = $1 and id = any($2::uuid[])
-    returning id, entity_type, entity_id, direction, attempt_count, created_at
+    returning id, entity_type, entity_id, direction, attempt_count, created_at,
+      sentry_trace, sentry_baggage, request_id
     `,
     [companyId, ids],
   )
   return applied.rows
 }
 
-export async function processQueueWithClient(client: QueueClient, companyId: string, limit = 25): Promise<QueueProcessResult> {
+export async function processQueueWithClient(
+  client: QueueClient,
+  companyId: string,
+  limit = 25,
+): Promise<QueueProcessResult> {
   const outboxRows = await processOutboxBatch(client, companyId, limit)
   const syncEventRows = await processSyncEventBatch(client, companyId, limit)
 

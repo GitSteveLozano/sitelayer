@@ -1,20 +1,51 @@
+import * as Sentry from '@sentry/react'
+
 // Shared API types
 export type BootstrapResponse = {
   company: { id: string; name: string; slug: string }
   template: { slug: string; name: string; description: string }
   workflowStages: string[]
   divisions: Array<{ code: string; name: string; sort_order: number }>
-  serviceItems: Array<{ code: string; name: string; category: string; unit: string; default_rate: string | null; source: string }>
-  customers: Array<{ id: string; name: string; external_id: string | null; source: string; version: number; deleted_at: string | null }>
+  serviceItems: Array<{
+    code: string
+    name: string
+    category: string
+    unit: string
+    default_rate: string | null
+    source: string
+  }>
+  customers: Array<{
+    id: string
+    name: string
+    external_id: string | null
+    source: string
+    version: number
+    deleted_at: string | null
+  }>
   projects: Array<ProjectRow>
   workers: Array<WorkerRow>
   pricingProfiles: Array<PricingProfileRow>
   bonusRules: Array<BonusRuleRow>
-  integrations: Array<{ id: string; provider: string; provider_account_id: string | null; sync_cursor: string | null; status: string }>
+  integrations: Array<{
+    id: string
+    provider: string
+    provider_account_id: string | null
+    sync_cursor: string | null
+    status: string
+  }>
   integrationMappings: Array<IntegrationMappingRow>
   laborEntries: Array<LaborRow>
   materialBills: Array<MaterialBillRow>
-  schedules: Array<{ id: string; project_id: string; scheduled_for: string; crew: unknown[]; status: string; version: number; deleted_at: string | null; created_at?: string }>
+  schedules: Array<{
+    id: string
+    project_id: string
+    scheduled_for: string
+    crew: unknown[]
+    status: string
+    version: number
+    deleted_at: string | null
+    created_at?: string
+  }>
 }
 
 export type ProjectRow = {
@@ -183,7 +214,15 @@ export type FeaturesResponse = {
 export type SessionResponse = {
   user: { id: string; role: string }
   activeCompany: { id: string; name: string; slug: string }
-  memberships: Array<{ id: string; company_id: string; clerk_user_id: string; role: string; created_at: string; slug: string; name: string }>
+  memberships: Array<{
+    id: string
+    company_id: string
+    clerk_user_id: string
+    role: string
+    created_at: string
+    slug: string
+    name: string
+  }>
 }
 
 export type CompaniesResponse = {
@@ -195,7 +234,13 @@ export type SyncStatusResponse = {
   company: { id: string; name: string; slug: string }
   pendingOutboxCount: number
   pendingSyncEventCount: number
-  latestSyncEvent: { created_at: string; entity_type: string; entity_id: string; direction: string; status: string } | null
+  latestSyncEvent: {
+    created_at: string
+    entity_type: string
+    entity_id: string
+    direction: string
+    status: string
+  } | null
   connections: Array<{
     id: string
     provider: string
@@ -312,6 +357,13 @@ export async function enqueueOfflineMutation(mutation: Omit<OfflineMutation, 'id
     createdAt: new Date().toISOString(),
   })
   await writeOfflineQueue(queue)
+  Sentry.addBreadcrumb({
+    category: 'offline_queue',
+    type: 'info',
+    level: 'info',
+    message: `enqueued ${mutation.method} ${mutation.path}`,
+    data: { depth: queue.length, method: mutation.method, path: mutation.path, companySlug: mutation.companySlug },
+  })
   window.dispatchEvent(new Event('sitelayer:offline-queue'))
 }
 
@@ -338,7 +390,12 @@ export async function apiGet<T>(path: string, companySlug: string): Promise<T> {
   return parsed
 }
 
-async function apiMutate<T>(method: 'POST' | 'PATCH' | 'DELETE', path: string, body: unknown, companySlug: string): Promise<T> {
+async function apiMutate<T>(
+  method: 'POST' | 'PATCH' | 'DELETE',
+  path: string,
+  body: unknown,
+  companySlug: string,
+): Promise<T> {
   if (FIXTURES_ENABLED) {
     const { mutateFixtureResponse } = await import('./fixtures.js')
     return mutateFixtureResponse<T>(method, path, body, companySlug)
@@ -396,48 +453,85 @@ export async function replayOfflineMutations(companySlug: string) {
   const queue = await readOfflineQueue()
   if (!queue.length) return
 
-  const remaining: OfflineMutation[] = []
-  for (const mutation of queue) {
-    if (mutation.companySlug !== companySlug) {
-      remaining.push(mutation)
-      continue
-    }
-
-    try {
-      const requestInit: RequestInit = {
-        method: mutation.method,
-        headers: {
-          'content-type': 'application/json',
-          'x-sitelayer-company-slug': mutation.companySlug,
-          'x-sitelayer-user-id': mutation.userId,
-        },
-      }
-      if (mutation.body !== undefined) {
-        requestInit.body = JSON.stringify(mutation.body)
-      }
-      const response = await fetch(`${API_URL}${mutation.path}`, requestInit)
-      if (!response.ok) {
-        if (response.status === 409) {
+  return Sentry.startSpan(
+    {
+      name: 'offline_queue.replay',
+      op: 'queue.replay',
+      attributes: {
+        'queue.depth_before': queue.length,
+        'queue.company_slug': companySlug,
+      },
+    },
+    async (span) => {
+      const remaining: OfflineMutation[] = []
+      let replayed = 0
+      let dropped = 0
+      let conflicts = 0
+      for (const mutation of queue) {
+        if (mutation.companySlug !== companySlug) {
           remaining.push(mutation)
           continue
         }
-        if (response.status >= 400 && response.status < 500) {
-          console.warn(`[offline] dropping invalid mutation ${mutation.method} ${mutation.path}: ${response.status}`)
-          continue
+
+        try {
+          const requestInit: RequestInit = {
+            method: mutation.method,
+            headers: {
+              'content-type': 'application/json',
+              'x-sitelayer-company-slug': mutation.companySlug,
+              'x-sitelayer-user-id': mutation.userId,
+            },
+          }
+          if (mutation.body !== undefined) {
+            requestInit.body = JSON.stringify(mutation.body)
+          }
+          const response = await fetch(`${API_URL}${mutation.path}`, requestInit)
+          if (!response.ok) {
+            if (response.status === 409) {
+              conflicts += 1
+              Sentry.addBreadcrumb({
+                category: 'offline_queue',
+                level: 'warning',
+                message: `conflict ${mutation.method} ${mutation.path}`,
+                data: { status: 409, path: mutation.path },
+              })
+              remaining.push(mutation)
+              continue
+            }
+            if (response.status >= 400 && response.status < 500) {
+              dropped += 1
+              Sentry.addBreadcrumb({
+                category: 'offline_queue',
+                level: 'warning',
+                message: `dropped invalid ${mutation.method} ${mutation.path}`,
+                data: { status: response.status, path: mutation.path },
+              })
+              continue
+            }
+            throw new Error(`${mutation.method} ${mutation.path} failed: ${response.status}`)
+          }
+          const parsed = await response.json().catch(() => null)
+          if (parsed !== null) {
+            invalidateCompanyCache(mutation.companySlug)
+            cacheResponse(mutation.companySlug, mutation.path, parsed)
+          }
+          replayed += 1
+        } catch (error) {
+          Sentry.captureException(error, {
+            tags: { scope: 'offline_replay' },
+            extra: { path: mutation.path, method: mutation.method },
+          })
+          remaining.push(mutation)
         }
-        throw new Error(`${mutation.method} ${mutation.path} failed: ${response.status}`)
       }
-      const parsed = await response.json().catch(() => null)
-      if (parsed !== null) {
-        invalidateCompanyCache(mutation.companySlug)
-        cacheResponse(mutation.companySlug, mutation.path, parsed)
-      }
-    } catch {
-      remaining.push(mutation)
-    }
-  }
-  await writeOfflineQueue(remaining)
-  window.dispatchEvent(new Event('sitelayer:offline-queue'))
+      await writeOfflineQueue(remaining)
+      span?.setAttribute('queue.replayed', replayed)
+      span?.setAttribute('queue.dropped', dropped)
+      span?.setAttribute('queue.conflicts', conflicts)
+      span?.setAttribute('queue.depth_after', remaining.length)
+      window.dispatchEvent(new Event('sitelayer:offline-queue'))
+    },
+  )
 }
 
 export async function startQboOAuth(companySlug: string) {

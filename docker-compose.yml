@@ -16,8 +16,8 @@ services:
       MINIO_ROOT_USER: sitelayerlocal
       MINIO_ROOT_PASSWORD: sitelayerlocal
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - '9000:9000'
+      - '9001:9001'
     volumes:
       - minio_data:/data
 
@@ -32,7 +32,7 @@ services:
       /usr/bin/mc mb --ignore-existing local/sitelayer-blueprints-local;
       echo 'minio ready: bucket sitelayer-blueprints-local';
       "
-    restart: "no"
+    restart: 'no'
 
   api:
     build:
@@ -42,7 +42,7 @@ services:
       NODE_ENV: development
       APP_TIER: local
       FEATURE_FLAGS: ${FEATURE_FLAGS:-}
-      PORT: "3001"
+      PORT: '3001'
       DATABASE_URL: postgres://sitelayer:sitelayer@db:5432/sitelayer
       ACTIVE_COMPANY_SLUG: la-operations
       DO_SPACES_KEY: sitelayerlocal
@@ -51,7 +51,7 @@ services:
       DO_SPACES_BUCKET: sitelayer-blueprints-local
       DO_SPACES_ENDPOINT: http://minio:9000
     ports:
-      - "3001:3001"
+      - '3001:3001'
     depends_on:
       db:
         condition: service_started
@@ -70,7 +70,7 @@ services:
       VITE_API_URL: http://localhost:3001
       VITE_APP_TIER: local
     ports:
-      - "3000:3000"
+      - '3000:3000'
     depends_on:
       - api
     volumes:

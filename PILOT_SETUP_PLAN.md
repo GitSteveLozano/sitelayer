@@ -121,19 +121,20 @@
   sudo apt-get install -y nginx
   ```
 - [ ] Create `/etc/nginx/sites-available/sitelayer`:
+
   ```nginx
   server {
     listen 443 ssl http2;
     server_name yourdomain.com;
-    
+
     ssl_certificate /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
-    
+
     location / {
       root /var/www/sitelayer;
       try_files $uri $uri/ /index.html;
     }
-    
+
     location /api {
       proxy_pass http://localhost:3001;
       proxy_set_header Host $host;
@@ -146,6 +147,7 @@
     return 301 https://$server_name$request_uri;
   }
   ```
+
 - [ ] Enable nginx: `sudo systemctl enable nginx && sudo systemctl start nginx`
 
 **Output:** Frontend served at https://yourdomain.com, `/api/*` proxies to Node.js
@@ -186,16 +188,17 @@
 ### 4.1 PDF.js Integration
 
 - [ ] In `apps/web/src`, create `components/PdfViewer.tsx`:
+
   ```typescript
   import * as pdfjsLib from 'pdfjs-dist';
-  
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
     `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-  
+
   export function PdfViewer({ url }: { url: string }) {
     const [pageNum, setPageNum] = useState(1);
     const canvasRef = useRef<HTMLCanvasElement>(null);
-    
+
     useEffect(() => {
       pdfjsLib.getDocument(url).promise.then(pdf => {
         pdf.getPage(pageNum).then(page => {
@@ -208,10 +211,11 @@
         });
       });
     }, [url, pageNum]);
-    
+
     return <canvas ref={canvasRef} />;
   }
   ```
+
 - [ ] Test with a sample blueprint PDF from Spaces
 
 **Output:** Blueprint renders in browser canvas
@@ -220,31 +224,32 @@
 
 - [ ] Install: `npm install konva react-konva`
 - [ ] Create `components/AnnotationLayer.tsx`:
+
   ```typescript
   import { Stage, Layer, Line, Transformer } from 'react-konva';
-  
-  export function AnnotationLayer({ 
-    width, 
-    height, 
-    onCoordinate 
-  }: { 
-    width: number; 
-    height: number; 
-    onCoordinate: (x: number, y: number) => void 
+
+  export function AnnotationLayer({
+    width,
+    height,
+    onCoordinate
+  }: {
+    width: number;
+    height: number;
+    onCoordinate: (x: number, y: number) => void
   }) {
     const [points, setPoints] = useState<number[]>([]);
-    
+
     const handleStageClick = (e: any) => {
       const pos = e.currentTarget.getPointerPosition();
       setPoints([...points, pos.x, pos.y]);
     };
-    
+
     const handleSave = async () => {
       // Convert canvas coords to PDF space: viewport.convertToPdfPoint(x, y)
       // Then POST to /api/annotations
       console.log('Saving annotation:', points);
     };
-    
+
     return (
       <div>
         <Stage width={width} height={height} onClick={handleStageClick}>
@@ -259,6 +264,7 @@
     );
   }
   ```
+
 - [ ] Overlay on PDF canvas in `TakeoffView`
 
 **Output:** User can draw polygons on blueprints
@@ -266,21 +272,23 @@
 ### 4.3 Annotation Persistence
 
 - [ ] Create API endpoint `POST /api/projects/:id/annotations`:
+
   ```typescript
   app.post('/api/projects/:id/annotations', async (req, res) => {
-    const { blueprintId, points, type } = req.body;
-    const companyId = req.headers['x-sitelayer-company-slug'];
-    
+    const { blueprintId, points, type } = req.body
+    const companyId = req.headers['x-sitelayer-company-slug']
+
     const result = await pool.query(
       `INSERT INTO annotations 
        (blueprint_id, company_id, points, annotation_type) 
        VALUES ($1, $2, $3, $4) 
        RETURNING *`,
-      [blueprintId, companyId, JSON.stringify(points), type]
-    );
-    res.json(result.rows[0]);
-  });
+      [blueprintId, companyId, JSON.stringify(points), type],
+    )
+    res.json(result.rows[0])
+  })
   ```
+
 - [ ] Test: draw polygon, save, refresh page, verify polygon reappears
 
 **Output:** Annotations persist to DB and reload on page refresh
@@ -292,36 +300,38 @@
 ### 5.1 Blueprint Upload to Spaces
 
 - [ ] In API, add `POST /api/projects/:id/blueprints`:
+
   ```typescript
-  import AWS from 'aws-sdk';
-  
+  import AWS from 'aws-sdk'
+
   const s3 = new AWS.S3({
     endpoint: process.env.DO_SPACES_ENDPOINT,
     accessKeyId: process.env.DO_SPACES_KEY,
     secretAccessKey: process.env.DO_SPACES_SECRET,
-    region: 'us-east-1'
-  });
-  
+    region: 'us-east-1',
+  })
+
   app.post('/api/projects/:id/blueprints', upload.single('file'), async (req, res) => {
     const params = {
       Bucket: 'sitelayer',
       Key: `blueprints/${req.params.id}/${req.file.originalname}`,
       Body: req.file.buffer,
-      ContentType: 'application/pdf'
-    };
-    
-    const result = await s3.upload(params).promise();
-    
+      ContentType: 'application/pdf',
+    }
+
+    const result = await s3.upload(params).promise()
+
     // Store metadata in DB
     await pool.query(
       `INSERT INTO blueprints (project_id, file_name, storage_path) 
        VALUES ($1, $2, $3)`,
-      [req.params.id, req.file.originalname, result.Location]
-    );
-    
-    res.json({ url: result.Location });
-  });
+      [req.params.id, req.file.originalname, result.Location],
+    )
+
+    res.json({ url: result.Location })
+  })
   ```
+
 - [ ] Create frontend upload form in `TakeoffView`
 
 **Output:** User can upload PDF files, they're stored in Spaces, URL returned to frontend
@@ -334,8 +344,8 @@
     return s3.getSignedUrl('getObject', {
       Bucket: 'sitelayer',
       Key: bucketKey,
-      Expires: 3600 // 1 hour
-    });
+      Expires: 3600, // 1 hour
+    })
   }
   ```
 - [ ] Include signed URL in `GET /api/blueprints/:id` response
@@ -361,15 +371,16 @@
 - [ ] Create `POST /api/integrations/qbo/auth` endpoint:
   ```typescript
   app.get('/api/integrations/qbo/auth', (req, res) => {
-    const companyId = req.headers['x-sitelayer-company-slug'];
-    const authUrl = `https://appcenter.intuit.com/connect/oauth2?` +
+    const companyId = req.headers['x-sitelayer-company-slug']
+    const authUrl =
+      `https://appcenter.intuit.com/connect/oauth2?` +
       `client_id=${process.env.QBO_CLIENT_ID}` +
       `&redirect_uri=${process.env.QBO_REDIRECT_URI}` +
       `&response_type=code` +
       `&scope=com.intuit.quickbooks.accounting` +
-      `&state=${companyId}`;
-    res.json({ authUrl });
-  });
+      `&state=${companyId}`
+    res.json({ authUrl })
+  })
   ```
 - [ ] Create callback handler: `GET /api/integrations/qbo/callback?code=...&state=...`
   - [ ] Exchange code for tokens (via intuit-oauth)
@@ -394,16 +405,17 @@
 ### 6.4 QBO Sync Job (Stub)
 
 - [ ] Create `POST /api/integrations/qbo/sync` endpoint:
+
   ```typescript
   app.post('/api/integrations/qbo/sync', async (req, res) => {
-    const companyId = req.headers['x-sitelayer-company-slug'];
-    
+    const companyId = req.headers['x-sitelayer-company-slug']
+
     // For pilot: just log that sync was triggered
-    console.log(`QBO sync triggered for ${companyId}`);
-    
+    console.log(`QBO sync triggered for ${companyId}`)
+
     // Later: queue a Hatchet workflow
-    res.json({ queued: true });
-  });
+    res.json({ queued: true })
+  })
   ```
 
 **Output:** Endpoint exists and can be called (real sync in Phase 7)
@@ -417,15 +429,17 @@
 - [ ] Create Sentry account and new project (Node.js + Next.js)
 - [ ] Add to API `.env`: `SENTRY_DSN=https://...`
 - [ ] Initialize in API:
+
   ```typescript
-  import * as Sentry from "@sentry/node";
-  
+  import * as Sentry from '@sentry/node'
+
   Sentry.init({
     dsn: process.env.SENTRY_DSN,
     environment: 'production',
-    tracesSampleRate: 0.1
-  });
+    tracesSampleRate: 0.1,
+  })
   ```
+
 - [ ] Add to frontend: `NEXT_PUBLIC_SENTRY_DSN`
 - [ ] Verify errors are captured: trigger a 500 error in API and check dashboard
 
@@ -464,25 +478,27 @@
 ### 8.1 Deployment Script
 
 - [ ] Create `scripts/deploy.sh`:
+
   ```bash
   #!/bin/bash
   set -e
-  
+
   echo "Building frontend..."
   cd apps/web && npm run build
-  
+
   echo "Building API..."
   cd ../api && npm run build
-  
+
   echo "Running migrations..."
   psql $DATABASE_URL < ../../docker/postgres/init/001_schema.sql
-  
+
   echo "Restarting services..."
   systemctl restart sitelayer-api
   systemctl reload nginx
-  
+
   echo "Deploy complete!"
   ```
+
 - [ ] Make executable: `chmod +x scripts/deploy.sh`
 
 **Output:** One-command deploy
@@ -540,6 +556,7 @@
 ## Weekly Checklist
 
 ### Week 1: Infrastructure & Auth
+
 - [ ] DO account, Droplet, DB, Spaces configured
 - [ ] Clerk org model set up
 - [ ] Domain DNS working
@@ -547,6 +564,7 @@
 - [ ] API and frontend deploy on Droplet
 
 ### Week 2: Canvas & Upload
+
 - [ ] PDF.js renders blueprint
 - [ ] Konva layer draws polygons
 - [ ] Blueprint upload to Spaces working
@@ -554,6 +572,7 @@
 - [ ] SSL/TLS certificate installed
 
 ### Week 3: QBO & Observability
+
 - [ ] QBO OAuth flow complete (sandbox test)
 - [ ] Hatchet running on Droplet
 - [ ] Sentry capturing errors
@@ -561,12 +580,14 @@
 - [ ] Logs accessible via SSH
 
 ### Week 4: Polish & Docs
+
 - [ ] Deploy script automated
 - [ ] Runbook documented
 - [ ] Tested full redeploy from scratch
 - [ ] All error paths tested
 
 ### Week 5: Pilot Launch
+
 - [ ] Pilot customer invited to Clerk org
 - [ ] End-to-end test with real blueprint
 - [ ] Support contact established
@@ -576,20 +597,20 @@
 
 ## Monthly Infrastructure Cost Breakdown
 
-| Service | Cost | Duration |
-|---------|------|----------|
-| DO Droplet 8GB | $48.00 | Ongoing |
-| DO Backups | $9.60 | Ongoing |
-| DO Postgres 1GB | $15.15 | Ongoing (upgrade to $60.90 at 5+ customers) |
-| DO Spaces | $5.00 | Ongoing |
-| Postmark Basic | $15.00 | Ongoing |
-| GitHub Team (2) | $8.00 | Ongoing |
-| Domain | ~$0.83 | Ongoing (~$10/year) |
-| Clerk | $0 | Free until 50K MAU |
-| Sentry | $0 | Free until 5K errors/month |
-| Grafana Cloud | $0 | Free tier |
-| UptimeRobot | $0 | Free tier |
-| **Total** | **~$101.58/mo** | |
+| Service         | Cost            | Duration                                    |
+| --------------- | --------------- | ------------------------------------------- |
+| DO Droplet 8GB  | $48.00          | Ongoing                                     |
+| DO Backups      | $9.60           | Ongoing                                     |
+| DO Postgres 1GB | $15.15          | Ongoing (upgrade to $60.90 at 5+ customers) |
+| DO Spaces       | $5.00           | Ongoing                                     |
+| Postmark Basic  | $15.00          | Ongoing                                     |
+| GitHub Team (2) | $8.00           | Ongoing                                     |
+| Domain          | ~$0.83          | Ongoing (~$10/year)                         |
+| Clerk           | $0              | Free until 50K MAU                          |
+| Sentry          | $0              | Free until 5K errors/month                  |
+| Grafana Cloud   | $0              | Free tier                                   |
+| UptimeRobot     | $0              | Free tier                                   |
+| **Total**       | **~$101.58/mo** |                                             |
 
 ---
 

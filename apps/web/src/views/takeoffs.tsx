@@ -1,7 +1,18 @@
 import { apiDelete, apiPatch, apiPost } from '../api.js'
-import type { BlueprintRow, BootstrapResponse, MaterialBillRow, MeasurementRow, ProjectSummary, ScheduleRow, WorkerRow } from '../api.js'
+import type {
+  BlueprintRow,
+  BootstrapResponse,
+  MaterialBillRow,
+  MeasurementRow,
+  ProjectSummary,
+  ScheduleRow,
+  WorkerRow,
+} from '../api.js'
 import { LaborEditor, MaterialBillEditor, MeasurementEditor, TakeoffWorkspace } from '../components/operations.js'
 import { FormRow, parseMeasurementRows } from '../components/forms.js'
+import { Input } from '../components/ui/input.js'
+import { Select } from '../components/ui/select.js'
+import { Textarea } from '../components/ui/textarea.js'
 import { BlueprintDocumentsView } from './blueprints.js'
 import type { RunAction } from './types.js'
 
@@ -49,14 +60,14 @@ export function TakeoffsView({
         <div className="toolbar">
           <label className="selectWrap">
             <span>Selected project</span>
-            <select value={selectedProjectId} onChange={(event) => setSelectedProjectId(event.target.value)}>
+            <Select value={selectedProjectId} onChange={(event) => setSelectedProjectId(event.target.value)}>
               <option value="">Choose a project</option>
               {bootstrap?.projects.map((project) => (
                 <option key={project.id} value={project.id}>
                   {project.name} · {project.customer_name} · {project.division_code} · {project.status}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
         </div>
       </section>
@@ -111,7 +122,11 @@ export function TakeoffsView({
               })
             }
           >
-            <textarea name="measurements" placeholder={`One per line: service_item_code, quantity, unit, notes\nEPS, 1250, sqft, front elevation`} rows={7} />
+            <Textarea
+              name="measurements"
+              placeholder={`One per line: service_item_code, quantity, unit, notes\nEPS, 1250, sqft, front elevation`}
+              rows={7}
+            />
             <small>Use measurable items only. Example: EPS, 1250, sqft, front elevation</small>
           </FormRow>
           <ul className="list compact">
@@ -139,7 +154,9 @@ export function TakeoffsView({
                   }
                   onDelete={() =>
                     runAction(`measurement:${measurement.id}`, async () => {
-                      await apiDelete(`/api/takeoff/measurements/${measurement.id}`, companySlug, { expected_version: measurement.version })
+                      await apiDelete(`/api/takeoff/measurements/${measurement.id}`, companySlug, {
+                        expected_version: measurement.version,
+                      })
                       await refreshTakeoff(selectedProjectId)
                     })
                   }
@@ -174,25 +191,25 @@ export function TakeoffsView({
               })
             }
           >
-            <select name="worker_id" defaultValue="">
+            <Select name="worker_id" defaultValue="">
               <option value="">Choose worker</option>
               {workers.map((worker) => (
                 <option key={worker.id} value={worker.id}>
                   {worker.name}
                 </option>
               ))}
-            </select>
-            <select name="service_item_code" defaultValue="">
+            </Select>
+            <Select name="service_item_code" defaultValue="">
               <option value="">Service item</option>
               {measurableServiceItems.map((item) => (
                 <option key={item.code} value={item.code}>
                   {item.code} - {item.name}
                 </option>
               ))}
-            </select>
-            <input name="hours" placeholder="Hours" type="number" step="0.25" defaultValue="8" />
-            <input name="sqft_done" placeholder="Sqft done" type="number" step="0.1" defaultValue="0" />
-            <input name="occurred_on" placeholder="2026-04-23" defaultValue={new Date().toISOString().slice(0, 10)} />
+            </Select>
+            <Input name="hours" placeholder="Hours" type="number" step="0.25" defaultValue="8" />
+            <Input name="sqft_done" placeholder="Sqft done" type="number" step="0.1" defaultValue="0" />
+            <Input name="occurred_on" placeholder="2026-04-23" defaultValue={new Date().toISOString().slice(0, 10)} />
           </FormRow>
         </article>
 
@@ -220,11 +237,11 @@ export function TakeoffsView({
               })
             }
           >
-            <input name="vendor" placeholder="Vendor" />
-            <input name="amount" placeholder="Amount" type="number" step="0.01" />
-            <input name="bill_type" placeholder="Type" defaultValue="material" />
-            <input name="description" placeholder="Description" />
-            <input name="occurred_on" placeholder="2026-04-23" defaultValue={new Date().toISOString().slice(0, 10)} />
+            <Input name="vendor" placeholder="Vendor" />
+            <Input name="amount" placeholder="Amount" type="number" step="0.01" />
+            <Input name="bill_type" placeholder="Type" defaultValue="material" />
+            <Input name="description" placeholder="Description" />
+            <Input name="occurred_on" placeholder="2026-04-23" defaultValue={new Date().toISOString().slice(0, 10)} />
           </FormRow>
           <ul className="list compact">
             {materialBills.map((bill) => (
@@ -279,29 +296,37 @@ export function TakeoffsView({
                   sqft_done: row.quantity,
                   occurred_on: String(form.get('occurred_on') ?? ''),
                 }))
-                await apiPost(`/api/schedules/${scheduleId}/confirm`, { entries, expected_version: scheduleVersion ?? undefined }, companySlug)
+                await apiPost(
+                  `/api/schedules/${scheduleId}/confirm`,
+                  { entries, expected_version: scheduleVersion ?? undefined },
+                  companySlug,
+                )
                 await refreshTakeoff(selectedProjectId)
               })
             }
           >
-            <select name="schedule_id" defaultValue="">
+            <Select name="schedule_id" defaultValue="">
               <option value="">Choose schedule</option>
               {schedules.map((schedule) => (
                 <option key={schedule.id} value={schedule.id}>
                   {schedule.scheduled_for} · {schedule.status}
                 </option>
               ))}
-            </select>
-            <select name="worker_id" defaultValue="">
+            </Select>
+            <Select name="worker_id" defaultValue="">
               <option value="">Worker for all entries</option>
               {workers.map((worker) => (
                 <option key={worker.id} value={worker.id}>
                   {worker.name}
                 </option>
               ))}
-            </select>
-            <input name="occurred_on" defaultValue={new Date().toISOString().slice(0, 10)} />
-            <textarea name="measurements" placeholder={`service_item_code, quantity, unit, notes\nEPS, 8, hr, daily confirm shorthand`} rows={5} />
+            </Select>
+            <Input name="occurred_on" defaultValue={new Date().toISOString().slice(0, 10)} />
+            <Textarea
+              name="measurements"
+              placeholder={`service_item_code, quantity, unit, notes\nEPS, 8, hr, daily confirm shorthand`}
+              rows={5}
+            />
             <small>Use the same shorthand parser as takeoff to create confirmed labor entries.</small>
           </FormRow>
         </article>
@@ -334,8 +359,8 @@ export function TakeoffsView({
             })
           }
         >
-          <input name="scheduled_for" defaultValue={new Date().toISOString().slice(0, 10)} />
-          <input name="crew" placeholder="Crew names, comma separated" />
+          <Input name="scheduled_for" defaultValue={new Date().toISOString().slice(0, 10)} />
+          <Input name="crew" placeholder="Crew names, comma separated" />
         </FormRow>
       </section>
 
@@ -370,7 +395,9 @@ export function TakeoffsView({
                   }
                   onDelete={() =>
                     runAction(`labor-entry:${entry.id}`, async () => {
-                      await apiDelete(`/api/labor-entries/${entry.id}`, companySlug, { expected_version: entry.version })
+                      await apiDelete(`/api/labor-entries/${entry.id}`, companySlug, {
+                        expected_version: entry.version,
+                      })
                     })
                   }
                 />

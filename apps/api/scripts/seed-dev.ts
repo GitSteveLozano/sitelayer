@@ -64,10 +64,9 @@ export async function seedDev(): Promise<{ inserted: number; skipped: number }> 
   const pool = new Pool(getPoolConfig(config.databaseUrl, config.tier))
 
   try {
-    const companyResult = await pool.query<{ id: string }>(
-      'select id from companies where slug = $1 limit 1',
-      [companySlug],
-    )
+    const companyResult = await pool.query<{ id: string }>('select id from companies where slug = $1 limit 1', [
+      companySlug,
+    ])
     const company = companyResult.rows[0]
     if (!company) {
       console.warn(`[seed] company "${companySlug}" not found — run 001_schema.sql first`)

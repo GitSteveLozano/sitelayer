@@ -1,7 +1,17 @@
 import { apiDelete, apiPatch, apiPost, startQboOAuth } from '../api.js'
-import type { BootstrapResponse, IntegrationMappingRow, OfflineMutation, ProjectRow, QboConnectionResponse, SyncStatusResponse } from '../api.js'
+import type {
+  BootstrapResponse,
+  IntegrationMappingRow,
+  OfflineMutation,
+  ProjectRow,
+  QboConnectionResponse,
+  SyncStatusResponse,
+} from '../api.js'
 import { IntegrationMappingEditor, MutationOutboxWidget, OfflineQueueWidget } from '../components/operations.js'
 import { FormRow } from '../components/forms.js'
+import { Button } from '../components/ui/button.js'
+import { Input } from '../components/ui/input.js'
+import { Select } from '../components/ui/select.js'
 import type { RunAction } from './types.js'
 
 type IntegrationsViewProps = {
@@ -43,8 +53,8 @@ export function IntegrationsView({
     <section className="panel">
       <h2>Integration Stance</h2>
       <p>
-        QBO, time tools, takeoff tools, and file systems stay behind adapters. The seeded workflow can be proven with fake data or direct
-        database-backed flows before any external connector is added.
+        QBO, time tools, takeoff tools, and file systems stay behind adapters. The seeded workflow can be proven with
+        fake data or direct database-backed flows before any external connector is added.
       </p>
       <div className="integrationGrid">
         <div className="integrationCard">
@@ -64,7 +74,9 @@ export function IntegrationsView({
             </div>
             <div>
               <dt>Last sync</dt>
-              <dd>{qboConnection?.last_synced_at ? new Date(qboConnection.last_synced_at).toLocaleString() : 'never'}</dd>
+              <dd>
+                {qboConnection?.last_synced_at ? new Date(qboConnection.last_synced_at).toLocaleString() : 'never'}
+              </dd>
             </div>
           </dl>
           <FormRow
@@ -85,13 +97,17 @@ export function IntegrationsView({
               })
             }
           >
-            <input name="expected_version" type="hidden" defaultValue={qboConnection?.version ?? 1} />
-            <input name="provider_account_id" defaultValue={qboConnection?.provider_account_id ?? ''} placeholder="QBO realm / account id" />
-            <input name="sync_cursor" defaultValue={qboConnection?.sync_cursor ?? ''} placeholder="Sync cursor" />
-            <input name="status" defaultValue={qboConnection?.status ?? 'connected'} placeholder="Status" />
+            <Input name="expected_version" type="hidden" defaultValue={qboConnection?.version ?? 1} />
+            <Input
+              name="provider_account_id"
+              defaultValue={qboConnection?.provider_account_id ?? ''}
+              placeholder="QBO realm / account id"
+            />
+            <Input name="sync_cursor" defaultValue={qboConnection?.sync_cursor ?? ''} placeholder="Sync cursor" />
+            <Input name="status" defaultValue={qboConnection?.status ?? 'connected'} placeholder="Status" />
           </FormRow>
           <div className="actions">
-            <button
+            <Button
               type="button"
               disabled={busy === 'qbo-oauth'}
               onClick={() =>
@@ -105,18 +121,22 @@ export function IntegrationsView({
               }
             >
               Connect with Intuit OAuth
-            </button>
-            <button
+            </Button>
+            <Button
               type="button"
               onClick={() =>
                 runAction('qbo-sync', async () => {
-                  await apiPost('/api/integrations/qbo/sync', { provider_account_id: qboConnection?.provider_account_id ?? null }, companySlug)
+                  await apiPost(
+                    '/api/integrations/qbo/sync',
+                    { provider_account_id: qboConnection?.provider_account_id ?? null },
+                    companySlug,
+                  )
                   await refresh()
                 })
               }
             >
               Sync QBO snapshot
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -133,7 +153,11 @@ export function IntegrationsView({
             </div>
             <div>
               <dt>Latest event</dt>
-              <dd>{syncStatus?.latestSyncEvent ? `${syncStatus.latestSyncEvent.entity_type}:${syncStatus.latestSyncEvent.entity_id}` : 'none'}</dd>
+              <dd>
+                {syncStatus?.latestSyncEvent
+                  ? `${syncStatus.latestSyncEvent.entity_type}:${syncStatus.latestSyncEvent.entity_id}`
+                  : 'none'}
+              </dd>
             </div>
             <div>
               <dt>Connections</dt>
@@ -141,7 +165,7 @@ export function IntegrationsView({
             </div>
           </dl>
           <div className="actions">
-            <button
+            <Button
               type="button"
               onClick={() =>
                 runAction('queue-process', async () => {
@@ -151,7 +175,7 @@ export function IntegrationsView({
               }
             >
               Process queue
-            </button>
+            </Button>
           </div>
         </div>
 
@@ -161,7 +185,13 @@ export function IntegrationsView({
           <div className="summaryGrid compact">
             <div>
               <dt>Mapped customers</dt>
-              <dd>{integrationMappings.filter((mapping) => mapping.entity_type === 'customer' && mapping.deleted_at === null).length}</dd>
+              <dd>
+                {
+                  integrationMappings.filter(
+                    (mapping) => mapping.entity_type === 'customer' && mapping.deleted_at === null,
+                  ).length
+                }
+              </dd>
             </div>
             <div>
               <dt>Suggested customers</dt>
@@ -173,15 +203,33 @@ export function IntegrationsView({
             </div>
             <div>
               <dt>Mapped service items</dt>
-              <dd>{integrationMappings.filter((mapping) => mapping.entity_type === 'service_item' && mapping.deleted_at === null).length}</dd>
+              <dd>
+                {
+                  integrationMappings.filter(
+                    (mapping) => mapping.entity_type === 'service_item' && mapping.deleted_at === null,
+                  ).length
+                }
+              </dd>
             </div>
             <div>
               <dt>Mapped divisions</dt>
-              <dd>{integrationMappings.filter((mapping) => mapping.entity_type === 'division' && mapping.deleted_at === null).length}</dd>
+              <dd>
+                {
+                  integrationMappings.filter(
+                    (mapping) => mapping.entity_type === 'division' && mapping.deleted_at === null,
+                  ).length
+                }
+              </dd>
             </div>
             <div>
               <dt>Mapped projects</dt>
-              <dd>{integrationMappings.filter((mapping) => mapping.entity_type === 'project' && mapping.deleted_at === null).length}</dd>
+              <dd>
+                {
+                  integrationMappings.filter(
+                    (mapping) => mapping.entity_type === 'project' && mapping.deleted_at === null,
+                  ).length
+                }
+              </dd>
             </div>
           </div>
 
@@ -192,9 +240,11 @@ export function IntegrationsView({
                 <li key={customer.id} className="splitRow">
                   <div>
                     <strong>{customer.name}</strong>
-                    <p className="muted compact">Local ref: {customer.id} · External ID: {customer.external_id}</p>
+                    <p className="muted compact">
+                      Local ref: {customer.id} · External ID: {customer.external_id}
+                    </p>
                   </div>
-                  <button
+                  <Button
                     type="button"
                     onClick={() =>
                       runAction(`qbo-suggest:${customer.id}`, async () => {
@@ -215,7 +265,7 @@ export function IntegrationsView({
                     }
                   >
                     Create mapping
-                  </button>
+                  </Button>
                 </li>
               ))
             ) : (
@@ -234,7 +284,7 @@ export function IntegrationsView({
                       {item.name} · {item.category} · {item.unit}
                     </p>
                   </div>
-                  <button
+                  <Button
                     type="button"
                     onClick={() =>
                       runAction(`qbo-service-item:${item.code}`, async () => {
@@ -255,7 +305,7 @@ export function IntegrationsView({
                     }
                   >
                     Create mapping
-                  </button>
+                  </Button>
                 </li>
               ))
             ) : (
@@ -264,7 +314,10 @@ export function IntegrationsView({
           </ul>
 
           <h4>Division mappings</h4>
-          <p className="muted compact">Division mappings are backfilled from QBO Class sync when the class name matches a local division name or code.</p>
+          <p className="muted compact">
+            Division mappings are backfilled from QBO Class sync when the class name matches a local division name or
+            code.
+          </p>
           <ul className="list compact">
             {suggestedDivisionMappings.length ? (
               suggestedDivisionMappings.map((division) => (
@@ -293,7 +346,7 @@ export function IntegrationsView({
                       {project.customer_name} · {project.division_code}
                     </p>
                   </div>
-                  <button
+                  <Button
                     type="button"
                     onClick={() =>
                       runAction(`qbo-project:${project.id}`, async () => {
@@ -306,7 +359,7 @@ export function IntegrationsView({
                     }
                   >
                     Push and map
-                  </button>
+                  </Button>
                 </li>
               ))
             ) : (
@@ -336,17 +389,17 @@ export function IntegrationsView({
               })
             }
           >
-            <select name="entity_type" defaultValue="customer">
+            <Select name="entity_type" defaultValue="customer">
               <option value="customer">customer</option>
               <option value="service_item">service_item</option>
               <option value="division">division</option>
               <option value="project">project</option>
-            </select>
-            <input name="local_ref" placeholder="Local ref / id / code" />
-            <input name="external_id" placeholder="QBO external id" />
-            <input name="label" placeholder="Label (optional)" />
-            <input name="status" placeholder="Status" defaultValue="active" />
-            <input name="notes" placeholder="Notes (optional)" />
+            </Select>
+            <Input name="local_ref" placeholder="Local ref / id / code" />
+            <Input name="external_id" placeholder="QBO external id" />
+            <Input name="label" placeholder="Label (optional)" />
+            <Input name="status" placeholder="Status" defaultValue="active" />
+            <Input name="notes" placeholder="Notes (optional)" />
           </FormRow>
 
           <ul className="list compact">
@@ -376,7 +429,9 @@ export function IntegrationsView({
                     }
                     onDelete={() =>
                       runAction(`qbo-mapping:${mapping.id}`, async () => {
-                        await apiDelete(`/api/integrations/qbo/mappings/${mapping.id}`, companySlug, { expected_version: mapping.version })
+                        await apiDelete(`/api/integrations/qbo/mappings/${mapping.id}`, companySlug, {
+                          expected_version: mapping.version,
+                        })
                         await refresh()
                       })
                     }

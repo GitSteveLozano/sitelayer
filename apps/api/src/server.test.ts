@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll } from 'vitest'
 import http from 'node:http'
 
 const describeIntegration = process.env.RUN_API_INTEGRATION === '1' ? describe : describe.skip
@@ -92,18 +92,14 @@ describeIntegration('API Integration Tests', () => {
     const customerId = bootstrap.customers[0]?.id
     expect(customerId).toBeDefined()
 
-    const result = await apiCall<{ id: string }>(
-      'POST',
-      '/api/projects',
-      {
-        name: 'Test Project',
-        customer_id: customerId,
-        customer_name: 'Test Customer',
-        division_code: 'D1',
-        bid_total: 50000,
-        labor_rate: 50,
-      },
-    )
+    const result = await apiCall<{ id: string }>('POST', '/api/projects', {
+      name: 'Test Project',
+      customer_id: customerId,
+      customer_name: 'Test Customer',
+      division_code: 'D1',
+      bid_total: 50000,
+      labor_rate: 50,
+    })
     expect(result.status).toBe(201)
     expect(result.id).toBeDefined()
   })

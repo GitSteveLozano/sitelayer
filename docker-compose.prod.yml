@@ -17,7 +17,7 @@ services:
       NODE_ENV: production
       APP_TIER: ${APP_TIER:-prod}
       FEATURE_FLAGS: ${FEATURE_FLAGS:-}
-      PORT: "3001"
+      PORT: '3001'
       DATABASE_URL: ${DATABASE_URL}
       DATABASE_URL_PROD_RO: ${DATABASE_URL_PROD_RO:-}
       DATABASE_SSL_REJECT_UNAUTHORIZED: ${DATABASE_SSL_REJECT_UNAUTHORIZED:-true}
@@ -93,8 +93,8 @@ services:
     image: caddy:2-alpine
     restart: always
     ports:
-      - "80:80"
-      - "443:443"
+      - '80:80'
+      - '443:443'
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

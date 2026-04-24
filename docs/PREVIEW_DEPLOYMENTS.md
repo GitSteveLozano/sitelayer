@@ -17,25 +17,25 @@ Do not create a second managed Postgres cluster yet. Use the existing `sitelayer
 
 ## Provisioned Preview Infrastructure
 
-| Resource | Value |
-|----------|-------|
-| Droplet | `sitelayer-preview` |
-| Droplet ID | `566806040` |
-| Region | Toronto `tor1` |
-| Size | `s-2vcpu-4gb` |
-| RAM / CPU / disk | 4GB RAM, 2 vCPU, 80GB disk |
-| Droplet public IPv4 | `137.184.169.208` |
-| Reserved IPv4 for DNS | `159.203.53.218` |
-| Private IPv4 | `10.118.0.2` |
-| Firewall | `sitelayer-preview`, ID `7a8f443e-cd74-4867-af8a-118559f33561` |
-| Firewall inbound | SSH `22` from `50.71.113.46/32`; HTTP `80` public; HTTPS `443` public |
-| Firewall outbound | TCP/UDP egress plus ICMP egress to `0.0.0.0/0` for package installs, Docker pulls, ACME, and update checks |
-| Router | Traefik v3 at `/opt/sitelayer-preview-router`, Docker network `sitelayer-preview-router` |
-| Shared env | `/app/previews/.env.shared`, owner `sitelayer:sitelayer`, mode `600` |
-| Shared preview DB | `sitelayer_preview` on managed cluster `sitelayer-db`, user `sitelayer_preview_app`, per-preview schemas such as `sitelayer_pr_42` |
-| GitHub runner | `sitelayer-preview`, service `actions.runner.GitSteveLozano-sitelayer.sitelayer-preview.service` |
-| TTL cleanup | `sitelayer-preview-prune.timer`, daily, 14-day default, installed by `scripts/setup-preview-host.sh` / `scripts/install-preview-prune-systemd.sh` |
-| Smoke preview | `https://main.preview.sitelayer.sandolab.xyz` |
+| Resource              | Value                                                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Droplet               | `sitelayer-preview`                                                                                                                               |
+| Droplet ID            | `566806040`                                                                                                                                       |
+| Region                | Toronto `tor1`                                                                                                                                    |
+| Size                  | `s-2vcpu-4gb`                                                                                                                                     |
+| RAM / CPU / disk      | 4GB RAM, 2 vCPU, 80GB disk                                                                                                                        |
+| Droplet public IPv4   | `137.184.169.208`                                                                                                                                 |
+| Reserved IPv4 for DNS | `159.203.53.218`                                                                                                                                  |
+| Private IPv4          | `10.118.0.2`                                                                                                                                      |
+| Firewall              | `sitelayer-preview`, ID `7a8f443e-cd74-4867-af8a-118559f33561`                                                                                    |
+| Firewall inbound      | SSH `22` from `50.71.113.46/32`; HTTP `80` public; HTTPS `443` public                                                                             |
+| Firewall outbound     | TCP/UDP egress plus ICMP egress to `0.0.0.0/0` for package installs, Docker pulls, ACME, and update checks                                        |
+| Router                | Traefik v3 at `/opt/sitelayer-preview-router`, Docker network `sitelayer-preview-router`                                                          |
+| Shared env            | `/app/previews/.env.shared`, owner `sitelayer:sitelayer`, mode `600`                                                                              |
+| Shared preview DB     | `sitelayer_preview` on managed cluster `sitelayer-db`, user `sitelayer_preview_app`, per-preview schemas such as `sitelayer_pr_42`                |
+| GitHub runner         | `sitelayer-preview`, service `actions.runner.GitSteveLozano-sitelayer.sitelayer-preview.service`                                                  |
+| TTL cleanup           | `sitelayer-preview-prune.timer`, daily, 14-day default, installed by `scripts/setup-preview-host.sh` / `scripts/install-preview-prune-systemd.sh` |
+| Smoke preview         | `https://main.preview.sitelayer.sandolab.xyz`                                                                                                     |
 
 The firewall does not expose public preview app ports such as `3000`. Traefik should be the only public ingress path.
 
