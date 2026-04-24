@@ -63,6 +63,11 @@ jobs:
               exit 1
             fi
 
+            # Apply idempotent schema migrations before booting the new app.
+            # Falls back to dockerized psql when the host client is absent.
+            PSQL_DOCKER_IMAGE=postgres:18-alpine scripts/migrate-db.sh
+            PSQL_DOCKER_IMAGE=postgres:18-alpine scripts/check-db-schema.sh
+
             # Build and start services
             $COMPOSE -f docker-compose.prod.yml config >/dev/null
             $COMPOSE -f docker-compose.prod.yml build --pull

@@ -4,7 +4,7 @@ Construction operations platform: blueprint takeoff, estimation, crew scheduling
 
 ## Agent Coordination Source of Truth
 
-**Last reconciled:** 2026-04-23
+**Last reconciled:** 2026-04-24
 
 **Mesh project:** `sitelayer` / project ID `282`
 
@@ -24,7 +24,7 @@ When an agent changes architecture, deployment, secrets layout, external service
 - Patch the relevant repo doc in the same turn.
 - Do not rely on old prose in historical docs if it disagrees with live code.
 
-Current Mesh runtime dependencies recorded for `sitelayer` as of `list_runtime_deps` on 2026-04-23:
+Current Mesh runtime dependencies recorded for `sitelayer` as of 2026-04-24:
 
 - `postgres/sitelayer-db`
 - `env_file/production-env`
@@ -33,10 +33,18 @@ Current Mesh runtime dependencies recorded for `sitelayer` as of `list_runtime_d
 - `port/preview-ssh-restricted`
 - `port/droplet-public-3000-followup`
 - `build_cmd/production-docker-build`
+- `docker_container/tiered-object-storage`
+- `env_file/app-tier-isolation`
+- `postgres/sitelayer-preview-db`
+- `env_file/preview-shared-env`
+- `docker_container/preview-router-traefik`
+- `docker_container/preview-main-stack`
+- `port/preview-http-https`
+- `build_cmd/preview-docker-build`
 
 These are currently tracked as deployment verification items, not global task blockers. After the first successful droplet deploy, promote the production-critical deps to required in Mesh.
 
-Preview state is documented in this repo and in Mesh planning notes, but the runtime dependency rows still need reconciliation. Runtime-dep upserts for the preview DB/router/shared env/main stack were blocked by the tool guard in this session. Retry in a clean context for:
+Preview state is documented in this repo and Mesh runtime dependencies. Runtime-dep rows were reconciled on 2026-04-24 for:
 
 - `postgres/sitelayer-preview-db`
 - `env_file/preview-shared-env`
@@ -68,6 +76,8 @@ Runner package state: `/home/sitelayer/actions-runner` exists on `sitelayer-prev
 | Optional integrations | Clerk, DigitalOcean Spaces, QBO, and Sentry can stay blank/placeholders for bootable deploy; `DATABASE_URL` is the hard requirement |
 
 Security note: the deploy user is in the Docker group. That avoids root SSH but Docker access is root-equivalent. Treat `DEPLOY_SSH_KEY` as production-root-equivalent.
+
+Database migrations use `scripts/migrate-db.sh`; schema readiness uses `scripts/check-db-schema.sh`. Production deploy runs both before container rebuilds. For local Docker verification without exposing Postgres on the host, run with `PSQL_DOCKER_NETWORK=sitelayer_default DATABASE_URL=postgres://sitelayer:sitelayer@db:5432/sitelayer`.
 
 ## Architecture Overview
 
@@ -396,9 +406,9 @@ Background job processor (currently minimal):
 
 ### Phase 2 — Initial Deployment (Week 1, Day 3-5)
 
-- [ ] Build Docker images (api, web, worker)
-- [ ] Postgres schema migration
-- [ ] Seed data (LA Operations template)
+- [x] Build Docker images (api, web, worker)
+- [x] Postgres schema migration runner and schema checker
+- [x] Seed data (LA Operations template)
 - [ ] Test QBO OAuth flow (sandbox)
 - [ ] Test blueprint upload → Spaces
 

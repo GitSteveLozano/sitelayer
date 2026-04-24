@@ -152,6 +152,28 @@ source .env
 psql "$DATABASE_URL" < docker/postgres/init/001_schema.sql
 ```
 
+For ongoing deploys, use the repo migration runner instead of calling SQL files
+manually:
+
+```bash
+cd /app/sitelayer
+ENV_FILE=/app/sitelayer/.env scripts/migrate-db.sh
+ENV_FILE=/app/sitelayer/.env scripts/check-db-schema.sh
+```
+
+The production GitHub Actions deploy runs both commands before rebuilding the
+containers. The SQL files are currently idempotent; review this before adding
+any destructive migration.
+
+For the local Docker database, use the Compose network instead of opening the
+database port:
+
+```bash
+PSQL_DOCKER_NETWORK=sitelayer_default \
+  DATABASE_URL=postgres://sitelayer:sitelayer@db:5432/sitelayer \
+  scripts/check-db-schema.sh
+```
+
 ### 8. TLS Certificate
 
 Caddy is the production reverse proxy in `docker-compose.prod.yml`. It binds
@@ -192,10 +214,12 @@ The GitHub Actions workflow will:
 1. Check out the code
 2. SSH into the droplet
 3. Pull latest changes from GitHub
-4. Validate Compose config
-5. Build Docker images
-6. Start services with `docker compose up -d --remove-orphans`
-7. Verify API health on `127.0.0.1:3001/health`
+4. Run `scripts/migrate-db.sh`
+5. Run `scripts/check-db-schema.sh`
+6. Validate Compose config
+7. Build Docker images
+8. Start services with `docker compose up -d --remove-orphans`
+9. Verify public HTTPS health locally through Caddy
 
 ## Tier Isolation
 
@@ -258,7 +282,7 @@ Local compose ships a MinIO container at `http://minio:9000` with console at `:9
 
 Applying to existing deployed DBs:
 ```
-psql "$DATABASE_URL" -f docker/postgres/init/002_tier_origin.sql
+ENV_FILE=/app/sitelayer/.env MIGRATION_FILES="docker/postgres/init/002_tier_origin.sql" scripts/migrate-db.sh
 ```
 Idempotent (`ADD COLUMN IF NOT EXISTS`). Existing rows stay NULL in the origin column — that's fine, only future writes get tagged.
 
@@ -311,6 +335,9 @@ psql "$DATABASE_URL" -c "SELECT version();"
 
 # Check if migrations were applied
 psql "$DATABASE_URL" -c "\dt"
+
+# Full schema readiness check
+ENV_FILE=/app/sitelayer/.env scripts/check-db-schema.sh
 ```
 
 ### Check Logs
