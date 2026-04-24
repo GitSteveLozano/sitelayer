@@ -1,4 +1,4 @@
-import { Pool, type PoolConfig } from 'pg'
+import { Pool, type PoolClient, type PoolConfig } from 'pg'
 
 const databaseUrl = process.env.DATABASE_URL ?? 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer'
 const databaseSslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false'
@@ -58,6 +58,116 @@ assertDatabaseMatchesTier(appTier, databaseUrl)
 
 const pool = new Pool(getPoolConfig(databaseUrl))
 
+async function processOutboxBatch(client: PoolClient, companyId: string, limit: number) {
+  const claimed = await client.query(
+    `
+    update mutation_outbox
+    set
+      status = 'processing',
+      attempt_count = attempt_count + 1,
+      next_attempt_at = now() + interval '5 minutes',
+      error = null
+    where id in (
+      select id
+      from mutation_outbox
+      where company_id = $1
+        and (
+          (status = 'pending' and next_attempt_at <= now())
+          or (status = 'processing' and next_attempt_at <= now())
+        )
+      order by next_attempt_at asc, created_at asc
+      limit $2
+      for update skip locked
+    )
+    returning id
+    `,
+    [companyId, limit],
+  )
+
+  const ids = claimed.rows.map((row) => row.id)
+  if (!ids.length) return 0
+
+  const applied = await client.query(
+    `
+    update mutation_outbox
+    set status = 'applied', applied_at = now(), error = null
+    where company_id = $1 and id = any($2::uuid[])
+    returning id
+    `,
+    [companyId, ids],
+  )
+  return applied.rowCount ?? 0
+}
+
+async function processSyncEventBatch(client: PoolClient, companyId: string, limit: number) {
+  const claimed = await client.query(
+    `
+    update sync_events
+    set
+      status = 'processing',
+      attempt_count = attempt_count + 1,
+      next_attempt_at = now() + interval '5 minutes',
+      error = null
+    where id in (
+      select id
+      from sync_events
+      where company_id = $1
+        and (
+          (status = 'pending' and next_attempt_at <= now())
+          or (status = 'processing' and next_attempt_at <= now())
+        )
+      order by next_attempt_at asc, created_at asc
+      limit $2
+      for update skip locked
+    )
+    returning id
+    `,
+    [companyId, limit],
+  )
+
+  const ids = claimed.rows.map((row) => row.id)
+  if (!ids.length) return 0
+
+  const applied = await client.query(
+    `
+    update sync_events
+    set status = 'applied', applied_at = now(), error = null
+    where company_id = $1 and id = any($2::uuid[])
+    returning id
+    `,
+    [companyId, ids],
+  )
+  return applied.rowCount ?? 0
+}
+
+async function processQueue(companyId: string, limit = 25) {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const processedOutbox = await processOutboxBatch(client, companyId, limit)
+    const processedSyncEvents = await processSyncEventBatch(client, companyId, limit)
+
+    if (processedOutbox || processedSyncEvents) {
+      await client.query(
+        `
+        update integration_connections
+        set last_synced_at = now(), status = 'connected', version = version + 1
+        where company_id = $1 and provider in ('qbo', 'demo')
+        `,
+        [companyId],
+      )
+    }
+
+    await client.query('commit')
+    return { processedOutbox, processedSyncEvents }
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 async function getCompanyId(): Promise<string | null> {
   const result = await pool.query<{ id: string }>(
     'select id from companies where slug = $1 limit 1',
@@ -75,11 +185,11 @@ async function heartbeat() {
 
   const [outboxResult, syncResult] = await Promise.all([
     pool.query<{ pending_count: number }>(
-      `select count(*)::int as pending_count from mutation_outbox where company_id = $1 and status = 'pending'`,
+      `select count(*)::int as pending_count from mutation_outbox where company_id = $1 and status in ('pending', 'processing')`,
       [companyId],
     ),
     pool.query<{ pending_count: number }>(
-      `select count(*)::int as pending_count from sync_events where company_id = $1 and status = 'pending'`,
+      `select count(*)::int as pending_count from sync_events where company_id = $1 and status in ('pending', 'processing')`,
       [companyId],
     ),
   ])
@@ -87,54 +197,16 @@ async function heartbeat() {
   const pendingOutbox = outboxResult.rows[0]?.pending_count ?? 0
   const pendingSyncEvents = syncResult.rows[0]?.pending_count ?? 0
 
-  let processedOutbox = 0
-  let processedSyncEvents = 0
   if (pendingOutbox || pendingSyncEvents) {
-    const drainedOutbox = await pool.query(
-      `
-      update mutation_outbox
-      set status = 'applied', applied_at = coalesce(applied_at, now()), error = null
-      where id in (
-        select id
-        from mutation_outbox
-        where company_id = $1 and status = 'pending'
-        order by created_at asc
-        limit 25
-      )
-      returning id
-      `,
-      [companyId],
+    const processed = await processQueue(companyId)
+    console.log(
+      `[worker] company=${activeCompanySlug} pending_outbox=${pendingOutbox} pending_sync_events=${pendingSyncEvents} processed_outbox=${processed.processedOutbox} processed_sync_events=${processed.processedSyncEvents}`,
     )
-    const drainedSync = await pool.query(
-      `
-      update sync_events
-      set status = 'applied'
-      where id in (
-        select id
-        from sync_events
-        where company_id = $1 and status = 'pending'
-        order by created_at asc
-        limit 25
-      )
-      returning id
-      `,
-      [companyId],
-    )
-    processedOutbox = drainedOutbox.rowCount ?? 0
-    processedSyncEvents = drainedSync.rowCount ?? 0
-
-    await pool.query(
-      `
-      update integration_connections
-      set last_synced_at = now(), status = 'connected'
-      where company_id = $1 and provider in ('qbo', 'demo')
-      `,
-      [companyId],
-    )
+    return
   }
 
   console.log(
-    `[worker] company=${activeCompanySlug} pending_outbox=${pendingOutbox} pending_sync_events=${pendingSyncEvents} processed_outbox=${processedOutbox} processed_sync_events=${processedSyncEvents}`,
+    `[worker] company=${activeCompanySlug} pending_outbox=${pendingOutbox} pending_sync_events=${pendingSyncEvents} processed_outbox=0 processed_sync_events=0`,
   )
 }
 

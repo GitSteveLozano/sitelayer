@@ -48,7 +48,7 @@
 1. **Clerk auth integration** — hardcoded demo user blocks real multi-tenant onboarding.
 2. **DO Spaces/off-host file storage** — local blueprint persistence works, but off-host/object storage is still needed before customer data.
 3. **PDF viewer + annotation validation** — polygon drawing persists to DB; needs pilot-device validation against real PDFs.
-4. **Job queue** — QBO sync requires background jobs beyond the current heartbeat worker.
+4. **Live QBO sync validation** — DB-backed queue processing exists; real QBO connector behavior still needs sandbox credentials and end-to-end testing.
 
 ---
 
@@ -169,6 +169,7 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 - [ ] Postgres logical backups automated and restore-drilled. DO managed Postgres automatic backups exist, but keep an independent `pg_dump` retention path before pilot data.
 - [ ] UptimeRobot green (all monitors passing)
 - [ ] QBO OAuth flow working (sandbox test)
+- [x] Worker processes queue reliably with Postgres leases
 - [ ] Logs accessible via SSH (journalctl or pm2 logs)
 
 ---

@@ -221,6 +221,10 @@ CREATE TABLE IF NOT EXISTS sync_events (
   entity_id text NOT NULL,
   payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   status text NOT NULL DEFAULT 'pending',
+  attempt_count integer NOT NULL DEFAULT 0,
+  next_attempt_at timestamptz NOT NULL DEFAULT now(),
+  applied_at timestamptz,
+  error text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
 

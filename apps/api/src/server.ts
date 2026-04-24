@@ -2,6 +2,7 @@ import { Sentry } from './instrument.js'
 import http from 'node:http'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { Pool, type PoolConfig } from 'pg'
+import type { PoolClient } from 'pg'
 import {
   DEFAULT_BONUS_RULE,
   LA_TEMPLATE,
@@ -694,11 +695,21 @@ async function upsertIntegrationConnection(
 async function countQueueRows(companyId: string) {
   const [outboxResult, syncResult] = await Promise.all([
     pool.query<{ pending_count: number }>(
-      `select count(*)::int as pending_count from mutation_outbox where company_id = $1 and status = 'pending'`,
+      `
+      select count(*)::int as pending_count
+      from mutation_outbox
+      where company_id = $1
+        and status in ('pending', 'processing')
+      `,
       [companyId],
     ),
     pool.query<{ pending_count: number }>(
-      `select count(*)::int as pending_count from sync_events where company_id = $1 and status = 'pending'`,
+      `
+      select count(*)::int as pending_count
+      from sync_events
+      where company_id = $1
+        and status in ('pending', 'processing')
+      `,
       [companyId],
     ),
   ])
@@ -708,54 +719,120 @@ async function countQueueRows(companyId: string) {
   }
 }
 
-async function processQueue(companyId: string, limit = 25) {
-  const outbox = await pool.query(
+async function processOutboxBatch(client: PoolClient, companyId: string, limit: number) {
+  const claimed = await client.query(
     `
     update mutation_outbox
-    set status = 'applied', applied_at = coalesce(applied_at, now()), error = null
+    set
+      status = 'processing',
+      attempt_count = attempt_count + 1,
+      next_attempt_at = now() + interval '5 minutes',
+      error = null
     where id in (
       select id
       from mutation_outbox
-      where company_id = $1 and status = 'pending'
-      order by created_at asc
+      where company_id = $1
+        and (
+          (status = 'pending' and next_attempt_at <= now())
+          or (status = 'processing' and next_attempt_at <= now())
+        )
+      order by next_attempt_at asc, created_at asc
       limit $2
+      for update skip locked
     )
-    returning id, entity_type, entity_id, mutation_type, created_at
+    returning id
     `,
     [companyId, limit],
   )
 
-  const syncEvents = await pool.query(
+  const ids = claimed.rows.map((row) => row.id)
+  if (!ids.length) return []
+
+  const applied = await client.query(
+    `
+    update mutation_outbox
+    set status = 'applied', applied_at = now(), error = null
+    where company_id = $1 and id = any($2::uuid[])
+    returning id, entity_type, entity_id, mutation_type, attempt_count, created_at
+    `,
+    [companyId, ids],
+  )
+  return applied.rows
+}
+
+async function processSyncEventBatch(client: PoolClient, companyId: string, limit: number) {
+  const claimed = await client.query(
     `
     update sync_events
-    set status = 'applied'
+    set
+      status = 'processing',
+      attempt_count = attempt_count + 1,
+      next_attempt_at = now() + interval '5 minutes',
+      error = null
     where id in (
       select id
       from sync_events
-      where company_id = $1 and status = 'pending'
-      order by created_at asc
+      where company_id = $1
+        and (
+          (status = 'pending' and next_attempt_at <= now())
+          or (status = 'processing' and next_attempt_at <= now())
+        )
+      order by next_attempt_at asc, created_at asc
       limit $2
+      for update skip locked
     )
-    returning id, entity_type, entity_id, direction, created_at
+    returning id
     `,
     [companyId, limit],
   )
 
-  await pool.query(
-    `
-    update integration_connections
-    set last_synced_at = now(), status = 'connected', version = version + 1
-    where company_id = $1
-      and provider in ('qbo', 'demo')
-    `,
-    [companyId],
-  )
+  const ids = claimed.rows.map((row) => row.id)
+  if (!ids.length) return []
 
-  return {
-    processedOutboxCount: outbox.rowCount,
-    processedSyncEventCount: syncEvents.rowCount,
-    outbox: outbox.rows,
-    syncEvents: syncEvents.rows,
+  const applied = await client.query(
+    `
+    update sync_events
+    set status = 'applied', applied_at = now(), error = null
+    where company_id = $1 and id = any($2::uuid[])
+    returning id, entity_type, entity_id, direction, attempt_count, created_at
+    `,
+    [companyId, ids],
+  )
+  return applied.rows
+}
+
+async function processQueue(companyId: string, limit = 25) {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const outboxRows = await processOutboxBatch(client, companyId, limit)
+    const syncEventRows = await processSyncEventBatch(client, companyId, limit)
+
+    if (outboxRows.length || syncEventRows.length) {
+      await client.query(
+        `
+        update integration_connections
+        set last_synced_at = now(), status = 'connected', version = version + 1
+        where company_id = $1
+          and provider in ('qbo', 'demo')
+        `,
+        [companyId],
+      )
+    }
+
+    await client.query('commit')
+
+    return {
+      processedOutboxCount: outboxRows.length,
+      processedSyncEventCount: syncEventRows.length,
+      outbox: outboxRows,
+      syncEvents: syncEventRows,
+    }
+  } catch (error) {
+    await client.query('rollback')
+    throw error
+  } finally {
+    client.release()
   }
 }
 
@@ -773,7 +850,7 @@ async function getSyncStatus(companyId: string) {
     ),
     pool.query(
       `
-      select created_at, entity_type, entity_id, direction, status
+      select created_at, entity_type, entity_id, direction, status, attempt_count, applied_at, error
       from sync_events
       where company_id = $1
       order by created_at desc
@@ -1952,7 +2029,7 @@ const server = http.createServer(async (req, res) => {
       const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 25)))
       const result = await pool.query(
         `
-        select id, integration_connection_id, direction, entity_type, entity_id, payload, status, created_at
+        select id, integration_connection_id, direction, entity_type, entity_id, payload, status, attempt_count, next_attempt_at, applied_at, error, created_at
         from sync_events
         where company_id = $1
         order by created_at desc

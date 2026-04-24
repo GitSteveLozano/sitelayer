@@ -100,7 +100,7 @@ Layer 3: Derived Insight & Workflow UI
 |-----------|-----------|-------|
 | **Backend** | Node.js (plain http module) + Postgres | No framework; minimal HTTP server |
 | **Frontend** | React 19 + Vite SPA | Client-side only; no SSR |
-| **Worker** | Node.js background tasks | Inline in monorepo; no Hatchet yet |
+| **Worker** | Node.js background tasks | Postgres-backed leased queue; no Hatchet yet |
 | **Monorepo** | npm workspaces | apps: api, web, worker; packages: domain |
 | **Database** | Postgres (pg driver) | Direct SQL queries in server.ts; no ORM |
 | **Auth** | TBD (hardcoded demo user) | Clerk planned but not yet integrated |
@@ -197,10 +197,10 @@ export const calculateBonusPayout = (revenue, cost, rule) => ...
 
 ### Worker (apps/worker/src/worker.ts)
 
-Background job processor (currently minimal):
-- QBO sync orchestration
-- Blueprint PDF processing
-- Estimate generation
+Background job processor:
+- Claims `mutation_outbox` and `sync_events` with `FOR UPDATE SKIP LOCKED`.
+- Uses short processing leases through `next_attempt_at` so stale work can be retried.
+- Marks simulated local queue work as `applied`; live QBO sync still needs sandbox credential validation.
 
 ### Database Schema
 
@@ -367,8 +367,8 @@ Background job processor (currently minimal):
 
 ### Background Jobs
 
-**Current**: Inline worker.ts (not yet hooked to actual job queue)  
-**Verdict**: 🔴 **Needs implementation**
+**Current**: Inline worker.ts backed by `mutation_outbox` and `sync_events` leases.  
+**Verdict**: 🟡 **OK for pilot simulation; live QBO connector still needs validation**
 
 | Solution | Upside | Downside | Cost | Fit |
 |----------|--------|---------|------|-----|
@@ -377,7 +377,7 @@ Background job processor (currently minimal):
 | **Postgres pg-boss** | No external dep, uses your DB | Less mature than Bull, slower | $0 | 🟡 Simpler for MVP |
 | **Temporal.io** | Enterprise-grade, durable | Significant overhead, learning curve | $0 (OSS) | ❌ Too much for MVP |
 
-**Recommendation**: For pilot, use **pg-boss** (Postgres-native, no Redis, free). Migrate to Hatchet post-pilot if you need deeper workflow orchestration.
+**Recommendation**: Keep the current Postgres-backed queue for pilot unless sync complexity grows. Revisit pg-boss or Hatchet after live QBO behavior is known.
 
 ### Monitoring & Observability
 

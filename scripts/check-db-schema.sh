@@ -43,6 +43,17 @@ expected_origin_columns(table_name) as (
     ('crew_schedules'),
     ('estimate_lines')
 ),
+expected_queue_columns(table_name, column_name) as (
+  values
+    ('mutation_outbox', 'attempt_count'),
+    ('mutation_outbox', 'next_attempt_at'),
+    ('mutation_outbox', 'applied_at'),
+    ('mutation_outbox', 'error'),
+    ('sync_events', 'attempt_count'),
+    ('sync_events', 'next_attempt_at'),
+    ('sync_events', 'applied_at'),
+    ('sync_events', 'error')
+),
 missing_tables as (
   select 'missing table: ' || e.table_name as failure
   from expected_tables e
@@ -59,10 +70,21 @@ missing_origin_columns as (
    and c.table_name = e.table_name
    and c.column_name = 'origin'
   where c.column_name is null
+),
+missing_queue_columns as (
+  select 'missing queue column: ' || e.table_name || '.' || e.column_name as failure
+  from expected_queue_columns e
+  left join information_schema.columns c
+    on c.table_schema = 'public'
+   and c.table_name = e.table_name
+   and c.column_name = e.column_name
+  where c.column_name is null
 )
 select failure from missing_tables
 union all
 select failure from missing_origin_columns
+union all
+select failure from missing_queue_columns
 order by failure;
 ")"
 
