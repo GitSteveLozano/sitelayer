@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+.turbo
+.vite
+.vite-cache
+.DS_Store
+.env
+.env.*
+!/.env.example

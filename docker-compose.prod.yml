@@ -1,0 +1,95 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
+        VITE_USER_ID: ${VITE_USER_ID:-demo-user}
+        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+        VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
+        VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
+    command: npm start -w @sitelayer/api
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_SSL_REJECT_UNAUTHORIZED: ${DATABASE_SSL_REJECT_UNAUTHORIZED:-true}
+      ACTIVE_COMPANY_SLUG: ${ACTIVE_COMPANY_SLUG:-la-operations}
+      ACTIVE_USER_ID: ${ACTIVE_USER_ID:-demo-user}
+      QBO_CLIENT_ID: ${QBO_CLIENT_ID:-demo}
+      QBO_CLIENT_SECRET: ${QBO_CLIENT_SECRET:-demo}
+      QBO_REDIRECT_URI: ${QBO_REDIRECT_URI:-http://localhost:3001/api/integrations/qbo/callback}
+      QBO_SUCCESS_REDIRECT_URI: ${QBO_SUCCESS_REDIRECT_URI:-http://localhost:3000/?qbo=connected}
+      QBO_ENVIRONMENT: ${QBO_ENVIRONMENT:-sandbox}
+      QBO_STATE_SECRET: ${QBO_STATE_SECRET:-demo-qbo-state-secret}
+      CLERK_SECRET_KEY: ${CLERK_SECRET_KEY:-}
+      DO_SPACES_KEY: ${DO_SPACES_KEY:-}
+      DO_SPACES_SECRET: ${DO_SPACES_SECRET:-}
+      DO_SPACES_REGION: ${DO_SPACES_REGION:-nyc3}
+      DO_SPACES_BUCKET: ${DO_SPACES_BUCKET:-sitelayer-blueprints}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
+    restart: always
+    networks:
+      - sitelayer
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
+        VITE_USER_ID: ${VITE_USER_ID:-demo-user}
+        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+        VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
+        VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
+    command: npm start -w @sitelayer/web
+    environment:
+      NODE_ENV: production
+    restart: always
+    networks:
+      - sitelayer
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
+        VITE_USER_ID: ${VITE_USER_ID:-demo-user}
+        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+        VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
+        VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
+    command: npm start -w @sitelayer/worker
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+      DATABASE_SSL_REJECT_UNAUTHORIZED: ${DATABASE_SSL_REJECT_UNAUTHORIZED:-true}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    restart: always
+    networks:
+      - sitelayer
+
+  nginx:
+    image: nginx:alpine
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    networks:
+      - sitelayer
+    depends_on:
+      - api
+      - web
+
+networks:
+  sitelayer:
+    driver: bridge

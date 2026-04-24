@@ -1,0 +1,75 @@
+name: Deploy to DigitalOcean Droplet
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: droplet-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: sitelayer
+        run: |
+          test -n "$DEPLOY_KEY" || { echo "DEPLOY_SSH_KEY is not configured"; exit 1; }
+          test -n "$DEPLOY_HOST" || { echo "DEPLOY_HOST is not configured"; exit 1; }
+
+          mkdir -p ~/.ssh
+          echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
+
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" << 'EOF'
+            set -e
+
+            if docker compose version >/dev/null 2>&1; then
+              COMPOSE="docker compose"
+            elif command -v docker-compose >/dev/null 2>&1; then
+              COMPOSE="docker-compose"
+            else
+              echo "ERROR: neither docker compose nor docker-compose is installed"
+              exit 1
+            fi
+
+            # Navigate to app directory
+            cd /app/sitelayer || {
+              echo "Creating /app/sitelayer directory..."
+              cd /app
+              git clone https://github.com/GitSteveLozano/sitelayer.git
+              cd sitelayer
+            }
+
+            # Update code
+            git fetch origin
+            git checkout -B main origin/main
+            git reset --hard origin/main
+
+            # docker compose reads this automatically from the working directory.
+            if [ ! -f .env ]; then
+              echo "ERROR: .env file not found in /app/sitelayer"
+              exit 1
+            fi
+
+            # Build and start services
+            $COMPOSE -f docker-compose.prod.yml config >/dev/null
+            $COMPOSE -f docker-compose.prod.yml build --pull
+            $COMPOSE -f docker-compose.prod.yml up -d --remove-orphans
+
+            # Wait for services to be ready
+            sleep 5
+
+            # Check API health
+            curl -fsS http://127.0.0.1:3001/health
+
+            echo "Deployment completed successfully"
+          EOF

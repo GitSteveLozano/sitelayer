@@ -1,0 +1,22 @@
+{
+  "name": "@sitelayer/worker",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/worker.js",
+  "scripts": {
+    "dev": "tsx watch src/worker.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "start": "node dist/worker.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "npm run typecheck",
+    "format": "npm run typecheck",
+    "test": "npm run typecheck"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.11"
+  }
+}

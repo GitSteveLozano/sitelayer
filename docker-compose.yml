@@ -1,0 +1,61 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sitelayer
+      POSTGRES_USER: sitelayer
+      POSTGRES_PASSWORD: sitelayer
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+
+  api:
+    build:
+      context: .
+    command: npm run dev:api
+    environment:
+      NODE_ENV: development
+      PORT: "3001"
+      DATABASE_URL: postgres://sitelayer:sitelayer@db:5432/sitelayer
+      ACTIVE_COMPANY_SLUG: la-operations
+    ports:
+      - "3001:3001"
+    depends_on:
+      - db
+    volumes:
+      - .:/app
+      - api_node_modules:/app/node_modules
+
+  web:
+    build:
+      context: .
+    command: npm run dev:web
+    environment:
+      NODE_ENV: development
+      VITE_API_URL: http://localhost:3001
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    volumes:
+      - .:/app
+      - web_node_modules:/app/node_modules
+
+  worker:
+    build:
+      context: .
+    command: npm run dev:worker
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgres://sitelayer:sitelayer@db:5432/sitelayer
+    depends_on:
+      - db
+    volumes:
+      - .:/app
+      - worker_node_modules:/app/node_modules
+
+volumes:
+  pgdata:
+  api_node_modules:
+  web_node_modules:
+  worker_node_modules:

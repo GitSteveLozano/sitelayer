@@ -1,0 +1,91 @@
+services:
+  api:
+    image: sitelayer-preview:${PREVIEW_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
+        VITE_USER_ID: ${VITE_USER_ID:-demo-user}
+        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+        VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-preview}
+        VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
+    command: npm start -w @sitelayer/api
+    env_file:
+      - ${PREVIEW_STACK_ENV_FILE:-.env}
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+    restart: unless-stopped
+    networks:
+      - app
+      - router
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=sitelayer-preview-router
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-api.rule=Host(`${PREVIEW_HOST}`) && (Path(`/api`) || PathPrefix(`/api/`) || Path(`/health`))
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-api.priority=100
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-api.entrypoints=websecure
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-api.tls.certresolver=letsencrypt
+      - traefik.http.services.sitelayer-${PREVIEW_SLUG}-api.loadbalancer.server.port=3001
+
+  web:
+    image: sitelayer-preview:${PREVIEW_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
+        VITE_USER_ID: ${VITE_USER_ID:-demo-user}
+        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+        VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-preview}
+        VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
+    command: npm start -w @sitelayer/web
+    environment:
+      NODE_ENV: production
+    restart: unless-stopped
+    networks:
+      - router
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=sitelayer-preview-router
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-web.rule=Host(`${PREVIEW_HOST}`)
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-web.entrypoints=websecure
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-web.tls.certresolver=letsencrypt
+      - traefik.http.services.sitelayer-${PREVIEW_SLUG}-web.loadbalancer.server.port=3000
+
+  worker:
+    image: sitelayer-preview:${PREVIEW_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+      args:
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
+        VITE_USER_ID: ${VITE_USER_ID:-demo-user}
+        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+        VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-preview}
+        VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
+    command: npm start -w @sitelayer/worker
+    env_file:
+      - ${PREVIEW_STACK_ENV_FILE:-.env}
+    environment:
+      NODE_ENV: production
+    profiles:
+      - worker
+    restart: unless-stopped
+    networks:
+      - app
+
+networks:
+  app:
+    driver: bridge
+    internal: true
+  router:
+    name: sitelayer-preview-router
+    external: true

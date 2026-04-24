@@ -1,0 +1,289 @@
+3/31/26, 3:32 PM - Messages and calls are end-to-end encrypted. Only people in this chat can read, listen to, or share them. *Learn more*
+3/31/26, 3:32 PM - David Synchyshyn created group "LA / Tiny Bison"
+3/31/26, 3:32 PM - David Synchyshyn added you
+3/31/26, 3:37 PM - David Synchyshyn: Cavy, (Steve & Marcus)
+
+Your workflow process from earlier today was helpful.  Prior to you sharing, Steve had created a simple one page screen shot, to ensure we were on the the same page. Link below
+
+https://gitstevelozano.github.io/CavyProject/
+
+Steve is moving forward on a mockup and we have this new chat group to streamline communications
+
+Have a great night
+3/31/26, 3:39 PM - +1 (204) 298-8517: Good evening guys! 
+Dashboard looks good. I can't upload drawings though
+3/31/26, 3:44 PM - Steve Lozano: Ya, it doesn't do anything right now 😅
+3/31/26, 3:44 PM - Steve Lozano: I put it together last week in an hour, just playing around with ideas
+3/31/26, 3:45 PM - Steve Lozano: With the workflow you put together earlier - going to completely change the initial product strategy/positioning
+3/31/26, 3:53 PM - +1 (204) 298-8517: Kk that makes sense. I can share the document here and we can treat it like a live document and anyone can ask questions or make notes
+3/31/26, 3:53 PM - +1 (204) 298-8517: https://docs.google.com/document/d/1izUGiVEnycpJTjAugZDsHFyLXQRHHQUXtdRMkyCEPLw/edit?usp=drivesdk
+3/31/26, 5:49 PM - Steve Lozano: https://gitstevelozano.github.io/sitelayer/
+3/31/26, 5:49 PM - Steve Lozano: Exploring a few things here
+3/31/26, 6:46 PM - Steve Lozano: Possible to get a blueprint example?
+3/31/26, 7:01 PM - Steve Lozano: Need the PDF to see if we can pull item names, and sqft in columns for the data layer
+3/31/26, 7:02 PM - David Synchyshyn: PDF drawing?
+3/31/26, 7:02 PM - Steve Lozano: Or could look at building a measurement canvas
+3/31/26, 7:02 PM - Steve Lozano: Yes
+3/31/26, 7:07 PM - Steve Lozano: Need it to test. I'm looking to build a simple version of planswift
+3/31/26, 7:07 PM - Steve Lozano: PDF render, scale calibration, polygon drawing tool, sqft summary, and annotations
+3/31/26, 7:28 PM - Steve Lozano: Okay, built
+3/31/26, 7:29 PM - Steve Lozano: Not sure if it works, so let's give it a go
+4/1/26, 1:26 AM - David Synchyshyn: Cavy, can you send over a few sets of pdf drawings when you have a moment?   Single family, multi family, commercial if available.
+4/1/26, 1:38 AM - +1 (204) 298-8517: Good morning guys! 
+
+Here are a ton of blueprints for single family: 
+https://drive.google.com/drive/folders/1Z2c_Ac8uw3u_dGdUq3kh89oPo2ohqx9M
+
+Here are multi family and a few commercial: 
+https://drive.google.com/drive/folders/1iT_tCq6epHnFXkKCPdG9xehFpGT3eDaj
+4/1/26, 1:39 AM - +1 (204) 298-8517: Some commercial in the second album will be: 785 Dakota, Red River Coop, 55 Farmer row
+4/1/26, 2:05 AM - David Synchyshyn: Thank you
+4/3/26, 10:50 AM - Steve Lozano: Should be able to get back to building this today/this weekend
+4/3/26, 10:51 AM - Steve Lozano: Given how things are moving - I may end up rebuilding the entire software suite from end to end
+4/3/26, 10:53 AM - Steve Lozano: Need to validate the blueprint/planswift replacement works. Finish the QuickBooks integration. Then rebuild something like Construction clock. 
+
+I'm really just limited by credits/tokens right now.
+4/3/26, 10:53 AM - Steve Lozano: Otherwise could probably finish the MVP in a week
+4/3/26, 10:54 AM - Steve Lozano: Do we want auto-clock in or manual?
+4/3/26, 11:01 AM - David Synchyshyn: Would it be easier to just have it communicate with construction clock instead of making a new CC?
+4/3/26, 11:02 AM - Steve Lozano: Eh, I can rebuild their entire stack.
+4/3/26, 11:02 AM - Steve Lozano: David's company has no moat except it has clients
+4/3/26, 11:03 AM - Steve Lozano: What they spent 2 years developing can now be rebuilt in a week or two
+4/3/26, 11:03 AM - Steve Lozano: It's kinda crazy how fast things are moving right now
+4/3/26, 11:04 AM - David Synchyshyn: Auto clock is CCs big thing.  But all the rest are manual
+4/3/26, 11:06 AM - Steve Lozano: Yea, it's nothing proprietary and I want to automate the rest with the initial planning/blueprint/takeoff data
+4/3/26, 11:06 AM - Steve Lozano: And hook it up to qbo to track actual costs
+4/3/26, 11:09 AM - +1 (204) 298-8517: Love your thought here guys
+4/3/26, 11:09 AM - +1 (204) 298-8517: Thoughts* 
+
+Lol let me know when I can contribute
+4/3/26, 11:10 AM - Steve Lozano: Continue to give feedback on the prototype - https://gitstevelozano.github.io/sitelayer/
+4/3/26, 11:10 AM - Steve Lozano: Whatever comes to mind. Write it down somewhere
+4/3/26, 11:11 AM - Steve Lozano: Any and all feedback is good. 
+
+Just note: It's in a bare bones/let's just get something working state
+4/3/26, 11:46 AM - David Synchyshyn: The gap in all the clock in softwares is knowing what the trade is doing.  Are they installation insulation or aluminum.  They can track manually in CC. Maybe way down the road a go pro or the safety glasses can map out their day in more detail
+4/3/26, 11:47 AM - Steve Lozano: Ah so more itemized per day?
+4/3/26, 11:50 AM - David Synchyshyn: If a trade works 8 hours, it would help Cavy to know how many hours were spent putting on insulation vs how many hours installing install trims for example.  He mug it be making $ on one and losing on the other
+4/3/26, 11:51 AM - Steve Lozano: Got it, that's something that probably needs to be manual until ya - hook it up to glasses/go pro
+4/3/26, 11:52 AM - Steve Lozano: So a manual time spent input at what would be good from a mobile/on job site
+4/3/26, 11:53 AM - David Synchyshyn: Let me go back into CC.  It was just in early stages last summer.  Let me see what they did. No need to reinvent the wheel.
+4/3/26, 11:53 AM - David Synchyshyn: They were manual, not sure how successful the adoption was.  I can see trades forgetting to keep switching tasks on their phone throughout the day
+4/3/26, 11:54 AM - +1 (204) 298-8517: To be honest, the service items that you have is a really good start 
+
+I can give you a list of them as well. And they connect straight into QuickBooks so when I run a report I can see the actual cost
+4/3/26, 11:58 AM - Steve Lozano: Ya, would prefer to keep it low maintenance. Less manual input - more confirmation based
+4/3/26, 12:00 PM - +1 (204) 298-8517: IMG-20260403-WA0012.jpg (file attached)
+I have our QBO setup my divisions first. This way I can run division wide reports for my managers to see if the work they are doing is profitable
+4/3/26, 12:00 PM - +1 (204) 298-8517: IMG-20260403-WA0013.jpg (file attached)
+Then we have the customers to clock into, same way you have the project set up
+4/3/26, 12:01 PM - Steve Lozano: Ah, neat. K
+4/3/26, 12:01 PM - +1 (204) 298-8517: 
+4/3/26, 12:01 PM - +1 (204) 298-8517: IMG-20260403-WA0014.jpg (file attached)
+4/3/26, 12:01 PM - +1 (204) 298-8517: IMG-20260403-WA0015.jpg (file attached)
+4/3/26, 12:01 PM - +1 (204) 298-8517: IMG-20260403-WA0016.jpg (file attached)
+4/3/26, 12:01 PM - +1 (204) 298-8517: IMG-20260403-WA0017.jpg (file attached)
+4/3/26, 12:01 PM - +1 (204) 298-8517: IMG-20260403-WA0018.jpg (file attached)
+4/3/26, 12:01 PM - +1 (204) 298-8517: And then we have the service items
+4/3/26, 12:04 PM - +1 (204) 298-8517: I'll share a document with you guys. This is historical data that we have been using for a new trial bonus structure for the supervisors on site. 
+
+Obviously super confidential so it can't be shared. Click the link and I'll give you individual access 
+
+https://docs.google.com/spreadsheets/d/19oTFwBiIYCb-m2fLixduY5zotjAvVs6HXQXIjAvBdfA/edit?usp=drivesdk
+4/3/26, 12:04 PM - +1 (204) 298-8517: It will be the end result of what we're looking for. This is information I can use to bid on future projects
+4/3/26, 12:05 PM - +1 (204) 298-8517: But currently it's only for the EIFS division. For I would like to do it with the entire company but it involves a huge amount of Labor to gather the data
+4/3/26, 12:05 PM - +1 (204) 298-8517: And from many sources
+4/3/26, 12:06 PM - Steve Lozano: All this is really good context. I'll work off this
+4/3/26, 2:18 PM - David Synchyshyn: This is us 
+
+
+https://www.instagram.com/p/DWRRK9vig8C/?utm_source=ig_embed&utm_campaign=embed_video_watch_again
+4/5/26, 1:25 PM - Steve Lozano: Clock in / time cards
+
+What we need: Hours assigned to project + service item (for bonus calc and QBO sync)
+What workers will actually do: As little data entry as possible
+
+Three UX Options
+
+Option A: "Daily Digest" (Recommended)
+
+Flow:
+
+1. Worker geo-clocks in at site (passive, no action)
+2. System auto-detects: "You're at 215 Cinnamon Teal"
+3. End of day: Push notification → "Confirm today's work"
+4. Screen shows:
+  • Project: [The District] ✓ (auto-filled from geo)
+  • Service items worked: [Basecoat, Finish Coat] (pre-filled from project scope)
+  • Hours: [8] (auto-calculated from clock-in/out)
+Worker just taps Confirm or edits if wrong.
+
+Why it works: One tap per day. Zero cognitive load. Crew lead can do it for whole team.
+
+───
+
+Option B: "Scope Checkpoints"
+
+Flow:
+
+1. Worker starts day, sees: "Working on The District?"
+2. Taps Yes → auto-assigned
+3. During day, quick-action buttons for scope items: "Switching to Flashing"
+4. End of day: Review and confirm
+
+Trade-off: More granular data (good for production tracking), but requires more interaction.
+
+───
+
+Option C: "Foreman Bulk Mode"
+
+Flow:
+
+1. Crew lead has tablet/phone at end of day
+2. Sees whole crew's geo-clock times
+3. Drag-drop or quick-assign each worker to projects + service items
+4. One submission covers 4-6 people
+
+
+Or can do a hybrid. For example a mix of A and C
+4/5/26, 4:39 PM - David Synchyshyn: Cavy can speak to his experience. 
+
+Here’s some of mine. When we had these discussions for CC, the auto clock in makes it easier, a “don’t have to think about it”. But here’s the thing, with companies we met that used T-sheets or Job Shark, where manual entry was required, it was either adopted by a company’s employees or not.  We saw very little failure to check in and out, within a company.   
+
+The employees either bought into the system or didn’t.  So even on the manual entry apps, if they drank the kool aid, they completed the entries 
+
+We also saw this across Salesforce adoption.  Employees were offered an extra $500 a week to complete their entries.  200 employees. Zero payouts. 
+
+On the adoption end, what works finding out what is important to that individual and how the adoption benefits them and helps them achieve their goals
+
+Hopefully that provides some insights on which direction to go
+4/5/26, 5:59 PM - +1 (204) 298-8517: We currently use C. As they have to double check all the hours anyways. This way it removes the double check at the end of the lay cycle and they do it daily. 
+
+I can appreciate the hybrid model too where the foreman approves the workers hours but they aren't always as technically inclined.  But maybe we could incorporate a schedule where it inputs the guys who are supposed to be on site that day?
+4/5/26, 6:01 PM - +1 (204) 298-8517: I haven't had implementation issues yet. I just remove the other option and they have no choice lol 
+
+But I always try to sell them on the "sense and meaning" behind what we do.  If this system allows the bonus, then they win too
+4/5/26, 7:00 PM - Steve Lozano: Scheduled Crew + Daily Confirm
+
+Morning (auto):
+
+The District — Tuesday Apr 8
+├─ Crew A (expected): Mike, Dave, Juan
+├─ Crew B (expected): Steve, Alex
+└─ Auto-populate from schedule
+
+End of day (foreman sees):
+
+The Job — Confirm Hours
+├─ Mike:    [ 8.0 ] hrs  [Basecoat, Finish Coat ▼]
+├─ Dave:    [ 8.0 ] hrs  [Basecoat ▼]
+├─ Juan:    [ 8.0 ] hrs  [Caulking ▼]
+├─ Steve:   [ 0.0 ] hrs  [Sick day — remove?]
+└─ Alex:    [ 8.0 ] hrs  [Flashing ▼]
+
+Total: 32 hrs    [✓ Confirm Day]
+
+Key features:
+
+1. Schedule pre-populates expected crew (no manual add)
+2. Foreman just edits — changes hours, removes no-shows, reassigns service items
+3. One "Confirm Day" button submits all entries
+4. Missing workers: Easy "+ Add Worker" for subs/fill-ins not on schedule
+
+Data flow:
+
+• Schedule table (new): crew_schedules — project, date, expected crew[]
+• Daily time entries created as "draft" from schedule
+• Foreman confirms → status "confirmed" → feeds bonus calc + QBO
+4/6/26, 8:04 AM - +1 (204) 298-8517: looks and sounds like a great start! 
+
+QBO time has the same idea where you can clock in the guys from the day before BUT I like the weekly shedule better because it does 2 things. 1) allows us to place all the guys in the app 2) makes it easier for the foreman to keep everyone accountable
+4/7/26, 9:00 AM - +1 (204) 298-8517: You guys have any inventory apps? Something that connects to QBO
+4/7/26, 9:06 AM - Steve Lozano: I can create one - there is a QBO connection on there already. Although I think it has a bug right now
+4/7/26, 10:02 AM - +1 (204) 298-8517: Ok. The current app we us is Avontus. Can we use an API to connect this?
+4/7/26, 10:12 AM - Steve Lozano: Or just import the data
+4/7/26, 10:12 AM - Steve Lozano: I'll check
+4/7/26, 10:12 AM - Steve Lozano: Is there anything in particular we need from Avontus besides the data?
+4/7/26, 1:59 PM - +1 (204) 298-8517: This is from my manager 
+
+
+The big one, the main reason we locked into Avontus for in the first place, is to track and automate our rental invoicing, which we have now found out is not possible within the platform. (ie. We will have to input deliveries, track rental dates manually, and manually invoices, before manually sending them to Jess to manually create an invoice in Quickbooks again to send to the customer.)
+4/7/26, 2:21 PM - Steve Lozano: I'll likely just build an Avontus solution, like the Planswift one
+4/7/26, 2:28 PM - +1 (204) 298-8517: Ok. To be clear. This our sister company and I want to be respectful of your time
+4/7/26, 2:43 PM - Steve Lozano: Got it, what I'm trying to decide is if it's worth putting into this general construction cogs platform. And I think it makes sense from "here's my material/labor/rental costs" vs what I'm actually making
+4/7/26, 2:45 PM - Steve Lozano: So it will be more generalized on the multi-tenant build as "rentals".
+4/7/26, 3:04 PM - +1 (204) 298-8517: Hmmm I think it would be because it's part of the demographic that we are trying to reach 
+
+Scaffolding job costing will have the same issue as stucco
+4/7/26, 3:06 PM - Steve Lozano: Yep, I think it works and adds some flexibility on the platform itself
+4/7/26, 3:07 PM - +1 (204) 298-8517: It will be some version of "build a bear" where some will want to track lineal foot cost vs sqft area vs volume possibly
+4/7/26, 3:09 PM - +1 (204) 298-8517: Maybe the service item section can have the measure option? 
+
+If the "Flashing" service item is tracked by every foot of flashing then the measure is feet per hour. So the flashing measurement is "lineal"
+4/10/26, 5:14 PM - Steve Lozano: Been playing around with the time pages, let me know if it makes sense
+4/10/26, 5:19 PM - ~ Cavy Braun pinned a message
+4/10/26, 5:25 PM - +1 (204) 298-8517: Looks sexy! 
+
+Under "scope". Can you do a drop down next to it by division? 
+
+By EPS you have EIFS but maybe there's a scenario where a different division does it (on a non EIFS job)
+4/10/26, 5:28 PM - +1 (204) 298-8517: Other issue. Your bid rate on the first page is as a complete system. When I fill in the scope section it tags every item as the rate I use. But the bid rate is the entire project rate, not the scope rate. 
+
+So EIFS ($14) would be broken down as (AB- $4) (EPS- $4) etc etc
+4/10/26, 5:29 PM - +1 (204) 298-8517: It inflates the $ on the measurements page
+4/10/26, 5:31 PM - +1 (204) 298-8517: I like it though that the details page has the $14 section. The scope should just have it broken down by scope. So maybe the scope section should be divided by the pool available in the bid section
+4/10/26, 5:32 PM - +1 (204) 298-8517: Reason I like it is because thats how I bid the job. It's also the safety number incase the scope are not 100% tagged properly I still have a clear picture of the entire job.
+4/10/26, 6:22 PM - Steve Lozano: Hmm, k. For the bid pool breakdown, do you want:
+
+(A) Auto-derive scope rates from the bid_psf proportionally (e.g., if defaults total $10 and bid is $14, scale each rate up by 1.4x)
+
+
+(B) Keep manual scope rates in Settings but show a comparison — "Scope total: $10.50 vs Bid: $14.00" with a warning if they don't match
+
+
+(C) Something else?
+4/10/26, 6:22 PM - Steve Lozano: Also, QBO integration should be working now. It works with the sandbox account at least
+4/10/26, 6:25 PM - Steve Lozano: Adding the division drop down now
+4/11/26, 2:07 AM - +1 (204) 298-8517: First impression is option B
+4/11/26, 7:10 AM - Steve Lozano: Updated, and fixed several bugs
+4/11/26, 7:11 AM - Steve Lozano: The blueprint editor is working now
+4/11/26, 8:15 AM - +1 (204) 298-8517: The pricing rate section is good. But can it be project specific?
+4/11/26, 8:17 AM - +1 (204) 298-8517: Or even a template per builder? Some builders get better pricing than others 
+
+I don't see blueprint editor. Only the blueprints confirm (scaling properly. Etc)
+4/11/26, 8:18 AM - Steve Lozano: Can do, I'll rewrite some of the logic for that
+4/11/26, 8:32 AM - Steve Lozano: Ctrl shift R for a hard refresh
+4/11/26, 8:32 AM - +1 (204) 298-8517: Ohh I was using my phone the whole time
+4/11/26, 8:32 AM - +1 (204) 298-8517: I'll reset it
+4/11/26, 8:33 AM - Steve Lozano: Each project has a project rates that overrides the default now
+4/15/26, 4:21 AM - +1 (204) 298-8517: I reset the app. looks great
+4/15/26, 5:07 AM - David Synchyshyn: So when this is ready and if Cavy wants to put it in the market I had a conversation with David from Innergy yesterday.  They focus on ERPs for the millwork industry.  In short, trying to provide solutions like Cavy that can be for various segments of construction. 
+
+He shared interesting information.  Their average ERP setup is $30-$40k plus ongoing costs.   However after one year, 50% of owners want to cancel the system (not using it) and in total 70% aren’t actively engaged in the system.  We discussed onboarding and that appears to be a gap.  
+
+Dave shared that they’ve done studies and and owners involvement in a physical CNC is high. The owner will attend a trade show, be on the ship floor during the unwrapping and actively engaged in learning how the machine functions
+
+When it comes to ERPs. 40% of owners miss the installation date, saying “I bought this for my employees”
+
+He also shared how focused companies are on the field.  They manage costs on the site or shop but not in the office.  One gap they see is contractors with a delayed project, then buying work at or below cost to keep guys busy.   The contractors don’t use the software tools to look forward for planning. They are looking backwards
+
+I spoke with Daidre at Winwood, who installed the Innergy systems.  They use it only for a fraction of its capabilities.  Winwood needs to manage its millwork inventory and “some” of the inventory is in the system.  Depending who is working in the warehouse, some staff members refuse to use the technology and enter products into inventory.  Daidre stressed that the system is only as good as the data they enter and company wide at Winwood, the feel the amount of entries they have to make is overwhelming and therefore they don’t really use the system they are paying for
+
+I found this all to be valuable market information.  
+
+Have a happy 😊 day
+4/15/26, 9:53 AM - Steve Lozano: Sound about right, company adoption needs to be there for the tool to be useful
+4/15/26, 9:54 AM - Steve Lozano: Or it's as hands off as possible. In this case, computer vision/smart inventory systems/etc <This message was edited>
+4/15/26, 9:57 AM - Steve Lozano: Nobody wants more to do's/tasks to their day to day.
+4/15/26, 11:40 AM - +1 (204) 298-8517: Your correct. I think a key though it to have it in one place. 
+
+If the plans are on the cloud BECAUSE of planswift and you HAVE to clock in because that's where your timesheet is. Then your forcing the issue
+4/22/26, 9:51 AM - +1 (204) 298-8517: is there a way to save the sandbox? it keeps reseting if I move into a different app and then I lose data before I can keep playing with it
+
+planswift feature is cool!
+4/22/26, 9:51 AM - +1 (204) 298-8517: is it possible to save a profile? or user?
+4/22/26, 9:52 AM - ~ Cavy Braun pinned a message
+4/22/26, 9:54 AM - +1 (204) 298-8517: on the takeoff portion- can it zoom in where there pointer is?  currently It only zooms to how the plan gets loaded
+4/22/26, 9:54 AM - +1 (204) 298-8517: meaning the image is locked and not movable. On PS (planswift) you can right click to move the plan where you want it
+4/22/26, 10:27 AM - Steve Lozano: Ya, I can add a save function
+4/22/26, 10:28 AM - Steve Lozano: I'll play around with it. Let me know if you see anything else that should be changed
