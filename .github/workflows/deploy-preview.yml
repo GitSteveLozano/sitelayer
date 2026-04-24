@@ -26,7 +26,7 @@ jobs:
     runs-on: [self-hosted, sitelayer-preview]
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.ref || github.sha }}
 
@@ -38,7 +38,7 @@ jobs:
 
       - name: Comment preview URL
         if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const marker = '<!-- sitelayer-preview-url -->'
@@ -64,7 +64,7 @@ jobs:
     runs-on: [self-hosted, sitelayer-preview]
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Cleanup preview stack
         env:

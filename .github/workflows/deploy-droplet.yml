@@ -13,7 +13,7 @@ jobs:
   deploy:
     runs-on: [self-hosted, sitelayer-preview]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Deploy via SSH
         env:
