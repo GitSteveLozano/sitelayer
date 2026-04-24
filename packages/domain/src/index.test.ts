@@ -4,7 +4,12 @@ import {
   calculateProjectCost,
   calculateMargin,
   calculateBonusPayout,
+  calculatePolygonArea,
+  calculatePolygonCentroid,
+  calculateTakeoffQuantity,
+  clampBoardCoordinate,
   DEFAULT_BONUS_RULE,
+  normalizePolygonGeometry,
 } from './index.js'
 
 describe('domain functions', () => {
@@ -127,6 +132,63 @@ describe('domain functions', () => {
       const result = calculateBonusPayout(0.25, 0, DEFAULT_BONUS_RULE.tiers)
       expect(result.eligible).toBe(true)
       expect(result.payout).toBe(0)
+    })
+  })
+
+  describe('takeoff geometry', () => {
+    const square = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ]
+
+    it('calculates polygon area and takeoff quantity', () => {
+      expect(calculatePolygonArea(square)).toBe(100)
+      expect(calculateTakeoffQuantity(square, 1.25)).toBe(125)
+    })
+
+    it('calculates centroid independent of winding direction', () => {
+      expect(calculatePolygonCentroid(square)).toEqual({ x: 5, y: 5 })
+      expect(calculatePolygonCentroid([...square].reverse())).toEqual({ x: 5, y: 5 })
+    })
+
+    it('clamps board coordinates for pointer input', () => {
+      expect(clampBoardCoordinate(-5)).toBe(0)
+      expect(clampBoardCoordinate(125)).toBe(100)
+      expect(clampBoardCoordinate(42.5)).toBe(42.5)
+    })
+
+    it('normalizes valid polygon geometry', () => {
+      expect(
+        normalizePolygonGeometry({
+          kind: 'polygon',
+          points: [
+            { x: 0, y: 0 },
+            { x: 10.129, y: 0 },
+            { x: 10, y: 10 },
+          ],
+          sheet_scale: '2.5',
+          calibration_length: '100',
+          calibration_unit: 'feet but this string is intentionally long enough to trim',
+        }),
+      ).toEqual({
+        kind: 'polygon',
+        points: [
+          { x: 0, y: 0 },
+          { x: 10.13, y: 0 },
+          { x: 10, y: 10 },
+        ],
+        sheet_scale: 2.5,
+        calibration_length: 100,
+        calibration_unit: 'feet but this string is intentio',
+      })
+    })
+
+    it('rejects malformed polygon geometry', () => {
+      expect(normalizePolygonGeometry({ kind: 'line', points: square })).toBeNull()
+      expect(normalizePolygonGeometry({ kind: 'polygon', points: square.slice(0, 2) })).toBeNull()
+      expect(normalizePolygonGeometry({ kind: 'polygon', points: [{ x: 0, y: 0 }, { x: 110, y: 0 }, { x: 0, y: 10 }] })).toBeNull()
     })
   })
 })

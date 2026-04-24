@@ -9,8 +9,10 @@ import {
   WORKFLOW_STAGES,
   calculateBonusPayout,
   calculateMargin,
+  calculateTakeoffQuantity,
   calculateProjectCost,
   formatMoney,
+  normalizePolygonGeometry,
 } from '@sitelayer/domain'
 import { loadAppConfig, logAppConfigBanner, TierConfigError } from './tier.js'
 import {
@@ -997,6 +999,89 @@ function parseExpectedVersion(value: unknown) {
 
 function isValidUuid(value: unknown) {
   return typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
+}
+
+type PreparedTakeoffMeasurementInput = {
+  serviceItemCode: string
+  quantity: number
+  unit: string
+  notes: string | null
+  geometryJson: string | null
+  blueprintDocumentId: string | null
+}
+
+function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'): PreparedTakeoffMeasurementInput {
+  if (typeof rawInput !== 'object' || rawInput === null || Array.isArray(rawInput)) {
+    throw new HttpError(400, `${label} must be an object`)
+  }
+
+  const input = rawInput as Record<string, unknown>
+  const serviceItemCode = String(input.service_item_code ?? '').trim()
+  const unit = String(input.unit ?? '').trim()
+  const notes = input.notes === undefined || input.notes === null || String(input.notes).trim() === '' ? null : String(input.notes)
+  const blueprintDocumentId = input.blueprint_document_id === undefined || input.blueprint_document_id === null || input.blueprint_document_id === ''
+    ? null
+    : String(input.blueprint_document_id)
+
+  if (!serviceItemCode) {
+    throw new HttpError(400, `${label}.service_item_code is required`)
+  }
+  if (!unit) {
+    throw new HttpError(400, `${label}.unit is required`)
+  }
+  if (blueprintDocumentId && !isValidUuid(blueprintDocumentId)) {
+    throw new HttpError(400, `${label}.blueprint_document_id must be a valid uuid`)
+  }
+
+  const rawGeometry = input.geometry
+  let quantity = Number(input.quantity ?? 0)
+  let geometryJson: string | null = null
+  if (rawGeometry !== undefined && rawGeometry !== null && rawGeometry !== '') {
+    const geometry = normalizePolygonGeometry(rawGeometry)
+    if (!geometry) {
+      throw new HttpError(400, `${label}.geometry must be a polygon with at least 3 points inside the board`)
+    }
+    quantity = calculateTakeoffQuantity(geometry.points, geometry.sheet_scale ?? 1)
+    if (quantity <= 0) {
+      throw new HttpError(400, `${label}.geometry must produce a positive area`)
+    }
+    geometryJson = JSON.stringify(geometry)
+  }
+
+  if (!Number.isFinite(quantity) || quantity < 0) {
+    throw new HttpError(400, `${label}.quantity must be a non-negative number`)
+  }
+
+  return {
+    serviceItemCode,
+    quantity,
+    unit,
+    notes,
+    geometryJson,
+    blueprintDocumentId,
+  }
+}
+
+async function assertBlueprintDocumentsBelongToProject(companyId: string, projectId: string, blueprintDocumentIds: Array<string | null>) {
+  const uniqueIds = Array.from(new Set(blueprintDocumentIds.filter((id): id is string => Boolean(id))))
+  if (!uniqueIds.length) return
+
+  const result = await pool.query<{ id: string }>(
+    `
+    select id
+    from blueprint_documents
+    where company_id = $1
+      and project_id = $2
+      and id = any($3::uuid[])
+      and deleted_at is null
+    `,
+    [companyId, projectId, uniqueIds],
+  )
+  const validIds = new Set(result.rows.map((row) => row.id))
+  const invalidIds = uniqueIds.filter((id) => !validIds.has(id))
+  if (invalidIds.length) {
+    throw new HttpError(400, 'blueprint_document_id must belong to the project')
+  }
 }
 
 async function listAnalytics(companyId: string) {
@@ -2790,25 +2875,7 @@ const server = http.createServer(async (req, res) => {
       }
       const body = await readBody(req)
       const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-      const serviceItemCode = String(body.service_item_code ?? '').trim()
-      const unit = String(body.unit ?? '').trim()
-      const quantity = Number(body.quantity ?? 0)
-      const blueprintDocumentId = body.blueprint_document_id === undefined || body.blueprint_document_id === null || body.blueprint_document_id === ''
-        ? null
-        : String(body.blueprint_document_id)
-
-      if (!serviceItemCode) {
-        sendJson(res, 400, { error: 'service_item_code is required' })
-        return
-      }
-      if (!unit) {
-        sendJson(res, 400, { error: 'unit is required' })
-        return
-      }
-      if (!Number.isFinite(quantity) || quantity < 0) {
-        sendJson(res, 400, { error: 'quantity must be a non-negative number' })
-        return
-      }
+      const measurementInput = prepareTakeoffMeasurementInput(body)
 
       const projectVersionResult = await pool.query('select version from projects where company_id = $1 and id = $2', [company.id, projectId])
       const currentProject = projectVersionResult.rows[0]
@@ -2821,16 +2888,7 @@ const server = http.createServer(async (req, res) => {
         return
       }
 
-      if (blueprintDocumentId) {
-        const blueprintResult = await pool.query(
-          'select id from blueprint_documents where company_id = $1 and project_id = $2 and id = $3 and deleted_at is null limit 1',
-          [company.id, projectId, blueprintDocumentId],
-        )
-        if (!blueprintResult.rows[0]) {
-          sendJson(res, 400, { error: 'blueprint_document_id must belong to the project' })
-          return
-        }
-      }
+      await assertBlueprintDocumentsBelongToProject(company.id, projectId, [measurementInput.blueprintDocumentId])
 
       const insertResult = await pool.query(
         `
@@ -2843,12 +2901,12 @@ const server = http.createServer(async (req, res) => {
         [
           company.id,
           projectId,
-          blueprintDocumentId,
-          serviceItemCode,
-          quantity,
-          unit,
-          body.notes === undefined || body.notes === null || String(body.notes).trim() === '' ? null : String(body.notes),
-          body.geometry ? JSON.stringify(body.geometry) : null,
+          measurementInput.blueprintDocumentId,
+          measurementInput.serviceItemCode,
+          measurementInput.quantity,
+          measurementInput.unit,
+          measurementInput.notes,
+          measurementInput.geometryJson,
         ],
       )
 
@@ -2884,18 +2942,22 @@ const server = http.createServer(async (req, res) => {
         return
       }
 
-      if (expectedVersion !== null) {
-        const projectVersionResult = await pool.query('select version from projects where company_id = $1 and id = $2', [company.id, projectId])
-        const currentProject = projectVersionResult.rows[0]
-        if (!currentProject) {
-          sendJson(res, 404, { error: 'project not found' })
-          return
-        }
-        if (Number(currentProject.version) !== expectedVersion) {
-          sendJson(res, 409, { error: 'version conflict', current_version: Number(currentProject.version) })
-          return
-        }
+      const preparedMeasurements = measurements.map((measurement, index) => prepareTakeoffMeasurementInput(measurement, `measurements[${index}]`))
+      const projectVersionResult = await pool.query('select version from projects where company_id = $1 and id = $2', [company.id, projectId])
+      const currentProject = projectVersionResult.rows[0]
+      if (!currentProject) {
+        sendJson(res, 404, { error: 'project not found' })
+        return
       }
+      if (expectedVersion !== null && Number(currentProject.version) !== expectedVersion) {
+        sendJson(res, 409, { error: 'version conflict', current_version: Number(currentProject.version) })
+        return
+      }
+      await assertBlueprintDocumentsBelongToProject(
+        company.id,
+        projectId,
+        preparedMeasurements.map((measurement) => measurement.blueprintDocumentId),
+      )
 
       await pool.query(
         `
@@ -2907,7 +2969,7 @@ const server = http.createServer(async (req, res) => {
       )
 
       const createdRows = []
-      for (const measurement of measurements) {
+      for (const measurement of preparedMeasurements) {
         const insertResult = await pool.query(
           `
           insert into takeoff_measurements (
@@ -2919,12 +2981,12 @@ const server = http.createServer(async (req, res) => {
           [
             company.id,
             projectId,
-            measurement.blueprint_document_id ?? null,
-            measurement.service_item_code,
+            measurement.blueprintDocumentId,
+            measurement.serviceItemCode,
             measurement.quantity,
             measurement.unit,
-            measurement.notes ?? null,
-            measurement.geometry ? JSON.stringify(measurement.geometry) : null,
+            measurement.notes,
+            measurement.geometryJson,
           ],
         )
         createdRows.push(insertResult.rows[0])
@@ -3334,6 +3396,50 @@ const server = http.createServer(async (req, res) => {
       }
       const body = await readBody(req)
       const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
+      let geometryJson: string | null = null
+      let quantity = body.quantity ?? null
+      if (body.geometry !== undefined && body.geometry !== null && body.geometry !== '') {
+        const geometry = normalizePolygonGeometry(body.geometry)
+        if (!geometry) {
+          sendJson(res, 400, { error: 'geometry must be a polygon with at least 3 points inside the board' })
+          return
+        }
+        geometryJson = JSON.stringify(geometry)
+        if (quantity === null || quantity === undefined || quantity === '') {
+          quantity = calculateTakeoffQuantity(geometry.points, geometry.sheet_scale ?? 1)
+        }
+        if (Number(quantity) <= 0) {
+          sendJson(res, 400, { error: 'geometry must produce a positive area' })
+          return
+        }
+      }
+      if (quantity !== null && quantity !== undefined && quantity !== '') {
+        const parsedQuantity = Number(quantity)
+        if (!Number.isFinite(parsedQuantity) || parsedQuantity < 0) {
+          sendJson(res, 400, { error: 'quantity must be a non-negative number' })
+          return
+        }
+        quantity = parsedQuantity
+      }
+      const patchBlueprintDocumentId = body.blueprint_document_id === undefined || body.blueprint_document_id === null || body.blueprint_document_id === ''
+        ? null
+        : String(body.blueprint_document_id)
+      if (patchBlueprintDocumentId) {
+        if (!isValidUuid(patchBlueprintDocumentId)) {
+          sendJson(res, 400, { error: 'blueprint_document_id must be a valid uuid' })
+          return
+        }
+        const measurementProjectResult = await pool.query<{ project_id: string }>(
+          'select project_id from takeoff_measurements where company_id = $1 and id = $2 and deleted_at is null limit 1',
+          [company.id, measurementId],
+        )
+        const measurementProjectId = measurementProjectResult.rows[0]?.project_id
+        if (!measurementProjectId) {
+          sendJson(res, 404, { error: 'measurement not found' })
+          return
+        }
+        await assertBlueprintDocumentsBelongToProject(company.id, measurementProjectId, [patchBlueprintDocumentId])
+      }
       const result = await pool.query(
         `
         update takeoff_measurements
@@ -3352,11 +3458,11 @@ const server = http.createServer(async (req, res) => {
           company.id,
           measurementId,
           body.service_item_code ?? null,
-          body.quantity ?? null,
+          quantity,
           body.unit ?? null,
           body.notes ?? null,
-          body.blueprint_document_id ?? null,
-          body.geometry ? JSON.stringify(body.geometry) : null,
+          patchBlueprintDocumentId,
+          geometryJson,
           expectedVersion,
         ],
       )

@@ -193,7 +193,11 @@ export const LA_TEMPLATE = { divisions: [...], items: [...] } // PreLoaded LA Op
 export const calculateMargin = (revenue, cost) => (revenue - cost) / revenue
 export const calculateProjectCost = (takeoffs, divisions) => ...
 export const calculateBonusPayout = (revenue, cost, rule) => ...
+export const normalizePolygonGeometry = (geometry) => ... // validates 0-100 board-space polygons
+export const calculateTakeoffQuantity = (points, multiplier) => ...
 ```
+
+Takeoff geometry is intentionally shared between API and web. The web uses it for live polygon quantity/centroid display; the API uses it to validate and normalize polygon geometry before writing `takeoff_measurements`.
 
 ### Queue Package (packages/queue/src/index.ts)
 

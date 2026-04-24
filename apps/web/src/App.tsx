@@ -1,5 +1,14 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { LA_TEMPLATE, formatMoney } from '@sitelayer/domain'
+import { useEffect, useState, type PointerEvent, type ReactNode } from 'react'
+import {
+  LA_TEMPLATE,
+  calculatePolygonArea,
+  calculatePolygonCentroid,
+  calculateTakeoffQuantity,
+  clampBoardCoordinate,
+  formatMoney,
+  normalizePolygonGeometry,
+  type TakeoffPoint,
+} from '@sitelayer/domain'
 import type {
   BootstrapResponse,
   BonusRuleRow,
@@ -2480,8 +2489,8 @@ function TakeoffWorkspace({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [draftPoints, setDraftPoints] = useState<Array<{ x: number; y: number }>>([])
-  const [pointerPoint, setPointerPoint] = useState<{ x: number; y: number } | null>(null)
+  const [draftPoints, setDraftPoints] = useState<TakeoffPoint[]>([])
+  const [pointerPoint, setPointerPoint] = useState<TakeoffPoint | null>(null)
   const [zoom, setZoom] = useState(1)
   const [serviceItemCode, setServiceItemCode] = useState(serviceItems[0]?.code ?? '')
   const [quantityMultiplier, setQuantityMultiplier] = useState(1)
@@ -2490,6 +2499,11 @@ function TakeoffWorkspace({
 
   const activeBlueprint = blueprints.find((blueprint) => blueprint.id === selectedBlueprintId) ?? blueprints[0] ?? null
   const blueprintMeasurements = measurements.filter((measurement) => measurement.blueprint_document_id === activeBlueprint?.id)
+  const quantityMultiplierValue = Number.isFinite(quantityMultiplier) && quantityMultiplier > 0 ? quantityMultiplier : 1
+  const draftArea = calculatePolygonArea(draftPoints)
+  const draftQuantity = calculateTakeoffQuantity(draftPoints, quantityMultiplierValue)
+  const selectedServiceItem = serviceItems.find((item) => item.code === serviceItemCode)
+  const selectedUnit = selectedServiceItem?.unit ?? 'sqft'
 
   useEffect(() => {
     if (!selectedBlueprintId && blueprints[0]) {
@@ -2500,7 +2514,8 @@ function TakeoffWorkspace({
   useEffect(() => {
     setDraftPoints([])
     setPointerPoint(null)
-    setQuantityMultiplier(activeBlueprint?.sheet_scale ? Number(activeBlueprint.sheet_scale) : 1)
+    const sheetScale = Number(activeBlueprint?.sheet_scale ?? 1)
+    setQuantityMultiplier(Number.isFinite(sheetScale) && sheetScale > 0 ? sheetScale : 1)
     setCalibrationLength(activeBlueprint?.calibration_length ?? '100')
     setCalibrationUnit(activeBlueprint?.calibration_unit ?? 'ft')
   }, [activeBlueprint?.id])
@@ -2521,8 +2536,12 @@ function TakeoffWorkspace({
     if (draftPoints.length < 3) {
       throw new Error('draw at least 3 points')
     }
-    const area = Math.max(0, polygonArea(draftPoints))
-    const quantity = Number((area * Number(quantityMultiplier || 1)).toFixed(2))
+    if (!Number.isFinite(quantityMultiplier) || quantityMultiplier <= 0) {
+      throw new Error('quantity multiplier must be greater than zero')
+    }
+    if (draftQuantity <= 0) {
+      throw new Error('polygon area must be greater than zero')
+    }
     setBusy(true)
     setError(null)
     try {
@@ -2531,13 +2550,13 @@ function TakeoffWorkspace({
         {
           blueprint_document_id: activeBlueprint.id,
           service_item_code: serviceItemCode,
-          quantity,
-          unit: serviceItems.find((item) => item.code === serviceItemCode)?.unit ?? 'sqft',
+          quantity: draftQuantity,
+          unit: selectedUnit,
           notes: `polygon:${draftPoints.length}`,
           geometry: {
             kind: 'polygon',
             points: draftPoints,
-            sheet_scale: quantityMultiplier,
+            sheet_scale: quantityMultiplierValue,
             calibration_length: Number(calibrationLength) || null,
             calibration_unit: calibrationUnit,
           },
@@ -2550,6 +2569,16 @@ function TakeoffWorkspace({
       setError(caught instanceof Error ? caught.message : 'unknown error')
     } finally {
       setBusy(false)
+    }
+  }
+
+  function getBoardPointerPoint(event: PointerEvent<SVGSVGElement>): TakeoffPoint {
+    const rect = event.currentTarget.getBoundingClientRect()
+    const x = ((event.clientX - rect.left) / rect.width) * 100
+    const y = ((event.clientY - rect.top) / rect.height) * 100
+    return {
+      x: clampBoardCoordinate(x),
+      y: clampBoardCoordinate(y),
     }
   }
 
@@ -2610,18 +2639,15 @@ function TakeoffWorkspace({
             className="takeoffSvg"
             viewBox="0 0 100 100"
             preserveAspectRatio="none"
-            onMouseMove={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect()
-              const x = ((event.clientX - rect.left) / rect.width) * 100
-              const y = ((event.clientY - rect.top) / rect.height) * 100
-              setPointerPoint({ x, y })
+            onPointerMove={(event) => {
+              setPointerPoint(getBoardPointerPoint(event))
             }}
-            onMouseLeave={() => setPointerPoint(null)}
-            onClick={(event) => {
-              const rect = event.currentTarget.getBoundingClientRect()
-              const x = ((event.clientX - rect.left) / rect.width) * 100
-              const y = ((event.clientY - rect.top) / rect.height) * 100
-              setDraftPoints((current) => [...current, { x, y }])
+            onPointerLeave={() => setPointerPoint(null)}
+            onPointerDown={(event) => {
+              if (event.pointerType === 'mouse' && event.button !== 0) return
+              event.preventDefault()
+              event.currentTarget.setPointerCapture(event.pointerId)
+              setDraftPoints((current) => [...current, getBoardPointerPoint(event)])
             }}
           >
             {pointerPoint ? (
@@ -2631,10 +2657,11 @@ function TakeoffWorkspace({
               </>
             ) : null}
             {blueprintMeasurements
-              .filter((measurement) => measurement.geometry && typeof measurement.geometry === 'object' && Array.isArray((measurement.geometry as { points?: unknown[] }).points))
               .map((measurement) => {
-                const points = (measurement.geometry as { points?: Array<{ x: number; y: number }> }).points ?? []
-                const labelPoint = polygonCentroid(points)
+                const geometry = normalizePolygonGeometry(measurement.geometry)
+                if (!geometry) return null
+                const points = geometry.points
+                const labelPoint = calculatePolygonCentroid(points)
                 return (
                   <g key={measurement.id}>
                     <polygon points={polygonPointsToString(points)} className="takeoffPolygon measurementPolygon" />
@@ -2668,6 +2695,9 @@ function TakeoffWorkspace({
         <button type="button" onClick={() => setDraftPoints([])} disabled={busy || !draftPoints.length}>
           Clear draft
         </button>
+        <button type="button" onClick={() => setDraftPoints((current) => current.slice(0, -1))} disabled={busy || !draftPoints.length}>
+          Undo point
+        </button>
         <button type="button" onClick={() => void saveDraftMeasurement()} disabled={busy || draftPoints.length < 3}>
           Save polygon
         </button>
@@ -2681,8 +2711,8 @@ function TakeoffWorkspace({
           </p>
         </div>
         <div>
-          <strong>{draftPoints.length} points</strong>
-          <p className="muted">Polygon area is computed in-board and multiplied by the selected quantity multiplier.</p>
+          <strong>{draftQuantity} {selectedUnit}</strong>
+          <p className="muted">{draftPoints.length} points · board area {draftArea.toFixed(2)} × {quantityMultiplierValue}</p>
         </div>
         <div>
           <strong>{calibrationLength || '0'} {calibrationUnit}</strong>
@@ -2692,7 +2722,7 @@ function TakeoffWorkspace({
 
       {error ? <p className="error">{error}</p> : null}
       <p className="muted takeoffHint">
-        Click the board to place vertices. The current draft is highlighted with numbered points and a live crosshair.
+        Click or tap the board to place vertices. The current draft is highlighted with numbered points and a live crosshair.
       </p>
       <ul className="list compact takeoffMeasurements">
         {blueprintMeasurements.length ? (
@@ -2713,38 +2743,7 @@ function TakeoffWorkspace({
   )
 }
 
-function polygonArea(points: Array<{ x: number; y: number }>) {
-  if (points.length < 3) return 0
-  let sum = 0
-  for (let index = 0; index < points.length; index += 1) {
-    const current = points[index]
-    const next = points[(index + 1) % points.length]
-    if (!current || !next) continue
-    sum += current.x * next.y - next.x * current.y
-  }
-  return Math.abs(sum / 2)
-}
-
-function polygonCentroid(points: Array<{ x: number; y: number }>) {
-  if (points.length < 3) return null
-  let areaFactor = 0
-  let cx = 0
-  let cy = 0
-  for (let index = 0; index < points.length; index += 1) {
-    const current = points[index]
-    const next = points[(index + 1) % points.length]
-    if (!current || !next) continue
-    const cross = current.x * next.y - next.x * current.y
-    areaFactor += cross
-    cx += (current.x + next.x) * cross
-    cy += (current.y + next.y) * cross
-  }
-  const area = areaFactor / 2
-  if (area === 0) return null
-  return { x: cx / (6 * area), y: cy / (6 * area) }
-}
-
-function polygonPointsToString(points: Array<{ x: number; y: number }>) {
+function polygonPointsToString(points: readonly TakeoffPoint[]) {
   return points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' ')
 }
 
