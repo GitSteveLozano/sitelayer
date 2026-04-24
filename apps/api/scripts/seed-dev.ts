@@ -13,7 +13,7 @@ import {
   getBlueprintMimeType,
   readStorageEnv,
 } from '../src/storage.js'
-import { loadAppConfig, TierConfigError } from '../src/tier.js'
+import { loadAppConfig, TierConfigError, type AppTier } from '../src/tier.js'
 
 const SAMPLE_DIRS = [
   path.resolve(process.cwd(), 'blueprints_sample'),
@@ -26,6 +26,25 @@ function findSampleDir(): string | null {
     if (existsSync(dir)) return dir
   }
   return null
+}
+
+function getPoolConfig(connectionString: string, tier: AppTier) {
+  const databaseSslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false'
+  try {
+    const url = new URL(connectionString)
+    const sslMode = url.searchParams.get('sslmode')
+    if (!databaseSslRejectUnauthorized && sslMode && sslMode !== 'disable') {
+      url.searchParams.delete('sslmode')
+      return {
+        connectionString: url.toString(),
+        ssl: { rejectUnauthorized: false },
+        options: `-c app.tier=${tier}`,
+      }
+    }
+  } catch {
+    return { connectionString, options: `-c app.tier=${tier}` }
+  }
+  return { connectionString, options: `-c app.tier=${tier}` }
 }
 
 export async function seedDev(): Promise<{ inserted: number; skipped: number }> {
@@ -42,12 +61,7 @@ export async function seedDev(): Promise<{ inserted: number; skipped: number }> 
 
   const companySlug = process.env.ACTIVE_COMPANY_SLUG ?? 'la-operations'
   const storage = await createBlueprintStorage(readStorageEnv(process.env, config.tier))
-  const pool = new Pool({ connectionString: config.databaseUrl })
-  pool.on('connect', (client) => {
-    client
-      .query('select set_config($1, $2, false)', ['app.tier', config.tier])
-      .catch(() => {})
-  })
+  const pool = new Pool(getPoolConfig(config.databaseUrl, config.tier))
 
   try {
     const companyResult = await pool.query<{ id: string }>(

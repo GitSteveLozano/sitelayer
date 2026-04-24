@@ -6,6 +6,7 @@ import {
   assertKeyInCompany,
   buildBlueprintStorageKey,
   createBlueprintStorage,
+  formatS3CopySource,
   getBlueprintMimeType,
   readStorageEnv,
   StorageError,
@@ -45,6 +46,17 @@ describe('blueprint storage', () => {
 
     await expect(storage.get('company-1/blueprint-1/file.pdf')).resolves.toEqual(Buffer.from('blueprint'))
     await expect(storage.get('company-1/blueprint-2/file.pdf')).resolves.toEqual(Buffer.from('blueprint'))
+  })
+
+  it('blocks local filesystem writes outside the storage root', async () => {
+    const root = await makeTempDir()
+    const storage = await createBlueprintStorage(readStorageEnv({ BLUEPRINT_STORAGE_ROOT: root }, 'local'))
+    await expect(storage.put('../escape.pdf', Buffer.from('bad'))).rejects.toThrow(StorageError)
+  })
+
+  it('defaults Spaces endpoint to Toronto and formats S3 copy source keys safely', () => {
+    expect(readStorageEnv({}, 'prod').spacesEndpoint).toBe('https://tor1.digitaloceanspaces.com')
+    expect(formatS3CopySource('bucket', 'company id/blueprint 1/file #1.pdf')).toBe('bucket/company%20id/blueprint%201/file%20%231.pdf')
   })
 
   it('maps common blueprint MIME types', () => {

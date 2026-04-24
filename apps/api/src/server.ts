@@ -96,31 +96,29 @@ const qboBaseUrl = process.env.QBO_BASE_URL ?? (qboEnvironment === 'sandbox' ? '
 const qboStateSecret = process.env.QBO_STATE_SECRET ?? qboClientSecret
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)
 
+function withTierOptions(config: PoolConfig): PoolConfig {
+  return { ...config, options: `-c app.tier=${appConfig.tier}` }
+}
+
 function getPoolConfig(connectionString: string): PoolConfig {
   try {
     const url = new URL(connectionString)
     const sslMode = url.searchParams.get('sslmode')
     if (!databaseSslRejectUnauthorized && sslMode && sslMode !== 'disable') {
       url.searchParams.delete('sslmode')
-      return {
+      return withTierOptions({
         connectionString: url.toString(),
         ssl: { rejectUnauthorized: false },
-      }
+      })
     }
   } catch {
-    return { connectionString }
+    return withTierOptions({ connectionString })
   }
 
-  return { connectionString }
+  return withTierOptions({ connectionString })
 }
 
 const pool = new Pool(getPoolConfig(databaseUrl))
-pool.on('connect', (client) => {
-  // Tags origin column defaults on newly-inserted rows for cross-tier forensics.
-  client.query('select set_config($1, $2, false)', ['app.tier', appConfig.tier]).catch((err) => {
-    console.warn(`[tier] failed to set app.tier on pool connect: ${err instanceof Error ? err.message : err}`)
-  })
-})
 
 class HttpError extends Error {
   constructor(

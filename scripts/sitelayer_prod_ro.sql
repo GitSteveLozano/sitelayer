@@ -32,5 +32,18 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT ON SEQUENCES TO sitelayer_prod_ro;
 
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sitelayer_prod_app') THEN
+    BEGIN
+      EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE sitelayer_prod_app IN SCHEMA public GRANT SELECT ON TABLES TO sitelayer_prod_ro';
+      EXECUTE 'ALTER DEFAULT PRIVILEGES FOR ROLE sitelayer_prod_app IN SCHEMA public GRANT SELECT ON SEQUENCES TO sitelayer_prod_ro';
+    EXCEPTION WHEN insufficient_privilege THEN
+      RAISE NOTICE 'skipping default privileges for sitelayer_prod_app; rerun as that role or a member';
+    END;
+  END IF;
+END
+$$;
+
 -- Sanity check — should return a row count, not an error.
 SELECT count(*) AS projects_visible_to_ro FROM projects;

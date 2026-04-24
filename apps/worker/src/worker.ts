@@ -4,7 +4,37 @@ const databaseUrl = process.env.DATABASE_URL ?? 'postgres://sitelayer:sitelayer@
 const databaseSslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false'
 const activeCompanySlug = process.env.ACTIVE_COMPANY_SLUG ?? 'la-operations'
 const pollIntervalMs = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 10_000)
-const appTier = (process.env.APP_TIER ?? 'local').trim()
+const appTier = parseAppTier(process.env.APP_TIER)
+
+type AppTier = 'local' | 'dev' | 'preview' | 'prod'
+
+function parseAppTier(raw: string | undefined): AppTier {
+  const normalized = raw?.trim().toLowerCase() || 'local'
+  if (normalized === 'local' || normalized === 'dev' || normalized === 'preview' || normalized === 'prod') return normalized
+  throw new Error(`APP_TIER must be one of local|dev|preview|prod (got "${raw}")`)
+}
+
+function getDatabaseName(connectionString: string): string {
+  try {
+    return new URL(connectionString).pathname.replace(/^\//, '')
+  } catch {
+    return ''
+  }
+}
+
+function assertDatabaseMatchesTier(tier: AppTier, connectionString: string) {
+  const dbName = getDatabaseName(connectionString)
+  if (tier === 'prod' && !/sitelayer_prod\b/.test(dbName)) {
+    throw new Error(`APP_TIER=prod but DATABASE_URL database name is "${dbName}"`)
+  }
+  if (tier !== 'prod' && /sitelayer_prod\b/.test(dbName) && !dbName.endsWith('_ro')) {
+    throw new Error(`APP_TIER=${tier} but DATABASE_URL points at prod database "${dbName}"`)
+  }
+}
+
+function withTierOptions(config: PoolConfig): PoolConfig {
+  return { ...config, options: `-c app.tier=${appTier}` }
+}
 
 function getPoolConfig(connectionString: string): PoolConfig {
   try {
@@ -12,24 +42,21 @@ function getPoolConfig(connectionString: string): PoolConfig {
     const sslMode = url.searchParams.get('sslmode')
     if (!databaseSslRejectUnauthorized && sslMode && sslMode !== 'disable') {
       url.searchParams.delete('sslmode')
-      return {
+      return withTierOptions({
         connectionString: url.toString(),
         ssl: { rejectUnauthorized: false },
-      }
+      })
     }
   } catch {
-    return { connectionString }
+    return withTierOptions({ connectionString })
   }
 
-  return { connectionString }
+  return withTierOptions({ connectionString })
 }
 
+assertDatabaseMatchesTier(appTier, databaseUrl)
+
 const pool = new Pool(getPoolConfig(databaseUrl))
-pool.on('connect', (client) => {
-  client.query('select set_config($1, $2, false)', ['app.tier', appTier]).catch((err) => {
-    console.warn(`[worker] failed to set app.tier on pool connect: ${err instanceof Error ? err.message : err}`)
-  })
-})
 
 async function getCompanyId(): Promise<string | null> {
   const result = await pool.query<{ id: string }>(

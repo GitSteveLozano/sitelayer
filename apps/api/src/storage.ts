@@ -21,6 +21,10 @@ export function buildBlueprintStorageKey(companyId: string, blueprintId: string,
   return `${companyId}/${blueprintId}/${sanitizeFileName(fileName)}`
 }
 
+export function formatS3CopySource(bucket: string, key: string): string {
+  return `${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`
+}
+
 const LEGACY_FS_PREFIX = /^(\/|[a-zA-Z]:\\)/
 
 function normalizeKey(storagePath: string): string {
@@ -66,7 +70,12 @@ class LocalFsStorage implements BlueprintStorage {
   constructor(private readonly root: string) {}
 
   private abs(key: string): string {
-    return path.join(this.root, key)
+    const resolvedRoot = path.resolve(this.root)
+    const resolvedAbs = path.resolve(this.root, key)
+    if (!resolvedAbs.startsWith(resolvedRoot + path.sep) && resolvedAbs !== resolvedRoot) {
+      throw new StorageError(400, 'blueprint path resolved outside storage root')
+    }
+    return resolvedAbs
   }
 
   async put(key: string, contents: Buffer): Promise<void> {
@@ -77,12 +86,6 @@ class LocalFsStorage implements BlueprintStorage {
 
   async get(key: string): Promise<Buffer> {
     const abs = this.abs(key)
-    // Ensure the resolved path is under root to block directory traversal via symlinks.
-    const resolvedRoot = path.resolve(this.root)
-    const resolvedAbs = path.resolve(abs)
-    if (!resolvedAbs.startsWith(resolvedRoot + path.sep) && resolvedAbs !== resolvedRoot) {
-      throw new StorageError(400, 'blueprint path resolved outside storage root')
-    }
     return fsReadFile(abs)
   }
 
@@ -138,7 +141,7 @@ class S3Storage implements BlueprintStorage {
     await this.client.send(
       new this.mod.CopyObjectCommand({
         Bucket: this.bucket,
-        CopySource: `${this.bucket}/${encodeURIComponent(sourceKey)}`,
+        CopySource: formatS3CopySource(this.bucket, sourceKey),
         Key: destKey,
       }),
     )
@@ -156,17 +159,17 @@ export type StorageEnv = {
 }
 
 export function readStorageEnv(env: NodeJS.ProcessEnv = process.env, tier: AppTier): StorageEnv {
+  const spacesRegion = env.DO_SPACES_REGION?.trim() || 'tor1'
   return {
     tier,
     blueprintStorageRoot: path.resolve(
       env.BLUEPRINT_STORAGE_ROOT ?? path.join(process.cwd(), 'storage', 'blueprints'),
     ),
-    spacesBucket: env.DO_SPACES_BUCKET ?? null,
-    spacesKey: env.DO_SPACES_KEY ?? null,
-    spacesSecret: env.DO_SPACES_SECRET ?? null,
-    spacesRegion: env.DO_SPACES_REGION ?? 'nyc3',
-    spacesEndpoint:
-      env.DO_SPACES_ENDPOINT ?? (env.DO_SPACES_REGION ? `https://${env.DO_SPACES_REGION}.digitaloceanspaces.com` : null),
+    spacesBucket: env.DO_SPACES_BUCKET?.trim() || null,
+    spacesKey: env.DO_SPACES_KEY?.trim() || null,
+    spacesSecret: env.DO_SPACES_SECRET?.trim() || null,
+    spacesRegion,
+    spacesEndpoint: env.DO_SPACES_ENDPOINT?.trim() || `https://${spacesRegion}.digitaloceanspaces.com`,
   }
 }
 

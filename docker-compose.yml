@@ -53,8 +53,10 @@ services:
     ports:
       - "3001:3001"
     depends_on:
-      - db
-      - minio
+      db:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
     volumes:
       - .:/app
       - api_node_modules:/app/node_modules
@@ -90,8 +92,10 @@ services:
       DO_SPACES_BUCKET: sitelayer-blueprints-local
       DO_SPACES_ENDPOINT: http://minio:9000
     depends_on:
-      - db
-      - minio
+      db:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
     volumes:
       - .:/app
       - worker_node_modules:/app/node_modules

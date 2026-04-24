@@ -254,7 +254,7 @@ Creates `sitelayer-blueprints-{dev,preview,prod}`, private ACL + public-access-b
 
 Local compose ships a MinIO container at `http://minio:9000` with console at `:9001` (`sitelayerlocal`/`sitelayerlocal`). The `minio-init` one-shot creates `sitelayer-blueprints-local` on boot.
 
-**Write-origin audit column.** Migration `docker/postgres/init/002_tier_origin.sql` adds an `origin text` column to `projects`, `blueprint_documents`, `takeoff_measurements`, `labor_entries`, `material_bills`, `crew_schedules`, `estimate_lines`. Defaults to `current_setting('app.tier', true)`. The API/worker pools call `set_config('app.tier', '<tier>', false)` on every connection so newly-inserted rows are self-labeled.
+**Write-origin audit column.** Migration `docker/postgres/init/002_tier_origin.sql` adds an `origin text` column to `projects`, `blueprint_documents`, `takeoff_measurements`, `labor_entries`, `material_bills`, `crew_schedules`, `estimate_lines`. Defaults to `current_setting('app.tier', true)`. The API/worker pools pass Postgres startup options (`-c app.tier=<tier>`) so newly-inserted rows are self-labeled before any query can race the connection setup.
 
 Applying to existing deployed DBs:
 ```
