@@ -40,5 +40,7 @@ COPY --from=builder /app/apps/worker/package.json /app/apps/worker/package.json
 COPY --from=builder /app/apps/worker/dist /app/apps/worker/dist
 COPY --from=builder /app/packages/domain/package.json /app/packages/domain/package.json
 COPY --from=builder /app/packages/domain/dist /app/packages/domain/dist
+COPY --from=builder /app/packages/queue/package.json /app/packages/queue/package.json
+COPY --from=builder /app/packages/queue/dist /app/packages/queue/dist
 
 CMD ["npm", "start", "-w", "@sitelayer/api"]

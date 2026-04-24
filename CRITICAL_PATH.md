@@ -48,7 +48,7 @@
 1. **Clerk auth integration** — hardcoded demo user blocks real multi-tenant onboarding.
 2. **DO Spaces/off-host file storage** — local blueprint persistence works, but off-host/object storage is still needed before customer data.
 3. **PDF viewer + annotation validation** — polygon drawing persists to DB; needs pilot-device validation against real PDFs.
-4. **Live QBO sync validation** — DB-backed queue processing exists; real QBO connector behavior still needs sandbox credentials and end-to-end testing.
+4. **Live QBO sync validation** — shared DB-backed queue processing exists with unit coverage; real QBO connector behavior still needs sandbox credentials and end-to-end testing.
 
 ---
 

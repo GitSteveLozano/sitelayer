@@ -289,7 +289,7 @@ Idempotent (`ADD COLUMN IF NOT EXISTS`). Existing rows stay NULL in the origin c
 
 **Dev data seeding.** `npm run seed:dev` attaches the PDFs in `blueprints_sample/` to the LA Operations demo project and uploads them through the active storage adapter. Idempotent. Refuses to run when `APP_TIER=prod`. Run this manually for local/dev/preview seed refreshes.
 
-**Queue processing.** The API and worker use Postgres-backed queue tables instead of an external Redis dependency. `mutation_outbox` and `sync_events` are claimed with a short processing lease, using `FOR UPDATE SKIP LOCKED`, then marked `applied`. This is still a local/simulated processor until live QBO sync is enabled, but it prevents multiple workers from processing the same row and leaves retry metadata (`attempt_count`, `next_attempt_at`, `error`) for the real connector.
+**Queue processing.** The API and worker use Postgres-backed queue tables instead of an external Redis dependency. `mutation_outbox` and `sync_events` are claimed with a short processing lease, using `FOR UPDATE SKIP LOCKED`, then marked `applied`. The shared SQL/transaction implementation lives in `packages/queue` and is covered by unit tests so API-triggered sync and the worker cannot drift. This is still a local/simulated processor until live QBO sync is enabled, but it prevents multiple workers from processing the same row and leaves retry metadata (`attempt_count`, `next_attempt_at`, `error`) for the real connector.
 
 ## Environment Variables Reference
 

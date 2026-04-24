@@ -13,8 +13,8 @@
     "forceConsistentCasingInFileNames": true,
     "baseUrl": ".",
     "paths": {
-      "@sitelayer/domain": ["packages/domain/src/index.ts"]
+      "@sitelayer/domain": ["packages/domain/src/index.ts"],
+      "@sitelayer/queue": ["packages/queue/src/index.ts"]
     }
   }
 }
-

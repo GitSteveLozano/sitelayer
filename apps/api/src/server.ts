@@ -2,7 +2,7 @@ import { Sentry } from './instrument.js'
 import http from 'node:http'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { Pool, type PoolConfig } from 'pg'
-import type { PoolClient } from 'pg'
+import { processQueue as processDatabaseQueue } from '@sitelayer/queue'
 import {
   DEFAULT_BONUS_RULE,
   LA_TEMPLATE,
@@ -719,121 +719,8 @@ async function countQueueRows(companyId: string) {
   }
 }
 
-async function processOutboxBatch(client: PoolClient, companyId: string, limit: number) {
-  const claimed = await client.query(
-    `
-    update mutation_outbox
-    set
-      status = 'processing',
-      attempt_count = attempt_count + 1,
-      next_attempt_at = now() + interval '5 minutes',
-      error = null
-    where id in (
-      select id
-      from mutation_outbox
-      where company_id = $1
-        and (
-          (status = 'pending' and next_attempt_at <= now())
-          or (status = 'processing' and next_attempt_at <= now())
-        )
-      order by next_attempt_at asc, created_at asc
-      limit $2
-      for update skip locked
-    )
-    returning id
-    `,
-    [companyId, limit],
-  )
-
-  const ids = claimed.rows.map((row) => row.id)
-  if (!ids.length) return []
-
-  const applied = await client.query(
-    `
-    update mutation_outbox
-    set status = 'applied', applied_at = now(), error = null
-    where company_id = $1 and id = any($2::uuid[])
-    returning id, entity_type, entity_id, mutation_type, attempt_count, created_at
-    `,
-    [companyId, ids],
-  )
-  return applied.rows
-}
-
-async function processSyncEventBatch(client: PoolClient, companyId: string, limit: number) {
-  const claimed = await client.query(
-    `
-    update sync_events
-    set
-      status = 'processing',
-      attempt_count = attempt_count + 1,
-      next_attempt_at = now() + interval '5 minutes',
-      error = null
-    where id in (
-      select id
-      from sync_events
-      where company_id = $1
-        and (
-          (status = 'pending' and next_attempt_at <= now())
-          or (status = 'processing' and next_attempt_at <= now())
-        )
-      order by next_attempt_at asc, created_at asc
-      limit $2
-      for update skip locked
-    )
-    returning id
-    `,
-    [companyId, limit],
-  )
-
-  const ids = claimed.rows.map((row) => row.id)
-  if (!ids.length) return []
-
-  const applied = await client.query(
-    `
-    update sync_events
-    set status = 'applied', applied_at = now(), error = null
-    where company_id = $1 and id = any($2::uuid[])
-    returning id, entity_type, entity_id, direction, attempt_count, created_at
-    `,
-    [companyId, ids],
-  )
-  return applied.rows
-}
-
 async function processQueue(companyId: string, limit = 25) {
-  const client = await pool.connect()
-  try {
-    await client.query('begin')
-    const outboxRows = await processOutboxBatch(client, companyId, limit)
-    const syncEventRows = await processSyncEventBatch(client, companyId, limit)
-
-    if (outboxRows.length || syncEventRows.length) {
-      await client.query(
-        `
-        update integration_connections
-        set last_synced_at = now(), status = 'connected', version = version + 1
-        where company_id = $1
-          and provider in ('qbo', 'demo')
-        `,
-        [companyId],
-      )
-    }
-
-    await client.query('commit')
-
-    return {
-      processedOutboxCount: outboxRows.length,
-      processedSyncEventCount: syncEventRows.length,
-      outbox: outboxRows,
-      syncEvents: syncEventRows,
-    }
-  } catch (error) {
-    await client.query('rollback')
-    throw error
-  } finally {
-    client.release()
-  }
+  return processDatabaseQueue(pool, companyId, limit)
 }
 
 async function getSyncStatus(companyId: string) {

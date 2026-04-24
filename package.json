@@ -11,7 +11,7 @@
     "dev:api": "npm run dev --workspace @sitelayer/api",
     "dev:web": "npm run dev --workspace @sitelayer/web",
     "dev:worker": "npm run dev --workspace @sitelayer/worker",
-    "build": "npm run build --workspace @sitelayer/domain && npm run build --workspace @sitelayer/api && npm run build --workspace @sitelayer/web && npm run build --workspace @sitelayer/worker",
+    "build": "npm run build --workspace @sitelayer/domain && npm run build --workspace @sitelayer/queue && npm run build --workspace @sitelayer/api && npm run build --workspace @sitelayer/web && npm run build --workspace @sitelayer/worker",
     "db:migrate": "scripts/migrate-db.sh",
     "db:check": "scripts/check-db-schema.sh",
     "seed:dev": "tsx apps/api/scripts/seed-dev.ts",

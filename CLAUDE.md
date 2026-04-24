@@ -195,11 +195,18 @@ export const calculateProjectCost = (takeoffs, divisions) => ...
 export const calculateBonusPayout = (revenue, cost, rule) => ...
 ```
 
+### Queue Package (packages/queue/src/index.ts)
+
+Shared Postgres queue lease implementation used by both API-triggered sync and the background worker:
+- Claims `mutation_outbox` and `sync_events` with `FOR UPDATE SKIP LOCKED`.
+- Uses short processing leases through `next_attempt_at` so stale work can be retried.
+- Wraps claim/apply/update in one transaction and rolls back on failure.
+- Has unit coverage in `packages/queue/src/index.test.ts`; do not fork this SQL back into app code.
+
 ### Worker (apps/worker/src/worker.ts)
 
 Background job processor:
-- Claims `mutation_outbox` and `sync_events` with `FOR UPDATE SKIP LOCKED`.
-- Uses short processing leases through `next_attempt_at` so stale work can be retried.
+- Calls `@sitelayer/queue` for the shared Postgres queue lease/transaction behavior.
 - Marks simulated local queue work as `applied`; live QBO sync still needs sandbox credential validation.
 
 ### Database Schema
