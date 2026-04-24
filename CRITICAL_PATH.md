@@ -29,20 +29,23 @@
 - [x] Preview Traefik router installed
 - [x] Shared preview DB/user created on managed Postgres
 - [x] `main.preview.sitelayer.sandolab.xyz` smoke preview deployed and verified
+- [x] `/app/sitelayer/.env` on production droplet with production `DATABASE_URL`
+- [x] GitHub Actions `DEPLOY_HOST` and `DEPLOY_SSH_KEY`
+- [x] Separate managed Postgres DB/user for production (`sitelayer_prod`, `sitelayer_prod_app`)
+- [x] Deploy user public SSH key installed on production droplet
+- [x] First bootable Docker Compose deploy verified at `http://sitelayer.sandolab.xyz`
+- [x] Managed Postgres trusted sources restricted to production and preview droplets
 
 ### ⏳ In Progress
-- [ ] `/app/sitelayer/.env` on droplet with production `DATABASE_URL`
-- [ ] GitHub Actions `DEPLOY_HOST` and `DEPLOY_SSH_KEY`
-- [ ] Separate managed Postgres DBs/users for prod/dev instead of using only `defaultdb`
-- [ ] Deploy user public SSH key installed on droplet
-- [ ] First bootable Docker Compose deploy
 - [ ] TLS strategy finalized and enabled
+- [ ] Separate managed Postgres DB/user for dev before dev deploys mutate shared data
+- [ ] Production logical backup timer smoke test with Postgres 18 pg_dump
 - [x] GitHub self-hosted preview runner registered on `sitelayer-preview`
 
 ### 🔴 Blockers for Pilot
-1. **Production env/secrets on droplet** — `DATABASE_URL` is required before Compose can start API/worker.
-2. **Database separation** — create `sitelayer_prod` and `sitelayer_dev` with separate app users before dev deploys start mutating shared data.
-3. **Clerk auth integration** — hardcoded demo user blocks real multi-tenant onboarding.
+1. **Clerk auth integration** — hardcoded demo user blocks real multi-tenant onboarding.
+2. **TLS** — production is HTTP-only until certificate automation is added.
+3. **Dev database separation** — create `sitelayer_dev` with its own app user before dev deploys start mutating shared data.
 4. **DO Spaces file upload** — blueprint persistence not yet wired.
 5. **PDF viewer + annotation** — canvas drawing/takeoff workflow needs end-to-end validation.
 6. **Job queue** — QBO sync requires background jobs beyond the current heartbeat worker.

@@ -7,6 +7,7 @@ BACKUP_DIR="${BACKUP_DIR:-/app/backups/postgres}"
 RETENTION_DAYS="${RETENTION_DAYS:-30}"
 SERVICE_NAME="${SERVICE_NAME:-sitelayer-postgres-backup}"
 BACKUP_TIME="${BACKUP_TIME:-03:17}"
+PG_DUMP_DOCKER_IMAGE="${PG_DUMP_DOCKER_IMAGE:-postgres:18-alpine}"
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "ERROR: run this script as root" >&2
@@ -39,6 +40,7 @@ WorkingDirectory=$APP_DIR
 Environment=BACKUP_DIR=$BACKUP_DIR
 Environment=RETENTION_DAYS=$RETENTION_DAYS
 Environment=DATABASE_URL_FILE=$ENV_FILE
+Environment=PG_DUMP_DOCKER_IMAGE=$PG_DUMP_DOCKER_IMAGE
 ExecStart=$APP_DIR/scripts/backup-postgres.sh
 EOF
 

@@ -194,23 +194,19 @@ curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh get-docker.sh
 sudo apt install -y git curl postgresql-client
 
-# Run scripts/setup-deploy-user.sh from the repo as root, then create:
-sudo nano /app/sitelayer/.env
+# Production is now managed by GitHub Actions via the self-hosted preview runner.
+# The runtime env lives at /app/sitelayer/.env and is owned by sitelayer:600.
+sudo ls -l /app/sitelayer/.env
 ```
 
 ---
 
 ## Next Steps
 
-1. **Create `/app/sitelayer/.env`** with at least `DATABASE_URL`.
-2. **Deploy app to Droplet** using `.github/workflows/deploy-droplet.yml` or `DEPLOYMENT.md`.
-3. **Apply database schema:**
-   ```bash
-   psql $DATABASE_URL < docker/postgres/init/001_schema.sql
-   ```
-4. **Provision optional services** (Clerk, Spaces, QBO, Sentry) when ready.
-5. **Add TLS** after DNS and certs are ready; committed nginx is currently HTTP-only.
-6. **Verify at:** http://sitelayer.sandolab.xyz or reserved IP until TLS is enabled.
+1. **Add TLS** after DNS and certs are ready; committed nginx is currently HTTP-only.
+2. **Provision optional services** (Clerk, Spaces, QBO production credentials) when ready.
+3. **Create `sitelayer_dev` DB/user** before a dev deploy starts mutating shared data.
+4. **Verify production at:** http://sitelayer.sandolab.xyz or reserved IP until TLS is enabled.
 
 Preview has been verified at:
 
@@ -256,9 +252,10 @@ curl https://main.preview.sitelayer.sandolab.xyz/api/bootstrap
 - ✅ Droplet created (5 min, automated)
 - ✅ Database created (5 min, automated)
 - ✅ Firewall configured (1 min, automated)
-- ⏳ `/app/sitelayer/.env` on droplet
-- ⏳ GitHub Actions `DEPLOY_HOST` and `DEPLOY_SSH_KEY`
-- ⏳ Separate Postgres databases/users for prod/dev
+- ✅ `/app/sitelayer/.env` on droplet
+- ✅ GitHub Actions `DEPLOY_HOST` and `DEPLOY_SSH_KEY`
+- ✅ Separate Postgres database/user for prod
+- ⏳ Separate Postgres database/user for dev
 - ⏳ Spaces/Clerk/QBO optional service credentials
 - ⏳ TLS enablement
 

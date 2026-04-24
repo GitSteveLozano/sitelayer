@@ -6,6 +6,7 @@ RETENTION_DAYS="${RETENTION_DAYS:-30}"
 DATABASE_URL="${DATABASE_URL:-}"
 DATABASE_URL_FILE="${DATABASE_URL_FILE:-}"
 PG_DUMP_EXTRA_ARGS="${PG_DUMP_EXTRA_ARGS:-}"
+PG_DUMP_DOCKER_IMAGE="${PG_DUMP_DOCKER_IMAGE:-}"
 
 if [ -z "$DATABASE_URL" ] && [ -n "$DATABASE_URL_FILE" ] && [ -f "$DATABASE_URL_FILE" ]; then
   DATABASE_URL="$(grep -E '^DATABASE_URL=' "$DATABASE_URL_FILE" | tail -n 1 | cut -d= -f2-)"
@@ -16,7 +17,15 @@ if [ -z "$DATABASE_URL" ]; then
   exit 1
 fi
 
-if ! command -v pg_dump >/dev/null 2>&1; then
+if [ -n "$PG_DUMP_DOCKER_IMAGE" ]; then
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "ERROR: docker is required when PG_DUMP_DOCKER_IMAGE is set" >&2
+    exit 1
+  fi
+  pg_dump_cmd=(docker run --rm --network host "$PG_DUMP_DOCKER_IMAGE" pg_dump)
+elif command -v pg_dump >/dev/null 2>&1; then
+  pg_dump_cmd=(pg_dump)
+else
   echo "ERROR: pg_dump is required" >&2
   exit 1
 fi
@@ -35,7 +44,7 @@ backup_file="$BACKUP_DIR/sitelayer-$timestamp.sql.gz"
 
 read -r -a extra_args <<<"$PG_DUMP_EXTRA_ARGS"
 
-pg_dump "${extra_args[@]}" --no-owner --no-privileges "$DATABASE_URL" | gzip -9 >"$tmp_file"
+"${pg_dump_cmd[@]}" "${extra_args[@]}" --no-owner --no-privileges "$DATABASE_URL" | gzip -9 >"$tmp_file"
 chmod 600 "$tmp_file"
 mv "$tmp_file" "$backup_file"
 

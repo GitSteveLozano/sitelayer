@@ -1,6 +1,6 @@
 # Sitelayer Backup Strategy
 
-**Status:** Logical backup scripts added; production timer not installed yet
+**Status:** Logical backup scripts added; production timer uses Dockerized Postgres 18 `pg_dump`
 **Last updated:** 2026-04-24
 
 ## Current Managed Database Backups
@@ -37,6 +37,8 @@ sudo APP_DIR=/app/sitelayer ENV_FILE=/app/sitelayer/.env BACKUP_DIR=/app/backups
   bash /app/sitelayer/scripts/install-postgres-backup-systemd.sh
 ```
 
+The timer defaults `PG_DUMP_DOCKER_IMAGE=postgres:18-alpine` because the managed cluster is Postgres 18 and Ubuntu 22.04's default `pg_dump` is too old.
+
 ## Retention
 
 Default logical retention is 30 days:
@@ -49,6 +51,5 @@ For pilot, 30 days is enough. Move to 90 days once real customer production data
 
 ## Open Tasks
 
-- Install the production backup timer after `/app/sitelayer/.env` is created.
 - Add off-host copy to DigitalOcean Spaces or another object store once Spaces is provisioned.
 - Run a restore drill against a non-production database and record the result.
