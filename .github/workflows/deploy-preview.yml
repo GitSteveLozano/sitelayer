@@ -2,7 +2,7 @@ name: Deploy Preview
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened, closed, labeled, unlabeled]
   workflow_dispatch:
     inputs:
       slug:
@@ -11,6 +11,10 @@ on:
       ref:
         description: Git ref to deploy
         required: false
+      mode:
+        description: dev (watch-mode, fast) or prod (full bundle build)
+        required: false
+        default: dev
 
 permissions:
   contents: read
@@ -35,6 +39,9 @@ jobs:
         env:
           PREVIEW_SLUG: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || inputs.slug }}
           PREVIEW_SOURCE_DIR: ${{ github.workspace }}
+          # Dev-mode (source-mounted tsx/vite watch) by default. Add the
+          # `preview-prod` label to the PR to force a full prod-bundle build.
+          PREVIEW_MODE: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'preview-prod')) && 'prod' || (inputs.mode || 'dev') }}
         run: scripts/deploy-preview.sh
 
       - name: Comment preview URL

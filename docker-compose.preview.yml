@@ -1,0 +1,112 @@
+# Dev-mode preview stack.
+# - Source is mounted from the rsync'd preview directory (no docker build step).
+# - API/worker run under `tsx watch` → file-change restart in ~1s.
+# - Web runs under `vite --host` with HMR through Traefik WebSocket upgrade.
+# - Per-slug node_modules volume persists across compose down, so commits only rsync.
+# For a prod-bundle smoke test before merge, use docker-compose.preview-prod.yml.
+
+services:
+  api:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install --no-audit --no-fund --prefer-offline && npm run dev:api"
+    env_file:
+      - ${PREVIEW_STACK_ENV_FILE:-.env}
+    environment:
+      NODE_ENV: development
+      APP_TIER: ${APP_TIER:-preview}
+      FEATURE_FLAGS: ${FEATURE_FLAGS:-}
+      PORT: '3001'
+      DATABASE_URL_PROD_RO: ${DATABASE_URL_PROD_RO:-}
+      BLUEPRINT_STORAGE_ROOT: /app/storage/blueprints
+      CHOKIDAR_USEPOLLING: '1'
+      CHOKIDAR_INTERVAL: '500'
+    volumes:
+      - .:/app
+      - preview_node_modules:/app/node_modules
+      - preview_vite_cache:/app/apps/web/.vite-cache
+      - blueprint_storage:/app/storage/blueprints
+    restart: unless-stopped
+    networks:
+      - app
+      - router
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=sitelayer-preview-router
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-api.rule=Host(`${PREVIEW_HOST}`) && (Path(`/api`) || PathPrefix(`/api/`) || Path(`/health`))
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-api.priority=100
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-api.entrypoints=websecure
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-api.tls.certresolver=letsencrypt
+      - traefik.http.services.sitelayer-${PREVIEW_SLUG}-api.loadbalancer.server.port=3001
+
+  web:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install --no-audit --no-fund --prefer-offline && npm run dev:web"
+    env_file:
+      - ${PREVIEW_STACK_ENV_FILE:-.env}
+    environment:
+      NODE_ENV: development
+      VITE_API_URL: https://${PREVIEW_HOST}
+      VITE_APP_TIER: ${VITE_APP_TIER:-preview}
+      VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+      VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-preview}
+      VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
+      VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}
+      VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}
+      # Vite HMR through Traefik TLS: browser connects WSS on 443, host = preview host.
+      VITE_HMR_HOST: ${PREVIEW_HOST}
+      VITE_HMR_CLIENT_PORT: '443'
+      VITE_HMR_PROTOCOL: wss
+      VITE_ALLOWED_HOSTS: .preview.sitelayer.sandolab.xyz
+      CHOKIDAR_USEPOLLING: '1'
+      CHOKIDAR_INTERVAL: '500'
+    volumes:
+      - .:/app
+      - preview_node_modules:/app/node_modules
+      - preview_vite_cache:/app/apps/web/.vite-cache
+    restart: unless-stopped
+    networks:
+      - router
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=sitelayer-preview-router
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-web.rule=Host(`${PREVIEW_HOST}`)
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-web.entrypoints=websecure
+      - traefik.http.routers.sitelayer-${PREVIEW_SLUG}-web.tls.certresolver=letsencrypt
+      - traefik.http.services.sitelayer-${PREVIEW_SLUG}-web.loadbalancer.server.port=3000
+
+  worker:
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install --no-audit --no-fund --prefer-offline && npm run dev:worker"
+    env_file:
+      - ${PREVIEW_STACK_ENV_FILE:-.env}
+    environment:
+      NODE_ENV: development
+      APP_TIER: ${APP_TIER:-preview}
+      FEATURE_FLAGS: ${FEATURE_FLAGS:-}
+      DATABASE_URL_PROD_RO: ${DATABASE_URL_PROD_RO:-}
+      CHOKIDAR_USEPOLLING: '1'
+      CHOKIDAR_INTERVAL: '500'
+    volumes:
+      - .:/app
+      - preview_node_modules:/app/node_modules
+    profiles:
+      - worker
+    restart: unless-stopped
+    networks:
+      - app
+
+networks:
+  app:
+    driver: bridge
+    internal: true
+  router:
+    name: sitelayer-preview-router
+    external: true
+
+volumes:
+  preview_node_modules:
+  preview_vite_cache:
+  blueprint_storage:

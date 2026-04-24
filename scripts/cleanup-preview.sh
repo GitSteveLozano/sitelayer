@@ -22,14 +22,24 @@ case "$target_dir" in
     ;;
 esac
 
-if [ -f "$target_dir/docker-compose.preview.yml" ]; then
+compose_file=""
+for candidate in docker-compose.preview.yml docker-compose.preview-prod.yml; do
+  if [ -f "$target_dir/$candidate" ]; then
+    compose_file="$candidate"
+    break
+  fi
+done
+
+if [ -n "$compose_file" ]; then
   env_args=()
   if [ -f "$target_dir/.env" ]; then
     env_args=(--env-file "$target_dir/.env")
   fi
-  docker compose "${env_args[@]}" -f "$target_dir/docker-compose.preview.yml" -p "$project_name" down --remove-orphans
+  # -v drops the per-slug node_modules + vite-cache volumes so the next deploy
+  # for this slug starts clean (also frees disk on the preview droplet).
+  docker compose "${env_args[@]}" -f "$target_dir/$compose_file" -p "$project_name" down --volumes --remove-orphans
 else
-  docker compose -p "$project_name" down --remove-orphans || true
+  docker compose -p "$project_name" down --volumes --remove-orphans || true
 fi
 
 if [ -f "$target_dir/.env" ] && grep -qE '^PREVIEW_DB_SCHEMA=' "$target_dir/.env"; then
