@@ -49,7 +49,21 @@ RETENTION_DAYS=30
 
 For pilot, 30 days is enough. Move to 90 days once real customer production data exists or when contract requirements demand it.
 
+## Droplet Snapshots
+
+Both droplets (prod `566798325`, preview `566806040`) have weekly DO backups enabled (Sun 04:00 UTC, 28-day retention). Verify with:
+
+```bash
+curl -H "Authorization: Bearer $DO_TOKEN" \
+  https://api.digitalocean.com/v2/droplets/566798325/backups/policy
+```
+
+## Disaster Recovery
+
+Full restore procedures and on-call runbook live in `docs/DR_RESTORE.md`.
+
 ## Open Tasks
 
-- Add off-host copy to DigitalOcean Spaces or another object store once Spaces is provisioned.
+- Add off-host copy to DigitalOcean Spaces or another object store once Spaces creds are populated (`DO_SPACES_KEY`/`DO_SPACES_SECRET` are blank in `/app/sitelayer/.env` as of 2026-04-24).
 - Run a restore drill against a non-production database and record the result.
+- Add monitoring/heartbeat for the `sitelayer-postgres-backup.timer` (currently silent if it fails).
