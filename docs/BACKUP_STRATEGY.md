@@ -1,6 +1,6 @@
 # Sitelayer Backup Strategy
 
-**Status:** Logical backup scripts added; production timer uses Dockerized Postgres 18 `pg_dump`
+**Status:** Production logical backup timer installed; uses Dockerized Postgres 18 `pg_dump`
 **Last updated:** 2026-04-24
 
 ## Current Managed Database Backups

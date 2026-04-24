@@ -35,11 +35,11 @@
 - [x] Deploy user public SSH key installed on production droplet
 - [x] First bootable Docker Compose deploy verified at `http://sitelayer.sandolab.xyz`
 - [x] Managed Postgres trusted sources restricted to production and preview droplets
+- [x] Production logical backup timer installed and smoke-tested with Postgres 18 pg_dump
 
 ### ⏳ In Progress
 - [ ] TLS strategy finalized and enabled
 - [ ] Separate managed Postgres DB/user for dev before dev deploys mutate shared data
-- [ ] Production logical backup timer smoke test with Postgres 18 pg_dump
 - [x] GitHub self-hosted preview runner registered on `sitelayer-preview`
 
 ### 🔴 Blockers for Pilot
