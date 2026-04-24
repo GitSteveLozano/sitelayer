@@ -15,6 +15,7 @@ on:
 permissions:
   contents: read
   issues: write
+  pull-requests: write
 
 concurrency:
   group: preview-${{ github.event_name == 'pull_request' && github.event.pull_request.number || inputs.slug }}
@@ -38,6 +39,7 @@ jobs:
 
       - name: Comment preview URL
         if: github.event_name == 'pull_request'
+        continue-on-error: true
         uses: actions/github-script@v9
         with:
           script: |
