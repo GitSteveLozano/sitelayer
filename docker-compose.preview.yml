@@ -18,6 +18,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: "3001"
+      BLUEPRINT_STORAGE_ROOT: /app/storage/blueprints
+    volumes:
+      - blueprint_storage:/app/storage/blueprints
     restart: unless-stopped
     networks:
       - app
@@ -89,3 +92,6 @@ networks:
   router:
     name: sitelayer-preview-router
     external: true
+
+volumes:
+  blueprint_storage:

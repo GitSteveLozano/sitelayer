@@ -94,7 +94,7 @@ Layer 3: Derived Insight & Workflow UI
 | **Monorepo** | npm workspaces | apps: api, web, worker; packages: domain |
 | **Database** | Postgres (pg driver) | Direct SQL queries in server.ts; no ORM |
 | **Auth** | TBD (hardcoded demo user) | Clerk planned but not yet integrated |
-| **File Storage** | TBD (DigitalOcean Spaces planned) | Blueprint PDFs not yet persisted to external storage |
+| **File Storage** | Local Docker volume fallback; DigitalOcean Spaces planned | Blueprint PDFs persist under `BLUEPRINT_STORAGE_ROOT`; Spaces/off-host copy still needed before customer data |
 | **QBO Integration** | OAuth + REST API (direct HTTP) | Connector layer; sync state in `integration_mappings` table |
 
 ## Project Structure
@@ -123,15 +123,16 @@ sitelayer/
 - **Dependencies**: Only `pg` and `@sitelayer/domain`
 
 **Endpoints**:
-- POST `/projects` — create project
-- GET `/projects` — list projects  
-- POST `/projects/:id/blueprints` — upload blueprint PDF
-- GET `/blueprints/:id` — retrieve blueprint metadata
-- POST `/annotations` — save polygon measurements
-- GET `/estimates/:id` — retrieve estimate (calculates on-demand)
-- POST `/integrations/qbo/connect` — OAuth initiation
-- POST `/integrations/qbo/sync` — trigger full sync job
-- GET `/integrations/status` — sync state
+- POST `/api/projects` — create project
+- GET `/api/bootstrap` — list projects and app seed data
+- POST `/api/projects/:id/blueprints` — upload blueprint PDF/image to local storage fallback
+- GET `/api/blueprints/:id/file` — stream stored blueprint file inline
+- POST `/api/projects/:id/takeoff/measurement` — append one polygon/manual measurement
+- POST `/api/projects/:id/takeoff/measurements` — replace a project's measurement set
+- GET `/api/projects/:id/summary` — retrieve estimate/operations summary
+- GET `/api/integrations/qbo/auth` — OAuth initiation
+- POST `/api/integrations/qbo/sync` — trigger QBO sync queue work
+- GET `/api/sync/status` — sync state
 
 **Environment Variables**:
 ```
@@ -141,6 +142,7 @@ ACTIVE_COMPANY_SLUG=la-operations        # Hardcoded tenant demo
 ACTIVE_USER_ID=demo-user                 # Hardcoded user
 QBO_CLIENT_ID / QBO_CLIENT_SECRET / QBO_REDIRECT_URI
 QBO_ENVIRONMENT=sandbox|production
+BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
 ALLOWED_ORIGINS=http://localhost:5173,...
 ```
 
@@ -149,7 +151,7 @@ ALLOWED_ORIGINS=http://localhost:5173,...
 - **React 19 SPA**: No Next.js, no SSR; pure client-side
 - **Build**: Vite dev server @ `0.0.0.0:3000` during dev
 - **State**: IndexedDB for offline-first (recent addition)
-- **UI Components**: Konva.js for PDF canvas annotation (not yet in dependencies, imported inline)
+- **UI Components**: Inline SVG polygon annotation overlay over browser PDF/image preview
 - **Storage**: LocalStorage for drafts, IndexedDB for offline queue
 
 **Key Views**:
@@ -191,8 +193,8 @@ Background job processor (currently minimal):
 - `companies` — multi-tenant isolation
 - `users` — user accounts  
 - `projects` — construction projects (customer, location, divisions)
-- `blueprints` — uploaded PDF documents with S3/Spaces reference
-- `takeoffs` — measurements extracted from blueprints (description, qty, division)
+- `blueprint_documents` — uploaded PDF/image documents with local storage path and revision lineage
+- `takeoff_measurements` — measurements extracted from blueprints, including persisted polygon geometry
 - `estimates` — calculated estimates with line items (labor, material, overhead)
 - `workers` — crew roster
 - `labor_entries` — time tracking
@@ -336,8 +338,8 @@ Background job processor (currently minimal):
 
 ### File Storage
 
-**Current**: Not implemented (hardcoded "demo" placeholder)  
-**Verdict**: 🔴 **Blocker for MVP**
+**Current**: Local filesystem fallback implemented and persisted by Docker Compose through the `blueprint_storage` volume.
+**Verdict**: 🟡 **Off-host/object storage still needed before customer data**
 
 | Service | Upside | Downside | Cost | Fit |
 |---------|--------|---------|------|-----|
@@ -346,7 +348,7 @@ Background job processor (currently minimal):
 | **Supabase Storage** | Built on S3, PostgreSQL-native | Different S3 endpoint | ~$10/mo | 🟡 Adds dependency |
 | **Cloudinary** | Image optimization built-in | Per-request pricing, vendor lock-in | $10+/mo | ❌ Overkill for PDFs |
 
-**Recommendation**: **Use DigitalOcean Spaces** as planned ($5/mo, S3-compatible, simple setup). Implement before first pilot customer.
+**Recommendation**: **Use DigitalOcean Spaces** as planned ($5/mo, S3-compatible, simple setup) for off-host retention and backup. Keep the local volume fallback for dev, preview, and early smoke testing.
 
 ### Background Jobs
 

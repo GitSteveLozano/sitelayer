@@ -903,7 +903,6 @@ export function App() {
         {selectedProjectId ? (
           <TakeoffWorkspace
             projectId={selectedProjectId}
-            projectVersion={summary?.project.version ?? undefined}
             companySlug={companySlug}
             blueprints={blueprints}
             measurements={measurements}
@@ -2409,7 +2408,6 @@ function LaborEditor({
 
 function TakeoffWorkspace({
   projectId,
-  projectVersion,
   companySlug,
   blueprints,
   measurements,
@@ -2419,7 +2417,6 @@ function TakeoffWorkspace({
   onSaved,
 }: {
   projectId: string
-  projectVersion: number | undefined
   companySlug: string
   blueprints: BlueprintRow[]
   measurements: MeasurementRow[]
@@ -2477,25 +2474,20 @@ function TakeoffWorkspace({
     setError(null)
     try {
       await apiPost(
-        `/api/projects/${projectId}/takeoff/measurements`,
+        `/api/projects/${projectId}/takeoff/measurement`,
         {
-          measurements: [
-            {
-              blueprint_document_id: activeBlueprint.id,
-              service_item_code: serviceItemCode,
-              quantity,
-              unit: serviceItems.find((item) => item.code === serviceItemCode)?.unit ?? 'sqft',
-              notes: `polygon:${draftPoints.length}`,
-              geometry: {
-                kind: 'polygon',
-                points: draftPoints,
-                sheet_scale: quantityMultiplier,
-                calibration_length: Number(calibrationLength) || null,
-                calibration_unit: calibrationUnit,
-              },
-            },
-          ],
-          expected_version: projectVersion ?? undefined,
+          blueprint_document_id: activeBlueprint.id,
+          service_item_code: serviceItemCode,
+          quantity,
+          unit: serviceItems.find((item) => item.code === serviceItemCode)?.unit ?? 'sqft',
+          notes: `polygon:${draftPoints.length}`,
+          geometry: {
+            kind: 'polygon',
+            points: draftPoints,
+            sheet_scale: quantityMultiplier,
+            calibration_length: Number(calibrationLength) || null,
+            calibration_unit: calibrationUnit,
+          },
         },
         companySlug,
       )

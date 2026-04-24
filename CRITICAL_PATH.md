@@ -38,14 +38,16 @@
 - [x] Production logical backup timer installed and smoke-tested with Postgres 18 pg_dump
 - [x] Production TLS enabled with Caddy and Let's Encrypt (`https://sitelayer.sandolab.xyz`)
 - [x] Separate managed Postgres DB/user for dev (`sitelayer_dev`, `sitelayer_dev_app`)
+- [x] Local durable blueprint upload storage via Docker volume
+- [x] Takeoff polygon annotations append to DB without replacing existing measurements
 
 ### ⏳ In Progress
 - [x] GitHub self-hosted preview runner registered on `sitelayer-preview`
 
 ### 🔴 Blockers for Pilot
 1. **Clerk auth integration** — hardcoded demo user blocks real multi-tenant onboarding.
-2. **DO Spaces file upload** — blueprint persistence not yet wired.
-3. **PDF viewer + annotation** — canvas drawing/takeoff workflow needs end-to-end validation.
+2. **DO Spaces/off-host file storage** — local blueprint persistence works, but off-host/object storage is still needed before customer data.
+3. **PDF viewer + annotation validation** — polygon drawing persists to DB; needs pilot-device validation against real PDFs.
 4. **Job queue** — QBO sync requires background jobs beyond the current heartbeat worker.
 
 ---
@@ -73,7 +75,7 @@ PHASE 1: INFRASTRUCTURE (Week 1, Days 1-3)
 ├─ DigitalOcean droplet (DONE: 8GB, Ubuntu 22.04, tor1)
 ├─ Postgres database (DONE: 1GB managed Postgres, tor1)
 ├─ Reserved IP (DONE: 159.203.51.158)
-├─ Spaces bucket (optional; not blocking bootable deploy)
+├─ Spaces bucket (optional; local Docker volume backs bootable blueprint uploads)
 ├─ Domain/DNS pointing to reserved IP
 ├─ Dedicated sitelayer deploy user + SSH key
 └─ `/app/sitelayer/.env` on Droplet
@@ -84,10 +86,10 @@ PHASE 2: CODE CHANGES (Week 1, Days 4-5 + Week 2)
 │  └─ Replace hardcoded ACTIVE_COMPANY_SLUG with JWT org_slug
 │  └─ Prerequisite for: pilot customer login
 ├─ Change 2: DO Spaces file upload (2h)
-│  └─ POST /api/projects/:id/blueprints → Spaces
-│  └─ Prerequisite for: blueprint storage
-├─ Change 3: PDF viewer + Konva annotation (3h)
-│  └─ PDF.js rendering + polygon drawing
+│  └─ POST /api/projects/:id/blueprints → Spaces/off-host object storage
+│  └─ Prerequisite for: customer-grade blueprint storage
+├─ Change 3: PDF viewer + SVG annotation (3h)
+│  └─ Browser PDF/image preview + polygon drawing
 │  └─ Prerequisite for: takeoff workflow
 ├─ Change 4: Job queue (pg-boss) (2h)
 │  └─ Background job processor for QBO sync
@@ -124,8 +126,8 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 4. Run first Docker Compose deployment and health check.
 5. Add TLS/domain configuration.
 6. Clerk auth implementation → blocks customer login.
-7. DO Spaces file upload → blocks blueprint persistence.
-8. PDF viewer + annotation validation → blocks takeoff workflow.
+7. DO Spaces/off-host file copy → blocks customer-grade blueprint retention.
+8. PDF viewer + annotation validation → blocks confident takeoff workflow.
 9. Job queue → blocks robust QBO sync.
 
 **Total critical path:** ~22 hours of work  
@@ -158,9 +160,10 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 ## Success Criteria (Must Have Before Pilot)
 
 - [ ] Clerk OAuth working (customer can sign in with Google)
-- [ ] Blueprint upload to Spaces working (PDF persists)
-- [ ] PDF viewer + polygon drawing working (user can annotate)
-- [ ] Annotations save to DB (reload page, annotation persists)
+- [x] Local blueprint upload persistence working (PDF persists in Docker volume)
+- [ ] Blueprint upload to Spaces/off-host object storage working
+- [x] PDF viewer + polygon drawing implemented (user can annotate)
+- [x] Annotations save to DB through append endpoint
 - [ ] API responds in <500ms (Sentry tracks 100% of errors)
 - [x] Caddy reverse proxy working (`https://sitelayer.sandolab.xyz` returns app/API)
 - [ ] Postgres logical backups automated and restore-drilled. DO managed Postgres automatic backups exist, but keep an independent `pg_dump` retention path before pilot data.

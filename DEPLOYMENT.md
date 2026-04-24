@@ -120,6 +120,10 @@ DO_SPACES_SECRET=
 DO_SPACES_BUCKET=sitelayer-blueprints
 DO_SPACES_REGION=nyc3
 
+# Local durable blueprint storage fallback.
+# docker-compose.prod.yml persists this path in the blueprint_storage volume.
+BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
+
 # Frontend
 VITE_API_URL=
 VITE_COMPANY_SLUG=la-operations
@@ -208,6 +212,7 @@ The GitHub Actions workflow will:
 | `CLERK_SECRET_KEY` | ❌ | Clerk authentication secret |
 | `DO_SPACES_KEY` | ❌ | DigitalOcean Spaces API key |
 | `DO_SPACES_SECRET` | ❌ | DigitalOcean Spaces API secret |
+| `BLUEPRINT_STORAGE_ROOT` | ❌ | Local filesystem blueprint storage path; production Compose persists `/app/storage/blueprints` in a named Docker volume |
 | `SENTRY_DSN` | ❌ | Sentry error tracking URL |
 | `ALLOWED_ORIGINS` | ❌ | CORS allowed origins (comma-separated) |
 
@@ -291,6 +296,7 @@ ls -lh /app/backups/postgres
 - [ ] QBO integration credentials configured
 - [ ] Clerk authentication working
 - [ ] DO Spaces credentials configured
+- [x] Local blueprint storage volume configured
 - [ ] Backup strategy in place
 - [ ] Monitoring/alerts configured
 - [ ] DNS pointing to reserved IP

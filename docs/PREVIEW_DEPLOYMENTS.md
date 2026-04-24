@@ -88,6 +88,7 @@ Target preview services:
 - `api`: API internally on `3001`
 - `worker`: optional; disable for UI-only previews unless the branch needs sync behavior
 - no per-preview nginx/Caddy
+- local blueprint uploads persist in each preview stack's `blueprint_storage` Docker volume at `/app/storage/blueprints`
 
 Routing:
 
@@ -154,6 +155,7 @@ The current `taylorSando` token still cannot list repo runners through the REST 
 
 - Preview droplet uses separate SSH key and GitHub secrets from production.
 - Preview env uses sandbox or blank Clerk/QBO/Spaces/Sentry values.
+- Preview blueprint uploads are stored in a per-stack Docker volume; do not upload customer-sensitive plans to preview until access control and retention policy are explicit.
 - Preview deploys run only for trusted internal branches unless manually approved.
 - Preview branch code can execute Docker build scripts on the preview host; treat this as privileged execution.
 - A self-hosted GitHub runner on the preview host is also privileged execution. Only run it for trusted internal branches or manually approved workflow dispatches.

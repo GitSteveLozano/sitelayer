@@ -30,8 +30,11 @@ services:
       DO_SPACES_SECRET: ${DO_SPACES_SECRET:-}
       DO_SPACES_REGION: ${DO_SPACES_REGION:-nyc3}
       DO_SPACES_BUCKET: ${DO_SPACES_BUCKET:-sitelayer-blueprints}
+      BLUEPRINT_STORAGE_ROOT: ${BLUEPRINT_STORAGE_ROOT:-/app/storage/blueprints}
       SENTRY_DSN: ${SENTRY_DSN:-}
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
+    volumes:
+      - blueprint_storage:/app/storage/blueprints
     restart: always
     networks:
       - sitelayer
@@ -98,5 +101,6 @@ networks:
     driver: bridge
 
 volumes:
+  blueprint_storage:
   caddy_data:
   caddy_config:

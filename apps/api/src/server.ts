@@ -66,7 +66,7 @@ const qboEnvironment = (process.env.QBO_ENVIRONMENT ?? 'sandbox') as 'sandbox' |
 const qboBaseUrl = process.env.QBO_BASE_URL ?? (qboEnvironment === 'sandbox' ? 'https://sandbox-quickbooks.api.intuit.com' : 'https://quickbooks.api.intuit.com')
 const qboStateSecret = process.env.QBO_STATE_SECRET ?? qboClientSecret
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)
-const blueprintStorageRoot = path.join(process.cwd(), 'storage', 'blueprints')
+const blueprintStorageRoot = path.resolve(process.env.BLUEPRINT_STORAGE_ROOT ?? path.join(process.cwd(), 'storage', 'blueprints'))
 
 function getPoolConfig(connectionString: string): PoolConfig {
   try {
@@ -2785,6 +2785,97 @@ const server = http.createServer(async (req, res) => {
       await recordSyncEvent(company.id, 'labor_entry', laborEntryId, { action: 'delete', laborEntry: result.rows[0] })
       await recordMutationOutbox(company.id, 'labor_entry', laborEntryId, 'delete', result.rows[0], `labor_entry:delete:${laborEntryId}`)
       sendJson(res, 200, result.rows[0])
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/takeoff\/measurement$/)) {
+      const projectId = url.pathname.split('/')[3] ?? ''
+      if (!projectId) {
+        sendJson(res, 400, { error: 'project id is required' })
+        return
+      }
+      const body = await readBody(req)
+      const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
+      const serviceItemCode = String(body.service_item_code ?? '').trim()
+      const unit = String(body.unit ?? '').trim()
+      const quantity = Number(body.quantity ?? 0)
+      const blueprintDocumentId = body.blueprint_document_id === undefined || body.blueprint_document_id === null || body.blueprint_document_id === ''
+        ? null
+        : String(body.blueprint_document_id)
+
+      if (!serviceItemCode) {
+        sendJson(res, 400, { error: 'service_item_code is required' })
+        return
+      }
+      if (!unit) {
+        sendJson(res, 400, { error: 'unit is required' })
+        return
+      }
+      if (!Number.isFinite(quantity) || quantity < 0) {
+        sendJson(res, 400, { error: 'quantity must be a non-negative number' })
+        return
+      }
+
+      const projectVersionResult = await pool.query('select version from projects where company_id = $1 and id = $2', [company.id, projectId])
+      const currentProject = projectVersionResult.rows[0]
+      if (!currentProject) {
+        sendJson(res, 404, { error: 'project not found' })
+        return
+      }
+      if (expectedVersion !== null && Number(currentProject.version) !== expectedVersion) {
+        sendJson(res, 409, { error: 'version conflict', current_version: Number(currentProject.version) })
+        return
+      }
+
+      if (blueprintDocumentId) {
+        const blueprintResult = await pool.query(
+          'select id from blueprint_documents where company_id = $1 and project_id = $2 and id = $3 and deleted_at is null limit 1',
+          [company.id, projectId, blueprintDocumentId],
+        )
+        if (!blueprintResult.rows[0]) {
+          sendJson(res, 400, { error: 'blueprint_document_id must belong to the project' })
+          return
+        }
+      }
+
+      const insertResult = await pool.query(
+        `
+        insert into takeoff_measurements (
+          company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version
+        )
+        values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1)
+        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at
+        `,
+        [
+          company.id,
+          projectId,
+          blueprintDocumentId,
+          serviceItemCode,
+          quantity,
+          unit,
+          body.notes === undefined || body.notes === null || String(body.notes).trim() === '' ? null : String(body.notes),
+          body.geometry ? JSON.stringify(body.geometry) : null,
+        ],
+      )
+
+      const measurement = insertResult.rows[0]
+      const estimate = await createEstimateFromMeasurements(company.id, projectId)
+      await recordSyncEvent(company.id, 'takeoff_measurement', measurement.id, {
+        action: 'create',
+        measurement,
+        estimate,
+      })
+      await recordMutationOutbox(
+        company.id,
+        'takeoff_measurement',
+        measurement.id,
+        'create',
+        { measurement, estimate },
+        `takeoff_measurement:create:${measurement.id}`,
+        'server',
+        getCurrentUserId(req),
+      )
+      sendJson(res, 201, { measurement, estimate })
       return
     }
 

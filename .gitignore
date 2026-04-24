@@ -4,6 +4,7 @@ coverage
 .turbo
 .vite
 .vite-cache
+storage
 .DS_Store
 .env
 .env.*

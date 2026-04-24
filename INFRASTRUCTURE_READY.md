@@ -112,6 +112,9 @@ DO_SPACES_ENDPOINT=https://sitelayer.tor1.digitaloceanspaces.com
 DO_SPACES_KEY=
 DO_SPACES_SECRET=
 
+# Local durable blueprint storage fallback
+BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
+
 # Clerk (optional until auth is provisioned)
 CLERK_SECRET_KEY=
 
@@ -206,8 +209,9 @@ sudo ls -l /app/sitelayer/.env
 ## Next Steps
 
 1. **Provision optional services** (Clerk, Spaces, QBO production credentials) when ready.
-2. **Decide dev deploy topology** before wiring `sitelayer_dev` into a long-lived environment.
-3. **Verify production at:** https://sitelayer.sandolab.xyz.
+2. **Add off-host blueprint/object backup** when Spaces or another object store is provisioned; local uploads currently persist in the production `blueprint_storage` Docker volume.
+3. **Decide dev deploy topology** before wiring `sitelayer_dev` into a long-lived environment.
+4. **Verify production at:** https://sitelayer.sandolab.xyz.
 
 Preview has been verified at:
 
@@ -257,6 +261,7 @@ curl https://main.preview.sitelayer.sandolab.xyz/api/bootstrap
 - ✅ GitHub Actions `DEPLOY_HOST` and `DEPLOY_SSH_KEY`
 - ✅ Separate Postgres database/user for prod
 - ✅ Separate Postgres database/user for dev
+- ✅ Local blueprint storage volume
 - ⏳ Spaces/Clerk/QBO optional service credentials
 - ✅ TLS enablement
 
