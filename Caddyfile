@@ -1,0 +1,15 @@
+sitelayer.sandolab.xyz {
+	encode gzip zstd
+
+	handle /health {
+		reverse_proxy api:3001
+	}
+
+	handle /api/* {
+		reverse_proxy api:3001
+	}
+
+	handle {
+		reverse_proxy web:3000
+	}
+}

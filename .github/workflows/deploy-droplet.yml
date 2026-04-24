@@ -68,11 +68,20 @@ jobs:
             $COMPOSE -f docker-compose.prod.yml build --pull
             $COMPOSE -f docker-compose.prod.yml up -d --remove-orphans
 
-            # Wait for services to be ready
-            sleep 5
+            # Check API health through the public TLS listener. The first Caddy
+            # boot can take a little time while Let's Encrypt issues the cert.
+            for attempt in $(seq 1 30); do
+              if curl -fsS --resolve sitelayer.sandolab.xyz:443:127.0.0.1 https://sitelayer.sandolab.xyz/health; then
+                break
+              fi
 
-            # Check API health through the only public listener.
-            curl -fsS http://127.0.0.1/health
+              if [ "$attempt" -eq 30 ]; then
+                echo "ERROR: HTTPS health check failed after $attempt attempts"
+                exit 1
+              fi
+
+              sleep 5
+            done
 
             echo "Deployment completed successfully"
           EOF

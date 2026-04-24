@@ -77,13 +77,16 @@ services:
     networks:
       - sitelayer
 
-  nginx:
-    image: nginx:alpine
+  caddy:
+    image: caddy:2-alpine
     restart: always
     ports:
       - "80:80"
+      - "443:443"
     volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
     networks:
       - sitelayer
     depends_on:
@@ -93,3 +96,7 @@ services:
 networks:
   sitelayer:
     driver: bridge
+
+volumes:
+  caddy_data:
+  caddy_config:
