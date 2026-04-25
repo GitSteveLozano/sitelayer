@@ -44,6 +44,7 @@ import {
   type BlueprintStorage,
 } from './storage.js'
 import { recordAudit, isAuditableEntity } from './audit.js'
+import { buildEstimatePdfInputFromSummary, renderEstimatePdf } from './pdf.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
 import { AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
 import { extractSvixHeaders, verifyClerkWebhook } from './clerk-webhook.js'
@@ -5633,6 +5634,38 @@ const server = http.createServer(async (req, res) => {
                 return
               }
               sendJson(res, 200, summary)
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\.pdf$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const projectId = url.pathname.split('/')[3] ?? ''
+              if (!projectId) {
+                sendJson(res, 400, { error: 'project id is required' })
+                return
+              }
+              const summary = await summarizeProject(company.id, projectId)
+              if (!summary) {
+                sendJson(res, 404, { error: 'project not found' })
+                return
+              }
+              const pdfInput = buildEstimatePdfInputFromSummary({
+                company: { name: company.name, slug: company.slug },
+                summary,
+                appUrl: process.env.APP_PUBLIC_URL ?? 'https://sitelayer.sandolab.xyz',
+              })
+              const filename = `estimate-${summary.project.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80)}.pdf`
+              res.writeHead(200, {
+                'content-type': 'application/pdf',
+                'content-disposition': `attachment; filename="${filename}"`,
+                'cache-control': 'no-store',
+                'access-control-allow-origin': getCorsOrigin(req),
+                'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
+                'access-control-allow-headers': CORS_ALLOW_HEADERS,
+                'access-control-allow-credentials': 'true',
+                'x-request-id': getRequestContext()?.requestId ?? '',
+              })
+              await renderEstimatePdf(pdfInput, res)
               return
             }
 
