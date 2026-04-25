@@ -13,7 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "pino": "^9.5.0"
+    "pino": "^10.3.1"
   },
   "peerDependencies": {
     "@sentry/node": "^10.0.0"
