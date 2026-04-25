@@ -272,6 +272,46 @@ export type QboConnectionResponse = {
   status: SyncStatusResponse
 }
 
+export type AuditEventRow = {
+  id: string
+  actor_user_id: string | null
+  actor_role: string | null
+  entity_type: string
+  entity_id: string
+  action: string
+  before: Record<string, unknown> | null
+  after: Record<string, unknown> | null
+  request_id: string | null
+  sentry_trace: string | null
+  created_at: string
+}
+
+export type AuditEventsResponse = {
+  events: AuditEventRow[]
+}
+
+export type AuditEventFilters = {
+  entityType?: string
+  entityId?: string
+  actorUserId?: string
+  since?: string
+  limit?: number
+}
+
+export async function listAuditEventsApi(
+  filters: AuditEventFilters,
+  companySlug: string,
+): Promise<AuditEventsResponse> {
+  const params = new URLSearchParams()
+  if (filters.entityType) params.set('entity_type', filters.entityType)
+  if (filters.entityId) params.set('entity_id', filters.entityId)
+  if (filters.actorUserId) params.set('actor_user_id', filters.actorUserId)
+  if (filters.since) params.set('since', filters.since)
+  if (filters.limit) params.set('limit', String(filters.limit))
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  return apiGet<AuditEventsResponse>(`/api/audit-events${suffix}`, companySlug)
+}
+
 type QboAuthResponse = {
   authUrl: string
 }

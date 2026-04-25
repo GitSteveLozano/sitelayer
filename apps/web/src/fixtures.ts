@@ -1,4 +1,5 @@
 import type {
+  AuditEventsResponse,
   BootstrapResponse,
   BlueprintRow,
   CompaniesResponse,
@@ -461,6 +462,39 @@ export function getFixtureResponse<T>(path: string, companySlug: string): T {
         },
       ],
     }) as T
+  }
+
+  if (path.startsWith('/api/audit-events')) {
+    return clone({
+      events: [
+        {
+          id: 'audit-1',
+          actor_user_id: 'demo-user',
+          actor_role: 'owner',
+          entity_type: 'project',
+          entity_id: 'project-hillcrest',
+          action: 'update',
+          before: { status: 'lead', bid_total: '150000.00' },
+          after: { status: 'active', bid_total: '184250.00' },
+          request_id: 'req-abc12345',
+          sentry_trace: null,
+          created_at: '2026-04-23T17:30:00.000Z',
+        },
+        {
+          id: 'audit-2',
+          actor_user_id: 'demo-user',
+          actor_role: 'owner',
+          entity_type: 'worker',
+          entity_id: 'worker-ana',
+          action: 'create',
+          before: null,
+          after: { name: 'Ana Castillo', role: 'lead' },
+          request_id: 'req-def67890',
+          sentry_trace: null,
+          created_at: '2026-04-19T09:00:00.000Z',
+        },
+      ],
+    } satisfies AuditEventsResponse) as T
   }
 
   const projectId = projectIdFromPath(path)
