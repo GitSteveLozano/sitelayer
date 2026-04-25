@@ -30,23 +30,23 @@ export function showToast(input: Omit<ToastPayload, 'id'> & { id?: string }) {
     id: input.id ?? nextId(),
     variant: input.variant,
     title: input.title,
-    description: input.description,
     ttlMs: input.ttlMs ?? 5000,
+    ...(input.description !== undefined ? { description: input.description } : {}),
   }
   emit(payload)
   return payload.id
 }
 
 export function toastSuccess(title: string, description?: string) {
-  return showToast({ variant: 'success', title, description })
+  return showToast({ variant: 'success', title, ...(description !== undefined ? { description } : {}) })
 }
 
 export function toastError(title: string, description?: string) {
-  return showToast({ variant: 'error', title, description })
+  return showToast({ variant: 'error', title, ...(description !== undefined ? { description } : {}) })
 }
 
 export function toastInfo(title: string, description?: string) {
-  return showToast({ variant: 'info', title, description })
+  return showToast({ variant: 'info', title, ...(description !== undefined ? { description } : {}) })
 }
 
 export function useToast() {
