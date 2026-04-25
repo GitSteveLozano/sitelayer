@@ -7,6 +7,7 @@ import { Button } from './components/ui/button.js'
 import { FIXTURES_ENABLED } from './api.js'
 import { captureWebVitals } from './web-vitals.js'
 import './styles.css'
+import './components/ui/mobile.css'
 
 captureWebVitals()
 
