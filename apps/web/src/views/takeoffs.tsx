@@ -9,6 +9,7 @@ import type {
   WorkerRow,
 } from '../api.js'
 import { LaborEditor, MaterialBillEditor, MeasurementEditor, TakeoffWorkspace } from '../components/operations.js'
+import { TakeoffPanOverlay } from '../components/takeoff-pan-overlay.js'
 import { FormRow, parseMeasurementRows } from '../components/forms.js'
 import { Input } from '../components/ui/input.js'
 import { Select } from '../components/ui/select.js'
@@ -75,16 +76,19 @@ export function TakeoffsView({
       <section className="panel">
         <h2>Takeoff Workspace</h2>
         {selectedProjectId ? (
-          <TakeoffWorkspace
-            projectId={selectedProjectId}
-            companySlug={companySlug}
-            blueprints={blueprints}
-            measurements={measurements}
-            serviceItems={measurableServiceItems}
-            selectedBlueprintId={selectedBlueprintId}
-            onSelectBlueprint={setSelectedBlueprintId}
-            onSaved={() => void refreshTakeoff(selectedProjectId)}
-          />
+          <>
+            <TakeoffPanOverlay />
+            <TakeoffWorkspace
+              projectId={selectedProjectId}
+              companySlug={companySlug}
+              blueprints={blueprints}
+              measurements={measurements}
+              serviceItems={measurableServiceItems}
+              selectedBlueprintId={selectedBlueprintId}
+              onSelectBlueprint={setSelectedBlueprintId}
+              onSaved={() => void refreshTakeoff(selectedProjectId)}
+            />
+          </>
         ) : (
           <p className="muted">Pick a project to open the takeoff board.</p>
         )}
