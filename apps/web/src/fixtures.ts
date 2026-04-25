@@ -592,6 +592,38 @@ export function mutateFixtureResponse<T>(
     }) as T
   }
 
+  // Onboarding wizard expects the real API shape for company creation. Without
+  // this branch the wizard can't hand-off the created company id to step 2.
+  if (method === 'POST' && path === '/api/companies') {
+    const input = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
+    const slug = typeof input.slug === 'string' ? input.slug : `fixture-${Date.now()}`
+    const name = typeof input.name === 'string' ? input.name : 'Fixture Company'
+    return clone({
+      company: {
+        id: `company-fixture-${slug}`,
+        slug,
+        name,
+        created_at: new Date().toISOString(),
+      },
+      role: 'admin',
+    }) as T
+  }
+
+  // Membership invite endpoint response shape used by the onboarding wizard.
+  if (method === 'POST' && /\/api\/companies\/[^/]+\/memberships$/.test(path)) {
+    const input = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
+    const companyId = path.match(/\/api\/companies\/([^/]+)\/memberships$/)?.[1] ?? 'company-fixture'
+    return clone({
+      membership: {
+        id: `membership-fixture-${Date.now()}`,
+        company_id: companyId,
+        clerk_user_id: typeof input.clerk_user_id === 'string' ? input.clerk_user_id : 'user-fixture',
+        role: typeof input.role === 'string' ? input.role : 'member',
+        created_at: new Date().toISOString(),
+      },
+    }) as T
+  }
+
   return clone({
     ...(typeof body === 'object' && body !== null ? body : {}),
     fixture: true,
