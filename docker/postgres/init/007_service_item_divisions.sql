@@ -47,3 +47,13 @@ ALTER TABLE estimate_lines
 CREATE INDEX IF NOT EXISTS estimate_lines_division_idx
   ON estimate_lines (company_id, division_code)
   WHERE division_code IS NOT NULL;
+
+-- Takeoff measurements carry an optional per-polygon division_code so that a
+-- single project can span divisions (WhatsApp:227-229). When NULL, downstream
+-- consumers fall back to the project's `division_code`.
+ALTER TABLE takeoff_measurements
+  ADD COLUMN IF NOT EXISTS division_code text;
+
+CREATE INDEX IF NOT EXISTS takeoff_measurements_division_idx
+  ON takeoff_measurements (company_id, division_code)
+  WHERE division_code IS NOT NULL;

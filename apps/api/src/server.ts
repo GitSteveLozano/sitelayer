@@ -18,6 +18,7 @@ import {
   calculateMargin,
   calculateTakeoffQuantity,
   calculateProjectCost,
+  compareBidVsScope,
   formatMoney,
   normalizePolygonGeometry,
 } from '@sitelayer/domain'
@@ -1147,16 +1148,28 @@ async function listSchedules(companyId: string, projectId: string) {
 }
 
 async function createEstimateFromMeasurements(companyId: string, projectId: string) {
-  const projectResult = await pool.query(
-    'select id, bid_total, labor_rate, bonus_pool from projects where company_id = $1 and id = $2 limit 1',
+  const projectResult = await pool.query<{
+    id: string
+    bid_total: string | number | null
+    labor_rate: string | number | null
+    bonus_pool: string | number | null
+    division_code: string | null
+  }>(
+    'select id, bid_total, labor_rate, bonus_pool, division_code from projects where company_id = $1 and id = $2 limit 1',
     [companyId, projectId],
   )
   const project = projectResult.rows[0]
   if (!project) return null
 
   const [measurementsResult, serviceItemsResult] = await Promise.all([
-    pool.query(
-      'select service_item_code, quantity, unit, notes from takeoff_measurements where company_id = $1 and project_id = $2 order by created_at asc',
+    pool.query<{
+      service_item_code: string
+      quantity: string | number
+      unit: string
+      notes: string | null
+      division_code: string | null
+    }>(
+      'select service_item_code, quantity, unit, notes, division_code from takeoff_measurements where company_id = $1 and project_id = $2 order by created_at asc',
       [companyId, projectId],
     ),
     pool.query('select code, default_rate, unit from service_items where company_id = $1', [companyId]),
@@ -1169,16 +1182,21 @@ async function createEstimateFromMeasurements(companyId: string, projectId: stri
 
   await pool.query('delete from estimate_lines where company_id = $1 and project_id = $2', [companyId, projectId])
 
+  const projectDivisionCode = project.division_code ?? null
   const createdLines = []
   for (const measurement of measurementsResult.rows) {
     const item = itemIndex.get(measurement.service_item_code)
     const rate = Number(item?.default_rate ?? 0)
     const amount = Number(measurement.quantity) * rate
+    // Per WhatsApp:227-229: an estimate line inherits the measurement's
+    // division_code when the takeoff captured one, otherwise falls back to
+    // the project's division_code so existing flows keep working.
+    const effectiveDivisionCode = measurement.division_code ?? projectDivisionCode
     const insertResult = await pool.query(
       `
-      insert into estimate_lines (company_id, project_id, service_item_code, quantity, unit, rate, amount)
-      values ($1, $2, $3, $4, $5, $6, $7)
-      returning service_item_code, quantity, unit, rate, amount, created_at
+      insert into estimate_lines (company_id, project_id, service_item_code, quantity, unit, rate, amount, division_code)
+      values ($1, $2, $3, $4, $5, $6, $7, $8)
+      returning service_item_code, quantity, unit, rate, amount, division_code, created_at
       `,
       [
         companyId,
@@ -1188,22 +1206,120 @@ async function createEstimateFromMeasurements(companyId: string, projectId: stri
         item?.unit ?? measurement.unit,
         rate,
         amount,
+        effectiveDivisionCode,
       ],
     )
     createdLines.push(insertResult.rows[0])
   }
 
-  const bidTotal = createdLines.reduce((total, line) => total + Number(line.amount), 0)
-  await pool.query(
-    'update projects set bid_total = $1, updated_at = now(), version = version + 1 where company_id = $2 and id = $3',
-    [bidTotal, companyId, projectId],
-  )
+  const scopeTotal = createdLines.reduce((total, line) => total + Number(line.amount), 0)
+  // Preserve the human-entered bid_total once set. Only overwrite it on the
+  // first estimate computation for a brand-new project (bid_total === 0),
+  // which keeps the seed/demo flow working. Afterwards, bid_total is the
+  // source of truth for the contract price and drift is surfaced through
+  // `scope_vs_bid`.
+  const existingBidTotal = Number(project.bid_total ?? 0)
+  const bidTotal = existingBidTotal > 0 ? existingBidTotal : scopeTotal
+  if (existingBidTotal <= 0 && scopeTotal > 0) {
+    await pool.query(
+      'update projects set bid_total = $1, updated_at = now(), version = version + 1 where company_id = $2 and id = $3',
+      [scopeTotal, companyId, projectId],
+    )
+  } else {
+    await pool.query(
+      'update projects set updated_at = now(), version = version + 1 where company_id = $1 and id = $2',
+      [companyId, projectId],
+    )
+  }
 
   return {
     projectId,
     bidTotal,
+    scopeTotal,
     lines: createdLines,
   }
+}
+
+/**
+ * Fetch the project's stored `bid_total` and the current sum of
+ * estimate_lines.amount, then return the scope-vs-bid summary. Returns null
+ * if the project does not exist for the given company.
+ *
+ * The estimate_lines payload mirrors what clients already receive from the
+ * estimate endpoints (service_item_code + quantity + unit + rate + amount +
+ * division_code when present) so the UI can render a side-by-side list next
+ * to the comparison header.
+ */
+async function getScopeVsBid(companyId: string, projectId: string) {
+  const projectResult = await pool.query<{ bid_total: string | number | null }>(
+    'select bid_total from projects where company_id = $1 and id = $2 limit 1',
+    [companyId, projectId],
+  )
+  const project = projectResult.rows[0]
+  if (!project) return null
+
+  const linesResult = await pool.query(
+    `select service_item_code, quantity, unit, rate, amount, division_code, created_at
+     from estimate_lines
+     where company_id = $1 and project_id = $2
+     order by created_at asc, service_item_code asc`,
+    [companyId, projectId],
+  )
+
+  const bidTotal = Number(project.bid_total ?? 0)
+  const scopeTotal = linesResult.rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0)
+  const comparison = compareBidVsScope({ bidTotal, scopeTotal })
+
+  return {
+    ...comparison,
+    lines: linesResult.rows,
+  }
+}
+
+async function listServiceItemDivisions(companyId: string, serviceItemCode: string) {
+  const result = await pool.query<{ division_code: string; created_at: string }>(
+    `select division_code, created_at
+     from service_item_divisions
+     where company_id = $1 and service_item_code = $2
+     order by division_code asc`,
+    [companyId, serviceItemCode],
+  )
+  return result.rows
+}
+
+/**
+ * Validate the division_code against the service item's allowed divisions.
+ * When `divisionCode` is null/empty we treat it as "not supplied" and the
+ * caller is expected to fall back to the project's `division_code`.
+ * Returns `true` when the code is accepted (either because none was supplied
+ * or because it is in the allowed set, or because no membership rows exist
+ * yet and the table is empty for that service item — i.e. legacy behavior).
+ */
+async function assertDivisionAllowedForServiceItem(
+  companyId: string,
+  serviceItemCode: string,
+  divisionCode: string | null,
+): Promise<boolean> {
+  if (!divisionCode) return true
+  const existing = await pool.query<{ exists: boolean }>(
+    `select exists(
+       select 1 from service_item_divisions
+        where company_id = $1 and service_item_code = $2
+     ) as exists`,
+    [companyId, serviceItemCode],
+  )
+  // If no xref rows exist yet for this service item, treat every division as
+  // allowed (backfill-friendly). Once an admin/office user has configured the
+  // set, enforce it strictly.
+  if (!existing.rows[0]?.exists) return true
+  const match = await pool.query<{ exists: boolean }>(
+    `select exists(
+       select 1 from service_item_divisions
+        where company_id = $1 and service_item_code = $2 and division_code = $3
+     ) as exists`,
+    [companyId, serviceItemCode, divisionCode],
+  )
+  return Boolean(match.rows[0]?.exists)
 }
 
 async function listProjects(companyId: string) {
@@ -1331,6 +1447,7 @@ type PreparedTakeoffMeasurementInput = {
   notes: string | null
   geometryJson: string | null
   blueprintDocumentId: string | null
+  divisionCode: string | null
 }
 
 function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'): PreparedTakeoffMeasurementInput {
@@ -1349,6 +1466,10 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     input.blueprint_document_id === ''
       ? null
       : String(input.blueprint_document_id)
+  const divisionCode =
+    input.division_code === undefined || input.division_code === null || String(input.division_code).trim() === ''
+      ? null
+      : String(input.division_code).trim()
 
   if (!serviceItemCode) {
     throw new HttpError(400, `${label}.service_item_code is required`)
@@ -1386,6 +1507,7 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     notes,
     geometryJson,
     blueprintDocumentId,
+    divisionCode,
   }
 }
 
@@ -3710,21 +3832,44 @@ const server = http.createServer(async (req, res) => {
                   return
                 }
               }
+              const serviceItemCode = String(body.service_item_code)
+              const divisionCodeInput =
+                body.division_code === undefined ||
+                body.division_code === null ||
+                String(body.division_code).trim() === ''
+                  ? null
+                  : String(body.division_code).trim()
+              if (divisionCodeInput) {
+                const allowed = await assertDivisionAllowedForServiceItem(
+                  company.id,
+                  serviceItemCode,
+                  divisionCodeInput,
+                )
+                if (!allowed) {
+                  sendJson(res, 400, {
+                    error: 'division_code not allowed for this service item',
+                    service_item_code: serviceItemCode,
+                    division_code: divisionCodeInput,
+                  })
+                  return
+                }
+              }
               const result = await pool.query(
                 `
-        insert into labor_entries (company_id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on)
-        values ($1, $2, $3, $4, $5, coalesce($6, 0), coalesce($7, 'draft'), $8)
-        returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, created_at
+        insert into labor_entries (company_id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code)
+        values ($1, $2, $3, $4, $5, coalesce($6, 0), coalesce($7, 'draft'), $8, $9)
+        returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, created_at
         `,
                 [
                   company.id,
                   body.project_id,
                   body.worker_id ?? null,
-                  body.service_item_code,
+                  serviceItemCode,
                   body.hours,
                   body.sqft_done ?? 0,
                   body.status ?? 'draft',
                   body.occurred_on,
+                  divisionCodeInput,
                 ],
               )
               await recordSyncEvent(company.id, 'labor_entry', result.rows[0].id, {
@@ -3752,7 +3897,7 @@ const server = http.createServer(async (req, res) => {
               const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') ?? 50)))
               const result = await pool.query(
                 `
-        select id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, version, deleted_at, created_at
+        select id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, version, deleted_at, created_at
         from labor_entries
         where company_id = $1 and ($2 = '' or project_id = $2)
         order by occurred_on desc, created_at desc
@@ -3772,6 +3917,44 @@ const server = http.createServer(async (req, res) => {
                 return
               }
               const body = await readBody(req)
+              const patchServiceItemCode =
+                body.service_item_code === undefined || body.service_item_code === null
+                  ? null
+                  : String(body.service_item_code)
+              const patchDivisionCode =
+                body.division_code === undefined
+                  ? null
+                  : body.division_code === null || String(body.division_code).trim() === ''
+                    ? null
+                    : String(body.division_code).trim()
+              // If the caller is changing either the service item or the division,
+              // re-validate against the xref so we don't accept labor for a
+              // combination that is no longer allowed.
+              if (patchDivisionCode && (patchServiceItemCode || body.service_item_code !== undefined)) {
+                const effectiveServiceItemCode =
+                  patchServiceItemCode ??
+                  (
+                    await pool.query<{ service_item_code: string }>(
+                      'select service_item_code from labor_entries where company_id = $1 and id = $2',
+                      [company.id, laborEntryId],
+                    )
+                  ).rows[0]?.service_item_code
+                if (effectiveServiceItemCode) {
+                  const allowed = await assertDivisionAllowedForServiceItem(
+                    company.id,
+                    effectiveServiceItemCode,
+                    patchDivisionCode,
+                  )
+                  if (!allowed) {
+                    sendJson(res, 400, {
+                      error: 'division_code not allowed for this service item',
+                      service_item_code: effectiveServiceItemCode,
+                      division_code: patchDivisionCode,
+                    })
+                    return
+                  }
+                }
+              }
               const result = await pool.query(
                 `
         update labor_entries
@@ -3782,19 +3965,22 @@ const server = http.createServer(async (req, res) => {
           sqft_done = coalesce($6, sqft_done),
           status = coalesce($7, status),
           occurred_on = coalesce($8, occurred_on),
+          division_code = case when $10::boolean then $9 else division_code end,
           version = version + 1
         where company_id = $1 and id = $2 and deleted_at is null
-        returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, version, deleted_at, created_at
+        returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, version, deleted_at, created_at
         `,
                 [
                   company.id,
                   laborEntryId,
                   body.worker_id ?? null,
-                  body.service_item_code ?? null,
+                  patchServiceItemCode,
                   body.hours ?? null,
                   body.sqft_done ?? null,
                   body.status ?? null,
                   body.occurred_on ?? null,
+                  patchDivisionCode,
+                  body.division_code !== undefined,
                 ],
               )
               if (!result.rows[0]) {
@@ -3885,10 +4071,10 @@ const server = http.createServer(async (req, res) => {
               const insertResult = await pool.query(
                 `
         insert into takeoff_measurements (
-          company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version
+          company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code
         )
-        values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at
+        values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9)
+        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, version, deleted_at, created_at
         `,
                 [
                   company.id,
@@ -3899,11 +4085,13 @@ const server = http.createServer(async (req, res) => {
                   measurementInput.unit,
                   measurementInput.notes,
                   measurementInput.geometryJson,
+                  measurementInput.divisionCode,
                 ],
               )
 
               const measurement = insertResult.rows[0]
               const estimate = await createEstimateFromMeasurements(company.id, projectId)
+              const scopeVsBid = await getScopeVsBid(company.id, projectId)
               await recordSyncEvent(company.id, 'takeoff_measurement', measurement.id, {
                 action: 'create',
                 measurement,
@@ -3919,7 +4107,7 @@ const server = http.createServer(async (req, res) => {
                 'server',
                 getCurrentUserId(req),
               )
-              sendJson(res, 201, { measurement, estimate })
+              sendJson(res, 201, { measurement, estimate, scope_vs_bid: scopeVsBid })
               return
             }
 
@@ -3971,10 +4159,10 @@ const server = http.createServer(async (req, res) => {
                 const insertResult = await pool.query(
                   `
           insert into takeoff_measurements (
-            company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version
+            company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code
           )
-          values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1)
-          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at
+          values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9)
+          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, version, deleted_at, created_at
           `,
                   [
                     company.id,
@@ -3985,12 +4173,14 @@ const server = http.createServer(async (req, res) => {
                     measurement.unit,
                     measurement.notes,
                     measurement.geometryJson,
+                    measurement.divisionCode,
                   ],
                 )
                 createdRows.push(insertResult.rows[0])
               }
 
               const estimate = await createEstimateFromMeasurements(company.id, projectId)
+              const scopeVsBid = await getScopeVsBid(company.id, projectId)
               await recordSyncEvent(company.id, 'takeoff_measurement', projectId, {
                 action: 'replace',
                 measurementCount: createdRows.length,
@@ -4005,7 +4195,7 @@ const server = http.createServer(async (req, res) => {
                 { measurementCount: createdRows.length, measurements: createdRows, estimate },
                 `takeoff_measurement:replace:${projectId}`,
               )
-              sendJson(res, 201, { measurements: createdRows, estimate })
+              sendJson(res, 201, { measurements: createdRows, estimate, scope_vs_bid: scopeVsBid })
               return
             }
 
@@ -4021,6 +4211,8 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'project not found' })
                 return
               }
+              const scopeVsBid = await getScopeVsBid(company.id, projectId)
+              ;(estimate as { scope_vs_bid?: unknown }).scope_vs_bid = scopeVsBid
               await recordSyncEvent(company.id, 'estimate', projectId, {
                 action: 'recompute',
                 estimate,
@@ -4050,6 +4242,106 @@ const server = http.createServer(async (req, res) => {
               }
               sendJson(res, 200, summary)
               return
+            }
+
+            if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/scope-vs-bid$/)) {
+              const projectId = url.pathname.split('/')[3] ?? ''
+              if (!projectId) {
+                sendJson(res, 400, { error: 'project id is required' })
+                return
+              }
+              const result = await getScopeVsBid(company.id, projectId)
+              if (!result) {
+                sendJson(res, 404, { error: 'project not found' })
+                return
+              }
+              sendJson(res, 200, result)
+              return
+            }
+
+            {
+              const match = url.pathname.match(/^\/api\/service-items\/([^/]+)\/divisions$/)
+              if (match) {
+                const code = decodeURIComponent(match[1] ?? '')
+                if (req.method === 'GET') {
+                  const divisions = await listServiceItemDivisions(company.id, code)
+                  sendJson(res, 200, { service_item_code: code, divisions })
+                  return
+                }
+                if (req.method === 'PUT') {
+                  if (!requireRole(res, company, ['admin', 'office'], req)) return
+                  const body = await readBody(req)
+                  const rawCodes = Array.isArray(body.division_codes) ? body.division_codes : null
+                  if (!rawCodes) {
+                    sendJson(res, 400, { error: 'division_codes must be an array' })
+                    return
+                  }
+                  const divisionCodes = Array.from(
+                    new Set(
+                      rawCodes
+                        .map((value: unknown) => (typeof value === 'string' ? value.trim() : ''))
+                        .filter((value: string) => value.length > 0),
+                    ),
+                  )
+                  // Verify the service item exists for this company so we can
+                  // return a clean 404 rather than a FK error.
+                  const serviceItemExists = await pool.query<{ exists: boolean }>(
+                    `select exists(
+                       select 1 from service_items
+                        where company_id = $1 and code = $2 and deleted_at is null
+                     ) as exists`,
+                    [company.id, code],
+                  )
+                  if (!serviceItemExists.rows[0]?.exists) {
+                    sendJson(res, 404, { error: 'service item not found' })
+                    return
+                  }
+                  if (divisionCodes.length > 0) {
+                    const validDivisions = await pool.query<{ code: string }>(
+                      `select code from divisions where company_id = $1 and code = any($2::text[])`,
+                      [company.id, divisionCodes],
+                    )
+                    const validSet = new Set(validDivisions.rows.map((row) => row.code))
+                    const unknown = divisionCodes.filter((value) => !validSet.has(value))
+                    if (unknown.length > 0) {
+                      sendJson(res, 400, {
+                        error: 'one or more division_codes do not exist for this company',
+                        unknown,
+                      })
+                      return
+                    }
+                  }
+                  const client = await pool.connect()
+                  try {
+                    await client.query('begin')
+                    await client.query(
+                      `delete from service_item_divisions where company_id = $1 and service_item_code = $2`,
+                      [company.id, code],
+                    )
+                    for (const divisionCode of divisionCodes) {
+                      await client.query(
+                        `insert into service_item_divisions (company_id, service_item_code, division_code)
+                         values ($1, $2, $3)
+                         on conflict do nothing`,
+                        [company.id, code, divisionCode],
+                      )
+                    }
+                    await client.query('commit')
+                  } catch (err) {
+                    await client.query('rollback').catch(() => {})
+                    throw err
+                  } finally {
+                    client.release()
+                  }
+                  const divisions = await listServiceItemDivisions(company.id, code)
+                  await recordSyncEvent(company.id, 'service_item_divisions', code, {
+                    action: 'replace',
+                    divisions: divisionCodes,
+                  })
+                  sendJson(res, 200, { service_item_code: code, divisions })
+                  return
+                }
+              }
             }
 
             if (req.method === 'GET' && url.pathname === '/api/analytics') {
@@ -4349,7 +4641,7 @@ const server = http.createServer(async (req, res) => {
               if (copyMeasurements) {
                 const sourceMeasurements = await pool.query(
                   `
-          select project_id, service_item_code, quantity, unit, notes, geometry
+          select project_id, service_item_code, quantity, unit, notes, geometry, division_code
           from takeoff_measurements
           where company_id = $1 and blueprint_document_id = $2 and deleted_at is null
           order by created_at asc
@@ -4360,9 +4652,9 @@ const server = http.createServer(async (req, res) => {
                   await pool.query(
                     `
             insert into takeoff_measurements (
-              company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version
+              company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code
             )
-            values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 1)
+            values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 1, $9)
             `,
                     [
                       company.id,
@@ -4373,6 +4665,7 @@ const server = http.createServer(async (req, res) => {
                       measurement.unit,
                       `${measurement.notes ?? ''}${measurement.notes ? ' · ' : ''}copied from blueprint v${source.version}`,
                       JSON.stringify(measurement.geometry ?? {}),
+                      measurement.division_code ?? null,
                     ],
                   )
                 }
