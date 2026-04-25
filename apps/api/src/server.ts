@@ -2240,14 +2240,16 @@ const server = http.createServer(async (req, res) => {
                 const realmId = connection.provider_account_id ?? ''
                 const accessToken = connection.access_token ?? ''
 
-                // Fetch customers from QBO
-                let qboCustomers: { id: string; displayName: string }[] = []
+                // QBO returns PascalCase field names; some legacy responses use camelCase
+                // so we accept both shapes when reading.
+                type QboCustomer = { Id?: string; DisplayName?: string; id?: string; displayName?: string }
+                let qboCustomers: QboCustomer[] = []
                 try {
-                  const customerResponse = (await qboGet<{ QueryResponse: { Customer?: unknown[] } }>(
+                  const customerResponse = await qboGet<{ QueryResponse?: { Customer?: QboCustomer[] } }>(
                     `/query?query=${encodeURIComponent('SELECT * FROM Customer')}`,
                     realmId,
                     accessToken,
-                  )) as any
+                  )
                   qboCustomers = customerResponse.QueryResponse?.Customer ?? []
                 } catch (e) {
                   logger.error({ err: e, scope: 'qbo_customers' }, 'Failed to sync customers from QBO')
@@ -2257,7 +2259,9 @@ const server = http.createServer(async (req, res) => {
                 // Upsert QBO customers into local database
                 const syncedCustomers: string[] = []
                 for (const qboCustomer of qboCustomers) {
-                  const name = (qboCustomer as any).displayName ?? (qboCustomer as any).id
+                  const externalId = String(qboCustomer.Id ?? qboCustomer.id ?? '')
+                  if (!externalId) continue
+                  const name = qboCustomer.DisplayName ?? qboCustomer.displayName ?? externalId
                   const customerResult = await pool.query(
                     `
             insert into customers (company_id, external_id, name, source)
@@ -2265,17 +2269,17 @@ const server = http.createServer(async (req, res) => {
             on conflict (company_id, external_id) do update set name = $3, updated_at = now()
             returning id, external_id, name, source, version, deleted_at, created_at
             `,
-                    [company.id, (qboCustomer as any).id, name],
+                    [company.id, externalId, name],
                   )
                   await upsertIntegrationMapping(company.id, 'qbo', {
                     entity_type: 'customer',
                     local_ref: customerResult.rows[0].id,
-                    external_id: String((qboCustomer as any).id),
+                    external_id: externalId,
                     label: name,
                     status: 'active',
                     notes: 'synced from qbo customer import',
                   })
-                  syncedCustomers.push((qboCustomer as any).id)
+                  syncedCustomers.push(externalId)
                 }
 
                 // Fetch items from QBO
