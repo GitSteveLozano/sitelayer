@@ -2,7 +2,12 @@ import { Sentry } from './instrument.js'
 import http from 'node:http'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { Pool, type PoolConfig } from 'pg'
-import { processQueue as processDatabaseQueue } from '@sitelayer/queue'
+import {
+  processQueue as processDatabaseQueue,
+  processRentalInvoice,
+  RENTAL_SELECT_COLUMNS,
+  type RentalRow,
+} from '@sitelayer/queue'
 import { createLogger, getRequestContext, runWithRequestContext, type RequestContext } from '@sitelayer/logger'
 import {
   authorizeDebugTraceRequest,
@@ -22,6 +27,7 @@ import {
   compareBidVsScope,
   computeProductivity,
   formatMoney,
+  initialRentalNextInvoiceAt,
   normalizeGeometry,
   normalizePolygonGeometry,
 } from '@sitelayer/domain'
@@ -4014,6 +4020,339 @@ const server = http.createServer(async (req, res) => {
                 [company.id, result.rows[0].project_id],
               )
               sendJson(res, 200, result.rows[0])
+              return
+            }
+
+            // ---------------------------------------------------------------
+            // Rentals — Avontus-style equipment rental tracking.
+            //
+            // All mutations are gated to admin/office because rental invoices
+            // feed billing, not field data capture.
+            // ---------------------------------------------------------------
+
+            if (req.method === 'GET' && url.pathname === '/api/rentals') {
+              const statusFilter = (url.searchParams.get('status') ?? 'active').toLowerCase()
+              const values: unknown[] = [company.id]
+              let statusClause = ''
+              if (statusFilter === 'active') {
+                statusClause = " and status = 'active'"
+              } else if (statusFilter === 'returned') {
+                statusClause = " and status in ('returned', 'invoiced_pending')"
+              } else if (statusFilter === 'closed') {
+                statusClause = " and status = 'closed'"
+              } else if (statusFilter !== 'all') {
+                sendJson(res, 400, { error: 'status must be one of active, returned, closed, all' })
+                return
+              }
+              const result = await pool.query<RentalRow>(
+                `
+                select ${RENTAL_SELECT_COLUMNS}
+                from rentals
+                where company_id = $1 and deleted_at is null${statusClause}
+                order by delivered_on desc, created_at desc
+                `,
+                values,
+              )
+              sendJson(res, 200, { rentals: result.rows })
+              return
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/rentals') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const body = await readBody(req)
+              const itemDescription = String(body.item_description ?? '').trim()
+              if (!itemDescription) {
+                sendJson(res, 400, { error: 'item_description is required' })
+                return
+              }
+              if (!body.delivered_on || !isValidDateInput(body.delivered_on)) {
+                sendJson(res, 400, { error: 'delivered_on must be YYYY-MM-DD' })
+                return
+              }
+              if (body.returned_on && !isValidDateInput(body.returned_on)) {
+                sendJson(res, 400, { error: 'returned_on must be YYYY-MM-DD when provided' })
+                return
+              }
+              const dailyRate = Number(body.daily_rate ?? 0)
+              if (!Number.isFinite(dailyRate) || dailyRate < 0) {
+                sendJson(res, 400, { error: 'daily_rate must be a non-negative number' })
+                return
+              }
+              const cadence = Math.max(1, Math.floor(Number(body.invoice_cadence_days ?? 7)))
+              const nextInvoiceAt = initialRentalNextInvoiceAt(String(body.delivered_on), cadence)
+              const projectId = body.project_id ? String(body.project_id) : null
+              const customerId = body.customer_id ? String(body.customer_id) : null
+              // Cross-check project tenancy up front so the composite FK doesn't
+              // bubble up as a generic 500.
+              if (projectId) {
+                const existing = await pool.query('select 1 from projects where company_id = $1 and id = $2', [
+                  company.id,
+                  projectId,
+                ])
+                if (!existing.rows[0]) {
+                  sendJson(res, 400, { error: 'project_id not found for company' })
+                  return
+                }
+              }
+              if (customerId) {
+                const existing = await pool.query('select 1 from customers where company_id = $1 and id = $2', [
+                  company.id,
+                  customerId,
+                ])
+                if (!existing.rows[0]) {
+                  sendJson(res, 400, { error: 'customer_id not found for company' })
+                  return
+                }
+              }
+              const inserted = await pool.query<RentalRow>(
+                `
+                insert into rentals (
+                  company_id, project_id, customer_id, item_description, daily_rate,
+                  delivered_on, returned_on, invoice_cadence_days, next_invoice_at, status, notes
+                )
+                values ($1, $2, $3, $4, $5, $6::date, $7::date, $8, $9, 'active', $10)
+                returning ${RENTAL_SELECT_COLUMNS}
+                `,
+                [
+                  company.id,
+                  projectId,
+                  customerId,
+                  itemDescription,
+                  dailyRate,
+                  body.delivered_on,
+                  body.returned_on ?? null,
+                  cadence,
+                  nextInvoiceAt,
+                  body.notes ? String(body.notes) : null,
+                ],
+              )
+              const rental = inserted.rows[0]!
+              await recordSyncEvent(company.id, 'rental', rental.id, { action: 'create', rental })
+              await recordMutationOutbox(
+                company.id,
+                'rental',
+                rental.id,
+                'create',
+                rental as unknown as Record<string, unknown>,
+                `rental:create:${rental.id}`,
+              )
+              sendJson(res, 201, rental)
+              return
+            }
+
+            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/rentals\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const rentalId = url.pathname.split('/')[3] ?? ''
+              if (!rentalId) {
+                sendJson(res, 400, { error: 'rental id is required' })
+                return
+              }
+              const body = await readBody(req)
+              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
+              if (
+                body.delivered_on !== undefined &&
+                body.delivered_on !== null &&
+                !isValidDateInput(body.delivered_on)
+              ) {
+                sendJson(res, 400, { error: 'delivered_on must be YYYY-MM-DD' })
+                return
+              }
+              if (body.returned_on !== undefined && body.returned_on !== null && !isValidDateInput(body.returned_on)) {
+                sendJson(res, 400, { error: 'returned_on must be YYYY-MM-DD' })
+                return
+              }
+              // Clients can set status=returned either by passing status='returned'
+              // explicitly or by setting returned_on. We honour whichever the
+              // client sent; the worker will transition returned -> closed once
+              // the final invoice fires.
+              const result = await pool.query<RentalRow>(
+                `
+                update rentals
+                set
+                  item_description = coalesce($3, item_description),
+                  daily_rate = coalesce($4, daily_rate),
+                  delivered_on = coalesce($5::date, delivered_on),
+                  returned_on = case when $6::text = '__clear__' then null
+                                     when $6::text is null then returned_on
+                                     else $6::date end,
+                  invoice_cadence_days = coalesce($7, invoice_cadence_days),
+                  status = coalesce($8, status),
+                  notes = coalesce($9, notes),
+                  project_id = case when $10::text = '__clear__' then null
+                                    when $10::text is null then project_id
+                                    else $10::uuid end,
+                  customer_id = case when $11::text = '__clear__' then null
+                                     when $11::text is null then customer_id
+                                     else $11::uuid end,
+                  version = version + 1,
+                  updated_at = now()
+                where company_id = $1 and id = $2 and deleted_at is null
+                  and ($12::int is null or version = $12)
+                returning ${RENTAL_SELECT_COLUMNS}
+                `,
+                [
+                  company.id,
+                  rentalId,
+                  body.item_description ?? null,
+                  body.daily_rate ?? null,
+                  body.delivered_on ?? null,
+                  body.returned_on === null ? '__clear__' : (body.returned_on ?? null),
+                  body.invoice_cadence_days ?? null,
+                  body.status ?? (body.returned_on ? 'returned' : null),
+                  body.notes ?? null,
+                  body.project_id === null ? '__clear__' : (body.project_id ?? null),
+                  body.customer_id === null ? '__clear__' : (body.customer_id ?? null),
+                  expectedVersion,
+                ],
+              )
+              if (!result.rows[0]) {
+                const existing = await pool.query('select version from rentals where company_id = $1 and id = $2', [
+                  company.id,
+                  rentalId,
+                ])
+                const current = existing.rows[0]
+                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
+                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                  return
+                }
+                sendJson(res, 404, { error: 'rental not found' })
+                return
+              }
+              const rental = result.rows[0]
+              await recordSyncEvent(company.id, 'rental', rentalId, { action: 'update', rental })
+              await recordMutationOutbox(
+                company.id,
+                'rental',
+                rentalId,
+                'update',
+                rental as unknown as Record<string, unknown>,
+                `rental:update:${rentalId}:${rental.version}`,
+              )
+              sendJson(res, 200, rental)
+              return
+            }
+
+            if (req.method === 'DELETE' && url.pathname.match(/^\/api\/rentals\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const rentalId = url.pathname.split('/')[3] ?? ''
+              if (!rentalId) {
+                sendJson(res, 400, { error: 'rental id is required' })
+                return
+              }
+              const body = await readBody(req)
+              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
+              const result = await pool.query<RentalRow>(
+                `
+                update rentals
+                set deleted_at = now(), version = version + 1, updated_at = now()
+                where company_id = $1 and id = $2 and deleted_at is null
+                  and ($3::int is null or version = $3)
+                returning ${RENTAL_SELECT_COLUMNS}
+                `,
+                [company.id, rentalId, expectedVersion],
+              )
+              if (!result.rows[0]) {
+                const existing = await pool.query('select version from rentals where company_id = $1 and id = $2', [
+                  company.id,
+                  rentalId,
+                ])
+                const current = existing.rows[0]
+                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
+                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                  return
+                }
+                sendJson(res, 404, { error: 'rental not found' })
+                return
+              }
+              const rental = result.rows[0]
+              await recordSyncEvent(company.id, 'rental', rentalId, { action: 'delete', rental })
+              await recordMutationOutbox(
+                company.id,
+                'rental',
+                rentalId,
+                'delete',
+                rental as unknown as Record<string, unknown>,
+                `rental:delete:${rentalId}`,
+              )
+              sendJson(res, 200, rental)
+              return
+            }
+
+            if (req.method === 'POST' && url.pathname.match(/^\/api\/rentals\/[^/]+\/invoice$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const rentalId = url.pathname.split('/')[3] ?? ''
+              if (!rentalId) {
+                sendJson(res, 400, { error: 'rental id is required' })
+                return
+              }
+              const existing = await pool.query<RentalRow>(
+                `select ${RENTAL_SELECT_COLUMNS} from rentals where company_id = $1 and id = $2 and deleted_at is null`,
+                [company.id, rentalId],
+              )
+              const rental = existing.rows[0]
+              if (!rental) {
+                sendJson(res, 404, { error: 'rental not found' })
+                return
+              }
+              if (!rental.project_id) {
+                sendJson(res, 400, { error: 'rental must be linked to a project to invoice' })
+                return
+              }
+              const client = await pool.connect()
+              let processed: Awaited<ReturnType<typeof processRentalInvoice>>
+              try {
+                await client.query('begin')
+                processed = await processRentalInvoice(client, rental)
+                await client.query('commit')
+              } catch (error) {
+                await client.query('rollback')
+                throw error
+              } finally {
+                client.release()
+              }
+              if (processed.bill) {
+                await recordSyncEvent(company.id, 'material_bill', processed.bill.id, {
+                  action: 'create',
+                  bill: processed.bill,
+                  source: 'rental_invoice',
+                  rental_id: rentalId,
+                })
+                await recordMutationOutbox(
+                  company.id,
+                  'material_bill',
+                  processed.bill.id,
+                  'create',
+                  { ...processed.bill, source: 'rental_invoice', rental_id: rentalId },
+                  `material_bill:create:${processed.bill.id}`,
+                )
+              }
+              await recordSyncEvent(company.id, 'rental', rentalId, {
+                action: 'invoice',
+                rental: processed.rental,
+                days: processed.days,
+                amount: processed.amount,
+                invoiced_through: processed.invoiced_through,
+              })
+              await recordMutationOutbox(
+                company.id,
+                'rental',
+                rentalId,
+                'invoice',
+                {
+                  rental: processed.rental,
+                  bill_id: processed.bill?.id ?? null,
+                  days: processed.days,
+                  amount: processed.amount,
+                },
+                `rental:invoice:${rentalId}:${processed.rental.version}`,
+              )
+              sendJson(res, 200, {
+                rental: processed.rental,
+                bill: processed.bill,
+                days: processed.days,
+                amount: processed.amount,
+                invoiced_through: processed.invoiced_through,
+              })
               return
             }
 

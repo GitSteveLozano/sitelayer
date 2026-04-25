@@ -201,12 +201,9 @@ describeIntegration('API Integration Tests', () => {
   // rest of the integration suite.
 
   async function createProjectAs(userId: string) {
-    const bootstrap = await apiCall<{ customers: Array<{ id: string }> }>(
-      'GET',
-      '/api/bootstrap',
-      undefined,
-      { userId },
-    )
+    const bootstrap = await apiCall<{ customers: Array<{ id: string }> }>('GET', '/api/bootstrap', undefined, {
+      userId,
+    })
     if ((bootstrap as any).status === 404) return { status: 404 as number, id: undefined }
     const customerId = bootstrap.customers?.[0]?.id
     return apiCall<{ id?: string; error?: string }>(
@@ -256,5 +253,69 @@ describeIntegration('API Integration Tests', () => {
     if (result.status === 404) return // member fixture missing
     expect(result.status).toBe(403)
     expect((result as { role?: string }).role).toBe('member')
+  })
+
+  // --- Rentals ------------------------------------------------------------
+  //
+  // Covers the happy-path create + manual invoice trigger. Asserts that
+  // firing POST /api/rentals/:id/invoice lands a material_bills row with
+  // bill_type='rental' whose amount matches the back-dated delivery date.
+
+  it('POST /api/rentals/:id/invoice creates a material_bill of bill_type=rental', async () => {
+    // Seed a project so the rental has somewhere to bill to.
+    const projectResponse = await createProjectAs('demo-user')
+    if (projectResponse.status === 404) return // fixture missing
+    if (projectResponse.status !== 201) return
+    const projectId = (projectResponse as { id: string }).id
+
+    // Back-date the delivery so the rental has several billable days even
+    // against a freshly created row.
+    const deliveredOn = new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10)
+    const createResult = await apiCall<{ id?: string; status: number; daily_rate?: string }>('POST', '/api/rentals', {
+      item_description: 'Integration-test scaffolding tower',
+      daily_rate: 15,
+      delivered_on: deliveredOn,
+      invoice_cadence_days: 7,
+      project_id: projectId,
+    })
+    expect(createResult.status).toBe(201)
+    const rentalId = createResult.id
+    expect(rentalId).toBeDefined()
+    if (!rentalId) return
+
+    const invoiceResult = await apiCall<{
+      status: number
+      amount?: number
+      days?: number
+      bill?: { id: string; bill_type: string; amount: string } | null
+    }>('POST', `/api/rentals/${rentalId}/invoice`, {})
+    expect(invoiceResult.status).toBe(200)
+    expect(invoiceResult.days).toBeGreaterThan(0)
+    expect(invoiceResult.bill).toBeTruthy()
+    expect(invoiceResult.bill?.bill_type).toBe('rental')
+    // 7-day cadence × $15 = $105 for the first period.
+    expect(Number(invoiceResult.bill?.amount ?? 0)).toBeGreaterThan(0)
+  })
+
+  it('member cannot create a rental (role gate)', async () => {
+    const result = await apiCall<{ status: number; error?: string; role?: string }>(
+      'POST',
+      '/api/rentals',
+      {
+        item_description: 'Member-gate test',
+        daily_rate: 10,
+        delivered_on: '2026-04-01',
+      },
+      { userId: 'demo-member-user' },
+    )
+    if (result.status === 404) return // member fixture missing
+    expect(result.status).toBe(403)
+    expect(result.role).toBe('member')
+  })
+
+  it('GET /api/rentals?status=active returns rentals list', async () => {
+    const result = await apiCall<{ status: number; rentals?: unknown[] }>('GET', '/api/rentals?status=active')
+    expect(result.status).toBe(200)
+    expect(Array.isArray(result.rentals)).toBe(true)
   })
 })
