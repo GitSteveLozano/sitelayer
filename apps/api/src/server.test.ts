@@ -201,12 +201,9 @@ describeIntegration('API Integration Tests', () => {
   // rest of the integration suite.
 
   async function createProjectAs(userId: string) {
-    const bootstrap = await apiCall<{ customers: Array<{ id: string }> }>(
-      'GET',
-      '/api/bootstrap',
-      undefined,
-      { userId },
-    )
+    const bootstrap = await apiCall<{ customers: Array<{ id: string }> }>('GET', '/api/bootstrap', undefined, {
+      userId,
+    })
     if ((bootstrap as any).status === 404) return { status: 404 as number, id: undefined }
     const customerId = bootstrap.customers?.[0]?.id
     return apiCall<{ id?: string; error?: string }>(
@@ -256,5 +253,81 @@ describeIntegration('API Integration Tests', () => {
     if (result.status === 404) return // member fixture missing
     expect(result.status).toBe(403)
     expect((result as { role?: string }).role).toBe('member')
+  })
+
+  // --- Geofenced clock-in/out ----------------------------------------------
+  //
+  // Covers the happy path: create a project with a site geofence, punch in
+  // from a point inside the fence with no explicit project_id, and verify
+  // the API resolved the project via the geofence. Falls back to skip-on-
+  // missing-fixture the same way other role-matrix tests do.
+
+  it('POST /api/clock/in resolves project_id via geofence when none is supplied', async () => {
+    const site = { lat: 49.8951, lng: -97.1384 }
+    // Create a fresh project with a geofence centred on `site`.
+    const projectResult = await apiCall<{ id?: string; status: number }>(
+      'POST',
+      '/api/projects',
+      {
+        name: `Geofence test ${Date.now()}`,
+        customer_name: 'Test Customer',
+        division_code: 'D1',
+        bid_total: 1000,
+        labor_rate: 50,
+        site_lat: site.lat,
+        site_lng: site.lng,
+        site_radius_m: 100,
+      },
+      { userId: 'demo-user' },
+    )
+    if (projectResult.status === 404) return // fixture missing
+    expect(projectResult.status).toBe(201)
+    const projectId = projectResult.id
+    expect(projectId).toBeDefined()
+
+    // ~50m north of centre — comfortably inside the 100m fence.
+    const nearby = { lat: site.lat + 0.000449, lng: site.lng }
+    const punchResult = await apiCall<{
+      status: number
+      clockEvent?: {
+        project_id: string | null
+        inside_geofence: boolean | null
+        event_type: string
+      }
+    }>(
+      'POST',
+      '/api/clock/in',
+      {
+        lat: nearby.lat,
+        lng: nearby.lng,
+        accuracy_m: 8,
+      },
+      { userId: 'demo-user' },
+    )
+    expect(punchResult.status).toBe(201)
+    expect(punchResult.clockEvent?.project_id).toBe(projectId)
+    expect(punchResult.clockEvent?.inside_geofence).toBe(true)
+    expect(punchResult.clockEvent?.event_type).toBe('in')
+  })
+
+  it('POST /api/clock/in with a point outside every geofence leaves project_id null', async () => {
+    // Antarctica — well outside any seeded or test-created geofence.
+    const punchResult = await apiCall<{
+      status: number
+      clockEvent?: { project_id: string | null; inside_geofence: boolean | null }
+    }>(
+      'POST',
+      '/api/clock/in',
+      {
+        lat: -82.5,
+        lng: 0,
+        accuracy_m: 20,
+      },
+      { userId: 'demo-user' },
+    )
+    if (punchResult.status === 404) return
+    expect(punchResult.status).toBe(201)
+    expect(punchResult.clockEvent?.project_id).toBeNull()
+    expect(punchResult.clockEvent?.inside_geofence).toBe(false)
   })
 })

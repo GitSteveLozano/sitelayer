@@ -179,10 +179,7 @@ export interface BidVsScopeComparison {
  * non-zero scope is reported as `mismatch`/100% so the caller cannot silently
  * miss an unreconciled scope.
  */
-export function compareBidVsScope(inputs: {
-  bidTotal: number
-  scopeTotal: number
-}): BidVsScopeComparison {
+export function compareBidVsScope(inputs: { bidTotal: number; scopeTotal: number }): BidVsScopeComparison {
   const bidTotal = Number.isFinite(inputs.bidTotal) ? Number(inputs.bidTotal) : 0
   const scopeTotal = Number.isFinite(inputs.scopeTotal) ? Number(inputs.scopeTotal) : 0
   const delta = roundMoney(bidTotal - scopeTotal)
@@ -444,6 +441,75 @@ export function computeProductivity(input: { entries: readonly ProductivitySampl
     p50: p50 === null ? null : roundMeasurement(p50),
     p90: p90 === null ? null : roundMeasurement(p90),
   }
+}
+
+export interface GeoPoint {
+  lat: number
+  lng: number
+}
+
+export interface GeofenceInput {
+  lat: number
+  lng: number
+  radius_m: number
+  point: GeoPoint
+}
+
+/**
+ * Earth mean radius in metres. Construction-site geofences are typically
+ * 30-300 m so the spherical-earth approximation is well inside the noise
+ * floor of a phone GPS fix; no ellipsoid correction needed.
+ */
+const EARTH_RADIUS_M = 6_371_000
+
+function toRadians(degrees: number): number {
+  return (degrees * Math.PI) / 180
+}
+
+/**
+ * Great-circle distance between two lat/lng points via the haversine
+ * formula. Returns metres. Returns Infinity if any input is non-finite so
+ * `isInsideGeofence` naturally falls to false on garbage input.
+ */
+export function haversineDistanceMeters(a: GeoPoint, b: GeoPoint): number {
+  const lat1 = Number(a.lat)
+  const lng1 = Number(a.lng)
+  const lat2 = Number(b.lat)
+  const lng2 = Number(b.lng)
+  if (!Number.isFinite(lat1) || !Number.isFinite(lng1)) return Number.POSITIVE_INFINITY
+  if (!Number.isFinite(lat2) || !Number.isFinite(lng2)) return Number.POSITIVE_INFINITY
+
+  const phi1 = toRadians(lat1)
+  const phi2 = toRadians(lat2)
+  const dPhi = toRadians(lat2 - lat1)
+  const dLambda = toRadians(lng2 - lng1)
+
+  const sinDPhi = Math.sin(dPhi / 2)
+  const sinDLambda = Math.sin(dLambda / 2)
+  const h = sinDPhi * sinDPhi + Math.cos(phi1) * Math.cos(phi2) * sinDLambda * sinDLambda
+  const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)))
+  return EARTH_RADIUS_M * c
+}
+
+/**
+ * Is `point` inside the circular geofence centered on (lat, lng) with
+ * `radius_m` metres? Zero or negative radius disables the fence. Missing
+ * centre coordinates also disable the fence (a project with no site
+ * coordinates should never match).
+ *
+ * Antimeridian (the ±180° seam) is intentionally not handled — every
+ * sitelayer customer is a construction crew in North America; a fence
+ * straddling the seam would be meaningless here.
+ */
+export function isInsideGeofence(input: GeofenceInput): boolean {
+  const lat = Number(input.lat)
+  const lng = Number(input.lng)
+  const radius = Number(input.radius_m)
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false
+  if (!Number.isFinite(radius) || radius <= 0) return false
+  const distance = haversineDistanceMeters({ lat, lng }, input.point)
+  if (!Number.isFinite(distance)) return false
+  return distance <= radius
 }
 
 function percentile(values: readonly number[], fraction: number): number {

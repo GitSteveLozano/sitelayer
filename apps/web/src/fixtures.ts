@@ -450,6 +450,10 @@ export function getFixtureResponse<T>(path: string, companySlug: string): T {
     }) as T
   }
 
+  if (path.startsWith('/api/clock/timeline')) {
+    return clone({ events: [] }) as T
+  }
+
   if (path.startsWith('/api/sync/outbox')) {
     return clone({
       outbox: [
