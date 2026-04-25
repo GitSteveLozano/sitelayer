@@ -15,10 +15,13 @@ import {
   LA_TEMPLATE,
   WORKFLOW_STAGES,
   calculateBonusPayout,
+  calculateGeometryQuantity,
   calculateMargin,
   calculateTakeoffQuantity,
   calculateProjectCost,
+  computeProductivity,
   formatMoney,
+  normalizeGeometry,
   normalizePolygonGeometry,
 } from '@sitelayer/domain'
 import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigError } from './tier.js'
@@ -1210,7 +1213,13 @@ async function listPricingProfiles(companyId: string) {
 
 async function listAuditEvents(
   companyId: string,
-  filters: { entityType?: string | null; entityId?: string | null; actorUserId?: string | null; since?: string | null; limit?: number },
+  filters: {
+    entityType?: string | null
+    entityId?: string | null
+    actorUserId?: string | null
+    since?: string | null
+    limit?: number
+  },
 ) {
   const clauses: string[] = ['company_id = $1']
   const values: unknown[] = [companyId]
@@ -1319,13 +1328,16 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
   let quantity = Number(input.quantity ?? 0)
   let geometryJson: string | null = null
   if (rawGeometry !== undefined && rawGeometry !== null && rawGeometry !== '') {
-    const geometry = normalizePolygonGeometry(rawGeometry)
+    const geometry = normalizeGeometry(rawGeometry)
     if (!geometry) {
-      throw new HttpError(400, `${label}.geometry must be a polygon with at least 3 points inside the board`)
+      throw new HttpError(
+        400,
+        `${label}.geometry must be a polygon (>=3 points), a lineal path (>=2 points), or a volume box with positive L/W/H`,
+      )
     }
-    quantity = calculateTakeoffQuantity(geometry.points, geometry.sheet_scale ?? 1)
+    quantity = calculateGeometryQuantity(geometry)
     if (quantity <= 0) {
-      throw new HttpError(400, `${label}.geometry must produce a positive area`)
+      throw new HttpError(400, `${label}.geometry must produce a positive quantity`)
     }
     geometryJson = JSON.stringify(geometry)
   }
@@ -1461,6 +1473,339 @@ async function listAnalytics(companyId: string) {
       count: totals.count,
     })),
   }
+}
+
+async function listDivisionAnalytics(companyId: string, options: { since?: string | null } = {}) {
+  const since = options.since && options.since.trim() ? options.since.trim() : null
+
+  // TODO: once `workers` carries a `clerk_user_id` link (or a join table
+  // between `workers` and `company_memberships` exists), scope results for
+  // foreman/member roles to the divisions they have labor on. Today workers
+  // are crew-only rows with no auth identity, so this helper is admin/office
+  // only; the route returns 403 before reaching here for other roles.
+
+  const projectQueryParams: Array<string> = [companyId]
+  let projectWhere = 'where p.company_id = $1'
+  if (since) {
+    projectQueryParams.push(since)
+    projectWhere += ' and (p.updated_at >= $2::date or p.closed_at >= $2::date)'
+  }
+
+  const [projectRows, laborRows, materialRows, divisionRows] = await Promise.all([
+    pool.query(
+      `select p.id, p.name, p.division_code, p.status, p.bid_total, p.labor_rate
+       from projects p
+       ${projectWhere}
+       order by p.updated_at desc`,
+      projectQueryParams,
+    ),
+    pool.query('select project_id, hours, sqft_done from labor_entries where company_id = $1 and deleted_at is null', [
+      companyId,
+    ]),
+    pool.query(
+      'select project_id, amount, bill_type from material_bills where company_id = $1 and deleted_at is null',
+      [companyId],
+    ),
+    pool.query('select code, name from divisions where company_id = $1 order by sort_order asc', [companyId]),
+  ])
+
+  const divisionNameByCode = new Map<string, string>()
+  for (const row of divisionRows.rows) {
+    divisionNameByCode.set(String(row.code), String(row.name))
+  }
+
+  type DivisionTotals = {
+    total_revenue: number
+    total_labor_cost: number
+    total_material_cost: number
+    total_sub_cost: number
+    total_hours: number
+    total_sqft: number
+    project_count: number
+    active_project_count: number
+    completed_project_count: number
+  }
+
+  const totalsByDivision = new Map<string, DivisionTotals>()
+  const ensureBucket = (code: string): DivisionTotals => {
+    let bucket = totalsByDivision.get(code)
+    if (!bucket) {
+      bucket = {
+        total_revenue: 0,
+        total_labor_cost: 0,
+        total_material_cost: 0,
+        total_sub_cost: 0,
+        total_hours: 0,
+        total_sqft: 0,
+        project_count: 0,
+        active_project_count: 0,
+        completed_project_count: 0,
+      }
+      totalsByDivision.set(code, bucket)
+    }
+    return bucket
+  }
+
+  const projectById = new Map<
+    string,
+    { id: string; division_code: string; status: string; labor_rate: number; bid_total: number }
+  >()
+  for (const project of projectRows.rows) {
+    const code = String(project.division_code ?? '')
+    if (!code) continue
+    const bucket = ensureBucket(code)
+    const revenue = Number(project.bid_total ?? 0)
+    const laborRate = Number(project.labor_rate ?? 0)
+    bucket.total_revenue += revenue
+    bucket.project_count += 1
+    const status = String(project.status ?? '')
+    if (status === 'closed' || status === 'completed') {
+      bucket.completed_project_count += 1
+    } else {
+      bucket.active_project_count += 1
+    }
+    projectById.set(String(project.id), {
+      id: String(project.id),
+      division_code: code,
+      status,
+      labor_rate: laborRate,
+      bid_total: revenue,
+    })
+  }
+
+  for (const labor of laborRows.rows) {
+    const project = projectById.get(String(labor.project_id))
+    if (!project) continue
+    const bucket = totalsByDivision.get(project.division_code)
+    if (!bucket) continue
+    const hours = Number(labor.hours ?? 0)
+    const sqft = Number(labor.sqft_done ?? 0)
+    bucket.total_hours += hours
+    bucket.total_sqft += sqft
+    bucket.total_labor_cost += hours * project.labor_rate
+  }
+
+  for (const material of materialRows.rows) {
+    const project = projectById.get(String(material.project_id))
+    if (!project) continue
+    const bucket = totalsByDivision.get(project.division_code)
+    if (!bucket) continue
+    const amount = Number(material.amount ?? 0)
+    if (material.bill_type === 'sub') {
+      bucket.total_sub_cost += amount
+    } else {
+      bucket.total_material_cost += amount
+    }
+  }
+
+  const divisions = Array.from(totalsByDivision.entries())
+    .map(([divisionCode, totals]) => {
+      const totalCost = totals.total_labor_cost + totals.total_material_cost + totals.total_sub_cost
+      const profit = totals.total_revenue - totalCost
+      const margin = totals.total_revenue > 0 ? profit / totals.total_revenue : 0
+      const sqftPerHour = totals.total_hours > 0 ? totals.total_sqft / totals.total_hours : 0
+
+      return {
+        division_code: divisionCode,
+        division_name: divisionNameByCode.get(divisionCode) ?? divisionCode,
+        project_count: totals.project_count,
+        active_project_count: totals.active_project_count,
+        completed_project_count: totals.completed_project_count,
+        total_revenue: round2(totals.total_revenue),
+        total_labor_cost: round2(totals.total_labor_cost),
+        total_material_cost: round2(totals.total_material_cost),
+        total_sub_cost: round2(totals.total_sub_cost),
+        total_cost: round2(totalCost),
+        profit: round2(profit),
+        margin: round4(margin),
+        total_hours: round2(totals.total_hours),
+        total_sqft: round2(totals.total_sqft),
+        sqft_per_hour: round2(sqftPerHour),
+      }
+    })
+    .sort((a, b) => a.division_code.localeCompare(b.division_code))
+
+  return { divisions, as_of: new Date().toISOString() }
+}
+
+async function listServiceItemProductivity(companyId: string) {
+  const [laborRows, itemRows] = await Promise.all([
+    pool.query(
+      `select service_item_code, hours, sqft_done, occurred_on
+       from labor_entries
+       where company_id = $1
+         and deleted_at is null
+         and service_item_code is not null`,
+      [companyId],
+    ),
+    pool.query('select code, name, unit from service_items where company_id = $1 and deleted_at is null', [companyId]),
+  ])
+
+  const itemsByCode = new Map<string, { code: string; name: string; unit: string }>()
+  for (const row of itemRows.rows) {
+    itemsByCode.set(String(row.code), { code: String(row.code), name: String(row.name), unit: String(row.unit) })
+  }
+
+  type EntryBucket = {
+    entries: Array<{ quantity: number; hours: number }>
+    firstSeen: string | null
+    lastSeen: string | null
+  }
+  const byCode = new Map<string, EntryBucket>()
+  for (const row of laborRows.rows) {
+    const code = String(row.service_item_code ?? '').trim()
+    if (!code) continue
+    const quantity = Number(row.sqft_done ?? 0)
+    const hours = Number(row.hours ?? 0)
+    const occurredOn = row.occurred_on ? new Date(row.occurred_on).toISOString().slice(0, 10) : null
+
+    let bucket = byCode.get(code)
+    if (!bucket) {
+      bucket = { entries: [], firstSeen: occurredOn, lastSeen: occurredOn }
+      byCode.set(code, bucket)
+    }
+    bucket.entries.push({ quantity, hours })
+    if (occurredOn) {
+      if (!bucket.firstSeen || occurredOn < bucket.firstSeen) bucket.firstSeen = occurredOn
+      if (!bucket.lastSeen || occurredOn > bucket.lastSeen) bucket.lastSeen = occurredOn
+    }
+  }
+
+  const service_items = Array.from(byCode.entries())
+    .map(([code, bucket]) => {
+      const stats = computeProductivity({ entries: bucket.entries })
+      const item = itemsByCode.get(code)
+      return {
+        code,
+        name: item?.name ?? code,
+        unit: item?.unit ?? 'sqft',
+        samples: stats.samples,
+        total_quantity: stats.total_quantity,
+        total_hours: stats.total_hours,
+        avg_quantity_per_hour: stats.avg,
+        p50_quantity_per_hour: stats.p50,
+        p90_quantity_per_hour: stats.p90,
+        first_seen: bucket.firstSeen,
+        last_seen: bucket.lastSeen,
+      }
+    })
+    .sort((a, b) => a.code.localeCompare(b.code))
+
+  return { service_items }
+}
+
+type ForecastMeasurementInput = {
+  service_item_code: string
+  quantity: number
+  unit?: string
+}
+
+async function forecastProjectHours(companyId: string, projectId: string, body: unknown) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new HttpError(400, 'body must be an object')
+  }
+  const measurements = (body as { measurements?: unknown }).measurements
+  if (!Array.isArray(measurements) || measurements.length === 0) {
+    throw new HttpError(400, 'measurements[] is required')
+  }
+
+  const normalized: ForecastMeasurementInput[] = measurements.map((entry, index) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new HttpError(400, `measurements[${index}] must be an object`)
+    }
+    const m = entry as Record<string, unknown>
+    const code = String(m.service_item_code ?? '').trim()
+    const quantity = Number(m.quantity ?? 0)
+    const unit = m.unit === undefined || m.unit === null ? '' : String(m.unit).trim()
+    if (!code) throw new HttpError(400, `measurements[${index}].service_item_code is required`)
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new HttpError(400, `measurements[${index}].quantity must be positive`)
+    }
+    return { service_item_code: code, quantity, unit }
+  })
+
+  const [projectRows, serviceItemRows, bonusRuleRows, productivity] = await Promise.all([
+    pool.query('select id, target_sqft_per_hr, labor_rate from projects where company_id = $1 and id = $2 limit 1', [
+      companyId,
+      projectId,
+    ]),
+    pool.query('select code, default_rate from service_items where company_id = $1 and deleted_at is null', [
+      companyId,
+    ]),
+    pool.query('select config from bonus_rules where company_id = $1 order by created_at desc limit 1', [companyId]),
+    listServiceItemProductivity(companyId),
+  ])
+
+  const project = projectRows.rows[0]
+  if (!project) throw new HttpError(404, 'project not found')
+
+  const laborRate = Number(project.labor_rate ?? 0)
+  const projectTarget =
+    project.target_sqft_per_hr != null && Number(project.target_sqft_per_hr) > 0
+      ? Number(project.target_sqft_per_hr)
+      : null
+
+  const bonusConfig = bonusRuleRows.rows[0]?.config as { target_sqft_per_hr?: number } | undefined
+  const bonusTarget =
+    bonusConfig?.target_sqft_per_hr != null && Number(bonusConfig.target_sqft_per_hr) > 0
+      ? Number(bonusConfig.target_sqft_per_hr)
+      : null
+
+  const productivityByCode = new Map<string, (typeof productivity.service_items)[number]>()
+  for (const item of productivity.service_items) {
+    productivityByCode.set(item.code, item)
+  }
+
+  const defaultRateByCode = new Map<string, number | null>()
+  for (const row of serviceItemRows.rows) {
+    const code = String(row.code)
+    const rate = row.default_rate == null ? null : Number(row.default_rate)
+    defaultRateByCode.set(code, Number.isFinite(rate ?? NaN) ? (rate as number) : null)
+  }
+
+  const forecast = normalized.map((m) => {
+    const stats = productivityByCode.get(m.service_item_code)
+    let rate: number | null = null
+    let basis: 'p50' | 'p90' | 'project_target' | 'bonus_rule_target' | 'default_rate' | 'no_data' = 'no_data'
+
+    if (stats && stats.samples >= 3 && stats.p50_quantity_per_hour && stats.p50_quantity_per_hour > 0) {
+      rate = stats.p50_quantity_per_hour
+      basis = 'p50'
+    } else if (projectTarget) {
+      rate = projectTarget
+      basis = 'project_target'
+    } else if (bonusTarget) {
+      rate = bonusTarget
+      basis = 'bonus_rule_target'
+    } else {
+      const defaultRate = defaultRateByCode.get(m.service_item_code) ?? null
+      if (defaultRate && defaultRate > 0) {
+        rate = defaultRate
+        basis = 'default_rate'
+      }
+    }
+
+    const projectedHours = rate && rate > 0 ? m.quantity / rate : null
+    const projectedCost = projectedHours != null ? projectedHours * laborRate : null
+
+    return {
+      service_item_code: m.service_item_code,
+      quantity: m.quantity,
+      projected_hours: projectedHours == null ? null : round2(projectedHours),
+      projected_cost: projectedCost == null ? null : round2(projectedCost),
+      basis,
+    }
+  })
+
+  return { forecast }
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
+function round4(value: number): number {
+  return Math.round(value * 10000) / 10000
 }
 
 const server = http.createServer(async (req, res) => {
@@ -4016,6 +4361,70 @@ const server = http.createServer(async (req, res) => {
               }))
 
               sendJson(res, 200, { history, from, to })
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname === '/api/analytics/divisions') {
+              const roleCheck = await pool.query<{ role: string }>(
+                'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+                [company.id, identity.userId],
+              )
+              const role = roleCheck.rows[0]?.role ?? null
+              // TODO: once workers carry a clerk_user_id link (or a join table
+              // between workers and company_memberships exists), scope results
+              // to foreman/member by the divisions they have labor on. Today
+              // workers have no auth identity, so this endpoint is admin/office
+              // only.
+              if (role !== 'admin' && role !== 'office') {
+                sendJson(res, 403, { error: 'admin or office role required' })
+                return
+              }
+              const since = url.searchParams.get('since')
+              sendJson(res, 200, await listDivisionAnalytics(company.id, { since }))
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname === '/api/analytics/service-item-productivity') {
+              const roleCheck = await pool.query<{ role: string }>(
+                'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+                [company.id, identity.userId],
+              )
+              const role = roleCheck.rows[0]?.role ?? null
+              if (role !== 'admin' && role !== 'office') {
+                sendJson(res, 403, { error: 'admin or office role required' })
+                return
+              }
+              sendJson(res, 200, await listServiceItemProductivity(company.id))
+              return
+            }
+
+            const forecastHoursMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/estimate\/forecast-hours$/)
+            if (req.method === 'POST' && forecastHoursMatch) {
+              const roleCheck = await pool.query<{ role: string }>(
+                'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+                [company.id, identity.userId],
+              )
+              const role = roleCheck.rows[0]?.role ?? null
+              if (role !== 'admin' && role !== 'office') {
+                sendJson(res, 403, { error: 'admin or office role required' })
+                return
+              }
+              const projectId = forecastHoursMatch[1] ?? ''
+              if (!projectId || !isValidUuid(projectId)) {
+                sendJson(res, 400, { error: 'project id must be a valid uuid' })
+                return
+              }
+              const body = await readBody(req)
+              try {
+                const result = await forecastProjectHours(company.id, projectId, body)
+                sendJson(res, 200, result)
+              } catch (err) {
+                if (err instanceof HttpError) {
+                  sendJson(res, err.status, { error: err.message })
+                  return
+                }
+                throw err
+              }
               return
             }
 

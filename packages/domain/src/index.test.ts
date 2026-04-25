@@ -10,6 +10,14 @@ import {
   clampBoardCoordinate,
   DEFAULT_BONUS_RULE,
   normalizePolygonGeometry,
+  normalizeLinealGeometry,
+  normalizeVolumeGeometry,
+  normalizeGeometry,
+  calculateLinealLength,
+  calculateLinealQuantity,
+  calculateVolumeQuantity,
+  calculateGeometryQuantity,
+  computeProductivity,
 } from './index.js'
 
 describe('domain functions', () => {
@@ -198,6 +206,222 @@ describe('domain functions', () => {
           ],
         }),
       ).toBeNull()
+    })
+  })
+
+  describe('lineal geometry', () => {
+    const path = [
+      { x: 0, y: 0 },
+      { x: 3, y: 4 },
+      { x: 3, y: 14 },
+    ]
+
+    it('calculates the total path length and applies multiplier', () => {
+      expect(calculateLinealLength(path)).toBe(15)
+      expect(calculateLinealQuantity(path, 2)).toBe(30)
+    })
+
+    it('normalizes a valid lineal geometry with >=2 points', () => {
+      expect(
+        normalizeLinealGeometry({
+          kind: 'lineal',
+          points: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+          ],
+          sheet_scale: '1.5',
+          calibration_unit: 'ft',
+        }),
+      ).toEqual({
+        kind: 'lineal',
+        points: [
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+        ],
+        sheet_scale: 1.5,
+        calibration_unit: 'ft',
+      })
+    })
+
+    it('rejects lineal geometry with <2 points or out-of-bounds points', () => {
+      expect(
+        normalizeLinealGeometry({
+          kind: 'lineal',
+          points: [{ x: 5, y: 5 }],
+        }),
+      ).toBeNull()
+      expect(
+        normalizeLinealGeometry({
+          kind: 'lineal',
+          points: [
+            { x: 0, y: 0 },
+            { x: 200, y: 50 },
+          ],
+        }),
+      ).toBeNull()
+      expect(normalizeLinealGeometry({ kind: 'polygon', points: path })).toBeNull()
+    })
+  })
+
+  describe('volume geometry', () => {
+    it('computes L*W*H', () => {
+      expect(calculateVolumeQuantity({ length: 2, width: 3, height: 4 })).toBe(24)
+    })
+
+    it('normalizes a valid volume box with positive dims', () => {
+      expect(
+        normalizeVolumeGeometry({
+          kind: 'volume',
+          length: 10,
+          width: 2,
+          height: 3.5,
+          unit: 'ft',
+        }),
+      ).toEqual({
+        kind: 'volume',
+        length: 10,
+        width: 2,
+        height: 3.5,
+        unit: 'ft',
+      })
+    })
+
+    it('rejects negative / zero / non-finite dimensions', () => {
+      expect(
+        normalizeVolumeGeometry({
+          kind: 'volume',
+          length: -1,
+          width: 2,
+          height: 3,
+        }),
+      ).toBeNull()
+      expect(
+        normalizeVolumeGeometry({
+          kind: 'volume',
+          length: 0,
+          width: 2,
+          height: 3,
+        }),
+      ).toBeNull()
+      expect(
+        normalizeVolumeGeometry({
+          kind: 'volume',
+          length: Number.POSITIVE_INFINITY,
+          width: 2,
+          height: 3,
+        }),
+      ).toBeNull()
+    })
+  })
+
+  describe('normalizeGeometry (discriminator)', () => {
+    it('dispatches on kind to the right normalizer', () => {
+      const polygon = normalizeGeometry({
+        kind: 'polygon',
+        points: [
+          { x: 0, y: 0 },
+          { x: 10, y: 0 },
+          { x: 10, y: 10 },
+        ],
+      })
+      expect(polygon?.kind).toBe('polygon')
+
+      const lineal = normalizeGeometry({
+        kind: 'lineal',
+        points: [
+          { x: 0, y: 0 },
+          { x: 5, y: 0 },
+        ],
+      })
+      expect(lineal?.kind).toBe('lineal')
+
+      const volume = normalizeGeometry({
+        kind: 'volume',
+        length: 2,
+        width: 2,
+        height: 2,
+      })
+      expect(volume?.kind).toBe('volume')
+
+      expect(normalizeGeometry({ kind: 'circle', radius: 5 })).toBeNull()
+      expect(normalizeGeometry(null)).toBeNull()
+    })
+
+    it('dispatches calculateGeometryQuantity correctly', () => {
+      expect(
+        calculateGeometryQuantity({
+          kind: 'volume',
+          length: 2,
+          width: 3,
+          height: 4,
+        }),
+      ).toBe(24)
+      expect(
+        calculateGeometryQuantity({
+          kind: 'lineal',
+          points: [
+            { x: 0, y: 0 },
+            { x: 10, y: 0 },
+          ],
+        }),
+      ).toBe(10)
+    })
+  })
+
+  describe('computeProductivity', () => {
+    it('returns zero metrics for empty input', () => {
+      const result = computeProductivity({ entries: [] })
+      expect(result.samples).toBe(0)
+      expect(result.avg).toBe(0)
+      expect(result.p50).toBeNull()
+      expect(result.p90).toBeNull()
+    })
+
+    it('skips p50/p90 when samples <3', () => {
+      const result = computeProductivity({
+        entries: [
+          { quantity: 100, hours: 2 },
+          { quantity: 200, hours: 4 },
+        ],
+      })
+      expect(result.samples).toBe(2)
+      expect(result.total_quantity).toBe(300)
+      expect(result.total_hours).toBe(6)
+      expect(result.avg).toBe(50)
+      expect(result.p50).toBeNull()
+      expect(result.p90).toBeNull()
+    })
+
+    it('computes avg / p50 / p90 across >=3 samples', () => {
+      const result = computeProductivity({
+        entries: [
+          { quantity: 50, hours: 1 },
+          { quantity: 40, hours: 1 },
+          { quantity: 60, hours: 1 },
+          { quantity: 70, hours: 1 },
+          { quantity: 100, hours: 1 },
+        ],
+      })
+      expect(result.samples).toBe(5)
+      expect(result.avg).toBe(64)
+      expect(result.p50).toBe(60)
+      expect(result.p90).toBeCloseTo(88, 1)
+    })
+
+    it('ignores non-positive or non-finite entries', () => {
+      const result = computeProductivity({
+        entries: [
+          { quantity: 0, hours: 2 },
+          { quantity: 50, hours: 0 },
+          { quantity: Number.NaN, hours: 2 },
+          { quantity: 100, hours: 2 },
+          { quantity: 50, hours: 1 },
+          { quantity: 30, hours: 1 },
+        ],
+      })
+      expect(result.samples).toBe(3)
+      expect(result.total_quantity).toBe(180)
+      expect(result.total_hours).toBe(4)
     })
   })
 })

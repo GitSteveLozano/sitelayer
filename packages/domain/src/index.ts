@@ -51,6 +51,38 @@ export interface PolygonGeometry {
   calibration_unit?: string | null
 }
 
+export interface LinealGeometry {
+  kind: 'lineal'
+  points: TakeoffPoint[]
+  sheet_scale?: number | null
+  calibration_length?: number | null
+  calibration_unit?: string | null
+}
+
+export interface VolumeGeometry {
+  kind: 'volume'
+  length: number
+  width: number
+  height: number
+  unit?: string | null
+}
+
+export type TakeoffGeometry = PolygonGeometry | LinealGeometry | VolumeGeometry
+
+export interface ProductivitySample {
+  quantity: number
+  hours: number
+}
+
+export interface ProductivityResult {
+  samples: number
+  total_quantity: number
+  total_hours: number
+  avg: number
+  p50: number | null
+  p90: number | null
+}
+
 export const WORKFLOW_STAGES: WorkflowStage[] = ['foundation', 'takeoff', 'field', 'sync', 'analytics', 'extensions']
 
 export const LA_TEMPLATE: TenantTemplate = {
@@ -236,4 +268,142 @@ function positiveNumberOrNull(value: unknown): number | null {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+export function normalizeLinealGeometry(input: unknown): LinealGeometry | null {
+  if (!isRecord(input)) return null
+  if (input.kind !== 'lineal') return null
+  if (!Array.isArray(input.points)) return null
+
+  const points = input.points.map(normalizeBoardPoint)
+  if (points.some((point) => point === null)) return null
+  const normalizedPoints = points.filter((point): point is TakeoffPoint => point !== null)
+  if (normalizedPoints.length < 2) return null
+
+  const geometry: LinealGeometry = {
+    kind: 'lineal',
+    points: normalizedPoints,
+  }
+  const sheetScale = positiveNumberOrNull(input.sheet_scale)
+  const calibrationLength = positiveNumberOrNull(input.calibration_length)
+  const calibrationUnit = typeof input.calibration_unit === 'string' ? input.calibration_unit.trim() : ''
+
+  if (sheetScale !== null) geometry.sheet_scale = sheetScale
+  if (calibrationLength !== null) geometry.calibration_length = calibrationLength
+  if (calibrationUnit) geometry.calibration_unit = calibrationUnit.slice(0, 32)
+
+  return geometry
+}
+
+export function normalizeVolumeGeometry(input: unknown): VolumeGeometry | null {
+  if (!isRecord(input)) return null
+  if (input.kind !== 'volume') return null
+
+  const length = Number(input.length)
+  const width = Number(input.width)
+  const height = Number(input.height)
+  if (!Number.isFinite(length) || length <= 0) return null
+  if (!Number.isFinite(width) || width <= 0) return null
+  if (!Number.isFinite(height) || height <= 0) return null
+
+  const geometry: VolumeGeometry = {
+    kind: 'volume',
+    length: roundMeasurement(length),
+    width: roundMeasurement(width),
+    height: roundMeasurement(height),
+  }
+  const unit = typeof input.unit === 'string' ? input.unit.trim() : ''
+  if (unit) geometry.unit = unit.slice(0, 32)
+
+  return geometry
+}
+
+export function normalizeGeometry(input: unknown): TakeoffGeometry | null {
+  if (!isRecord(input)) return null
+  if (input.kind === 'polygon') return normalizePolygonGeometry(input)
+  if (input.kind === 'lineal') return normalizeLinealGeometry(input)
+  if (input.kind === 'volume') return normalizeVolumeGeometry(input)
+  return null
+}
+
+export function calculateLinealLength(points: readonly TakeoffPoint[]): number {
+  if (points.length < 2) return 0
+  let total = 0
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index]
+    const next = points[index + 1]
+    if (!current || !next) continue
+    const dx = next.x - current.x
+    const dy = next.y - current.y
+    total += Math.sqrt(dx * dx + dy * dy)
+  }
+  return total
+}
+
+export function calculateLinealQuantity(points: readonly TakeoffPoint[], multiplier = 1): number {
+  const resolvedMultiplier = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1
+  return roundMeasurement(calculateLinealLength(points) * resolvedMultiplier)
+}
+
+export function calculateVolumeQuantity(input: { length: number; width: number; height: number }): number {
+  const { length, width, height } = input
+  if (!Number.isFinite(length) || !Number.isFinite(width) || !Number.isFinite(height)) return 0
+  if (length <= 0 || width <= 0 || height <= 0) return 0
+  return roundMeasurement(length * width * height)
+}
+
+export function calculateGeometryQuantity(geometry: TakeoffGeometry): number {
+  if (geometry.kind === 'polygon') {
+    return calculateTakeoffQuantity(geometry.points, geometry.sheet_scale ?? 1)
+  }
+  if (geometry.kind === 'lineal') {
+    return calculateLinealQuantity(geometry.points, geometry.sheet_scale ?? 1)
+  }
+  return calculateVolumeQuantity(geometry)
+}
+
+export function computeProductivity(input: { entries: readonly ProductivitySample[] }): ProductivityResult {
+  const validRatios: number[] = []
+  let totalQuantity = 0
+  let totalHours = 0
+  let samples = 0
+
+  for (const entry of input.entries) {
+    const quantity = Number(entry.quantity)
+    const hours = Number(entry.hours)
+    if (!Number.isFinite(quantity) || !Number.isFinite(hours)) continue
+    if (quantity <= 0 || hours <= 0) continue
+    validRatios.push(quantity / hours)
+    totalQuantity += quantity
+    totalHours += hours
+    samples += 1
+  }
+
+  const avg = totalHours > 0 ? totalQuantity / totalHours : 0
+  const p50 = samples >= 3 ? percentile(validRatios, 0.5) : null
+  const p90 = samples >= 3 ? percentile(validRatios, 0.9) : null
+
+  return {
+    samples,
+    total_quantity: roundMeasurement(totalQuantity),
+    total_hours: roundMeasurement(totalHours),
+    avg: roundMeasurement(avg),
+    p50: p50 === null ? null : roundMeasurement(p50),
+    p90: p90 === null ? null : roundMeasurement(p90),
+  }
+}
+
+function percentile(values: readonly number[], fraction: number): number {
+  if (values.length === 0) return 0
+  const sorted = [...values].sort((a, b) => a - b)
+  if (sorted.length === 1) return sorted[0] ?? 0
+  const clamped = Math.min(1, Math.max(0, fraction))
+  const rank = clamped * (sorted.length - 1)
+  const lower = Math.floor(rank)
+  const upper = Math.ceil(rank)
+  if (lower === upper) return sorted[lower] ?? 0
+  const weight = rank - lower
+  const lowerValue = sorted[lower] ?? 0
+  const upperValue = sorted[upper] ?? 0
+  return lowerValue + (upperValue - lowerValue) * weight
 }
