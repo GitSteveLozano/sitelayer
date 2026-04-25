@@ -486,9 +486,33 @@ Background job processor:
    - Current: `ACTIVE_COMPANY_SLUG` env var (hardcoded demo)
    - Post-pilot: Need to implement per-user company isolation
 
-4. **Offline Sync Conflict Resolution**: What if crew edits measurement both online and offline?
-   - Current: IndexedDB queue (FIFO)
-   - Need: Last-write-wins vs. manual resolution UI
+## Decisions
+
+### 4. Offline Sync Conflict Resolution — Last-Write-Wins + Diagnostic Toast (2026-04-24)
+
+**Question (resolved):** What if crew edits a measurement both online and offline?
+
+**Decision:** Last-write-wins on the server, with a diagnostic toast on the offline client to surface that its local edit was discarded.
+
+**Mechanics:**
+
+- Each queued offline mutation captures a `client_updated_at` ISO timestamp at enqueue time (`OfflineMutation.clientUpdatedAt` in `apps/web/src/api.ts`).
+- On replay the frontend sends `If-Unmodified-Since: <client_updated_at>` to the API.
+- API endpoints for measurement updates (currently `PATCH /api/takeoff/measurements/:id`) consult the row's `updated_at`. If the server is strictly newer than the header, return `409` with the authoritative server value. Otherwise apply the write and bump `updated_at = now()`.
+- On `409`, `replayOfflineMutations` drops the queued mutation and shows: "A newer change for {entity} was synced from another device — your local edit was discarded."
+
+**Why LWW (not manual resolution):**
+
+- Construction crews are mostly editing measurement quantities and notes; the cost of a lost local edit is small compared to UI complexity of a merge picker.
+- LWW preserves the offline-first UX: queued writes either land or get discarded with a visible breadcrumb, never silently re-queue forever.
+- The toast + Sentry breadcrumb (`offline_queue: lww conflict ...`) gives Taylor visibility into how often this fires; if the rate goes up we can revisit.
+
+**Scope:**
+
+- `takeoff_measurements` is the only entity wired through the LWW path today (its `updated_at` column was added in `012_takeoff_measurements_updated_at.sql`).
+- Other entities (rentals, labor entries, estimate lines) still rely on optimistic-version `expected_version` checks. Those return `409` too but without an `If-Unmodified-Since`-driven toast; the offline replayer drops them on any 4xx as before.
+
+**Tests:** `apps/api/src/lww.test.ts` covers parse, comparison, and the two-write race scenario.
 
 ## References
 

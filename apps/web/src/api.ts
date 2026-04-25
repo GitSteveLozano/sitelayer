@@ -271,6 +271,33 @@ export type OfflineMutation = {
   companySlug: string
   userId: string
   createdAt: string
+  /**
+   * ISO timestamp captured at enqueue-time. When the mutation replays the
+   * frontend sends it as `If-Unmodified-Since` so the API can apply the
+   * last-write-wins gate (see Decisions #4 in CLAUDE.md). Optional for
+   * back-compat with queue entries that were persisted before the LWW path
+   * shipped — those replay without the header and the API skips the check.
+   */
+  clientUpdatedAt?: string
+  /**
+   * Optional human label used in the conflict toast when a 409 is returned.
+   * If absent we fall back to the path. The frontend mutation builders
+   * supply this when the entity name is meaningful (e.g. "measurement").
+   */
+  entityLabel?: string
+}
+
+/**
+ * Best-effort entity label inferred from the request path so older queue
+ * entries (which lack `entityLabel`) still produce a useful toast.
+ */
+function inferEntityLabel(path: string): string {
+  const segments = path.split('/').filter(Boolean)
+  for (const segment of segments) {
+    if (segment === 'api' || /^[0-9a-f-]{8,}$/i.test(segment)) continue
+    return segment.replace(/-/g, ' ').replace(/_/g, ' ')
+  }
+  return 'item'
 }
 
 export type TierRibbon = { label: string; tone: 'info' | 'warn' | 'danger' } | null
@@ -500,10 +527,14 @@ async function writeOfflineQueue(queue: OfflineMutation[]) {
 export async function enqueueOfflineMutation(mutation: Omit<OfflineMutation, 'id' | 'createdAt'>) {
   if (typeof window === 'undefined') return
   const queue = await readOfflineQueue()
+  const now = new Date().toISOString()
   queue.push({
     ...mutation,
     id: `${mutation.method.toLowerCase()}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-    createdAt: new Date().toISOString(),
+    createdAt: now,
+    // Default `clientUpdatedAt` to enqueue time when the caller didn't supply
+    // one. This is the timestamp the LWW gate compares against on replay.
+    clientUpdatedAt: mutation.clientUpdatedAt ?? now,
   })
   await writeOfflineQueue(queue)
   Sentry.addBreadcrumb({
@@ -574,7 +605,17 @@ async function apiMutate<T>(
     // userId is no longer load-bearing under Clerk auth — the JWT is fetched fresh
     // at replay time via tokenProvider. Persist a placeholder so older queued
     // entries (which had a real userId) still deserialize cleanly.
-    await enqueueOfflineMutation({ method, path, body, companySlug, userId: getStoredUserId() })
+    await enqueueOfflineMutation({
+      method,
+      path,
+      body,
+      companySlug,
+      userId: getStoredUserId(),
+      // `clientUpdatedAt` defaults to enqueue-time inside enqueueOfflineMutation;
+      // set explicitly here so the call site is self-documenting and so future
+      // refactors that hoist enqueue out of the catch path retain the value.
+      clientUpdatedAt: new Date().toISOString(),
+    })
     console.warn(`[offline] queued ${method} ${path}`, error)
     return (body ?? { queued: true }) as T
   }
@@ -664,6 +705,12 @@ export async function replayOfflineMutations(companySlug: string) {
           // the queue may have been parked across multiple sign-in sessions.
           const headers = await authHeaders(mutation.companySlug)
           headers['content-type'] = 'application/json'
+          if (mutation.clientUpdatedAt) {
+            // LWW gate (see Decisions #4): server compares its row's
+            // updated_at against this header. If the server has a newer
+            // change we get 409 and drop our queued mutation.
+            headers['If-Unmodified-Since'] = mutation.clientUpdatedAt
+          }
           const requestInit: RequestInit = {
             method: mutation.method,
             headers,
@@ -674,14 +721,26 @@ export async function replayOfflineMutations(companySlug: string) {
           const response = await fetch(`${API_URL}${mutation.path}`, requestInit)
           if (!response.ok) {
             if (response.status === 409) {
+              // Last-write-wins: a newer change was synced from another
+              // device, so drop this queued mutation rather than re-queue.
               conflicts += 1
+              dropped += 1
+              const entityLabel = mutation.entityLabel ?? inferEntityLabel(mutation.path)
               Sentry.addBreadcrumb({
                 category: 'offline_queue',
                 level: 'warning',
-                message: `conflict ${mutation.method} ${mutation.path}`,
-                data: { status: 409, path: mutation.path },
+                message: `lww conflict ${mutation.method} ${mutation.path}`,
+                data: { status: 409, path: mutation.path, entity: entityLabel },
               })
-              remaining.push(mutation)
+              try {
+                const { toastInfo } = await import('./components/ui/toast.js')
+                toastInfo(
+                  'Local edit discarded',
+                  `A newer change for ${entityLabel} was synced from another device — your local edit was discarded.`,
+                )
+              } catch (toastErr) {
+                Sentry.captureException(toastErr, { tags: { scope: 'offline_replay_toast' } })
+              }
               continue
             }
             if (response.status >= 400 && response.status < 500) {

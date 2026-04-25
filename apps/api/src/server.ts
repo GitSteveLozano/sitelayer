@@ -56,6 +56,7 @@ import {
   assertServiceItemCatalogStatus as assertServiceItemCatalogStatusImpl,
   rejectionMessageForCatalog,
 } from './catalog.js'
+import { evaluateLww } from './lww.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
 import { AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
 import { extractSvixHeaders, verifyClerkWebhook } from './clerk-webhook.js'
@@ -6381,6 +6382,56 @@ const server = http.createServer(async (req, res) => {
                   patchBlueprintDocumentId,
                 ])
               }
+
+              // LWW gate: if the client tells us the row hasn't changed since
+              // a particular timestamp, but the server's `updated_at` is
+              // newer, reject with 409 + the authoritative server row so the
+              // offline replayer can show "your local edit was discarded".
+              const ifUnmodifiedSince = req.headers['if-unmodified-since']
+              if (ifUnmodifiedSince) {
+                const currentRow = await pool.query<{
+                  id: string
+                  project_id: string
+                  blueprint_document_id: string | null
+                  service_item_code: string
+                  quantity: string
+                  unit: string
+                  notes: string | null
+                  geometry: unknown
+                  version: number
+                  deleted_at: string | null
+                  created_at: string
+                  updated_at: string
+                }>(
+                  `select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes,
+                          geometry, version, deleted_at, created_at, updated_at
+                   from takeoff_measurements
+                   where company_id = $1 and id = $2`,
+                  [company.id, measurementId],
+                )
+                const current = currentRow.rows[0]
+                if (current) {
+                  const lww = evaluateLww(current.updated_at, ifUnmodifiedSince)
+                  if (!lww.ok && lww.reason === 'server_newer') {
+                    sendJson(res, 409, {
+                      error: 'server has a newer change',
+                      entity: 'takeoff_measurement',
+                      server_value: current,
+                      server_updated_at: lww.serverUpdatedAt.toISOString(),
+                      client_reference: lww.clientReference.toISOString(),
+                    })
+                    return
+                  }
+                  if (!lww.ok && lww.reason === 'header_unparseable') {
+                    sendJson(res, 400, {
+                      error: 'If-Unmodified-Since header is not a valid timestamp',
+                      raw: lww.rawHeader,
+                    })
+                    return
+                  }
+                }
+              }
+
               const result = await pool.query(
                 `
         update takeoff_measurements
@@ -6391,9 +6442,10 @@ const server = http.createServer(async (req, res) => {
           notes = coalesce($6, notes),
           blueprint_document_id = coalesce($7, blueprint_document_id),
           geometry = coalesce($8::jsonb, geometry),
-          version = version + 1
+          version = version + 1,
+          updated_at = now()
         where company_id = $1 and id = $2 and deleted_at is null and ($9::int is null or version = $9)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at
+        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at, updated_at
         `,
                 [
                   company.id,
