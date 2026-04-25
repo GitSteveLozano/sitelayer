@@ -40,10 +40,12 @@ import {
 import { Input } from './components/ui/input.js'
 import { Toaster, toastError, toastInfo, toastSuccess } from './components/ui/toast.js'
 import { AuditView } from './views/audit.js'
+import { ClockView } from './views/clock.js'
 import { ConfirmView } from './views/confirm.js'
 import { EstimatesView } from './views/estimates.js'
 import { IntegrationsView } from './views/integrations.js'
 import { ProjectsView } from './views/projects.js'
+import { RentalsView } from './views/rentals.js'
 import { TakeoffsView } from './views/takeoffs.js'
 
 const SentryRoutes = Sentry.withSentryReactRouterV7Routing(Routes)
@@ -400,6 +402,10 @@ function AppShell() {
   // route; otherwise require an admin/owner session role.
   const sessionRole = session?.user.role
   const auditNavVisible = FIXTURES_ENABLED || sessionRole === 'admin' || sessionRole === 'owner'
+  // Rentals is admin/office only. Same fixture bypass so /rentals renders
+  // deterministically in the e2e suite.
+  const rentalsNavVisible =
+    FIXTURES_ENABLED || sessionRole === 'admin' || sessionRole === 'office' || sessionRole === 'owner'
 
   return (
     <main className="shell">
@@ -422,9 +428,13 @@ function AppShell() {
           {confirmDoneToday ? '✓ ' : ''}
           Confirm Day
         </NavLink>
+        <NavLink to="/clock" data-testid="nav-clock">
+          Clock
+        </NavLink>
         <NavLink to="/projects">Projects</NavLink>
         <NavLink to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}>Takeoffs</NavLink>
         <NavLink to="/estimates">Estimates</NavLink>
+        {rentalsNavVisible ? <NavLink to="/rentals">Rentals</NavLink> : null}
         <NavLink to="/integrations">Integrations</NavLink>
         {auditNavVisible ? <NavLink to="/audit">Audit</NavLink> : null}
         {devSurfaceEnabled ? <NavLink to="/dev/scratch">Dev</NavLink> : null}
@@ -446,6 +456,7 @@ function AppShell() {
             />
           }
         />
+        <Route path="/clock" element={<ClockView bootstrap={bootstrap} companySlug={companySlug} />} />
         <Route
           path="/projects"
           element={
@@ -562,6 +573,18 @@ function AppShell() {
             ) : (
               <ClerkAuditRoute companySlug={companySlug} session={session} />
             )
+          }
+        />
+        <Route
+          path="/rentals"
+          element={
+            <RentalsView
+              companySlug={companySlug}
+              bootstrap={bootstrap}
+              session={session}
+              customers={customers}
+              projects={bootstrap?.projects ?? []}
+            />
           }
         />
         <Route

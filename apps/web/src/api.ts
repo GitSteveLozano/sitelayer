@@ -61,9 +61,37 @@ export type ProjectRow = {
   bonus_pool: string
   closed_at: string | null
   summary_locked_at: string | null
+  site_lat?: string | null
+  site_lng?: string | null
+  site_radius_m?: number | null
   version: number
   created_at: string
   updated_at: string
+}
+
+export type ClockEventRow = {
+  id: string
+  company_id: string
+  worker_id: string | null
+  project_id: string | null
+  clerk_user_id: string | null
+  event_type: 'in' | 'out' | 'auto_out_geo' | 'auto_out_idle'
+  occurred_at: string
+  lat: string | null
+  lng: string | null
+  accuracy_m: string | null
+  inside_geofence: boolean | null
+  notes: string | null
+  created_at: string
+}
+
+export type ClockTimelineResponse = {
+  events: ClockEventRow[]
+}
+
+export type ClockPunchResponse = {
+  clockEvent: ClockEventRow
+  laborEntry?: LaborRow | null
 }
 
 export type WorkerRow = {
@@ -100,6 +128,48 @@ export type MaterialBillRow = {
   version: number
   deleted_at: string | null
   created_at: string
+}
+
+export type RentalRow = {
+  id: string
+  company_id: string
+  project_id: string | null
+  customer_id: string | null
+  item_description: string
+  daily_rate: string
+  delivered_on: string
+  returned_on: string | null
+  next_invoice_at: string | null
+  invoice_cadence_days: number
+  last_invoice_amount: string | null
+  last_invoiced_through: string | null
+  status: 'active' | 'returned' | 'invoiced_pending' | 'closed'
+  notes: string | null
+  version: number
+  deleted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ListRentalsResponse = {
+  rentals: RentalRow[]
+}
+
+export type RentalInvoiceResponse = {
+  rental: RentalRow
+  bill: {
+    id: string
+    project_id: string | null
+    vendor_name: string
+    amount: string
+    bill_type: string
+    description: string | null
+    occurred_on: string | null
+    created_at: string
+  } | null
+  days: number
+  amount: number
+  invoiced_through: string
 }
 
 export type ScheduleRow = {
@@ -621,6 +691,68 @@ export async function replayOfflineMutations(companySlug: string) {
       span?.setAttribute('queue.depth_after', remaining.length)
       window.dispatchEvent(new Event('sitelayer:offline-queue'))
     },
+  )
+}
+
+export type RentalStatusFilter = 'active' | 'returned' | 'closed' | 'all'
+
+export async function listRentals(
+  companySlug: string,
+  status: RentalStatusFilter = 'active',
+): Promise<ListRentalsResponse> {
+  const suffix = status === 'active' ? '' : `?status=${status}`
+  return apiGet<ListRentalsResponse>(`/api/rentals${suffix}`, companySlug)
+}
+
+export type CreateRentalInput = {
+  item_description: string
+  daily_rate: number
+  delivered_on: string
+  returned_on?: string | null
+  invoice_cadence_days?: number
+  project_id?: string | null
+  customer_id?: string | null
+  notes?: string | null
+}
+
+export async function createRental(input: CreateRentalInput, companySlug: string): Promise<RentalRow> {
+  return apiPost<RentalRow>('/api/rentals', input, companySlug)
+}
+
+export async function updateRental(
+  rentalId: string,
+  input: Partial<CreateRentalInput & { status: RentalRow['status']; expected_version: number }>,
+  companySlug: string,
+): Promise<RentalRow> {
+  return apiPatch<RentalRow>(`/api/rentals/${rentalId}`, input, companySlug)
+}
+
+export async function markRentalReturned(
+  rentalId: string,
+  returnedOn: string,
+  expectedVersion: number,
+  companySlug: string,
+): Promise<RentalRow> {
+  return updateRental(
+    rentalId,
+    { returned_on: returnedOn, status: 'returned', expected_version: expectedVersion },
+    companySlug,
+  )
+}
+
+export async function triggerRentalInvoice(rentalId: string, companySlug: string): Promise<RentalInvoiceResponse> {
+  return apiPost<RentalInvoiceResponse>(`/api/rentals/${rentalId}/invoice`, {}, companySlug)
+}
+
+export async function deleteRental(
+  rentalId: string,
+  companySlug: string,
+  expectedVersion?: number,
+): Promise<RentalRow> {
+  return apiDelete<RentalRow>(
+    `/api/rentals/${rentalId}`,
+    companySlug,
+    expectedVersion ? { expected_version: expectedVersion } : undefined,
   )
 }
 

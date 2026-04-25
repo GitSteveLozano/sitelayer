@@ -4,10 +4,12 @@ import type {
   BlueprintRow,
   CompaniesResponse,
   FeaturesResponse,
+  ListRentalsResponse,
   MaterialBillRow,
   MeasurementRow,
   ProjectSummary,
   QboConnectionResponse,
+  RentalRow,
   ScheduleRow,
   SessionResponse,
   SyncStatusResponse,
@@ -185,6 +187,49 @@ const materialBills: MaterialBillRow[] = [
     version: 2,
     deleted_at: null,
     created_at: '2026-04-22T18:00:00.000Z',
+  },
+]
+
+const rentals: RentalRow[] = [
+  {
+    id: 'rental-hillcrest-scaffold-1',
+    company_id: company.id,
+    project_id: 'project-hillcrest',
+    customer_id: 'customer-1',
+    item_description: 'Scaffolding tower 6m',
+    daily_rate: '35.00',
+    delivered_on: '2026-04-10',
+    returned_on: null,
+    next_invoice_at: '2026-04-24T00:00:00.000Z',
+    invoice_cadence_days: 7,
+    last_invoice_amount: '245.00',
+    last_invoiced_through: '2026-04-16',
+    status: 'active',
+    notes: null,
+    version: 2,
+    deleted_at: null,
+    created_at: '2026-04-10T15:00:00.000Z',
+    updated_at: '2026-04-17T00:00:00.000Z',
+  },
+  {
+    id: 'rental-hillcrest-mixer-1',
+    company_id: company.id,
+    project_id: 'project-hillcrest',
+    customer_id: 'customer-1',
+    item_description: 'Cement mixer',
+    daily_rate: '18.00',
+    delivered_on: '2026-04-18',
+    returned_on: null,
+    next_invoice_at: '2026-04-25T00:00:00.000Z',
+    invoice_cadence_days: 7,
+    last_invoice_amount: null,
+    last_invoiced_through: null,
+    status: 'active',
+    notes: 'Ground floor pours',
+    version: 1,
+    deleted_at: null,
+    created_at: '2026-04-18T14:00:00.000Z',
+    updated_at: '2026-04-18T14:00:00.000Z',
   },
 ]
 
@@ -450,6 +495,10 @@ export function getFixtureResponse<T>(path: string, companySlug: string): T {
     }) as T
   }
 
+  if (path.startsWith('/api/clock/timeline')) {
+    return clone({ events: [] }) as T
+  }
+
   if (path.startsWith('/api/sync/outbox')) {
     return clone({
       outbox: [
@@ -462,6 +511,20 @@ export function getFixtureResponse<T>(path: string, companySlug: string): T {
         },
       ],
     }) as T
+  }
+
+  if (path.startsWith('/api/rentals')) {
+    // Simple status filter: the query string lives on path, so we peek.
+    const statusMatch = path.match(/[?&]status=([^&]+)/)
+    const status = statusMatch ? decodeURIComponent(statusMatch[1] ?? 'active') : 'active'
+    const filtered = rentals.filter((rental) => {
+      if (status === 'all') return true
+      if (status === 'active') return rental.status === 'active'
+      if (status === 'returned') return rental.status === 'returned' || rental.status === 'invoiced_pending'
+      if (status === 'closed') return rental.status === 'closed'
+      return true
+    })
+    return clone({ rentals: filtered } satisfies ListRentalsResponse) as T
   }
 
   if (path.startsWith('/api/audit-events')) {

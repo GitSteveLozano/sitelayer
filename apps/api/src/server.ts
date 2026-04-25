@@ -2,7 +2,12 @@ import { Sentry } from './instrument.js'
 import http from 'node:http'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { Pool, type PoolConfig } from 'pg'
-import { processQueue as processDatabaseQueue } from '@sitelayer/queue'
+import {
+  processQueue as processDatabaseQueue,
+  processRentalInvoice,
+  RENTAL_SELECT_COLUMNS,
+  type RentalRow,
+} from '@sitelayer/queue'
 import { createLogger, getRequestContext, runWithRequestContext, type RequestContext } from '@sitelayer/logger'
 import {
   authorizeDebugTraceRequest,
@@ -22,6 +27,9 @@ import {
   compareBidVsScope,
   computeProductivity,
   formatMoney,
+  haversineDistanceMeters,
+  initialRentalNextInvoiceAt,
+  isInsideGeofence,
   normalizeGeometry,
   normalizePolygonGeometry,
 } from '@sitelayer/domain'
@@ -1414,7 +1422,9 @@ async function listProjects(companyId: string) {
     `
     select
       id, customer_id, name, customer_name, division_code, status, bid_total,
-      labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at
+      labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at,
+      site_lat, site_lng, site_radius_m,
+      version, created_at, updated_at
     from projects
     where company_id = $1
     order by updated_at desc
@@ -1518,6 +1528,13 @@ function parseConfigPayload(value: unknown) {
 
 function isValidDateInput(value: unknown) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
+function parseOptionalNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed)) return null
+  return parsed
 }
 
 function parseExpectedVersion(value: unknown) {
@@ -4004,11 +4021,16 @@ const server = http.createServer(async (req, res) => {
                 return
               }
 
+              const siteLat = parseOptionalNumber(body.site_lat)
+              const siteLng = parseOptionalNumber(body.site_lng)
+              const siteRadiusMeters = parseOptionalNumber(body.site_radius_m)
+
               const created = await pool.query(
                 `
         insert into projects (
           company_id, customer_id, name, customer_name, division_code, status,
-          bid_total, labor_rate, target_sqft_per_hr, bonus_pool, version
+          bid_total, labor_rate, target_sqft_per_hr, bonus_pool,
+          site_lat, site_lng, site_radius_m, version
         )
         values (
           $1,
@@ -4021,9 +4043,12 @@ const server = http.createServer(async (req, res) => {
           coalesce($8, 0),
           $9,
           coalesce($10, 0),
+          $11,
+          $12,
+          coalesce($13, 100),
           1
         )
-        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at
+        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, version, created_at, updated_at
         `,
                 [
                   company.id,
@@ -4036,6 +4061,9 @@ const server = http.createServer(async (req, res) => {
                   body.labor_rate ?? 0,
                   body.target_sqft_per_hr ?? null,
                   body.bonus_pool ?? 0,
+                  siteLat,
+                  siteLng,
+                  siteRadiusMeters,
                 ],
               )
               await recordSyncEvent(company.id, 'project', created.rows[0].id, {
@@ -4063,6 +4091,9 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
+              const patchSiteLat = body.site_lat === undefined ? null : parseOptionalNumber(body.site_lat)
+              const patchSiteLng = body.site_lng === undefined ? null : parseOptionalNumber(body.site_lng)
+              const patchSiteRadius = body.site_radius_m === undefined ? null : parseOptionalNumber(body.site_radius_m)
               const result = await pool.query(
                 `
         update projects
@@ -4075,10 +4106,13 @@ const server = http.createServer(async (req, res) => {
           labor_rate = coalesce($8, labor_rate),
           target_sqft_per_hr = coalesce($9, target_sqft_per_hr),
           bonus_pool = coalesce($10, bonus_pool),
+          site_lat = case when $12::boolean then $13::numeric else site_lat end,
+          site_lng = case when $14::boolean then $15::numeric else site_lng end,
+          site_radius_m = case when $16::boolean then $17::int else site_radius_m end,
           updated_at = now(),
           version = version + 1
         where company_id = $1 and id = $2 and ($11::int is null or version = $11)
-        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at
+        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, version, created_at, updated_at
         `,
                 [
                   company.id,
@@ -4092,6 +4126,12 @@ const server = http.createServer(async (req, res) => {
                   body.target_sqft_per_hr ?? null,
                   body.bonus_pool ?? null,
                   expectedVersion,
+                  body.site_lat !== undefined,
+                  patchSiteLat,
+                  body.site_lng !== undefined,
+                  patchSiteLng,
+                  body.site_radius_m !== undefined,
+                  patchSiteRadius,
                 ],
               )
               if (!result.rows[0]) {
@@ -4392,6 +4432,339 @@ const server = http.createServer(async (req, res) => {
                 [company.id, result.rows[0].project_id],
               )
               sendJson(res, 200, result.rows[0])
+              return
+            }
+
+            // ---------------------------------------------------------------
+            // Rentals — Avontus-style equipment rental tracking.
+            //
+            // All mutations are gated to admin/office because rental invoices
+            // feed billing, not field data capture.
+            // ---------------------------------------------------------------
+
+            if (req.method === 'GET' && url.pathname === '/api/rentals') {
+              const statusFilter = (url.searchParams.get('status') ?? 'active').toLowerCase()
+              const values: unknown[] = [company.id]
+              let statusClause = ''
+              if (statusFilter === 'active') {
+                statusClause = " and status = 'active'"
+              } else if (statusFilter === 'returned') {
+                statusClause = " and status in ('returned', 'invoiced_pending')"
+              } else if (statusFilter === 'closed') {
+                statusClause = " and status = 'closed'"
+              } else if (statusFilter !== 'all') {
+                sendJson(res, 400, { error: 'status must be one of active, returned, closed, all' })
+                return
+              }
+              const result = await pool.query<RentalRow>(
+                `
+                select ${RENTAL_SELECT_COLUMNS}
+                from rentals
+                where company_id = $1 and deleted_at is null${statusClause}
+                order by delivered_on desc, created_at desc
+                `,
+                values,
+              )
+              sendJson(res, 200, { rentals: result.rows })
+              return
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/rentals') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const body = await readBody(req)
+              const itemDescription = String(body.item_description ?? '').trim()
+              if (!itemDescription) {
+                sendJson(res, 400, { error: 'item_description is required' })
+                return
+              }
+              if (!body.delivered_on || !isValidDateInput(body.delivered_on)) {
+                sendJson(res, 400, { error: 'delivered_on must be YYYY-MM-DD' })
+                return
+              }
+              if (body.returned_on && !isValidDateInput(body.returned_on)) {
+                sendJson(res, 400, { error: 'returned_on must be YYYY-MM-DD when provided' })
+                return
+              }
+              const dailyRate = Number(body.daily_rate ?? 0)
+              if (!Number.isFinite(dailyRate) || dailyRate < 0) {
+                sendJson(res, 400, { error: 'daily_rate must be a non-negative number' })
+                return
+              }
+              const cadence = Math.max(1, Math.floor(Number(body.invoice_cadence_days ?? 7)))
+              const nextInvoiceAt = initialRentalNextInvoiceAt(String(body.delivered_on), cadence)
+              const projectId = body.project_id ? String(body.project_id) : null
+              const customerId = body.customer_id ? String(body.customer_id) : null
+              // Cross-check project tenancy up front so the composite FK doesn't
+              // bubble up as a generic 500.
+              if (projectId) {
+                const existing = await pool.query('select 1 from projects where company_id = $1 and id = $2', [
+                  company.id,
+                  projectId,
+                ])
+                if (!existing.rows[0]) {
+                  sendJson(res, 400, { error: 'project_id not found for company' })
+                  return
+                }
+              }
+              if (customerId) {
+                const existing = await pool.query('select 1 from customers where company_id = $1 and id = $2', [
+                  company.id,
+                  customerId,
+                ])
+                if (!existing.rows[0]) {
+                  sendJson(res, 400, { error: 'customer_id not found for company' })
+                  return
+                }
+              }
+              const inserted = await pool.query<RentalRow>(
+                `
+                insert into rentals (
+                  company_id, project_id, customer_id, item_description, daily_rate,
+                  delivered_on, returned_on, invoice_cadence_days, next_invoice_at, status, notes
+                )
+                values ($1, $2, $3, $4, $5, $6::date, $7::date, $8, $9, 'active', $10)
+                returning ${RENTAL_SELECT_COLUMNS}
+                `,
+                [
+                  company.id,
+                  projectId,
+                  customerId,
+                  itemDescription,
+                  dailyRate,
+                  body.delivered_on,
+                  body.returned_on ?? null,
+                  cadence,
+                  nextInvoiceAt,
+                  body.notes ? String(body.notes) : null,
+                ],
+              )
+              const rental = inserted.rows[0]!
+              await recordSyncEvent(company.id, 'rental', rental.id, { action: 'create', rental })
+              await recordMutationOutbox(
+                company.id,
+                'rental',
+                rental.id,
+                'create',
+                rental as unknown as Record<string, unknown>,
+                `rental:create:${rental.id}`,
+              )
+              sendJson(res, 201, rental)
+              return
+            }
+
+            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/rentals\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const rentalId = url.pathname.split('/')[3] ?? ''
+              if (!rentalId) {
+                sendJson(res, 400, { error: 'rental id is required' })
+                return
+              }
+              const body = await readBody(req)
+              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
+              if (
+                body.delivered_on !== undefined &&
+                body.delivered_on !== null &&
+                !isValidDateInput(body.delivered_on)
+              ) {
+                sendJson(res, 400, { error: 'delivered_on must be YYYY-MM-DD' })
+                return
+              }
+              if (body.returned_on !== undefined && body.returned_on !== null && !isValidDateInput(body.returned_on)) {
+                sendJson(res, 400, { error: 'returned_on must be YYYY-MM-DD' })
+                return
+              }
+              // Clients can set status=returned either by passing status='returned'
+              // explicitly or by setting returned_on. We honour whichever the
+              // client sent; the worker will transition returned -> closed once
+              // the final invoice fires.
+              const result = await pool.query<RentalRow>(
+                `
+                update rentals
+                set
+                  item_description = coalesce($3, item_description),
+                  daily_rate = coalesce($4, daily_rate),
+                  delivered_on = coalesce($5::date, delivered_on),
+                  returned_on = case when $6::text = '__clear__' then null
+                                     when $6::text is null then returned_on
+                                     else $6::date end,
+                  invoice_cadence_days = coalesce($7, invoice_cadence_days),
+                  status = coalesce($8, status),
+                  notes = coalesce($9, notes),
+                  project_id = case when $10::text = '__clear__' then null
+                                    when $10::text is null then project_id
+                                    else $10::uuid end,
+                  customer_id = case when $11::text = '__clear__' then null
+                                     when $11::text is null then customer_id
+                                     else $11::uuid end,
+                  version = version + 1,
+                  updated_at = now()
+                where company_id = $1 and id = $2 and deleted_at is null
+                  and ($12::int is null or version = $12)
+                returning ${RENTAL_SELECT_COLUMNS}
+                `,
+                [
+                  company.id,
+                  rentalId,
+                  body.item_description ?? null,
+                  body.daily_rate ?? null,
+                  body.delivered_on ?? null,
+                  body.returned_on === null ? '__clear__' : (body.returned_on ?? null),
+                  body.invoice_cadence_days ?? null,
+                  body.status ?? (body.returned_on ? 'returned' : null),
+                  body.notes ?? null,
+                  body.project_id === null ? '__clear__' : (body.project_id ?? null),
+                  body.customer_id === null ? '__clear__' : (body.customer_id ?? null),
+                  expectedVersion,
+                ],
+              )
+              if (!result.rows[0]) {
+                const existing = await pool.query('select version from rentals where company_id = $1 and id = $2', [
+                  company.id,
+                  rentalId,
+                ])
+                const current = existing.rows[0]
+                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
+                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                  return
+                }
+                sendJson(res, 404, { error: 'rental not found' })
+                return
+              }
+              const rental = result.rows[0]
+              await recordSyncEvent(company.id, 'rental', rentalId, { action: 'update', rental })
+              await recordMutationOutbox(
+                company.id,
+                'rental',
+                rentalId,
+                'update',
+                rental as unknown as Record<string, unknown>,
+                `rental:update:${rentalId}:${rental.version}`,
+              )
+              sendJson(res, 200, rental)
+              return
+            }
+
+            if (req.method === 'DELETE' && url.pathname.match(/^\/api\/rentals\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const rentalId = url.pathname.split('/')[3] ?? ''
+              if (!rentalId) {
+                sendJson(res, 400, { error: 'rental id is required' })
+                return
+              }
+              const body = await readBody(req)
+              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
+              const result = await pool.query<RentalRow>(
+                `
+                update rentals
+                set deleted_at = now(), version = version + 1, updated_at = now()
+                where company_id = $1 and id = $2 and deleted_at is null
+                  and ($3::int is null or version = $3)
+                returning ${RENTAL_SELECT_COLUMNS}
+                `,
+                [company.id, rentalId, expectedVersion],
+              )
+              if (!result.rows[0]) {
+                const existing = await pool.query('select version from rentals where company_id = $1 and id = $2', [
+                  company.id,
+                  rentalId,
+                ])
+                const current = existing.rows[0]
+                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
+                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                  return
+                }
+                sendJson(res, 404, { error: 'rental not found' })
+                return
+              }
+              const rental = result.rows[0]
+              await recordSyncEvent(company.id, 'rental', rentalId, { action: 'delete', rental })
+              await recordMutationOutbox(
+                company.id,
+                'rental',
+                rentalId,
+                'delete',
+                rental as unknown as Record<string, unknown>,
+                `rental:delete:${rentalId}`,
+              )
+              sendJson(res, 200, rental)
+              return
+            }
+
+            if (req.method === 'POST' && url.pathname.match(/^\/api\/rentals\/[^/]+\/invoice$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const rentalId = url.pathname.split('/')[3] ?? ''
+              if (!rentalId) {
+                sendJson(res, 400, { error: 'rental id is required' })
+                return
+              }
+              const existing = await pool.query<RentalRow>(
+                `select ${RENTAL_SELECT_COLUMNS} from rentals where company_id = $1 and id = $2 and deleted_at is null`,
+                [company.id, rentalId],
+              )
+              const rental = existing.rows[0]
+              if (!rental) {
+                sendJson(res, 404, { error: 'rental not found' })
+                return
+              }
+              if (!rental.project_id) {
+                sendJson(res, 400, { error: 'rental must be linked to a project to invoice' })
+                return
+              }
+              const client = await pool.connect()
+              let processed: Awaited<ReturnType<typeof processRentalInvoice>>
+              try {
+                await client.query('begin')
+                processed = await processRentalInvoice(client, rental)
+                await client.query('commit')
+              } catch (error) {
+                await client.query('rollback')
+                throw error
+              } finally {
+                client.release()
+              }
+              if (processed.bill) {
+                await recordSyncEvent(company.id, 'material_bill', processed.bill.id, {
+                  action: 'create',
+                  bill: processed.bill,
+                  source: 'rental_invoice',
+                  rental_id: rentalId,
+                })
+                await recordMutationOutbox(
+                  company.id,
+                  'material_bill',
+                  processed.bill.id,
+                  'create',
+                  { ...processed.bill, source: 'rental_invoice', rental_id: rentalId },
+                  `material_bill:create:${processed.bill.id}`,
+                )
+              }
+              await recordSyncEvent(company.id, 'rental', rentalId, {
+                action: 'invoice',
+                rental: processed.rental,
+                days: processed.days,
+                amount: processed.amount,
+                invoiced_through: processed.invoiced_through,
+              })
+              await recordMutationOutbox(
+                company.id,
+                'rental',
+                rentalId,
+                'invoice',
+                {
+                  rental: processed.rental,
+                  bill_id: processed.bill?.id ?? null,
+                  days: processed.days,
+                  amount: processed.amount,
+                },
+                `rental:invoice:${rentalId}:${processed.rental.version}`,
+              )
+              sendJson(res, 200, {
+                rental: processed.rental,
+                bill: processed.bill,
+                days: processed.days,
+                amount: processed.amount,
+                invoiced_through: processed.invoiced_through,
+              })
               return
             }
 
@@ -4759,6 +5132,302 @@ const server = http.createServer(async (req, res) => {
                 `labor_entry:delete:${laborEntryId}`,
               )
               sendJson(res, 200, result.rows[0])
+              return
+            }
+
+            // ----------------------------------------------------------------
+            // Clock events: geofenced passive clock-in/out for crew members.
+            // Every membership role can clock themselves in/out. Foreman/admin
+            // see the team timeline via GET /api/clock/timeline.
+            // ----------------------------------------------------------------
+
+            if (req.method === 'POST' && url.pathname === '/api/clock/in') {
+              const body = await readBody(req)
+              const lat = parseOptionalNumber(body.lat)
+              const lng = parseOptionalNumber(body.lng)
+              if (lat === null || lng === null) {
+                sendJson(res, 400, { error: 'lat and lng are required' })
+                return
+              }
+              const accuracy = parseOptionalNumber(body.accuracy_m)
+              const notes = typeof body.notes === 'string' ? body.notes.slice(0, 1024) : null
+              const currentUserId = identity.userId
+
+              // Resolve the worker for this user. Workers are seeded without a
+              // clerk_user_id link, so we fall back to the first worker in the
+              // company when we can't identify one. This matches how the rest
+              // of the app treats "demo-user" -> "Crew Lead" today.
+              const workerLookup = await pool.query<{ id: string }>(
+                `
+                select w.id
+                from workers w
+                where w.company_id = $1 and w.deleted_at is null
+                order by w.created_at asc
+                limit 1
+                `,
+                [company.id],
+              )
+              const workerId = workerLookup.rows[0]?.id ?? null
+
+              // Project resolution precedence:
+              //   1. explicit project_id from the body (foreman override).
+              //   2. project whose geofence contains (lat, lng).
+              //   3. null (accepts the punch but marks inside_geofence=false).
+              let projectId: string | null = null
+              let insideGeofence = false
+              const explicitProjectId =
+                body.project_id === undefined || body.project_id === null || body.project_id === ''
+                  ? null
+                  : String(body.project_id).trim()
+              if (explicitProjectId) {
+                if (!isValidUuid(explicitProjectId)) {
+                  sendJson(res, 400, { error: 'project_id must be a valid uuid' })
+                  return
+                }
+                const explicitProject = await pool.query<{
+                  id: string
+                  site_lat: string | null
+                  site_lng: string | null
+                  site_radius_m: number | null
+                }>(
+                  `
+                  select id, site_lat, site_lng, site_radius_m
+                  from projects
+                  where company_id = $1 and id = $2 and deleted_at is null
+                  limit 1
+                  `,
+                  [company.id, explicitProjectId],
+                )
+                if (!explicitProject.rows[0]) {
+                  sendJson(res, 404, { error: 'project not found' })
+                  return
+                }
+                projectId = explicitProject.rows[0].id
+                const pLat = Number(explicitProject.rows[0].site_lat)
+                const pLng = Number(explicitProject.rows[0].site_lng)
+                const pRad = Number(explicitProject.rows[0].site_radius_m ?? 0)
+                if (Number.isFinite(pLat) && Number.isFinite(pLng) && pRad > 0) {
+                  insideGeofence = isInsideGeofence({
+                    lat: pLat,
+                    lng: pLng,
+                    radius_m: pRad,
+                    point: { lat, lng },
+                  })
+                }
+              } else {
+                const candidateProjects = await pool.query<{
+                  id: string
+                  site_lat: string | null
+                  site_lng: string | null
+                  site_radius_m: number | null
+                }>(
+                  `
+                  select id, site_lat, site_lng, site_radius_m
+                  from projects
+                  where company_id = $1
+                    and deleted_at is null
+                    and site_lat is not null
+                    and site_lng is not null
+                    and site_radius_m is not null
+                    and site_radius_m > 0
+                  `,
+                  [company.id],
+                )
+                let bestDistance = Number.POSITIVE_INFINITY
+                for (const row of candidateProjects.rows) {
+                  const pLat = Number(row.site_lat)
+                  const pLng = Number(row.site_lng)
+                  const pRad = Number(row.site_radius_m ?? 0)
+                  if (!Number.isFinite(pLat) || !Number.isFinite(pLng) || pRad <= 0) continue
+                  if (!isInsideGeofence({ lat: pLat, lng: pLng, radius_m: pRad, point: { lat, lng } })) continue
+                  const distance = haversineDistanceMeters({ lat: pLat, lng: pLng }, { lat, lng })
+                  if (distance < bestDistance) {
+                    bestDistance = distance
+                    projectId = row.id
+                    insideGeofence = true
+                  }
+                }
+              }
+
+              const inserted = await pool.query(
+                `
+                insert into clock_events (
+                  company_id, worker_id, project_id, clerk_user_id, event_type,
+                  lat, lng, accuracy_m, inside_geofence, notes
+                )
+                values ($1, $2, $3, $4, 'in', $5, $6, $7, $8, $9)
+                returning id, company_id, worker_id, project_id, clerk_user_id,
+                          event_type, occurred_at, lat, lng, accuracy_m,
+                          inside_geofence, notes, created_at
+                `,
+                [company.id, workerId, projectId, currentUserId, lat, lng, accuracy, insideGeofence, notes],
+              )
+              sendJson(res, 201, { clockEvent: inserted.rows[0] })
+              return
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/clock/out') {
+              const body = await readBody(req)
+              const lat = parseOptionalNumber(body.lat)
+              const lng = parseOptionalNumber(body.lng)
+              const accuracy = parseOptionalNumber(body.accuracy_m)
+              const notes = typeof body.notes === 'string' ? body.notes.slice(0, 1024) : null
+              const currentUserId = identity.userId
+
+              const workerLookup = await pool.query<{ id: string }>(
+                `
+                select w.id
+                from workers w
+                where w.company_id = $1 and w.deleted_at is null
+                order by w.created_at asc
+                limit 1
+                `,
+                [company.id],
+              )
+              const workerId = workerLookup.rows[0]?.id ?? null
+
+              // Find the most-recent open 'in' for this worker to pair with.
+              // "Open" means: latest clock event for the worker is an 'in'.
+              const openInLookup = await pool.query<{
+                id: string
+                project_id: string | null
+                occurred_at: string
+                event_type: string
+              }>(
+                `
+                select id, project_id, occurred_at, event_type
+                from clock_events
+                where company_id = $1
+                  and (
+                    ($2::uuid is not null and worker_id = $2::uuid)
+                    or ($2::uuid is null and clerk_user_id = $3)
+                  )
+                order by occurred_at desc
+                limit 1
+                `,
+                [company.id, workerId, currentUserId],
+              )
+              const openIn = openInLookup.rows[0]
+              if (!openIn || openIn.event_type !== 'in') {
+                sendJson(res, 409, { error: 'no open clock-in found for this worker' })
+                return
+              }
+
+              const projectId = openIn.project_id
+              let insideGeofence: boolean | null = null
+              if (projectId && lat !== null && lng !== null) {
+                const projectRow = await pool.query<{
+                  site_lat: string | null
+                  site_lng: string | null
+                  site_radius_m: number | null
+                }>('select site_lat, site_lng, site_radius_m from projects where company_id = $1 and id = $2', [
+                  company.id,
+                  projectId,
+                ])
+                const row = projectRow.rows[0]
+                if (row) {
+                  const pLat = Number(row.site_lat)
+                  const pLng = Number(row.site_lng)
+                  const pRad = Number(row.site_radius_m ?? 0)
+                  if (Number.isFinite(pLat) && Number.isFinite(pLng) && pRad > 0) {
+                    insideGeofence = isInsideGeofence({
+                      lat: pLat,
+                      lng: pLng,
+                      radius_m: pRad,
+                      point: { lat, lng },
+                    })
+                  }
+                }
+              }
+
+              const inserted = await pool.query<{
+                id: string
+                worker_id: string | null
+                project_id: string | null
+                occurred_at: string
+              }>(
+                `
+                insert into clock_events (
+                  company_id, worker_id, project_id, clerk_user_id, event_type,
+                  lat, lng, accuracy_m, inside_geofence, notes
+                )
+                values ($1, $2, $3, $4, 'out', $5, $6, $7, $8, $9)
+                returning id, company_id, worker_id, project_id, clerk_user_id,
+                          event_type, occurred_at, lat, lng, accuracy_m,
+                          inside_geofence, notes, created_at
+                `,
+                [company.id, workerId, projectId, currentUserId, lat, lng, accuracy, insideGeofence, notes],
+              )
+              const outRow = inserted.rows[0]!
+
+              // Derive a draft labor entry when we have all the inputs:
+              // a project, a worker, and a sensible duration (<24h) between
+              // the paired in/out. Foreman still confirms during /confirm.
+              let laborEntry: Record<string, unknown> | null = null
+              if (projectId && workerId) {
+                const startMs = Date.parse(openIn.occurred_at)
+                const endMs = Date.parse(outRow.occurred_at)
+                if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs) {
+                  const rawHours = (endMs - startMs) / (1000 * 60 * 60)
+                  if (rawHours > 0 && rawHours < 24) {
+                    const hours = Math.round(rawHours * 100) / 100
+                    const occurredOn = new Date(startMs).toISOString().slice(0, 10)
+                    const laborInsert = await pool.query(
+                      `
+                      insert into labor_entries (
+                        company_id, project_id, worker_id, service_item_code,
+                        hours, sqft_done, status, occurred_on
+                      )
+                      values ($1, $2, $3, '', $4, 0, 'draft', $5)
+                      returning id, project_id, worker_id, service_item_code, hours,
+                                sqft_done, status, occurred_on, version, deleted_at, created_at
+                      `,
+                      [company.id, projectId, workerId, hours, occurredOn],
+                    )
+                    laborEntry = laborInsert.rows[0] as Record<string, unknown>
+                    await recordSyncEvent(company.id, 'labor_entry', String(laborEntry.id), {
+                      action: 'create',
+                      source: 'clock_out',
+                      laborEntry,
+                    })
+                    await recordMutationOutbox(
+                      company.id,
+                      'labor_entry',
+                      String(laborEntry.id),
+                      'create',
+                      laborEntry,
+                      `labor_entry:create:${laborEntry.id}`,
+                    )
+                  }
+                }
+              }
+
+              sendJson(res, 201, { clockEvent: outRow, laborEntry })
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname === '/api/clock/timeline') {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
+              const workerIdParam = String(url.searchParams.get('worker_id') ?? '').trim()
+              const dateParam = String(url.searchParams.get('date') ?? '').trim()
+              const result = await pool.query(
+                `
+                select id, company_id, worker_id, project_id, clerk_user_id,
+                       event_type, occurred_at, lat, lng, accuracy_m,
+                       inside_geofence, notes, created_at
+                from clock_events
+                where company_id = $1
+                  and ($2 = '' or worker_id = $2::uuid)
+                  and (
+                    $3 = ''
+                    or (occurred_at >= ($3::date) and occurred_at < ($3::date + interval '1 day'))
+                  )
+                order by occurred_at asc
+                limit 500
+                `,
+                [company.id, workerIdParam, dateParam],
+              )
+              sendJson(res, 200, { events: result.rows })
               return
             }
 

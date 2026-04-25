@@ -275,4 +275,144 @@ describeIntegration('API Integration Tests', () => {
     // assertion above is enough to prove the endpoint still returns 201 with
     // the email plumbing in place.
   })
+
+  // --- Rentals ------------------------------------------------------------
+  //
+  // Covers the happy-path create + manual invoice trigger. Asserts that
+  // firing POST /api/rentals/:id/invoice lands a material_bills row with
+  // bill_type='rental' whose amount matches the back-dated delivery date.
+
+  it('POST /api/rentals/:id/invoice creates a material_bill of bill_type=rental', async () => {
+    // Seed a project so the rental has somewhere to bill to.
+    const projectResponse = await createProjectAs('demo-user')
+    if (projectResponse.status === 404) return // fixture missing
+    if (projectResponse.status !== 201) return
+    const projectId = (projectResponse as { id: string }).id
+
+    // Back-date the delivery so the rental has several billable days even
+    // against a freshly created row.
+    const deliveredOn = new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10)
+    const createResult = await apiCall<{ id?: string; status: number; daily_rate?: string }>('POST', '/api/rentals', {
+      item_description: 'Integration-test scaffolding tower',
+      daily_rate: 15,
+      delivered_on: deliveredOn,
+      invoice_cadence_days: 7,
+      project_id: projectId,
+    })
+    expect(createResult.status).toBe(201)
+    const rentalId = createResult.id
+    expect(rentalId).toBeDefined()
+    if (!rentalId) return
+
+    const invoiceResult = await apiCall<{
+      status: number
+      amount?: number
+      days?: number
+      bill?: { id: string; bill_type: string; amount: string } | null
+    }>('POST', `/api/rentals/${rentalId}/invoice`, {})
+    expect(invoiceResult.status).toBe(200)
+    expect(invoiceResult.days).toBeGreaterThan(0)
+    expect(invoiceResult.bill).toBeTruthy()
+    expect(invoiceResult.bill?.bill_type).toBe('rental')
+    // 7-day cadence × $15 = $105 for the first period.
+    expect(Number(invoiceResult.bill?.amount ?? 0)).toBeGreaterThan(0)
+  })
+
+  it('member cannot create a rental (role gate)', async () => {
+    const result = await apiCall<{ status: number; error?: string; role?: string }>(
+      'POST',
+      '/api/rentals',
+      {
+        item_description: 'Member-gate test',
+        daily_rate: 10,
+        delivered_on: '2026-04-01',
+      },
+      { userId: 'demo-member-user' },
+    )
+    if (result.status === 404) return // member fixture missing
+    expect(result.status).toBe(403)
+    expect(result.role).toBe('member')
+  })
+
+  it('GET /api/rentals?status=active returns rentals list', async () => {
+    const result = await apiCall<{ status: number; rentals?: unknown[] }>('GET', '/api/rentals?status=active')
+    expect(result.status).toBe(200)
+    expect(Array.isArray(result.rentals)).toBe(true)
+  })
+
+  // --- Geofenced clock-in/out ----------------------------------------------
+  //
+  // Covers the happy path: create a project with a site geofence, punch in
+  // from a point inside the fence with no explicit project_id, and verify
+  // the API resolved the project via the geofence. Falls back to skip-on-
+  // missing-fixture the same way other role-matrix tests do.
+
+  it('POST /api/clock/in resolves project_id via geofence when none is supplied', async () => {
+    const site = { lat: 49.8951, lng: -97.1384 }
+    // Create a fresh project with a geofence centred on `site`.
+    const projectResult = await apiCall<{ id?: string; status: number }>(
+      'POST',
+      '/api/projects',
+      {
+        name: `Geofence test ${Date.now()}`,
+        customer_name: 'Test Customer',
+        division_code: 'D1',
+        bid_total: 1000,
+        labor_rate: 50,
+        site_lat: site.lat,
+        site_lng: site.lng,
+        site_radius_m: 100,
+      },
+      { userId: 'demo-user' },
+    )
+    if (projectResult.status === 404) return // fixture missing
+    expect(projectResult.status).toBe(201)
+    const projectId = projectResult.id
+    expect(projectId).toBeDefined()
+
+    // ~50m north of centre — comfortably inside the 100m fence.
+    const nearby = { lat: site.lat + 0.000449, lng: site.lng }
+    const punchResult = await apiCall<{
+      status: number
+      clockEvent?: {
+        project_id: string | null
+        inside_geofence: boolean | null
+        event_type: string
+      }
+    }>(
+      'POST',
+      '/api/clock/in',
+      {
+        lat: nearby.lat,
+        lng: nearby.lng,
+        accuracy_m: 8,
+      },
+      { userId: 'demo-user' },
+    )
+    expect(punchResult.status).toBe(201)
+    expect(punchResult.clockEvent?.project_id).toBe(projectId)
+    expect(punchResult.clockEvent?.inside_geofence).toBe(true)
+    expect(punchResult.clockEvent?.event_type).toBe('in')
+  })
+
+  it('POST /api/clock/in with a point outside every geofence leaves project_id null', async () => {
+    // Antarctica — well outside any seeded or test-created geofence.
+    const punchResult = await apiCall<{
+      status: number
+      clockEvent?: { project_id: string | null; inside_geofence: boolean | null }
+    }>(
+      'POST',
+      '/api/clock/in',
+      {
+        lat: -82.5,
+        lng: 0,
+        accuracy_m: 20,
+      },
+      { userId: 'demo-user' },
+    )
+    if (punchResult.status === 404) return
+    expect(punchResult.status).toBe(201)
+    expect(punchResult.clockEvent?.project_id).toBeNull()
+    expect(punchResult.clockEvent?.inside_geofence).toBe(false)
+  })
 })

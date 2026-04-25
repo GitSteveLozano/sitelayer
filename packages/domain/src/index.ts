@@ -179,10 +179,7 @@ export interface BidVsScopeComparison {
  * non-zero scope is reported as `mismatch`/100% so the caller cannot silently
  * miss an unreconciled scope.
  */
-export function compareBidVsScope(inputs: {
-  bidTotal: number
-  scopeTotal: number
-}): BidVsScopeComparison {
+export function compareBidVsScope(inputs: { bidTotal: number; scopeTotal: number }): BidVsScopeComparison {
   const bidTotal = Number.isFinite(inputs.bidTotal) ? Number(inputs.bidTotal) : 0
   const scopeTotal = Number.isFinite(inputs.scopeTotal) ? Number(inputs.scopeTotal) : 0
   const delta = roundMoney(bidTotal - scopeTotal)
@@ -446,6 +443,75 @@ export function computeProductivity(input: { entries: readonly ProductivitySampl
   }
 }
 
+export interface GeoPoint {
+  lat: number
+  lng: number
+}
+
+export interface GeofenceInput {
+  lat: number
+  lng: number
+  radius_m: number
+  point: GeoPoint
+}
+
+/**
+ * Earth mean radius in metres. Construction-site geofences are typically
+ * 30-300 m so the spherical-earth approximation is well inside the noise
+ * floor of a phone GPS fix; no ellipsoid correction needed.
+ */
+const EARTH_RADIUS_M = 6_371_000
+
+function toRadians(degrees: number): number {
+  return (degrees * Math.PI) / 180
+}
+
+/**
+ * Great-circle distance between two lat/lng points via the haversine
+ * formula. Returns metres. Returns Infinity if any input is non-finite so
+ * `isInsideGeofence` naturally falls to false on garbage input.
+ */
+export function haversineDistanceMeters(a: GeoPoint, b: GeoPoint): number {
+  const lat1 = Number(a.lat)
+  const lng1 = Number(a.lng)
+  const lat2 = Number(b.lat)
+  const lng2 = Number(b.lng)
+  if (!Number.isFinite(lat1) || !Number.isFinite(lng1)) return Number.POSITIVE_INFINITY
+  if (!Number.isFinite(lat2) || !Number.isFinite(lng2)) return Number.POSITIVE_INFINITY
+
+  const phi1 = toRadians(lat1)
+  const phi2 = toRadians(lat2)
+  const dPhi = toRadians(lat2 - lat1)
+  const dLambda = toRadians(lng2 - lng1)
+
+  const sinDPhi = Math.sin(dPhi / 2)
+  const sinDLambda = Math.sin(dLambda / 2)
+  const h = sinDPhi * sinDPhi + Math.cos(phi1) * Math.cos(phi2) * sinDLambda * sinDLambda
+  const c = 2 * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)))
+  return EARTH_RADIUS_M * c
+}
+
+/**
+ * Is `point` inside the circular geofence centered on (lat, lng) with
+ * `radius_m` metres? Zero or negative radius disables the fence. Missing
+ * centre coordinates also disable the fence (a project with no site
+ * coordinates should never match).
+ *
+ * Antimeridian (the ±180° seam) is intentionally not handled — every
+ * sitelayer customer is a construction crew in North America; a fence
+ * straddling the seam would be meaningless here.
+ */
+export function isInsideGeofence(input: GeofenceInput): boolean {
+  const lat = Number(input.lat)
+  const lng = Number(input.lng)
+  const radius = Number(input.radius_m)
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false
+  if (!Number.isFinite(radius) || radius <= 0) return false
+  const distance = haversineDistanceMeters({ lat, lng }, input.point)
+  if (!Number.isFinite(distance)) return false
+  return distance <= radius
+}
+
 function percentile(values: readonly number[], fraction: number): number {
   if (values.length === 0) return 0
   const sorted = [...values].sort((a, b) => a - b)
@@ -459,4 +525,172 @@ function percentile(values: readonly number[], fraction: number): number {
   const lowerValue = sorted[lower] ?? 0
   const upperValue = sorted[upper] ?? 0
   return lowerValue + (upperValue - lowerValue) * weight
+}
+
+// ---------------------------------------------------------------------------
+// Rentals (Avontus-style rental tracking)
+// ---------------------------------------------------------------------------
+//
+// Rentals are billed on a rolling cadence: each tick (default 7 days) emits
+// one `material_bills` row of `bill_type='rental'` for the period that just
+// ended. The invoice clock starts at `delivered_on` and advances in
+// `invoice_cadence_days` steps. Once the item is returned, we bill through
+// `returned_on` and stop.
+//
+// The helpers below are pure so they can be covered by unit tests and reused
+// from both the API manual-trigger endpoint and the worker heartbeat job.
+
+export type RentalStatus = 'active' | 'returned' | 'invoiced_pending' | 'closed'
+
+export interface RentalForInvoice {
+  daily_rate: number | string
+  delivered_on: string // YYYY-MM-DD
+  returned_on?: string | null // YYYY-MM-DD | null
+  invoice_cadence_days: number
+  last_invoiced_through?: string | null // YYYY-MM-DD | null
+  status?: RentalStatus
+}
+
+export interface RentalInvoiceResult {
+  /** Days billed in this invoice (>= 0). Zero means "skip, nothing to bill". */
+  days: number
+  /** Amount in dollars rounded to cents. */
+  amount: number
+  /** Period start (inclusive, YYYY-MM-DD). */
+  period_start: string
+  /** Period end (inclusive, YYYY-MM-DD). */
+  period_end: string
+  /** Next `last_invoiced_through` after this invoice fires. */
+  invoiced_through: string
+  /** When the next cadence tick should happen (ISO). Null when the rental is fully billed. */
+  next_invoice_at: string | null
+  /** Terminal status after this invoice fires. */
+  next_status: RentalStatus
+}
+
+function parseISODate(value: string): Date {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return new Date(NaN)
+  const [, year, month, day] = match
+  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)))
+}
+
+function formatISODate(date: Date): string {
+  const year = date.getUTCFullYear().toString().padStart(4, '0')
+  const month = (date.getUTCMonth() + 1).toString().padStart(2, '0')
+  const day = date.getUTCDate().toString().padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function addDaysUtc(date: Date, days: number): Date {
+  const next = new Date(date.getTime())
+  next.setUTCDate(next.getUTCDate() + days)
+  return next
+}
+
+function diffDaysUtc(laterISO: string, earlierISO: string): number {
+  const later = parseISODate(laterISO).getTime()
+  const earlier = parseISODate(earlierISO).getTime()
+  if (Number.isNaN(later) || Number.isNaN(earlier)) return 0
+  return Math.round((later - earlier) / 86_400_000)
+}
+
+/**
+ * Calculate the next invoice amount for a rental.
+ *
+ * Edge cases handled:
+ *   - `delivered_on` in the future: no billable days yet — returns days=0.
+ *   - `returned_on` before the last invoiced period: the rental is already
+ *     fully billed — returns days=0 and `next_status='closed'`.
+ *   - `last_invoiced_through` null: the billing clock starts at delivered_on.
+ *   - `returned_on` within the cadence window: truncates the period to
+ *     `returned_on` and marks the rental as closed.
+ */
+export function calculateRentalInvoice(
+  rental: RentalForInvoice,
+  referenceDate: string = formatISODate(new Date()),
+): RentalInvoiceResult {
+  const cadence = Math.max(1, Math.floor(Number(rental.invoice_cadence_days) || 7))
+  const dailyRate = Number(rental.daily_rate) || 0
+  const deliveredOn = rental.delivered_on
+  const returnedOn = rental.returned_on ?? null
+  const lastThrough = rental.last_invoiced_through ?? null
+
+  const periodStartISO = lastThrough ? formatISODate(addDaysUtc(parseISODate(lastThrough), 1)) : deliveredOn
+
+  // Haven't hit the first billable day yet.
+  if (
+    parseISODate(periodStartISO).getTime() > parseISODate(referenceDate).getTime() &&
+    !(returnedOn && parseISODate(returnedOn).getTime() >= parseISODate(periodStartISO).getTime())
+  ) {
+    return {
+      days: 0,
+      amount: 0,
+      period_start: periodStartISO,
+      period_end: periodStartISO,
+      invoiced_through: lastThrough ?? formatISODate(addDaysUtc(parseISODate(deliveredOn), -1)),
+      next_invoice_at: `${formatISODate(addDaysUtc(parseISODate(deliveredOn), cadence - 1))}T00:00:00.000Z`,
+      next_status: returnedOn ? 'returned' : 'active',
+    }
+  }
+
+  // Cap the period end at: (a) reference date, (b) the cadence tick, and
+  // (c) returned_on (if present). The smallest of these wins.
+  const cadenceEnd = addDaysUtc(parseISODate(periodStartISO), cadence - 1)
+  const referenceEnd = parseISODate(referenceDate)
+  const returnedEnd = returnedOn ? parseISODate(returnedOn) : null
+
+  let periodEnd = cadenceEnd.getTime() <= referenceEnd.getTime() ? cadenceEnd : referenceEnd
+  let terminal = false
+  if (returnedEnd && returnedEnd.getTime() < periodEnd.getTime()) {
+    periodEnd = returnedEnd
+    terminal = true
+  } else if (returnedEnd && returnedEnd.getTime() === periodEnd.getTime()) {
+    terminal = true
+  }
+
+  const periodEndISO = formatISODate(periodEnd)
+
+  // If returned_on is strictly before the first billable day, the rental is
+  // already fully billed — there's nothing to invoice.
+  if (parseISODate(periodEndISO).getTime() < parseISODate(periodStartISO).getTime()) {
+    return {
+      days: 0,
+      amount: 0,
+      period_start: periodStartISO,
+      period_end: periodStartISO,
+      invoiced_through: lastThrough ?? formatISODate(addDaysUtc(parseISODate(deliveredOn), -1)),
+      next_invoice_at: null,
+      next_status: 'closed',
+    }
+  }
+
+  const days = diffDaysUtc(periodEndISO, periodStartISO) + 1
+  const amount = Math.round(days * dailyRate * 100) / 100
+
+  const nextStatus: RentalStatus = terminal ? 'closed' : returnedOn ? 'returned' : 'active'
+  const nextInvoiceAt = nextStatus === 'closed' ? null : `${formatISODate(addDaysUtc(periodEnd, 1))}T00:00:00.000Z`
+
+  return {
+    days,
+    amount,
+    period_start: periodStartISO,
+    period_end: periodEndISO,
+    invoiced_through: periodEndISO,
+    next_invoice_at: nextInvoiceAt,
+    next_status: nextStatus,
+  }
+}
+
+/**
+ * Compute the initial `next_invoice_at` timestamp when a rental is first
+ * created. The billing clock ticks `invoice_cadence_days` after
+ * `delivered_on` (i.e. the first invoice covers delivered_on through
+ * delivered_on + cadence - 1 inclusive and fires on the following day).
+ */
+export function initialRentalNextInvoiceAt(deliveredOn: string, invoiceCadenceDays: number): string {
+  const cadence = Math.max(1, Math.floor(Number(invoiceCadenceDays) || 7))
+  const delivered = parseISODate(deliveredOn)
+  if (Number.isNaN(delivered.getTime())) return `${deliveredOn}T00:00:00.000Z`
+  return `${formatISODate(addDaysUtc(delivered, cadence))}T00:00:00.000Z`
 }
