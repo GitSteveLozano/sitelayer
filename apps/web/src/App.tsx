@@ -40,6 +40,7 @@ import {
 import { Input } from './components/ui/input.js'
 import { Toaster, toastError, toastInfo, toastSuccess } from './components/ui/toast.js'
 import { AuditView } from './views/audit.js'
+import { BonusSimView } from './views/bonus-sim.js'
 import { ConfirmView } from './views/confirm.js'
 import { EstimatesView } from './views/estimates.js'
 import { IntegrationsView } from './views/integrations.js'
@@ -400,6 +401,8 @@ function AppShell() {
   // route; otherwise require an admin/owner session role.
   const sessionRole = session?.user.role
   const auditNavVisible = FIXTURES_ENABLED || sessionRole === 'admin' || sessionRole === 'owner'
+  // Bonus sim is an admin/office tool — same gating as audit.
+  const bonusSimNavVisible = FIXTURES_ENABLED || sessionRole === 'admin' || sessionRole === 'owner'
 
   return (
     <main className="shell">
@@ -426,6 +429,7 @@ function AppShell() {
         <NavLink to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}>Takeoffs</NavLink>
         <NavLink to="/estimates">Estimates</NavLink>
         <NavLink to="/integrations">Integrations</NavLink>
+        {bonusSimNavVisible ? <NavLink to="/bonus-sim">Bonus Sim</NavLink> : null}
         {auditNavVisible ? <NavLink to="/audit">Audit</NavLink> : null}
         {devSurfaceEnabled ? <NavLink to="/dev/scratch">Dev</NavLink> : null}
       </nav>
@@ -552,6 +556,12 @@ function AppShell() {
               refreshSummary={refreshSummary}
               runAction={runAction}
             />
+          }
+        />
+        <Route
+          path="/bonus-sim"
+          element={
+            bonusSimNavVisible ? <BonusSimView bootstrap={bootstrap} /> : <Navigate to="/projects" replace />
           }
         />
         <Route

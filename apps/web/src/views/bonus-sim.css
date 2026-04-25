@@ -1,0 +1,224 @@
+/* Bonus simulator view. Uses --primary / --accent / --muted / --border / --foreground
+ * tokens already defined on :root in styles.css. Do not edit styles.css from here. */
+
+.bonusSim {
+  display: grid;
+  gap: 20px;
+}
+
+.bonusSimModes {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.bonusSimModes button {
+  border-radius: 999px;
+  padding: 0.55rem 1rem;
+  font-weight: 700;
+  border: 1px solid hsl(var(--border));
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+  cursor: pointer;
+}
+
+.bonusSimModes button[aria-pressed='true'] {
+  background: hsl(var(--primary));
+  color: hsl(var(--primary-foreground));
+  border-color: hsl(var(--primary));
+}
+
+.bonusSimGrid {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+@media (max-width: 900px) {
+  .bonusSimGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.bonusSimFields {
+  display: grid;
+  gap: 18px;
+}
+
+.bonusSimField {
+  display: grid;
+  gap: 6px;
+}
+
+.bonusSimField label {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-weight: 600;
+  color: hsl(var(--foreground));
+}
+
+.bonusSimField label span.value {
+  color: hsl(var(--primary));
+  font-variant-numeric: tabular-nums;
+}
+
+.bonusSimField input[type='range'] {
+  width: 100%;
+  appearance: none;
+  height: 6px;
+  border-radius: 999px;
+  background: hsl(var(--muted));
+  outline: none;
+  accent-color: hsl(var(--primary));
+}
+
+.bonusSimField input[type='range']::-webkit-slider-thumb {
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  border: 2px solid hsl(var(--background));
+  cursor: grab;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.bonusSimField input[type='range']::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: hsl(var(--primary));
+  border: 2px solid hsl(var(--background));
+  cursor: grab;
+}
+
+.bonusSimResults {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid hsl(var(--border));
+  border-radius: 12px;
+  background: hsl(var(--card) / 0.55);
+}
+
+.bonusSimResults dl {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 16px;
+  margin: 0;
+}
+
+.bonusSimResults dt {
+  color: hsl(var(--muted-foreground));
+  font-weight: 500;
+}
+
+.bonusSimResults dd {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.bonusSimResults .highlight {
+  color: hsl(var(--accent));
+}
+
+.bonusSimNextTier {
+  margin-top: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: hsl(var(--accent) / 0.16);
+  border: 1px solid hsl(var(--accent) / 0.4);
+  color: hsl(var(--accent-foreground));
+  font-weight: 600;
+}
+
+.bonusSimNextTier.topped {
+  background: hsl(var(--primary) / 0.12);
+  border-color: hsl(var(--primary) / 0.4);
+  color: hsl(var(--primary));
+}
+
+.bonusSimChart {
+  width: 100%;
+  height: 240px;
+  display: block;
+}
+
+.bonusSimChart .axis {
+  stroke: hsl(var(--border));
+  stroke-width: 1;
+}
+
+.bonusSimChart .tierTick {
+  stroke: hsl(var(--muted-foreground));
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+  opacity: 0.5;
+}
+
+.bonusSimChart .payoutLine {
+  fill: none;
+  stroke: hsl(var(--primary));
+  stroke-width: 2;
+}
+
+.bonusSimChart .currentDot {
+  fill: hsl(var(--accent));
+  stroke: hsl(var(--accent-foreground));
+  stroke-width: 2;
+}
+
+.bonusSimChart .label {
+  fill: hsl(var(--muted-foreground));
+  font-size: 11px;
+  font-family: inherit;
+}
+
+.bonusSimChart .currentLabel {
+  fill: hsl(var(--foreground));
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.bonusSimTierList {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.bonusSimTierList .tier {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  padding: 4px 0;
+  color: hsl(var(--muted-foreground));
+  font-variant-numeric: tabular-nums;
+}
+
+.bonusSimTierList .tier.active {
+  color: hsl(var(--primary));
+  font-weight: 700;
+}
+
+.bonusSimProjectSelect {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.bonusSimProjectSelect select {
+  padding: 0.55rem 0.75rem;
+  border-radius: 10px;
+  background: hsl(var(--secondary));
+  color: hsl(var(--secondary-foreground));
+  border: 1px solid hsl(var(--border));
+}
+
+.bonusSimBaseline {
+  font-size: 0.85rem;
+  color: hsl(var(--muted-foreground));
+}

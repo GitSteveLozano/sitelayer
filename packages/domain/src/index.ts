@@ -226,6 +226,67 @@ export function calculateBonusPayout(
   }
 }
 
+export interface BonusScenarioResult {
+  margin: number
+  profit: number
+  eligible: boolean
+  payout_percent: number
+  payout: number
+  next_tier_threshold: number | null
+  revenue_to_next_tier: number | null
+}
+
+/**
+ * Simulate a full what-if bonus scenario given a candidate revenue, cost,
+ * bonus pool and the tier schedule. In addition to what `calculateBonusPayout`
+ * returns, this helper computes:
+ *
+ *   - `next_tier_threshold`: the minimum margin needed to reach the next tier
+ *     above the current one, or `null` if already at (or past) the top tier.
+ *   - `revenue_to_next_tier`: how much additional revenue, holding cost
+ *     constant, would be required to clear that next threshold. `null` if
+ *     there is no next tier, or if the cost is zero/negative (in which case
+ *     any non-zero revenue already implies 100% margin and no meaningful
+ *     extra-revenue projection exists).
+ *
+ * Revenue of zero is treated as margin 0% and profit equal to `-cost`.
+ */
+export function simulateBonusScenario(input: {
+  revenue: number
+  cost: number
+  bonus_pool: number
+  tiers: readonly BonusTier[]
+}): BonusScenarioResult {
+  const revenue = Number.isFinite(input.revenue) ? Number(input.revenue) : 0
+  const cost = Number.isFinite(input.cost) ? Number(input.cost) : 0
+  const bonusPool = Number.isFinite(input.bonus_pool) ? Number(input.bonus_pool) : 0
+
+  const { margin, profit } = calculateMargin({ revenue, cost })
+  const payout = calculateBonusPayout(margin, bonusPool, input.tiers)
+
+  const sortedTiers = [...input.tiers].sort((a, b) => a.minMargin - b.minMargin)
+  const nextTier = sortedTiers.find((tier) => tier.minMargin > margin) ?? null
+  const nextTierThreshold = nextTier ? nextTier.minMargin : null
+
+  let revenueToNextTier: number | null = null
+  if (nextTier && cost > 0) {
+    // margin = (revenue - cost) / revenue => required revenue = cost / (1 - t)
+    const requiredRevenue = cost / (1 - nextTier.minMargin)
+    const delta = requiredRevenue - revenue
+    revenueToNextTier = delta > 0 ? roundMoney(delta) : 0
+  }
+
+  return {
+    margin,
+    profit,
+    eligible: payout.eligible,
+    payout_percent: payout.payoutPercent,
+    payout: payout.payout,
+    next_tier_threshold: nextTierThreshold,
+    revenue_to_next_tier: revenueToNextTier,
+  }
+}
+
 export function roundMoney(value: number): number {
   return Math.round(value * 100) / 100
 }
