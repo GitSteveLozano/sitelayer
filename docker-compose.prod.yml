@@ -67,6 +67,11 @@ services:
     volumes:
       - blueprint_storage:/app/storage/blueprints
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '5'
     healthcheck:
       test:
         [
@@ -109,6 +114,11 @@ services:
     environment:
       NODE_ENV: production
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '5'
     networks:
       - sitelayer
 
@@ -154,6 +164,11 @@ services:
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
     restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '5'
     networks:
       - sitelayer
 
@@ -167,6 +182,11 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '5'
     networks:
       - sitelayer
     depends_on:
