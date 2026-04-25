@@ -52,6 +52,11 @@ import {
   listLaborByWorker,
   parseLaborReportFilters,
 } from './labor-reports.js'
+import {
+  assertServiceItemCatalogStatus as assertServiceItemCatalogStatusImpl,
+  rejectionMessageForCatalog,
+} from './catalog.js'
+import { evaluateLww } from './lww.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
 import { AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
 import { extractSvixHeaders, verifyClerkWebhook } from './clerk-webhook.js'
@@ -1397,6 +1402,12 @@ async function listServiceItemDivisions(companyId: string, serviceItemCode: stri
  * Returns `true` when the code is accepted (either because none was supplied
  * or because it is in the allowed set, or because no membership rows exist
  * yet and the table is empty for that service item — i.e. legacy behavior).
+ *
+ * NOTE: this is the lenient version retained for labor_entries and other
+ * non-takeoff callers that historically allowed an unrestricted catalog. The
+ * stricter `assertServiceItemCatalogStatus` is used by takeoff measurement
+ * endpoints and refuses both the "no rows at all" and "wrong division" cases
+ * per the curated-catalog spec.
  */
 async function assertDivisionAllowedForServiceItem(
   companyId: string,
@@ -1423,6 +1434,28 @@ async function assertDivisionAllowedForServiceItem(
     [companyId, serviceItemCode, divisionCode],
   )
   return Boolean(match.rows[0]?.exists)
+}
+
+/**
+ * Strict catalog enforcement for takeoff measurements. Implements the spec:
+ *   - If service_item_divisions has zero rows for a service_item_code,
+ *     the service item is rejected (catalog must be curated).
+ *   - If rows exist and `divisionCode` (resolved by the caller, with
+ *     project-level fallback) is missing from the allowed set, reject.
+ *   - If `divisionCode` is null we still require a curated catalog row;
+ *     a curated item with at least one division is the minimum bar even
+ *     when the caller didn't specify a per-takeoff division.
+ *
+ * The lenient `assertDivisionAllowedForServiceItem` is intentionally NOT
+ * folded into this — labor entries still write through the legacy permissive
+ * path because their xref usage is opt-in.
+ */
+function assertServiceItemCatalogStatus(
+  companyId: string,
+  serviceItemCode: string,
+  divisionCode: string | null,
+) {
+  return assertServiceItemCatalogStatusImpl(pool, companyId, serviceItemCode, divisionCode)
 }
 
 async function listProjects(companyId: string) {
@@ -5474,6 +5507,29 @@ const server = http.createServer(async (req, res) => {
                 measurementInput.blueprintDocumentId,
               ])
 
+              // Curated-catalog enforcement (per spec): a takeoff cannot reference
+              // a service item without at least one curated division mapping, and
+              // if a division was supplied it must be in the allowed set.
+              const projectDivisionResult = await pool.query<{ division_code: string | null }>(
+                'select division_code from projects where company_id = $1 and id = $2',
+                [company.id, projectId],
+              )
+              const fallbackDivision =
+                measurementInput.divisionCode ?? projectDivisionResult.rows[0]?.division_code ?? null
+              const catalogStatus = await assertServiceItemCatalogStatus(
+                company.id,
+                measurementInput.serviceItemCode,
+                fallbackDivision,
+              )
+              if (!catalogStatus.ok) {
+                sendJson(res, 422, {
+                  error: rejectionMessageForCatalog(catalogStatus.reason),
+                  service_item_code: measurementInput.serviceItemCode,
+                  division_code: fallbackDivision,
+                })
+                return
+              }
+
               const insertResult = await pool.query(
                 `
         insert into takeoff_measurements (
@@ -5550,6 +5606,31 @@ const server = http.createServer(async (req, res) => {
                 projectId,
                 preparedMeasurements.map((measurement) => measurement.blueprintDocumentId),
               )
+
+              // Curated-catalog enforcement applied per measurement BEFORE the
+              // destructive soft-delete of the existing set, so a single bad
+              // row doesn't wipe the project's takeoff history.
+              const projectDivisionResult = await pool.query<{ division_code: string | null }>(
+                'select division_code from projects where company_id = $1 and id = $2',
+                [company.id, projectId],
+              )
+              const projectDivisionCode = projectDivisionResult.rows[0]?.division_code ?? null
+              for (const measurement of preparedMeasurements) {
+                const fallbackDivision = measurement.divisionCode ?? projectDivisionCode
+                const catalogStatus = await assertServiceItemCatalogStatus(
+                  company.id,
+                  measurement.serviceItemCode,
+                  fallbackDivision,
+                )
+                if (!catalogStatus.ok) {
+                  sendJson(res, 422, {
+                    error: rejectionMessageForCatalog(catalogStatus.reason),
+                    service_item_code: measurement.serviceItemCode,
+                    division_code: fallbackDivision,
+                  })
+                  return
+                }
+              }
 
               await pool.query(
                 `
@@ -6301,6 +6382,56 @@ const server = http.createServer(async (req, res) => {
                   patchBlueprintDocumentId,
                 ])
               }
+
+              // LWW gate: if the client tells us the row hasn't changed since
+              // a particular timestamp, but the server's `updated_at` is
+              // newer, reject with 409 + the authoritative server row so the
+              // offline replayer can show "your local edit was discarded".
+              const ifUnmodifiedSince = req.headers['if-unmodified-since']
+              if (ifUnmodifiedSince) {
+                const currentRow = await pool.query<{
+                  id: string
+                  project_id: string
+                  blueprint_document_id: string | null
+                  service_item_code: string
+                  quantity: string
+                  unit: string
+                  notes: string | null
+                  geometry: unknown
+                  version: number
+                  deleted_at: string | null
+                  created_at: string
+                  updated_at: string
+                }>(
+                  `select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes,
+                          geometry, version, deleted_at, created_at, updated_at
+                   from takeoff_measurements
+                   where company_id = $1 and id = $2`,
+                  [company.id, measurementId],
+                )
+                const current = currentRow.rows[0]
+                if (current) {
+                  const lww = evaluateLww(current.updated_at, ifUnmodifiedSince)
+                  if (!lww.ok && lww.reason === 'server_newer') {
+                    sendJson(res, 409, {
+                      error: 'server has a newer change',
+                      entity: 'takeoff_measurement',
+                      server_value: current,
+                      server_updated_at: lww.serverUpdatedAt.toISOString(),
+                      client_reference: lww.clientReference.toISOString(),
+                    })
+                    return
+                  }
+                  if (!lww.ok && lww.reason === 'header_unparseable') {
+                    sendJson(res, 400, {
+                      error: 'If-Unmodified-Since header is not a valid timestamp',
+                      raw: lww.rawHeader,
+                    })
+                    return
+                  }
+                }
+              }
+
               const result = await pool.query(
                 `
         update takeoff_measurements
@@ -6311,9 +6442,10 @@ const server = http.createServer(async (req, res) => {
           notes = coalesce($6, notes),
           blueprint_document_id = coalesce($7, blueprint_document_id),
           geometry = coalesce($8::jsonb, geometry),
-          version = version + 1
+          version = version + 1,
+          updated_at = now()
         where company_id = $1 and id = $2 and deleted_at is null and ($9::int is null or version = $9)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at
+        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at, updated_at
         `,
                 [
                   company.id,
