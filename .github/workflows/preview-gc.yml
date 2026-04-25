@@ -36,6 +36,8 @@ jobs:
           echo "csv=${open_csv}" >>"$GITHUB_OUTPUT"
           echo "Open PRs: ${open_csv:-<none>}"
 
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
       - name: SSH to preview droplet and reap stale stacks
         env:
           PREVIEW_KEY: ${{ secrets.PREVIEW_SSH_KEY }}
@@ -51,86 +53,17 @@ jobs:
           chmod 700 ~/.ssh
           echo "$PREVIEW_KEY" >~/.ssh/preview_key
           chmod 600 ~/.ssh/preview_key
-          ssh-keyscan -H "$PREVIEW_HOST" >>~/.ssh/known_hosts 2>/dev/null || true
 
-          # Forward the CSV via an env var; SendEnv is gated on sshd config so
-          # we inline it via the remote command line instead.
+          # Pipe the checked-in remote script via stdin; pass OPEN_PRS_CSV on
+          # the SSH command line. Using a real script file dodges YAML heredoc
+          # indentation footguns. -o StrictHostKeyChecking=accept-new pins the
+          # host key on first connect without prompting.
           quoted_csv="$(printf '%q' "$OPEN_PRS_CSV")"
-          ssh -i ~/.ssh/preview_key -o BatchMode=yes \
+          ssh -i ~/.ssh/preview_key \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=15 \
+            -o ServerAliveInterval=15 \
             "$PREVIEW_USER@$PREVIEW_HOST" \
-            "OPEN_PRS_CSV=$quoted_csv bash -s" <<'REMOTE'
-            set -euo pipefail
-
-            open_csv="${OPEN_PRS_CSV:-}"
-            open_list="$(printf '%s\n' "$open_csv" | tr ',' '\n' | awk 'NF')"
-
-            # Enumerate `sitelayer-pr-*` compose projects via container labels.
-            # `docker compose ls --format json` is friendlier but its schema
-            # has shifted across CLI versions; the label query is invariant.
-            mapfile -t projects < <(
-              docker ps -a --format '{{.Label "com.docker.compose.project"}}' \
-                | awk 'NF' \
-                | grep -E '^sitelayer-pr-[0-9]+$' \
-                | sort -u
-            )
-
-            if [ "${#projects[@]}" -eq 0 ]; then
-              echo "No sitelayer-pr-* compose projects found on droplet."
-              echo "Summary: 0 reaped, 0 retained."
-              exit 0
-            fi
-
-            reaped=()
-            retained=()
-            for project in "${projects[@]}"; do
-              pr_num="${project#sitelayer-pr-}"
-              if [[ ! "$pr_num" =~ ^[0-9]+$ ]]; then
-                echo "Skip (non-numeric suffix): $project"
-                continue
-              fi
-
-              if [ -n "$open_list" ] && printf '%s\n' "$open_list" | grep -Fxq "$pr_num"; then
-                retained+=("$project")
-                continue
-              fi
-
-              echo "Reaping stale preview stack: $project (PR #$pr_num is closed/missing)"
-              target_dir="/app/previews/pr-${pr_num}"
-              compose_file=""
-              for candidate in docker-compose.preview.yml docker-compose.preview-prod.yml; do
-                if [ -f "$target_dir/$candidate" ]; then
-                  compose_file="$candidate"
-                  break
-                fi
-              done
-
-              if [ -n "$compose_file" ]; then
-                env_args=()
-                if [ -f "$target_dir/.env" ]; then
-                  env_args=(--env-file "$target_dir/.env")
-                fi
-                ( cd "$target_dir" && \
-                  docker compose "${env_args[@]}" \
-                    -f "$compose_file" \
-                    -p "$project" \
-                    down -v --remove-orphans \
-                ) || echo "WARN: docker compose down failed for $project (continuing)"
-              else
-                # Fall back to project-name-only teardown (no compose file recovered).
-                docker compose -p "$project" down -v --remove-orphans \
-                  || echo "WARN: project-only down failed for $project (continuing)"
-              fi
-              reaped+=("$project")
-            done
-
-            echo
-            echo "Summary: ${#reaped[@]} reaped, ${#retained[@]} retained."
-            if [ "${#reaped[@]}" -gt 0 ]; then
-              echo "Reaped:"
-              printf '  - %s\n' "${reaped[@]}"
-            fi
-            if [ "${#retained[@]}" -gt 0 ]; then
-              echo "Retained (PR still open):"
-              printf '  - %s\n' "${retained[@]}"
-            fi
-          REMOTE
+            "OPEN_PRS_CSV=$quoted_csv bash -s" \
+            <scripts/preview-gc-remote.sh
