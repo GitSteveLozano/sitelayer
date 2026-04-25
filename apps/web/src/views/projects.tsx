@@ -1,6 +1,9 @@
 import { LA_TEMPLATE } from '@sitelayer/domain'
 import { useUser } from '@clerk/clerk-react'
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { apiDelete, apiPatch, apiPost, createCompany, FIXTURES_ENABLED, inviteMembership } from '../api.js'
+import { Button } from '../components/ui/button.js'
 
 // Component variant so callers in fixtures mode never trigger Clerk's hook
 // (which throws when ClerkProvider isn't mounted).
@@ -103,8 +106,36 @@ export function ProjectsView({
   const filteredWorkers = workers.filter((worker) => matches(workerSearch, worker.name, worker.role))
   const filteredCustomers = customers.filter((customer) => matches(customerSearch, customer.name, customer.external_id))
 
+  // Show the onboarding banner only when the user has a single company and it
+  // contains zero projects. This is the unambiguous "new tenant" signal — once
+  // there's a project, the banner is noise.
+  const showOnboardingBanner = bootstrap !== null && companies.length <= 1 && projects.length === 0
+  const [quickCreateOpen, setQuickCreateOpen] = useState(false)
+
   return (
     <>
+      {showOnboardingBanner ? (
+        <section
+          className="panel"
+          data-testid="onboarding-banner"
+          style={{
+            background: 'rgba(59, 130, 246, 0.1)',
+            borderLeft: '4px solid rgb(59, 130, 246)',
+          }}
+        >
+          <h2>Welcome — let&apos;s set up your account</h2>
+          <p className="muted compact">
+            Create your company, seed a first project, invite your crew, and connect QuickBooks. Takes about two minutes.
+          </p>
+          <div style={{ marginTop: 8 }}>
+            <Link to="/onboarding">
+              <Button type="button" data-testid="onboarding-banner-cta">
+                Set up
+              </Button>
+            </Link>
+          </div>
+        </section>
+      ) : null}
       <section className="hero">
         <p className="eyebrow">Greenfield reset</p>
         <h1>Sitelayer</h1>
@@ -186,25 +217,46 @@ export function ProjectsView({
           Provisions a new tenant with default divisions, service items, pricing profile, and bonus rule. The current
           user becomes admin.
         </p>
-        <FormRow
-          actionLabel="Create company"
-          busy={busy === 'create-company'}
-          onSubmit={(form) =>
-            runAction('create-company', async () => {
-              const slug = String(form.get('new_company_slug') ?? '')
-                .trim()
-                .toLowerCase()
-              const name = String(form.get('new_company_name') ?? '').trim()
-              if (!slug) throw new Error('slug is required')
-              if (!name) throw new Error('name is required')
-              const response = await createCompany({ slug, name }, companySlug)
-              setCompanySlug(response.company.slug)
-            })
-          }
-        >
-          <Input name="new_company_slug" placeholder="acme-construction" />
-          <Input name="new_company_name" placeholder="Acme Construction" />
-        </FormRow>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <Link to="/onboarding">
+            <Button type="button" size="lg" data-testid="create-company-big-button">
+              Create company (guided wizard)
+            </Button>
+          </Link>
+          {quickCreateOpen ? (
+            <FormRow
+              actionLabel="Create company"
+              busy={busy === 'create-company'}
+              onSubmit={(form) =>
+                runAction('create-company', async () => {
+                  const slug = String(form.get('new_company_slug') ?? '')
+                    .trim()
+                    .toLowerCase()
+                  const name = String(form.get('new_company_name') ?? '').trim()
+                  if (!slug) throw new Error('slug is required')
+                  if (!name) throw new Error('name is required')
+                  const response = await createCompany({ slug, name }, companySlug)
+                  setCompanySlug(response.company.slug)
+                  setQuickCreateOpen(false)
+                })
+              }
+            >
+              <Input name="new_company_slug" placeholder="acme-construction" />
+              <Input name="new_company_name" placeholder="Acme Construction" />
+            </FormRow>
+          ) : (
+            <Button
+              type="button"
+              variant="link"
+              size="sm"
+              onClick={() => setQuickCreateOpen(true)}
+              style={{ alignSelf: 'flex-start', padding: 0 }}
+              data-testid="quick-create-toggle"
+            >
+              Quick create (slug + name only)
+            </Button>
+          )}
+        </div>
       </section>
 
       {session?.user.role === 'admin' && session?.activeCompany.id ? (
