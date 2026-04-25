@@ -128,8 +128,11 @@ jobs:
 
             previous_sha="$(git rev-parse --short HEAD 2>/dev/null || true)"
 
-            # Update code
+            # Update code. The production checkout is deployment-owned; keep
+            # runtime files but clear drift from manual hotfixes/scripts.
             git fetch origin
+            git reset --hard
+            git clean -fd -e .env -e ".last_*"
             git checkout -B main origin/main
             git reset --hard origin/main
             export SENTRY_RELEASE="$(git rev-parse --short HEAD)"
