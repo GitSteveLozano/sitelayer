@@ -40,6 +40,7 @@ import {
 import { Input } from './components/ui/input.js'
 import { Toaster, toastError, toastInfo, toastSuccess } from './components/ui/toast.js'
 import { AuditView } from './views/audit.js'
+import { BonusSimView } from './views/bonus-sim.js'
 import { ClockView } from './views/clock.js'
 import { ConfirmView } from './views/confirm.js'
 import { EstimatesView } from './views/estimates.js'
@@ -408,6 +409,8 @@ function AppShell() {
   // deterministically in the e2e suite.
   const rentalsNavVisible =
     FIXTURES_ENABLED || sessionRole === 'admin' || sessionRole === 'office' || sessionRole === 'owner'
+  // Bonus sim is an admin/office tool — same gating as audit.
+  const bonusSimNavVisible = FIXTURES_ENABLED || sessionRole === 'admin' || sessionRole === 'owner'
 
   return (
     <main className="shell">
@@ -441,6 +444,7 @@ function AppShell() {
         <NavLink to="/estimates">Estimates</NavLink>
         {rentalsNavVisible ? <NavLink to="/rentals">Rentals</NavLink> : null}
         <NavLink to="/integrations">Integrations</NavLink>
+        {bonusSimNavVisible ? <NavLink to="/bonus-sim">Bonus Sim</NavLink> : null}
         {auditNavVisible ? <NavLink to="/audit">Audit</NavLink> : null}
         {devSurfaceEnabled ? <NavLink to="/dev/scratch">Dev</NavLink> : null}
       </nav>
@@ -596,6 +600,12 @@ function AppShell() {
                 void refresh()
               }}
             />
+          }
+        />
+        <Route
+          path="/bonus-sim"
+          element={
+            bonusSimNavVisible ? <BonusSimView bootstrap={bootstrap} /> : <Navigate to="/projects" replace />
           }
         />
         <Route
