@@ -46,9 +46,16 @@ import { BonusRuleEditor, CustomerEditor, PricingProfileEditor, WorkerEditor } f
 import { FormRow } from '../components/forms.js'
 import { Checkbox } from '../components/ui/checkbox.js'
 import { Input } from '../components/ui/input.js'
+import { SearchInput, usePersistedSearch } from '../components/ui/search-input.js'
 import { Select } from '../components/ui/select.js'
 import { Textarea } from '../components/ui/textarea.js'
 import type { RunAction } from './types.js'
+
+function matches(needle: string, ...haystacks: Array<string | null | undefined>): boolean {
+  if (!needle) return true
+  const query = needle.toLowerCase()
+  return haystacks.some((value) => typeof value === 'string' && value.toLowerCase().includes(query))
+}
 
 type ProjectsViewProps = {
   bootstrap: BootstrapResponse | null
@@ -85,6 +92,17 @@ export function ProjectsView({
   setCompanySlug,
   runAction,
 }: ProjectsViewProps) {
+  const [projectSearch, setProjectSearch] = usePersistedSearch(companySlug, 'projects')
+  const [workerSearch, setWorkerSearch] = usePersistedSearch(companySlug, 'workers')
+  const [customerSearch, setCustomerSearch] = usePersistedSearch(companySlug, 'customers')
+
+  const projects = bootstrap?.projects ?? []
+  const filteredProjects = projects.filter((project) =>
+    matches(projectSearch, project.name, project.customer_name, project.division_code, project.status),
+  )
+  const filteredWorkers = workers.filter((worker) => matches(workerSearch, worker.name, worker.role))
+  const filteredCustomers = customers.filter((customer) => matches(customerSearch, customer.name, customer.external_id))
+
   return (
     <>
       <section className="hero">
@@ -250,6 +268,33 @@ export function ProjectsView({
               <dd>{serviceItems.length}</dd>
             </div>
           </dl>
+          <div className="searchWrap">
+            <SearchInput
+              value={projectSearch}
+              onChange={setProjectSearch}
+              placeholder="Search projects by name, customer, division, status"
+              aria-label="Search projects"
+            />
+            <p className="muted compact">
+              {filteredProjects.length} of {projects.length} project{projects.length === 1 ? '' : 's'}
+              {projectSearch ? ` match "${projectSearch}"` : ''}
+            </p>
+          </div>
+          {projectSearch ? (
+            <ul className="list compact">
+              {filteredProjects.map((project) => (
+                <li key={project.id}>
+                  <div className="stacked">
+                    <strong>{project.name}</strong>
+                    <span className="muted compact">
+                      {project.customer_name} · {project.division_code} · {project.status}
+                    </span>
+                  </div>
+                </li>
+              ))}
+              {filteredProjects.length === 0 ? <li className="muted">No matches.</li> : null}
+            </ul>
+          ) : null}
         </article>
 
         <article className="panel">
@@ -285,8 +330,20 @@ export function ProjectsView({
 
       <section className="panel">
         <h2>Customers</h2>
+        <div className="searchWrap">
+          <SearchInput
+            value={customerSearch}
+            onChange={setCustomerSearch}
+            placeholder="Search customers by name or QBO id"
+            aria-label="Search customers"
+          />
+          <p className="muted compact">
+            {filteredCustomers.length} of {customers.length} customer{customers.length === 1 ? '' : 's'}
+            {customerSearch ? ` match "${customerSearch}"` : ''}
+          </p>
+        </div>
         <ul className="list">
-          {customers.map((customer) => (
+          {filteredCustomers.map((customer) => (
             <li key={customer.id}>
               <CustomerEditor
                 customer={customer}
@@ -383,8 +440,20 @@ export function ProjectsView({
 
       <section className="panel">
         <h2>Workers</h2>
+        <div className="searchWrap">
+          <SearchInput
+            value={workerSearch}
+            onChange={setWorkerSearch}
+            placeholder="Search workers by name or role"
+            aria-label="Search workers"
+          />
+          <p className="muted compact">
+            {filteredWorkers.length} of {workers.length} worker{workers.length === 1 ? '' : 's'}
+            {workerSearch ? ` match "${workerSearch}"` : ''}
+          </p>
+        </div>
         <ul className="list compact">
-          {workers.map((worker) => (
+          {filteredWorkers.map((worker) => (
             <li key={worker.id}>
               <WorkerEditor
                 worker={worker}
