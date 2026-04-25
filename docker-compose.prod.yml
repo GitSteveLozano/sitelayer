@@ -59,6 +59,10 @@ services:
       AUTH_ALLOW_HEADER_FALLBACK: ${AUTH_ALLOW_HEADER_FALLBACK:-}
       API_METRICS_TOKEN: ${API_METRICS_TOKEN:-}
       APP_BUILD_SHA: ${GIT_SHA:-unknown}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@sitelayer.sandolab.xyz}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
     volumes:
       - blueprint_storage:/app/storage/blueprints
     restart: always
@@ -144,6 +148,10 @@ services:
       SENTRY_RELEASE: ${SENTRY_RELEASE:-}
       DEBUG_TRACE_TOKEN: ${DEBUG_TRACE_TOKEN:-}
       APP_BUILD_SHA: ${GIT_SHA:-unknown}
+      EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
+      EMAIL_FROM: ${EMAIL_FROM:-noreply@sitelayer.sandolab.xyz}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
     restart: always
     networks:
       - sitelayer
