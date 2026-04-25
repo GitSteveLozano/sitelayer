@@ -220,7 +220,7 @@ Shared Postgres queue lease implementation used by both API-triggered sync and t
 Background job processor:
 
 - Calls `@sitelayer/queue` for the shared Postgres queue lease/transaction behavior.
-- Marks simulated local queue work as `applied`; live QBO sync still needs sandbox credential validation.
+- Marks simulated local queue work as `applied`. The QBO material-bill push path is now exercised in CI by `apps/api/src/qbo-material-bill-sync.test.ts` against a localhost HTTP mock; before flipping the `qbo-live` flag in prod, run `scripts/qbo-sandbox-smoke.sh` against a real QBO sandbox.
 
 ### Database Schema
 
