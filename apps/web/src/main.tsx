@@ -5,7 +5,10 @@ import { ClerkProvider } from '@clerk/clerk-react'
 import { App } from './App.js'
 import { Button } from './components/ui/button.js'
 import { FIXTURES_ENABLED } from './api.js'
+import { captureWebVitals } from './web-vitals.js'
 import './styles.css'
+
+captureWebVitals()
 
 const PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 if (!PUBLISHABLE_KEY && !FIXTURES_ENABLED) {
