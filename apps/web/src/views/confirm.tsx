@@ -210,10 +210,7 @@ export function ConfirmView({
         )
       } catch (caught: unknown) {
         hadError = true
-        toastError(
-          `Failed to confirm ${draft.projectName}`,
-          caught instanceof Error ? caught.message : 'unknown error',
-        )
+        toastError(`Failed to confirm ${draft.projectName}`, caught instanceof Error ? caught.message : 'unknown error')
       }
       completed += 1
       setProgress({ done: completed, total: drafts.length })
@@ -276,10 +273,7 @@ export function ConfirmView({
               </span>
             </header>
 
-            <ul
-              className="list compact"
-              style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}
-            >
+            <ul className="list compact" style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
               {draft.entries.map((entry) => (
                 <li
                   key={entry.key}
@@ -326,9 +320,7 @@ export function ConfirmView({
                     step="1"
                     min="0"
                     value={entry.sqft_done}
-                    onChange={(event) =>
-                      updateEntry(draft.scheduleId, entry.key, { sqft_done: event.target.value })
-                    }
+                    onChange={(event) => updateEntry(draft.scheduleId, entry.key, { sqft_done: event.target.value })}
                   />
                   <label
                     className="checkbox"

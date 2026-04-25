@@ -4,6 +4,7 @@
 **Assumes:** Clerk SDK is wired into the SPA (`apps/web/src/App.tsx` mounts `/sign-in` and `/sign-up`) **and** the API tier has `CLERK_JWT_KEY` set with header fallback disabled so JWTs are actually enforced. If the tier still falls back to the demo user, the bulk script at the bottom is the only path.
 
 The product flow is built on three already-shipped backend pieces:
+
 - `POST /api/companies` (creates the company; calls `seedCompanyDefaults` to provision divisions + service items + default pricing profile + default bonus rule).
 - `POST /api/companies/:id/memberships` (adds crew with role `admin|foreman|office|member`).
 - `GET /api/integrations/qbo/auth` (initiates QBO OAuth).
@@ -23,9 +24,8 @@ psql "$DATABASE_URL" -c "select count(distinct clerk_user_id) from company_membe
 doctl databases get 9948c96b-b6b6-45ad-adf7-d20e4c206c66 --format Connection
 
 # 3. Spaces bucket headroom — sitelayer-blueprints-prod cap = 250 GB included.
-#    (Skip until Spaces creds are populated; today blueprints land on the local
-#    /app/storage/blueprints volume.)
-doctl compute ssh sitelayer --ssh-command='df -h /app/storage'
+aws s3 ls s3://sitelayer-blueprints-prod --summarize \
+  --endpoint-url https://tor1.digitaloceanspaces.com
 
 # 4. QBO creds in place for the right env.
 doctl compute ssh sitelayer --ssh-command='grep ^QBO_ /app/sitelayer/.env'
@@ -47,6 +47,7 @@ If you're admin-creating on their behalf (concierge onboarding), use Clerk dashb
 ## 2. Customer creates company
 
 The SPA's "Create company" form posts to `POST /api/companies` with `{ slug, name, seed_defaults: true }`. The handler:
+
 1. Validates slug against `^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$`.
 2. Inserts row into `companies`.
 3. Inserts the creator as `role='admin'` in `company_memberships`.
@@ -54,6 +55,7 @@ The SPA's "Create company" form posts to `POST /api/companies` with `{ slug, nam
 5. Writes an audit log row, returns 201.
 
 **Verification:**
+
 ```bash
 curl -fsS -H "Authorization: Bearer $JWT" \
   https://sitelayer.sandolab.xyz/api/companies | jq
@@ -75,6 +77,7 @@ curl -fsS -X POST \
 ```
 
 Roles:
+
 - `admin` — full company access; can invite, can rotate QBO connection.
 - `foreman` — manages crew/labor entries on assigned projects.
 - `office` — read-only operational, plus invoice/estimate edit.
@@ -91,12 +94,14 @@ The invitee must already have a Clerk account in this Clerk instance — Sitelay
 From the SPA's Integrations page, the admin clicks "Connect QuickBooks". Browser navigates to `GET /api/integrations/qbo/auth` which redirects to Intuit's OAuth consent screen (signed by `QBO_STATE_SECRET`). Intuit redirects back to `QBO_REDIRECT_URI` → `/api/integrations/qbo/callback` → tokens land in `integration_connections`, `realmId` recorded, status = `connected`.
 
 **Verification:**
+
 ```bash
 psql "$DATABASE_URL" -c \
   "select company_id, status, last_synced_at from integration_connections where provider='qbo';"
 ```
 
 First sync runs automatically; trigger a manual one with `POST /api/integrations/qbo/sync`. Watch worker logs:
+
 ```bash
 doctl compute ssh sitelayer --ssh-command='
   docker compose -f /app/sitelayer/docker-compose.prod.yml logs --tail 100 worker | grep qbo
@@ -107,9 +112,10 @@ doctl compute ssh sitelayer --ssh-command='
 
 ## 5. First blueprint upload
 
-Admin or foreman opens a project, clicks "Upload blueprint", drops a PDF. SPA POSTs to `/api/projects/:id/blueprints`. With Spaces creds populated, the file lands at `s3://sitelayer-blueprints-prod/<companyId>/<blueprintId>/<filename>`. Without them, it lands on the local `blueprint_storage` Docker volume.
+Admin or foreman opens a project, clicks "Upload blueprint", drops a PDF. SPA POSTs to `/api/projects/:id/blueprints`; production stores it at `s3://sitelayer-blueprints-prod/<companyId>/<blueprintId>/<filename>`.
 
 **Verification:**
+
 ```bash
 psql "$DATABASE_URL" -c \
   "select id, project_id, storage_path, created_at from blueprint_documents order by created_at desc limit 1;"
@@ -128,6 +134,7 @@ file /tmp/check.pdf   # should report "PDF document"
 4. Verify QBO Time Activity in QBO sandbox/prod.
 
 **Spot-check:**
+
 ```bash
 psql "$DATABASE_URL" -c "
   select id, status, attempt_count, error
@@ -143,7 +150,7 @@ All `applied`, zero `error` populated → green.
 
 ## 7. Hand-off checklist
 
-- [ ] Admin Clerk user ID recorded in `mesh` (project=sitelayer, planning_note `customer_<slug>_admin`).
+- [ ] Admin Clerk user ID recorded in `mesh` (project=sitelayer, planning*note `customer*<slug>\_admin`).
 - [ ] Admin knows how to invite more people (Team view + share `/sign-up` URL).
 - [ ] Admin knows audit log lives at `audit_events` table (or via `GET /api/audit-events`).
 - [ ] Support contact set: `taylor@releaserent.com`. Response SLA: 24h business days during pilot.

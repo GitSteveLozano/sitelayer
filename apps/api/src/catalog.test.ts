@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  assertServiceItemCatalogStatus,
-  rejectionMessageForCatalog,
-  type CatalogQueryRunner,
-} from './catalog.js'
+import { assertServiceItemCatalogStatus, rejectionMessageForCatalog, type CatalogQueryRunner } from './catalog.js'
 
 /**
  * In-memory mock of the slice of pg.Pool we use. Each call inspects the SQL

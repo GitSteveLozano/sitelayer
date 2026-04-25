@@ -59,7 +59,7 @@ Runner package state: `/home/sitelayer/actions-runner` exists on `sitelayer-prev
 
 ## Current Infrastructure Snapshot
 
-**Verified with `doctl` and production smoke checks on 2026-04-24.**
+**Verified with `doctl` and production smoke checks on 2026-04-25.**
 
 | Resource                         | Current State                                                                                                                                                                    |
 | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -72,12 +72,14 @@ Runner package state: `/home/sitelayer/actions-runner` exists on `sitelayer-prev
 | Production deploy path           | GitHub Actions runs on the self-hosted `sitelayer-preview` runner, SSHs to `sitelayer@10.118.0.4`, deploys `/app/sitelayer` with Docker Compose, `.env` at `/app/sitelayer/.env` |
 | Preview deploy path              | `docker-compose.preview.yml` behind Traefik on `sitelayer-preview`; shared env at `/app/previews/.env.shared`; smoke stack at `main.preview.sitelayer.sandolab.xyz`              |
 | Public edge                      | Containerized Caddy on ports 80/443; automatic Let's Encrypt TLS for `sitelayer.sandolab.xyz`; HTTP redirects to HTTPS                                                           |
-| Backups                          | DO managed Postgres automatic backups exist; independent logical backup scripts are added and production timer uses `postgres:18-alpine` pg_dump                                 |
-| Optional integrations            | Clerk, DigitalOcean Spaces, QBO, and Sentry can stay blank/placeholders for bootable deploy; `DATABASE_URL` is the hard requirement                                              |
+| Backups                          | DO managed Postgres automatic backups exist; logical Postgres backup, Postgres off-host copy, blueprint-volume fallback copy, restore-drill, and timer-monitor timers are active |
+| Object storage                   | DO Spaces bucket `sitelayer-blueprints-prod` in `tor1`, versioning enabled, scoped prod read/write key in `/app/sitelayer/.env`                                                  |
+| Container registry               | DO Container Registry `sitelayer` in `tor1`; production deploy promotes `registry.digitalocean.com/sitelayer/sitelayer:<git-sha>`                                                |
+| Optional integrations            | QBO and Sentry can stay blank/placeholders; prod API boot requires auth config, `API_METRICS_TOKEN`, and Spaces credentials in addition to `DATABASE_URL`                        |
 
 Security note: the deploy user is in the Docker group. That avoids root SSH but Docker access is root-equivalent. Treat `DEPLOY_SSH_KEY` as production-root-equivalent.
 
-Database migrations use `scripts/migrate-db.sh`; schema readiness uses `scripts/check-db-schema.sh`. Production deploy runs both before container rebuilds. For local Docker verification without exposing Postgres on the host, run with `PSQL_DOCKER_NETWORK=sitelayer_default DATABASE_URL=postgres://sitelayer:sitelayer@db:5432/sitelayer`.
+Database migrations use `scripts/migrate-db.sh`; schema readiness uses `scripts/check-db-schema.sh`. Production deploy builds and pushes an immutable registry image, pulls that exact tag on the droplet, takes a pre-migration logical backup, then runs both before replacing containers. The runner records checksums in `schema_migrations`; add new SQL files instead of editing applied migrations. For local Docker verification without exposing Postgres on the host, run with `PSQL_DOCKER_NETWORK=sitelayer_default DATABASE_URL=postgres://sitelayer:sitelayer@db:5432/sitelayer`.
 
 ## Architecture Overview
 
@@ -96,17 +98,17 @@ Layer 3: Derived Insight & Workflow UI
 
 ### Tech Stack
 
-| Component           | Technology                                                | Notes                                                                                                         |
-| ------------------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| **Backend**         | Node.js (plain http module) + Postgres                    | No framework; minimal HTTP server                                                                             |
-| **Frontend**        | React 19 + Vite SPA                                       | Client-side only; no SSR                                                                                      |
-| **Worker**          | Node.js background tasks                                  | Postgres-backed leased queue; no Hatchet yet                                                                  |
-| **Monorepo**        | npm workspaces                                            | apps: api, web, worker; packages: config, domain, logger, queue                                               |
-| **Database**        | Postgres (pg driver)                                      | Direct SQL queries in server.ts; no ORM                                                                       |
+| Component           | Technology                                                 | Notes                                                                                                                                                                                                                                                              |
+| ------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Backend**         | Node.js (plain http module) + Postgres                     | No framework; minimal HTTP server                                                                                                                                                                                                                                  |
+| **Frontend**        | React 19 + Vite SPA                                        | Client-side only; no SSR                                                                                                                                                                                                                                           |
+| **Worker**          | Node.js background tasks                                   | Postgres-backed leased queue; no Hatchet yet                                                                                                                                                                                                                       |
+| **Monorepo**        | npm workspaces                                             | apps: api, web, worker; packages: config, domain, logger, queue                                                                                                                                                                                                    |
+| **Database**        | Postgres (pg driver)                                       | Direct SQL queries in server.ts; no ORM                                                                                                                                                                                                                            |
 | **Auth**            | Clerk wired in SPA + JWT verification in API; gated by env | `apps/web/src/App.tsx` runs SignIn/SignUp; `apps/api/src/auth.ts` verifies Clerk JWTs when `CLERK_JWT_KEY` is set. Header fallback to `ACTIVE_USER_ID=demo-user` is still active until `AUTH_ALLOW_HEADER_FALLBACK=0` and `CLERK_JWT_KEY` are configured per tier. |
-| **File Storage**    | Dual-mode shipped: local FS or DigitalOcean Spaces        | `apps/api/src/storage.ts` auto-selects `S3Storage` when `DO_SPACES_BUCKET/KEY/SECRET` are set, otherwise local FS at `BLUEPRINT_STORAGE_ROOT`. Default region `tor1`. |
-| **QBO Integration** | OAuth + REST API (direct HTTP)                            | Connector layer; sync state in `integration_mappings` table                                                   |
-| **Observability**   | Sentry v10 + Pino                                         | Trace propagation through browser/API/worker; request-scoped JSON logs via `@sitelayer/logger`                |
+| **File Storage**    | Dual-mode shipped: local FS or DigitalOcean Spaces         | `apps/api/src/storage.ts` auto-selects `S3Storage` when `DO_SPACES_BUCKET/KEY/SECRET` are set, otherwise local FS at `BLUEPRINT_STORAGE_ROOT`. Default region `tor1`.                                                                                              |
+| **QBO Integration** | OAuth + REST API (direct HTTP)                             | Connector layer; sync state in `integration_mappings` table                                                                                                                                                                                                        |
+| **Observability**   | Sentry v10 + Pino                                          | Trace propagation through browser/API/worker; request-scoped JSON logs via `@sitelayer/logger`                                                                                                                                                                     |
 
 ## Project Structure
 
@@ -139,6 +141,7 @@ sitelayer/
 **Endpoints** (representative — `apps/api/src/server.ts` is the canonical list):
 
 System / observability:
+
 - GET `/health` (note: no `/api` prefix — what Caddy probes), GET `/api/version`
 - GET `/api/metrics` — Prometheus format, gated by `API_METRICS_TOKEN`
 - GET `/api/features`, GET `/api/spec`, GET `/api/session`
@@ -146,16 +149,19 @@ System / observability:
 - GET `/api/debug/traces/:traceId` — Sentry trace fetch, gated by `DEBUG_TRACE_TOKEN`
 
 Companies / auth:
+
 - GET/POST `/api/companies`
 - POST `/api/companies/:id/memberships`
 - POST `/api/webhooks/clerk` — Svix-signed Clerk webhook
 
 Bootstrap / projects:
+
 - GET `/api/bootstrap` — projects and seed data for current company
 - POST `/api/projects`, PATCH `/api/projects/:id`
 - GET `/api/projects/:id/summary`, POST `/api/projects/:id/closeout`
 
 Blueprints / takeoff:
+
 - POST `/api/projects/:id/blueprints` — upload (currently base64 JSON; streaming refactor pending)
 - GET `/api/projects/:id/blueprints`, GET `/api/blueprints/:id/file`
 - PATCH/DELETE `/api/blueprints/:id`, POST `/api/blueprints/:id/versions`
@@ -164,25 +170,30 @@ Blueprints / takeoff:
 - GET/PATCH/DELETE `/api/takeoff/measurements/:id`
 
 Estimation:
+
 - POST `/api/projects/:id/estimate/recompute`
 - GET `/api/projects/:id/estimate/scope-vs-bid`
 - POST `/api/projects/:id/estimate/push-qbo`
 - GET `/api/projects/:id/estimate/forecast-hours`
 
 Material bills:
+
 - GET/POST `/api/projects/:id/material-bills`
 - PATCH/DELETE `/api/material-bills/:id`
 
 Reference data CRUD: customers, workers, divisions, service-items, pricing-profiles, bonus-rules, labor-entries, schedules, rentals.
 
 Time tracking (clock):
+
 - POST `/api/clock/in`, POST `/api/clock/out`
 - GET `/api/clock/timeline`
 
 Analytics:
+
 - GET `/api/analytics`, `/api/analytics/history`, `/api/analytics/divisions`, `/api/analytics/service-item-productivity`
 
 QBO integration:
+
 - GET `/api/integrations/qbo/auth`, GET `/api/integrations/qbo/callback`
 - GET/POST `/api/integrations/qbo`, POST `/api/integrations/qbo/sync`
 - POST `/api/integrations/qbo/sync/material-bills` — push material bills to QBO
@@ -190,6 +201,7 @@ QBO integration:
 - PATCH/DELETE `/api/integrations/qbo/mappings/:id`
 
 Sync queue inspection:
+
 - GET `/api/sync/status`, `/api/sync/events`, `/api/sync/outbox`
 - POST `/api/sync/process` — manual drain trigger
 
@@ -488,7 +500,8 @@ Background job processor:
 ### Phase 1 — Environment & Secrets (DONE; snapshot in `INFRASTRUCTURE_READY.md`)
 
 - [x] Domain (`sandolab.xyz` registered + DNS for prod and preview)
-- [x] DigitalOcean Spaces — `sitelayer-blueprints-prod` provisioned in `tor1`; dev/preview buckets via `scripts/provision-spaces-buckets.sh`
+- [x] DigitalOcean Spaces — `sitelayer-blueprints-prod` provisioned in `tor1`, versioning enabled, scoped prod key wired
+- [x] DigitalOcean Container Registry — `sitelayer` Starter registry in `tor1` for immutable runtime images
 - [x] DigitalOcean managed Postgres 18 (`sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev`)
 - [x] Clerk app + OAuth credentials (env vars wired; enforcement gated on `CLERK_JWT_KEY` + `AUTH_ALLOW_HEADER_FALLBACK`)
 - [x] `.env.example` scaffold; production `.env` lives at `/app/sitelayer/.env` (mode `600`); GitHub Actions injects build-time secrets at deploy
@@ -496,18 +509,18 @@ Background job processor:
 
 ### Phase 2 — Initial Deployment (DONE)
 
-- [x] Build Docker images (api, web, worker)
+- [x] Build and promote immutable runtime image (api, web, worker commands share one image)
 - [x] Postgres schema migration runner (`scripts/migrate-db.sh`) + schema checker (`scripts/check-db-schema.sh`)
 - [x] Seed data (LA Operations template via `seedCompanyDefaults` in `apps/api/src/onboarding.ts`)
 - [x] Sentry wired across api/web/worker with trace propagation
-- [x] Logical backup timer (`scripts/install-postgres-backup-systemd.sh`) running with `postgres:18-alpine` pg_dump
+- [x] Logical backup, Postgres off-host copy, blueprint-volume fallback copy, restore-drill, and timer-monitor timers running with Postgres 18 tooling
 - [ ] QBO OAuth flow validated end-to-end against sandbox (`scripts/qbo-sandbox-smoke.sh` exists; needs real creds)
-- [ ] Blueprint upload streamed directly to Spaces (current: base64 JSON, capped at `MAX_JSON_BODY_BYTES`)
+- [x] Blueprint uploads stored directly in Spaces (still base64 JSON through API, capped at `MAX_JSON_BODY_BYTES`)
 
 ### Phase 3 — Pilot Customer Onboarding
 
-- [ ] Cut over to enforced Clerk auth (`AUTH_ALLOW_HEADER_FALLBACK=0`, `CLERK_JWT_KEY` set in prod)
-- [ ] Inject `DO_SPACES_KEY/SECRET` into prod tier so storage flips off the local volume
+- [x] Cut over to enforced Clerk auth in prod (`AUTH_ALLOW_HEADER_FALLBACK=0`, `CLERK_JWT_KEY` set)
+- [x] Inject `DO_SPACES_KEY/SECRET` into prod tier so storage flips off the local volume
 - [ ] Provision first pilot company + memberships via `/api/companies` + `/api/companies/:id/memberships`
 - [ ] Train on crew scheduling + labor entry
 - [ ] Daily QBO sync running clean

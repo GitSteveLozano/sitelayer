@@ -25,9 +25,7 @@ export type QboWebhookPayload = {
   eventNotifications?: QboWebhookEventNotification[]
 }
 
-export type QboWebhookVerifyResult =
-  | { ok: true }
-  | { ok: false; status: number; error: string }
+export type QboWebhookVerifyResult = { ok: true } | { ok: false; status: number; error: string }
 
 /**
  * Map a QBO entity name to the Sitelayer sync_events entity_type taxonomy.

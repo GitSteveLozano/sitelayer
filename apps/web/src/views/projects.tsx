@@ -2,15 +2,7 @@ import { LA_TEMPLATE } from '@sitelayer/domain'
 import { useUser } from '@clerk/clerk-react'
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import {
-  apiDelete,
-  apiGet,
-  apiPatch,
-  apiPost,
-  createCompany,
-  FIXTURES_ENABLED,
-  inviteMembership,
-} from '../api.js'
+import { apiDelete, apiGet, apiPatch, apiPost, createCompany, FIXTURES_ENABLED, inviteMembership } from '../api.js'
 import type { ProjectRow } from '../api.js'
 
 // Component variant so callers in fixtures mode never trigger Clerk's hook
@@ -171,7 +163,8 @@ export function ProjectsView({
         >
           <h2>Welcome — let&apos;s set up your account</h2>
           <p className="muted compact">
-            Create your company, seed a first project, invite your crew, and connect QuickBooks. Takes about two minutes.
+            Create your company, seed a first project, invite your crew, and connect QuickBooks. Takes about two
+            minutes.
           </p>
           <div style={{ marginTop: 8 }}>
             <Link to="/onboarding">

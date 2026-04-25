@@ -65,6 +65,13 @@ describe('blueprint storage', () => {
     )
   })
 
+  it('requires an explicit escape hatch for local filesystem storage in prod', async () => {
+    await expect(createBlueprintStorage(readStorageEnv({}, 'prod'))).rejects.toThrow(StorageError)
+    await expect(
+      createBlueprintStorage(readStorageEnv({ ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD: '1' }, 'prod')),
+    ).resolves.toMatchObject({ backend: 'local-fs' })
+  })
+
   it('maps common blueprint MIME types', () => {
     expect(getBlueprintMimeType('plan.pdf')).toBe('application/pdf')
     expect(getBlueprintMimeType('plan.png')).toBe('image/png')

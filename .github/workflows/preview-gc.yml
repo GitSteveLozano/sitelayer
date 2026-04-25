@@ -24,7 +24,7 @@ jobs:
     runs-on: [self-hosted, sitelayer-preview]
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: List open PR numbers
         id: open_prs

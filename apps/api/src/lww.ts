@@ -39,8 +39,9 @@ export function evaluateLww(
   serverUpdatedAt: Date | string | null | undefined,
   ifUnmodifiedSinceHeader: string | string[] | undefined | null,
 ): LwwCheckResult {
-  const rawHeader =
-    Array.isArray(ifUnmodifiedSinceHeader) ? ifUnmodifiedSinceHeader[0] : ifUnmodifiedSinceHeader ?? ''
+  const rawHeader = Array.isArray(ifUnmodifiedSinceHeader)
+    ? ifUnmodifiedSinceHeader[0]
+    : (ifUnmodifiedSinceHeader ?? '')
   if (!rawHeader) {
     return { ok: true, clientReference: null }
   }

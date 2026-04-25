@@ -1,7 +1,7 @@
 # Sitelayer Backup Strategy
 
-**Status:** Production logical backup timer installed; uses Dockerized Postgres 18 `pg_dump`
-**Last updated:** 2026-04-24
+**Status:** Production logical backup, Postgres off-host copy, Spaces-backed blueprint storage with versioning, blueprint-volume fallback copy, restore drill, and timer monitor installed; uses Dockerized Postgres 18 tooling
+**Last updated:** 2026-04-25
 
 ## Current Managed Database Backups
 
@@ -13,8 +13,12 @@ Do not rely on provider backups as the only recovery layer. If the database clus
 
 1. **Provider backups:** DigitalOcean Managed Postgres automatic backups and point-in-time restore.
 2. **Logical backups:** `scripts/backup-postgres.sh` creates compressed `pg_dump` files with configurable retention.
-3. **Pre-migration backups:** run the logical backup script before destructive schema changes.
-4. **Restore drills:** restore a logical backup to a temporary database before pilot launch and after any major schema shift.
+3. **Off-host copy:** `scripts/backup-postgres-offsite.sh` copies the newest dump to the preview droplet at `/app/offsite-backups/postgres-from-prod`.
+4. **Blueprint primary storage:** `sitelayer-blueprints-prod` Spaces bucket in `tor1`, versioning enabled, app uses a scoped read/write key.
+5. **Blueprint-volume fallback copy:** `scripts/backup-blueprints-offsite.sh` backs up `sitelayer_blueprint_storage` to `/app/offsite-backups/blueprints-from-prod` if local prod fallback is re-enabled.
+6. **Pre-migration backups:** production deploys run the logical backup script before migrations.
+7. **Restore drills:** restore a logical backup to a temporary database before pilot launch and after any major schema shift.
+8. **Timer monitor:** hourly `sitelayer-timer-monitor.timer` checks backup/restore timer freshness and sends Sentry events on failure.
 
 ## Scripts
 
@@ -37,7 +41,13 @@ sudo APP_DIR=/app/sitelayer ENV_FILE=/app/sitelayer/.env BACKUP_DIR=/app/backups
   bash /app/sitelayer/scripts/install-postgres-backup-systemd.sh
 ```
 
-The timer defaults `PG_DUMP_DOCKER_IMAGE=postgres:18-alpine` because the managed cluster is Postgres 18 and Ubuntu 22.04's default `pg_dump` is too old.
+The installer creates `sitelayer-postgres-backup.timer`,
+`sitelayer-postgres-offsite.timer`, and `sitelayer-restore-drill.timer`.
+The backup timer defaults `PG_DUMP_DOCKER_IMAGE=postgres:18-alpine` because the
+managed cluster is Postgres 18 and Ubuntu 22.04's default `pg_dump` is too old.
+Install the blueprint-volume fallback timer separately with
+`scripts/install-blueprint-backup-systemd.sh`, and install the hourly monitor
+with `scripts/install-timer-monitor-systemd.sh`.
 
 ## Retention
 
@@ -64,6 +74,5 @@ Full restore procedures and on-call runbook live in `docs/DR_RESTORE.md`.
 
 ## Open Tasks
 
-- Add off-host copy to DigitalOcean Spaces or another object store once Spaces creds are populated (`DO_SPACES_KEY`/`DO_SPACES_SECRET` are blank in `/app/sitelayer/.env` as of 2026-04-24).
-- Run a restore drill against a non-production database and record the result.
-- Add monitoring/heartbeat for the `sitelayer-postgres-backup.timer` (currently silent if it fails).
+- Move the off-host Postgres copy from preview-droplet storage to DigitalOcean Spaces or another object store once database-backup retention requirements are defined.
+- Wire Sentry timer-monitor alerts to an on-call routing rule once the on-call destination exists.

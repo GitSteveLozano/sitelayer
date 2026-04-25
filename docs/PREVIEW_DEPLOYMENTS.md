@@ -1,7 +1,7 @@
 # Sitelayer Preview Deployments
 
 **Status:** Preview droplet, Traefik routing, shared preview DB with per-preview schemas, deploy scripts, GitHub self-hosted runner, TTL cleanup timer, and `main` smoke preview are live
-**Last updated:** 2026-04-24
+**Last updated:** 2026-04-25
 
 ## Goal
 
@@ -28,7 +28,7 @@ Do not create a second managed Postgres cluster yet. Use the existing `sitelayer
 | Reserved IPv4 for DNS | `159.203.53.218`                                                                                                                                  |
 | Private IPv4          | `10.118.0.2`                                                                                                                                      |
 | Firewall              | `sitelayer-preview`, ID `7a8f443e-cd74-4867-af8a-118559f33561`                                                                                    |
-| Firewall inbound      | SSH `22` from `50.71.113.46/32`; HTTP `80` public; HTTPS `443` public                                                                             |
+| Firewall inbound      | SSH `22` from `50.71.113.46/32` and prod droplet `566798325`; HTTP `80` public; HTTPS `443` public                                                |
 | Firewall outbound     | TCP/UDP egress plus ICMP egress to `0.0.0.0/0` for package installs, Docker pulls, ACME, and update checks                                        |
 | Router                | Traefik v3 at `/opt/sitelayer-preview-router`, Docker network `sitelayer-preview-router`                                                          |
 | Shared env            | `/app/previews/.env.shared`, owner `sitelayer:sitelayer`, mode `600`                                                                              |

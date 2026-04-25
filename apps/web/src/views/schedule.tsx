@@ -431,12 +431,7 @@ export function ScheduleView({
       >
         <WorkerRail workers={workers} />
 
-        <div
-          style={{ overflowX: 'auto' }}
-          data-testid="schedule-grid"
-          role="grid"
-          aria-label="Weekly crew schedule"
-        >
+        <div style={{ overflowX: 'auto' }} data-testid="schedule-grid" role="grid" aria-label="Weekly crew schedule">
           <div
             style={{
               display: 'grid',
@@ -843,11 +838,7 @@ function ScheduleCell({
       ) : null}
 
       {busy ? (
-        <span
-          aria-live="polite"
-          className="muted"
-          style={{ fontSize: 11, position: 'absolute', bottom: 4, right: 6 }}
-        >
+        <span aria-live="polite" className="muted" style={{ fontSize: 11, position: 'absolute', bottom: 4, right: 6 }}>
           saving…
         </span>
       ) : null}

@@ -102,10 +102,10 @@ QBO_REDIRECT_URI=https://sitelayer.sandolab.xyz/api/integrations/qbo/callback
 QBO_SUCCESS_REDIRECT_URI=https://sitelayer.sandolab.xyz/?qbo=connected
 QBO_ENVIRONMENT=production
 QBO_STATE_SECRET=
-# Blueprint storage — set DO_SPACES_* to enable S3, otherwise local FS at BLUEPRINT_STORAGE_ROOT
+# Blueprint storage — prod requires scoped Spaces credentials.
 BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
-DO_SPACES_KEY=
-DO_SPACES_SECRET=
+DO_SPACES_KEY=<scoped-readwrite-key>
+DO_SPACES_SECRET=<scoped-readwrite-secret>
 DO_SPACES_BUCKET=sitelayer-blueprints-prod
 DO_SPACES_REGION=tor1
 DO_SPACES_ENDPOINT=https://tor1.digitaloceanspaces.com
@@ -125,14 +125,15 @@ EOF
 
 ### 3. Initialize database
 
-Use the migration runner — it applies every file in `docker/postgres/init/` in order, idempotently. Don't `psql < 001_schema.sql` directly (skips later migrations).
+Use the migration runner — it applies every file in `docker/postgres/init/` in order, records checksums in `schema_migrations`, and skips already-applied files. Don't `psql < 001_schema.sql` directly (skips later migrations and the ledger).
 
 ```bash
 ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
 ENV_FILE=/app/sitelayer/.env PSQL_DOCKER_IMAGE=postgres:18-alpine \
   scripts/migrate-db.sh
-ENV_FILE=/app/sitelayer/.env scripts/check-db-schema.sh
+ENV_FILE=/app/sitelayer/.env PSQL_DOCKER_IMAGE=postgres:18-alpine \
+  scripts/check-db-schema.sh
 EOF
 ```
 
@@ -182,14 +183,16 @@ ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz \
   'cd /app/sitelayer && docker compose -f docker-compose.prod.yml down'
 ```
 
-### Rebuild and restart
+### Pull current immutable image and restart
 
 ```bash
 ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
-docker compose -f docker-compose.prod.yml down
-docker compose -f docker-compose.prod.yml build --pull
-docker compose -f docker-compose.prod.yml up -d
+GIT_SHA=$(git rev-parse --short HEAD)
+APP_IMAGE=registry.digitalocean.com/sitelayer/sitelayer:$GIT_SHA
+(grep -q '^APP_IMAGE=' .env && sed -i "s|^APP_IMAGE=.*|APP_IMAGE=$APP_IMAGE|" .env || printf '\nAPP_IMAGE=%s\n' "$APP_IMAGE" >> .env)
+APP_IMAGE=$APP_IMAGE docker compose -f docker-compose.prod.yml pull api web worker
+APP_IMAGE=$APP_IMAGE docker compose -f docker-compose.prod.yml up -d --remove-orphans
 EOF
 ```
 

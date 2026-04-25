@@ -157,7 +157,10 @@ export function renderEstimatePdf(input: EstimatePdfInput, sink: Writable): Prom
     doc.fillColor('#000000')
 
     // Project block
-    doc.fontSize(13).font('Helvetica-Bold').text(`Estimate · ${safe(input.project.name)}`)
+    doc
+      .fontSize(13)
+      .font('Helvetica-Bold')
+      .text(`Estimate · ${safe(input.project.name)}`)
     doc.fontSize(10).font('Helvetica')
     doc.text(`Customer: ${safe(input.project.customer_name)}`)
     doc.text(`Location: ${safe(input.project.location ?? null)}`)
@@ -224,12 +227,12 @@ export function renderEstimatePdf(input: EstimatePdfInput, sink: Writable): Prom
     }
 
     // Bid vs Scope variance
-    const scope = input.project.scope_total === null || input.project.scope_total === undefined
-      ? null
-      : Number(input.project.scope_total)
-    const bid = input.project.bid_total === null || input.project.bid_total === undefined
-      ? null
-      : Number(input.project.bid_total)
+    const scope =
+      input.project.scope_total === null || input.project.scope_total === undefined
+        ? null
+        : Number(input.project.scope_total)
+    const bid =
+      input.project.bid_total === null || input.project.bid_total === undefined ? null : Number(input.project.bid_total)
     if (scope !== null && Number.isFinite(scope) && bid !== null && Number.isFinite(bid)) {
       const variance = bid - scope
       doc.moveDown(0.6)

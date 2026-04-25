@@ -55,13 +55,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Throwaway container, no port mapping, tmpfs-backed data dir so we never
+# Throwaway container, no port mapping, tmpfs-backed Postgres dir so we never
 # touch host state.
 docker run -d --rm \
   --name "$SCRATCH_CONTAINER" \
   -e POSTGRES_PASSWORD="$SCRATCH_PASSWORD" \
   -e POSTGRES_DB="$SCRATCH_DB" \
-  --tmpfs /var/lib/postgresql/data:rw \
+  --tmpfs /var/lib/postgresql:rw \
   "$PG_IMAGE" >/dev/null
 
 # Wait for readiness.
@@ -115,6 +115,11 @@ check_count() {
   fi
 }
 
+count_rows() {
+  local table="$1"
+  psql_in_scratch "SELECT count(*) FROM $table"
+}
+
 check_recency() {
   local table="$1"
   local age_hours
@@ -137,11 +142,19 @@ echo
 echo "Sanity checks:"
 check_count companies
 check_count projects
-check_count takeoff_measurements
+takeoff_count="$(count_rows takeoff_measurements || printf '0')"
+if [ "$takeoff_count" -gt 0 ]; then
+  echo "OK   count(takeoff_measurements)=$takeoff_count"
+else
+  echo "WARN count(takeoff_measurements)=0 (skipping takeoff recency until pilot data exists)"
+fi
 
-# Recency checks. Use takeoff_measurements as the most active write target;
-# fall back to projects if takeoff_measurements has no rows yet.
-check_recency takeoff_measurements
+# Recency checks. Projects are required seed/customer workflow data. Takeoff
+# measurements become an additional recency signal once pilot usage creates them.
+check_recency projects
+if [ "$takeoff_count" -gt 0 ]; then
+  check_recency takeoff_measurements
+fi
 
 echo
 if [ "$fail" -eq 0 ]; then

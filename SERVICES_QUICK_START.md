@@ -3,6 +3,7 @@
 > **🚫 SUPERSEDED — DO NOT USE FOR PROVISIONING (banner added 2026-04-25).**
 >
 > The infrastructure described here is provisioned (see `INFRASTRUCTURE_READY.md`) and the code-changes are merged. Concrete instructions are wrong against the current code:
+>
 > - Reverse proxy is **Caddy**, not nginx + certbot.
 > - Background jobs are a bespoke Postgres-leased queue, not Hatchet.
 > - Auth env vars are `CLERK_JWT_KEY` / `CLERK_ISSUER` / `CLERK_WEBHOOK_SECRET` / `AUTH_ALLOW_HEADER_FALLBACK` — not `CLERK_SECRET_KEY`. The SPA is Vite, so frontend env is `VITE_*`, not `NEXT_PUBLIC_*`.
@@ -289,8 +290,9 @@ sudo systemctl reload nginx
 ### Step 4: Database & Hatchet
 
 ```bash
-# Apply schema
-psql $DATABASE_URL < docker/postgres/init/001_schema.sql
+# Apply migrations and verify schema
+DATABASE_URL="$DATABASE_URL" scripts/migrate-db.sh
+DATABASE_URL="$DATABASE_URL" scripts/check-db-schema.sh
 
 # Run Hatchet
 docker run -d \

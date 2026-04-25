@@ -314,10 +314,71 @@ async function heartbeat() {
   )
 }
 
-await heartbeat()
-setInterval(() => {
-  void heartbeat().catch((error) => {
-    logger.error({ err: error }, '[worker] heartbeat failed')
+let shutdownStarted = false
+let heartbeatInFlight: Promise<void> | null = null
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+
+async function runHeartbeat() {
+  if (shutdownStarted) return
+  if (heartbeatInFlight) {
+    logger.warn('[worker] previous heartbeat still running; skipping overlap')
+    return
+  }
+
+  heartbeatInFlight = heartbeat()
+    .catch((error) => {
+      logger.error({ err: error }, '[worker] heartbeat failed')
+      Sentry.captureException(error)
+    })
+    .finally(() => {
+      heartbeatInFlight = null
+    })
+
+  await heartbeatInFlight
+}
+
+async function shutdown(signal: NodeJS.Signals) {
+  if (shutdownStarted) return
+  shutdownStarted = true
+  logger.info({ signal }, '[worker] shutting down')
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer)
+  }
+
+  const forceExit = setTimeout(
+    () => {
+      logger.error({ signal }, '[worker] shutdown timed out')
+      process.exit(1)
+    },
+    Number(process.env.SHUTDOWN_TIMEOUT_MS ?? 15_000),
+  )
+  forceExit.unref()
+
+  try {
+    if (heartbeatInFlight) {
+      await heartbeatInFlight
+    }
+    await pool.end()
+    await Sentry.flush(2_000)
+    clearTimeout(forceExit)
+    logger.info({ signal }, '[worker] shutdown complete')
+    process.exit(0)
+  } catch (error) {
+    clearTimeout(forceExit)
+    logger.error({ err: error, signal }, '[worker] shutdown failed')
     Sentry.captureException(error)
-  })
+    process.exit(1)
+  }
+}
+
+process.on('SIGTERM', () => {
+  void shutdown('SIGTERM')
+})
+process.on('SIGINT', () => {
+  void shutdown('SIGINT')
+})
+
+await runHeartbeat()
+heartbeatTimer = setInterval(() => {
+  void runHeartbeat()
 }, pollIntervalMs)

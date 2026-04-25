@@ -102,7 +102,7 @@ Environment=BACKUP_DIR=$BACKUP_DIR
 Environment=OFFSITE_HOST=$OFFSITE_HOST
 Environment=OFFSITE_DIR=$OFFSITE_DIR
 Environment=OFFSITE_RETENTION_DAYS=$OFFSITE_RETENTION_DAYS
-Environment=SSH_OPTS=-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -i $SSH_KEY_PATH
+Environment="SSH_OPTS=-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=15 -i $SSH_KEY_PATH"
 ExecStart=$APP_DIR/scripts/backup-postgres-offsite.sh
 EOF
 

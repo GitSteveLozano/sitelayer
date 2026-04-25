@@ -12,21 +12,11 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "paths": {
-      "@/*": [
-        "./apps/web/src/*"
-      ],
-      "@sitelayer/config": [
-        "./packages/config/src/index.ts"
-      ],
-      "@sitelayer/domain": [
-        "./packages/domain/src/index.ts"
-      ],
-      "@sitelayer/logger": [
-        "./packages/logger/src/index.ts"
-      ],
-      "@sitelayer/queue": [
-        "./packages/queue/src/index.ts"
-      ]
+      "@/*": ["./apps/web/src/*"],
+      "@sitelayer/config": ["./packages/config/src/index.ts"],
+      "@sitelayer/domain": ["./packages/domain/src/index.ts"],
+      "@sitelayer/logger": ["./packages/logger/src/index.ts"],
+      "@sitelayer/queue": ["./packages/queue/src/index.ts"]
     }
   }
 }

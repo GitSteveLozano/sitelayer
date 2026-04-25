@@ -305,9 +305,7 @@ export function AuditView({ companySlug, session, publicMetadataRole }: AuditVie
           Events <span className="muted compact">({events.length})</span>
         </h2>
         {error ? <p className="muted">Error: {error}</p> : null}
-        {!loading && !error && events.length === 0 ? (
-          <p className="muted">No events matched those filters.</p>
-        ) : null}
+        {!loading && !error && events.length === 0 ? <p className="muted">No events matched those filters.</p> : null}
         {events.length > 0 ? (
           <div className="auditTableWrap">
             <table className="auditTable">

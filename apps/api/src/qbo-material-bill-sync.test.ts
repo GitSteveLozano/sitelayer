@@ -50,7 +50,10 @@ type InMemoryState = {
 
 function buildInMemoryRunner(state: InMemoryState): QboBillSyncRunner {
   return {
-    async query<Row = unknown>(sql: string, params: unknown[] = []): Promise<{ rows: Row[]; rowCount?: number | null }> {
+    async query<Row = unknown>(
+      sql: string,
+      params: unknown[] = [],
+    ): Promise<{ rows: Row[]; rowCount?: number | null }> {
       // 1. Materials AccountRef lookup
       if (sql.includes("entity_type = 'qbo_account'") && sql.includes("local_ref = 'materials'")) {
         const companyId = String(params[0])

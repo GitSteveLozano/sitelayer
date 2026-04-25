@@ -1,13 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import {
-  API_URL,
-  apiPost,
-  createCompany,
-  DEFAULT_COMPANY_SLUG,
-  FIXTURES_ENABLED,
-  inviteMembership,
-} from '../api.js'
+import { API_URL, apiPost, createCompany, DEFAULT_COMPANY_SLUG, FIXTURES_ENABLED, inviteMembership } from '../api.js'
 import type { BootstrapResponse } from '../api.js'
 import { Button } from '../components/ui/button.js'
 import { Checkbox } from '../components/ui/checkbox.js'
@@ -376,7 +369,11 @@ export function OnboardingView({ bootstrap, activeCompanySlug, setCompanySlug, o
                 borderRadius: 6,
                 border: '1px solid rgba(148, 163, 184, 0.35)',
                 background:
-                  status === 'current' ? 'rgba(59, 130, 246, 0.15)' : status === 'done' ? 'rgba(34, 197, 94, 0.1)' : 'transparent',
+                  status === 'current'
+                    ? 'rgba(59, 130, 246, 0.15)'
+                    : status === 'done'
+                      ? 'rgba(34, 197, 94, 0.1)'
+                      : 'transparent',
                 fontWeight: status === 'current' ? 600 : 400,
                 fontSize: 12,
               }}
@@ -428,7 +425,9 @@ export function OnboardingView({ bootstrap, activeCompanySlug, setCompanySlug, o
 
       {draft.step === 'project' ? (
         <div className="formGrid" data-testid="step-project">
-          <p className="muted compact">Creating the first project for {draft.createdCompany?.name ?? 'your company'}.</p>
+          <p className="muted compact">
+            Creating the first project for {draft.createdCompany?.name ?? 'your company'}.
+          </p>
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
             <span>Project name</span>
             <Input

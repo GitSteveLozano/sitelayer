@@ -15,15 +15,50 @@ const SEED: SeedLaborEntry[] = [
   // Two workers, two items, three different weeks. Picked so each split has a
   // distinct top row and the totals reconcile to a checkable round number.
   // Week of 2026-04-06 (Mon): EPS / Alice / 8h @ $40 = $320
-  { service_item_code: 'EPS', worker_id: 'w1', worker_name: 'Alice', hours: 8, occurred_on: '2026-04-07', labor_rate: 40 },
+  {
+    service_item_code: 'EPS',
+    worker_id: 'w1',
+    worker_name: 'Alice',
+    hours: 8,
+    occurred_on: '2026-04-07',
+    labor_rate: 40,
+  },
   // Week of 2026-04-06 (Mon): EPS / Bob / 6h @ $40 = $240
-  { service_item_code: 'EPS', worker_id: 'w2', worker_name: 'Bob', hours: 6, occurred_on: '2026-04-08', labor_rate: 40 },
+  {
+    service_item_code: 'EPS',
+    worker_id: 'w2',
+    worker_name: 'Bob',
+    hours: 6,
+    occurred_on: '2026-04-08',
+    labor_rate: 40,
+  },
   // Week of 2026-04-13 (Mon): DRY / Alice / 4h @ $40 = $160
-  { service_item_code: 'DRY', worker_id: 'w1', worker_name: 'Alice', hours: 4, occurred_on: '2026-04-13', labor_rate: 40 },
+  {
+    service_item_code: 'DRY',
+    worker_id: 'w1',
+    worker_name: 'Alice',
+    hours: 4,
+    occurred_on: '2026-04-13',
+    labor_rate: 40,
+  },
   // Week of 2026-04-13 (Mon): DRY / Bob / 2h @ $50 = $100 (different rate)
-  { service_item_code: 'DRY', worker_id: 'w2', worker_name: 'Bob', hours: 2, occurred_on: '2026-04-15', labor_rate: 50 },
+  {
+    service_item_code: 'DRY',
+    worker_id: 'w2',
+    worker_name: 'Bob',
+    hours: 2,
+    occurred_on: '2026-04-15',
+    labor_rate: 50,
+  },
   // Week of 2026-04-20 (Mon): unassigned worker
-  { service_item_code: 'EPS', worker_id: null, worker_name: '(unassigned)', hours: 1, occurred_on: '2026-04-20', labor_rate: 40 },
+  {
+    service_item_code: 'EPS',
+    worker_id: null,
+    worker_name: '(unassigned)',
+    hours: 1,
+    occurred_on: '2026-04-20',
+    labor_rate: 40,
+  },
 ]
 
 describe('parseLaborReportFilters', () => {

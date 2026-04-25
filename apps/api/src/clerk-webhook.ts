@@ -12,9 +12,7 @@ export type ClerkWebhookHeaders = {
   svixSignature: string | null
 }
 
-export type ClerkWebhookResult =
-  | { ok: true; event: ClerkWebhookEvent }
-  | { ok: false; status: number; error: string }
+export type ClerkWebhookResult = { ok: true; event: ClerkWebhookEvent } | { ok: false; status: number; error: string }
 
 export function extractSvixHeaders(headers: Record<string, unknown>): ClerkWebhookHeaders {
   function pick(key: string): string | null {
@@ -33,11 +31,7 @@ export function extractSvixHeaders(headers: Record<string, unknown>): ClerkWebho
  * Verify a Clerk svix-signed webhook payload. Returns the parsed event on success
  * or an error tuple on failure. Caller is responsible for HTTP status mapping.
  */
-export function verifyClerkWebhook(
-  rawBody: string,
-  headers: ClerkWebhookHeaders,
-  secret: string,
-): ClerkWebhookResult {
+export function verifyClerkWebhook(rawBody: string, headers: ClerkWebhookHeaders, secret: string): ClerkWebhookResult {
   if (!headers.svixId || !headers.svixTimestamp || !headers.svixSignature) {
     return { ok: false, status: 400, error: 'missing svix-id / svix-timestamp / svix-signature header' }
   }
