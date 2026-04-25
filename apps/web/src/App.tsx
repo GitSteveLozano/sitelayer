@@ -1,16 +1,16 @@
 import { useCallback, useEffect, useState, type ComponentProps } from 'react'
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
+import { SignedIn, SignedOut, SignIn, SignUp, UserButton, useAuth, useUser } from '@clerk/clerk-react'
 import { Sentry } from './instrument.js'
 import {
   apiGet,
   DEFAULT_COMPANY_SLUG,
-  DEFAULT_USER_ID,
+  FIXTURES_ENABLED,
   getStoredCompanySlug,
-  getStoredUserId,
   readOfflineQueue,
+  registerClerkTokenProvider,
   replayOfflineMutations,
   setStoredCompanySlug,
-  setStoredUserId,
 } from './api.js'
 import type {
   BlueprintRow,
@@ -44,11 +44,73 @@ import { TakeoffsView } from './views/takeoffs.js'
 
 const SentryRoutes = Sentry.withSentryReactRouterV7Routing(Routes)
 
+// Bridge Clerk's getToken into the api module's global token provider.
+// Mounted inside <SignedIn>; on sign-out the provider keeps returning whatever
+// Clerk's getToken does (null until a new session). Registering a single function
+// reference keeps re-renders cheap.
+function ClerkTokenBridge() {
+  const { getToken } = useAuth()
+  useEffect(() => {
+    registerClerkTokenProvider(() => getToken())
+    return () => {
+      registerClerkTokenProvider(async () => null)
+    }
+  }, [getToken])
+  return null
+}
+
 export function App() {
+  // Fixtures mode (e2e + storybook-like preview) renders the app without Clerk
+  // auth gating so tests can deterministically reach every route without a
+  // session. The api module short-circuits real HTTP in fixtures mode too.
+  if (FIXTURES_ENABLED) {
+    return (
+      <BrowserRouter>
+        <AppShell />
+      </BrowserRouter>
+    )
+  }
   return (
     <BrowserRouter>
-      <AppShell />
+      <SignedOut>
+        <UnauthShell />
+      </SignedOut>
+      <SignedIn>
+        <ClerkTokenBridge />
+        <AppShell />
+      </SignedIn>
     </BrowserRouter>
+  )
+}
+
+function UnauthShell() {
+  // Best-effort tier ribbon for unsigned users — does not require a token.
+  const [features, setFeatures] = useState<FeaturesResponse | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    apiGet<FeaturesResponse>('/api/features', DEFAULT_COMPANY_SLUG)
+      .then((data) => {
+        if (!cancelled) setFeatures(data)
+      })
+      .catch(() => {
+        /* ribbon is best-effort */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  return (
+    <main className="shell">
+      <EnvironmentRibbon features={features} />
+      <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
+        <SentryRoutes>
+          <Route path="/sign-in/*" element={<SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" />} />
+          <Route path="/sign-up/*" element={<SignUp routing="path" path="/sign-up" signInUrl="/sign-in" />} />
+          <Route path="*" element={<Navigate to="/sign-in" replace />} />
+        </SentryRoutes>
+      </div>
+    </main>
   )
 }
 
@@ -60,7 +122,6 @@ function AppShell() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [companySlug, setCompanySlug] = useState(() => getStoredCompanySlug() || DEFAULT_COMPANY_SLUG)
-  const [userId, setUserId] = useState(() => getStoredUserId() || DEFAULT_USER_ID)
   const [blueprints, setBlueprints] = useState<BlueprintRow[]>([])
   const [measurements, setMeasurements] = useState<MeasurementRow[]>([])
   const [schedules, setSchedules] = useState<ScheduleRow[]>([])
@@ -90,10 +151,6 @@ function AppShell() {
   useEffect(() => {
     setStoredCompanySlug(companySlug)
   }, [companySlug])
-
-  useEffect(() => {
-    setStoredUserId(userId)
-  }, [userId])
 
   const refresh = useCallback(async () => {
     const [sessionData, data] = await Promise.all([
@@ -273,6 +330,11 @@ function AppShell() {
   return (
     <main className="shell">
       <EnvironmentRibbon features={features} />
+      {FIXTURES_ENABLED ? null : (
+        <div className="appHeader" style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 16px' }}>
+          <UserButton afterSignOutUrl="/sign-in" />
+        </div>
+      )}
       <nav className="appNav" aria-label="Primary">
         <NavLink to="/projects">Projects</NavLink>
         <NavLink to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}>Takeoffs</NavLink>
@@ -290,7 +352,6 @@ function AppShell() {
               session={session}
               companies={companies}
               companySlug={companySlug}
-              userId={userId}
               busy={busy}
               error={error}
               customers={customers}
@@ -300,7 +361,6 @@ function AppShell() {
               pricingProfiles={pricingProfiles}
               bonusRules={bonusRules}
               primaryDivision={primaryDivision}
-              setUserId={setUserId}
               setCompanySlug={setCompanySlug}
               runAction={runAction}
             />
@@ -396,6 +456,9 @@ function AppShell() {
           path="/dev/*"
           element={devSurfaceEnabled ? <DevScratchView features={features} /> : <Navigate to="/projects" replace />}
         />
+        {/* If a signed-in user lands on a sign-in URL, bounce them home. */}
+        <Route path="/sign-in/*" element={<Navigate to="/projects" replace />} />
+        <Route path="/sign-up/*" element={<Navigate to="/projects" replace />} />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </SentryRoutes>
     </main>
@@ -423,6 +486,11 @@ function RoutedTakeoffsView(props: ComponentProps<typeof TakeoffsView>) {
   )
 }
 
+function DevScratchUserId() {
+  const { user } = useUser()
+  return <>{user?.id ?? 'unknown'}</>
+}
+
 function DevScratchView({ features }: { features: FeaturesResponse | null }) {
   return (
     <section className="panel">
@@ -438,6 +506,10 @@ function DevScratchView({ features }: { features: FeaturesResponse | null }) {
             <div>
               <dt>Flags</dt>
               <dd>{features?.flags.join(', ') || 'none'}</dd>
+            </div>
+            <div>
+              <dt>Clerk user</dt>
+              <dd>{FIXTURES_ENABLED ? 'fixture-user' : <DevScratchUserId />}</dd>
             </div>
           </dl>
         </article>

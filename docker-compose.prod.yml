@@ -6,6 +6,7 @@ services:
       target: runtime
       args:
         VITE_API_URL: ${VITE_API_URL:-}
+        VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}
         VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
         VITE_USER_ID: ${VITE_USER_ID:-demo-user}
         VITE_APP_TIER: ${VITE_APP_TIER:-prod}
@@ -53,6 +54,7 @@ services:
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:3000}
       CLERK_JWT_KEY: ${CLERK_JWT_KEY:-}
       CLERK_ISSUER: ${CLERK_ISSUER:-}
+      CLERK_WEBHOOK_SECRET: ${CLERK_WEBHOOK_SECRET:-}
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-}
       AUTH_ALLOW_HEADER_FALLBACK: ${AUTH_ALLOW_HEADER_FALLBACK:-}
       API_METRICS_TOKEN: ${API_METRICS_TOKEN:-}
@@ -82,6 +84,7 @@ services:
       target: runtime
       args:
         VITE_API_URL: ${VITE_API_URL:-}
+        VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}
         VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
         VITE_USER_ID: ${VITE_USER_ID:-demo-user}
         VITE_APP_TIER: ${VITE_APP_TIER:-prod}
@@ -111,6 +114,7 @@ services:
       target: runtime
       args:
         VITE_API_URL: ${VITE_API_URL:-}
+        VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}
         VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
         VITE_USER_ID: ${VITE_USER_ID:-demo-user}
         VITE_APP_TIER: ${VITE_APP_TIER:-prod}

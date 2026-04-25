@@ -1,5 +1,39 @@
 import { LA_TEMPLATE } from '@sitelayer/domain'
-import { apiDelete, apiPatch, apiPost, createCompany, inviteMembership } from '../api.js'
+import { useUser } from '@clerk/clerk-react'
+import { apiDelete, apiPatch, apiPost, createCompany, FIXTURES_ENABLED, inviteMembership } from '../api.js'
+
+// Component variant so callers in fixtures mode never trigger Clerk's hook
+// (which throws when ClerkProvider isn't mounted).
+function ClerkIdentityPanel() {
+  const { user } = useUser()
+  return (
+    <>
+      <div>
+        <dt>Clerk user id</dt>
+        <dd>{user?.id ?? '—'}</dd>
+      </div>
+      <div>
+        <dt>Email</dt>
+        <dd>{user?.primaryEmailAddress?.emailAddress ?? '—'}</dd>
+      </div>
+    </>
+  )
+}
+
+function FixtureIdentityPanel() {
+  return (
+    <>
+      <div>
+        <dt>Clerk user id</dt>
+        <dd>fixture-user</dd>
+      </div>
+      <div>
+        <dt>Email</dt>
+        <dd>fixture@example.com</dd>
+      </div>
+    </>
+  )
+}
 import type {
   BonusRuleRow,
   BootstrapResponse,
@@ -21,7 +55,6 @@ type ProjectsViewProps = {
   session: SessionResponse | null
   companies: CompaniesResponse['companies']
   companySlug: string
-  userId: string
   busy: string | null
   error: string | null
   customers: BootstrapResponse['customers']
@@ -31,7 +64,6 @@ type ProjectsViewProps = {
   pricingProfiles: PricingProfileRow[]
   bonusRules: BonusRuleRow[]
   primaryDivision: string
-  setUserId: (userId: string) => void
   setCompanySlug: (companySlug: string) => void
   runAction: RunAction
 }
@@ -41,7 +73,6 @@ export function ProjectsView({
   session,
   companies,
   companySlug,
-  userId,
   busy,
   error,
   customers,
@@ -51,7 +82,6 @@ export function ProjectsView({
   pricingProfiles,
   bonusRules,
   primaryDivision,
-  setUserId,
   setCompanySlug,
   runAction,
 }: ProjectsViewProps) {
@@ -92,28 +122,9 @@ export function ProjectsView({
       </section>
 
       <section className="panel">
-        <h2>Clerk Bridge</h2>
-        <p className="muted">
-          The app speaks in Clerk-shaped user ids and company memberships, even while running locally.
-        </p>
-        <FormRow
-          actionLabel="Load user"
-          busy={busy === 'user'}
-          onSubmit={(form) =>
-            runAction(
-              'user',
-              async () => {
-                const nextUserId = String(form.get('user_id') ?? '').trim()
-                if (!nextUserId) throw new Error('user id is required')
-                setUserId(nextUserId)
-              },
-              { skipRefresh: true },
-            )
-          }
-        >
-          <Input name="user_id" defaultValue={userId} placeholder="Clerk user id" />
-          <Input name="display_name" defaultValue={session?.user.id ?? userId} placeholder="Display name" disabled />
-        </FormRow>
+        <h2>Clerk Identity</h2>
+        <p className="muted">Signed in via Clerk; the API receives the Clerk session JWT on every request.</p>
+        <dl className="kv">{FIXTURES_ENABLED ? <FixtureIdentityPanel /> : <ClerkIdentityPanel />}</dl>
       </section>
 
       <section className="panel">

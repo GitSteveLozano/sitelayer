@@ -286,17 +286,42 @@ class QueueableMutationError extends Error {
 // Configuration
 export const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3001'
 export const DEFAULT_COMPANY_SLUG = import.meta.env.VITE_COMPANY_SLUG ?? 'la-operations'
+/** @deprecated Retained for fixtures/legacy storage compat. The runtime user id now comes from Clerk. */
 export const DEFAULT_USER_ID = import.meta.env.VITE_USER_ID ?? 'demo-user'
 export const FIXTURES_ENABLED = import.meta.env.VITE_FIXTURES === '1' || import.meta.env.VITE_FIXTURES === 'true'
 const RESPONSE_CACHE_PREFIX = 'sitelayer.cache'
 const MUTATION_QUEUE_KEY = 'sitelayer.offlineQueue'
 
-// User storage
+// Clerk session token provider. Registered once at boot from <App> via useAuth().getToken.
+// Returning null means "no signed-in user" — calls fall back to no Authorization header,
+// which the prod API will reject once AUTH_ALLOW_HEADER_FALLBACK is flipped to 0.
+type TokenProvider = () => Promise<string | null>
+let tokenProvider: TokenProvider = async () => null
+
+export function registerClerkTokenProvider(fn: TokenProvider) {
+  tokenProvider = fn
+}
+
+async function authHeaders(companySlug: string): Promise<Record<string, string>> {
+  const headers: Record<string, string> = { 'x-sitelayer-company-slug': companySlug }
+  try {
+    const token = await tokenProvider()
+    if (token) headers['Authorization'] = `Bearer ${token}`
+  } catch (error) {
+    // Token provider failures should not crash request building; the API's auth
+    // layer will return 401 and the caller can surface that. Surface to Sentry.
+    Sentry.captureException(error, { tags: { scope: 'clerk_token_provider' } })
+  }
+  return headers
+}
+
+/** @deprecated The SPA uses Clerk session JWTs now; user id is server-derived. Fixtures still read this. */
 export function getStoredUserId() {
   if (typeof window === 'undefined') return DEFAULT_USER_ID
   return window.localStorage.getItem('sitelayer.userId') ?? DEFAULT_USER_ID
 }
 
+/** @deprecated Kept for fixtures compat; production no longer writes user id from the client. */
 export function setStoredUserId(userId: string) {
   if (typeof window === 'undefined') return
   window.localStorage.setItem('sitelayer.userId', userId)
@@ -387,12 +412,8 @@ export async function apiGet<T>(path: string, companySlug: string): Promise<T> {
     const { getFixtureResponse } = await import('./fixtures.js')
     return getFixtureResponse<T>(path, companySlug)
   }
-  const userId = getStoredUserId()
   const response = await fetch(`${API_URL}${path}`, {
-    headers: {
-      'x-sitelayer-company-slug': companySlug,
-      'x-sitelayer-user-id': userId,
-    },
+    headers: await authHeaders(companySlug),
   })
   if (!response.ok) {
     const cached = readCachedResponse<T>(companySlug, path)
@@ -414,15 +435,12 @@ async function apiMutate<T>(
     const { mutateFixtureResponse } = await import('./fixtures.js')
     return mutateFixtureResponse<T>(method, path, body, companySlug)
   }
-  const userId = getStoredUserId()
   try {
+    const headers = await authHeaders(companySlug)
+    headers['content-type'] = 'application/json'
     const requestInit: RequestInit = {
       method,
-      headers: {
-        'content-type': 'application/json',
-        'x-sitelayer-company-slug': companySlug,
-        'x-sitelayer-user-id': userId,
-      },
+      headers,
     }
     if (body !== undefined) {
       requestInit.body = JSON.stringify(body)
@@ -443,7 +461,10 @@ async function apiMutate<T>(
     if (!(error instanceof QueueableMutationError)) {
       throw error
     }
-    await enqueueOfflineMutation({ method, path, body, companySlug, userId })
+    // userId is no longer load-bearing under Clerk auth — the JWT is fetched fresh
+    // at replay time via tokenProvider. Persist a placeholder so older queued
+    // entries (which had a real userId) still deserialize cleanly.
+    await enqueueOfflineMutation({ method, path, body, companySlug, userId: getStoredUserId() })
     console.warn(`[offline] queued ${method} ${path}`, error)
     return (body ?? { queued: true }) as T
   }
@@ -503,13 +524,13 @@ export async function replayOfflineMutations(companySlug: string) {
         }
 
         try {
+          // Re-fetch a fresh Clerk token per mutation; tokens expire in ~60s and
+          // the queue may have been parked across multiple sign-in sessions.
+          const headers = await authHeaders(mutation.companySlug)
+          headers['content-type'] = 'application/json'
           const requestInit: RequestInit = {
             method: mutation.method,
-            headers: {
-              'content-type': 'application/json',
-              'x-sitelayer-company-slug': mutation.companySlug,
-              'x-sitelayer-user-id': mutation.userId,
-            },
+            headers,
           }
           if (mutation.body !== undefined) {
             requestInit.body = JSON.stringify(mutation.body)
@@ -565,12 +586,8 @@ export async function replayOfflineMutations(companySlug: string) {
 
 export async function startQboOAuth(companySlug: string) {
   if (FIXTURES_ENABLED) return
-  const userId = getStoredUserId()
   const response = await fetch(`${API_URL}/api/integrations/qbo/auth`, {
-    headers: {
-      'x-sitelayer-company-slug': companySlug,
-      'x-sitelayer-user-id': userId,
-    },
+    headers: await authHeaders(companySlug),
   })
   if (!response.ok) {
     const fallback = await response.text()
