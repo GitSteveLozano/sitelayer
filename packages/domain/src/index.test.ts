@@ -21,6 +21,8 @@ import {
   computeProductivity,
   calculateRentalInvoice,
   initialRentalNextInvoiceAt,
+  haversineDistanceMeters,
+  isInsideGeofence,
 } from './index.js'
 
 describe('domain functions', () => {
@@ -625,6 +627,112 @@ describe('domain functions', () => {
 
     it('defaults to weekly when cadence is invalid', () => {
       expect(initialRentalNextInvoiceAt('2026-04-01', 0)).toBe('2026-04-08T00:00:00.000Z')
+    })
+  })
+
+  describe('geofence math', () => {
+    // Centre chosen near a Winnipeg residential lot; any city-scale
+    // lat/lng works the same because construction-site radii (100m) are
+    // well inside the regime where spherical earth is accurate to <<1m.
+    const site = { lat: 49.8951, lng: -97.1384 }
+
+    it('reports zero distance for identical points', () => {
+      expect(haversineDistanceMeters(site, site)).toBe(0)
+    })
+
+    it('approximates 1 degree of latitude at ~111 km', () => {
+      const oneDegreeNorth = { lat: site.lat + 1, lng: site.lng }
+      const distance = haversineDistanceMeters(site, oneDegreeNorth)
+      // Allow 0.5% slop for the mean-radius approximation.
+      expect(distance).toBeGreaterThan(110_000)
+      expect(distance).toBeLessThan(112_000)
+    })
+
+    it('accepts a point inside a 100m fence', () => {
+      // ~50m north of centre: 50m / 111320 m per degree ~= 0.000449°.
+      const nearby = { lat: site.lat + 0.000449, lng: site.lng }
+      expect(
+        isInsideGeofence({
+          lat: site.lat,
+          lng: site.lng,
+          radius_m: 100,
+          point: nearby,
+        }),
+      ).toBe(true)
+    })
+
+    it('rejects a point outside a 100m fence', () => {
+      // ~200m north of centre.
+      const farAway = { lat: site.lat + 0.001797, lng: site.lng }
+      expect(
+        isInsideGeofence({
+          lat: site.lat,
+          lng: site.lng,
+          radius_m: 100,
+          point: farAway,
+        }),
+      ).toBe(false)
+    })
+
+    it('treats the fence edge as inside (inclusive boundary)', () => {
+      // Synthesise a point exactly radius_m away using the measured distance
+      // so we do not depend on an analytical earth radius constant here.
+      const candidate = { lat: site.lat + 0.000898, lng: site.lng }
+      const distance = haversineDistanceMeters(site, candidate)
+      expect(
+        isInsideGeofence({
+          lat: site.lat,
+          lng: site.lng,
+          radius_m: Math.ceil(distance),
+          point: candidate,
+        }),
+      ).toBe(true)
+    })
+
+    it('returns false when radius is zero or negative', () => {
+      expect(isInsideGeofence({ lat: site.lat, lng: site.lng, radius_m: 0, point: site })).toBe(false)
+      expect(isInsideGeofence({ lat: site.lat, lng: site.lng, radius_m: -50, point: site })).toBe(false)
+    })
+
+    it('returns false when centre coordinates are missing', () => {
+      expect(
+        isInsideGeofence({
+          lat: Number.NaN,
+          lng: Number.NaN,
+          radius_m: 100,
+          point: site,
+        }),
+      ).toBe(false)
+    })
+
+    it('handles pole-adjacent centres without NaN-poisoning the result', () => {
+      // Near the north pole, 1 degree of latitude is still ~111 km away
+      // (polar circumference is unchanged). Confirms haversine stays finite
+      // when one endpoint is within a hair of the pole.
+      const polar = { lat: 89.999, lng: 0 }
+      const polarDeg = { lat: 88.999, lng: 0 }
+      const distance = haversineDistanceMeters(polar, polarDeg)
+      expect(Number.isFinite(distance)).toBe(true)
+      expect(distance).toBeGreaterThan(110_000)
+      expect(
+        isInsideGeofence({
+          lat: polar.lat,
+          lng: polar.lng,
+          radius_m: 100,
+          point: polarDeg,
+        }),
+      ).toBe(false)
+    })
+
+    it('accepts a point exactly at the centre', () => {
+      expect(
+        isInsideGeofence({
+          lat: site.lat,
+          lng: site.lng,
+          radius_m: 100,
+          point: site,
+        }),
+      ).toBe(true)
     })
   })
 })
