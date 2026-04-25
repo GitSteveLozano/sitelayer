@@ -120,6 +120,59 @@ export function calculateMargin(inputs: { revenue: number; cost: number }): Marg
   }
 }
 
+export type BidVsScopeStatus = 'ok' | 'warn' | 'mismatch'
+
+export interface BidVsScopeComparison {
+  bid_total: number
+  scope_total: number
+  delta: number
+  delta_pct: number
+  status: BidVsScopeStatus
+}
+
+/**
+ * Compare the contract bid (`bidTotal`, e.g. a single $/sqft figure multiplied
+ * out by the quoted quantity) against the sum of scope line amounts
+ * (`scopeTotal`, e.g. EPS + Basecoat + ...). Returns the signed delta
+ * (bid minus scope, positive when the bid is higher than the sum of scope
+ * rates), the absolute percentage of the bid that the delta represents, and a
+ * status bucket used by the UI to warn the estimator.
+ *
+ * Thresholds per the product brief:
+ *   |delta| <= 1% of bid  -> ok
+ *   1% <  |delta| <= 5%   -> warn
+ *   |delta| >  5%          -> mismatch
+ *
+ * A zero bid with a zero scope is reported as `ok`/0%. A zero bid with any
+ * non-zero scope is reported as `mismatch`/100% so the caller cannot silently
+ * miss an unreconciled scope.
+ */
+export function compareBidVsScope(inputs: {
+  bidTotal: number
+  scopeTotal: number
+}): BidVsScopeComparison {
+  const bidTotal = Number.isFinite(inputs.bidTotal) ? Number(inputs.bidTotal) : 0
+  const scopeTotal = Number.isFinite(inputs.scopeTotal) ? Number(inputs.scopeTotal) : 0
+  const delta = roundMoney(bidTotal - scopeTotal)
+  const denominator = Math.abs(bidTotal)
+  const deltaPct = denominator === 0 ? (delta === 0 ? 0 : 1) : roundPercent(Math.abs(delta) / denominator)
+  let status: BidVsScopeStatus
+  if (deltaPct <= 0.01) {
+    status = 'ok'
+  } else if (deltaPct <= 0.05) {
+    status = 'warn'
+  } else {
+    status = 'mismatch'
+  }
+  return {
+    bid_total: roundMoney(bidTotal),
+    scope_total: roundMoney(scopeTotal),
+    delta,
+    delta_pct: deltaPct,
+    status,
+  }
+}
+
 export function calculateBonusPayout(
   margin: number,
   bonusPool: number,
