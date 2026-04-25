@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-const routes = ['/confirm', '/projects', '/takeoffs/project-hillcrest', '/estimates', '/integrations']
+const routes = ['/confirm', '/projects', '/takeoffs/project-hillcrest', '/estimates', '/rentals', '/integrations']
 
 for (const route of routes) {
   test(`renders ${route} with fixture data`, async ({ page }) => {

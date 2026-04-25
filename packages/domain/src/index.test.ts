@@ -19,6 +19,8 @@ import {
   calculateVolumeQuantity,
   calculateGeometryQuantity,
   computeProductivity,
+  calculateRentalInvoice,
+  initialRentalNextInvoiceAt,
 } from './index.js'
 
 describe('domain functions', () => {
@@ -485,6 +487,144 @@ describe('domain functions', () => {
       expect(result.samples).toBe(3)
       expect(result.total_quantity).toBe(180)
       expect(result.total_hours).toBe(4)
+    })
+  })
+
+  describe('calculateRentalInvoice', () => {
+    it('bills one full cadence window from delivery when no prior invoice exists', () => {
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 25,
+          delivered_on: '2026-04-01',
+          returned_on: null,
+          invoice_cadence_days: 7,
+          last_invoiced_through: null,
+        },
+        '2026-04-08',
+      )
+      expect(result.days).toBe(7)
+      expect(result.amount).toBe(175)
+      expect(result.period_start).toBe('2026-04-01')
+      expect(result.period_end).toBe('2026-04-07')
+      expect(result.invoiced_through).toBe('2026-04-07')
+      expect(result.next_invoice_at).toBe('2026-04-08T00:00:00.000Z')
+      expect(result.next_status).toBe('active')
+    })
+
+    it('bills only elapsed days when reference date is mid-window', () => {
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 30,
+          delivered_on: '2026-04-01',
+          returned_on: null,
+          invoice_cadence_days: 7,
+          last_invoiced_through: null,
+        },
+        '2026-04-04',
+      )
+      // Delivered 2026-04-01 through reference 2026-04-04 = 4 days * 30 = 120
+      expect(result.days).toBe(4)
+      expect(result.amount).toBe(120)
+      expect(result.period_end).toBe('2026-04-04')
+    })
+
+    it('returns zero days when delivered_on is in the future', () => {
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 40,
+          delivered_on: '2026-05-01',
+          returned_on: null,
+          invoice_cadence_days: 7,
+          last_invoiced_through: null,
+        },
+        '2026-04-20',
+      )
+      expect(result.days).toBe(0)
+      expect(result.amount).toBe(0)
+      expect(result.next_status).toBe('active')
+    })
+
+    it('caps the invoice period at returned_on and closes the rental', () => {
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 10,
+          delivered_on: '2026-04-01',
+          returned_on: '2026-04-05',
+          invoice_cadence_days: 7,
+          last_invoiced_through: null,
+        },
+        '2026-04-10',
+      )
+      // 2026-04-01 through 2026-04-05 = 5 days * 10 = 50
+      expect(result.days).toBe(5)
+      expect(result.amount).toBe(50)
+      expect(result.period_end).toBe('2026-04-05')
+      expect(result.next_status).toBe('closed')
+      expect(result.next_invoice_at).toBeNull()
+    })
+
+    it('returns zero days when returned_on precedes the last invoiced period', () => {
+      // Item returned 2026-04-04, but we already invoiced through 2026-04-07.
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 10,
+          delivered_on: '2026-04-01',
+          returned_on: '2026-04-04',
+          invoice_cadence_days: 7,
+          last_invoiced_through: '2026-04-07',
+        },
+        '2026-04-10',
+      )
+      expect(result.days).toBe(0)
+      expect(result.amount).toBe(0)
+      expect(result.next_status).toBe('closed')
+      expect(result.next_invoice_at).toBeNull()
+    })
+
+    it('advances billing after an existing last_invoiced_through value', () => {
+      // Previously billed 2026-04-01 through 2026-04-07; reference 2026-04-14
+      // -> next period is 2026-04-08 through 2026-04-14 = 7 days.
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 12,
+          delivered_on: '2026-04-01',
+          returned_on: null,
+          invoice_cadence_days: 7,
+          last_invoiced_through: '2026-04-07',
+        },
+        '2026-04-14',
+      )
+      expect(result.period_start).toBe('2026-04-08')
+      expect(result.period_end).toBe('2026-04-14')
+      expect(result.days).toBe(7)
+      expect(result.amount).toBe(84)
+      expect(result.next_status).toBe('active')
+    })
+
+    it('rounds sub-cent amounts to two decimal places', () => {
+      const result = calculateRentalInvoice(
+        {
+          daily_rate: 3.333,
+          delivered_on: '2026-04-01',
+          returned_on: null,
+          invoice_cadence_days: 3,
+          last_invoiced_through: null,
+        },
+        '2026-04-10',
+      )
+      // 3 days at 3.333 = 9.999 -> rounded to 10.00
+      expect(result.days).toBe(3)
+      expect(result.amount).toBe(10)
+    })
+  })
+
+  describe('initialRentalNextInvoiceAt', () => {
+    it('sets the first invoice tick cadence_days after delivery', () => {
+      expect(initialRentalNextInvoiceAt('2026-04-01', 7)).toBe('2026-04-08T00:00:00.000Z')
+    })
+
+    it('defaults to weekly when cadence is invalid', () => {
+      expect(initialRentalNextInvoiceAt('2026-04-01', 0)).toBe('2026-04-08T00:00:00.000Z')
     })
   })
 })

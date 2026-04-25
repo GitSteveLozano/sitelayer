@@ -7,11 +7,8 @@
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
-    "types": [
-      "node"
-    ]
+    "paths": {},
+    "types": ["node"]
   },
-  "exclude": [
-    "src/**/*.test.ts"
-  ]
+  "exclude": ["src/**/*.test.ts"]
 }

@@ -1,5 +1,14 @@
 import type { QueryResult, QueryResultRow } from 'pg'
 
+export {
+  fetchDueRentals,
+  processRentalInvoice,
+  RENTAL_SELECT_COLUMNS,
+  type ProcessRentalInvoiceResult,
+  type RentalMaterialBillRow,
+  type RentalRow,
+} from './rentals.js'
+
 export interface QueueClient {
   query<T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<T>>
 }
