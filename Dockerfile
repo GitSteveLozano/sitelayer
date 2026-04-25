@@ -73,4 +73,10 @@ COPY --from=builder /app/packages/logger/dist /app/packages/logger/dist
 COPY --from=builder /app/packages/queue/package.json /app/packages/queue/package.json
 COPY --from=builder /app/packages/queue/dist /app/packages/queue/dist
 
+# Run as the unprivileged `node` user (uid 1000) baked into node:20-alpine.
+# The blueprint_storage volume mounts at /app/storage/blueprints — pre-create
+# it so the directory exists with node ownership before any volume mount.
+RUN mkdir -p /app/storage/blueprints && chown -R node:node /app
+USER node
+
 CMD ["npm", "start", "-w", "@sitelayer/api"]
