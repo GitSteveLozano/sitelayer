@@ -18,6 +18,13 @@ export interface ServiceItemTemplate {
   category: 'measurable' | 'accounting'
   unit: 'sqft' | 'lf' | 'ea' | 'hr' | 'job'
   defaultRate: number | null
+  /**
+   * Default division this service item is curated for. Used to seed
+   * `service_item_divisions` so the takeoff catalog enforcement layer has at
+   * least one allowed division per item out of the box. See migration
+   * `011_service_item_xref_backfill.sql`.
+   */
+  defaultDivisionCode: string
 }
 
 export interface CostInputs {
@@ -104,18 +111,102 @@ export const LA_DIVISIONS: DivisionTemplate[] = [
 ]
 
 export const LA_SERVICE_ITEMS: ServiceItemTemplate[] = [
-  { code: 'EPS', name: 'EPS', category: 'measurable', unit: 'sqft', defaultRate: 4 },
-  { code: 'Basecoat', name: 'Basecoat', category: 'measurable', unit: 'sqft', defaultRate: 2.5 },
-  { code: 'Finish Coat', name: 'Finish Coat', category: 'measurable', unit: 'sqft', defaultRate: 3.5 },
-  { code: 'Air Barrier', name: 'Air Barrier', category: 'measurable', unit: 'sqft', defaultRate: 1.8 },
-  { code: 'Envelope Seal', name: 'Envelope Seal', category: 'measurable', unit: 'lf', defaultRate: 2 },
-  { code: 'Cementboard', name: 'Cementboard', category: 'measurable', unit: 'sqft', defaultRate: 3.25 },
-  { code: 'Cultured Stone', name: 'Cultured Stone', category: 'measurable', unit: 'sqft', defaultRate: 12 },
-  { code: 'Caulking', name: 'Caulking', category: 'measurable', unit: 'lf', defaultRate: 4.5 },
-  { code: 'Flashing', name: 'Flashing', category: 'measurable', unit: 'lf', defaultRate: 8 },
-  { code: 'Change Order', name: 'Change Order', category: 'accounting', unit: 'job', defaultRate: null },
-  { code: 'Deposit', name: 'Deposit', category: 'accounting', unit: 'job', defaultRate: null },
-  { code: 'Holdback', name: 'Holdback', category: 'accounting', unit: 'job', defaultRate: null },
+  // EIFS system stack (D4)
+  { code: 'EPS', name: 'EPS', category: 'measurable', unit: 'sqft', defaultRate: 4, defaultDivisionCode: 'D4' },
+  {
+    code: 'Basecoat',
+    name: 'Basecoat',
+    category: 'measurable',
+    unit: 'sqft',
+    defaultRate: 2.5,
+    defaultDivisionCode: 'D4',
+  },
+  {
+    code: 'Finish Coat',
+    name: 'Finish Coat',
+    category: 'measurable',
+    unit: 'sqft',
+    defaultRate: 3.5,
+    defaultDivisionCode: 'D4',
+  },
+  // Paper and Wire envelope work (D5)
+  {
+    code: 'Air Barrier',
+    name: 'Air Barrier',
+    category: 'measurable',
+    unit: 'sqft',
+    defaultRate: 1.8,
+    defaultDivisionCode: 'D5',
+  },
+  {
+    code: 'Envelope Seal',
+    name: 'Envelope Seal',
+    category: 'measurable',
+    unit: 'lf',
+    defaultRate: 2,
+    defaultDivisionCode: 'D5',
+  },
+  // Siding (D3)
+  {
+    code: 'Cementboard',
+    name: 'Cementboard',
+    category: 'measurable',
+    unit: 'sqft',
+    defaultRate: 3.25,
+    defaultDivisionCode: 'D3',
+  },
+  // Masonry (D2)
+  {
+    code: 'Cultured Stone',
+    name: 'Cultured Stone',
+    category: 'measurable',
+    unit: 'sqft',
+    defaultRate: 12,
+    defaultDivisionCode: 'D2',
+  },
+  {
+    code: 'Caulking',
+    name: 'Caulking',
+    category: 'measurable',
+    unit: 'lf',
+    defaultRate: 4.5,
+    defaultDivisionCode: 'D2',
+  },
+  {
+    code: 'Flashing',
+    name: 'Flashing',
+    category: 'measurable',
+    unit: 'lf',
+    defaultRate: 8,
+    defaultDivisionCode: 'D2',
+  },
+  // Accounting line items live under Overhead (D8) by default — they are not
+  // crew labor but still need to land in some division so rollups don't drop
+  // them.
+  {
+    code: 'Change Order',
+    name: 'Change Order',
+    category: 'accounting',
+    unit: 'job',
+    defaultRate: null,
+    defaultDivisionCode: 'D8',
+  },
+  {
+    code: 'Deposit',
+    name: 'Deposit',
+    category: 'accounting',
+    unit: 'job',
+    defaultRate: null,
+    defaultDivisionCode: 'D8',
+  },
+  {
+    code: 'Holdback',
+    name: 'Holdback',
+    category: 'accounting',
+    unit: 'job',
+    defaultRate: null,
+    defaultDivisionCode: 'D8',
+  },
 ]
 
 export const DEFAULT_BONUS_RULE = {
