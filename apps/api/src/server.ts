@@ -52,6 +52,10 @@ import {
   listLaborByWorker,
   parseLaborReportFilters,
 } from './labor-reports.js'
+import {
+  assertServiceItemCatalogStatus as assertServiceItemCatalogStatusImpl,
+  rejectionMessageForCatalog,
+} from './catalog.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
 import { AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
 import { extractSvixHeaders, verifyClerkWebhook } from './clerk-webhook.js'
@@ -1397,6 +1401,12 @@ async function listServiceItemDivisions(companyId: string, serviceItemCode: stri
  * Returns `true` when the code is accepted (either because none was supplied
  * or because it is in the allowed set, or because no membership rows exist
  * yet and the table is empty for that service item — i.e. legacy behavior).
+ *
+ * NOTE: this is the lenient version retained for labor_entries and other
+ * non-takeoff callers that historically allowed an unrestricted catalog. The
+ * stricter `assertServiceItemCatalogStatus` is used by takeoff measurement
+ * endpoints and refuses both the "no rows at all" and "wrong division" cases
+ * per the curated-catalog spec.
  */
 async function assertDivisionAllowedForServiceItem(
   companyId: string,
@@ -1423,6 +1433,28 @@ async function assertDivisionAllowedForServiceItem(
     [companyId, serviceItemCode, divisionCode],
   )
   return Boolean(match.rows[0]?.exists)
+}
+
+/**
+ * Strict catalog enforcement for takeoff measurements. Implements the spec:
+ *   - If service_item_divisions has zero rows for a service_item_code,
+ *     the service item is rejected (catalog must be curated).
+ *   - If rows exist and `divisionCode` (resolved by the caller, with
+ *     project-level fallback) is missing from the allowed set, reject.
+ *   - If `divisionCode` is null we still require a curated catalog row;
+ *     a curated item with at least one division is the minimum bar even
+ *     when the caller didn't specify a per-takeoff division.
+ *
+ * The lenient `assertDivisionAllowedForServiceItem` is intentionally NOT
+ * folded into this — labor entries still write through the legacy permissive
+ * path because their xref usage is opt-in.
+ */
+function assertServiceItemCatalogStatus(
+  companyId: string,
+  serviceItemCode: string,
+  divisionCode: string | null,
+) {
+  return assertServiceItemCatalogStatusImpl(pool, companyId, serviceItemCode, divisionCode)
 }
 
 async function listProjects(companyId: string) {
@@ -5474,6 +5506,29 @@ const server = http.createServer(async (req, res) => {
                 measurementInput.blueprintDocumentId,
               ])
 
+              // Curated-catalog enforcement (per spec): a takeoff cannot reference
+              // a service item without at least one curated division mapping, and
+              // if a division was supplied it must be in the allowed set.
+              const projectDivisionResult = await pool.query<{ division_code: string | null }>(
+                'select division_code from projects where company_id = $1 and id = $2',
+                [company.id, projectId],
+              )
+              const fallbackDivision =
+                measurementInput.divisionCode ?? projectDivisionResult.rows[0]?.division_code ?? null
+              const catalogStatus = await assertServiceItemCatalogStatus(
+                company.id,
+                measurementInput.serviceItemCode,
+                fallbackDivision,
+              )
+              if (!catalogStatus.ok) {
+                sendJson(res, 422, {
+                  error: rejectionMessageForCatalog(catalogStatus.reason),
+                  service_item_code: measurementInput.serviceItemCode,
+                  division_code: fallbackDivision,
+                })
+                return
+              }
+
               const insertResult = await pool.query(
                 `
         insert into takeoff_measurements (
@@ -5550,6 +5605,31 @@ const server = http.createServer(async (req, res) => {
                 projectId,
                 preparedMeasurements.map((measurement) => measurement.blueprintDocumentId),
               )
+
+              // Curated-catalog enforcement applied per measurement BEFORE the
+              // destructive soft-delete of the existing set, so a single bad
+              // row doesn't wipe the project's takeoff history.
+              const projectDivisionResult = await pool.query<{ division_code: string | null }>(
+                'select division_code from projects where company_id = $1 and id = $2',
+                [company.id, projectId],
+              )
+              const projectDivisionCode = projectDivisionResult.rows[0]?.division_code ?? null
+              for (const measurement of preparedMeasurements) {
+                const fallbackDivision = measurement.divisionCode ?? projectDivisionCode
+                const catalogStatus = await assertServiceItemCatalogStatus(
+                  company.id,
+                  measurement.serviceItemCode,
+                  fallbackDivision,
+                )
+                if (!catalogStatus.ok) {
+                  sendJson(res, 422, {
+                    error: rejectionMessageForCatalog(catalogStatus.reason),
+                    service_item_code: measurement.serviceItemCode,
+                    division_code: fallbackDivision,
+                  })
+                  return
+                }
+              }
 
               await pool.query(
                 `

@@ -28,6 +28,16 @@ export async function seedCompanyDefaults(
        on conflict (company_id, code) do nothing`,
       [companyId, item.code, item.name, item.category, item.unit, item.defaultRate],
     )
+    // Seed the curated catalog xref so takeoffs can immediately validate
+    // the (service_item, division) pair without an admin manually configuring
+    // every item. See `assertDivisionAllowedForServiceItem` in
+    // apps/api/src/server.ts and migration 011.
+    await client.query(
+      `insert into service_item_divisions (company_id, service_item_code, division_code)
+       values ($1, $2, $3)
+       on conflict (company_id, service_item_code, division_code) do nothing`,
+      [companyId, item.code, item.defaultDivisionCode],
+    )
   }
 
   await client.query(
