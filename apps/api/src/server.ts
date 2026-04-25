@@ -45,6 +45,7 @@ import {
 } from './storage.js'
 import { recordAudit, isAuditableEntity } from './audit.js'
 import { buildEstimatePdfInputFromSummary, renderEstimatePdf } from './pdf.js'
+import { buildListProjectsQuery, parseProjectsQuery } from './projects-query.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
 import { AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
 import { extractSvixHeaders, verifyClerkWebhook } from './clerk-webhook.js'
@@ -2533,7 +2534,13 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'GET' && url.pathname === '/api/projects') {
-              sendJson(res, 200, { projects: await listProjects(company.id) })
+              const query = parseProjectsQuery(url.searchParams)
+              const built = buildListProjectsQuery(company.id, query)
+              const result = await pool.query(built.sql, built.values)
+              const projects = result.rows
+              const nextCursor =
+                projects.length === built.limit ? (projects[projects.length - 1]?.updated_at ?? null) : null
+              sendJson(res, 200, { projects, nextCursor })
               return
             }
 
