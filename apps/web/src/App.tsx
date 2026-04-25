@@ -417,18 +417,12 @@ function AppShell() {
         />
         {FIXTURES_ENABLED ? null : <UserButton afterSignOutUrl="/sign-in" />}
       </div>
-      <nav className="appNav" aria-label="Primary">
-        <NavLink to="/confirm" data-testid="nav-confirm">
-          {confirmDoneToday ? '✓ ' : ''}
-          Confirm Day
-        </NavLink>
-        <NavLink to="/projects">Projects</NavLink>
-        <NavLink to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}>Takeoffs</NavLink>
-        <NavLink to="/estimates">Estimates</NavLink>
-        <NavLink to="/integrations">Integrations</NavLink>
-        {auditNavVisible ? <NavLink to="/audit">Audit</NavLink> : null}
-        {devSurfaceEnabled ? <NavLink to="/dev/scratch">Dev</NavLink> : null}
-      </nav>
+      <MobileNav
+        selectedProjectId={selectedProjectId}
+        confirmDoneToday={confirmDoneToday}
+        auditNavVisible={auditNavVisible}
+        devSurfaceEnabled={devSurfaceEnabled}
+      />
       <SentryRoutes>
         <Route path="/" element={<Navigate to="/confirm" replace />} />
         <Route
@@ -574,6 +568,69 @@ function AppShell() {
         <Route path="*" element={<Navigate to="/confirm" replace />} />
       </SentryRoutes>
     </main>
+  )
+}
+
+// MobileNav renders the primary <nav>. On phones ≤479px with more than 4
+// visible links, it collapses to a hamburger toggle (mobile.css hides the
+// non-active links when data-collapsed="true"). Desktop and tablet viewports
+// render the full strip exactly like before.
+function MobileNav({
+  selectedProjectId,
+  confirmDoneToday,
+  auditNavVisible,
+  devSurfaceEnabled,
+}: {
+  selectedProjectId: string
+  confirmDoneToday: boolean
+  auditNavVisible: boolean
+  devSurfaceEnabled: boolean
+}) {
+  const [collapsed, setCollapsed] = useState(false)
+  const [isNarrow, setIsNarrow] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.matchMedia('(max-width: 479px)').matches : false,
+  )
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mql = window.matchMedia('(max-width: 479px)')
+    const onChange = (event: MediaQueryListEvent) => setIsNarrow(event.matches)
+    mql.addEventListener('change', onChange)
+    setIsNarrow(mql.matches)
+    return () => mql.removeEventListener('change', onChange)
+  }, [])
+
+  const linkCount = 4 + (auditNavVisible ? 1 : 0) + (devSurfaceEnabled ? 1 : 0) + 1 // +1 for Confirm
+  const showHamburger = isNarrow && linkCount > 4
+  const collapsedAttr = showHamburger && collapsed ? 'true' : 'false'
+
+  return (
+    <nav className="appNav" aria-label="Primary" data-collapsed={collapsedAttr}>
+      {showHamburger ? (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="mobileNavToggle"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? 'Expand navigation' : 'Collapse navigation'}
+          data-testid="mobile-nav-toggle"
+          onClick={() => setCollapsed((current) => !current)}
+        >
+          ☰
+        </Button>
+      ) : null}
+      <NavLink to="/confirm" data-testid="nav-confirm">
+        {confirmDoneToday ? '✓ ' : ''}
+        Confirm Day
+      </NavLink>
+      <NavLink to="/projects">Projects</NavLink>
+      <NavLink to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}>Takeoffs</NavLink>
+      <NavLink to="/estimates">Estimates</NavLink>
+      <NavLink to="/integrations">Integrations</NavLink>
+      {auditNavVisible ? <NavLink to="/audit">Audit</NavLink> : null}
+      {devSurfaceEnabled ? <NavLink to="/dev/scratch">Dev</NavLink> : null}
+    </nav>
   )
 }
 
