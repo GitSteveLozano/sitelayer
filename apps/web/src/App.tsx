@@ -26,6 +26,7 @@ import type {
   SessionResponse,
   SyncStatusResponse,
 } from './api.js'
+import { CompanySwitcher } from './components/company-switcher.js'
 import { EnvironmentRibbon } from './components/environment-ribbon.js'
 import { Button } from './components/ui/button.js'
 import {
@@ -37,6 +38,8 @@ import {
   DialogTrigger,
 } from './components/ui/dialog.js'
 import { Input } from './components/ui/input.js'
+import { Toaster, toastError, toastInfo, toastSuccess } from './components/ui/toast.js'
+import { ConfirmView } from './views/confirm.js'
 import { EstimatesView } from './views/estimates.js'
 import { IntegrationsView } from './views/integrations.js'
 import { ProjectsView } from './views/projects.js'
@@ -103,6 +106,7 @@ function UnauthShell() {
   return (
     <main className="shell">
       <EnvironmentRibbon features={features} />
+      <Toaster />
       <div style={{ display: 'flex', justifyContent: 'center', padding: '2rem' }}>
         <SentryRoutes>
           <Route path="/sign-in/*" element={<SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" />} />
@@ -133,6 +137,31 @@ function AppShell() {
   const [offlineQueue, setOfflineQueue] = useState<OfflineMutation[]>([])
   const [syncRefreshKey, setSyncRefreshKey] = useState(0)
   const [features, setFeatures] = useState<FeaturesResponse | null>(null)
+  const [confirmDoneToday, setConfirmDoneToday] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    try {
+      const today = new Date().toISOString().slice(0, 10)
+      return window.localStorage.getItem('sitelayer.lastConfirmedDay') === today
+    } catch {
+      return false
+    }
+  })
+
+  useEffect(() => {
+    function refreshConfirmState() {
+      if (typeof window === 'undefined') return
+      try {
+        const today = new Date().toISOString().slice(0, 10)
+        setConfirmDoneToday(window.localStorage.getItem('sitelayer.lastConfirmedDay') === today)
+      } catch {
+        setConfirmDoneToday(false)
+      }
+    }
+    refreshConfirmState()
+    const handler = () => refreshConfirmState()
+    window.addEventListener('sitelayer:day-confirmed', handler)
+    return () => window.removeEventListener('sitelayer:day-confirmed', handler)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -195,13 +224,29 @@ function AppShell() {
 
   useEffect(() => {
     let active = true
+    let previousDepth = 0
     const refreshQueueState = () => {
       void readOfflineQueue().then((queue) => {
-        if (active) setOfflineQueue(queue)
+        if (!active) return
+        // When depth drops, emit an info toast so crews know offline edits synced.
+        if (previousDepth > 0 && queue.length < previousDepth) {
+          const synced = previousDepth - queue.length
+          toastInfo(
+            `${synced} offline change${synced === 1 ? '' : 's'} synced`,
+            queue.length > 0 ? `${queue.length} pending` : undefined,
+          )
+        }
+        previousDepth = queue.length
+        setOfflineQueue(queue)
       })
     }
     const replay = () => {
-      replayOfflineMutations(companySlug).then(refreshQueueState).catch(refreshQueueState)
+      replayOfflineMutations(companySlug)
+        .then(refreshQueueState)
+        .catch((caught: unknown) => {
+          refreshQueueState()
+          toastError('Offline sync failed', caught instanceof Error ? caught.message : 'Will retry automatically')
+        })
     }
 
     replay()
@@ -269,6 +314,13 @@ function AppShell() {
     })
   }, [refreshSummary, refreshTakeoff, selectedProjectId])
 
+  // Fetch bootstrap data across all visible schedules so /confirm can
+  // aggregate today's schedules without needing a project to be selected.
+  const [allSchedules, setAllSchedules] = useState<ScheduleRow[]>([])
+  useEffect(() => {
+    setAllSchedules((bootstrap?.schedules ?? []) as ScheduleRow[])
+  }, [bootstrap?.schedules])
+
   async function runAction(label: string, action: () => Promise<void>, options?: { skipRefresh?: boolean }) {
     try {
       setBusy(label)
@@ -280,8 +332,15 @@ function AppShell() {
           await refreshSummary(selectedProjectId)
         }
       }
+      // Surface lightweight success toasts for user-visible high-signal actions.
+      // Other labels are mutation-internal and would be noisy.
+      if (label === 'create-company') toastSuccess('Company created')
+      if (label === 'invite-member') toastSuccess('Invitation sent')
+      if (label === 'qbo-sync') toastSuccess('QBO sync triggered')
     } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught.message : 'unknown error')
+      const message = caught instanceof Error ? caught.message : 'unknown error'
+      setError(message)
+      toastError(`${label} failed`, message)
     } finally {
       setBusy(null)
     }
@@ -330,12 +389,24 @@ function AppShell() {
   return (
     <main className="shell">
       <EnvironmentRibbon features={features} />
-      {FIXTURES_ENABLED ? null : (
-        <div className="appHeader" style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 16px' }}>
-          <UserButton afterSignOutUrl="/sign-in" />
-        </div>
-      )}
+      <Toaster />
+      <div
+        className="appHeader"
+        style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, padding: '8px 16px' }}
+      >
+        <CompanySwitcher
+          companies={companies}
+          activeSlug={companySlug}
+          onSelect={(slug) => setCompanySlug(slug)}
+          onCreated={() => void refresh()}
+        />
+        {FIXTURES_ENABLED ? null : <UserButton afterSignOutUrl="/sign-in" />}
+      </div>
       <nav className="appNav" aria-label="Primary">
+        <NavLink to="/confirm" data-testid="nav-confirm">
+          {confirmDoneToday ? '✓ ' : ''}
+          Confirm Day
+        </NavLink>
         <NavLink to="/projects">Projects</NavLink>
         <NavLink to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}>Takeoffs</NavLink>
         <NavLink to="/estimates">Estimates</NavLink>
@@ -343,7 +414,22 @@ function AppShell() {
         {devSurfaceEnabled ? <NavLink to="/dev/scratch">Dev</NavLink> : null}
       </nav>
       <SentryRoutes>
-        <Route path="/" element={<Navigate to="/projects" replace />} />
+        <Route path="/" element={<Navigate to="/confirm" replace />} />
+        <Route
+          path="/confirm"
+          element={
+            <ConfirmView
+              bootstrap={bootstrap}
+              schedules={allSchedules}
+              workers={workers}
+              serviceItems={serviceItems}
+              companySlug={companySlug}
+              onConfirmed={async () => {
+                await refresh()
+              }}
+            />
+          }
+        />
         <Route
           path="/projects"
           element={
@@ -457,9 +543,9 @@ function AppShell() {
           element={devSurfaceEnabled ? <DevScratchView features={features} /> : <Navigate to="/projects" replace />}
         />
         {/* If a signed-in user lands on a sign-in URL, bounce them home. */}
-        <Route path="/sign-in/*" element={<Navigate to="/projects" replace />} />
-        <Route path="/sign-up/*" element={<Navigate to="/projects" replace />} />
-        <Route path="*" element={<Navigate to="/projects" replace />} />
+        <Route path="/sign-in/*" element={<Navigate to="/confirm" replace />} />
+        <Route path="/sign-up/*" element={<Navigate to="/confirm" replace />} />
+        <Route path="*" element={<Navigate to="/confirm" replace />} />
       </SentryRoutes>
     </main>
   )
