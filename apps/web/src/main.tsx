@@ -1,15 +1,27 @@
-import { Sentry } from './instrument.js'
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { ClerkProvider } from '@clerk/clerk-react'
 import { App } from './App.js'
 import { Button } from './components/ui/button.js'
 import { FIXTURES_ENABLED } from './api.js'
-import { captureWebVitals } from './web-vitals.js'
+import { captureException, initSentry } from './instrument.js'
 import './styles.css'
 import './components/ui/mobile.css'
 
-captureWebVitals()
+function runWhenIdle(run: () => void, timeout: number) {
+  if (typeof window === 'undefined') return
+  const requestIdleCallback = window.requestIdleCallback
+  if (typeof requestIdleCallback === 'function') {
+    requestIdleCallback(run, { timeout })
+  } else {
+    globalThis.setTimeout(run, 1000)
+  }
+}
+
+runWhenIdle(initSentry, 3000)
+runWhenIdle(() => {
+  void import('./web-vitals.js').then(({ captureWebVitals }) => captureWebVitals())
+}, 4000)
 
 // Sitelayer Clerk theming. The color values mirror the HSL triplets declared in
 // styles.css (`--primary`, `--background`, etc.) so the hosted <SignIn>/<SignUp>
@@ -54,9 +66,32 @@ function FallbackError({ error, resetError }: { error: unknown; resetError: () =
   )
 }
 
+class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, { error: unknown | null }> {
+  state = { error: null }
+
+  static getDerivedStateFromError(error: unknown) {
+    return { error }
+  }
+
+  componentDidCatch(error: unknown) {
+    captureException(error, { tags: { scope: 'react_error_boundary' } })
+  }
+
+  resetError = () => {
+    this.setState({ error: null })
+  }
+
+  render() {
+    if (this.state.error) {
+      return <FallbackError error={this.state.error} resetError={this.resetError} />
+    }
+    return this.props.children
+  }
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <Sentry.ErrorBoundary fallback={FallbackError} showDialog={false}>
+    <AppErrorBoundary>
       {FIXTURES_ENABLED || !PUBLISHABLE_KEY ? (
         <App />
       ) : (
@@ -64,6 +99,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <App />
         </ClerkProvider>
       )}
-    </Sentry.ErrorBoundary>
+    </AppErrorBoundary>
   </React.StrictMode>,
 )
