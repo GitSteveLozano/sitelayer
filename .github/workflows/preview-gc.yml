@@ -1,10 +1,11 @@
 name: Preview Stack GC
 
 # Daily garbage collection of stale `sitelayer-pr-*` docker compose stacks
-# on the preview droplet. Runs from a hosted GitHub runner (ubuntu-latest)
-# rather than the self-hosted preview runner so it still works when that
-# runner is OOM/dead — which is the failure mode that originally let stale
-# stacks accumulate to 25+ and OOM-kill the runner host.
+# on the preview droplet. Runs on the self-hosted preview runner — the
+# preview droplet's port 22 is firewalled to the private 10.118.0.0/16
+# network only, so a hosted ubuntu-latest runner can't reach it. The
+# 2GB swap added to the droplet (see DEPLOYMENT.md) prevents the OOM
+# condition that originally motivated routing this off-runner.
 on:
   schedule:
     - cron: '17 3 * * *'
@@ -20,9 +21,11 @@ concurrency:
 
 jobs:
   gc:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, sitelayer-preview]
     timeout-minutes: 15
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
       - name: List open PR numbers
         id: open_prs
         env:
@@ -30,40 +33,16 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # Comma-separated list of open PR numbers. Empty list is OK.
           open_csv="$(gh pr list --state open --limit 500 --json number \
             --jq 'map(.number) | join(",")' 2>/dev/null || true)"
           echo "csv=${open_csv}" >>"$GITHUB_OUTPUT"
           echo "Open PRs: ${open_csv:-<none>}"
 
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
-
-      - name: SSH to preview droplet and reap stale stacks
+      - name: Reap stale preview stacks (local)
         env:
-          PREVIEW_KEY: ${{ secrets.PREVIEW_SSH_KEY }}
-          PREVIEW_HOST: ${{ secrets.PREVIEW_HOST }}
-          PREVIEW_USER: ${{ secrets.PREVIEW_SSH_USER || 'sitelayer' }}
           OPEN_PRS_CSV: ${{ steps.open_prs.outputs.csv }}
         run: |
           set -euo pipefail
-          test -n "$PREVIEW_KEY" || { echo "PREVIEW_SSH_KEY is not configured"; exit 1; }
-          test -n "$PREVIEW_HOST" || { echo "PREVIEW_HOST is not configured"; exit 1; }
-
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-          echo "$PREVIEW_KEY" >~/.ssh/preview_key
-          chmod 600 ~/.ssh/preview_key
-
-          # Pipe the checked-in remote script via stdin; pass OPEN_PRS_CSV on
-          # the SSH command line. Using a real script file dodges YAML heredoc
-          # indentation footguns. -o StrictHostKeyChecking=accept-new pins the
-          # host key on first connect without prompting.
-          quoted_csv="$(printf '%q' "$OPEN_PRS_CSV")"
-          ssh -i ~/.ssh/preview_key \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=accept-new \
-            -o ConnectTimeout=15 \
-            -o ServerAliveInterval=15 \
-            "$PREVIEW_USER@$PREVIEW_HOST" \
-            "OPEN_PRS_CSV=$quoted_csv bash -s" \
-            <scripts/preview-gc-remote.sh
+          # The runner already lives on the preview droplet, so the reaper
+          # is just a local bash script invocation. No SSH hop needed.
+          bash scripts/preview-gc-remote.sh
