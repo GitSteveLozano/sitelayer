@@ -5,6 +5,7 @@ import { Sentry } from './instrument.js'
 import {
   apiGet,
   DEFAULT_COMPANY_SLUG,
+  FIXTURES_ENABLED,
   getStoredCompanySlug,
   readOfflineQueue,
   registerClerkTokenProvider,
@@ -59,6 +60,16 @@ function ClerkTokenBridge() {
 }
 
 export function App() {
+  // Fixtures mode (e2e + storybook-like preview) renders the app without Clerk
+  // auth gating so tests can deterministically reach every route without a
+  // session. The api module short-circuits real HTTP in fixtures mode too.
+  if (FIXTURES_ENABLED) {
+    return (
+      <BrowserRouter>
+        <AppShell />
+      </BrowserRouter>
+    )
+  }
   return (
     <BrowserRouter>
       <SignedOut>
@@ -319,9 +330,11 @@ function AppShell() {
   return (
     <main className="shell">
       <EnvironmentRibbon features={features} />
-      <div className="appHeader" style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 16px' }}>
-        <UserButton afterSignOutUrl="/sign-in" />
-      </div>
+      {FIXTURES_ENABLED ? null : (
+        <div className="appHeader" style={{ display: 'flex', justifyContent: 'flex-end', padding: '8px 16px' }}>
+          <UserButton afterSignOutUrl="/sign-in" />
+        </div>
+      )}
       <nav className="appNav" aria-label="Primary">
         <NavLink to="/projects">Projects</NavLink>
         <NavLink to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}>Takeoffs</NavLink>
@@ -473,8 +486,12 @@ function RoutedTakeoffsView(props: ComponentProps<typeof TakeoffsView>) {
   )
 }
 
-function DevScratchView({ features }: { features: FeaturesResponse | null }) {
+function DevScratchUserId() {
   const { user } = useUser()
+  return <>{user?.id ?? 'unknown'}</>
+}
+
+function DevScratchView({ features }: { features: FeaturesResponse | null }) {
   return (
     <section className="panel">
       <h2>Dev Scratch</h2>
@@ -492,7 +509,7 @@ function DevScratchView({ features }: { features: FeaturesResponse | null }) {
             </div>
             <div>
               <dt>Clerk user</dt>
-              <dd>{user?.id ?? 'unknown'}</dd>
+              <dd>{FIXTURES_ENABLED ? 'fixture-user' : <DevScratchUserId />}</dd>
             </div>
           </dl>
         </article>

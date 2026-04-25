@@ -1,6 +1,39 @@
 import { LA_TEMPLATE } from '@sitelayer/domain'
 import { useUser } from '@clerk/clerk-react'
-import { apiDelete, apiPatch, apiPost, createCompany, inviteMembership } from '../api.js'
+import { apiDelete, apiPatch, apiPost, createCompany, FIXTURES_ENABLED, inviteMembership } from '../api.js'
+
+// Component variant so callers in fixtures mode never trigger Clerk's hook
+// (which throws when ClerkProvider isn't mounted).
+function ClerkIdentityPanel() {
+  const { user } = useUser()
+  return (
+    <>
+      <div>
+        <dt>Clerk user id</dt>
+        <dd>{user?.id ?? '—'}</dd>
+      </div>
+      <div>
+        <dt>Email</dt>
+        <dd>{user?.primaryEmailAddress?.emailAddress ?? '—'}</dd>
+      </div>
+    </>
+  )
+}
+
+function FixtureIdentityPanel() {
+  return (
+    <>
+      <div>
+        <dt>Clerk user id</dt>
+        <dd>fixture-user</dd>
+      </div>
+      <div>
+        <dt>Email</dt>
+        <dd>fixture@example.com</dd>
+      </div>
+    </>
+  )
+}
 import type {
   BonusRuleRow,
   BootstrapResponse,
@@ -52,9 +85,6 @@ export function ProjectsView({
   setCompanySlug,
   runAction,
 }: ProjectsViewProps) {
-  const { user } = useUser()
-  const clerkUserId = user?.id ?? '—'
-  const clerkEmail = user?.primaryEmailAddress?.emailAddress ?? '—'
   return (
     <>
       <section className="hero">
@@ -94,16 +124,7 @@ export function ProjectsView({
       <section className="panel">
         <h2>Clerk Identity</h2>
         <p className="muted">Signed in via Clerk; the API receives the Clerk session JWT on every request.</p>
-        <dl className="kv">
-          <div>
-            <dt>Clerk user id</dt>
-            <dd>{clerkUserId}</dd>
-          </div>
-          <div>
-            <dt>Email</dt>
-            <dd>{clerkEmail}</dd>
-          </div>
-        </dl>
+        <dl className="kv">{FIXTURES_ENABLED ? <FixtureIdentityPanel /> : <ClerkIdentityPanel />}</dl>
       </section>
 
       <section className="panel">
