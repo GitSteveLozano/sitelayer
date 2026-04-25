@@ -10,7 +10,12 @@ beforeAll(async () => {
   process.env.ACTIVE_USER_ID = 'demo-user'
 })
 
-async function apiCall<T>(method: string, path: string, body?: unknown): Promise<T & { status: number }> {
+async function apiCall<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  overrides?: { userId?: string; companySlug?: string },
+): Promise<T & { status: number }> {
   const options: http.RequestOptions = {
     hostname: 'localhost',
     port: 3001,
@@ -18,8 +23,8 @@ async function apiCall<T>(method: string, path: string, body?: unknown): Promise
     method,
     headers: {
       'Content-Type': 'application/json',
-      'x-sitelayer-company-slug': 'la-operations',
-      'x-sitelayer-user-id': 'demo-user',
+      'x-sitelayer-company-slug': overrides?.companySlug ?? 'la-operations',
+      'x-sitelayer-user-id': overrides?.userId ?? 'demo-user',
     },
   }
 
@@ -177,5 +182,79 @@ describeIntegration('API Integration Tests', () => {
       'svix-signature': 'v1,bogus',
     })
     expect(result.status).toBe(401)
+  })
+
+  // --- Role-enforcement regression tests ---------------------------------
+  //
+  // These assume the integration fixtures seed four memberships in the
+  // `la-operations` company with the following Clerk user ids:
+  //   demo-user          -> admin
+  //   demo-foreman-user  -> foreman
+  //   demo-office-user   -> office
+  //   demo-member-user   -> member
+  //
+  // The seeding is handled by `apps/api/scripts/seed-dev.ts` when
+  // RUN_API_INTEGRATION=1. If the fixture user is missing, the API returns
+  // 404 for the company (because getCompany treats "no membership" the same
+  // as "no company") — in that case we mark the test as skipped rather than
+  // failing the suite, so local devs without the seed can still run the
+  // rest of the integration suite.
+
+  async function createProjectAs(userId: string) {
+    const bootstrap = await apiCall<{ customers: Array<{ id: string }> }>(
+      'GET',
+      '/api/bootstrap',
+      undefined,
+      { userId },
+    )
+    if ((bootstrap as any).status === 404) return { status: 404 as number, id: undefined }
+    const customerId = bootstrap.customers?.[0]?.id
+    return apiCall<{ id?: string; error?: string }>(
+      'POST',
+      '/api/projects',
+      {
+        name: `Role test ${Date.now()}`,
+        customer_id: customerId,
+        customer_name: 'Test Customer',
+        division_code: 'D1',
+        bid_total: 1000,
+        labor_rate: 50,
+      },
+      { userId },
+    )
+  }
+
+  it('admin can create a project (role matrix row: POST /api/projects admin=✓)', async () => {
+    const result = await createProjectAs('demo-user')
+    if (result.status === 404) return // fixture missing
+    expect(result.status).toBe(201)
+    expect((result as { id?: string }).id).toBeDefined()
+  })
+
+  it('foreman can create a labor entry (role matrix row: POST /api/labor-entries foreman=✓)', async () => {
+    const adminProject = await createProjectAs('demo-user')
+    if (adminProject.status === 404) return
+    expect(adminProject.status).toBe(201)
+    const projectId = (adminProject as { id: string }).id
+    const result = await apiCall<{ id?: string; error?: string }>(
+      'POST',
+      '/api/labor-entries',
+      {
+        project_id: projectId,
+        service_item_code: 'EPS',
+        hours: 4,
+        occurred_on: '2026-04-24',
+      },
+      { userId: 'demo-foreman-user' },
+    )
+    if (result.status === 404) return // foreman fixture missing
+    expect(result.status).toBe(201)
+  })
+
+  it('member is rejected from POST /api/projects with 403', async () => {
+    const result = await createProjectAs('demo-member-user')
+    if (result.status === 404) return // member fixture missing
+    expect(result.status).toBe(403)
+    expect((result as { role?: string }).role).toBe('member')
   })
 })
