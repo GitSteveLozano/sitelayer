@@ -24,6 +24,13 @@ open http://localhost:3000
 
 Seed and migration SQL live under `docker/postgres/init/`. The compose stack sets `APP_TIER=local`, uses local Postgres, and points blueprint storage at local MinIO.
 
+The local database image matches production on Postgres 18. If you have an old local `postgres_data` volume from the previous Postgres 16 stack and do not need to keep that data, reset it before first boot:
+
+```bash
+docker compose down -v
+docker compose up --build
+```
+
 ## App Routes
 
 - `/projects` - auth shell, company switcher, customers, workers, pricing, bonus rules

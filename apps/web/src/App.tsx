@@ -592,9 +592,7 @@ function AppShell() {
         />
         <Route
           path="/bonus-sim"
-          element={
-            bonusSimNavVisible ? <BonusSimView bootstrap={bootstrap} /> : <Navigate to="/projects" replace />
-          }
+          element={bonusSimNavVisible ? <BonusSimView bootstrap={bootstrap} /> : <Navigate to="/projects" replace />}
         />
         <Route
           path="/audit"

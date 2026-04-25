@@ -1,7 +1,7 @@
 # Sitelayer Infrastructure Ready
 
-**Date:** 2026-04-23  
-**Status:** Live DigitalOcean state reconciled; preview deploy path smoke-tested; secrets redacted from repo
+**Date:** 2026-04-25
+**Status:** Live DigitalOcean state reconciled; prod/preview smoke-tested; Spaces blueprint storage, immutable registry, off-host DB backup, timer monitor, and restore drill verified; secrets redacted from repo
 
 This document is infrastructure inventory only. Deployment procedure lives in `DEPLOYMENT.md`. Planning/runtime state must also be mirrored into Mesh under project `sitelayer`.
 
@@ -39,6 +39,8 @@ This document is infrastructure inventory only. Deployment procedure lives in `D
 - **GitHub runner:** `sitelayer-preview`, active systemd service `actions.runner.GitSteveLozano-sitelayer.sitelayer-preview.service`
 - **Preview cleanup:** `sitelayer-preview-prune.timer`, daily TTL cleanup
 - **Smoke preview:** `https://main.preview.sitelayer.sandolab.xyz`
+- **Off-host backup target:** `/app/offsite-backups/postgres-from-prod`
+- **Off-host blueprint backup target:** `/app/offsite-backups/blueprints-from-prod`
 
 ### Database
 
@@ -55,7 +57,24 @@ This document is infrastructure inventory only. Deployment procedure lives in `D
 - **Connection String:** stored outside git in the project secret store / deployment environment.
 - **Security note:** a live database URL was previously committed here. Rotate that credential before any production or pilot use.
 - **Cost:** $15.15/mo
-- **Backup status:** DigitalOcean managed backups are available. Independent logical backup timer is installed on production and uses `postgres:18-alpine` pg_dump.
+- **Backup status:** DigitalOcean managed backups are available. Independent logical backup, Postgres off-host copy, blueprint-volume fallback copy, restore drill, and timer-monitor timers are installed on production.
+
+### Object Storage
+
+- **Bucket:** `sitelayer-blueprints-prod`
+- **Region:** Toronto (`tor1`)
+- **Status:** active, versioning enabled
+- **App credential:** scoped read/write Spaces key in `/app/sitelayer/.env`
+- **Cost:** $5/mo base Spaces subscription
+
+### Container Registry
+
+- **Name:** `sitelayer`
+- **Region:** Toronto (`tor1`)
+- **Plan:** Starter
+- **Image:** `registry.digitalocean.com/sitelayer/sitelayer:<git-sha>`
+- **Purpose:** immutable production image promotion; the droplet pulls exact tags instead of building on-host.
+- **Cost:** $0/mo until Starter storage/bandwidth limits are exceeded
 
 ### Firewall
 
@@ -69,7 +88,8 @@ This document is infrastructure inventory only. Deployment procedure lives in `D
 
 - **ID:** 7a8f443e-cd74-4867-af8a-118559f33561
 - **Name:** sitelayer-preview
-- **Rules:** SSH (22) from `50.71.113.46/32`, HTTP (80), HTTPS (443)
+- **Rules:** SSH (22) from `50.71.113.46/32` and prod droplet `566798325`, HTTP (80), HTTPS (443)
+- **Host UFW:** additionally allows TCP 22 from prod private IP `10.118.0.4`
 - **Outbound:** TCP/UDP egress plus ICMP egress to `0.0.0.0/0`
 - **Status:** Active
 - **Security note:** no public 3000/3001/etc. Preview app traffic should enter through Traefik on 80/443 only.
@@ -93,6 +113,12 @@ For preview deployments, add records under the main site hostname:
 | A    | preview.sitelayer    | preview.sitelayer.sandolab.xyz    | 159.203.53.218 | No      |
 | A    | \*.preview.sitelayer | \*.preview.sitelayer.sandolab.xyz | 159.203.53.218 | No      |
 
+Additional DigitalOcean reserved IP observed on 2026-04-25:
+
+| IP             | Region | Assignment |
+| -------------- | ------ | ---------- |
+| 159.203.51.235 | tor1   | Unassigned |
+
 Keep preview records DNS-only initially. Traefik can request per-preview certificates through HTTP-01. If you later want orange-cloud proxying, switch after origin TLS is working and Cloudflare SSL mode is set deliberately.
 
 After DNS propagates (usually ~5 min):
@@ -109,25 +135,31 @@ Save this to `/app/sitelayer/.env` on the Droplet, owned by the `sitelayer` depl
 
 ```bash
 # Database
+APP_TIER=prod
 DATABASE_URL=<set-in-deployment-environment>
 # For DO managed Postgres sslmode=require until a CA bundle is configured.
 DATABASE_SSL_REJECT_UNAUTHORIZED=false
 
-# DigitalOcean Spaces (optional until storage is provisioned)
+# DigitalOcean Spaces
 DO_SPACES_ENDPOINT=https://tor1.digitaloceanspaces.com
-DO_SPACES_KEY=
-DO_SPACES_SECRET=
+DO_SPACES_KEY=<scoped-readwrite-key>
+DO_SPACES_SECRET=<scoped-readwrite-secret>
 DO_SPACES_REGION=tor1
 DO_SPACES_BUCKET=sitelayer-blueprints-prod
 
 # Local durable blueprint storage fallback
 BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
+# Emergency-only escape hatch. Leave blank in prod.
+ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD=
 
-# Clerk (optional until auth is enforced; see apps/api/src/auth.ts)
+# Clerk / auth. Prod requires CLERK_JWT_KEY or INTERNAL_AUTH_TOKEN.
 CLERK_JWT_KEY=
 CLERK_ISSUER=
 CLERK_WEBHOOK_SECRET=
 AUTH_ALLOW_HEADER_FALLBACK=
+AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS=
+INTERNAL_AUTH_TOKEN=
+API_METRICS_TOKEN=<generate-32b-random>
 
 # Intuit QBO (optional until OAuth credentials are ready)
 QBO_CLIENT_ID=
@@ -147,18 +179,12 @@ DOMAIN=sitelayer.sandolab.xyz
 
 ---
 
-## Manual Setup Required (9 minutes via UI)
+## Manual Setup Required
 
-### 1. Create DO Spaces Bucket (2 min)
+### 1. DigitalOcean Spaces (done)
 
-1. Go to https://cloud.digitalocean.com/spaces
-2. Click **Create Spaces Bucket**
-3. Name: `sitelayer-blueprints-prod` (or run `scripts/provision-spaces-buckets.sh` to create dev/preview/prod buckets)
-4. Region: Toronto (tor1)
-5. Click Create
-6. Go to **Settings** → **API Keys** (tab)
-7. Click **Generate New Key**
-8. Copy the key and secret to your `.env`
+`sitelayer-blueprints-prod` exists in Toronto (`tor1`), bucket versioning is
+enabled, and production uses a scoped read/write key.
 
 ### 2. Create Clerk Organization (2 min)
 
@@ -225,10 +251,9 @@ sudo ls -l /app/sitelayer/.env
 
 ## Next Steps
 
-1. **Provision optional services** (Clerk, Spaces, QBO production credentials) when ready.
-2. **Add off-host blueprint/object backup** when Spaces or another object store is provisioned; local uploads currently persist in the production `blueprint_storage` Docker volume.
-3. **Decide dev deploy topology** before wiring `sitelayer_dev` into a long-lived environment.
-4. **Verify production at:** https://sitelayer.sandolab.xyz.
+1. **Provision remaining optional service** (QBO production credentials) when ready.
+2. **Decide dev deploy topology** before wiring `sitelayer_dev` into a long-lived environment.
+3. **Verify production at:** https://sitelayer.sandolab.xyz.
 
 Preview has been verified at:
 
@@ -241,14 +266,11 @@ curl https://main.preview.sitelayer.sandolab.xyz/api/bootstrap
 
 ## Cost Summary (Month 1)
 
-| Service     | Cost       |
-| ----------- | ---------- |
-| Droplet     | $48.00     |
-| Database    | $15.15     |
-| Reserved IP | $3.60      |
-| Spaces      | $5.00      |
-| Domain      | $0.83      |
-| **Total**   | **$72.58** |
+Current recurring cost detail lives in `docs/COST_AND_LIMITS.md`. The live
+DigitalOcean resources observed on 2026-04-25 are the production droplet,
+preview droplet, managed Postgres cluster, three reserved IPs (one unassigned),
+one Spaces bucket, and one Starter container registry. There are no App
+Platform/Kubernetes/load balancer/volume resources visible via `doctl`.
 
 _(Plus free tier: Clerk, Sentry, UptimeRobot, Intuit)_
 
@@ -283,7 +305,9 @@ _(Plus free tier: Clerk, Sentry, UptimeRobot, Intuit)_
 - ✅ Separate Postgres database/user for prod
 - ✅ Separate Postgres database/user for dev
 - ✅ Local blueprint storage volume
-- ⏳ Spaces/Clerk/QBO optional service credentials
+- ✅ Clerk auth credentials in prod
+- ✅ Spaces bucket and scoped prod credentials
+- ⏳ QBO optional service credentials
 - ✅ TLS enablement
 
 **Total:** ~27 minutes to full deployment

@@ -3,6 +3,7 @@
 > **🚫 SUPERSEDED — DO NOT USE FOR PROVISIONING (banner added 2026-04-25).**
 >
 > Most concrete instructions below are wrong against the shipped codebase. Specifically:
+>
 > - It assumes **Hatchet** for background jobs — actual worker is a bespoke Postgres lease (`packages/queue` + `apps/worker`).
 > - It assumes **nginx** as reverse proxy — actual is **Caddy** (`Caddyfile`).
 > - It assumes **Konva.js** for annotation — actual is inline SVG over a browser PDF/image preview (`apps/web/src`).
@@ -57,7 +58,8 @@
 - [ ] Clone git repo: `git clone https://github.com/yourusername/sitelayer.git`
 - [ ] Run Postgres schema migration (one-time):
   ```bash
-  psql $DATABASE_URL < docker/postgres/init/001_schema.sql
+  DATABASE_URL="$DATABASE_URL" scripts/migrate-db.sh
+  DATABASE_URL="$DATABASE_URL" scripts/check-db-schema.sh
   ```
 - [ ] Verify tables exist: `psql $DATABASE_URL -c "\dt"`
 
@@ -508,7 +510,8 @@
   cd ../api && npm run build
 
   echo "Running migrations..."
-  psql $DATABASE_URL < ../../docker/postgres/init/001_schema.sql
+  DATABASE_URL="$DATABASE_URL" scripts/migrate-db.sh
+  DATABASE_URL="$DATABASE_URL" scripts/check-db-schema.sh
 
   echo "Restarting services..."
   systemctl restart sitelayer-api

@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import {
-  DEFAULT_BONUS_RULE,
-  formatMoney,
-  simulateBonusScenario,
-  type BonusTier,
-} from '@sitelayer/domain'
+import { DEFAULT_BONUS_RULE, formatMoney, simulateBonusScenario, type BonusTier } from '@sitelayer/domain'
 import type { BonusRuleRow, BootstrapResponse, ProjectRow } from '../api.js'
 import { Button } from '../components/ui/button.js'
 import { Input } from '../components/ui/input.js'
@@ -230,7 +225,8 @@ export function BonusSimView({ bootstrap }: BonusSimViewProps) {
           />
           <div className="bonusSimTierList" aria-label="Tier schedule">
             {sortedTiers.map((tier) => {
-              const active = result.eligible && result.payout_percent === tier.payoutPercent && result.margin >= tier.minMargin
+              const active =
+                result.eligible && result.payout_percent === tier.payoutPercent && result.margin >= tier.minMargin
               return (
                 <div key={`${tier.minMargin}-${tier.payoutPercent}`} className={`tier${active ? ' active' : ''}`}>
                   <span>≥ {formatPercent(tier.minMargin, 0)} margin</span>
@@ -417,7 +413,13 @@ function PayoutChart({ tiers, bonusPool, margin, payout }: PayoutChartProps) {
 
       {/* x labels */}
       {xTickList.map((tick) => (
-        <text key={`xt-${tick}`} className="label" x={xFromMargin(tick)} y={padding.top + plotH + 18} textAnchor="middle">
+        <text
+          key={`xt-${tick}`}
+          className="label"
+          x={xFromMargin(tick)}
+          y={padding.top + plotH + 18}
+          textAnchor="middle"
+        >
           {formatPercent(tick, 0)}
         </text>
       ))}

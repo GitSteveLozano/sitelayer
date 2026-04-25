@@ -1,35 +1,38 @@
 # Sitelayer Disaster Recovery — Restore Runbook
 
-**Last updated:** 2026-04-24
+**Last updated:** 2026-04-25
 **Audience:** on-call engineer recovering Sitelayer prod after data loss, droplet failure, or DB corruption.
 
 ## Targets (RPO / RTO)
 
-| Failure                   | RPO                                           | RTO         | Primary recovery path                          |
-| ------------------------- | --------------------------------------------- | ----------- | ---------------------------------------------- |
-| App droplet lost          | 0 (data lives in managed DB / Spaces)         | <= 30 min   | Restore droplet snapshot OR redeploy from main |
-| Managed Postgres deleted  | <= 5 min via DO point-in-time-restore (PITR)  | <= 60 min   | DO PITR fork (preferred), then re-cutover      |
-| Bad migration / data corr | <= 24 h via daily logical pg_dump on prod box | <= 60 min   | psql restore from `/app/backups/postgres`      |
-| Region-wide outage        | <= 24 h logical, weekly droplet snapshot      | hours       | Manual rebuild in different region from dump   |
+| Failure                   | RPO                                           | RTO       | Primary recovery path                         |
+| ------------------------- | --------------------------------------------- | --------- | --------------------------------------------- |
+| App droplet lost          | 0 for DB and blueprint objects                | <= 30 min | Restore droplet snapshot OR redeploy from DCR |
+| Managed Postgres deleted  | <= 5 min via DO point-in-time-restore (PITR)  | <= 60 min | DO PITR fork (preferred), then re-cutover     |
+| Bad migration / data corr | <= 24 h via daily logical pg_dump on prod box | <= 60 min | psql restore from `/app/backups/postgres`     |
+| Region-wide outage        | <= 24 h logical, weekly droplet snapshot      | hours     | Manual rebuild in different region from dump  |
 
 DigitalOcean Managed Postgres includes daily backups + 7-day PITR on every plan.
 Droplet weekly backups: Sunday 04:00 UTC, 28-day retention (DO standard).
 
 ## Where backups live
 
-| Backup                  | Location                                                                          | Retention | List command                                                          |
-| ----------------------- | --------------------------------------------------------------------------------- | --------- | --------------------------------------------------------------------- |
-| Droplet snapshots       | DO snapshots service                                                              | 28 days   | `doctl compute droplet backups list <ID>`                             |
-| Managed Postgres backup | DO managed                                                                        | 7 days    | `doctl databases backups 9948c96b-b6b6-45ad-adf7-d20e4c206c66`        |
-| Managed Postgres PITR   | DO managed                                                                        | 7 days    | API: `/v2/databases/<id>/replicas` and fork-from-time                 |
-| Logical pg_dump         | `/app/backups/postgres/sitelayer-YYYYMMDDTHHMMSSZ.sql.gz` on prod droplet         | 30 days   | `ssh sitelayer ls /app/backups/postgres`                              |
-| Off-host logical dump   | DO Spaces `s3://sitelayer-blueprints-prod/db-backups/` (NOT YET ENABLED)          | 90 days   | requires Spaces creds — see "Open work" below                         |
+| Backup                   | Location                                                                  | Retention | List command                                                                                  |
+| ------------------------ | ------------------------------------------------------------------------- | --------- | --------------------------------------------------------------------------------------------- |
+| Droplet snapshots        | DO snapshots service                                                      | 28 days   | `doctl compute droplet backups <ID>`                                                          |
+| Managed Postgres backup  | DO managed                                                                | 7 days    | `doctl databases backups 9948c96b-b6b6-45ad-adf7-d20e4c206c66`                                |
+| Managed Postgres PITR    | DO managed                                                                | 7 days    | API: `/v2/databases/<id>/replicas` and fork-from-time                                         |
+| Logical pg_dump          | `/app/backups/postgres/sitelayer-YYYYMMDDTHHMMSSZ.sql.gz` on prod droplet | 30 days   | `ssh sitelayer ls /app/backups/postgres`                                                      |
+| Off-host logical dump    | Preview droplet `/app/offsite-backups/postgres-from-prod`                 | 30 days   | `ssh sitelayer@10.118.0.2 ls -lh /app/offsite-backups/postgres-from-prod`                     |
+| Blueprint objects        | DO Spaces `sitelayer-blueprints-prod` in `tor1`, versioning enabled       | versioned | `aws s3 ls s3://sitelayer-blueprints-prod --endpoint-url https://tor1.digitaloceanspaces.com` |
+| Off-host blueprint dump  | Preview droplet `/app/offsite-backups/blueprints-from-prod` fallback      | 30 days   | `ssh sitelayer@10.118.0.2 ls -lh /app/offsite-backups/blueprints-from-prod`                   |
+| Future object-store dump | DO Spaces `s3://sitelayer-blueprints-prod/db-backups/` (NOT YET ENABLED)  | 90 days   | requires Spaces creds — see "Open work" below                                                 |
 
 ## On-call quick reference (5 commands)
 
 ```bash
 # 1. Latest droplet snapshot ID
-doctl compute droplet backups list 566798325 --format ID,Name,CreatedAt
+doctl compute droplet backups 566798325 --format ID,Name,Created
 
 # 2. Most recent managed PG backup
 doctl databases backups 9948c96b-b6b6-45ad-adf7-d20e4c206c66
@@ -51,7 +54,7 @@ Use when the prod droplet is lost or compromised but the managed DB is fine.
 
 ```bash
 # List snapshots
-doctl compute droplet backups list 566798325
+doctl compute droplet backups 566798325
 
 # Create new droplet from latest snapshot
 doctl compute droplet create sitelayer-restore \
@@ -156,10 +159,6 @@ psql "$DATABASE_URL" -c "SELECT count(*) FROM projects; SELECT count(*) FROM blu
 
 ## Open work
 
-1. **DO Spaces off-host copy.** Logical dumps currently live only on the prod droplet — single point of failure. Once `DO_SPACES_KEY`/`DO_SPACES_SECRET` are populated in `/app/sitelayer/.env`:
-   ```bash
-   bash /app/sitelayer/scripts/provision-spaces-buckets.sh   # creates sitelayer-blueprints-{dev,preview,prod}
-   ```
-   Then extend `scripts/backup-postgres.sh` to `aws s3 cp` each dump to `s3://sitelayer-blueprints-prod/db-backups/`.
+1. **Postgres dump object-store copy.** Logical dumps are copied to the preview droplet as of 2026-04-25. Move the second copy to object storage or another off-region target once retention requirements are defined.
 2. **Off-region snapshot.** DO weekly snapshot is region-local. For DR against a tor1 outage, schedule a monthly `pg_dump` copied to a non-tor1 Space.
-3. **Backup monitoring.** Add a Sentry cron monitor or a heartbeat to a healthcheck endpoint so a missed nightly dump pages on-call.
+3. **On-call routing.** `sitelayer-timer-monitor.timer` sends Sentry events on missed/stale backup timers; wire those events to the final on-call destination once that destination exists.

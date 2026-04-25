@@ -25,6 +25,13 @@ export class AuthError extends Error {
   }
 }
 
+export class AuthConfigError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AuthConfigError'
+  }
+}
+
 export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig {
   const tier = env.APP_TIER ?? 'local'
   const clerkJwtKey = env.CLERK_JWT_KEY?.trim() || null
@@ -33,6 +40,18 @@ export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig
   const allowHeaderFallback = env.AUTH_ALLOW_HEADER_FALLBACK
     ? env.AUTH_ALLOW_HEADER_FALLBACK === '1' || env.AUTH_ALLOW_HEADER_FALLBACK === 'true'
     : !authConfigured || tier !== 'prod'
+  const breakGlassHeaderFallback =
+    env.AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS === '1' || env.AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS === 'true'
+
+  if (tier === 'prod' && !authConfigured) {
+    throw new AuthConfigError('APP_TIER=prod requires CLERK_JWT_KEY or INTERNAL_AUTH_TOKEN')
+  }
+  if (tier === 'prod' && allowHeaderFallback && !breakGlassHeaderFallback) {
+    throw new AuthConfigError(
+      'APP_TIER=prod refuses AUTH_ALLOW_HEADER_FALLBACK without AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS=1',
+    )
+  }
+
   return {
     clerkJwtKey,
     clerkIssuer: env.CLERK_ISSUER?.trim() || null,

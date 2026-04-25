@@ -2,7 +2,7 @@
 
 ## Overview
 
-Sitelayer is deployed to a DigitalOcean Droplet using Docker Compose. The GitHub Actions workflow automatically deploys production on push to `main`.
+Sitelayer is deployed to a DigitalOcean Droplet using Docker Compose. The GitHub Actions workflow automatically builds one immutable runtime image, pushes it to DigitalOcean Container Registry, and deploys production on push to `main`.
 
 ## Initial Droplet Setup
 
@@ -90,7 +90,7 @@ git clone https://github.com/GitSteveLozano/sitelayer.git .
 
 ### 6. Environment Configuration
 
-Create `/app/sitelayer/.env` owned by the `sitelayer` user. `DATABASE_URL` is the only hard requirement for the stack to render; leave optional integration values blank until those services are provisioned.
+Create `/app/sitelayer/.env` owned by the `sitelayer` user. `DATABASE_URL`, production auth, `API_METRICS_TOKEN`, and Spaces credentials are required for the current production profile.
 
 ```bash
 cat > /app/sitelayer/.env << 'EOF'
@@ -100,6 +100,7 @@ DATABASE_URL=postgresql://user:password@host:25060/defaultdb?sslmode=require
 DATABASE_SSL_REJECT_UNAUTHORIZED=false
 
 # API Configuration
+APP_TIER=prod
 PORT=3001
 NODE_ENV=production
 ACTIVE_COMPANY_SLUG=la-operations
@@ -113,21 +114,29 @@ QBO_SUCCESS_REDIRECT_URI=https://your-domain.com/?qbo=connected
 QBO_ENVIRONMENT=production
 QBO_STATE_SECRET=
 
-# Clerk Authentication (optional until Clerk JWT enforcement is enabled)
+# Clerk Authentication (prod requires Clerk JWT key or INTERNAL_AUTH_TOKEN)
 CLERK_JWT_KEY=
 CLERK_ISSUER=
 CLERK_WEBHOOK_SECRET=
 AUTH_ALLOW_HEADER_FALLBACK=
+AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS=
+INTERNAL_AUTH_TOKEN=
 
-# DigitalOcean Spaces (optional until file storage is provisioned)
-DO_SPACES_KEY=
-DO_SPACES_SECRET=
+# Metrics
+API_METRICS_TOKEN=<generate-32b-random>
+
+# DigitalOcean Spaces
+DO_SPACES_KEY=<scoped-readwrite-key>
+DO_SPACES_SECRET=<scoped-readwrite-secret>
 DO_SPACES_BUCKET=sitelayer-blueprints-prod
 DO_SPACES_REGION=tor1
+DO_SPACES_ENDPOINT=https://tor1.digitaloceanspaces.com
 
 # Local durable blueprint storage fallback.
 # docker-compose.prod.yml persists this path in the blueprint_storage volume.
 BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
+# Emergency-only escape hatch if Spaces is unavailable. Leave blank in prod.
+ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD=
 
 # Frontend
 VITE_API_URL=
@@ -153,23 +162,17 @@ As the `sitelayer` user:
 
 ```bash
 cd /app/sitelayer
-source .env
-psql "$DATABASE_URL" < docker/postgres/init/001_schema.sql
-```
-
-For ongoing deploys, use the repo migration runner instead of calling SQL files
-manually:
-
-```bash
-cd /app/sitelayer
 ENV_FILE=/app/sitelayer/.env scripts/migrate-db.sh
 ENV_FILE=/app/sitelayer/.env scripts/check-db-schema.sh
 ```
 
-The production GitHub Actions deploy runs both commands before rebuilding the
-containers. The SQL files are currently idempotent; review this before adding
-any destructive migration. Keep seed data guarded by `NOT EXISTS` checks unless
-a real unique constraint exists.
+The production GitHub Actions deploy builds images, takes a pre-migration
+logical backup, then runs both commands before replacing containers. The runner
+records each migration in `schema_migrations` with a checksum and holds a
+transaction-scoped advisory lock so overlapping deploys cannot apply migrations
+concurrently. Do not edit a committed migration after it has run in any shared
+environment; add a new SQL file instead. Keep seed data guarded by `NOT EXISTS`
+checks unless a real unique constraint exists.
 
 For the local Docker database, use the Compose network instead of opening the
 database port:
@@ -192,7 +195,8 @@ As the `sitelayer` user:
 
 ```bash
 cd /app/sitelayer
-docker compose -f docker-compose.prod.yml up -d
+APP_IMAGE=registry.digitalocean.com/sitelayer/sitelayer:<git-sha> \
+  docker compose -f docker-compose.prod.yml up -d
 ```
 
 Or via GitHub Actions (automatic on push to `main`).
@@ -205,6 +209,7 @@ Add the following secrets to your GitHub repository settings:
 
 - `DEPLOY_HOST`: Droplet IP or domain (e.g., `165.245.230.3` or `sitelayer.sandolab.xyz`)
 - `DEPLOY_SSH_KEY`: Private SSH key content from `~/.ssh/sitelayer_deploy` (the deployment user's key)
+- `DIGITALOCEAN_ACCESS_TOKEN`: token with registry read/write access for pushing immutable images and minting short-lived registry pull credentials
 
 The workflow uses the `sitelayer` deployment user and does not expose the root SSH key. Because the user can access Docker, the deployment key is still root-equivalent and must be protected accordingly.
 
@@ -219,14 +224,17 @@ git push origin main
 The GitHub Actions workflow will:
 
 1. Check out the code
-2. SSH into the droplet
-3. Pull latest changes from GitHub
-4. Run `scripts/migrate-db.sh`
-5. Run `scripts/check-db-schema.sh`
-6. Validate Compose config
-7. Build Docker images
-8. Start services with `docker compose up -d --remove-orphans`
-9. Verify public HTTPS health locally through Caddy
+2. Build `registry.digitalocean.com/sitelayer/sitelayer:<git-sha>`
+3. Push both `<git-sha>` and `main` image tags to DigitalOcean Container Registry
+4. Mint short-lived read-only registry pull credentials for the droplet
+5. SSH into the droplet
+6. Pull latest repo metadata from GitHub
+7. Pull the exact image tag built for this commit
+8. Run a pre-migration logical backup with `scripts/backup-postgres.sh`
+9. Run `scripts/migrate-db.sh`
+10. Run `scripts/check-db-schema.sh`
+11. Start services with `APP_IMAGE=<sha-image> docker compose up -d --remove-orphans`
+12. Verify public HTTPS health, `/api/version`, web root, metrics gating, and container state
 
 ## Tier Isolation
 
@@ -304,25 +312,32 @@ Idempotent (`ADD COLUMN IF NOT EXISTS`). Existing rows stay NULL in the origin c
 
 ## Environment Variables Reference
 
-| Variable                   | Required   | Description                                                                                                             |
-| -------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `APP_TIER`                 | ✅ in prod | `local`\|`dev`\|`preview`\|`prod`. Startup guard refuses to boot on mismatch.                                           |
-| `FEATURE_FLAGS`            | ❌         | Comma-separated. See Tier Isolation above.                                                                              |
-| `DATABASE_URL`             | ✅         | PostgreSQL connection string (use managed database)                                                                     |
-| `DATABASE_URL_PROD_RO`     | ❌         | Read-only prod pool for `read-prod-ro` flag; user must be `_ro`/readonly role.                                          |
-| `PORT`                     | ❌         | API port; Compose sets `3001`                                                                                           |
-| `NODE_ENV`                 | ❌         | Compose sets `production`                                                                                               |
-| `QBO_CLIENT_ID`            | ❌         | QuickBooks Online client ID; defaults to demo placeholders until configured                                             |
-| `QBO_CLIENT_SECRET`        | ❌         | QuickBooks Online client secret; defaults to demo placeholders until configured                                         |
-| `QBO_REDIRECT_URI`         | ❌         | OAuth redirect URI for QBO                                                                                              |
-| `QBO_SUCCESS_REDIRECT_URI` | ❌         | UI redirect after QBO OAuth success                                                                                     |
-| `QBO_STATE_SECRET`         | ❌         | Secret used to sign QBO OAuth state                                                                                     |
-| `CLERK_SECRET_KEY`         | ❌         | Clerk authentication secret                                                                                             |
-| `DO_SPACES_KEY`            | ❌         | DigitalOcean Spaces API key                                                                                             |
-| `DO_SPACES_SECRET`         | ❌         | DigitalOcean Spaces API secret                                                                                          |
-| `BLUEPRINT_STORAGE_ROOT`   | ❌         | Local filesystem blueprint storage path; production Compose persists `/app/storage/blueprints` in a named Docker volume |
-| `SENTRY_DSN`               | ❌         | Sentry error tracking URL                                                                                               |
-| `ALLOWED_ORIGINS`          | ❌         | CORS allowed origins (comma-separated)                                                                                  |
+| Variable                                 | Required   | Description                                                                                                                |
+| ---------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `APP_TIER`                               | ✅ in prod | `local`\|`dev`\|`preview`\|`prod`. Startup guard refuses to boot on mismatch.                                              |
+| `FEATURE_FLAGS`                          | ❌         | Comma-separated. See Tier Isolation above.                                                                                 |
+| `DATABASE_URL`                           | ✅         | PostgreSQL connection string (use managed database)                                                                        |
+| `DATABASE_URL_PROD_RO`                   | ❌         | Read-only prod pool for `read-prod-ro` flag; user must be `_ro`/readonly role.                                             |
+| `PORT`                                   | ❌         | API port; Compose sets `3001`                                                                                              |
+| `NODE_ENV`                               | ❌         | Compose sets `production`                                                                                                  |
+| `QBO_CLIENT_ID`                          | ❌         | QuickBooks Online client ID; defaults to demo placeholders until configured                                                |
+| `QBO_CLIENT_SECRET`                      | ❌         | QuickBooks Online client secret; defaults to demo placeholders until configured                                            |
+| `QBO_REDIRECT_URI`                       | ❌         | OAuth redirect URI for QBO                                                                                                 |
+| `QBO_SUCCESS_REDIRECT_URI`               | ❌         | UI redirect after QBO OAuth success                                                                                        |
+| `QBO_STATE_SECRET`                       | ❌         | Secret used to sign QBO OAuth state                                                                                        |
+| `CLERK_SECRET_KEY`                       | ❌         | Clerk authentication secret                                                                                                |
+| `CLERK_JWT_KEY`                          | ✅ in prod | Clerk JWT public key. Prod refuses to boot unless `CLERK_JWT_KEY` or `INTERNAL_AUTH_TOKEN` is configured.                  |
+| `AUTH_ALLOW_HEADER_FALLBACK`             | ❌         | Dev/preview escape hatch for header/default identity. Prod refuses this unless `AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS=1`. |
+| `AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS` | ❌         | Emergency-only prod override for header fallback; never leave enabled.                                                     |
+| `INTERNAL_AUTH_TOKEN`                    | ❌         | Service bearer token. Also satisfies the prod auth startup guard when Clerk is unavailable.                                |
+| `API_METRICS_TOKEN`                      | ✅ in prod | Bearer token required for `/api/metrics`; prod refuses to boot without it.                                                 |
+| `APP_IMAGE`                              | ✅ deploy  | Immutable runtime image tag; deploy exports `registry.digitalocean.com/sitelayer/sitelayer:<git-sha>`.                     |
+| `DO_SPACES_KEY`                          | ✅ in prod | Scoped DigitalOcean Spaces read/write key for `sitelayer-blueprints-prod`.                                                 |
+| `DO_SPACES_SECRET`                       | ✅ in prod | Scoped DigitalOcean Spaces secret.                                                                                         |
+| `ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD`  | ❌         | Temporary prod escape hatch for local blueprint storage; requires off-host volume backups while set.                       |
+| `BLUEPRINT_STORAGE_ROOT`                 | ❌         | Local filesystem blueprint storage path; production Compose persists `/app/storage/blueprints` in a named Docker volume    |
+| `SENTRY_DSN`                             | ❌         | Sentry error tracking URL                                                                                                  |
+| `ALLOWED_ORIGINS`                        | ❌         | CORS allowed origins (comma-separated)                                                                                     |
 
 ## Monitoring & Troubleshooting
 
@@ -385,11 +400,14 @@ DATABASE_URL="$RESTORE_TARGET_DATABASE_URL" scripts/restore-postgres.sh /app/bac
 
 ### Automated Logical Backups + Off-host Copy + Restore Drill
 
-The installer wires up three timers on the production droplet:
+The installers wire up five timers on the production droplet. Verified live on
+2026-04-25:
 
 - `sitelayer-postgres-backup.timer` — daily logical pg_dump at 03:17 UTC (30-day retention).
 - `sitelayer-postgres-offsite.timer` — rsyncs the latest dump to the preview droplet over the 10.118.0.0/16 private network at 03:32 UTC. Verifies via `sha256sum`, atomic rename, mirrors retention.
-- `sitelayer-restore-drill.timer` — weekly (Sunday 04:00 UTC), log-only at `/var/log/sitelayer/restore-drill.log`. Restores the latest dump into a throwaway `postgres:18-alpine` container and runs sanity queries. **Does not page** — pager hookup is a separate concern.
+- `sitelayer-blueprint-backup.timer` — tars the production `blueprint_storage` Docker volume and rsyncs it to the preview droplet at 03:47 UTC when `ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD=1` is in use. Production normally stores new blueprint objects in Spaces.
+- `sitelayer-restore-drill.timer` — weekly (Sunday 04:00 UTC), log at `/var/log/sitelayer/restore-drill.log`. Restores the latest dump into a throwaway `postgres:18-alpine` container and runs sanity queries.
+- `sitelayer-timer-monitor.timer` — hourly, checks that the backup/off-host/restore timers are active, recently successful, and not stale. Sends a Sentry event when `SENTRY_DSN` is configured and the check fails.
 
 Install (run on prod droplet, idempotent):
 
@@ -399,6 +417,15 @@ sudo APP_DIR=/app/sitelayer ENV_FILE=/app/sitelayer/.env \
   OFFSITE_HOST=sitelayer@10.118.0.2 \
   OFFSITE_DIR=/app/offsite-backups/postgres-from-prod \
   bash /app/sitelayer/scripts/install-postgres-backup-systemd.sh
+
+sudo APP_DIR=/app/sitelayer ENV_FILE=/app/sitelayer/.env \
+  BACKUP_DIR=/app/backups/blueprints RETENTION_DAYS=30 \
+  OFFSITE_HOST=sitelayer@10.118.0.2 \
+  OFFSITE_DIR=/app/offsite-backups/blueprints-from-prod \
+  bash /app/sitelayer/scripts/install-blueprint-backup-systemd.sh
+
+sudo APP_DIR=/app/sitelayer ENV_FILE=/app/sitelayer/.env \
+  bash /app/sitelayer/scripts/install-timer-monitor-systemd.sh
 ```
 
 Useful checks:
@@ -407,10 +434,13 @@ Useful checks:
 systemctl list-timers \
   sitelayer-postgres-backup.timer \
   sitelayer-postgres-offsite.timer \
-  sitelayer-restore-drill.timer
-systemctl status sitelayer-postgres-backup.service sitelayer-postgres-offsite.service
+  sitelayer-blueprint-backup.timer \
+  sitelayer-restore-drill.timer \
+  sitelayer-timer-monitor.timer
+systemctl status sitelayer-postgres-backup.service sitelayer-postgres-offsite.service sitelayer-blueprint-backup.service sitelayer-timer-monitor.service
 ls -lh /app/backups/postgres
 ssh sitelayer@10.118.0.2 ls -lh /app/offsite-backups/postgres-from-prod
+ssh sitelayer@10.118.0.2 ls -lh /app/offsite-backups/blueprints-from-prod
 tail -50 /var/log/sitelayer/restore-drill.log
 ```
 
@@ -444,16 +474,16 @@ docker compose -f docker-compose.prod.yml up -d --force-recreate
 ## Post-Deployment Checklist
 
 - [ ] SSL certificate installed and auto-renewal configured
-- [ ] Database schema applied successfully
-- [ ] API responding on health check endpoint
-- [ ] Frontend loading without errors
+- [x] Database schema applied successfully
+- [x] API responding on health check endpoint
+- [x] Frontend loading without errors
 - [ ] QBO integration credentials configured
-- [ ] Clerk authentication working
+- [x] Clerk authentication working
 - [ ] DO Spaces credentials configured
 - [x] Local blueprint storage volume configured
-- [ ] Backup strategy in place
+- [x] Backup strategy in place
 - [ ] Monitoring/alerts configured
-- [ ] DNS pointing to reserved IP
+- [x] DNS pointing to reserved IP
 
 ## Next Steps
 

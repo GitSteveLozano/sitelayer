@@ -10,34 +10,101 @@ permissions:
 
 concurrency:
   group: droplet-production
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: [self-hosted, sitelayer-preview]
-    timeout-minutes: 15
+    timeout-minutes: 45
     environment:
       name: production
       url: https://sitelayer.sandolab.xyz
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: digitalocean/action-doctl@3cb3953159719656269e044e0e24ca16dd2a690f # v2.5.2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Build and push immutable image
+        env:
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          GIT_SHA="$(git rev-parse --short HEAD)"
+          APP_IMAGE="registry.digitalocean.com/sitelayer/sitelayer:${GIT_SHA}"
+          APP_IMAGE_MAIN="registry.digitalocean.com/sitelayer/sitelayer:main"
+
+          {
+            echo "GIT_SHA=$GIT_SHA"
+            echo "APP_IMAGE=$APP_IMAGE"
+          } >> "$GITHUB_ENV"
+
+          docker_config_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/sitelayer-docker-config.XXXXXX")"
+          trap 'rm -rf "$docker_config_dir"' EXIT
+          doctl registry docker-config sitelayer --read-write --expiry-seconds 3600 > "$docker_config_dir/config.json"
+
+          VITE_CLERK_PUBLISHABLE_KEY="${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}"
+
+          DOCKER_CONFIG="$docker_config_dir" DOCKER_BUILDKIT=1 docker build \
+            --pull \
+            --target runtime \
+            --build-arg VITE_API_URL="${VITE_API_URL:-}" \
+            --build-arg VITE_CLERK_PUBLISHABLE_KEY="$VITE_CLERK_PUBLISHABLE_KEY" \
+            --build-arg VITE_COMPANY_SLUG="${VITE_COMPANY_SLUG:-la-operations}" \
+            --build-arg VITE_USER_ID="${VITE_USER_ID:-demo-user}" \
+            --build-arg VITE_APP_TIER="${VITE_APP_TIER:-prod}" \
+            --build-arg VITE_SENTRY_DSN="${VITE_SENTRY_DSN:-}" \
+            --build-arg VITE_SENTRY_ENVIRONMENT="${VITE_SENTRY_ENVIRONMENT:-production}" \
+            --build-arg VITE_SENTRY_RELEASE="$GIT_SHA" \
+            --build-arg VITE_SENTRY_TRACES_SAMPLE_RATE="${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}" \
+            --build-arg VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}" \
+            --build-arg VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE="${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}" \
+            --build-arg SENTRY_ORG="${SENTRY_ORG:-sandolabs}" \
+            --build-arg SENTRY_WEB_PROJECT="${SENTRY_WEB_PROJECT:-sitelayer-web}" \
+            --build-arg SENTRY_RELEASE="$GIT_SHA" \
+            --build-arg GIT_SHA="$GIT_SHA" \
+            --secret id=sentry_auth_token,env=SENTRY_AUTH_TOKEN \
+            -t "$APP_IMAGE" \
+            -t "$APP_IMAGE_MAIN" \
+            .
+
+          DOCKER_CONFIG="$docker_config_dir" docker push "$APP_IMAGE"
+          DOCKER_CONFIG="$docker_config_dir" docker push "$APP_IMAGE_MAIN"
 
       - name: Deploy via SSH
         env:
           DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: sitelayer
+          APP_IMAGE: ${{ env.APP_IMAGE }}
+          GIT_SHA: ${{ env.GIT_SHA }}
         run: |
           test -n "$DEPLOY_KEY" || { echo "DEPLOY_SSH_KEY is not configured"; exit 1; }
           test -n "$DEPLOY_HOST" || { echo "DEPLOY_HOST is not configured"; exit 1; }
+          test -n "$APP_IMAGE" || { echo "APP_IMAGE is not configured"; exit 1; }
+          test -n "$GIT_SHA" || { echo "GIT_SHA is not configured"; exit 1; }
 
           mkdir -p ~/.ssh
           echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null || true
 
-          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" << 'EOF'
-            set -e
+          doctl registry docker-config sitelayer --expiry-seconds 604800 > /tmp/sitelayer-registry-docker-config.json
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p ~/.docker && chmod 700 ~/.docker"
+          scp -i ~/.ssh/deploy_key /tmp/sitelayer-registry-docker-config.json "$DEPLOY_USER@$DEPLOY_HOST:/home/$DEPLOY_USER/.docker/config.json.tmp"
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "mv ~/.docker/config.json.tmp ~/.docker/config.json && chmod 600 ~/.docker/config.json"
+          shred -u /tmp/sitelayer-registry-docker-config.json
+
+          ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "APP_IMAGE='$APP_IMAGE' EXPECTED_GIT_SHA='$GIT_SHA' bash -s" << 'EOF'
+            set -euo pipefail
+
+            exec 9>/tmp/sitelayer-production-deploy.lock
+            if ! flock -n 9; then
+              echo "ERROR: another production deploy is already running"
+              exit 1
+            fi
 
             if docker compose version >/dev/null 2>&1; then
               COMPOSE="docker compose"
@@ -59,6 +126,8 @@ jobs:
               git remote set-url origin https://github.com/GitSteveLozano/sitelayer.git
             fi
 
+            previous_sha="$(git rev-parse --short HEAD 2>/dev/null || true)"
+
             # Update code
             git fetch origin
             git checkout -B main origin/main
@@ -66,6 +135,11 @@ jobs:
             export SENTRY_RELEASE="$(git rev-parse --short HEAD)"
             export VITE_SENTRY_RELEASE="$SENTRY_RELEASE"
             export GIT_SHA="$SENTRY_RELEASE"
+            test "$GIT_SHA" = "$EXPECTED_GIT_SHA" || {
+              echo "ERROR: checked out $GIT_SHA but image was built for $EXPECTED_GIT_SHA"
+              exit 1
+            }
+            export APP_IMAGE
             export SENTRY_WEB_PROJECT="${SENTRY_WEB_PROJECT:-sitelayer-web}"
 
             # docker compose reads this automatically from the working directory.
@@ -74,14 +148,45 @@ jobs:
               exit 1
             fi
 
-            # Apply idempotent schema migrations before booting the new app.
+            APP_IMAGE="$APP_IMAGE" python3 - <<'PY'
+          from pathlib import Path
+          import os
+
+          path = Path("/app/sitelayer/.env")
+          key = "APP_IMAGE"
+          value = os.environ["APP_IMAGE"]
+          lines = path.read_text().splitlines()
+          written = False
+          out = []
+          for line in lines:
+              if line.startswith(f"{key}="):
+                  out.append(f"{key}={value}")
+                  written = True
+              else:
+                  out.append(line)
+          if not written:
+              out.append(f"{key}={value}")
+          path.write_text("\n".join(out) + "\n")
+          PY
+
+            # Pull before touching the database so a missing image cannot leave
+            # the old app running against a newly migrated schema.
+            $COMPOSE -f docker-compose.prod.yml config >/dev/null
+            $COMPOSE -f docker-compose.prod.yml pull api web worker
+            docker image inspect "$APP_IMAGE" >/dev/null
+
+            # Take a logical backup before any schema migration.
+            BACKUP_DIR="${BACKUP_DIR:-/app/backups/postgres}" \
+              DATABASE_URL_FILE=/app/sitelayer/.env \
+              PG_DUMP_DOCKER_IMAGE=postgres:18-alpine \
+              scripts/backup-postgres.sh
+
+            # Apply ledgered schema migrations after the image has built.
             # Falls back to dockerized psql when the host client is absent.
             PSQL_DOCKER_IMAGE=postgres:18-alpine scripts/migrate-db.sh
             PSQL_DOCKER_IMAGE=postgres:18-alpine scripts/check-db-schema.sh
 
-            # Build and start services
-            $COMPOSE -f docker-compose.prod.yml config >/dev/null
-            $COMPOSE -f docker-compose.prod.yml build --pull
+            # Start services
             $COMPOSE -f docker-compose.prod.yml up -d --remove-orphans
 
             # Check API health through the public TLS listener. The first Caddy
@@ -98,6 +203,15 @@ jobs:
 
               sleep 5
             done
+
+            EXPECTED_SHA="$GIT_SHA" scripts/verify-prod-deploy.sh
+
+            if [ -n "$previous_sha" ]; then
+              printf '%s\n' "$previous_sha" > .last_previous_deployed_sha
+            fi
+            printf '%s\n' "$GIT_SHA" > .last_successful_deployed_sha
+            printf '%s\n' "$APP_IMAGE" > .last_successful_app_image
+            date -u +%Y-%m-%dT%H:%M:%SZ > .last_successful_deployed_at
 
             echo "Deployment completed successfully"
           EOF

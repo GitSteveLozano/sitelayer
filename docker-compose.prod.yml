@@ -1,27 +1,6 @@
 services:
   api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-      args:
-        VITE_API_URL: ${VITE_API_URL:-}
-        VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}
-        VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
-        VITE_USER_ID: ${VITE_USER_ID:-demo-user}
-        VITE_APP_TIER: ${VITE_APP_TIER:-prod}
-        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
-        VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
-        VITE_SENTRY_RELEASE: ${VITE_SENTRY_RELEASE:-}
-        VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
-        VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}
-        VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}
-        SENTRY_ORG: ${SENTRY_ORG:-sandolabs}
-        SENTRY_WEB_PROJECT: ${SENTRY_WEB_PROJECT:-sitelayer-web}
-        SENTRY_RELEASE: ${SENTRY_RELEASE:-}
-        GIT_SHA: ${GIT_SHA:-unknown}
-      secrets:
-        - sentry_auth_token
+    image: ${APP_IMAGE:-registry.digitalocean.com/sitelayer/sitelayer:main}
     command: npm start -w @sitelayer/api
     environment:
       NODE_ENV: production
@@ -45,6 +24,7 @@ services:
       DO_SPACES_SECRET: ${DO_SPACES_SECRET:-}
       DO_SPACES_REGION: ${DO_SPACES_REGION:-tor1}
       DO_SPACES_BUCKET: ${DO_SPACES_BUCKET:-sitelayer-blueprints-prod}
+      ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD: ${ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD:-}
       BLUEPRINT_STORAGE_ROOT: ${BLUEPRINT_STORAGE_ROOT:-/app/storage/blueprints}
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_ORG: ${SENTRY_ORG:-sandolabs}
@@ -58,15 +38,18 @@ services:
       CLERK_WEBHOOK_SECRET: ${CLERK_WEBHOOK_SECRET:-}
       INTERNAL_AUTH_TOKEN: ${INTERNAL_AUTH_TOKEN:-}
       AUTH_ALLOW_HEADER_FALLBACK: ${AUTH_ALLOW_HEADER_FALLBACK:-}
+      AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS: ${AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS:-}
       API_METRICS_TOKEN: ${API_METRICS_TOKEN:-}
       APP_BUILD_SHA: ${GIT_SHA:-unknown}
       EMAIL_PROVIDER: ${EMAIL_PROVIDER:-console}
       EMAIL_FROM: ${EMAIL_FROM:-noreply@sitelayer.sandolab.xyz}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+      SHUTDOWN_TIMEOUT_MS: ${SHUTDOWN_TIMEOUT_MS:-15000}
     volumes:
       - blueprint_storage:/app/storage/blueprints
     restart: always
+    stop_grace_period: 20s
     logging:
       driver: json-file
       options:
@@ -88,63 +71,34 @@ services:
       - sitelayer
 
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-      args:
-        VITE_API_URL: ${VITE_API_URL:-}
-        VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}
-        VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
-        VITE_USER_ID: ${VITE_USER_ID:-demo-user}
-        VITE_APP_TIER: ${VITE_APP_TIER:-prod}
-        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
-        VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
-        VITE_SENTRY_RELEASE: ${VITE_SENTRY_RELEASE:-}
-        VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
-        VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}
-        VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}
-        SENTRY_ORG: ${SENTRY_ORG:-sandolabs}
-        SENTRY_WEB_PROJECT: ${SENTRY_WEB_PROJECT:-sitelayer-web}
-        SENTRY_RELEASE: ${SENTRY_RELEASE:-}
-        GIT_SHA: ${GIT_SHA:-unknown}
-      secrets:
-        - sentry_auth_token
+    image: ${APP_IMAGE:-registry.digitalocean.com/sitelayer/sitelayer:main}
     command: npm start -w @sitelayer/web
     environment:
       NODE_ENV: production
     restart: always
+    stop_grace_period: 20s
     logging:
       driver: json-file
       options:
         max-size: '20m'
         max-file: '5'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('node:http').get('http://127.0.0.1:3000/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     networks:
       - sitelayer
 
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      target: runtime
-      args:
-        VITE_API_URL: ${VITE_API_URL:-}
-        VITE_CLERK_PUBLISHABLE_KEY: ${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}
-        VITE_COMPANY_SLUG: ${VITE_COMPANY_SLUG:-la-operations}
-        VITE_USER_ID: ${VITE_USER_ID:-demo-user}
-        VITE_APP_TIER: ${VITE_APP_TIER:-prod}
-        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
-        VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
-        VITE_SENTRY_RELEASE: ${VITE_SENTRY_RELEASE:-}
-        VITE_SENTRY_TRACES_SAMPLE_RATE: ${VITE_SENTRY_TRACES_SAMPLE_RATE:-0.1}
-        VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE:-0.1}
-        VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE: ${VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE:-1.0}
-        SENTRY_ORG: ${SENTRY_ORG:-sandolabs}
-        SENTRY_WEB_PROJECT: ${SENTRY_WEB_PROJECT:-sitelayer-web}
-        SENTRY_RELEASE: ${SENTRY_RELEASE:-}
-        GIT_SHA: ${GIT_SHA:-unknown}
-      secrets:
-        - sentry_auth_token
+    image: ${APP_IMAGE:-registry.digitalocean.com/sitelayer/sitelayer:main}
     command: npm start -w @sitelayer/worker
     environment:
       NODE_ENV: production
@@ -163,12 +117,20 @@ services:
       EMAIL_FROM: ${EMAIL_FROM:-noreply@sitelayer.sandolab.xyz}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       SENDGRID_API_KEY: ${SENDGRID_API_KEY:-}
+      SHUTDOWN_TIMEOUT_MS: ${SHUTDOWN_TIMEOUT_MS:-15000}
     restart: always
+    stop_grace_period: 20s
     logging:
       driver: json-file
       options:
         max-size: '20m'
         max-file: '5'
+    healthcheck:
+      test: ['CMD-SHELL', "test -r /proc/1/cmdline && tr '\\0' ' ' </proc/1/cmdline | grep -Eq 'npm|node|worker'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     networks:
       - sitelayer
 
@@ -190,8 +152,10 @@ services:
     networks:
       - sitelayer
     depends_on:
-      - api
-      - web
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
 
 networks:
   sitelayer:
@@ -201,7 +165,3 @@ volumes:
   blueprint_storage:
   caddy_data:
   caddy_config:
-
-secrets:
-  sentry_auth_token:
-    environment: SENTRY_AUTH_TOKEN

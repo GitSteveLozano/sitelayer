@@ -93,13 +93,14 @@ select_psql_runner() {
 
 run_psql_file() {
   local file="$1"
+  shift || true
 
   case "${PSQL_RUNNER:-}" in
     local)
       if [ -n "${PGOPTIONS:-}" ]; then
-        PGOPTIONS="$PGOPTIONS" psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f "$file"
+        PGOPTIONS="$PGOPTIONS" psql -v ON_ERROR_STOP=1 "$@" "$DATABASE_URL" -f "$file"
       else
-        psql -v ON_ERROR_STOP=1 "$DATABASE_URL" -f "$file"
+        psql -v ON_ERROR_STOP=1 "$@" "$DATABASE_URL" -f "$file"
       fi
       ;;
     docker)
@@ -111,13 +112,26 @@ run_psql_file() {
         docker_args+=(-e "PGOPTIONS=$PGOPTIONS")
       fi
       docker_args+=(-v "$PWD:/work:ro" -w /work "$PSQL_DOCKER_IMAGE" psql)
-      "${docker_args[@]}" -v ON_ERROR_STOP=1 "$DATABASE_URL" -f "$file"
+      "${docker_args[@]}" -v ON_ERROR_STOP=1 "$@" "$DATABASE_URL" -f "$file"
       ;;
     *)
       echo "ERROR: select_psql_runner must run before run_psql_file" >&2
       exit 1
       ;;
   esac
+}
+
+run_psql_file_with_vars() {
+  local file="$1"
+  shift || true
+  local psql_args=()
+  local assignment
+
+  for assignment in "$@"; do
+    psql_args+=(-v "$assignment")
+  done
+
+  run_psql_file "$file" "${psql_args[@]}"
 }
 
 run_psql_query() {

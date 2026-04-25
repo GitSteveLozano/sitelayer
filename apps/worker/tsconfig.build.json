@@ -5,11 +5,7 @@
     "outDir": "dist",
     "rootDir": "src",
     "paths": {},
-    "types": [
-      "node"
-    ]
+    "types": ["node"]
   },
-  "exclude": [
-    "src/**/*.test.ts"
-  ]
+  "exclude": ["src/**/*.test.ts"]
 }

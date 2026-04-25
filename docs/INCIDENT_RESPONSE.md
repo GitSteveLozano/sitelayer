@@ -27,6 +27,7 @@ docker compose -f /app/sitelayer/docker-compose.prod.yml logs --tail 200 -f api
 **Detect:** Sentry alert "issue rate > 5/min" on `sitelayer-api`; or `/api/metrics` `http_requests_total{status=~"5.."}` rising.
 
 **Mitigate (≤ 2 min):**
+
 ```bash
 doctl compute ssh sitelayer
 docker compose -f /app/sitelayer/docker-compose.prod.yml logs api --tail 200
@@ -36,15 +37,18 @@ docker compose -f /app/sitelayer/docker-compose.prod.yml restart api
 ```
 
 **Investigate:** open the Sentry issue, copy the `request_id`, then:
+
 ```bash
 curl -fsS -H "Authorization: Bearer $DEBUG_TRACE_TOKEN" \
   "https://sitelayer.sandolab.xyz/api/debug/traces/<trace_id>?by=request_id"
 ```
+
 That joins the Sentry trace with `mutation_outbox` / `sync_events` rows.
 
 Common causes: bad migration left a missing column → run `ENV_FILE=/app/sitelayer/.env scripts/check-db-schema.sh`; QBO sync looping on bad token → look for `scope=qbo_sync` errors; pg pool exhausted → look for `Error: timeout exceeded when trying to connect`.
 
 **Comms (when customers exist):**
+
 > We're investigating elevated errors on Sitelayer. The app may be slow or return errors for the next ~15 minutes. We'll post an update at <time>. — Taylor
 
 **Escalate:** Sentry triage; if root cause is QBO connector, page Intuit dev support.
@@ -56,6 +60,7 @@ Common causes: bad migration left a missing column → run `ENV_FILE=/app/sitela
 **Detect:** `/health` returns 503; `docker compose logs api` shows `connection refused` or `terminating connection due to administrator command`.
 
 **Mitigate:** there is **no app-side circuit breaker today**. Every request attempts a pg connection and times out. Two options:
+
 1. Wait and let DO recover (most outages < 10 min).
 2. Pull the api+worker offline so health checks fail loudly:
    ```bash
@@ -64,6 +69,7 @@ Common causes: bad migration left a missing column → run `ENV_FILE=/app/sitela
    Caddy will keep serving the static web bundle; the SPA will show a cached error.
 
 **Investigate:** https://status.digitalocean.com/ → Toronto / Managed Databases. Then:
+
 ```bash
 doctl databases get 9948c96b-b6b6-45ad-adf7-d20e4c206c66
 ```
@@ -87,6 +93,7 @@ doctl databases get 9948c96b-b6b6-45ad-adf7-d20e4c206c66
 **Mitigate:** there is no graceful degradation. Check https://status.clerk.com/. **Do not** flip `AUTH_ALLOW_HEADER_FALLBACK=1` in prod — that disables auth entirely.
 
 **Comms:**
+
 > Sign-in is currently unavailable due to a Clerk (our auth provider) outage. Already-authenticated sessions may continue to work for ~1 hour. Status: https://status.clerk.com/
 
 **Escalate:** Clerk support, attach instance ID from dashboard.
@@ -98,6 +105,7 @@ doctl databases get 9948c96b-b6b6-45ad-adf7-d20e4c206c66
 **Detect:** `dig sitelayer.sandolab.xyz` returns SERVFAIL or stale. Customers report `ERR_NAME_NOT_RESOLVED`.
 
 **Mitigate:** four `sandolab.xyz` zones live on Cloudflare Free. If Cloudflare is down for DNS, fallback options are limited:
+
 - Direct IP smoke test: `curl -k --resolve sitelayer.sandolab.xyz:443:159.203.51.158 https://sitelayer.sandolab.xyz/health`.
 - If Cloudflare proxy is the issue (not DNS), set the `sitelayer` A record to "DNS only" (grey cloud) in CF dashboard; otherwise use Cloudflare Registrar's "Change nameservers" only as last resort (slow propagation).
 
@@ -112,6 +120,7 @@ doctl databases get 9948c96b-b6b6-45ad-adf7-d20e4c206c66
 **Detect:** Sentry "ENOSPC", Caddy can't write logs, `docker compose up` fails.
 
 **Mitigate:**
+
 ```bash
 doctl compute ssh sitelayer
 df -h                                      # /var, /app/backups, /var/lib/docker
@@ -136,6 +145,7 @@ sudo journalctl --vacuum-time=7d                        # systemd journal
 **Detect:** browser warning "NET::ERR_CERT_DATE_INVALID" on `sitelayer.sandolab.xyz`. Or `curl -v https://sitelayer.sandolab.xyz/health` shows expired cert.
 
 **Mitigate:**
+
 ```bash
 doctl compute ssh sitelayer
 docker compose -f /app/sitelayer/docker-compose.prod.yml logs caddy --tail 200 | grep -iE 'error|tls|acme'
@@ -155,18 +165,25 @@ Common causes: rate-limited by LE (5 fails/hour) — wait an hour; CF "Full (str
 **Detect:** GitHub Actions workflow run red; or hung past 15-min `timeout-minutes`.
 
 **Mitigate:**
+
 ```bash
 gh run list -R GitSteveLozano/sitelayer --limit 5
 gh run view <run-id> -R GitSteveLozano/sitelayer --log-failed
 
-# Manual rollback to a known-good SHA:
-PRIOR_SHA=$(gh run list -R GitSteveLozano/sitelayer --status success --limit 1 --json headSha --jq '.[0].headSha')
+# App-only rollback to the previously deployed SHA. This assumes the schema is
+# backward compatible with the previous app. If the failed deploy included a
+# destructive migration, use docs/DR_RESTORE.md instead of rerunning migrations.
 doctl compute ssh sitelayer --ssh-command="
   cd /app/sitelayer &&
+  PRIOR_SHA=\$(cat .last_previous_deployed_sha) &&
+  PRIOR_IMAGE=registry.digitalocean.com/sitelayer/sitelayer:\$PRIOR_SHA &&
   git fetch origin &&
-  git reset --hard $PRIOR_SHA &&
-  PSQL_DOCKER_IMAGE=postgres:18-alpine scripts/migrate-db.sh &&
-  docker compose -f docker-compose.prod.yml up -d --build
+  git reset --hard \$PRIOR_SHA &&
+  (grep -q '^APP_IMAGE=' /app/sitelayer/.env &&
+    sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=\$PRIOR_IMAGE|\" /app/sitelayer/.env ||
+    printf '\\nAPP_IMAGE=%s\\n' \"\$PRIOR_IMAGE\" >> /app/sitelayer/.env) &&
+  APP_IMAGE=\$PRIOR_IMAGE docker compose -f docker-compose.prod.yml pull api web worker &&
+  APP_IMAGE=\$PRIOR_IMAGE docker compose -f docker-compose.prod.yml up -d --remove-orphans
 "
 curl -fsS https://sitelayer.sandolab.xyz/health
 ```
@@ -182,6 +199,7 @@ curl -fsS https://sitelayer.sandolab.xyz/health
 **Detect:** unexpected Sentry alert from new IP, unfamiliar QBO sync events, GitHub security alert, or suspicion.
 
 **Mitigate (immediate):**
+
 1. **Identify class** of credential (Clerk session token? `DEPLOY_SSH_KEY`? QBO?).
 2. **Revoke first, rotate second.** Don't wait for full rotation.
    - Clerk session compromise: Clerk dashboard → Users → revoke sessions for affected user.

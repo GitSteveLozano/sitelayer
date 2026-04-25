@@ -5,6 +5,7 @@ These three settings on `GitSteveLozano/sitelayer` require the **repo owner** (S
 ## 1. Branch protection on `main`
 
 Settings → Branches → Add rule (`main`)
+
 - Require status checks: `validate` (Quality workflow)
 - Block force pushes
 - Block branch deletion
@@ -13,12 +14,14 @@ Settings → Branches → Add rule (`main`)
 ## 2. Repo description + homepage
 
 Settings → General
+
 - Description: `Construction operations platform: blueprint takeoff, estimation, crew scheduling, QBO sync`
 - Website: `https://sitelayer.sandolab.xyz`
 
 ## 3. Security tab
 
 Settings → Code security
+
 - Enable Secret scanning + Push protection
 - Enable Dependabot security updates
 

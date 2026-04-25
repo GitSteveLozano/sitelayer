@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB: sitelayer
       POSTGRES_USER: sitelayer
@@ -35,9 +35,9 @@ services:
     restart: 'no'
 
   api:
-    build:
-      context: .
-    command: npm run dev:api
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install --no-audit --no-fund --prefer-offline && npm run dev:api"
     environment:
       NODE_ENV: development
       APP_TIER: local
@@ -62,9 +62,9 @@ services:
       - api_node_modules:/app/node_modules
 
   web:
-    build:
-      context: .
-    command: npm run dev:web
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install --no-audit --no-fund --prefer-offline && npm run dev:web"
     environment:
       NODE_ENV: development
       VITE_API_URL: http://localhost:3001
@@ -78,9 +78,9 @@ services:
       - web_node_modules:/app/node_modules
 
   worker:
-    build:
-      context: .
-    command: npm run dev:worker
+    image: node:20-alpine
+    working_dir: /app
+    command: sh -c "npm install --no-audit --no-fund --prefer-offline && npm run dev:worker"
     environment:
       NODE_ENV: development
       APP_TIER: local

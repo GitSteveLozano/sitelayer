@@ -127,7 +127,9 @@ export function CompanySwitcher({ companies, activeSlug, onSelect, onCreated }: 
             </form>
           ) : (
             <>
-              <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <ul
+                style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 2 }}
+              >
                 {companies.map((company) => {
                   const isActive = company.slug === activeSlug
                   return (

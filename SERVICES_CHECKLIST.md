@@ -202,8 +202,9 @@ sudo apt install -y postgresql-client
 git clone https://github.com/yourusername/sitelayer.git
 cd sitelayer
 
-# Apply Postgres schema
-psql $DATABASE_URL < docker/postgres/init/001_schema.sql
+# Apply migrations and verify schema
+DATABASE_URL="$DATABASE_URL" scripts/migrate-db.sh
+DATABASE_URL="$DATABASE_URL" scripts/check-db-schema.sh
 
 # Verify tables
 psql $DATABASE_URL -c "\dt"

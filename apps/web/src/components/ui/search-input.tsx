@@ -63,10 +63,7 @@ export function SearchInput({
   )
 }
 
-export function usePersistedSearch(
-  companySlug: string,
-  resourceKey: string,
-): [string, (next: string) => void] {
+export function usePersistedSearch(companySlug: string, resourceKey: string): [string, (next: string) => void] {
   const storageKey = `sitelayer.search.${companySlug}.${resourceKey}`
   const [value, setValue] = React.useState<string>(() => {
     if (typeof window === 'undefined') return ''

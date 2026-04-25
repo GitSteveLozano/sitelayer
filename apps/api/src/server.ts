@@ -53,7 +53,7 @@ import {
 } from './catalog.js'
 import { evaluateLww } from './lww.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
-import { AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
+import { AuthConfigError, AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
 import { extractSvixHeaders, verifyClerkWebhook } from './clerk-webhook.js'
 import {
   extractIntuitSignature,
@@ -68,12 +68,7 @@ import {
   listCompanyAdminIds,
   type EnqueueNotificationInput as NotificationInput,
 } from './notifications.js'
-import {
-  QboParseError,
-  parseQboClass,
-  parseQboEstimateCreateResponse,
-  parseQboItem,
-} from './qbo-parse.js'
+import { QboParseError, parseQboClass, parseQboEstimateCreateResponse, parseQboItem } from './qbo-parse.js'
 import { applyRateLimit, createRateLimiter, isRateLimitExempt, loadRateLimitConfig } from './rate-limit.js'
 import { assertVersion } from './version-guard.js'
 
@@ -220,13 +215,31 @@ const databaseUrl = appConfig.databaseUrl
 const databaseSslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false'
 const activeCompanySlug = process.env.ACTIVE_COMPANY_SLUG ?? 'la-operations'
 const activeUserId = process.env.ACTIVE_USER_ID ?? 'demo-user'
-const authConfig = loadAuthConfig(process.env)
+let authConfig: ReturnType<typeof loadAuthConfig>
+try {
+  authConfig = loadAuthConfig(process.env)
+} catch (err) {
+  if (err instanceof AuthConfigError) {
+    logger.fatal({ err }, '[auth] refusing to start')
+    process.exit(1)
+  }
+  throw err
+}
 const buildSha = process.env.APP_BUILD_SHA ?? process.env.SENTRY_RELEASE ?? 'unknown'
 const startedAt = new Date().toISOString()
 const metricsToken = process.env.API_METRICS_TOKEN?.trim() || null
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:5173,http://localhost:3000')
   .split(',')
   .map((o) => o.trim())
+  .filter(Boolean)
+if (appConfig.tier === 'prod' && !metricsToken) {
+  logger.fatal('[metrics] APP_TIER=prod requires API_METRICS_TOKEN')
+  process.exit(1)
+}
+if (appConfig.tier === 'prod' && allowedOrigins.some((origin) => /localhost|127\.0\.0\.1/.test(origin))) {
+  logger.fatal({ allowed_origins: allowedOrigins }, '[cors] APP_TIER=prod refuses localhost ALLOWED_ORIGINS')
+  process.exit(1)
+}
 const qboClientId = process.env.QBO_CLIENT_ID ?? 'demo'
 const qboClientSecret = process.env.QBO_CLIENT_SECRET ?? 'demo'
 const qboRedirectUri = process.env.QBO_REDIRECT_URI ?? 'http://localhost:3001/api/integrations/qbo/callback'
@@ -1523,23 +1536,6 @@ async function assertDivisionAllowedForServiceItem(
  */
 function assertServiceItemCatalogStatus(companyId: string, serviceItemCode: string, divisionCode: string | null) {
   return assertServiceItemCatalogStatusImpl(pool, companyId, serviceItemCode, divisionCode)
-}
-
-async function listProjects(companyId: string) {
-  const result = await pool.query(
-    `
-    select
-      id, customer_id, name, customer_name, division_code, status, bid_total,
-      labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at,
-      site_lat, site_lng, site_radius_m,
-      version, created_at, updated_at
-    from projects
-    where company_id = $1
-    order by updated_at desc
-    `,
-    [companyId],
-  )
-  return result.rows
 }
 
 async function listCustomers(companyId: string) {
@@ -5022,10 +5018,7 @@ const server = http.createServer(async (req, res) => {
                   qboEstimateId = parseQboEstimateCreateResponse(result).id
                 } catch (e) {
                   if (e instanceof QboParseError) {
-                    logger.error(
-                      { err: e, scope: 'qbo_push_estimate_parse' },
-                      'QBO estimate response parse failed',
-                    )
+                    logger.error({ err: e, scope: 'qbo_push_estimate_parse' }, 'QBO estimate response parse failed')
                     Sentry.captureException(e, { tags: { scope: 'qbo_push_estimate_parse' } })
                     await recordSyncEvent(
                       company.id,
@@ -6925,4 +6918,43 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, () => {
   logger.info({ port }, '[api] listening')
+})
+
+let shutdownStarted = false
+
+async function shutdown(signal: NodeJS.Signals) {
+  if (shutdownStarted) return
+  shutdownStarted = true
+  logger.info({ signal }, '[api] shutting down')
+
+  const forceExit = setTimeout(
+    () => {
+      logger.error({ signal }, '[api] shutdown timed out')
+      process.exit(1)
+    },
+    Number(process.env.SHUTDOWN_TIMEOUT_MS ?? 15_000),
+  )
+  forceExit.unref()
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.close((err) => (err ? reject(err) : resolve()))
+    })
+    await pool.end()
+    await Sentry.flush(2_000)
+    clearTimeout(forceExit)
+    logger.info({ signal }, '[api] shutdown complete')
+    process.exit(0)
+  } catch (err) {
+    clearTimeout(forceExit)
+    logger.error({ err, signal }, '[api] shutdown failed')
+    process.exit(1)
+  }
+}
+
+process.on('SIGTERM', () => {
+  void shutdown('SIGTERM')
+})
+process.on('SIGINT', () => {
+  void shutdown('SIGINT')
 })

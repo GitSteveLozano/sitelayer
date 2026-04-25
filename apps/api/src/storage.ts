@@ -159,6 +159,7 @@ export type StorageEnv = {
   spacesSecret: string | null
   spacesRegion: string
   spacesEndpoint: string | null
+  allowLocalInProd: boolean
 }
 
 export function readStorageEnv(env: NodeJS.ProcessEnv = process.env, tier: AppTier): StorageEnv {
@@ -171,12 +172,20 @@ export function readStorageEnv(env: NodeJS.ProcessEnv = process.env, tier: AppTi
     spacesSecret: env.DO_SPACES_SECRET?.trim() || null,
     spacesRegion,
     spacesEndpoint: env.DO_SPACES_ENDPOINT?.trim() || `https://${spacesRegion}.digitaloceanspaces.com`,
+    allowLocalInProd:
+      env.ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD === '1' || env.ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD === 'true',
   }
 }
 
 export async function createBlueprintStorage(storageEnv: StorageEnv): Promise<BlueprintStorage> {
   const useS3 = Boolean(storageEnv.spacesKey && storageEnv.spacesSecret && storageEnv.spacesBucket)
   if (!useS3) {
+    if (storageEnv.tier === 'prod' && !storageEnv.allowLocalInProd) {
+      throw new StorageError(
+        500,
+        'APP_TIER=prod requires Spaces credentials or ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD=1',
+      )
+    }
     return new LocalFsStorage(storageEnv.blueprintStorageRoot)
   }
 

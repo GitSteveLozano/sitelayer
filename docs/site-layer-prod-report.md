@@ -2,7 +2,7 @@
 
 > **🟡 RESEARCH ARTIFACT — preserved for historical context (banner added 2026-04-25).**
 >
-> Pre-build research. Some recommendations were taken (DigitalOcean managed Postgres, Spaces, Sentry, UptimeRobot) and some were *not*: shipped worker is a **bespoke Postgres-leased queue** (`packages/queue`), **not Hatchet**. Annotation is **inline SVG**, **not Konva.js**. Frontend is a **Vite SPA**, not Next.js. Read for decision history; do not use as a stack reference.
+> Pre-build research. Some recommendations were taken (DigitalOcean managed Postgres, Spaces, Sentry, UptimeRobot) and some were _not_: shipped worker is a **bespoke Postgres-leased queue** (`packages/queue`), **not Hatchet**. Annotation is **inline SVG**, **not Konva.js**. Frontend is a **Vite SPA**, not Next.js. Read for decision history; do not use as a stack reference.
 >
 > Canonical stack: `CLAUDE.md`. Live infra: `INFRASTRUCTURE_READY.md`.
 

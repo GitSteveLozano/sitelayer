@@ -185,7 +185,8 @@ fi
 # Fast health-check poll. Tight loop for first ~30s, then back off.
 deadline=$(( $(date +%s) + 120 ))
 while :; do
-  if curl -fsS --max-time 5 "https://$preview_host/health" >/dev/null 2>&1; then
+  if curl -fsS --max-time 5 "https://$preview_host/health" >/dev/null 2>&1 &&
+    curl -fsSI --max-time 5 "https://$preview_host/" >/dev/null 2>&1; then
     date -u +%Y-%m-%dT%H:%M:%SZ >"$target_dir/.last_deployed_at"
     elapsed=$(( $(date +%s) - t_start ))
     echo "Preview ready: https://$preview_host (mode=$PREVIEW_MODE, ${elapsed}s)"

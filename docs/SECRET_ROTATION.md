@@ -17,25 +17,25 @@ For incident-time triage (revoke first, rotate second) see `docs/INCIDENT_RESPON
 
 ## Inventory at a glance
 
-| Secret                          | Stored                                                | Mint via                                                  | If leaked → see |
-|---------------------------------|-------------------------------------------------------|-----------------------------------------------------------|-----------------|
-| `DEPLOY_SSH_KEY`                | GitHub repo secret + `/home/sitelayer/.ssh/authorized_keys` on prod | `ssh-keygen -t ed25519` on trusted local                   | § 6 |
-| `PREVIEW_SSH_KEY`               | GitHub repo secret + authorized_keys on preview droplet | `ssh-keygen -t ed25519` on trusted local                   | § 7 |
-| `DEPLOY_HOST` / `PREVIEW_HOST`  | GitHub repo secret (hostname-only, not really a secret) | n/a — DO reserved IP / hostname                            | § 8 |
-| `CLERK_SECRET_KEY`              | `/app/sitelayer/.env` (prod) + `~/.env.local` (dev)   | Clerk dashboard → Configure → API Keys                    | § 1 |
-| `CLERK_JWT_KEY`                 | `/app/sitelayer/.env`                                 | Clerk dashboard → API Keys → JWT public key (rotates rare) | § 1 |
-| `VITE_CLERK_PUBLISHABLE_KEY`    | `/app/sitelayer/.env` baked into web build            | Clerk dashboard → Frontend API                            | § 1 |
-| `QBO_CLIENT_ID`                 | `/app/sitelayer/.env`                                 | Intuit dev portal → app → Keys & OAuth                    | § 3 |
-| `QBO_CLIENT_SECRET`             | `/app/sitelayer/.env` (currently empty in prod)       | Intuit dev portal → Regenerate Client Secret              | § 3 |
-| `QBO_STATE_SECRET`              | `/app/sitelayer/.env`                                 | `openssl rand -base64 32`                                 | § 3 |
-| `SENTRY_AUTH_TOKEN`             | `~/.env.local` + GitHub Actions secret                | `sandolabs.sentry.io/settings/auth-tokens/`               | § 2 |
-| `SENTRY_DSN`                    | `/app/sitelayer/.env`                                 | Sentry project → Client Keys (Public DSN)                 | § 2 |
-| `VITE_SENTRY_DSN`               | `/app/sitelayer/.env` baked into web build            | Same DSN as `SENTRY_DSN` (web project)                    | § 2 |
-| `DATABASE_URL`                  | `/app/sitelayer/.env`                                 | DO managed Postgres → Connection Details → Reset password | § 9 |
-| `DEBUG_TRACE_TOKEN`             | `/app/sitelayer/.env`                                 | `openssl rand -base64 32`                                 | § 5 |
-| `API_METRICS_TOKEN`             | `/app/sitelayer/.env` + Grafana scrape config         | `openssl rand -base64 32`                                 | § 5 |
-| `DO_SPACES_KEY` / `_SECRET`     | `/app/sitelayer/.env` (planned, blank in prod today)  | DO Console → API → Spaces Keys                            | § 4 |
-| `DO_SPACES_BUCKET`              | `/app/sitelayer/.env` (hostname-only, not a secret)   | DO Console → Spaces                                       | § 4 |
+| Secret                         | Stored                                                              | Mint via                                                   | If leaked → see |
+| ------------------------------ | ------------------------------------------------------------------- | ---------------------------------------------------------- | --------------- |
+| `DEPLOY_SSH_KEY`               | GitHub repo secret + `/home/sitelayer/.ssh/authorized_keys` on prod | `ssh-keygen -t ed25519` on trusted local                   | § 6             |
+| `PREVIEW_SSH_KEY`              | GitHub repo secret + authorized_keys on preview droplet             | `ssh-keygen -t ed25519` on trusted local                   | § 7             |
+| `DEPLOY_HOST` / `PREVIEW_HOST` | GitHub repo secret (hostname-only, not really a secret)             | n/a — DO reserved IP / hostname                            | § 8             |
+| `CLERK_SECRET_KEY`             | `/app/sitelayer/.env` (prod) + `~/.env.local` (dev)                 | Clerk dashboard → Configure → API Keys                     | § 1             |
+| `CLERK_JWT_KEY`                | `/app/sitelayer/.env`                                               | Clerk dashboard → API Keys → JWT public key (rotates rare) | § 1             |
+| `VITE_CLERK_PUBLISHABLE_KEY`   | `/app/sitelayer/.env` baked into web build                          | Clerk dashboard → Frontend API                             | § 1             |
+| `QBO_CLIENT_ID`                | `/app/sitelayer/.env`                                               | Intuit dev portal → app → Keys & OAuth                     | § 3             |
+| `QBO_CLIENT_SECRET`            | `/app/sitelayer/.env` (currently empty in prod)                     | Intuit dev portal → Regenerate Client Secret               | § 3             |
+| `QBO_STATE_SECRET`             | `/app/sitelayer/.env`                                               | `openssl rand -base64 32`                                  | § 3             |
+| `SENTRY_AUTH_TOKEN`            | `~/.env.local` + GitHub Actions secret                              | `sandolabs.sentry.io/settings/auth-tokens/`                | § 2             |
+| `SENTRY_DSN`                   | `/app/sitelayer/.env`                                               | Sentry project → Client Keys (Public DSN)                  | § 2             |
+| `VITE_SENTRY_DSN`              | `/app/sitelayer/.env` baked into web build                          | Same DSN as `SENTRY_DSN` (web project)                     | § 2             |
+| `DATABASE_URL`                 | `/app/sitelayer/.env`                                               | DO managed Postgres → Connection Details → Reset password  | § 9             |
+| `DEBUG_TRACE_TOKEN`            | `/app/sitelayer/.env`                                               | `openssl rand -base64 32`                                  | § 5             |
+| `API_METRICS_TOKEN`            | `/app/sitelayer/.env` + Grafana scrape config                       | `openssl rand -base64 32`                                  | § 5             |
+| `DO_SPACES_KEY` / `_SECRET`    | `/app/sitelayer/.env` (planned, blank in prod today)                | DO Console → API → Spaces Keys                             | § 4             |
+| `DO_SPACES_BUCKET`             | `/app/sitelayer/.env` (hostname-only, not a secret)                 | DO Console → Spaces                                        | § 4             |
 
 ---
 
@@ -72,7 +72,7 @@ curl -fsS -H "Authorization: Bearer $FRESH_CLERK_JWT" https://sitelayer.sandolab
 
 **JWT verification key (`CLERK_JWT_KEY`)** rotates only when Clerk forces a rollover. Pull the new PEM from Clerk → API Keys → "JWT public key", same `sed -i` pattern, restart api.
 
-**Frontend publishable key (`VITE_CLERK_PUBLISHABLE_KEY`)** is baked into the web bundle at build time (see `docker-compose.prod.yml`). It is *not* a secret in the strict sense — it is shipped to every browser — but rotating it requires a rebuild + redeploy. Update the prod `.env`, then `docker compose ... up -d --build web` so Vite re-bakes the new value into `dist/`.
+**Frontend publishable key (`VITE_CLERK_PUBLISHABLE_KEY`)** is baked into the web bundle at image build time. It is _not_ a secret in the strict sense — it is shipped to every browser — but rotating it requires a new immutable image and deploy. Update the GitHub Actions variable/secret used for the build, then push or manually dispatch the deploy workflow.
 
 ---
 
@@ -98,7 +98,7 @@ gh run watch -R GitSteveLozano/sitelayer
 # 5. In Sentry dashboard → revoke old token.
 ```
 
-**`SENTRY_DSN` / `VITE_SENTRY_DSN`** are public DSNs for the api/worker and web projects. They are not auth-bearing on their own (rate-limited per-DSN, project-scoped). Rotate only if you suspect they're being abused for nuisance event submission: Sentry project → Settings → Client Keys → "+ Generate New Key", then `sed -i` patch both `.env` entries and rebuild web. `VITE_SENTRY_DSN` is build-time-baked, so requires `docker compose ... up -d --build web`.
+**`SENTRY_DSN` / `VITE_SENTRY_DSN`** are public DSNs for the api/worker and web projects. They are not auth-bearing on their own (rate-limited per-DSN, project-scoped). Rotate only if you suspect they're being abused for nuisance event submission: Sentry project → Settings → Client Keys → "+ Generate New Key", then patch runtime `.env` for `SENTRY_DSN` and update the build variable/secret for `VITE_SENTRY_DSN`. `VITE_SENTRY_DSN` is build-time-baked, so it requires a new immutable image and deploy.
 
 ---
 
@@ -135,12 +135,11 @@ doctl compute ssh sitelayer --ssh-command='
 
 ## 4. DigitalOcean Spaces — `DO_SPACES_KEY` / `DO_SPACES_SECRET`
 
-**Grants:** read/write to `sitelayer-blueprints-prod` (and dev/preview). Loss = blueprint exfiltration.
-**Currently empty placeholders.** When populated:
+**Grants:** scoped read/write to `sitelayer-blueprints-prod`. Loss = blueprint exfiltration/modification for that bucket.
 
 ```bash
-# 1. DO Console → API → Spaces Keys → "Generate New Key" (label: sitelayer-prod-YYYYMMDD).
-#    Or: doctl spaces (not yet supported in doctl; use API or console).
+# 1. Create a new scoped Spaces key for bucket sitelayer-blueprints-prod
+#    with read/write permission. Use DO Console or POST /v2/spaces/keys.
 
 # 2. Replace in prod env.
 doctl compute ssh sitelayer --ssh-command='
