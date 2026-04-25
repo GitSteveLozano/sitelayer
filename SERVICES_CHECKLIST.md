@@ -1,5 +1,11 @@
 # Sitelayer Services & Infrastructure Checklist
 
+> **🚫 SUPERSEDED — DO NOT USE FOR PROVISIONING (banner added 2026-04-25).**
+>
+> Same drift as `SERVICES_QUICK_START.md` and `PILOT_SETUP_PLAN.md`: assumes nginx + Hatchet + `CLERK_SECRET_KEY` + `NEXT_PUBLIC_*` + Clerk roles `owner|admin|estimator|field`. The shipped stack uses **Caddy**, a **bespoke Postgres-leased queue** (`packages/queue`), `CLERK_JWT_KEY`/`CLERK_ISSUER`/`CLERK_WEBHOOK_SECRET`, `VITE_*` for the SPA, and roles **`admin|foreman|office|member`**.
+>
+> **Use instead:** `INFRASTRUCTURE_READY.md`, `DEPLOYMENT.md`, `CRITICAL_PATH.md`, `docs/ONBOARDING_CONTRACTOR.md`, `.env.example`.
+
 **Goal:** Minimal viable setup to onboard first pilot customer  
 **Timeline:** 4-6 weeks  
 **Monthly Cost:** ~$102/mo

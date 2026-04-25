@@ -123,8 +123,11 @@ DO_SPACES_BUCKET=sitelayer-blueprints-prod
 # Local durable blueprint storage fallback
 BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
 
-# Clerk (optional until auth is provisioned)
-CLERK_SECRET_KEY=
+# Clerk (optional until auth is enforced; see apps/api/src/auth.ts)
+CLERK_JWT_KEY=
+CLERK_ISSUER=
+CLERK_WEBHOOK_SECRET=
+AUTH_ALLOW_HEADER_FALLBACK=
 
 # Intuit QBO (optional until OAuth credentials are ready)
 QBO_CLIENT_ID=

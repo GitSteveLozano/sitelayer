@@ -1,5 +1,9 @@
 # Sitelayer Production Report Verification (April 23, 2026)
 
+> **🟡 RESEARCH ARTIFACT — companion to `site-layer-prod-report.md` (banner added 2026-04-25).**
+>
+> Same caveat: Hatchet/Konva/Next.js were **not** adopted. Treat as decision history. Canonical stack: `CLAUDE.md`.
+
 **Verification Date:** April 23, 2026 (fresh)
 **Original Report Date:** April 23, 2026
 **Status:** Partially verified across pricing, technology, and competitive landscape

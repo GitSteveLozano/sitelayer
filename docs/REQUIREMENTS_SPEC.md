@@ -129,8 +129,8 @@ The system must:
 
 The system must:
 
-- store blueprint PDFs in object storage
-- create signed URLs on demand
+- store blueprint PDFs in DigitalOcean Spaces when configured, otherwise local FS volume (`apps/api/src/storage.ts`)
+- serve downloads via the API (`GET /api/blueprints/:id/file` proxies through Node; presigned URLs are post-pilot work)
 - preserve project-document linkage
 - allow replacement or remeasurement without losing history
 

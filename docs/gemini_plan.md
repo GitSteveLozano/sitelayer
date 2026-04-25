@@ -1,5 +1,15 @@
 # Project Sitelayer: App Requirements & Implementation Plan
 
+> **🚫 OBSOLETE — DO NOT USE FOR PLANNING (archived 2026-04-25).**
+>
+> This file describes a Supabase-schema + Edge-Functions + multi-agent workstream plan that was **never built**. The shipped architecture is plain Postgres on DigitalOcean (raw `pg` driver, no RLS, no Edge Functions), a plain Node.js HTTP server (`apps/api/src/server.ts`), a React 19 SPA, and a Postgres-leased queue worker.
+>
+> Authoritative current state: `CLAUDE.md`, `CRITICAL_PATH.md`, `INFRASTRUCTURE_READY.md`, `DEPLOYMENT.md`.
+>
+> Original content preserved below for historical context only.
+
+---
+
 ## Executive Summary
 
 **Sitelayer** is a centralized operations platform designed for **L&A Operations** to bridge the gap between estimating, project management, and financial analysis.

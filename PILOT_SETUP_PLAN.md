@@ -1,5 +1,23 @@
 # Sitelayer Pilot Setup Plan
 
+> **🚫 SUPERSEDED — DO NOT USE FOR PROVISIONING (banner added 2026-04-25).**
+>
+> Most concrete instructions below are wrong against the shipped codebase. Specifically:
+> - It assumes **Hatchet** for background jobs — actual worker is a bespoke Postgres lease (`packages/queue` + `apps/worker`).
+> - It assumes **nginx** as reverse proxy — actual is **Caddy** (`Caddyfile`).
+> - It assumes **Konva.js** for annotation — actual is inline SVG over a browser PDF/image preview (`apps/web/src`).
+> - It uses **`NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`** — this is a **Vite** SPA; correct prefix is `VITE_*`.
+> - It names auth env as **`CLERK_SECRET_KEY`** — code reads `CLERK_JWT_KEY`, `CLERK_ISSUER`, `CLERK_WEBHOOK_SECRET`, `AUTH_ALLOW_HEADER_FALLBACK` (`apps/api/src/auth.ts`).
+> - It defines Clerk roles as **`owner|admin|estimator|field`** — code uses **`admin|foreman|office|member`**.
+> - It tells you to `psql < 001_schema.sql` — use `scripts/migrate-db.sh` so later migrations apply too.
+> - It opens Postgres port **5432** publicly — production locks this down to droplet IPs only.
+>
+> **Use instead:** `CRITICAL_PATH.md`, `INFRASTRUCTURE_READY.md`, `DEPLOYMENT.md`, `docs/ONBOARDING_CONTRACTOR.md`, `CLAUDE.md`.
+>
+> Original plan preserved below for historical context only.
+
+---
+
 **Goal:** Get one real construction company on the platform, upload a blueprint, create an estimate, and push to QBO
 
 **Timeline:** 4-6 weeks to pilot-ready

@@ -113,8 +113,11 @@ QBO_SUCCESS_REDIRECT_URI=https://your-domain.com/?qbo=connected
 QBO_ENVIRONMENT=production
 QBO_STATE_SECRET=
 
-# Clerk Authentication (optional until Clerk is provisioned)
-CLERK_SECRET_KEY=
+# Clerk Authentication (optional until Clerk JWT enforcement is enabled)
+CLERK_JWT_KEY=
+CLERK_ISSUER=
+CLERK_WEBHOOK_SECRET=
+AUTH_ALLOW_HEADER_FALLBACK=
 
 # DigitalOcean Spaces (optional until file storage is provisioned)
 DO_SPACES_KEY=
@@ -200,7 +203,7 @@ Or via GitHub Actions (automatic on push to `main`).
 
 Add the following secrets to your GitHub repository settings:
 
-- `DEPLOY_HOST`: Droplet IP or domain (e.g., `165.245.231.199` or `sitelayer.example.com`)
+- `DEPLOY_HOST`: Droplet IP or domain (e.g., `165.245.230.3` or `sitelayer.sandolab.xyz`)
 - `DEPLOY_SSH_KEY`: Private SSH key content from `~/.ssh/sitelayer_deploy` (the deployment user's key)
 
 The workflow uses the `sitelayer` deployment user and does not expose the root SSH key. Because the user can access Docker, the deployment key is still root-equivalent and must be protected accordingly.

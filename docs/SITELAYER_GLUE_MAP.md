@@ -1,5 +1,9 @@
 # SITELAYER GLUE OPPORTUNITY MAP
 
+> **🟡 STRATEGY DOC — partially superseded (banner added 2026-04-25).**
+>
+> The product thesis (glue product, derived insight from QBO/QB-Time/PlanSwift) is preserved as strategic context, but specific stack claims are stale: shipped stack is **Vite SPA + plain Node HTTP + Postgres + bespoke Postgres-leased queue**, not Next.js / Hatchet. `CLAUDE.md` is canonical for current architecture.
+
 **Synthesized from API research — April 2026**
 **Audience: Sitelayer founder. No softening. No fluff.**
 

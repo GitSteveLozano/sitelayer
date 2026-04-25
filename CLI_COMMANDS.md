@@ -1,5 +1,7 @@
 # Sitelayer Deployment CLI Commands
 
+> **Canonical deploy path is GitHub Actions** (`.github/workflows/deploy-droplet.yml`, triggered by push to `main`). The commands below are the manual fallback / bootstrap reference. Live infrastructure values (droplet IP, DB IDs, bucket names) come from `INFRASTRUCTURE_READY.md`.
+
 Quick reference for all command-line operations needed to deploy and manage Sitelayer on DigitalOcean.
 
 ## Droplet Access
@@ -7,7 +9,7 @@ Quick reference for all command-line operations needed to deploy and manage Site
 ### SSH as root (initial setup only)
 
 ```bash
-ssh -i ~/.ssh/id_rsa root@165.245.231.199
+ssh -i ~/.ssh/id_rsa root@sitelayer.sandolab.xyz
 ```
 
 Or if you've configured a domain:
@@ -19,7 +21,7 @@ ssh -i ~/.ssh/id_rsa root@sitelayer.example.com
 ### SSH as sitelayer user (after setup)
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz
 ```
 
 ## Initial Droplet Setup (as root)
@@ -39,10 +41,10 @@ Run the setup script:
 
 ```bash
 # Copy script to droplet first (from your local machine)
-scp -i ~/.ssh/id_rsa scripts/setup-deploy-user.sh root@165.245.231.199:/tmp/
+scp -i ~/.ssh/id_rsa scripts/setup-deploy-user.sh root@sitelayer.sandolab.xyz:/tmp/
 
 # Then SSH as root and run it
-ssh -i ~/.ssh/id_rsa root@165.245.231.199 'bash /tmp/setup-deploy-user.sh'
+ssh -i ~/.ssh/id_rsa root@sitelayer.sandolab.xyz 'bash /tmp/setup-deploy-user.sh'
 ```
 
 Or manually:
@@ -63,7 +65,7 @@ chmod 600 /home/sitelayer/.ssh/authorized_keys
 
 ```bash
 # From your local machine
-cat ~/.ssh/sitelayer_deploy.pub | ssh -i ~/.ssh/id_rsa root@165.245.231.199 \
+cat ~/.ssh/sitelayer_deploy.pub | ssh -i ~/.ssh/id_rsa root@sitelayer.sandolab.xyz \
   'cat >> /home/sitelayer/.ssh/authorized_keys && chmod 600 /home/sitelayer/.ssh/authorized_keys'
 ```
 
@@ -72,7 +74,7 @@ cat ~/.ssh/sitelayer_deploy.pub | ssh -i ~/.ssh/id_rsa root@165.245.231.199 \
 ### 1. Clone repository
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 << 'EOF'
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
 git clone https://github.com/GitSteveLozano/sitelayer.git .
 EOF
@@ -81,48 +83,63 @@ EOF
 ### 2. Create .env file
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 'cat > /app/sitelayer/.env' << 'EOF'
-DATABASE_URL=postgresql://user:password@host:25060/defaultdb?sslmode=require
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz 'cat > /app/sitelayer/.env' << 'EOF'
+APP_TIER=prod
+DATABASE_URL=postgresql://sitelayer_prod_app:...@host:25060/sitelayer_prod?sslmode=require
 PORT=3001
 NODE_ENV=production
+# Auth — header fallback only kept on while Clerk is being rolled out
 ACTIVE_COMPANY_SLUG=la-operations
 ACTIVE_USER_ID=demo-user
+AUTH_ALLOW_HEADER_FALLBACK=
+# CLERK_JWT_KEY=<PEM public key from Clerk dashboard → JWT Public Key>
+# CLERK_ISSUER=https://clerk.sandolab.xyz
+# CLERK_WEBHOOK_SECRET=<svix whsec_… from Clerk dashboard → Webhooks>
+# QBO
 QBO_CLIENT_ID=
 QBO_CLIENT_SECRET=
-QBO_REDIRECT_URI=https://your-domain.com/api/integrations/qbo/callback
-QBO_SUCCESS_REDIRECT_URI=https://your-domain.com/?qbo=connected
+QBO_REDIRECT_URI=https://sitelayer.sandolab.xyz/api/integrations/qbo/callback
+QBO_SUCCESS_REDIRECT_URI=https://sitelayer.sandolab.xyz/?qbo=connected
 QBO_ENVIRONMENT=production
 QBO_STATE_SECRET=
-CLERK_SECRET_KEY=
+# Blueprint storage — set DO_SPACES_* to enable S3, otherwise local FS at BLUEPRINT_STORAGE_ROOT
+BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
 DO_SPACES_KEY=
 DO_SPACES_SECRET=
-DO_SPACES_BUCKET=sitelayer-blueprints
-DO_SPACES_REGION=nyc3
-VITE_API_URL=https://your-domain.com
+DO_SPACES_BUCKET=sitelayer-blueprints-prod
+DO_SPACES_REGION=tor1
+DO_SPACES_ENDPOINT=https://tor1.digitaloceanspaces.com
+# Frontend
+VITE_API_URL=https://sitelayer.sandolab.xyz
 VITE_COMPANY_SLUG=la-operations
 VITE_USER_ID=demo-user
+# Observability
 SENTRY_DSN=
 VITE_SENTRY_DSN=
 VITE_SENTRY_ENVIRONMENT=production
-ALLOWED_ORIGINS=https://your-domain.com
+DEBUG_TRACE_TOKEN=<generate-32b-random>
+API_METRICS_TOKEN=<generate-32b-random>
+ALLOWED_ORIGINS=https://sitelayer.sandolab.xyz
 EOF
 ```
 
 ### 3. Initialize database
 
+Use the migration runner — it applies every file in `docker/postgres/init/` in order, idempotently. Don't `psql < 001_schema.sql` directly (skips later migrations).
+
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 << 'EOF'
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
-source .env
-psql "$DATABASE_URL" < docker/postgres/init/001_schema.sql
-psql "$DATABASE_URL" -c "SELECT version();"  # Verify connection
+ENV_FILE=/app/sitelayer/.env PSQL_DOCKER_IMAGE=postgres:18-alpine \
+  scripts/migrate-db.sh
+ENV_FILE=/app/sitelayer/.env scripts/check-db-schema.sh
 EOF
 ```
 
 ### 4. Start services
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 << 'EOF'
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
 docker compose -f docker-compose.prod.yml up -d
 sleep 2
@@ -135,7 +152,7 @@ EOF
 ### Service status
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 \
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz \
   'cd /app/sitelayer && docker compose -f docker-compose.prod.yml ps'
 ```
 
@@ -143,32 +160,32 @@ ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 \
 
 ```bash
 # All services
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 \
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz \
   'cd /app/sitelayer && docker compose -f docker-compose.prod.yml logs -f'
 
 # Specific service
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 \
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz \
   'cd /app/sitelayer && docker compose -f docker-compose.prod.yml logs -f api'
 ```
 
 ### Restart service
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 \
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz \
   'cd /app/sitelayer && docker compose -f docker-compose.prod.yml restart api'
 ```
 
 ### Stop all services
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 \
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz \
   'cd /app/sitelayer && docker compose -f docker-compose.prod.yml down'
 ```
 
 ### Rebuild and restart
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 << 'EOF'
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
 docker compose -f docker-compose.prod.yml down
 docker compose -f docker-compose.prod.yml build --pull
@@ -181,7 +198,7 @@ EOF
 ### Test connection
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 << 'EOF'
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
 source .env
 psql "$DATABASE_URL" -c "SELECT version();"
@@ -191,7 +208,7 @@ EOF
 ### List tables
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 << 'EOF'
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
 source .env
 psql "$DATABASE_URL" -c "\dt"
@@ -201,7 +218,7 @@ EOF
 ### Backup database
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 << 'EOF'
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
 source .env
 pg_dump "$DATABASE_URL" > sitelayer_backup_$(date +%Y%m%d_%H%M%S).sql
@@ -212,7 +229,7 @@ EOF
 ### Restore database
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 << 'EOF'
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
 source .env
 psql "$DATABASE_URL" < sitelayer_backup_20240101_120000.sql
@@ -227,7 +244,7 @@ Configure these in your GitHub repository at: Settings → Secrets and variables
 
 ```bash
 # Set DEPLOY_HOST (droplet IP or domain)
-DEPLOY_HOST=165.245.231.199
+DEPLOY_HOST=sitelayer.sandolab.xyz
 
 # Set DEPLOY_SSH_KEY (your private key)
 DEPLOY_SSH_KEY=$(cat ~/.ssh/sitelayer_deploy)
@@ -246,14 +263,14 @@ In GitHub UI:
 ### Check API health
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 \
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz \
   'curl -s http://127.0.0.1:3001/health'
 ```
 
 ### Check all services running
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 << 'EOF'
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
 docker compose -f docker-compose.prod.yml ps
 echo "---"
@@ -271,13 +288,13 @@ chmod 600 ~/.ssh/sitelayer_deploy
 chmod 600 ~/.ssh/id_rsa
 
 # Verify on droplet
-ssh -i ~/.ssh/id_rsa root@165.245.231.199 'ls -la /home/sitelayer/.ssh/'
+ssh -i ~/.ssh/id_rsa root@sitelayer.sandolab.xyz 'ls -la /home/sitelayer/.ssh/'
 ```
 
 ### Docker daemon issues
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 << 'EOF'
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 docker ps  # Should work without sudo (sitelayer in docker group)
 docker compose version
 EOF
@@ -286,14 +303,14 @@ EOF
 ### Port conflicts
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 \
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz \
   'ss -tlnp | grep -E "(3000|3001|80|443)"'
 ```
 
 ### Clear Docker resources
 
 ```bash
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 << 'EOF'
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
 docker compose -f docker-compose.prod.yml down --remove-orphans
 docker system prune -f
@@ -312,7 +329,7 @@ git push origin main
 # 3. Monitor in GitHub Actions tab
 # 4. Or manually trigger:
 
-ssh -i ~/.ssh/sitelayer_deploy sitelayer@165.245.231.199 << 'EOF'
+ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
 git fetch origin
 git checkout -B main origin/main
@@ -328,17 +345,42 @@ Keep these values secure. Only DATABASE_URL is required to start:
 
 ```bash
 # Required
-DATABASE_URL=postgresql://...
+APP_TIER             # local|dev|preview|prod — startup guard cross-checks DATABASE_URL and DO_SPACES_BUCKET
+DATABASE_URL         # tier-specific role: sitelayer_{prod,preview,dev}_app
+PORT                 # default 3001
 
-# Optional (service integrations)
+# Auth (Clerk integration; see apps/api/src/auth.ts)
+CLERK_JWT_KEY        # PEM public key from Clerk dashboard
+CLERK_ISSUER         # e.g. https://clerk.sandolab.xyz
+CLERK_WEBHOOK_SECRET # Svix whsec_... for /api/webhooks/clerk
+AUTH_ALLOW_HEADER_FALLBACK # leave empty in prod once Clerk JWT is enforced
+ACTIVE_COMPANY_SLUG  # demo fallback only when CLERK_JWT_KEY unset
+ACTIVE_USER_ID       # demo fallback only when CLERK_JWT_KEY unset
+
+# QBO
 QBO_CLIENT_ID
 QBO_CLIENT_SECRET
 QBO_REDIRECT_URI
 QBO_SUCCESS_REDIRECT_URI
-QBO_ENVIRONMENT
-QBO_STATE_SECRET
-CLERK_SECRET_KEY
+QBO_ENVIRONMENT      # sandbox|production
+QBO_STATE_SECRET     # HMAC nonce signing for OAuth state
+
+# Blueprint storage (S3 mode auto-selected when all three Spaces vars are set)
+BLUEPRINT_STORAGE_ROOT   # e.g. /app/storage/blueprints
+DO_SPACES_BUCKET         # tier-specific: sitelayer-blueprints-{dev,preview,prod}
+DO_SPACES_REGION         # tor1
+DO_SPACES_ENDPOINT       # https://tor1.digitaloceanspaces.com
 DO_SPACES_KEY
 DO_SPACES_SECRET
+
+# Observability
 SENTRY_DSN
+VITE_SENTRY_DSN
+VITE_SENTRY_ENVIRONMENT
+DEBUG_TRACE_TOKEN        # bearer for /api/debug/traces/:traceId
+API_METRICS_TOKEN        # bearer for /api/metrics
+
+# Feature flags
+FEATURE_FLAGS            # comma-separated subset of: read-prod-ro, qbo-live, pdf-ocr-experimental
+DATABASE_URL_PROD_RO     # required when FEATURE_FLAGS includes read-prod-ro
 ```
