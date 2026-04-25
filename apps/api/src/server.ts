@@ -114,11 +114,23 @@ try {
   process.exit(1)
 }
 
+type CompanyRole = 'admin' | 'foreman' | 'office' | 'member'
+
+const COMPANY_ROLES: readonly CompanyRole[] = ['admin', 'foreman', 'office', 'member']
+
+function normalizeCompanyRole(value: unknown): CompanyRole {
+  if (typeof value === 'string' && (COMPANY_ROLES as readonly string[]).includes(value)) {
+    return value as CompanyRole
+  }
+  return 'member'
+}
+
 type ActiveCompany = {
   id: string
   slug: string
   name: string
   created_at: string
+  role: CompanyRole
 }
 
 type IntegrationMappingRow = {
@@ -297,41 +309,74 @@ async function qboPost<T>(endpoint: string, realmId: string, accessToken: string
   return response.json() as Promise<T>
 }
 
+type CompanyRow = {
+  id: string
+  slug: string
+  name: string
+  created_at: string
+}
+
 async function getCompany(req?: http.IncomingMessage): Promise<ActiveCompany | null> {
   const headerSlug = req?.headers['x-sitelayer-company-slug']
   const headerId = req?.headers['x-sitelayer-company-id']
   const requestedSlug = Array.isArray(headerSlug) ? headerSlug[0] : headerSlug
   const requestedId = Array.isArray(headerId) ? headerId[0] : headerId
 
-  let company: ActiveCompany | null = null
+  let companyRow: CompanyRow | null = null
   if (requestedId) {
-    const byId = await pool.query<ActiveCompany>(
+    const byId = await pool.query<CompanyRow>(
       'select id, slug, name, created_at from companies where id = $1 limit 1',
       [requestedId],
     )
-    if (byId.rows[0]) company = byId.rows[0]
+    if (byId.rows[0]) companyRow = byId.rows[0]
   }
 
-  if (!company) {
+  if (!companyRow) {
     const companySlug = requestedSlug?.trim() || getCurrentCompanySlug(req)
-    const result = await pool.query<ActiveCompany>(
+    const result = await pool.query<CompanyRow>(
       'select id, slug, name, created_at from companies where slug = $1 limit 1',
       [companySlug],
     )
-    company = result.rows[0] ?? null
+    companyRow = result.rows[0] ?? null
   }
 
-  if (!company) return null
+  if (!companyRow) return null
 
-  // Verify membership
+  // Verify membership and surface the role so handlers can enforce RBAC
+  // without re-querying. See `requireRole()`.
   const userId = getCurrentUserId(req)
-  const membership = await pool.query(
-    'select role from company_memberships where company_id = $1 and clerk_user_id = $2',
-    [company.id, userId],
+  const membership = await pool.query<{ role: string }>(
+    'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+    [companyRow.id, userId],
   )
   if (!membership.rows.length) return null
 
-  return company
+  return {
+    id: companyRow.id,
+    slug: companyRow.slug,
+    name: companyRow.name,
+    created_at: companyRow.created_at,
+    role: normalizeCompanyRole(membership.rows[0]?.role),
+  }
+}
+
+/**
+ * Enforce role-based access on a mutation handler. Returns `true` when the
+ * active role is in `allowed` and the caller should proceed; returns `false`
+ * after sending a 403 response, in which case the caller should `return`.
+ *
+ * Usage:
+ *   if (!requireRole(res, company, ['admin', 'office'])) return
+ */
+function requireRole(
+  res: http.ServerResponse,
+  company: Pick<ActiveCompany, 'role'>,
+  allowed: readonly CompanyRole[],
+  req?: http.IncomingMessage,
+): boolean {
+  if (allowed.includes(company.role)) return true
+  sendJson(res, 403, { error: 'forbidden: role not permitted', role: company.role, allowed }, req)
+  return false
 }
 
 async function getMemberships(userId: string) {
@@ -1847,14 +1892,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'GET' && url.pathname === '/api/audit-events') {
-              const adminCheck = await pool.query<{ role: string }>(
-                'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
-                [company.id, identity.userId],
-              )
-              if (!adminCheck.rows[0] || adminCheck.rows[0].role !== 'admin') {
-                sendJson(res, 403, { error: 'admin role required' })
-                return
-              }
+              if (!requireRole(res, company, ['admin'], req)) return
               const limitParam = url.searchParams.get('limit')
               const events = await listAuditEvents(company.id, {
                 entityType: url.searchParams.get('entity_type'),
@@ -1882,6 +1920,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname === '/api/sync/process') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const body = await readBody(req)
               const limit = Math.max(1, Math.min(100, Number(body.limit ?? 25)))
               sendJson(res, 200, await processQueue(company.id, limit))
@@ -1974,6 +2013,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname === '/api/integrations/qbo/mappings') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const body = await readBody(req)
               const entityType = String(body.entity_type ?? '').trim()
               const localRef = String(body.local_ref ?? '').trim()
@@ -2007,6 +2047,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'PATCH' && url.pathname.match(/^\/api\/integrations\/qbo\/mappings\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const mappingId = url.pathname.split('/')[5] ?? ''
               if (!mappingId) {
                 sendJson(res, 400, { error: 'mapping id is required' })
@@ -2077,6 +2118,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'DELETE' && url.pathname.match(/^\/api\/integrations\/qbo\/mappings\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const mappingId = url.pathname.split('/')[5] ?? ''
               if (!mappingId) {
                 sendJson(res, 400, { error: 'mapping id is required' })
@@ -2128,6 +2170,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname === '/api/integrations/qbo') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
               const currentConnection = await getIntegrationConnection(company.id, 'qbo')
@@ -2165,6 +2208,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname === '/api/integrations/qbo/sync') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const connection = await getIntegrationConnectionWithSecrets(company.id, 'qbo')
               await upsertIntegrationConnection(company.id, 'qbo', { status: 'syncing' })
               try {
@@ -2392,6 +2436,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname === '/api/pricing-profiles') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const body = await readBody(req)
               const name = String(body.name ?? '').trim()
               if (!name) {
@@ -2433,6 +2478,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'PATCH' && url.pathname.match(/^\/api\/pricing-profiles\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const pricingProfileId = url.pathname.split('/')[3] ?? ''
               if (!pricingProfileId) {
                 sendJson(res, 400, { error: 'pricing profile id is required' })
@@ -2505,6 +2551,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'DELETE' && url.pathname.match(/^\/api\/pricing-profiles\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const pricingProfileId = url.pathname.split('/')[3] ?? ''
               if (!pricingProfileId) {
                 sendJson(res, 400, { error: 'pricing profile id is required' })
@@ -2546,6 +2593,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname === '/api/bonus-rules') {
+              if (!requireRole(res, company, ['admin'], req)) return
               const body = await readBody(req)
               const name = String(body.name ?? '').trim()
               if (!name) {
@@ -2584,6 +2632,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'PATCH' && url.pathname.match(/^\/api\/bonus-rules\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin'], req)) return
               const bonusRuleId = url.pathname.split('/')[3] ?? ''
               if (!bonusRuleId) {
                 sendJson(res, 400, { error: 'bonus rule id is required' })
@@ -2650,6 +2699,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'DELETE' && url.pathname.match(/^\/api\/bonus-rules\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin'], req)) return
               const bonusRuleId = url.pathname.split('/')[3] ?? ''
               if (!bonusRuleId) {
                 sendJson(res, 400, { error: 'bonus rule id is required' })
@@ -2725,6 +2775,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname === '/api/customers') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const body = await readBody(req)
               const name = String(body.name ?? '').trim()
               if (!name) {
@@ -2757,6 +2808,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'PATCH' && url.pathname.match(/^\/api\/customers\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const customerId = url.pathname.split('/')[3] ?? ''
               if (!customerId) {
                 sendJson(res, 400, { error: 'customer id is required' })
@@ -2817,6 +2869,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'DELETE' && url.pathname.match(/^\/api\/customers\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const customerId = url.pathname.split('/')[3] ?? ''
               if (!customerId) {
                 sendJson(res, 400, { error: 'customer id is required' })
@@ -2849,6 +2902,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname === '/api/workers') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const body = await readBody(req)
               const name = String(body.name ?? '').trim()
               if (!name) {
@@ -2880,6 +2934,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'PATCH' && url.pathname.match(/^\/api\/workers\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const workerId = url.pathname.split('/')[3] ?? ''
               if (!workerId) {
                 sendJson(res, 400, { error: 'worker id is required' })
@@ -2931,6 +2986,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'DELETE' && url.pathname.match(/^\/api\/workers\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const workerId = url.pathname.split('/')[3] ?? ''
               if (!workerId) {
                 sendJson(res, 400, { error: 'worker id is required' })
@@ -2963,6 +3019,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname === '/api/service-items') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const body = await readBody(req)
               const code = String(body.code ?? '').trim()
               const name = String(body.name ?? '').trim()
@@ -2997,6 +3054,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'PATCH' && url.pathname.match(/^\/api\/service-items\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const code = url.pathname.split('/')[3] ?? ''
               if (!code) {
                 sendJson(res, 400, { error: 'service item code is required' })
@@ -3056,6 +3114,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'DELETE' && url.pathname.match(/^\/api\/service-items\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const code = url.pathname.split('/')[3] ?? ''
               if (!code) {
                 sendJson(res, 400, { error: 'service item code is required' })
@@ -3105,6 +3164,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname === '/api/projects') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const body = await readBody(req)
               const name = String(body.name ?? '').trim()
               const customerName = String(body.customer_name ?? '').trim()
@@ -3173,6 +3233,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'PATCH' && url.pathname.match(/^\/api\/projects\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const projectId = url.pathname.split('/')[3] ?? ''
               if (!projectId) {
                 sendJson(res, 400, { error: 'project id is required' })
@@ -3241,6 +3302,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/closeout$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const projectId = url.pathname.split('/')[3] ?? ''
               if (!projectId) {
                 sendJson(res, 400, { error: 'project id is required' })
@@ -3308,6 +3370,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/material-bills$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const projectId = url.pathname.split('/')[3] ?? ''
               if (!projectId) {
                 sendJson(res, 400, { error: 'project id is required' })
@@ -3371,6 +3434,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'PATCH' && url.pathname.match(/^\/api\/material-bills\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const billId = url.pathname.split('/')[3] ?? ''
               if (!billId) {
                 sendJson(res, 400, { error: 'bill id is required' })
@@ -3436,6 +3500,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'DELETE' && url.pathname.match(/^\/api\/material-bills\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const billId = url.pathname.split('/')[3] ?? ''
               if (!billId) {
                 sendJson(res, 400, { error: 'bill id is required' })
@@ -3486,6 +3551,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/push-qbo$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
               const projectId = url.pathname.split('/')[3] ?? ''
               if (!projectId) {
                 sendJson(res, 400, { error: 'project id is required' })
@@ -3574,6 +3640,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname === '/api/schedules') {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const body = await readBody(req)
               if (!body.project_id || !body.scheduled_for) {
                 sendJson(res, 400, { error: 'project_id and scheduled_for are required' })
@@ -3614,6 +3681,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname === '/api/labor-entries') {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const body = await readBody(req)
               const required = ['project_id', 'service_item_code', 'hours', 'occurred_on']
               for (const key of required) {
@@ -3697,6 +3765,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'PATCH' && url.pathname.match(/^\/api\/labor-entries\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const laborEntryId = url.pathname.split('/')[3] ?? ''
               if (!laborEntryId) {
                 sendJson(res, 400, { error: 'labor entry id is required' })
@@ -3749,6 +3818,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'DELETE' && url.pathname.match(/^\/api\/labor-entries\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const laborEntryId = url.pathname.split('/')[3] ?? ''
               if (!laborEntryId) {
                 sendJson(res, 400, { error: 'labor entry id is required' })
@@ -3784,6 +3854,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/takeoff\/measurement$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const projectId = url.pathname.split('/')[3] ?? ''
               if (!projectId) {
                 sendJson(res, 400, { error: 'project id is required' })
@@ -3853,6 +3924,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/takeoff\/measurements$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const projectId = url.pathname.split('/')[3] ?? ''
               const body = await readBody(req)
               const measurements = Array.isArray(body.measurements) ? body.measurements : []
@@ -3938,6 +4010,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/recompute$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const projectId = url.pathname.split('/')[3] ?? ''
               if (!projectId) {
                 sendJson(res, 400, { error: 'project id is required' })
@@ -4050,6 +4123,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/blueprints$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const projectId = url.pathname.split('/')[3] ?? ''
               if (!projectId) {
                 sendJson(res, 400, { error: 'project id is required' })
@@ -4123,6 +4197,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'PATCH' && url.pathname.match(/^\/api\/blueprints\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const blueprintId = url.pathname.split('/')[3] ?? ''
               if (!blueprintId) {
                 sendJson(res, 400, { error: 'blueprint id is required' })
@@ -4204,6 +4279,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname.match(/^\/api\/blueprints\/[^/]+\/versions$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const sourceBlueprintId = url.pathname.split('/')[3] ?? ''
               if (!sourceBlueprintId) {
                 sendJson(res, 400, { error: 'blueprint id is required' })
@@ -4352,6 +4428,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'PATCH' && url.pathname.match(/^\/api\/takeoff\/measurements\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const measurementId = url.pathname.split('/')[4] ?? ''
               if (!measurementId) {
                 sendJson(res, 400, { error: 'measurement id is required' })
@@ -4464,6 +4541,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'DELETE' && url.pathname.match(/^\/api\/takeoff\/measurements\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const measurementId = url.pathname.split('/')[4] ?? ''
               if (!measurementId) {
                 sendJson(res, 400, { error: 'measurement id is required' })
@@ -4510,6 +4588,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'POST' && url.pathname.match(/^\/api\/schedules\/[^/]+\/confirm$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman'], req)) return
               const scheduleId = url.pathname.split('/')[3] ?? ''
               if (!scheduleId) {
                 sendJson(res, 400, { error: 'schedule id is required' })
@@ -4584,6 +4663,7 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'DELETE' && url.pathname.match(/^\/api\/blueprints\/[^/]+$/)) {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const blueprintId = url.pathname.split('/')[3] ?? ''
               if (!blueprintId) {
                 sendJson(res, 400, { error: 'blueprint id is required' })

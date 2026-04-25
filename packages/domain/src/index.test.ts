@@ -8,6 +8,7 @@ import {
   calculatePolygonCentroid,
   calculateTakeoffQuantity,
   clampBoardCoordinate,
+  compareBidVsScope,
   DEFAULT_BONUS_RULE,
   normalizePolygonGeometry,
 } from './index.js'
@@ -132,6 +133,68 @@ describe('domain functions', () => {
       const result = calculateBonusPayout(0.25, 0, DEFAULT_BONUS_RULE.tiers)
       expect(result.eligible).toBe(true)
       expect(result.payout).toBe(0)
+    })
+  })
+
+  describe('compareBidVsScope', () => {
+    it('reports ok when scope and bid match exactly', () => {
+      const result = compareBidVsScope({ bidTotal: 19200, scopeTotal: 19200 })
+      expect(result.delta).toBe(0)
+      expect(result.delta_pct).toBe(0)
+      expect(result.status).toBe('ok')
+      expect(result.bid_total).toBe(19200)
+      expect(result.scope_total).toBe(19200)
+    })
+
+    it('reports ok inside the 1% band', () => {
+      // 1% of 19267.50 is 192.675; a 67.50 delta stays comfortably inside.
+      const result = compareBidVsScope({ bidTotal: 19267.5, scopeTotal: 19200 })
+      expect(result.delta).toBe(67.5)
+      expect(result.delta_pct).toBeCloseTo(0.0035, 4)
+      expect(result.status).toBe('ok')
+    })
+
+    it('reports warn in the 1–5% band', () => {
+      // 2% delta.
+      const result = compareBidVsScope({ bidTotal: 20000, scopeTotal: 19600 })
+      expect(result.delta).toBe(400)
+      expect(result.delta_pct).toBeCloseTo(0.02, 4)
+      expect(result.status).toBe('warn')
+    })
+
+    it('reports mismatch when drift exceeds 5%', () => {
+      // 10% delta.
+      const result = compareBidVsScope({ bidTotal: 20000, scopeTotal: 18000 })
+      expect(result.delta).toBe(2000)
+      expect(result.delta_pct).toBeCloseTo(0.1, 4)
+      expect(result.status).toBe('mismatch')
+    })
+
+    it('treats scope above bid symmetrically (negative delta, still banded by |delta_pct|)', () => {
+      const result = compareBidVsScope({ bidTotal: 10000, scopeTotal: 10200 })
+      expect(result.delta).toBe(-200)
+      expect(result.delta_pct).toBeCloseTo(0.02, 4)
+      expect(result.status).toBe('warn')
+    })
+
+    it('returns ok/0 for a fully zero bid and zero scope', () => {
+      const result = compareBidVsScope({ bidTotal: 0, scopeTotal: 0 })
+      expect(result.delta).toBe(0)
+      expect(result.delta_pct).toBe(0)
+      expect(result.status).toBe('ok')
+    })
+
+    it('returns mismatch when bid is zero but scope is non-zero', () => {
+      const result = compareBidVsScope({ bidTotal: 0, scopeTotal: 1 })
+      expect(result.status).toBe('mismatch')
+      expect(result.delta_pct).toBe(1)
+    })
+
+    it('coerces non-finite inputs to zero rather than NaN-poisoning the result', () => {
+      const result = compareBidVsScope({ bidTotal: Number.NaN, scopeTotal: 500 })
+      expect(result.bid_total).toBe(0)
+      expect(result.scope_total).toBe(500)
+      expect(result.status).toBe('mismatch')
     })
   })
 
