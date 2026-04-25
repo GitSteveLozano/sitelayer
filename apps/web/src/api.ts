@@ -1,4 +1,4 @@
-import * as Sentry from '@sentry/react'
+import { Sentry } from './instrument.js'
 
 // Shared API types
 export type BootstrapResponse = {

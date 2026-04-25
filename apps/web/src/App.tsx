@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useState, type ComponentProps } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useState, type ComponentProps } from 'react'
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { SignedIn, SignedOut, SignIn, SignUp, UserButton, useAuth, useUser } from '@clerk/clerk-react'
-import { Sentry } from './instrument.js'
 import {
   apiGet,
   DEFAULT_COMPANY_SLUG,
@@ -39,19 +38,53 @@ import {
 } from './components/ui/dialog.js'
 import { Input } from './components/ui/input.js'
 import { Toaster, toastError, toastInfo, toastSuccess } from './components/ui/toast.js'
-import { AuditView } from './views/audit.js'
-import { BonusSimView } from './views/bonus-sim.js'
-import { ClockView } from './views/clock.js'
-import { ConfirmView } from './views/confirm.js'
-import { EstimatesView } from './views/estimates.js'
-import { IntegrationsView } from './views/integrations.js'
-import { OnboardingView } from './views/onboarding.js'
-import { ProjectsView } from './views/projects.js'
-import { RentalsView } from './views/rentals.js'
-import { ScheduleView } from './views/schedule.js'
-import { TakeoffsView } from './views/takeoffs.js'
 
-const SentryRoutes = Sentry.withSentryReactRouterV7Routing(Routes)
+const loadAuditView = () => import('./views/audit.js')
+const loadBonusSimView = () => import('./views/bonus-sim.js')
+const loadClockView = () => import('./views/clock.js')
+const loadConfirmView = () => import('./views/confirm.js')
+const loadEstimatesView = () => import('./views/estimates.js')
+const loadIntegrationsView = () => import('./views/integrations.js')
+const loadOnboardingView = () => import('./views/onboarding.js')
+const loadProjectsView = () => import('./views/projects.js')
+const loadRentalsView = () => import('./views/rentals.js')
+const loadScheduleView = () => import('./views/schedule.js')
+const loadTakeoffsView = () => import('./views/takeoffs.js')
+
+const AuditView = lazy(() => loadAuditView().then(({ AuditView }) => ({ default: AuditView })))
+const BonusSimView = lazy(() => loadBonusSimView().then(({ BonusSimView }) => ({ default: BonusSimView })))
+const ClockView = lazy(() => loadClockView().then(({ ClockView }) => ({ default: ClockView })))
+const ConfirmView = lazy(() => loadConfirmView().then(({ ConfirmView }) => ({ default: ConfirmView })))
+const EstimatesView = lazy(() => loadEstimatesView().then(({ EstimatesView }) => ({ default: EstimatesView })))
+const IntegrationsView = lazy(() =>
+  loadIntegrationsView().then(({ IntegrationsView }) => ({ default: IntegrationsView })),
+)
+const OnboardingView = lazy(() => loadOnboardingView().then(({ OnboardingView }) => ({ default: OnboardingView })))
+const ProjectsView = lazy(() => loadProjectsView().then(({ ProjectsView }) => ({ default: ProjectsView })))
+const RentalsView = lazy(() => loadRentalsView().then(({ RentalsView }) => ({ default: RentalsView })))
+const ScheduleView = lazy(() => loadScheduleView().then(({ ScheduleView }) => ({ default: ScheduleView })))
+const TakeoffsView = lazy(() => loadTakeoffsView().then(({ TakeoffsView }) => ({ default: TakeoffsView })))
+
+const ROUTE_PRELOADS: Record<string, () => Promise<unknown>> = {
+  '/audit': loadAuditView,
+  '/bonus-sim': loadBonusSimView,
+  '/clock': loadClockView,
+  '/confirm': loadConfirmView,
+  '/estimates': loadEstimatesView,
+  '/integrations': loadIntegrationsView,
+  '/onboarding': loadOnboardingView,
+  '/projects': loadProjectsView,
+  '/rentals': loadRentalsView,
+  '/schedule': loadScheduleView,
+  '/takeoffs': loadTakeoffsView,
+}
+
+const SentryRoutes = Routes
+
+function preloadRoute(path: string) {
+  const routeKey = path.startsWith('/takeoffs') ? '/takeoffs' : path
+  void ROUTE_PRELOADS[routeKey]?.()
+}
 
 // Bridge Clerk's getToken into the api module's global token provider.
 // Mounted inside <SignedIn>; on sign-out the provider keeps returning whatever
@@ -76,6 +109,14 @@ function ClerkAuditRoute({ companySlug, session }: { companySlug: string; sessio
   const raw = user?.publicMetadata?.role
   const publicMetadataRole = typeof raw === 'string' ? raw : null
   return <AuditView companySlug={companySlug} session={session} publicMetadataRole={publicMetadataRole} />
+}
+
+function RouteFallback() {
+  return (
+    <section className="panel routeFallback" aria-busy="true">
+      <p className="muted">Loading...</p>
+    </section>
+  )
 }
 
 export function App() {
@@ -436,195 +477,197 @@ function AppShell() {
         bonusSimNavVisible={bonusSimNavVisible}
         devSurfaceEnabled={devSurfaceEnabled}
       />
-      <SentryRoutes>
-        <Route path="/" element={<Navigate to="/confirm" replace />} />
-        <Route
-          path="/confirm"
-          element={
-            <ConfirmView
-              bootstrap={bootstrap}
-              schedules={allSchedules}
-              workers={workers}
-              serviceItems={serviceItems}
-              companySlug={companySlug}
-              onConfirmed={async () => {
-                await refresh()
-              }}
-            />
-          }
-        />
-        <Route path="/clock" element={<ClockView bootstrap={bootstrap} companySlug={companySlug} />} />
-        <Route
-          path="/schedule"
-          element={
-            <ScheduleView
-              bootstrap={bootstrap}
-              schedules={allSchedules}
-              workers={workers}
-              serviceItems={serviceItems}
-              companySlug={companySlug}
-              onMutated={async () => {
-                await refresh()
-              }}
-            />
-          }
-        />
-        <Route
-          path="/projects"
-          element={
-            <ProjectsView
-              bootstrap={bootstrap}
-              session={session}
-              companies={companies}
-              companySlug={companySlug}
-              busy={busy}
-              error={error}
-              customers={customers}
-              workers={workers}
-              serviceItems={serviceItems}
-              divisions={divisions}
-              pricingProfiles={pricingProfiles}
-              bonusRules={bonusRules}
-              primaryDivision={primaryDivision}
-              setCompanySlug={setCompanySlug}
-              runAction={runAction}
-            />
-          }
-        />
-        <Route
-          path="/takeoffs"
-          element={
-            <RoutedTakeoffsView
-              bootstrap={bootstrap}
-              selectedProjectId={selectedProjectId}
-              selectedBlueprintId={selectedBlueprintId}
-              companySlug={companySlug}
-              busy={busy}
-              blueprints={blueprints}
-              measurements={measurements}
-              schedules={schedules}
-              materialBills={materialBills}
-              workers={workers}
-              measurableServiceItems={measurableServiceItems}
-              summary={summary}
-              setSelectedProjectId={setSelectedProjectId}
-              setSelectedBlueprintId={setSelectedBlueprintId}
-              refreshTakeoff={refreshTakeoff}
-              runAction={runAction}
-            />
-          }
-        />
-        <Route
-          path="/takeoffs/:projectId"
-          element={
-            <RoutedTakeoffsView
-              bootstrap={bootstrap}
-              selectedProjectId={selectedProjectId}
-              selectedBlueprintId={selectedBlueprintId}
-              companySlug={companySlug}
-              busy={busy}
-              blueprints={blueprints}
-              measurements={measurements}
-              schedules={schedules}
-              materialBills={materialBills}
-              workers={workers}
-              measurableServiceItems={measurableServiceItems}
-              summary={summary}
-              setSelectedProjectId={setSelectedProjectId}
-              setSelectedBlueprintId={setSelectedBlueprintId}
-              refreshTakeoff={refreshTakeoff}
-              runAction={runAction}
-            />
-          }
-        />
-        <Route
-          path="/estimates"
-          element={
-            <EstimatesView
-              bootstrap={bootstrap}
-              summary={summary}
-              selectedProjectId={selectedProjectId}
-              companySlug={companySlug}
-              busy={busy}
-              divisions={divisions}
-              measurableServiceItems={measurableServiceItems}
-              setSelectedProjectId={setSelectedProjectId}
-              refresh={refresh}
-              refreshSummary={refreshSummary}
-              runAction={runAction}
-            />
-          }
-        />
-        <Route
-          path="/integrations"
-          element={
-            <IntegrationsView
-              companySlug={companySlug}
-              busy={busy}
-              qboConnection={qboConnection}
-              syncStatus={syncStatus}
-              integrationMappings={integrationMappings}
-              suggestedCustomerMappings={suggestedCustomerMappings}
-              suggestedServiceItemMappings={suggestedServiceItemMappings}
-              suggestedDivisionMappings={suggestedDivisionMappings}
-              suggestedProjectMappings={suggestedProjectMappings}
-              selectedProjectId={selectedProjectId}
-              offlineQueue={offlineQueue}
-              syncRefreshKey={syncRefreshKey}
-              refresh={refresh}
-              refreshSummary={refreshSummary}
-              runAction={runAction}
-            />
-          }
-        />
-        <Route
-          path="/onboarding"
-          element={
-            <OnboardingView
-              bootstrap={bootstrap}
-              activeCompanySlug={companySlug}
-              setCompanySlug={setCompanySlug}
-              onCompleted={() => {
-                void refresh()
-              }}
-            />
-          }
-        />
-        <Route
-          path="/bonus-sim"
-          element={bonusSimNavVisible ? <BonusSimView bootstrap={bootstrap} /> : <Navigate to="/projects" replace />}
-        />
-        <Route
-          path="/audit"
-          element={
-            FIXTURES_ENABLED ? (
-              <AuditView companySlug={companySlug} session={session} />
-            ) : (
-              <ClerkAuditRoute companySlug={companySlug} session={session} />
-            )
-          }
-        />
-        <Route
-          path="/rentals"
-          element={
-            <RentalsView
-              companySlug={companySlug}
-              bootstrap={bootstrap}
-              session={session}
-              customers={customers}
-              projects={bootstrap?.projects ?? []}
-            />
-          }
-        />
-        <Route
-          path="/dev/*"
-          element={devSurfaceEnabled ? <DevScratchView features={features} /> : <Navigate to="/projects" replace />}
-        />
-        {/* If a signed-in user lands on a sign-in URL, bounce them home. */}
-        <Route path="/sign-in/*" element={<Navigate to="/confirm" replace />} />
-        <Route path="/sign-up/*" element={<Navigate to="/confirm" replace />} />
-        <Route path="*" element={<Navigate to="/confirm" replace />} />
-      </SentryRoutes>
+      <Suspense fallback={<RouteFallback />}>
+        <SentryRoutes>
+          <Route path="/" element={<Navigate to="/confirm" replace />} />
+          <Route
+            path="/confirm"
+            element={
+              <ConfirmView
+                bootstrap={bootstrap}
+                schedules={allSchedules}
+                workers={workers}
+                serviceItems={serviceItems}
+                companySlug={companySlug}
+                onConfirmed={async () => {
+                  await refresh()
+                }}
+              />
+            }
+          />
+          <Route path="/clock" element={<ClockView bootstrap={bootstrap} companySlug={companySlug} />} />
+          <Route
+            path="/schedule"
+            element={
+              <ScheduleView
+                bootstrap={bootstrap}
+                schedules={allSchedules}
+                workers={workers}
+                serviceItems={serviceItems}
+                companySlug={companySlug}
+                onMutated={async () => {
+                  await refresh()
+                }}
+              />
+            }
+          />
+          <Route
+            path="/projects"
+            element={
+              <ProjectsView
+                bootstrap={bootstrap}
+                session={session}
+                companies={companies}
+                companySlug={companySlug}
+                busy={busy}
+                error={error}
+                customers={customers}
+                workers={workers}
+                serviceItems={serviceItems}
+                divisions={divisions}
+                pricingProfiles={pricingProfiles}
+                bonusRules={bonusRules}
+                primaryDivision={primaryDivision}
+                setCompanySlug={setCompanySlug}
+                runAction={runAction}
+              />
+            }
+          />
+          <Route
+            path="/takeoffs"
+            element={
+              <RoutedTakeoffsView
+                bootstrap={bootstrap}
+                selectedProjectId={selectedProjectId}
+                selectedBlueprintId={selectedBlueprintId}
+                companySlug={companySlug}
+                busy={busy}
+                blueprints={blueprints}
+                measurements={measurements}
+                schedules={schedules}
+                materialBills={materialBills}
+                workers={workers}
+                measurableServiceItems={measurableServiceItems}
+                summary={summary}
+                setSelectedProjectId={setSelectedProjectId}
+                setSelectedBlueprintId={setSelectedBlueprintId}
+                refreshTakeoff={refreshTakeoff}
+                runAction={runAction}
+              />
+            }
+          />
+          <Route
+            path="/takeoffs/:projectId"
+            element={
+              <RoutedTakeoffsView
+                bootstrap={bootstrap}
+                selectedProjectId={selectedProjectId}
+                selectedBlueprintId={selectedBlueprintId}
+                companySlug={companySlug}
+                busy={busy}
+                blueprints={blueprints}
+                measurements={measurements}
+                schedules={schedules}
+                materialBills={materialBills}
+                workers={workers}
+                measurableServiceItems={measurableServiceItems}
+                summary={summary}
+                setSelectedProjectId={setSelectedProjectId}
+                setSelectedBlueprintId={setSelectedBlueprintId}
+                refreshTakeoff={refreshTakeoff}
+                runAction={runAction}
+              />
+            }
+          />
+          <Route
+            path="/estimates"
+            element={
+              <EstimatesView
+                bootstrap={bootstrap}
+                summary={summary}
+                selectedProjectId={selectedProjectId}
+                companySlug={companySlug}
+                busy={busy}
+                divisions={divisions}
+                measurableServiceItems={measurableServiceItems}
+                setSelectedProjectId={setSelectedProjectId}
+                refresh={refresh}
+                refreshSummary={refreshSummary}
+                runAction={runAction}
+              />
+            }
+          />
+          <Route
+            path="/integrations"
+            element={
+              <IntegrationsView
+                companySlug={companySlug}
+                busy={busy}
+                qboConnection={qboConnection}
+                syncStatus={syncStatus}
+                integrationMappings={integrationMappings}
+                suggestedCustomerMappings={suggestedCustomerMappings}
+                suggestedServiceItemMappings={suggestedServiceItemMappings}
+                suggestedDivisionMappings={suggestedDivisionMappings}
+                suggestedProjectMappings={suggestedProjectMappings}
+                selectedProjectId={selectedProjectId}
+                offlineQueue={offlineQueue}
+                syncRefreshKey={syncRefreshKey}
+                refresh={refresh}
+                refreshSummary={refreshSummary}
+                runAction={runAction}
+              />
+            }
+          />
+          <Route
+            path="/onboarding"
+            element={
+              <OnboardingView
+                bootstrap={bootstrap}
+                activeCompanySlug={companySlug}
+                setCompanySlug={setCompanySlug}
+                onCompleted={() => {
+                  void refresh()
+                }}
+              />
+            }
+          />
+          <Route
+            path="/bonus-sim"
+            element={bonusSimNavVisible ? <BonusSimView bootstrap={bootstrap} /> : <Navigate to="/projects" replace />}
+          />
+          <Route
+            path="/audit"
+            element={
+              FIXTURES_ENABLED ? (
+                <AuditView companySlug={companySlug} session={session} />
+              ) : (
+                <ClerkAuditRoute companySlug={companySlug} session={session} />
+              )
+            }
+          />
+          <Route
+            path="/rentals"
+            element={
+              <RentalsView
+                companySlug={companySlug}
+                bootstrap={bootstrap}
+                session={session}
+                customers={customers}
+                projects={bootstrap?.projects ?? []}
+              />
+            }
+          />
+          <Route
+            path="/dev/*"
+            element={devSurfaceEnabled ? <DevScratchView features={features} /> : <Navigate to="/projects" replace />}
+          />
+          {/* If a signed-in user lands on a sign-in URL, bounce them home. */}
+          <Route path="/sign-in/*" element={<Navigate to="/confirm" replace />} />
+          <Route path="/sign-up/*" element={<Navigate to="/confirm" replace />} />
+          <Route path="*" element={<Navigate to="/confirm" replace />} />
+        </SentryRoutes>
+      </Suspense>
     </main>
   )
 }
@@ -688,23 +731,74 @@ function MobileNav({
           ☰
         </Button>
       ) : null}
-      <NavLink to="/confirm" data-testid="nav-confirm">
+      <NavLink
+        to="/confirm"
+        data-testid="nav-confirm"
+        onMouseEnter={() => preloadRoute('/confirm')}
+        onFocus={() => preloadRoute('/confirm')}
+      >
         {confirmDoneToday ? '✓ ' : ''}
         Confirm Day
       </NavLink>
-      <NavLink to="/clock" data-testid="nav-clock">
+      <NavLink
+        to="/clock"
+        data-testid="nav-clock"
+        onMouseEnter={() => preloadRoute('/clock')}
+        onFocus={() => preloadRoute('/clock')}
+      >
         Clock
       </NavLink>
-      <NavLink to="/schedule" data-testid="nav-schedule">
+      <NavLink
+        to="/schedule"
+        data-testid="nav-schedule"
+        onMouseEnter={() => preloadRoute('/schedule')}
+        onFocus={() => preloadRoute('/schedule')}
+      >
         Schedule
       </NavLink>
-      <NavLink to="/projects">Projects</NavLink>
-      <NavLink to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}>Takeoffs</NavLink>
-      <NavLink to="/estimates">Estimates</NavLink>
-      {rentalsNavVisible ? <NavLink to="/rentals">Rentals</NavLink> : null}
-      <NavLink to="/integrations">Integrations</NavLink>
-      {bonusSimNavVisible ? <NavLink to="/bonus-sim">Bonus Sim</NavLink> : null}
-      {auditNavVisible ? <NavLink to="/audit">Audit</NavLink> : null}
+      <NavLink to="/projects" onMouseEnter={() => preloadRoute('/projects')} onFocus={() => preloadRoute('/projects')}>
+        Projects
+      </NavLink>
+      <NavLink
+        to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}
+        onMouseEnter={() => preloadRoute('/takeoffs')}
+        onFocus={() => preloadRoute('/takeoffs')}
+      >
+        Takeoffs
+      </NavLink>
+      <NavLink
+        to="/estimates"
+        onMouseEnter={() => preloadRoute('/estimates')}
+        onFocus={() => preloadRoute('/estimates')}
+      >
+        Estimates
+      </NavLink>
+      {rentalsNavVisible ? (
+        <NavLink to="/rentals" onMouseEnter={() => preloadRoute('/rentals')} onFocus={() => preloadRoute('/rentals')}>
+          Rentals
+        </NavLink>
+      ) : null}
+      <NavLink
+        to="/integrations"
+        onMouseEnter={() => preloadRoute('/integrations')}
+        onFocus={() => preloadRoute('/integrations')}
+      >
+        Integrations
+      </NavLink>
+      {bonusSimNavVisible ? (
+        <NavLink
+          to="/bonus-sim"
+          onMouseEnter={() => preloadRoute('/bonus-sim')}
+          onFocus={() => preloadRoute('/bonus-sim')}
+        >
+          Bonus Sim
+        </NavLink>
+      ) : null}
+      {auditNavVisible ? (
+        <NavLink to="/audit" onMouseEnter={() => preloadRoute('/audit')} onFocus={() => preloadRoute('/audit')}>
+          Audit
+        </NavLink>
+      ) : null}
       {devSurfaceEnabled ? <NavLink to="/dev/scratch">Dev</NavLink> : null}
     </nav>
   )
