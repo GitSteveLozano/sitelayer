@@ -176,10 +176,10 @@ is a hard failure and surfaces in `journalctl -u sitelayer-postgres-offsite`.
 
 ## Cadence
 
-| Action           | Frequency                                                                     | Owner   |
-| ---------------- | ----------------------------------------------------------------------------- | ------- |
-| Local dump       | daily 03:17 UTC (timer)                                                       | systemd |
-| Off-host copy    | daily 03:32 UTC (timer)                                                       | systemd |
-| Blueprint backup | daily 03:47 UTC (timer)                                                       | systemd |
-| Restore drill    | weekly (timer, log only) + **monthly manual** `bash scripts/restore-drill.sh` | Taylor  |
-| Spaces migration | one-shot, when DO Spaces creds land                                           | Taylor  |
+| Action               | Frequency                                                                     | Owner   |
+| -------------------- | ----------------------------------------------------------------------------- | ------- |
+| Local dump           | daily 03:17 UTC (timer)                                                       | systemd |
+| Off-host copy        | daily 03:32 UTC (timer)                                                       | systemd |
+| Blueprint backup     | daily 03:47 UTC (timer)                                                       | systemd |
+| Restore drill        | weekly (timer, log only) + **monthly manual** `bash scripts/restore-drill.sh` | Taylor  |
+| Spaces storage check | quarterly, confirm prod bucket versioning + scoped key still work             | Taylor  |

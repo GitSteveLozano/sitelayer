@@ -1,8 +1,8 @@
 # Sitelayer Critical Path to Pilot Launch
 
 **Goal:** First customer onboarded in 4-6 weeks  
-**Today:** Infrastructure provisioned; production deployment hardening in progress; preview stack smoke-tested
-**Next:** finish production droplet env/secrets, split prod/dev database users, register preview self-hosted runner, and deploy bootable production stack
+**Today:** Production and preview infrastructure are live on DigitalOcean; prod deploys use immutable registry images through GitHub Actions; Clerk, Spaces, TLS, backups, and baseline observability are wired.
+**Next:** remove the blueprint upload size ceiling, validate live QBO sync end to end, then onboard the first pilot company.
 
 **Mesh coordination:** project `sitelayer` / ID `282`; follow-up task chain `sitelayer-deploy-reconcile-20260423`
 
@@ -41,35 +41,35 @@
 - [x] Separate managed Postgres DB/user for dev (`sitelayer_dev`, `sitelayer_dev_app`)
 - [x] Local durable blueprint upload storage via Docker volume
 - [x] Takeoff polygon annotations append to DB without replacing existing measurements
+- [x] Clerk auth cut over in production; unauthenticated app APIs return `401`
+- [x] DO Spaces enabled in production for blueprint object storage
 
 ### ⏳ In Progress
 
-- [x] GitHub self-hosted preview runner registered on `sitelayer-preview`
+- [ ] Blueprint upload streaming and presigned download path.
+- [ ] Live QBO sandbox/prod sync validation with real credentials.
 
 ### 🔴 Blockers for Pilot
 
 These are configuration / validation blockers; the underlying code is shipped.
 
-1. **Clerk auth cutover** — `apps/api/src/auth.ts` already verifies Clerk JWTs and `apps/web/src/App.tsx` mounts `/sign-in` and `/sign-up`. Production tier still falls back to `ACTIVE_USER_ID=demo-user` because `CLERK_JWT_KEY` is unset. Cutover = set Clerk env vars per tier and ensure `AUTH_ALLOW_HEADER_FALLBACK` is empty/0.
-2. **DO Spaces enablement** — `apps/api/src/storage.ts` auto-selects S3 when `DO_SPACES_BUCKET/KEY/SECRET` are populated. Per-tier buckets exist (`sitelayer-blueprints-prod` live; dev/preview via `scripts/provision-spaces-buckets.sh`). Cutover = inject Spaces creds into prod/preview deploy secrets so the prod tier stops writing to the local Docker volume.
-3. **Blueprint upload streaming** — current path buffers the entire PDF as base64 JSON (capped at `maxJsonBodyBytes`, ~20MB). Real construction PDFs are 30–80MB. Replace with streaming multipart → Spaces; serve downloads via presigned URLs.
-4. **Live QBO sync validation** — `mutation_outbox` + `sync_events` worker drain is unit-tested; real QBO sandbox credentials still need to be exercised end-to-end.
+1. **Blueprint upload streaming** — current path buffers the entire PDF as base64 JSON (capped at `maxJsonBodyBytes`, ~20MB). Real construction PDFs are 30–80MB. Replace with streaming multipart → Spaces; serve downloads via presigned URLs.
+2. **Live QBO sync validation** — `mutation_outbox` + `sync_events` worker drain is unit-tested; real QBO sandbox credentials still need to be exercised end-to-end.
 
 ---
 
 ## Mandatory Services (Can't Launch Without These)
 
-| Service                                | Cost         | Time to Setup | Blocker If Missing                   |
-| -------------------------------------- | ------------ | ------------- | ------------------------------------ |
-| **DigitalOcean** (Droplet, DB, Spaces) | $73.75/mo    | 1 hour        | Yes — infrastructure required        |
-| **Domain** (yourdomain.com)            | ~$10/year    | 10 min        | Yes — DNS required for SSL           |
-| **Clerk**                              | Free (pilot) | 20 min        | Yes — auth required for multi-tenant |
-| **Intuit QBO**                         | Free         | 15 min        | Yes — integration required for sync  |
-| **Sentry**                             | Free (pilot) | 10 min        | No — nice to have for debugging      |
-| **UptimeRobot**                        | Free         | 10 min        | No — useful for alerts               |
+| Service                                | Current State                                              | Pilot Blocker If Broken                   |
+| -------------------------------------- | ---------------------------------------------------------- | ----------------------------------------- |
+| **DigitalOcean** (Droplet, DB, Spaces) | Live prod + preview; details in `INFRASTRUCTURE_READY.md`  | Yes — hosting, database, and file storage |
+| **Domain / TLS**                       | `sitelayer.sandolab.xyz` on reserved IP + Caddy            | Yes — auth redirects and customer access  |
+| **Clerk**                              | Prod JWT auth configured                                   | Yes — multi-tenant login                  |
+| **Intuit QBO**                         | App credentials captured; live sync still needs validation | Yes for accounting sync pilot scope       |
+| **Sentry**                             | API, worker, and lazy web client wired                     | No — required for operator visibility     |
+| **UptimeRobot / timer monitor**        | Baseline uptime and timer checks configured                | No — required before unattended operation |
 
-**Total setup time:** ~2 hours  
-**Total cost:** ~$102/mo (infrastructure only; auth/observability/monitoring free)
+**Current monthly cost:** see `docs/COST_AND_LIMITS.md`.
 
 ---
 
@@ -80,10 +80,10 @@ PHASE 1: INFRASTRUCTURE (Week 1, Days 1-3)
 ├─ DigitalOcean droplet (DONE: 8GB, Ubuntu 22.04, tor1)
 ├─ Postgres database (DONE: 1GB managed Postgres, tor1)
 ├─ Reserved IP (DONE: 159.203.51.158)
-├─ Spaces bucket (optional; local Docker volume backs bootable blueprint uploads)
-├─ Domain/DNS pointing to reserved IP
-├─ Dedicated sitelayer deploy user + SSH key
-└─ `/app/sitelayer/.env` on Droplet
+├─ Spaces bucket (DONE: sitelayer-blueprints-prod, tor1, versioning enabled)
+├─ Domain/DNS pointing to reserved IP (DONE: sitelayer.sandolab.xyz)
+├─ Dedicated sitelayer deploy user + SSH key (DONE)
+└─ `/app/sitelayer/.env` on Droplet (DONE)
    └─ Prerequisite for: all code deployment
 
 PHASE 2: CODE CHANGES (mostly DONE)
@@ -95,9 +95,9 @@ PHASE 2: CODE CHANGES (mostly DONE)
 
 REMAINING: Streaming blueprint upload (replace base64 buffering); live QBO sandbox validation.
 
-PHASE 3: DEPLOYMENT (Week 2-3)
+PHASE 3: DEPLOYMENT (DONE)
 ├─ Apply Postgres schema through managed DB connection
-├─ Build monorepo with Dockerfile
+├─ Build immutable runtime image with Dockerfile and DO Container Registry
 ├─ Deploy via `.github/workflows/deploy-droplet.yml`
 ├─ Start api/web/worker/Caddy through `docker compose -f docker-compose.prod.yml`
 ├─ Verify public HTTPS health at `https://sitelayer.sandolab.xyz/health`
@@ -117,18 +117,13 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 
 ## Critical Path (Longest Chain)
 
-1. Create production/dev Postgres databases and app users on existing managed cluster.
-2. Put `/app/sitelayer/.env` on droplet with production `DATABASE_URL`.
-3. Configure deploy SSH key and GitHub Actions secrets.
-4. Run first Docker Compose deployment and health check.
-5. Add TLS/domain configuration.
-6. Clerk auth implementation → blocks customer login.
-7. DO Spaces/off-host file copy → blocks customer-grade blueprint retention.
-8. PDF viewer + annotation validation → blocks confident takeoff workflow.
-9. Job queue → blocks robust QBO sync.
+1. Replace base64 JSON blueprint uploads with streaming multipart to Spaces.
+2. Serve blueprint downloads through presigned URLs instead of API-buffered payloads.
+3. Validate QBO OAuth, token refresh, and worker-drained sync with sandbox credentials.
+4. Provision first pilot company, Clerk org/memberships, and QBO mapping.
+5. Run pilot smoke: login → upload large blueprint → annotate → estimate → sync.
 
-**Total critical path:** ~22 hours of work  
-**Parallelizable:** Change 1-5 can start in parallel once Phase 1 infrastructure is ready
+**Parallelizable:** QBO validation can proceed while the blueprint streaming path is implemented.
 
 ---
 
@@ -160,18 +155,18 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 
 ## Success Criteria (Must Have Before Pilot)
 
-- [ ] Clerk OAuth working (customer can sign in with Google)
+- [x] Clerk OAuth working (customer can sign in with Google)
 - [x] Local blueprint upload persistence working (PDF persists in Docker volume)
-- [ ] Blueprint upload to Spaces/off-host object storage working
+- [x] Blueprint upload to Spaces/off-host object storage working for current JSON-size limit
 - [x] PDF viewer + polygon drawing implemented (user can annotate)
 - [x] Annotations save to DB through append endpoint
-- [ ] API responds in <500ms (Sentry tracks 100% of errors)
+- [ ] API responds in <500ms for pilot-critical flows under real blueprint/QBO load
 - [x] Caddy reverse proxy working (`https://sitelayer.sandolab.xyz` returns app/API)
-- [ ] Postgres logical backups automated and restore-drilled. DO managed Postgres automatic backups exist, but keep an independent `pg_dump` retention path before pilot data.
+- [x] Postgres logical backups automated and restore-drilled
 - [ ] UptimeRobot green (all monitors passing)
 - [ ] QBO OAuth flow working (sandbox test)
 - [x] Worker processes queue reliably with Postgres leases
-- [ ] Logs accessible via SSH (journalctl or pm2 logs)
+- [x] Logs accessible via SSH / Docker Compose logs
 
 ---
 
@@ -264,7 +259,7 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 
 ---
 
-## Immediate Action Items (Next 24 Hours)
+## Immediate Action Items
 
 - [x] **Create:** `sitelayer_prod` and `sitelayer_dev` DBs plus separate app users on existing managed Postgres.
 - [x] **Install:** deployment public key for `sitelayer` user on droplet.
@@ -272,9 +267,9 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 - [x] **Create:** `/app/sitelayer/.env` on droplet with `DATABASE_URL` and optional integration placeholders.
 - [x] **Deploy:** run the GitHub Actions droplet workflow once.
 - [x] **Tighten:** remove public firewall port 3000 if no temporary service needs it.
-- [ ] **Decide:** same droplet dev deploy vs separate small dev droplet.
-
-**Expected completion:** All setup by EOD tomorrow, ready to deploy by EOD Week 1
+- [ ] **Decide:** same droplet dev deploy vs separate small dev droplet before exposing `sitelayer_dev`.
+- [ ] **Implement:** streaming blueprint upload / presigned download before large pilot PDFs.
+- [ ] **Validate:** live QBO sandbox sync and production token refresh path.
 
 ---
 

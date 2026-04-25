@@ -29,11 +29,17 @@ jobs:
       - name: Shell syntax
         run: bash -n scripts/*.sh
 
+      - run: npm run lint
+
+      - run: npm run format
+
       - run: npm run typecheck
 
       - run: npm run test
 
       - run: npm run build
+
+      - run: npm run web:bundle-budget
 
       - name: Fixture web build
         run: VITE_FIXTURES=1 npm run build --workspace @sitelayer/web

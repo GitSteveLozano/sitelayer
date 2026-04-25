@@ -4,7 +4,7 @@ Construction operations platform: blueprint takeoff, estimation, crew scheduling
 
 ## Agent Coordination Source of Truth
 
-**Last reconciled:** 2026-04-24
+**Last reconciled:** 2026-04-25
 
 **Mesh project:** `sitelayer` / project ID `282`
 
@@ -42,7 +42,7 @@ Current Mesh runtime dependencies recorded for `sitelayer` as of 2026-04-24:
 - `port/preview-http-https`
 - `build_cmd/preview-docker-build`
 
-These are currently tracked as deployment verification items, not global task blockers. After the first successful droplet deploy, promote the production-critical deps to required in Mesh.
+These are deployment verification/runtime records. Treat production-critical rows as required evidence when changing infra, deploy, storage, auth, or observability.
 
 Preview state is documented in this repo and Mesh runtime dependencies. Runtime-dep rows were reconciled on 2026-04-24 for:
 
@@ -61,21 +61,21 @@ Runner package state: `/home/sitelayer/actions-runner` exists on `sitelayer-prev
 
 **Verified with `doctl` and production smoke checks on 2026-04-25.**
 
-| Resource                         | Current State                                                                                                                                                                    |
-| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Production droplet               | `sitelayer`, ID `566798325`, Ubuntu 22.04, Toronto `tor1`, 4 vCPU, 8GB RAM, public IPv4 `165.245.230.3`                                                                          |
-| Reserved production IP           | `159.203.51.158`, assigned to droplet `566798325`                                                                                                                                |
-| Preview droplet                  | `sitelayer-preview`, ID `566806040`, Ubuntu 22.04, Toronto `tor1`, 2 vCPU, 4GB RAM, reserved IPv4 `159.203.53.218`                                                               |
-| Managed Postgres                 | `sitelayer-db`, ID `9948c96b-b6b6-45ad-adf7-d20e4c206c66`, Postgres 18, `db-s-1vcpu-1gb`, Toronto `tor1`, online                                                                 |
-| Managed Postgres databases       | `defaultdb`, `sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev`                                                                                                              |
-| Managed Postgres trusted sources | Droplet `566798325` (`sitelayer`) and droplet `566806040` (`sitelayer-preview`)                                                                                                  |
-| Production deploy path           | GitHub Actions runs on the self-hosted `sitelayer-preview` runner, SSHs to `sitelayer@10.118.0.4`, deploys `/app/sitelayer` with Docker Compose, `.env` at `/app/sitelayer/.env` |
-| Preview deploy path              | `docker-compose.preview.yml` behind Traefik on `sitelayer-preview`; shared env at `/app/previews/.env.shared`; smoke stack at `main.preview.sitelayer.sandolab.xyz`              |
-| Public edge                      | Containerized Caddy on ports 80/443; automatic Let's Encrypt TLS for `sitelayer.sandolab.xyz`; HTTP redirects to HTTPS                                                           |
-| Backups                          | DO managed Postgres automatic backups exist; logical Postgres backup, Postgres off-host copy, blueprint-volume fallback copy, restore-drill, and timer-monitor timers are active |
-| Object storage                   | DO Spaces bucket `sitelayer-blueprints-prod` in `tor1`, versioning enabled, scoped prod read/write key in `/app/sitelayer/.env`                                                  |
-| Container registry               | DO Container Registry `sitelayer` in `tor1`; production deploy promotes `registry.digitalocean.com/sitelayer/sitelayer:<git-sha>`                                                |
-| Optional integrations            | QBO and Sentry can stay blank/placeholders; prod API boot requires auth config, `API_METRICS_TOKEN`, and Spaces credentials in addition to `DATABASE_URL`                        |
+| Resource                         | Current State                                                                                                                                                                                                                           |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Production droplet               | `sitelayer`, ID `566798325`, Ubuntu 22.04, Toronto `tor1`, 4 vCPU, 8GB RAM, public IPv4 `165.245.230.3`                                                                                                                                 |
+| Reserved production IP           | `159.203.51.158`, assigned to droplet `566798325`                                                                                                                                                                                       |
+| Preview droplet                  | `sitelayer-preview`, ID `566806040`, Ubuntu 22.04, Toronto `tor1`, 2 vCPU, 4GB RAM, reserved IPv4 `159.203.53.218`                                                                                                                      |
+| Managed Postgres                 | `sitelayer-db`, ID `9948c96b-b6b6-45ad-adf7-d20e4c206c66`, Postgres 18, `db-s-1vcpu-1gb`, Toronto `tor1`, online                                                                                                                        |
+| Managed Postgres databases       | `defaultdb`, `sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev`                                                                                                                                                                     |
+| Managed Postgres trusted sources | Droplet `566798325` (`sitelayer`) and droplet `566806040` (`sitelayer-preview`)                                                                                                                                                         |
+| Production deploy path           | GitHub Actions runs on the self-hosted `sitelayer-preview` runner, SSHs to `sitelayer@10.118.0.4`, deploys `/app/sitelayer` with Docker Compose, `.env` at `/app/sitelayer/.env`                                                        |
+| Preview deploy path              | `docker-compose.preview.yml` behind Traefik on `sitelayer-preview`; shared env at `/app/previews/.env.shared`; smoke stack at `main.preview.sitelayer.sandolab.xyz`                                                                     |
+| Public edge                      | Containerized Caddy on ports 80/443; automatic Let's Encrypt TLS for `sitelayer.sandolab.xyz`; HTTP redirects to HTTPS                                                                                                                  |
+| Backups                          | DO managed Postgres automatic backups exist; logical Postgres backup, Postgres off-host copy, blueprint-volume fallback copy, restore-drill, and timer-monitor timers are active                                                        |
+| Object storage                   | DO Spaces bucket `sitelayer-blueprints-prod` in `tor1`, versioning enabled, scoped prod read/write key in `/app/sitelayer/.env`                                                                                                         |
+| Container registry               | DO Container Registry `sitelayer` in `tor1`; production deploy promotes `registry.digitalocean.com/sitelayer/sitelayer:<git-sha>`                                                                                                       |
+| Optional integrations            | QBO credentials can stay blank until live sync validation; Sentry can stay blank but is wired for api/worker/web when DSNs are present. Prod API boot requires auth config, `API_METRICS_TOKEN`, Spaces credentials, and `DATABASE_URL` |
 
 Security note: the deploy user is in the Docker group. That avoids root SSH but Docker access is root-equivalent. Treat `DEPLOY_SSH_KEY` as production-root-equivalent.
 
@@ -108,7 +108,7 @@ Layer 3: Derived Insight & Workflow UI
 | **Auth**            | Clerk wired in SPA + JWT verification in API; gated by env | `apps/web/src/App.tsx` runs SignIn/SignUp; `apps/api/src/auth.ts` verifies Clerk JWTs when `CLERK_JWT_KEY` is set. Header fallback to `ACTIVE_USER_ID=demo-user` is still active until `AUTH_ALLOW_HEADER_FALLBACK=0` and `CLERK_JWT_KEY` are configured per tier. |
 | **File Storage**    | Dual-mode shipped: local FS or DigitalOcean Spaces         | `apps/api/src/storage.ts` auto-selects `S3Storage` when `DO_SPACES_BUCKET/KEY/SECRET` are set, otherwise local FS at `BLUEPRINT_STORAGE_ROOT`. Default region `tor1`.                                                                                              |
 | **QBO Integration** | OAuth + REST API (direct HTTP)                             | Connector layer; sync state in `integration_mappings` table                                                                                                                                                                                                        |
-| **Observability**   | Sentry v10 + Pino                                          | Trace propagation through browser/API/worker; request-scoped JSON logs via `@sitelayer/logger`                                                                                                                                                                     |
+| **Observability**   | Sentry v10 + Pino                                          | Trace propagation through API/worker; web Sentry and web-vitals are idle/lazy loaded; request-scoped JSON logs via `@sitelayer/logger`                                                                                                                             |
 
 ## Project Structure
 
@@ -430,7 +430,7 @@ Background job processor:
 | **Postgres.js** | Drop-in pg replacement, typed queries | Still manual composition                   | 🟡 Bridge solution, not long-term      |
 | **Raw pg**      | Total control, transparent            | String concatenation risks                 | ❌ Don't scale this                    |
 
-**Recommendation**: Plan **Prisma migration** before production. It gives you:
+**Recommendation**: Keep the current ledgered SQL migrations through the pilot, then plan a **Prisma migration** before the schema surface grows much further. It gives you:
 
 - Type safety for queries
 - Auto-migration generation from schema changes
@@ -439,8 +439,8 @@ Background job processor:
 
 ### Authentication
 
-**Current**: Hardcoded demo user  
-**Verdict**: 🔴 **Must implement before pilot**
+**Current**: Clerk JWT verification in API, Clerk React provider in web, local fixture fallback for development.
+**Verdict**: ✅ **Implemented for production; validate first-customer org/membership mapping during pilot setup**
 
 | Solution          | Upside                            | Downside                             | Fit for Sitelayer                   |
 | ----------------- | --------------------------------- | ------------------------------------ | ----------------------------------- |
@@ -449,21 +449,21 @@ Background job processor:
 | **Supabase Auth** | Open-source, free tier exists     | Limited multi-tenant features        | 🟡 OK for single-tenant MVP         |
 | **NextAuth.js**   | Self-hosted, flexible             | OAuth provider setup overhead        | 🟡 Consider if avoiding third-party |
 
-**Recommendation**: **Integrate Clerk before pilot** (required for multi-tenant demo). Estimated cost: ~$20-50/month for pilot scale.
+**Recommendation**: Keep Clerk for pilot auth and organization mapping. `CLERK_SECRET_KEY` is reserved for future Clerk Backend API calls; the current request path verifies `CLERK_JWT_KEY`.
 
 ### File Storage
 
-**Current**: Local filesystem fallback implemented and persisted by Docker Compose through the `blueprint_storage` volume.
-**Verdict**: 🟡 **Off-host/object storage still needed before customer data**
+**Current**: DigitalOcean Spaces is enabled for production (`sitelayer-blueprints-prod`) with the local `blueprint_storage` volume retained as a dev/preview/emergency fallback.
+**Verdict**: ✅ **Object storage is live; remaining pilot risk is upload/download size, not storage durability**
 
 | Service                 | Upside                               | Downside                                | Cost     | Fit                  |
 | ----------------------- | ------------------------------------ | --------------------------------------- | -------- | -------------------- |
-| **DigitalOcean Spaces** | $5/mo, 250GB included, S3-compatible | Smaller ecosystem                       | $5-15/mo | ✅ Planned choice    |
+| **DigitalOcean Spaces** | $5/mo, 250GB included, S3-compatible | Smaller ecosystem                       | $5-15/mo | ✅ Current choice    |
 | **AWS S3**              | Industry standard, mature            | Per-request pricing, more complex setup | $10+/mo  | 🟡 Overkill for MVP  |
 | **Supabase Storage**    | Built on S3, PostgreSQL-native       | Different S3 endpoint                   | ~$10/mo  | 🟡 Adds dependency   |
 | **Cloudinary**          | Image optimization built-in          | Per-request pricing, vendor lock-in     | $10+/mo  | ❌ Overkill for PDFs |
 
-**Recommendation**: **Use DigitalOcean Spaces** as planned ($5/mo, S3-compatible, simple setup) for off-host retention and backup. Keep the local volume fallback for dev, preview, and early smoke testing.
+**Recommendation**: Keep DigitalOcean Spaces as the production object store. Next storage work is streaming multipart upload plus presigned download so 30-80MB construction PDFs do not pass through the JSON body limit.
 
 ### Background Jobs
 
@@ -472,7 +472,7 @@ Background job processor:
 
 | Solution             | Upside                                | Downside                             | Cost     | Fit                  |
 | -------------------- | ------------------------------------- | ------------------------------------ | -------- | -------------------- |
-| **Hatchet**          | Purpose-built for workflows, no infra | Pricing TBD (currently free)         | Free?    | ✅ Planned choice    |
+| **Hatchet**          | Purpose-built for workflows, no infra | Additional hosted/service dependency | Varies   | 🟡 Future option     |
 | **Bull** (Redis)     | Lightweight, mature                   | Need Redis instance                  | $0-15/mo | 🟡 Works, adds Redis |
 | **Postgres pg-boss** | No external dep, uses your DB         | Less mature than Bull, slower        | $0       | 🟡 Simpler for MVP   |
 | **Temporal.io**      | Enterprise-grade, durable             | Significant overhead, learning curve | $0 (OSS) | ❌ Too much for MVP  |
@@ -482,18 +482,18 @@ Background job processor:
 ### Monitoring & Observability
 
 **Current**: Sentry (v10, OpenTelemetry-native) across `api`, `worker`, and `web`; Pino JSON logs stamped with `trace_id` / `span_id` / `request_id` via AsyncLocalStorage.
-**Verdict**: ✅ **Live as of 2026-04-24.** Keep `tracesSampleRate=1.0` through pilot; revisit once volume justifies sampling.
+**Verdict**: ✅ **Live as of 2026-04-24.** Prod defaults to `tracesSampleRate=0.1`; local/dev/preview default to `1.0`. Revisit sampling once volume justifies tuning.
 
 **What is wired:**
 
 - `apps/api/src/instrument.ts` and `apps/worker/src/instrument.ts` are imported first and enable `httpIntegration`, `nativeNodeFetchIntegration`, `postgresIntegration`, and `contextLinesIntegration`. HTTP server spans and `pg` query spans are automatic.
 - Every request gets a UUID `x-request-id` (echoed in response headers and error bodies), attached to the active Sentry scope and to an AsyncLocalStorage slot consumed by `@sitelayer/logger`.
 - `recordSyncEvent` and `recordMutationOutbox` persist `sentry_trace`, `sentry_baggage`, and `request_id` on every enqueue (migration `005_trace_propagation.sql`). The worker calls `Sentry.continueTrace()` on each applied row so the queue hop shows up as a child span of the originating HTTP request.
-- Web SDK ships `reactRouterV7BrowserTracingIntegration` + `replayIntegration` (masks text, inputs, and media). `Sentry.ErrorBoundary` wraps the app in `main.tsx`. Offline-queue replay emits an `offline_queue.replay` span with depth/replayed/dropped/conflict counts.
+- Web SDK ships `reactRouterV7BrowserTracingIntegration` + `replayIntegration` (masks text, inputs, and media) only after the lazy Sentry chunk loads. `main.tsx` uses a local React error boundary that reports through the lazy Sentry facade and also handles stale chunk reload recovery after deploys. Offline-queue replay emits an `offline_queue.replay` span with depth/replayed/dropped/conflict counts when Sentry is loaded.
 
 **Agent trace lookup:** `GET /api/debug/traces/:traceId` (or `?by=request_id`) — Bearer `DEBUG_TRACE_TOKEN`, tier-gated against prod unless `DEBUG_ALLOW_PROD=1`, rate-limited. Proxies Sentry's `events-trace` API and joins local `mutation_outbox` and `sync_events` rows matching the trace or request id.
 
-**Required env** (see `.env.example`): `SENTRY_DSN`, `VITE_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN`, `DEBUG_TRACE_TOKEN`. Trace sample rate defaults to `1.0`; on-error replay `1.0`; session replay `0.1`.
+**Required env for full trace tooling** (see `.env.example`): `SENTRY_DSN`, optional `SENTRY_WORKER_DSN`, build-time `VITE_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_AUTH_TOKEN`, `DEBUG_TRACE_TOKEN`. Trace sample rate defaults to `0.1` in prod and `1.0` elsewhere; on-error replay `1.0`; session replay `0.1`.
 
 ## Pending Infrastructure & Setup
 
