@@ -61,9 +61,37 @@ export type ProjectRow = {
   bonus_pool: string
   closed_at: string | null
   summary_locked_at: string | null
+  site_lat?: string | null
+  site_lng?: string | null
+  site_radius_m?: number | null
   version: number
   created_at: string
   updated_at: string
+}
+
+export type ClockEventRow = {
+  id: string
+  company_id: string
+  worker_id: string | null
+  project_id: string | null
+  clerk_user_id: string | null
+  event_type: 'in' | 'out' | 'auto_out_geo' | 'auto_out_idle'
+  occurred_at: string
+  lat: string | null
+  lng: string | null
+  accuracy_m: string | null
+  inside_geofence: boolean | null
+  notes: string | null
+  created_at: string
+}
+
+export type ClockTimelineResponse = {
+  events: ClockEventRow[]
+}
+
+export type ClockPunchResponse = {
+  clockEvent: ClockEventRow
+  laborEntry?: LaborRow | null
 }
 
 export type WorkerRow = {

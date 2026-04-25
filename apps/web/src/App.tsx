@@ -40,6 +40,7 @@ import {
 import { Input } from './components/ui/input.js'
 import { Toaster, toastError, toastInfo, toastSuccess } from './components/ui/toast.js'
 import { AuditView } from './views/audit.js'
+import { ClockView } from './views/clock.js'
 import { ConfirmView } from './views/confirm.js'
 import { EstimatesView } from './views/estimates.js'
 import { IntegrationsView } from './views/integrations.js'
@@ -422,6 +423,9 @@ function AppShell() {
           {confirmDoneToday ? '✓ ' : ''}
           Confirm Day
         </NavLink>
+        <NavLink to="/clock" data-testid="nav-clock">
+          Clock
+        </NavLink>
         <NavLink to="/projects">Projects</NavLink>
         <NavLink to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}>Takeoffs</NavLink>
         <NavLink to="/estimates">Estimates</NavLink>
@@ -446,6 +450,7 @@ function AppShell() {
             />
           }
         />
+        <Route path="/clock" element={<ClockView bootstrap={bootstrap} companySlug={companySlug} />} />
         <Route
           path="/projects"
           element={

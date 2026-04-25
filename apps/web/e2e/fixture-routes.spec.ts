@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 
-const routes = ['/confirm', '/projects', '/takeoffs/project-hillcrest', '/estimates', '/integrations']
+const routes = ['/confirm', '/clock', '/projects', '/takeoffs/project-hillcrest', '/estimates', '/integrations']
 
 for (const route of routes) {
   test(`renders ${route} with fixture data`, async ({ page }) => {
@@ -11,6 +11,14 @@ for (const route of routes) {
     await expect(page.locator('main')).not.toBeEmpty()
   })
 }
+
+test('clock view exposes clock-in/out controls', async ({ page }) => {
+  await page.goto('/clock')
+  await expect(page.getByTestId('nav-clock')).toBeVisible()
+  await expect(page.getByTestId('clock-in-button')).toBeVisible()
+  await expect(page.getByTestId('clock-out-button')).toBeVisible()
+  await expect(page.getByTestId('clock-status')).toBeVisible()
+})
 
 test('confirm day nav link surfaces the confirm view', async ({ page }) => {
   await page.goto('/projects')

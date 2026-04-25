@@ -22,6 +22,8 @@ import {
   compareBidVsScope,
   computeProductivity,
   formatMoney,
+  haversineDistanceMeters,
+  isInsideGeofence,
   normalizeGeometry,
   normalizePolygonGeometry,
 } from '@sitelayer/domain'
@@ -1414,7 +1416,9 @@ async function listProjects(companyId: string) {
     `
     select
       id, customer_id, name, customer_name, division_code, status, bid_total,
-      labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at
+      labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at,
+      site_lat, site_lng, site_radius_m,
+      version, created_at, updated_at
     from projects
     where company_id = $1
     order by updated_at desc
@@ -1518,6 +1522,13 @@ function parseConfigPayload(value: unknown) {
 
 function isValidDateInput(value: unknown) {
   return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+}
+
+function parseOptionalNumber(value: unknown): number | null {
+  if (value === undefined || value === null || value === '') return null
+  const parsed = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(parsed)) return null
+  return parsed
 }
 
 function parseExpectedVersion(value: unknown) {
@@ -4004,11 +4015,16 @@ const server = http.createServer(async (req, res) => {
                 return
               }
 
+              const siteLat = parseOptionalNumber(body.site_lat)
+              const siteLng = parseOptionalNumber(body.site_lng)
+              const siteRadiusMeters = parseOptionalNumber(body.site_radius_m)
+
               const created = await pool.query(
                 `
         insert into projects (
           company_id, customer_id, name, customer_name, division_code, status,
-          bid_total, labor_rate, target_sqft_per_hr, bonus_pool, version
+          bid_total, labor_rate, target_sqft_per_hr, bonus_pool,
+          site_lat, site_lng, site_radius_m, version
         )
         values (
           $1,
@@ -4021,9 +4037,12 @@ const server = http.createServer(async (req, res) => {
           coalesce($8, 0),
           $9,
           coalesce($10, 0),
+          $11,
+          $12,
+          coalesce($13, 100),
           1
         )
-        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at
+        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, version, created_at, updated_at
         `,
                 [
                   company.id,
@@ -4036,6 +4055,9 @@ const server = http.createServer(async (req, res) => {
                   body.labor_rate ?? 0,
                   body.target_sqft_per_hr ?? null,
                   body.bonus_pool ?? 0,
+                  siteLat,
+                  siteLng,
+                  siteRadiusMeters,
                 ],
               )
               await recordSyncEvent(company.id, 'project', created.rows[0].id, {
@@ -4063,6 +4085,9 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
+              const patchSiteLat = body.site_lat === undefined ? null : parseOptionalNumber(body.site_lat)
+              const patchSiteLng = body.site_lng === undefined ? null : parseOptionalNumber(body.site_lng)
+              const patchSiteRadius = body.site_radius_m === undefined ? null : parseOptionalNumber(body.site_radius_m)
               const result = await pool.query(
                 `
         update projects
@@ -4075,10 +4100,13 @@ const server = http.createServer(async (req, res) => {
           labor_rate = coalesce($8, labor_rate),
           target_sqft_per_hr = coalesce($9, target_sqft_per_hr),
           bonus_pool = coalesce($10, bonus_pool),
+          site_lat = case when $12::boolean then $13::numeric else site_lat end,
+          site_lng = case when $14::boolean then $15::numeric else site_lng end,
+          site_radius_m = case when $16::boolean then $17::int else site_radius_m end,
           updated_at = now(),
           version = version + 1
         where company_id = $1 and id = $2 and ($11::int is null or version = $11)
-        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at
+        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, version, created_at, updated_at
         `,
                 [
                   company.id,
@@ -4092,6 +4120,12 @@ const server = http.createServer(async (req, res) => {
                   body.target_sqft_per_hr ?? null,
                   body.bonus_pool ?? null,
                   expectedVersion,
+                  body.site_lat !== undefined,
+                  patchSiteLat,
+                  body.site_lng !== undefined,
+                  patchSiteLng,
+                  body.site_radius_m !== undefined,
+                  patchSiteRadius,
                 ],
               )
               if (!result.rows[0]) {
@@ -4759,6 +4793,302 @@ const server = http.createServer(async (req, res) => {
                 `labor_entry:delete:${laborEntryId}`,
               )
               sendJson(res, 200, result.rows[0])
+              return
+            }
+
+            // ----------------------------------------------------------------
+            // Clock events: geofenced passive clock-in/out for crew members.
+            // Every membership role can clock themselves in/out. Foreman/admin
+            // see the team timeline via GET /api/clock/timeline.
+            // ----------------------------------------------------------------
+
+            if (req.method === 'POST' && url.pathname === '/api/clock/in') {
+              const body = await readBody(req)
+              const lat = parseOptionalNumber(body.lat)
+              const lng = parseOptionalNumber(body.lng)
+              if (lat === null || lng === null) {
+                sendJson(res, 400, { error: 'lat and lng are required' })
+                return
+              }
+              const accuracy = parseOptionalNumber(body.accuracy_m)
+              const notes = typeof body.notes === 'string' ? body.notes.slice(0, 1024) : null
+              const currentUserId = identity.userId
+
+              // Resolve the worker for this user. Workers are seeded without a
+              // clerk_user_id link, so we fall back to the first worker in the
+              // company when we can't identify one. This matches how the rest
+              // of the app treats "demo-user" -> "Crew Lead" today.
+              const workerLookup = await pool.query<{ id: string }>(
+                `
+                select w.id
+                from workers w
+                where w.company_id = $1 and w.deleted_at is null
+                order by w.created_at asc
+                limit 1
+                `,
+                [company.id],
+              )
+              const workerId = workerLookup.rows[0]?.id ?? null
+
+              // Project resolution precedence:
+              //   1. explicit project_id from the body (foreman override).
+              //   2. project whose geofence contains (lat, lng).
+              //   3. null (accepts the punch but marks inside_geofence=false).
+              let projectId: string | null = null
+              let insideGeofence = false
+              const explicitProjectId =
+                body.project_id === undefined || body.project_id === null || body.project_id === ''
+                  ? null
+                  : String(body.project_id).trim()
+              if (explicitProjectId) {
+                if (!isValidUuid(explicitProjectId)) {
+                  sendJson(res, 400, { error: 'project_id must be a valid uuid' })
+                  return
+                }
+                const explicitProject = await pool.query<{
+                  id: string
+                  site_lat: string | null
+                  site_lng: string | null
+                  site_radius_m: number | null
+                }>(
+                  `
+                  select id, site_lat, site_lng, site_radius_m
+                  from projects
+                  where company_id = $1 and id = $2 and deleted_at is null
+                  limit 1
+                  `,
+                  [company.id, explicitProjectId],
+                )
+                if (!explicitProject.rows[0]) {
+                  sendJson(res, 404, { error: 'project not found' })
+                  return
+                }
+                projectId = explicitProject.rows[0].id
+                const pLat = Number(explicitProject.rows[0].site_lat)
+                const pLng = Number(explicitProject.rows[0].site_lng)
+                const pRad = Number(explicitProject.rows[0].site_radius_m ?? 0)
+                if (Number.isFinite(pLat) && Number.isFinite(pLng) && pRad > 0) {
+                  insideGeofence = isInsideGeofence({
+                    lat: pLat,
+                    lng: pLng,
+                    radius_m: pRad,
+                    point: { lat, lng },
+                  })
+                }
+              } else {
+                const candidateProjects = await pool.query<{
+                  id: string
+                  site_lat: string | null
+                  site_lng: string | null
+                  site_radius_m: number | null
+                }>(
+                  `
+                  select id, site_lat, site_lng, site_radius_m
+                  from projects
+                  where company_id = $1
+                    and deleted_at is null
+                    and site_lat is not null
+                    and site_lng is not null
+                    and site_radius_m is not null
+                    and site_radius_m > 0
+                  `,
+                  [company.id],
+                )
+                let bestDistance = Number.POSITIVE_INFINITY
+                for (const row of candidateProjects.rows) {
+                  const pLat = Number(row.site_lat)
+                  const pLng = Number(row.site_lng)
+                  const pRad = Number(row.site_radius_m ?? 0)
+                  if (!Number.isFinite(pLat) || !Number.isFinite(pLng) || pRad <= 0) continue
+                  if (!isInsideGeofence({ lat: pLat, lng: pLng, radius_m: pRad, point: { lat, lng } })) continue
+                  const distance = haversineDistanceMeters({ lat: pLat, lng: pLng }, { lat, lng })
+                  if (distance < bestDistance) {
+                    bestDistance = distance
+                    projectId = row.id
+                    insideGeofence = true
+                  }
+                }
+              }
+
+              const inserted = await pool.query(
+                `
+                insert into clock_events (
+                  company_id, worker_id, project_id, clerk_user_id, event_type,
+                  lat, lng, accuracy_m, inside_geofence, notes
+                )
+                values ($1, $2, $3, $4, 'in', $5, $6, $7, $8, $9)
+                returning id, company_id, worker_id, project_id, clerk_user_id,
+                          event_type, occurred_at, lat, lng, accuracy_m,
+                          inside_geofence, notes, created_at
+                `,
+                [company.id, workerId, projectId, currentUserId, lat, lng, accuracy, insideGeofence, notes],
+              )
+              sendJson(res, 201, { clockEvent: inserted.rows[0] })
+              return
+            }
+
+            if (req.method === 'POST' && url.pathname === '/api/clock/out') {
+              const body = await readBody(req)
+              const lat = parseOptionalNumber(body.lat)
+              const lng = parseOptionalNumber(body.lng)
+              const accuracy = parseOptionalNumber(body.accuracy_m)
+              const notes = typeof body.notes === 'string' ? body.notes.slice(0, 1024) : null
+              const currentUserId = identity.userId
+
+              const workerLookup = await pool.query<{ id: string }>(
+                `
+                select w.id
+                from workers w
+                where w.company_id = $1 and w.deleted_at is null
+                order by w.created_at asc
+                limit 1
+                `,
+                [company.id],
+              )
+              const workerId = workerLookup.rows[0]?.id ?? null
+
+              // Find the most-recent open 'in' for this worker to pair with.
+              // "Open" means: latest clock event for the worker is an 'in'.
+              const openInLookup = await pool.query<{
+                id: string
+                project_id: string | null
+                occurred_at: string
+                event_type: string
+              }>(
+                `
+                select id, project_id, occurred_at, event_type
+                from clock_events
+                where company_id = $1
+                  and (
+                    ($2::uuid is not null and worker_id = $2::uuid)
+                    or ($2::uuid is null and clerk_user_id = $3)
+                  )
+                order by occurred_at desc
+                limit 1
+                `,
+                [company.id, workerId, currentUserId],
+              )
+              const openIn = openInLookup.rows[0]
+              if (!openIn || openIn.event_type !== 'in') {
+                sendJson(res, 409, { error: 'no open clock-in found for this worker' })
+                return
+              }
+
+              const projectId = openIn.project_id
+              let insideGeofence: boolean | null = null
+              if (projectId && lat !== null && lng !== null) {
+                const projectRow = await pool.query<{
+                  site_lat: string | null
+                  site_lng: string | null
+                  site_radius_m: number | null
+                }>('select site_lat, site_lng, site_radius_m from projects where company_id = $1 and id = $2', [
+                  company.id,
+                  projectId,
+                ])
+                const row = projectRow.rows[0]
+                if (row) {
+                  const pLat = Number(row.site_lat)
+                  const pLng = Number(row.site_lng)
+                  const pRad = Number(row.site_radius_m ?? 0)
+                  if (Number.isFinite(pLat) && Number.isFinite(pLng) && pRad > 0) {
+                    insideGeofence = isInsideGeofence({
+                      lat: pLat,
+                      lng: pLng,
+                      radius_m: pRad,
+                      point: { lat, lng },
+                    })
+                  }
+                }
+              }
+
+              const inserted = await pool.query<{
+                id: string
+                worker_id: string | null
+                project_id: string | null
+                occurred_at: string
+              }>(
+                `
+                insert into clock_events (
+                  company_id, worker_id, project_id, clerk_user_id, event_type,
+                  lat, lng, accuracy_m, inside_geofence, notes
+                )
+                values ($1, $2, $3, $4, 'out', $5, $6, $7, $8, $9)
+                returning id, company_id, worker_id, project_id, clerk_user_id,
+                          event_type, occurred_at, lat, lng, accuracy_m,
+                          inside_geofence, notes, created_at
+                `,
+                [company.id, workerId, projectId, currentUserId, lat, lng, accuracy, insideGeofence, notes],
+              )
+              const outRow = inserted.rows[0]!
+
+              // Derive a draft labor entry when we have all the inputs:
+              // a project, a worker, and a sensible duration (<24h) between
+              // the paired in/out. Foreman still confirms during /confirm.
+              let laborEntry: Record<string, unknown> | null = null
+              if (projectId && workerId) {
+                const startMs = Date.parse(openIn.occurred_at)
+                const endMs = Date.parse(outRow.occurred_at)
+                if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs) {
+                  const rawHours = (endMs - startMs) / (1000 * 60 * 60)
+                  if (rawHours > 0 && rawHours < 24) {
+                    const hours = Math.round(rawHours * 100) / 100
+                    const occurredOn = new Date(startMs).toISOString().slice(0, 10)
+                    const laborInsert = await pool.query(
+                      `
+                      insert into labor_entries (
+                        company_id, project_id, worker_id, service_item_code,
+                        hours, sqft_done, status, occurred_on
+                      )
+                      values ($1, $2, $3, '', $4, 0, 'draft', $5)
+                      returning id, project_id, worker_id, service_item_code, hours,
+                                sqft_done, status, occurred_on, version, deleted_at, created_at
+                      `,
+                      [company.id, projectId, workerId, hours, occurredOn],
+                    )
+                    laborEntry = laborInsert.rows[0] as Record<string, unknown>
+                    await recordSyncEvent(company.id, 'labor_entry', String(laborEntry.id), {
+                      action: 'create',
+                      source: 'clock_out',
+                      laborEntry,
+                    })
+                    await recordMutationOutbox(
+                      company.id,
+                      'labor_entry',
+                      String(laborEntry.id),
+                      'create',
+                      laborEntry,
+                      `labor_entry:create:${laborEntry.id}`,
+                    )
+                  }
+                }
+              }
+
+              sendJson(res, 201, { clockEvent: outRow, laborEntry })
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname === '/api/clock/timeline') {
+              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
+              const workerIdParam = String(url.searchParams.get('worker_id') ?? '').trim()
+              const dateParam = String(url.searchParams.get('date') ?? '').trim()
+              const result = await pool.query(
+                `
+                select id, company_id, worker_id, project_id, clerk_user_id,
+                       event_type, occurred_at, lat, lng, accuracy_m,
+                       inside_geofence, notes, created_at
+                from clock_events
+                where company_id = $1
+                  and ($2 = '' or worker_id = $2::uuid)
+                  and (
+                    $3 = ''
+                    or (occurred_at >= ($3::date) and occurred_at < ($3::date + interval '1 day'))
+                  )
+                order by occurred_at asc
+                limit 500
+                `,
+                [company.id, workerIdParam, dateParam],
+              )
+              sendJson(res, 200, { events: result.rows })
               return
             }
 
