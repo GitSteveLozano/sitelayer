@@ -1,4 +1,74 @@
 {
+  "rewrites": [
+    {
+      "source": "/audit",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/bonus-sim",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/clock",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/confirm",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/dev/**",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/estimates",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/integrations",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/onboarding",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/projects",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/rentals",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/schedule",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/sign-in",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/sign-in/**",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/sign-up",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/sign-up/**",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/takeoffs",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/takeoffs/**",
+      "destination": "/index.html"
+    }
+  ],
   "headers": [
     {
       "source": "/assets/**",
