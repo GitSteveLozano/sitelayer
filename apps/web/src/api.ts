@@ -592,6 +592,32 @@ export async function apiDelete<T>(path: string, companySlug: string, body?: unk
   return apiMutate<T>('DELETE', path, body, companySlug)
 }
 
+/**
+ * Pull an estimate PDF as a Blob and trigger a browser download. Stays out
+ * of `apiGet` because the response is binary and shouldn't be cached or
+ * fed through the offline-queue path.
+ */
+export async function downloadEstimatePdf(projectId: string, projectName: string, companySlug: string): Promise<void> {
+  const headers = await authHeaders(companySlug)
+  const response = await fetch(`${API_URL}/api/projects/${projectId}/estimate.pdf`, { headers })
+  if (!response.ok) {
+    throw new Error(`Estimate PDF download failed: ${response.status}`)
+  }
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  try {
+    const anchor = document.createElement('a')
+    anchor.href = url
+    const safeName = projectName.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80) || 'estimate'
+    anchor.download = `estimate-${safeName}.pdf`
+    document.body.appendChild(anchor)
+    anchor.click()
+    anchor.remove()
+  } finally {
+    URL.revokeObjectURL(url)
+  }
+}
+
 export async function createCompany(
   input: { slug: string; name: string; seed_defaults?: boolean },
   companySlug: string,

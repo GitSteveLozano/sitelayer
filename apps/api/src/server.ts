@@ -44,6 +44,14 @@ import {
   type BlueprintStorage,
 } from './storage.js'
 import { recordAudit, isAuditableEntity } from './audit.js'
+import { buildEstimatePdfInputFromSummary, renderEstimatePdf } from './pdf.js'
+import { buildListProjectsQuery, parseProjectsQuery } from './projects-query.js'
+import {
+  listLaborByItem,
+  listLaborByWeek,
+  listLaborByWorker,
+  parseLaborReportFilters,
+} from './labor-reports.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
 import { AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
 import { extractSvixHeaders, verifyClerkWebhook } from './clerk-webhook.js'
@@ -2532,7 +2540,13 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'GET' && url.pathname === '/api/projects') {
-              sendJson(res, 200, { projects: await listProjects(company.id) })
+              const query = parseProjectsQuery(url.searchParams)
+              const built = buildListProjectsQuery(company.id, query)
+              const result = await pool.query(built.sql, built.values)
+              const projects = result.rows
+              const nextCursor =
+                projects.length === built.limit ? (projects[projects.length - 1]?.updated_at ?? null) : null
+              sendJson(res, 200, { projects, nextCursor })
               return
             }
 
@@ -5636,6 +5650,38 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
+            if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\.pdf$/)) {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const projectId = url.pathname.split('/')[3] ?? ''
+              if (!projectId) {
+                sendJson(res, 400, { error: 'project id is required' })
+                return
+              }
+              const summary = await summarizeProject(company.id, projectId)
+              if (!summary) {
+                sendJson(res, 404, { error: 'project not found' })
+                return
+              }
+              const pdfInput = buildEstimatePdfInputFromSummary({
+                company: { name: company.name, slug: company.slug },
+                summary,
+                appUrl: process.env.APP_PUBLIC_URL ?? 'https://sitelayer.sandolab.xyz',
+              })
+              const filename = `estimate-${summary.project.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80)}.pdf`
+              res.writeHead(200, {
+                'content-type': 'application/pdf',
+                'content-disposition': `attachment; filename="${filename}"`,
+                'cache-control': 'no-store',
+                'access-control-allow-origin': getCorsOrigin(req),
+                'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
+                'access-control-allow-headers': CORS_ALLOW_HEADERS,
+                'access-control-allow-credentials': 'true',
+                'x-request-id': getRequestContext()?.requestId ?? '',
+              })
+              await renderEstimatePdf(pdfInput, res)
+              return
+            }
+
             if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/scope-vs-bid$/)) {
               const projectId = url.pathname.split('/')[3] ?? ''
               if (!projectId) {
@@ -5807,6 +5853,27 @@ const server = http.createServer(async (req, res) => {
                 return
               }
               sendJson(res, 200, await listServiceItemProductivity(company.id))
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname === '/api/analytics/labor/by-item') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const filters = parseLaborReportFilters(url.searchParams)
+              sendJson(res, 200, { rows: await listLaborByItem(pool, company.id, filters), filters })
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname === '/api/analytics/labor/by-worker') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const filters = parseLaborReportFilters(url.searchParams)
+              sendJson(res, 200, { rows: await listLaborByWorker(pool, company.id, filters), filters })
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname === '/api/analytics/labor/by-week') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const filters = parseLaborReportFilters(url.searchParams)
+              sendJson(res, 200, { rows: await listLaborByWeek(pool, company.id, filters), filters })
               return
             }
 

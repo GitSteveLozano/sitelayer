@@ -1,8 +1,17 @@
 import { LA_TEMPLATE } from '@sitelayer/domain'
 import { useUser } from '@clerk/clerk-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { apiDelete, apiPatch, apiPost, createCompany, FIXTURES_ENABLED, inviteMembership } from '../api.js'
+import {
+  apiDelete,
+  apiGet,
+  apiPatch,
+  apiPost,
+  createCompany,
+  FIXTURES_ENABLED,
+  inviteMembership,
+} from '../api.js'
+import type { ProjectRow } from '../api.js'
 
 // Component variant so callers in fixtures mode never trigger Clerk's hook
 // (which throws when ClerkProvider isn't mounted).
@@ -100,9 +109,46 @@ export function ProjectsView({
   const [customerSearch, setCustomerSearch] = usePersistedSearch(companySlug, 'customers')
 
   const projects = bootstrap?.projects ?? []
-  const filteredProjects = projects.filter((project) =>
-    matches(projectSearch, project.name, project.customer_name, project.division_code, project.status),
-  )
+
+  // Server-side project filter. When the user types, we hit
+  // GET /api/projects?q=...&status=...&customer_id=... with a 300 ms debounce
+  // and replace the in-memory filter result. When the search box is empty,
+  // we fall back to the bootstrap snapshot so this view keeps working
+  // offline / for the initial paint.
+  const [serverFilteredProjects, setServerFilteredProjects] = useState<ProjectRow[] | null>(null)
+  const trimmedSearch = projectSearch.trim()
+  useEffect(() => {
+    if (!trimmedSearch) {
+      setServerFilteredProjects(null)
+      return
+    }
+    let cancelled = false
+    const handle = window.setTimeout(() => {
+      const params = new URLSearchParams()
+      params.set('q', trimmedSearch)
+      apiGet<{ projects: ProjectRow[] }>(`/api/projects?${params.toString()}`, companySlug)
+        .then((response) => {
+          if (cancelled) return
+          setServerFilteredProjects(response.projects ?? [])
+        })
+        .catch(() => {
+          if (cancelled) return
+          // Fall back to the in-memory filter if the network call fails so
+          // the search box never becomes a permanent dead-end.
+          setServerFilteredProjects(null)
+        })
+    }, 300)
+    return () => {
+      cancelled = true
+      window.clearTimeout(handle)
+    }
+  }, [trimmedSearch, companySlug])
+
+  const filteredProjects =
+    serverFilteredProjects ??
+    projects.filter((project) =>
+      matches(projectSearch, project.name, project.customer_name, project.division_code, project.status),
+    )
   const filteredWorkers = workers.filter((worker) => matches(workerSearch, worker.name, worker.role))
   const filteredCustomers = customers.filter((customer) => matches(customerSearch, customer.name, customer.external_id))
 
