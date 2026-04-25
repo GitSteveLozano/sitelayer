@@ -73,6 +73,12 @@ import {
   listCompanyAdminIds,
   type EnqueueNotificationInput as NotificationInput,
 } from './notifications.js'
+import {
+  QboParseError,
+  parseQboClass,
+  parseQboEstimateCreateResponse,
+  parseQboItem,
+} from './qbo-parse.js'
 
 const logger = createLogger('api')
 const CORS_ALLOW_HEADERS =
@@ -3043,26 +3049,46 @@ const server = http.createServer(async (req, res) => {
                   syncedCustomers.push(externalId)
                 }
 
-                // Fetch items from QBO
-                let qboItems: { id: string; name: string; unitPrice?: number }[] = []
+                // Fetch items from QBO. Parse each row through `parseQboItem`
+                // so we get a stable shape regardless of PascalCase vs
+                // camelCase variance from Intuit. A QboParseError on any row
+                // is recorded as a sync_event so the failure isn't silently
+                // dropped.
+                let qboItemsRaw: unknown[] = []
                 try {
-                  const itemResponse = (await qboGet<{ QueryResponse: { Item?: unknown[] } }>(
+                  const itemResponse = await qboGet<{ QueryResponse?: { Item?: unknown[] } }>(
                     `/query?query=${encodeURIComponent("SELECT * FROM Item WHERE Type IN ('Service', 'Inventory')")}`,
                     realmId,
                     accessToken,
-                  )) as any
-                  qboItems = itemResponse.QueryResponse?.Item ?? []
+                  )
+                  qboItemsRaw = itemResponse.QueryResponse?.Item ?? []
                 } catch (e) {
                   logger.error({ err: e, scope: 'qbo_items' }, 'Failed to sync items from QBO')
                   Sentry.captureException(e, { tags: { scope: 'qbo_items' } })
                 }
 
-                // Upsert QBO items into local service_items
                 const syncedItems: string[] = []
-                for (const qboItem of qboItems) {
-                  const code = `qbo-${(qboItem as any).id}`
-                  const name = (qboItem as any).name ?? code
-                  const rate = (qboItem as any).unitPrice ?? 0
+                for (const rawItem of qboItemsRaw) {
+                  let qboItem
+                  try {
+                    qboItem = parseQboItem(rawItem)
+                  } catch (e) {
+                    if (e instanceof QboParseError) {
+                      logger.error({ err: e, scope: 'qbo_items_parse' }, 'QBO item parse failed')
+                      Sentry.captureException(e, { tags: { scope: 'qbo_items_parse' } })
+                      await recordSyncEvent(
+                        company.id,
+                        'service_item',
+                        'unknown',
+                        { action: 'parse_failed', provider: 'qbo', raw: e.raw },
+                        connection.id,
+                        { status: 'failed', error: e.message },
+                      )
+                      continue
+                    }
+                    throw e
+                  }
+                  const code = `qbo-${qboItem.id}`
                   const itemResult = await pool.query(
                     `
             insert into service_items (company_id, code, name, default_rate, category, unit, source)
@@ -3070,21 +3096,23 @@ const server = http.createServer(async (req, res) => {
             on conflict (company_id, code) do update set name = $3, default_rate = $4, source = 'qbo', updated_at = now()
             returning code, name, category, unit, default_rate, source, created_at
             `,
-                    [company.id, code, name, rate],
+                    [company.id, code, qboItem.name, qboItem.unitPrice],
                   )
-                  await backfillServiceItemMapping(company.id, itemResult.rows[0], String((qboItem as any).id))
+                  await backfillServiceItemMapping(company.id, itemResult.rows[0], qboItem.id)
                   syncedItems.push(code)
                 }
 
-                // Fetch classes from QBO and backfill division mappings by name match.
-                let qboClasses: { id: string; name: string }[] = []
+                // Fetch classes from QBO and backfill division mappings by
+                // name match. Per-row parse failures are recorded as
+                // sync_events; the overall sync continues.
+                let qboClassesRaw: unknown[] = []
                 try {
-                  const classResponse = (await qboGet<{ QueryResponse: { Class?: unknown[] } }>(
+                  const classResponse = await qboGet<{ QueryResponse?: { Class?: unknown[] } }>(
                     `/query?query=${encodeURIComponent('SELECT * FROM Class')}`,
                     realmId,
                     accessToken,
-                  )) as any
-                  qboClasses = classResponse.QueryResponse?.Class ?? []
+                  )
+                  qboClassesRaw = classResponse.QueryResponse?.Class ?? []
                 } catch (e) {
                   logger.error({ err: e, scope: 'qbo_classes' }, 'Failed to sync classes from QBO')
                   Sentry.captureException(e, { tags: { scope: 'qbo_classes' } })
@@ -3095,17 +3123,33 @@ const server = http.createServer(async (req, res) => {
                   [company.id],
                 )
                 const syncedDivisions: string[] = []
-                for (const qboClass of qboClasses) {
-                  const className = String((qboClass as any).name ?? (qboClass as any).Name ?? '').trim()
-                  const classId = String((qboClass as any).id ?? (qboClass as any).Id ?? '').trim()
-                  if (!className || !classId) continue
+                for (const rawClass of qboClassesRaw) {
+                  let qboClass
+                  try {
+                    qboClass = parseQboClass(rawClass)
+                  } catch (e) {
+                    if (e instanceof QboParseError) {
+                      logger.error({ err: e, scope: 'qbo_classes_parse' }, 'QBO class parse failed')
+                      Sentry.captureException(e, { tags: { scope: 'qbo_classes_parse' } })
+                      await recordSyncEvent(
+                        company.id,
+                        'division',
+                        'unknown',
+                        { action: 'parse_failed', provider: 'qbo', raw: e.raw },
+                        connection.id,
+                        { status: 'failed', error: e.message },
+                      )
+                      continue
+                    }
+                    throw e
+                  }
                   const division = divisionsResult.rows.find(
                     (row) =>
-                      row.name.toLowerCase() === className.toLowerCase() ||
-                      row.code.toLowerCase() === className.toLowerCase(),
+                      row.name.toLowerCase() === qboClass.name.toLowerCase() ||
+                      row.code.toLowerCase() === qboClass.name.toLowerCase(),
                   )
                   if (!division) continue
-                  await backfillDivisionMapping(company.id, division, classId)
+                  await backfillDivisionMapping(company.id, division, qboClass.id)
                   syncedDivisions.push(division.code)
                 }
 
@@ -4884,9 +4928,29 @@ const server = http.createServer(async (req, res) => {
                   estimatePayload,
                 )
 
-                const qboEstimateId = String(
-                  (result as any).Estimate?.Id ?? (result as any).Id ?? (result as any).id ?? '',
-                ).trim()
+                let qboEstimateId = ''
+                try {
+                  qboEstimateId = parseQboEstimateCreateResponse(result).id
+                } catch (e) {
+                  if (e instanceof QboParseError) {
+                    logger.error(
+                      { err: e, scope: 'qbo_push_estimate_parse' },
+                      'QBO estimate response parse failed',
+                    )
+                    Sentry.captureException(e, { tags: { scope: 'qbo_push_estimate_parse' } })
+                    await recordSyncEvent(
+                      company.id,
+                      'project',
+                      projectId,
+                      { action: 'push_qbo', provider: 'qbo', raw: e.raw },
+                      connection.id ?? null,
+                      { status: 'failed', error: e.message },
+                    )
+                    sendJson(res, 502, { error: 'qbo returned malformed estimate response' })
+                    return
+                  }
+                  throw e
+                }
                 if (qboEstimateId) {
                   await backfillProjectMapping(company.id, project, qboEstimateId)
                 }
