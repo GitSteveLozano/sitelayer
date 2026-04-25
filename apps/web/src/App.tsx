@@ -47,6 +47,7 @@ import { IntegrationsView } from './views/integrations.js'
 import { OnboardingView } from './views/onboarding.js'
 import { ProjectsView } from './views/projects.js'
 import { RentalsView } from './views/rentals.js'
+import { ScheduleView } from './views/schedule.js'
 import { TakeoffsView } from './views/takeoffs.js'
 
 const SentryRoutes = Sentry.withSentryReactRouterV7Routing(Routes)
@@ -432,6 +433,9 @@ function AppShell() {
         <NavLink to="/clock" data-testid="nav-clock">
           Clock
         </NavLink>
+        <NavLink to="/schedule" data-testid="nav-schedule">
+          Schedule
+        </NavLink>
         <NavLink to="/projects">Projects</NavLink>
         <NavLink to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}>Takeoffs</NavLink>
         <NavLink to="/estimates">Estimates</NavLink>
@@ -458,6 +462,21 @@ function AppShell() {
           }
         />
         <Route path="/clock" element={<ClockView bootstrap={bootstrap} companySlug={companySlug} />} />
+        <Route
+          path="/schedule"
+          element={
+            <ScheduleView
+              bootstrap={bootstrap}
+              schedules={allSchedules}
+              workers={workers}
+              serviceItems={serviceItems}
+              companySlug={companySlug}
+              onMutated={async () => {
+                await refresh()
+              }}
+            />
+          }
+        />
         <Route
           path="/projects"
           element={
