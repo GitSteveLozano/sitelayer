@@ -46,12 +46,7 @@ import {
 import { recordAudit, isAuditableEntity } from './audit.js'
 import { buildEstimatePdfInputFromSummary, renderEstimatePdf } from './pdf.js'
 import { buildListProjectsQuery, parseProjectsQuery } from './projects-query.js'
-import {
-  listLaborByItem,
-  listLaborByWeek,
-  listLaborByWorker,
-  parseLaborReportFilters,
-} from './labor-reports.js'
+import { listLaborByItem, listLaborByWeek, listLaborByWorker, parseLaborReportFilters } from './labor-reports.js'
 import {
   assertServiceItemCatalogStatus as assertServiceItemCatalogStatusImpl,
   rejectionMessageForCatalog,
@@ -79,6 +74,8 @@ import {
   parseQboEstimateCreateResponse,
   parseQboItem,
 } from './qbo-parse.js'
+import { applyRateLimit, createRateLimiter, isRateLimitExempt, loadRateLimitConfig } from './rate-limit.js'
+import { assertVersion } from './version-guard.js'
 
 const logger = createLogger('api')
 const CORS_ALLOW_HEADERS =
@@ -243,8 +240,39 @@ const clerkWebhookSecret = process.env.CLERK_WEBHOOK_SECRET?.trim() || null
 const qboWebhookVerifier = process.env.QBO_WEBHOOK_VERIFIER?.trim() || null
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)
 
+// Pool circuit-breaker knobs.
+// - max bounds connection count so a slow-query storm can't exhaust Postgres.
+// - statement_timeout / query_timeout fail individual queries fast instead of
+//   stalling /health behind them.
+// - healthProbeTimeout caps the /health DB probe so the endpoint stays
+//   reachable even when Postgres is wedged.
+// - application_name is set so DB-side `pg_stat_activity` debug is easier.
+const pgPoolMax = (() => {
+  const n = Number(process.env.PG_POOL_MAX ?? 20)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 20
+})()
+const pgStatementTimeoutMs = (() => {
+  const n = Number(process.env.PG_STATEMENT_TIMEOUT_MS ?? 5000)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5000
+})()
+const pgQueryTimeoutMs = (() => {
+  const n = Number(process.env.PG_QUERY_TIMEOUT_MS ?? 10_000)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 10_000
+})()
+const pgHealthProbeTimeoutMs = (() => {
+  const n = Number(process.env.PG_HEALTH_PROBE_TIMEOUT_MS ?? 1500)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1500
+})()
+
 function withTierOptions(config: PoolConfig): PoolConfig {
-  return { ...config, options: postgresOptionsForTier(appConfig.tier, config.options || process.env.PGOPTIONS) }
+  return {
+    ...config,
+    options: postgresOptionsForTier(appConfig.tier, config.options || process.env.PGOPTIONS),
+    application_name: 'sitelayer-api',
+    max: pgPoolMax,
+    statement_timeout: pgStatementTimeoutMs,
+    query_timeout: pgQueryTimeoutMs,
+  }
 }
 
 function getPoolConfig(connectionString: string): PoolConfig {
@@ -267,6 +295,26 @@ function getPoolConfig(connectionString: string): PoolConfig {
 
 const pool = new Pool(getPoolConfig(databaseUrl))
 attachPool(pool)
+
+const rateLimitConfig = loadRateLimitConfig(process.env)
+const rateLimiter = createRateLimiter(rateLimitConfig)
+logger.info(
+  {
+    perUserPerMin: rateLimitConfig.perUserPerMin,
+    perIpPerMin: rateLimitConfig.perIpPerMin,
+    windowMs: rateLimitConfig.windowMs,
+  },
+  '[rate-limit] configured',
+)
+logger.info(
+  {
+    pgPoolMax,
+    pgStatementTimeoutMs,
+    pgQueryTimeoutMs,
+    pgHealthProbeTimeoutMs,
+  },
+  '[pool] configured',
+)
 
 class HttpError extends Error {
   constructor(
@@ -519,6 +567,23 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown, req?:
 function sendRedirect(res: http.ServerResponse, location: string) {
   res.writeHead(303, { location })
   res.end()
+}
+
+/**
+ * Local wrapper around `assertVersion` that re-uses `sendJson` so the 409
+ * response keeps CORS headers attached.
+ */
+async function checkVersion(
+  table: string,
+  where: string,
+  params: unknown[],
+  expectedVersion: number | null,
+  res: http.ServerResponse,
+  req: http.IncomingMessage,
+): Promise<boolean> {
+  return assertVersion(pool, table, where, params, expectedVersion, res, {
+    sendJson: (r, status, body) => sendJson(r as http.ServerResponse, status, body, req),
+  })
 }
 
 function readBody(req: http.IncomingMessage): Promise<Record<string, any>> {
@@ -1456,11 +1521,7 @@ async function assertDivisionAllowedForServiceItem(
  * folded into this — labor entries still write through the legacy permissive
  * path because their xref usage is opt-in.
  */
-function assertServiceItemCatalogStatus(
-  companyId: string,
-  serviceItemCode: string,
-  divisionCode: string | null,
-) {
+function assertServiceItemCatalogStatus(companyId: string, serviceItemCode: string, divisionCode: string | null) {
   return assertServiceItemCatalogStatusImpl(pool, companyId, serviceItemCode, divisionCode)
 }
 
@@ -2189,6 +2250,8 @@ const server = http.createServer(async (req, res) => {
             }
 
             if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/health') {
+              // Race the pg probe against PG_HEALTH_PROBE_TIMEOUT_MS so a wedged
+              // pool can't pin /health open for the default 30s socket timeout.
               const probe = await Promise.race([
                 pool
                   .query('select 1 as ok')
@@ -2198,7 +2261,14 @@ const server = http.createServer(async (req, res) => {
                     error: err instanceof Error ? err.message : String(err),
                   })),
                 new Promise<{ db: 'timeout'; error: string }>((resolve) =>
-                  setTimeout(() => resolve({ db: 'timeout', error: 'db probe exceeded 2s' }), 2000),
+                  setTimeout(
+                    () =>
+                      resolve({
+                        db: 'timeout',
+                        error: `db probe exceeded ${pgHealthProbeTimeoutMs}ms`,
+                      }),
+                    pgHealthProbeTimeoutMs,
+                  ),
                 ),
               ])
               const ok = probe.db === 'healthy'
@@ -2369,10 +2439,7 @@ const server = http.createServer(async (req, res) => {
                 )
                 persisted += 1
               }
-              logger.info(
-                { persisted, skipped, realms: realmIds.length },
-                '[qbo-webhook] received',
-              )
+              logger.info({ persisted, skipped, realms: realmIds.length }, '[qbo-webhook] received')
               // 200 quickly; the worker will pull entity details asynchronously.
               res.writeHead(200, {
                 'content-type': 'application/json; charset=utf-8',
@@ -2382,11 +2449,7 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            const PUBLIC_PATHS = new Set([
-              '/api/integrations/qbo/callback',
-              '/api/webhooks/clerk',
-              '/api/webhooks/qbo',
-            ])
+            const PUBLIC_PATHS = new Set(['/api/integrations/qbo/callback', '/api/webhooks/clerk', '/api/webhooks/qbo'])
             const isPublicPath = PUBLIC_PATHS.has(url.pathname)
             let identity: Identity
             try {
@@ -2406,6 +2469,17 @@ const server = http.createServer(async (req, res) => {
             requestContext.actorUserId = identity.userId
             scope.setUser({ id: identity.userId })
             scope.setTag('auth_source', identity.source)
+
+            // Rate limit /api/* (except /health and /api/webhooks/*). We resolve
+            // the bucket key after identity so authenticated calls share a
+            // per-user bucket regardless of source IP, and unauthenticated
+            // public-path callers get a per-IP bucket.
+            if (!isRateLimitExempt(url.pathname)) {
+              const rateLimitUserId = identity.source === 'default' ? null : identity.userId
+              if (applyRateLimit(rateLimiter, req, res, url.pathname, rateLimitUserId)) {
+                return
+              }
+            }
 
             if (req.method === 'GET' && url.pathname === '/api/companies') {
               const memberships = await getMemberships(identity.userId)
@@ -2807,18 +2881,16 @@ const server = http.createServer(async (req, res) => {
                 ],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version, deleted_at from integration_mappings where company_id = $1 and provider = $2 and id = $3',
-                  [company.id, 'qbo', mappingId],
-                )
-                const current = existing.rows[0]
                 if (
-                  current &&
-                  !current.deleted_at &&
-                  expectedVersion !== null &&
-                  Number(current.version) !== expectedVersion
+                  !(await checkVersion(
+                    'integration_mappings',
+                    "company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null",
+                    [company.id, mappingId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
                 ) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
                   return
                 }
                 sendJson(res, 404, { error: 'mapping not found' })
@@ -2859,18 +2931,16 @@ const server = http.createServer(async (req, res) => {
                 [company.id, mappingId, expectedVersion],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version, deleted_at from integration_mappings where company_id = $1 and provider = $2 and id = $3',
-                  [company.id, 'qbo', mappingId],
-                )
-                const current = existing.rows[0]
                 if (
-                  current &&
-                  !current.deleted_at &&
-                  expectedVersion !== null &&
-                  Number(current.version) !== expectedVersion
+                  !(await checkVersion(
+                    'integration_mappings',
+                    "company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null",
+                    [company.id, mappingId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
                 ) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
                   return
                 }
                 sendJson(res, 404, { error: 'mapping not found' })
@@ -3291,12 +3361,9 @@ const server = http.createServer(async (req, res) => {
                     )
                     vendorId = vendorSearch.QueryResponse?.Vendor?.[0]?.Id ?? null
                     if (!vendorId) {
-                      const created = await qboPost<{ Vendor?: { Id?: string } }>(
-                        `/vendor`,
-                        realmId,
-                        accessToken,
-                        { DisplayName: displayName },
-                      )
+                      const created = await qboPost<{ Vendor?: { Id?: string } }>(`/vendor`, realmId, accessToken, {
+                        DisplayName: displayName,
+                      })
                       vendorId = created.Vendor?.Id ?? null
                     }
                     if (!vendorId) {
@@ -3329,12 +3396,7 @@ const server = http.createServer(async (req, res) => {
                       },
                     ],
                   }
-                  const response = await qboPost<{ Bill?: { Id?: string } }>(
-                    `/bill`,
-                    realmId,
-                    accessToken,
-                    billPayload,
-                  )
+                  const response = await qboPost<{ Bill?: { Id?: string } }>(`/bill`, realmId, accessToken, billPayload)
                   const qboBillId = response.Bill?.Id ?? null
                   if (!qboBillId) {
                     errors.push({ bill_id: bill.id, error: 'QBO did not return a Bill.Id' })
@@ -3452,13 +3514,16 @@ const server = http.createServer(async (req, res) => {
                 ],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version from pricing_profiles where company_id = $1 and id = $2',
-                  [company.id, pricingProfileId],
-                )
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'pricing_profiles',
+                    'company_id = $1 and id = $2',
+                    [company.id, pricingProfileId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'pricing profile not found' })
@@ -3494,13 +3559,16 @@ const server = http.createServer(async (req, res) => {
                 [company.id, pricingProfileId, expectedVersion],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version from pricing_profiles where company_id = $1 and id = $2',
-                  [company.id, pricingProfileId],
-                )
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'pricing_profiles',
+                    'company_id = $1 and id = $2',
+                    [company.id, pricingProfileId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'pricing profile not found' })
@@ -3600,13 +3668,16 @@ const server = http.createServer(async (req, res) => {
                 ],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query('select version from bonus_rules where company_id = $1 and id = $2', [
-                  company.id,
-                  bonusRuleId,
-                ])
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'bonus_rules',
+                    'company_id = $1 and id = $2',
+                    [company.id, bonusRuleId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'bonus rule not found' })
@@ -3642,13 +3713,16 @@ const server = http.createServer(async (req, res) => {
                 [company.id, bonusRuleId, expectedVersion],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query('select version from bonus_rules where company_id = $1 and id = $2', [
-                  company.id,
-                  bonusRuleId,
-                ])
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'bonus_rules',
+                    'company_id = $1 and id = $2',
+                    [company.id, bonusRuleId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'bonus rule not found' })
@@ -3767,18 +3841,16 @@ const server = http.createServer(async (req, res) => {
                 ],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version, deleted_at from customers where company_id = $1 and id = $2',
-                  [company.id, customerId],
-                )
-                const current = existing.rows[0]
                 if (
-                  current &&
-                  !current.deleted_at &&
-                  expectedVersion !== null &&
-                  Number(current.version) !== expectedVersion
+                  !(await checkVersion(
+                    'customers',
+                    'company_id = $1 and id = $2 and deleted_at is null',
+                    [company.id, customerId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
                 ) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
                   return
                 }
                 sendJson(res, 404, { error: 'customer not found' })
@@ -3885,18 +3957,16 @@ const server = http.createServer(async (req, res) => {
                 [company.id, workerId, body.name ?? null, body.role ?? null, expectedVersion],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version, deleted_at from workers where company_id = $1 and id = $2',
-                  [company.id, workerId],
-                )
-                const current = existing.rows[0]
                 if (
-                  current &&
-                  !current.deleted_at &&
-                  expectedVersion !== null &&
-                  Number(current.version) !== expectedVersion
+                  !(await checkVersion(
+                    'workers',
+                    'company_id = $1 and id = $2 and deleted_at is null',
+                    [company.id, workerId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
                 ) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
                   return
                 }
                 sendJson(res, 404, { error: 'worker not found' })
@@ -4015,13 +4085,16 @@ const server = http.createServer(async (req, res) => {
                 ],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version from service_items where company_id = $1 and code = $2',
-                  [company.id, code],
-                )
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'service_items',
+                    'company_id = $1 and code = $2',
+                    [company.id, code],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'service item not found' })
@@ -4061,17 +4134,16 @@ const server = http.createServer(async (req, res) => {
                 [company.id, code, parseExpectedVersion(body.expected_version ?? body.version)],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version from service_items where company_id = $1 and code = $2',
-                  [company.id, code],
-                )
-                const current = existing.rows[0]
                 if (
-                  current &&
-                  parseExpectedVersion(body.expected_version ?? body.version) !== null &&
-                  Number(current.version) !== parseExpectedVersion(body.expected_version ?? body.version)
+                  !(await checkVersion(
+                    'service_items',
+                    'company_id = $1 and code = $2',
+                    [company.id, code],
+                    parseExpectedVersion(body.expected_version ?? body.version),
+                    res,
+                    req,
+                  ))
                 ) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
                   return
                 }
                 sendJson(res, 404, { error: 'service item not found' })
@@ -4226,13 +4298,16 @@ const server = http.createServer(async (req, res) => {
                 ],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query('select version from projects where company_id = $1 and id = $2', [
-                  company.id,
-                  projectId,
-                ])
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'projects',
+                    'company_id = $1 and id = $2',
+                    [company.id, projectId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'project not found' })
@@ -4277,14 +4352,16 @@ const server = http.createServer(async (req, res) => {
                 [company.id, projectId, parseExpectedVersion(body?.expected_version ?? body?.version)],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query('select version from projects where company_id = $1 and id = $2', [
-                  company.id,
-                  projectId,
-                ])
-                const current = existing.rows[0]
-                const expectedVersion = parseExpectedVersion(body?.expected_version ?? body?.version)
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'projects',
+                    'company_id = $1 and id = $2',
+                    [company.id, projectId],
+                    parseExpectedVersion(body?.expected_version ?? body?.version),
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'project not found' })
@@ -4443,13 +4520,16 @@ const server = http.createServer(async (req, res) => {
                 ],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version from material_bills where company_id = $1 and id = $2',
-                  [company.id, billId],
-                )
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'material_bills',
+                    'company_id = $1 and id = $2',
+                    [company.id, billId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'bill not found' })
@@ -4494,13 +4574,16 @@ const server = http.createServer(async (req, res) => {
                 [company.id, billId, expectedVersion],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version from material_bills where company_id = $1 and id = $2',
-                  [company.id, billId],
-                )
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'material_bills',
+                    'company_id = $1 and id = $2',
+                    [company.id, billId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'bill not found' })
@@ -4709,13 +4792,16 @@ const server = http.createServer(async (req, res) => {
                 ],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query('select version from rentals where company_id = $1 and id = $2', [
-                  company.id,
-                  rentalId,
-                ])
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'rentals',
+                    'company_id = $1 and id = $2',
+                    [company.id, rentalId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'rental not found' })
@@ -4755,13 +4841,16 @@ const server = http.createServer(async (req, res) => {
                 [company.id, rentalId, expectedVersion],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query('select version from rentals where company_id = $1 and id = $2', [
-                  company.id,
-                  rentalId,
-                ])
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'rentals',
+                    'company_id = $1 and id = $2',
+                    [company.id, rentalId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'rental not found' })
@@ -6202,13 +6291,16 @@ const server = http.createServer(async (req, res) => {
                 ],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version from blueprint_documents where company_id = $1 and id = $2',
-                  [company.id, blueprintId],
-                )
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'blueprint_documents',
+                    'company_id = $1 and id = $2',
+                    [company.id, blueprintId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'blueprint not found' })
@@ -6524,13 +6616,16 @@ const server = http.createServer(async (req, res) => {
                 ],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version from takeoff_measurements where company_id = $1 and id = $2',
-                  [company.id, measurementId],
-                )
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'takeoff_measurements',
+                    'company_id = $1 and id = $2',
+                    [company.id, measurementId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'measurement not found' })
@@ -6571,13 +6666,16 @@ const server = http.createServer(async (req, res) => {
                 [company.id, measurementId, expectedVersion],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version from takeoff_measurements where company_id = $1 and id = $2',
-                  [company.id, measurementId],
-                )
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'takeoff_measurements',
+                    'company_id = $1 and id = $2',
+                    [company.id, measurementId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'measurement not found' })
@@ -6620,13 +6718,16 @@ const server = http.createServer(async (req, res) => {
               )
               const schedule = scheduleResult.rows[0]
               if (!schedule) {
-                const existing = await pool.query(
-                  'select version from crew_schedules where company_id = $1 and id = $2',
-                  [company.id, scheduleId],
-                )
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'crew_schedules',
+                    'company_id = $1 and id = $2',
+                    [company.id, scheduleId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'schedule not found' })
@@ -6693,13 +6794,16 @@ const server = http.createServer(async (req, res) => {
                 [company.id, blueprintId, expectedVersion],
               )
               if (!result.rows[0]) {
-                const existing = await pool.query(
-                  'select version from blueprint_documents where company_id = $1 and id = $2',
-                  [company.id, blueprintId],
-                )
-                const current = existing.rows[0]
-                if (current && expectedVersion !== null && Number(current.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(current.version) })
+                if (
+                  !(await checkVersion(
+                    'blueprint_documents',
+                    'company_id = $1 and id = $2',
+                    [company.id, blueprintId],
+                    expectedVersion,
+                    res,
+                    req,
+                  ))
+                ) {
                   return
                 }
                 sendJson(res, 404, { error: 'blueprint not found' })
