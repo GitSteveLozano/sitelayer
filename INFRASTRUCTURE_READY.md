@@ -171,7 +171,13 @@ QBO_STATE_SECRET=
 
 # Sentry (optional)
 SENTRY_DSN=
-VITE_SENTRY_DSN=
+SENTRY_WORKER_DSN=
+SENTRY_ENVIRONMENT=production
+SENTRY_TRACES_SAMPLE_RATE=0.1
+
+# Browser VITE_* values are build-time Docker args in deploy-droplet.yml, not
+# runtime web-container env. Changing VITE_API_URL, VITE_CLERK_PUBLISHABLE_KEY,
+# or VITE_SENTRY_DSN requires a new image build/deploy.
 
 # Domain
 DOMAIN=sitelayer.sandolab.xyz
@@ -179,46 +185,41 @@ DOMAIN=sitelayer.sandolab.xyz
 
 ---
 
-## Manual Setup Required
+## External Service Setup State
 
 ### 1. DigitalOcean Spaces (done)
 
 `sitelayer-blueprints-prod` exists in Toronto (`tor1`), bucket versioning is
 enabled, and production uses a scoped read/write key.
 
-### 2. Create Clerk Organization (2 min)
+### 2. Clerk auth (done; per-customer org mapping remains)
 
-1. Go to https://dashboard.clerk.com
-2. Create app (if not done): choose "Google OAuth + Email"
-3. Go to **JWT Templates** tab
-4. Create new template with claims:
+1. Clerk app is configured for production auth.
+2. Confirm the JWT template includes the org slug claim:
    ```json
    {
      "org_slug": "{{org.slug}}"
    }
    ```
-5. Copy Secret Key and Publishable Key to `.env`
+3. Runtime API auth reads `CLERK_JWT_KEY`; webhook verification reads `CLERK_WEBHOOK_SECRET`; the browser publishable key is baked at image build via the deploy workflow.
 
-### 3. Create Intuit QBO App (2 min)
+### 3. Intuit QBO app (credentials captured; live sync validation pending)
 
-1. Go to https://developer.intuit.com
-2. Create app, choose "QuickBooks Online"
-3. Copy Client ID and Secret to `.env`
-4. Development redirect URI: `http://localhost:3001/api/integrations/qbo/callback`
-5. Production redirect URI, after deployment exists: `https://sitelayer.sandolab.xyz/api/integrations/qbo/callback`
+1. Keep the production redirect URI set to `https://sitelayer.sandolab.xyz/api/integrations/qbo/callback`.
+2. Keep the local redirect URI set to `http://localhost:3001/api/integrations/qbo/callback`.
+3. Before pilot sync, run a sandbox OAuth/token-refresh/drain test with real QBO credentials.
 
-### 4. Create Sentry Projects (2 min)
+### 4. Sentry projects (done; plan/quota review pending)
 
-1. Go to https://sentry.io
-2. Create project → Node.js for backend
-3. Create project → React for frontend
-4. Copy DSNs to `.env`
+1. API and worker DSNs live in runtime `.env` as `SENTRY_DSN` / `SENTRY_WORKER_DSN`.
+2. Web DSN is a build-time value passed as `VITE_SENTRY_DSN` by the deploy workflow.
+3. Confirm active plan/quota in the Sentry billing UI during the quarterly cost review.
 
-### 5. UptimeRobot Monitors (optional, 1 min)
+### 5. UptimeRobot / timer monitors (baseline done)
 
-1. Go to https://uptimerobot.com
-2. Add monitor: `https://sitelayer.sandolab.xyz`
-3. Add monitor: `https://sitelayer.sandolab.xyz/api/bootstrap`
+1. Keep a public monitor on `https://sitelayer.sandolab.xyz`.
+2. Keep an authenticated or internal check for app/API readiness, because `/api/bootstrap` is intentionally auth-gated in production.
+3. Keep production backup/drill/timer monitor units green.
 
 ---
 
@@ -251,9 +252,9 @@ sudo ls -l /app/sitelayer/.env
 
 ## Next Steps
 
-1. **Provision remaining optional service** (QBO production credentials) when ready.
+1. **Validate QBO live sync** with sandbox credentials, then production token refresh.
 2. **Decide dev deploy topology** before wiring `sitelayer_dev` into a long-lived environment.
-3. **Verify production at:** https://sitelayer.sandolab.xyz.
+3. **Implement streaming blueprint upload/download** before using large pilot PDFs.
 
 Preview has been verified at:
 

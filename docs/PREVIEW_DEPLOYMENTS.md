@@ -71,10 +71,12 @@ https://feature-qbo-ui.preview.sitelayer.sandolab.xyz
 Each branch/PR gets its own Docker Compose project:
 
 ```text
-COMPOSE_PROJECT_NAME=sitelayer_pr_42
+COMPOSE_PROJECT_NAME=sitelayer-pr-42
 /app/previews/pr-42
 /app/previews/pr-42/.env
 ```
+
+The matching database schema keeps underscores, for example `sitelayer_pr_42`.
 
 The preview stack should not publish arbitrary host ports. Traefik owns ports `80` and `443`; app containers stay on Docker networks.
 
@@ -120,8 +122,7 @@ Preview automation is defined in `.github/workflows/deploy-preview.yml`.
 Trigger candidates:
 
 - `pull_request` opened/synchronize/reopened for internal branches only
-- `workflow_dispatch` with a branch input
-- optionally `push` to `preview/**`
+- `workflow_dispatch` with `slug`, optional `ref`, and `mode`
 
 Do not run secret-bearing preview deploys for untrusted fork PRs.
 
@@ -129,11 +130,13 @@ Current workflow design:
 
 - Runs on a self-hosted runner labeled `sitelayer-preview`.
 - Computes `pr-<number>` for PRs or uses a manual dispatch slug.
+- Defaults to `PREVIEW_MODE=dev`, which source-mounts the app and does not run `docker compose up --build`.
+- Uses `PREVIEW_MODE=prod` when a PR has the `preview-prod` label or manual dispatch sets `mode=prod`; that path builds with `docker-compose.preview-prod.yml`.
 - Runs `scripts/deploy-preview.sh` from the checked-out commit.
 - Stages code under `/app/previews/<slug>`.
 - Renders `.env` from `/app/previews/.env.shared` plus slug-specific host and schema values.
 - Creates the preview schema, runs migrations in that schema, and checks that schema.
-- Runs `docker compose -p sitelayer-<slug> -f docker-compose.preview.yml up -d --build --remove-orphans`.
+- Runs `docker compose -p sitelayer-<slug> ... up -d --remove-orphans`; prod mode adds `--build`.
 - Health-checks `https://<slug>.preview.sitelayer.sandolab.xyz/health`.
 
 Cleanup workflow:
@@ -156,7 +159,7 @@ The current `taylorSando` token still cannot list repo runners through the REST 
 
 ## Security Rules
 
-- Preview droplet uses separate SSH key and GitHub secrets from production.
+- Preview deploys run locally on the `sitelayer-preview` self-hosted runner. The current preview workflow does not consume a preview SSH deploy key.
 - Preview env uses sandbox or blank Clerk/QBO/Spaces/Sentry values.
 - Preview blueprint uploads are stored in a per-stack Docker volume; do not upload customer-sensitive plans to preview until access control and retention policy are explicit.
 - Preview deploys run only for trusted internal branches unless manually approved.

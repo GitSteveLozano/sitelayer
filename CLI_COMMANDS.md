@@ -109,14 +109,14 @@ DO_SPACES_SECRET=<scoped-readwrite-secret>
 DO_SPACES_BUCKET=sitelayer-blueprints-prod
 DO_SPACES_REGION=tor1
 DO_SPACES_ENDPOINT=https://tor1.digitaloceanspaces.com
-# Frontend
-VITE_API_URL=https://sitelayer.sandolab.xyz
-VITE_COMPANY_SLUG=la-operations
-VITE_USER_ID=demo-user
+# Frontend VITE_* values are build-time Docker args in deploy-droplet.yml.
+# Editing this runtime .env after deploy will not change the browser bundle.
 # Observability
 SENTRY_DSN=
-VITE_SENTRY_DSN=
-VITE_SENTRY_ENVIRONMENT=production
+SENTRY_WORKER_DSN=
+SENTRY_ENVIRONMENT=production
+SENTRY_TRACES_SAMPLE_RATE=0.1
+# VITE_SENTRY_DSN / VITE_SENTRY_ENVIRONMENT are build-time only.
 DEBUG_TRACE_TOKEN=<generate-32b-random>
 API_METRICS_TOKEN=<generate-32b-random>
 ALLOWED_ORIGINS=https://sitelayer.sandolab.xyz
@@ -142,7 +142,8 @@ EOF
 ```bash
 ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
-docker compose -f docker-compose.prod.yml up -d
+GIT_SHA=$(cat .last_successful_deployed_sha 2>/dev/null || git rev-parse --short HEAD) \
+  docker compose -f docker-compose.prod.yml up -d
 sleep 2
 docker compose -f docker-compose.prod.yml ps
 EOF
@@ -192,7 +193,7 @@ GIT_SHA=$(git rev-parse --short HEAD)
 APP_IMAGE=registry.digitalocean.com/sitelayer/sitelayer:$GIT_SHA
 (grep -q '^APP_IMAGE=' .env && sed -i "s|^APP_IMAGE=.*|APP_IMAGE=$APP_IMAGE|" .env || printf '\nAPP_IMAGE=%s\n' "$APP_IMAGE" >> .env)
 APP_IMAGE=$APP_IMAGE docker compose -f docker-compose.prod.yml pull api web worker
-APP_IMAGE=$APP_IMAGE docker compose -f docker-compose.prod.yml up -d --remove-orphans
+GIT_SHA=$GIT_SHA APP_IMAGE=$APP_IMAGE docker compose -f docker-compose.prod.yml up -d --remove-orphans
 EOF
 ```
 
@@ -251,6 +252,9 @@ DEPLOY_HOST=sitelayer.sandolab.xyz
 
 # Set DEPLOY_SSH_KEY (your private key)
 DEPLOY_SSH_KEY=$(cat ~/.ssh/sitelayer_deploy)
+
+# Set DIGITALOCEAN_ACCESS_TOKEN (registry push/pull + doctl deploy automation)
+DIGITALOCEAN_ACCESS_TOKEN=dop_v1_...
 ```
 
 In GitHub UI:
@@ -258,8 +262,9 @@ In GitHub UI:
 1. Go to repository Settings
 2. Click "Secrets and variables" → "Actions"
 3. Click "New repository secret"
-4. Add `DEPLOY_HOST` = your droplet IP/domain
+4. Add `DEPLOY_HOST` = prod droplet private VPC IP from preview runner, or public/reserved IP if firewall allows it
 5. Add `DEPLOY_SSH_KEY` = contents of `~/.ssh/sitelayer_deploy` file
+6. Add `DIGITALOCEAN_ACCESS_TOKEN` = DO token used by deploy automation
 
 ## Health Checks
 
@@ -267,7 +272,7 @@ In GitHub UI:
 
 ```bash
 ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz \
-  'curl -s http://127.0.0.1:3001/health'
+  'curl --resolve sitelayer.sandolab.xyz:443:127.0.0.1 -fsS https://sitelayer.sandolab.xyz/health'
 ```
 
 ### Check all services running
@@ -277,7 +282,7 @@ ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
 docker compose -f docker-compose.prod.yml ps
 echo "---"
-curl -s http://127.0.0.1:3001/health && echo "✓ API healthy"
+curl --resolve sitelayer.sandolab.xyz:443:127.0.0.1 -fsS https://sitelayer.sandolab.xyz/health && echo "API healthy"
 EOF
 ```
 
@@ -332,13 +337,19 @@ git push origin main
 # 3. Monitor in GitHub Actions tab
 # 4. Or manually trigger:
 
+# Manual fallback should mirror deploy-droplet.yml: use an already-built
+# immutable image, pull before DB work, take backup, migrate/check, start, verify.
 ssh -i ~/.ssh/sitelayer_deploy sitelayer@sitelayer.sandolab.xyz << 'EOF'
 cd /app/sitelayer
-git fetch origin
-git checkout -B main origin/main
-git reset --hard origin/main
-docker compose -f docker-compose.prod.yml pull
-docker compose -f docker-compose.prod.yml up -d
+GIT_SHA=$(git rev-parse --short HEAD)
+APP_IMAGE=registry.digitalocean.com/sitelayer/sitelayer:$GIT_SHA
+(grep -q '^APP_IMAGE=' .env && sed -i "s|^APP_IMAGE=.*|APP_IMAGE=$APP_IMAGE|" .env || printf '\nAPP_IMAGE=%s\n' "$APP_IMAGE" >> .env)
+APP_IMAGE=$APP_IMAGE docker compose -f docker-compose.prod.yml pull api web worker
+BACKUP_DIR=/app/backups/postgres DATABASE_URL_FILE=/app/sitelayer/.env PG_DUMP_DOCKER_IMAGE=postgres:18-alpine scripts/backup-postgres.sh
+PSQL_DOCKER_IMAGE=postgres:18-alpine scripts/migrate-db.sh
+PSQL_DOCKER_IMAGE=postgres:18-alpine scripts/check-db-schema.sh
+GIT_SHA=$GIT_SHA APP_IMAGE=$APP_IMAGE docker compose -f docker-compose.prod.yml up -d --remove-orphans
+EXPECTED_SHA=$GIT_SHA scripts/verify-prod-deploy.sh
 EOF
 ```
 
@@ -378,8 +389,11 @@ DO_SPACES_SECRET
 
 # Observability
 SENTRY_DSN
-VITE_SENTRY_DSN
-VITE_SENTRY_ENVIRONMENT
+SENTRY_WORKER_DSN       # optional; worker falls back to SENTRY_DSN
+SENTRY_ENVIRONMENT      # runtime api/worker label
+SENTRY_TRACES_SAMPLE_RATE
+VITE_SENTRY_DSN         # build-time only
+VITE_SENTRY_ENVIRONMENT # build-time only
 DEBUG_TRACE_TOKEN        # bearer for /api/debug/traces/:traceId
 API_METRICS_TOKEN        # bearer for /api/metrics
 

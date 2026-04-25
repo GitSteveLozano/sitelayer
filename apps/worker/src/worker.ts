@@ -122,7 +122,10 @@ async function getCompanyId(): Promise<string | null> {
   return result.rows[0]?.id ?? null
 }
 
-const NOTIFICATION_MAX_ATTEMPTS = 5
+const notificationMaxAttemptsRaw = Number(process.env.NOTIFICATION_MAX_ATTEMPTS ?? 5)
+const NOTIFICATION_MAX_ATTEMPTS = Number.isFinite(notificationMaxAttemptsRaw)
+  ? Math.max(1, Math.floor(notificationMaxAttemptsRaw))
+  : 5
 const notificationBatchLimit = Number(process.env.NOTIFICATION_BATCH_LIMIT ?? 10)
 const emailConfig = loadEmailConfig()
 

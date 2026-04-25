@@ -139,12 +139,18 @@ BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
 ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD=
 
 # Frontend
+# These are build-time inputs. Production deploy passes them to `docker build`;
+# editing `/app/sitelayer/.env` after deploy does not change the already-built
+# browser bundle.
 VITE_API_URL=
 VITE_COMPANY_SLUG=la-operations
 VITE_USER_ID=demo-user
 
 # Optional: Error Tracking
 SENTRY_DSN=
+SENTRY_WORKER_DSN=
+SENTRY_ENVIRONMENT=production
+SENTRY_TRACES_SAMPLE_RATE=0.1
 VITE_SENTRY_DSN=
 VITE_SENTRY_ENVIRONMENT=production
 
@@ -240,12 +246,12 @@ The GitHub Actions workflow will:
 
 Sitelayer runs in one of four tiers, declared explicitly via `APP_TIER`:
 
-| Tier      | DB (DigitalOcean managed Postgres) | Spaces bucket                        | Purpose                                     |
-| --------- | ---------------------------------- | ------------------------------------ | ------------------------------------------- |
-| `local`   | `postgres` in `docker-compose.yml` | MinIO (TBD)                          | Laptop-only development                     |
-| `dev`     | `sitelayer_dev`                    | `sitelayer-blueprints-dev` (TBD)     | Shared sandbox; Claude Desktop / MCP agents |
-| `preview` | `sitelayer_preview`                | `sitelayer-blueprints-preview` (TBD) | Per-PR stacks, non-technical demos          |
-| `prod`    | `sitelayer_prod`                   | `sitelayer-blueprints-prod`          | Real customers only                         |
+| Tier      | DB (DigitalOcean managed Postgres) | Spaces bucket                             | Purpose                                     |
+| --------- | ---------------------------------- | ----------------------------------------- | ------------------------------------------- |
+| `local`   | `postgres` in `docker-compose.yml` | MinIO bucket `sitelayer-blueprints-local` | Laptop-only development                     |
+| `dev`     | `sitelayer_dev`                    | `sitelayer-blueprints-dev`                | Shared sandbox; Claude Desktop / MCP agents |
+| `preview` | `sitelayer_preview`                | `sitelayer-blueprints-preview`            | Per-PR stacks, non-technical demos          |
+| `prod`    | `sitelayer_prod`                   | `sitelayer-blueprints-prod`               | Real customers only                         |
 
 **Startup guard.** On boot the API reads `APP_TIER`, `DATABASE_URL`, and `DO_SPACES_BUCKET` and refuses to start on mismatch. Concrete rules:
 
@@ -325,19 +331,53 @@ Idempotent (`ADD COLUMN IF NOT EXISTS`). Existing rows stay NULL in the origin c
 | `QBO_REDIRECT_URI`                       | ❌         | OAuth redirect URI for QBO                                                                                                 |
 | `QBO_SUCCESS_REDIRECT_URI`               | ❌         | UI redirect after QBO OAuth success                                                                                        |
 | `QBO_STATE_SECRET`                       | ❌         | Secret used to sign QBO OAuth state                                                                                        |
-| `CLERK_SECRET_KEY`                       | ❌         | Clerk authentication secret                                                                                                |
+| `CLERK_SECRET_KEY`                       | ❌         | Reserved for future Clerk Backend API calls; current request auth does not read it.                                        |
 | `CLERK_JWT_KEY`                          | ✅ in prod | Clerk JWT public key. Prod refuses to boot unless `CLERK_JWT_KEY` or `INTERNAL_AUTH_TOKEN` is configured.                  |
 | `AUTH_ALLOW_HEADER_FALLBACK`             | ❌         | Dev/preview escape hatch for header/default identity. Prod refuses this unless `AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS=1`. |
 | `AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS` | ❌         | Emergency-only prod override for header fallback; never leave enabled.                                                     |
 | `INTERNAL_AUTH_TOKEN`                    | ❌         | Service bearer token. Also satisfies the prod auth startup guard when Clerk is unavailable.                                |
 | `API_METRICS_TOKEN`                      | ✅ in prod | Bearer token required for `/api/metrics`; prod refuses to boot without it.                                                 |
 | `APP_IMAGE`                              | ✅ deploy  | Immutable runtime image tag; deploy exports `registry.digitalocean.com/sitelayer/sitelayer:<git-sha>`.                     |
+| `VITE_CLERK_PUBLISHABLE_KEY`             | ✅ web     | Public Clerk frontend key baked into the web bundle at image build time.                                                   |
+| `VITE_API_URL`                           | ❌         | Frontend API base URL. Leave blank in same-origin production so Caddy routes `/api/*` to the API.                          |
+| `VITE_APP_TIER`                          | ❌         | Frontend tier hint used by the ribbon and build metadata.                                                                  |
+| `VITE_SENTRY_DSN`                        | ❌         | Public web Sentry DSN. When blank, the web Sentry chunk is never loaded.                                                   |
+| `VITE_SENTRY_TRACES_SAMPLE_RATE`         | ❌         | Web trace sample rate. Defaults to `0.1` in prod, `1.0` elsewhere.                                                         |
+| `SENTRY_ENVIRONMENT`                     | ❌         | API/worker Sentry environment label. Compose defaults it to `production`.                                                  |
+| `SENTRY_WORKER_DSN`                      | ❌         | Optional worker-specific Sentry DSN. When blank, worker falls back to `SENTRY_DSN`.                                        |
+| `SENTRY_TRACES_SAMPLE_RATE`              | ❌         | API/worker trace sample rate. Defaults to `0.1` in prod, `1.0` elsewhere.                                                  |
 | `DO_SPACES_KEY`                          | ✅ in prod | Scoped DigitalOcean Spaces read/write key for `sitelayer-blueprints-prod`.                                                 |
 | `DO_SPACES_SECRET`                       | ✅ in prod | Scoped DigitalOcean Spaces secret.                                                                                         |
 | `ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD`  | ❌         | Temporary prod escape hatch for local blueprint storage; requires off-host volume backups while set.                       |
 | `BLUEPRINT_STORAGE_ROOT`                 | ❌         | Local filesystem blueprint storage path; production Compose persists `/app/storage/blueprints` in a named Docker volume    |
-| `SENTRY_DSN`                             | ❌         | Sentry error tracking URL                                                                                                  |
+| `SENTRY_DSN`                             | ❌         | API Sentry error tracking URL; worker uses this too unless `SENTRY_WORKER_DSN` is set.                                     |
 | `ALLOWED_ORIGINS`                        | ❌         | CORS allowed origins (comma-separated)                                                                                     |
+
+## Web Serving, Caching, and Bundle Budget
+
+Production serves `apps/web/dist` through the `@sitelayer/web` package script:
+
+```bash
+npm start -w @sitelayer/web
+# runs: serve -l 3000 dist
+```
+
+Do not add `serve -s` here. The SPA fallback is intentionally expressed in `apps/web/public/serve.json` as explicit route rewrites so missing `/assets/...` URLs return `404` instead of cached `index.html`.
+
+Current browser cache contract:
+
+- `/assets/**` — `Cache-Control: public, max-age=31536000, immutable`; all Vite assets are hashed, so repeat visits download only changed files.
+- `/index.html` — `Cache-Control: no-cache` plus `ETag`; browsers revalidate and receive `304` when unchanged.
+- `/sitelayer-logo.svg` — `Cache-Control: public, max-age=86400`.
+
+Startup bundle rules are enforced by `npm run web:bundle-budget` and included in `npm run ci:quality`:
+
+- initial eager JS gzip budget: `160 KiB`;
+- individual eager chunk gzip budget: `110 KiB`;
+- lazy app chunk gzip budget: `40 KiB`;
+- `vendor-sentry-*` must never be eager.
+
+The web app also recovers from stale lazy chunks after a deploy. `main.tsx` listens for Vite preload failures and React chunk-load errors, records them to Sentry when configured, and reloads the page once per build so old open tabs fetch the new `index.html` and changed chunk names.
 
 ## Monitoring & Troubleshooting
 
@@ -353,8 +393,10 @@ docker compose -f docker-compose.prod.yml logs -f api
 ```bash
 docker compose -f docker-compose.prod.yml restart api
 docker compose -f docker-compose.prod.yml down
-docker compose -f docker-compose.prod.yml up -d
+GIT_SHA=$(cat .last_successful_deployed_sha) docker compose -f docker-compose.prod.yml up -d
 ```
+
+When a command recreates `api` or `worker`, preserve `GIT_SHA` from `.last_successful_deployed_sha`; otherwise `/api/version` reports `unknown` even though the image is correct.
 
 ### Database Connection Issues
 
@@ -466,7 +508,7 @@ Total cap per service: ~100 MB rolling. Applies to `api`, `web`, `worker`, and `
 
 ```bash
 cd /app/sitelayer
-docker compose -f docker-compose.prod.yml up -d --force-recreate
+GIT_SHA=$(cat .last_successful_deployed_sha) docker compose -f docker-compose.prod.yml up -d --force-recreate
 ```
 
 (Docker only re-reads `logging` on container creation, not on simple restart.)
@@ -479,16 +521,15 @@ docker compose -f docker-compose.prod.yml up -d --force-recreate
 - [x] Frontend loading without errors
 - [ ] QBO integration credentials configured
 - [x] Clerk authentication working
-- [ ] DO Spaces credentials configured
-- [x] Local blueprint storage volume configured
+- [x] DO Spaces credentials configured
+- [x] Local blueprint storage volume configured as fallback
 - [x] Backup strategy in place
-- [ ] Monitoring/alerts configured
+- [x] Monitoring/alerts baseline configured; final on-call routing still pending
 - [x] DNS pointing to reserved IP
 
 ## Next Steps
 
-1. Configure your domain DNS to point to the droplet IP
-2. Obtain real credentials for QBO, Clerk, Sentry
-3. Set up automated backups
-4. Configure monitoring and alerts
-5. Create deployment runbooks for common operations
+1. Validate QBO sandbox and production credentials.
+2. Provision the first pilot company and memberships.
+3. Wire Sentry/timer-monitor events to the final on-call destination.
+4. Keep `npm run web:bundle-budget` green before every deploy.

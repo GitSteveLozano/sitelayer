@@ -88,7 +88,7 @@ doctl databases get 9948c96b-b6b6-45ad-adf7-d20e4c206c66
 
 **Detect:** every protected request returns 401 with `clerk verification unavailable` or `invalid signature`. Sign-in flow hangs.
 
-**Behavior:** the API's `verifyClerkJwt` (apps/api/src/auth.ts) rejects requests when Clerk's signing keys can't be fetched/verified. Public paths (`/api/integrations/qbo/callback`, `/health`, `/api/metrics`) keep working. Everything else 401s.
+**Behavior:** the API's `verifyClerkJwt` (apps/api/src/auth.ts) rejects requests when Clerk's signing keys can't be fetched/verified. Public paths such as `/api/integrations/qbo/callback`, `/health`, and `/api/version` keep working. `/api/metrics` stays bearer-gated by `API_METRICS_TOKEN`. Everything else 401s.
 
 **Mitigate:** there is no graceful degradation. Check https://status.clerk.com/. **Do not** flip `AUTH_ALLOW_HEADER_FALLBACK=1` in prod — that disables auth entirely.
 
@@ -162,7 +162,7 @@ Common causes: rate-limited by LE (5 fails/hour) — wait an hour; CF "Full (str
 
 ## 7. Deploy stuck or failed
 
-**Detect:** GitHub Actions workflow run red; or hung past 15-min `timeout-minutes`.
+**Detect:** GitHub Actions workflow run red; or hung near the 45-minute workflow timeout.
 
 **Mitigate:**
 
@@ -183,7 +183,7 @@ doctl compute ssh sitelayer --ssh-command="
     sed -i \"s|^APP_IMAGE=.*|APP_IMAGE=\$PRIOR_IMAGE|\" /app/sitelayer/.env ||
     printf '\\nAPP_IMAGE=%s\\n' \"\$PRIOR_IMAGE\" >> /app/sitelayer/.env) &&
   APP_IMAGE=\$PRIOR_IMAGE docker compose -f docker-compose.prod.yml pull api web worker &&
-  APP_IMAGE=\$PRIOR_IMAGE docker compose -f docker-compose.prod.yml up -d --remove-orphans
+  GIT_SHA=\$PRIOR_SHA APP_IMAGE=\$PRIOR_IMAGE docker compose -f docker-compose.prod.yml up -d --remove-orphans
 "
 curl -fsS https://sitelayer.sandolab.xyz/health
 ```

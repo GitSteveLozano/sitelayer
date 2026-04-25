@@ -45,7 +45,8 @@ DATABASE_URL=postgres://doadmin:...@.../sitelayer_prod_restore \
   /app/sitelayer/scripts/restore-postgres.sh /app/backups/postgres/<dump>
 
 # 5. Promote restore: swap APP_TIER+DATABASE_URL in /app/sitelayer/.env, then
-docker compose -f /app/sitelayer/docker-compose.prod.yml up -d --force-recreate api worker
+cd /app/sitelayer
+GIT_SHA=$(cat .last_successful_deployed_sha) docker compose -f docker-compose.prod.yml up -d --force-recreate api worker
 ```
 
 ## Procedure 1 — Restore droplet from snapshot
@@ -103,7 +104,7 @@ Wait until `doctl databases get <new-id>` shows status `online`, then point prod
 ```bash
 doctl databases connection <NEW_DB_ID>
 ssh sitelayer 'sudo -u sitelayer sed -i "s|^DATABASE_URL=.*|DATABASE_URL=<NEW_URI>|" /app/sitelayer/.env'
-ssh sitelayer 'cd /app/sitelayer && docker compose up -d --force-recreate api worker'
+ssh sitelayer 'cd /app/sitelayer && GIT_SHA=$(cat .last_successful_deployed_sha) docker compose -f docker-compose.prod.yml up -d --force-recreate api worker'
 ```
 
 After validation, retire the old cluster and rename the new one to `sitelayer-db`.
@@ -138,8 +139,12 @@ psql "$RESTORE_URL" -c "SELECT count(*) FROM projects;"
 ## Verification after any restore
 
 ```bash
-# App responds
-curl -fsS https://sitelayer.sandolab.xyz/api/bootstrap
+# Public endpoints respond
+curl -fsS https://sitelayer.sandolab.xyz/health
+curl -fsS https://sitelayer.sandolab.xyz/api/version
+
+# Authenticated app APIs still require a Clerk JWT or internal bearer token
+curl -fsS -H "Authorization: Bearer $TOKEN" https://sitelayer.sandolab.xyz/api/bootstrap
 
 # Worker is processing
 ssh sitelayer 'docker compose -f /app/sitelayer/docker-compose.prod.yml logs --tail=30 worker'

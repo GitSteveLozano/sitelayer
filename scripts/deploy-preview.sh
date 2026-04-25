@@ -59,7 +59,7 @@ fi
 # is OOM). Before provisioning a new stack, tear down any `sitelayer-pr-*`
 # project whose corresponding PR is no longer open. Best-effort: never block
 # the deploy on reap failures — the daily preview-gc.yml workflow is the
-# durable backstop running from a hosted runner.
+# durable backstop running on the self-hosted preview runner.
 if [ "${PREVIEW_DEPLOY_SKIP_REAP:-0}" != "1" ]; then
   open_prs_csv="${PREVIEW_OPEN_PRS:-}"
   if [ -z "$open_prs_csv" ] && command -v gh >/dev/null 2>&1; then

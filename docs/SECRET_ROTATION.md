@@ -17,49 +17,54 @@ For incident-time triage (revoke first, rotate second) see `docs/INCIDENT_RESPON
 
 ## Inventory at a glance
 
-| Secret                         | Stored                                                              | Mint via                                                   | If leaked → see |
-| ------------------------------ | ------------------------------------------------------------------- | ---------------------------------------------------------- | --------------- |
-| `DEPLOY_SSH_KEY`               | GitHub repo secret + `/home/sitelayer/.ssh/authorized_keys` on prod | `ssh-keygen -t ed25519` on trusted local                   | § 6             |
-| `PREVIEW_SSH_KEY`              | GitHub repo secret + authorized_keys on preview droplet             | `ssh-keygen -t ed25519` on trusted local                   | § 7             |
-| `DEPLOY_HOST` / `PREVIEW_HOST` | GitHub repo secret (hostname-only, not really a secret)             | n/a — DO reserved IP / hostname                            | § 8             |
-| `CLERK_SECRET_KEY`             | `/app/sitelayer/.env` (prod) + `~/.env.local` (dev)                 | Clerk dashboard → Configure → API Keys                     | § 1             |
-| `CLERK_JWT_KEY`                | `/app/sitelayer/.env`                                               | Clerk dashboard → API Keys → JWT public key (rotates rare) | § 1             |
-| `VITE_CLERK_PUBLISHABLE_KEY`   | `/app/sitelayer/.env` baked into web build                          | Clerk dashboard → Frontend API                             | § 1             |
-| `QBO_CLIENT_ID`                | `/app/sitelayer/.env`                                               | Intuit dev portal → app → Keys & OAuth                     | § 3             |
-| `QBO_CLIENT_SECRET`            | `/app/sitelayer/.env` (currently empty in prod)                     | Intuit dev portal → Regenerate Client Secret               | § 3             |
-| `QBO_STATE_SECRET`             | `/app/sitelayer/.env`                                               | `openssl rand -base64 32`                                  | § 3             |
-| `SENTRY_AUTH_TOKEN`            | `~/.env.local` + GitHub Actions secret                              | `sandolabs.sentry.io/settings/auth-tokens/`                | § 2             |
-| `SENTRY_DSN`                   | `/app/sitelayer/.env`                                               | Sentry project → Client Keys (Public DSN)                  | § 2             |
-| `VITE_SENTRY_DSN`              | `/app/sitelayer/.env` baked into web build                          | Same DSN as `SENTRY_DSN` (web project)                     | § 2             |
-| `DATABASE_URL`                 | `/app/sitelayer/.env`                                               | DO managed Postgres → Connection Details → Reset password  | § 9             |
-| `DEBUG_TRACE_TOKEN`            | `/app/sitelayer/.env`                                               | `openssl rand -base64 32`                                  | § 5             |
-| `API_METRICS_TOKEN`            | `/app/sitelayer/.env` + Grafana scrape config                       | `openssl rand -base64 32`                                  | § 5             |
-| `DO_SPACES_KEY` / `_SECRET`    | `/app/sitelayer/.env` (planned, blank in prod today)                | DO Console → API → Spaces Keys                             | § 4             |
-| `DO_SPACES_BUCKET`             | `/app/sitelayer/.env` (hostname-only, not a secret)                 | DO Console → Spaces                                        | § 4             |
+| Secret                       | Stored                                                              | Mint via                                                   | If leaked → see |
+| ---------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------- | --------------- |
+| `DEPLOY_SSH_KEY`             | GitHub repo secret + `/home/sitelayer/.ssh/authorized_keys` on prod | `ssh-keygen -t ed25519` on trusted local                   | § 6             |
+| `PREVIEW_SSH_KEY`            | Legacy/manual only; current preview workflow does not consume it    | `ssh-keygen -t ed25519` on trusted local                   | § 7             |
+| `DEPLOY_HOST`                | GitHub repo secret (hostname/IP, not really a secret)               | n/a — private VPC IP / DO reserved IP / hostname           | § 8             |
+| `DIGITALOCEAN_ACCESS_TOKEN`  | GitHub repo secret                                                  | DO Console → API → Tokens                                  | § 10            |
+| `CLERK_SECRET_KEY`           | Reserved; not used by current API auth path                         | Clerk dashboard → Configure → API Keys                     | § 1             |
+| `CLERK_JWT_KEY`              | `/app/sitelayer/.env`                                               | Clerk dashboard → API Keys → JWT public key (rotates rare) | § 1             |
+| `CLERK_WEBHOOK_SECRET`       | `/app/sitelayer/.env`                                               | Clerk dashboard → Webhooks                                 | § 1             |
+| `VITE_CLERK_PUBLISHABLE_KEY` | GitHub Actions build env/default baked into web image               | Clerk dashboard → Frontend API                             | § 1             |
+| `QBO_CLIENT_ID`              | `/app/sitelayer/.env`                                               | Intuit dev portal → app → Keys & OAuth                     | § 3             |
+| `QBO_CLIENT_SECRET`          | `/app/sitelayer/.env` (currently empty in prod)                     | Intuit dev portal → Regenerate Client Secret               | § 3             |
+| `QBO_STATE_SECRET`           | `/app/sitelayer/.env`                                               | `openssl rand -base64 32`                                  | § 3             |
+| `SENTRY_AUTH_TOKEN`          | `~/.env.local` + GitHub Actions secret                              | `sandolabs.sentry.io/settings/auth-tokens/`                | § 2             |
+| `SENTRY_DSN`                 | `/app/sitelayer/.env`                                               | Sentry project → Client Keys (Public DSN)                  | § 2             |
+| `SENTRY_WORKER_DSN`          | `/app/sitelayer/.env` (optional; falls back to `SENTRY_DSN`)        | Sentry project → Client Keys (Public DSN)                  | § 2             |
+| `VITE_SENTRY_DSN`            | GitHub Actions build env/secret baked into web image                | Same DSN as `SENTRY_DSN` (web project)                     | § 2             |
+| `DATABASE_URL`               | `/app/sitelayer/.env`                                               | DO managed Postgres → Connection Details → Reset password  | § 9             |
+| `DEBUG_TRACE_TOKEN`          | `/app/sitelayer/.env`                                               | `openssl rand -base64 32`                                  | § 5             |
+| `API_METRICS_TOKEN`          | `/app/sitelayer/.env` + Grafana scrape config                       | `openssl rand -base64 32`                                  | § 5             |
+| `DO_SPACES_KEY` / `_SECRET`  | `/app/sitelayer/.env`                                               | DO Console → API → Spaces Keys                             | § 4             |
+| `DO_SPACES_BUCKET`           | `/app/sitelayer/.env` (hostname-only, not a secret)                 | DO Console → Spaces                                        | § 4             |
 
 ---
 
-## 1. Clerk — `CLERK_SECRET_KEY` / `CLERK_JWT_KEY`
+## 1. Clerk — `CLERK_JWT_KEY` / `CLERK_WEBHOOK_SECRET`
 
-**Grants:** server-side verification of Clerk JWTs, user lookups via Clerk Backend API. Loss = full auth bypass risk.
-**Stored in:** `/app/sitelayer/.env` (prod `sk_live_*`); `~/.env.local` (dev `sk_test_*`); never in repo.
+**Grants:** `CLERK_JWT_KEY` verifies browser session JWTs in `apps/api/src/auth.ts`; `CLERK_WEBHOOK_SECRET` verifies Svix-signed Clerk webhooks. Loss = auth verification or webhook trust risk.
+**Stored in:** `/app/sitelayer/.env` for prod; never in repo.
 
 ```bash
-# 1. In Clerk dashboard → Configure → API Keys → "Create new secret key"
-#    Choose "Backend (server-side)". Copy sk_live_... (prod) or sk_test_... (dev).
+# 1. In Clerk dashboard → API Keys → JWT public key, copy the new PEM if Clerk
+#    forces a key rollover. For webhook rotation, create a new endpoint secret
+#    under Clerk dashboard → Webhooks.
 
 # 2. Patch prod env in place (atomic write).
 doctl compute ssh sitelayer --ssh-command='
   sudo -u sitelayer bash -c "
     cp /app/sitelayer/.env /app/sitelayer/.env.bak.$(date -u +%Y%m%dT%H%M%SZ) &&
-    sed -i \"s|^CLERK_SECRET_KEY=.*|CLERK_SECRET_KEY=sk_live_NEW_VALUE|\" /app/sitelayer/.env
+    sed -i \"s|^CLERK_JWT_KEY=.*|CLERK_JWT_KEY=NEW_PEM_VALUE|\" /app/sitelayer/.env
   "
 '
 
-# 3. Recreate api + worker (web does not read CLERK_SECRET_KEY).
+# 3. Recreate api + worker (web does not read CLERK_JWT_KEY).
 doctl compute ssh sitelayer --ssh-command='
   cd /app/sitelayer &&
-  docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api worker
+  GIT_SHA=$(cat .last_successful_deployed_sha) \
+    docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api worker
 '
 
 # 4. Verify.
@@ -67,10 +72,10 @@ curl -fsS https://sitelayer.sandolab.xyz/health
 # Then with a fresh signed-in user, exercise an authed endpoint:
 curl -fsS -H "Authorization: Bearer $FRESH_CLERK_JWT" https://sitelayer.sandolab.xyz/api/companies
 
-# 5. In Clerk dashboard → revoke old sk_live_* key.
+# 5. Revoke the old Clerk key/secret in the dashboard after verification.
 ```
 
-**JWT verification key (`CLERK_JWT_KEY`)** rotates only when Clerk forces a rollover. Pull the new PEM from Clerk → API Keys → "JWT public key", same `sed -i` pattern, restart api.
+`CLERK_SECRET_KEY` is currently reserved for future Clerk Backend API calls; the current API auth path does not use it. Do not rotate it as an auth fix unless Backend API usage is added.
 
 **Frontend publishable key (`VITE_CLERK_PUBLISHABLE_KEY`)** is baked into the web bundle at image build time. It is _not_ a secret in the strict sense — it is shipped to every browser — but rotating it requires a new immutable image and deploy. Update the GitHub Actions variable/secret used for the build, then push or manually dispatch the deploy workflow.
 
@@ -98,7 +103,7 @@ gh run watch -R GitSteveLozano/sitelayer
 # 5. In Sentry dashboard → revoke old token.
 ```
 
-**`SENTRY_DSN` / `VITE_SENTRY_DSN`** are public DSNs for the api/worker and web projects. They are not auth-bearing on their own (rate-limited per-DSN, project-scoped). Rotate only if you suspect they're being abused for nuisance event submission: Sentry project → Settings → Client Keys → "+ Generate New Key", then patch runtime `.env` for `SENTRY_DSN` and update the build variable/secret for `VITE_SENTRY_DSN`. `VITE_SENTRY_DSN` is build-time-baked, so it requires a new immutable image and deploy.
+**`SENTRY_DSN` / `SENTRY_WORKER_DSN` / `VITE_SENTRY_DSN`** are public DSNs for the api, worker, and web projects. They are not auth-bearing on their own (rate-limited per-DSN, project-scoped). `SENTRY_WORKER_DSN` is optional; when blank, the worker falls back to `SENTRY_DSN`. Rotate DSNs only if you suspect nuisance event submission: Sentry project → Settings → Client Keys → "+ Generate New Key", then patch runtime `.env` for server DSNs and update the build variable/secret for `VITE_SENTRY_DSN`. `VITE_SENTRY_DSN` is build-time-baked, so it requires a new immutable image and deploy.
 
 ---
 
@@ -119,7 +124,8 @@ sed -i "s|^QBO_CLIENT_SECRET=.*|QBO_CLIENT_SECRET=NEW_VALUE|" ~/.env.local
 # 3. Patch prod, restart api.
 doctl compute ssh sitelayer --ssh-command='
   sudo -u sitelayer sed -i "s|^QBO_CLIENT_SECRET=.*|QBO_CLIENT_SECRET=NEW_VALUE|" /app/sitelayer/.env &&
-  cd /app/sitelayer && docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api worker
+  cd /app/sitelayer && GIT_SHA=$(cat .last_successful_deployed_sha) \
+    docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api worker
 '
 
 # 4. Notify each connected customer; have them reconnect via Settings → Integrations.
@@ -147,7 +153,8 @@ doctl compute ssh sitelayer --ssh-command='
     -e "s|^DO_SPACES_KEY=.*|DO_SPACES_KEY=NEW_KEY|" \
     -e "s|^DO_SPACES_SECRET=.*|DO_SPACES_SECRET=NEW_SECRET|" \
     /app/sitelayer/.env &&
-  cd /app/sitelayer && docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api worker
+  cd /app/sitelayer && GIT_SHA=$(cat .last_successful_deployed_sha) \
+    docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api worker
 '
 
 # 3. Verify upload path (will hit storage adapter at apps/api/src/storage.ts).
@@ -174,7 +181,8 @@ echo "$NEW_TOKEN"
 # 2. Patch prod.
 doctl compute ssh sitelayer --ssh-command="
   sudo -u sitelayer sed -i 's|^API_METRICS_TOKEN=.*|API_METRICS_TOKEN=$NEW_TOKEN|' /app/sitelayer/.env &&
-  cd /app/sitelayer && docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api
+  cd /app/sitelayer && GIT_SHA=\$(cat .last_successful_deployed_sha) \
+    docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api
 "
 
 # 3. Update Grafana scrape config (Authorization: Bearer ...) and reload.
@@ -188,7 +196,7 @@ Same pattern for `DEBUG_TRACE_TOKEN`. Both are random-bearers — no external sy
 
 ## 6. `DEPLOY_SSH_KEY` — GitHub Actions deploy key
 
-**Grants:** SSH as `sitelayer@165.245.230.3`. Because the user is in the `docker` group, this is **production-root-equivalent**. Treat with extreme care.
+**Grants:** SSH as `sitelayer` on the production droplet. The production deploy normally reaches it from the preview runner over the private VPC address; public or reserved IP access is only for operator break-glass paths. Because the user is in the `docker` group, this is **production-root-equivalent**. Treat with extreme care.
 **Stored in:** GitHub Actions secret `DEPLOY_SSH_KEY` only. Public half on droplet at `/home/sitelayer/.ssh/authorized_keys`.
 
 ```bash
@@ -220,11 +228,11 @@ If the key ever leaves the GH secrets store, treat it as **breach** — immediat
 
 ---
 
-## 7. `PREVIEW_SSH_KEY` — preview droplet deploy key
+## 7. `PREVIEW_SSH_KEY` — legacy/manual preview key
+
+The current `.github/workflows/deploy-preview.yml` runs on the `sitelayer-preview` self-hosted runner and does not consume `PREVIEW_SSH_KEY`. Keep this section only for a manually managed preview SSH key if one exists.
 
 **Grants:** SSH as `sitelayer@159.203.53.218` (preview droplet `566806040`). Same `docker`-group blast radius as `DEPLOY_SSH_KEY`, scoped to preview only. Public half on droplet at `/home/sitelayer/.ssh/authorized_keys`.
-
-**Stored in:** GitHub Actions secret `PREVIEW_SSH_KEY` only.
 
 ```bash
 # 1. Generate new keypair on a trusted local machine.
@@ -235,19 +243,12 @@ doctl compute ssh sitelayer-preview --ssh-command="
   sudo -u sitelayer bash -c 'cat >> /home/sitelayer/.ssh/authorized_keys' <<< \"$(cat /tmp/sitelayer_preview_*.pub)\"
 "
 
-# 3. Replace GH secret.
-gh secret set PREVIEW_SSH_KEY -R GitSteveLozano/sitelayer < /tmp/sitelayer_preview_$(date -u +%Y%m%d)
-
-# 4. Trigger a preview deploy and confirm.
-gh workflow run deploy-preview.yml -R GitSteveLozano/sitelayer
-gh run watch -R GitSteveLozano/sitelayer
-
-# 5. Prune old pubkey.
+# 3. Prune old pubkey after verifying manual SSH still works with the new key.
 doctl compute ssh sitelayer-preview --ssh-command="
   sudo -u sitelayer sed -i '/<old-key-fingerprint-comment>/d' /home/sitelayer/.ssh/authorized_keys
 "
 
-# 6. Shred local copies.
+# 4. Shred local copies.
 shred -u /tmp/sitelayer_preview_*
 ```
 
@@ -255,17 +256,16 @@ The preview droplet also hosts the self-hosted GH Actions runner that runs the p
 
 ---
 
-## 8. `DEPLOY_HOST` / `PREVIEW_HOST` — hostnames (not really secrets)
+## 8. `DEPLOY_HOST` — hostname/IP (not really a secret)
 
 **Grants:** nothing on their own — these are just IPs/hostnames the deploy workflows read. Listed here for completeness so the rotation checklist accounts for every `gh secret` row.
 
-**Stored in:** GitHub Actions secrets `DEPLOY_HOST` (reserved IP `159.203.51.158` or domain `sitelayer.sandolab.xyz`) and `PREVIEW_HOST` (`159.203.53.218` or `sitelayer-preview.sandolab.xyz`).
+**Stored in:** GitHub Actions secret `DEPLOY_HOST` (prefer the prod droplet private VPC address from the preview runner; public/reserved IP or `sitelayer.sandolab.xyz` only if firewall policy allows it). Preview deploy hosts are derived from slug + `preview.sitelayer.sandolab.xyz`; there is no current `PREVIEW_HOST` GitHub secret.
 
 **When to update:** only if the droplet IP changes (resize, reprovision, reserved-IP swap). Then:
 
 ```bash
-gh secret set DEPLOY_HOST  -R GitSteveLozano/sitelayer --body "<new>"
-gh secret set PREVIEW_HOST -R GitSteveLozano/sitelayer --body "<new>"
+gh secret set DEPLOY_HOST -R GitSteveLozano/sitelayer --body "<new>"
 ```
 
 If exposed → no action required. They are public-DNS-discoverable already.
@@ -277,12 +277,12 @@ If exposed → no action required. They are public-DNS-discoverable already.
 **Grants:** read/write on the production database. Total compromise of customer data.
 **Stored in:** `/app/sitelayer/.env` (prod), `/app/previews/.env.shared` (preview, separate `sitelayer_preview` db), `~/.env.local` (dev, points at `sitelayer_dev`).
 
-The string embeds the password for the `sitelayer` Postgres user. Rotation = reset that user's password in DO and patch every `.env`.
+The string embeds the password for the per-tier app user, for example `sitelayer_prod_app`, `sitelayer_preview_app`, or `sitelayer_dev_app`. Rotation = reset the affected tier's app-user password in DO and patch the matching `.env`.
 
 ```bash
 # 1. DO Console → Databases → sitelayer-db → Users & Databases → reset password
-#    for the `sitelayer` user. Or:
-doctl databases user reset 9948c96b-b6b6-45ad-adf7-d20e4c206c66 sitelayer
+#    for the affected app user. Or:
+doctl databases user reset 9948c96b-b6b6-45ad-adf7-d20e4c206c66 sitelayer_prod_app
 
 # 2. Pull the new connection string.
 doctl databases connection 9948c96b-b6b6-45ad-adf7-d20e4c206c66 --format URI
@@ -290,7 +290,8 @@ doctl databases connection 9948c96b-b6b6-45ad-adf7-d20e4c206c66 --format URI
 # 3. Patch prod env.
 doctl compute ssh sitelayer --ssh-command='
   sudo -u sitelayer sed -i "s|^DATABASE_URL=.*|DATABASE_URL=NEW_URL|" /app/sitelayer/.env &&
-  cd /app/sitelayer && docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api worker
+  cd /app/sitelayer && GIT_SHA=$(cat .last_successful_deployed_sha) \
+    docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api worker
 '
 
 # 4. Patch preview env (separate db).
@@ -309,6 +310,29 @@ If leaked, follow `docs/INCIDENT_RESPONSE.md` § 8 first (revoke), then this sec
 
 ---
 
+## 10. `DIGITALOCEAN_ACCESS_TOKEN` — registry/deploy automation token
+
+**Grants:** DigitalOcean API access for the production deploy workflow to authenticate `doctl`, mint registry Docker credentials, and push/pull immutable images in the `sitelayer` registry.
+**Stored in:** GitHub Actions secret `DIGITALOCEAN_ACCESS_TOKEN`.
+
+```bash
+# 1. DO Console → API → Tokens → Generate New Token.
+#    Scope it to the minimum project/registry permissions DigitalOcean supports
+#    for registry push/pull and deploy automation.
+
+# 2. Replace GitHub secret.
+gh secret set DIGITALOCEAN_ACCESS_TOKEN -R GitSteveLozano/sitelayer --body "dop_v1_NEW"
+
+# 3. Trigger and verify deploy.
+gh workflow run deploy-droplet.yml -R GitSteveLozano/sitelayer
+gh run watch -R GitSteveLozano/sitelayer
+curl -fsS https://sitelayer.sandolab.xyz/api/version
+
+# 4. Revoke the old token in the DO Console.
+```
+
+---
+
 ## Calendar reminder template
 
 Paste into Google Calendar, recurring **first Monday of Jan/Apr/Jul/Oct, 09:00 ET**:
@@ -317,7 +341,7 @@ Paste into Google Calendar, recurring **first Monday of Jan/Apr/Jul/Oct, 09:00 E
 Title: Sitelayer secret rotation
 Duration: 60 min
 Body:
-  Run docs/SECRET_ROTATION.md sections 1-6 in order.
+  Run docs/SECRET_ROTATION.md sections 1-10 in order.
   Pre-flight: gh secret list -R GitSteveLozano/sitelayer
   Post-flight: curl -fsS https://sitelayer.sandolab.xyz/health
   Log result in mesh: mcp__mesh__add_planning_note project=sitelayer

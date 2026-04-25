@@ -1,6 +1,6 @@
 # Sitelayer Backup Strategy
 
-**Status:** Production logical backup, Postgres off-host copy, Spaces-backed blueprint storage with versioning, blueprint-volume fallback copy, restore drill, and timer monitor installed; uses Dockerized Postgres 18 tooling
+**Status:** Production logical backup, Postgres off-host copy, Spaces-backed blueprint storage with versioning, blueprint-volume fallback copy, restore drill, and timer monitor installed; backup/drill timers use Dockerized Postgres 18 tooling
 **Last updated:** 2026-04-25
 
 ## Current Managed Database Backups
@@ -33,6 +33,8 @@ Restore a backup to a target database:
 ```bash
 DATABASE_URL="$RESTORE_TARGET_DATABASE_URL" scripts/restore-postgres.sh /app/backups/postgres/sitelayer-YYYYMMDDTHHMMSSZ.sql.gz
 ```
+
+`scripts/restore-postgres.sh` requires host `psql` and `gzip` for compressed dumps. The backup and restore-drill timers use Dockerized `postgres:18-alpine` tooling so they do not depend on Ubuntu's older default Postgres client.
 
 Install daily systemd backups on the production droplet:
 

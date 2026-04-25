@@ -6,10 +6,10 @@ These three settings on `GitSteveLozano/sitelayer` require the **repo owner** (S
 
 Settings → Branches → Add rule (`main`)
 
-- Require status checks: `validate` (Quality workflow)
+- Require status checks: `Quality / validate`
 - Block force pushes
 - Block branch deletion
-- Leave "Require pull request before merging" off (single-maintainer flow)
+- Optional stricter mode: require one approving pull-request review. `scripts/configure-github-protection.sh` enables this because it is the source-controlled default.
 
 ## 2. Repo description + homepage
 

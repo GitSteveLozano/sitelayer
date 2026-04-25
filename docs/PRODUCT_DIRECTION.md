@@ -13,7 +13,7 @@ Build the local pilot workflow first:
 7. margin and bonus summary
 8. QBO mapping and simulated sync
 
-This keeps the app useful before DigitalOcean, Clerk, QBO, Spaces, and observability services are fully provisioned.
+This keeps the app useful while production infrastructure is live and the remaining pilot risk is narrowed to large-blueprint handling plus live QBO validation.
 
 ## Product Boundary
 
@@ -33,15 +33,14 @@ The next milestone is native takeoff plus field workflow because that is the cle
 
 The broader "glue product" direction remains valid after the pilot loop works. Integration-only workflows should not displace the core local pilot until blueprint-to-margin is usable end to end.
 
-## Service-Blocked Work
+## External-Validation Work
 
-These remain intentionally blocked until services are provisioned:
+These are no longer blocked by missing infrastructure, but they still require real service exercises before pilot use:
 
-- Clerk JWT verification and organization mapping
-- DigitalOcean Spaces direct upload and signed URLs
 - live QBO OAuth testing and production token refresh
-- Sentry/UptimeRobot production observability
-- Droplet/App Platform production deployment
+- large blueprint upload/download behavior against DigitalOcean Spaces
+- Sentry/UptimeRobot signal review during a realistic pilot smoke
+- final Clerk organization/member mapping for the first customer
 
 ## Local-Only Work To Keep Moving
 

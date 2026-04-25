@@ -4,7 +4,7 @@ name: Preview Stack GC
 # on the preview droplet. Runs on the self-hosted preview runner — the
 # preview droplet's port 22 is firewalled to the private 10.118.0.0/16
 # network only, so a hosted ubuntu-latest runner can't reach it. The
-# 2GB swap added to the droplet (see DEPLOYMENT.md) prevents the OOM
+# 2GB swap added to the droplet (see docs/PREVIEW_DEPLOYMENTS.md) prevents the OOM
 # condition that originally motivated routing this off-runner.
 on:
   schedule:

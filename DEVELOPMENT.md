@@ -33,10 +33,17 @@ docker compose up --build
 
 ## App Routes
 
+- `/confirm` - daily schedule confirmation and crew review
+- `/clock` - crew clock-in/out and timeline
+- `/schedule` - weekly crew schedule grid
 - `/projects` - auth shell, company switcher, customers, workers, pricing, bonus rules
 - `/takeoffs` and `/takeoffs/:projectId` - project selection, blueprint documents, takeoff board, labor, schedules, material bills
 - `/estimates` - selected project summary, estimate lines, analytics
 - `/integrations` - QBO connection, queue health, mappings, offline queue
+- `/onboarding` - company creation wizard
+- `/rentals` - admin/office rental ledger
+- `/bonus-sim` - admin bonus simulation
+- `/audit` - admin/owner audit trail
 - `/dev/*` - non-production scratch space for generated UI
 
 ## Ribbon Colors
@@ -63,8 +70,11 @@ Each preview uses the shared `sitelayer_preview` database with an isolated schem
 ```bash
 npm run typecheck --workspace @sitelayer/web
 npm run build --workspace @sitelayer/web
+npm run web:bundle-budget
 VITE_FIXTURES=1 npm run build --workspace @sitelayer/web
 npm run e2e
 ```
+
+`npm run ci:quality` is the full local mirror of the Quality workflow: shell syntax, lint, format, typecheck, tests, build, web bundle budget, fixture build, and Playwright e2e.
 
 For architecture and deployment rules, use `CLAUDE.md`. For release gate details, use `docs/RELEASE_GATES.md`. For first-30-minutes setup, use this file.
