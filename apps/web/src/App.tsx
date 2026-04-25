@@ -43,6 +43,7 @@ import { AuditView } from './views/audit.js'
 import { ConfirmView } from './views/confirm.js'
 import { EstimatesView } from './views/estimates.js'
 import { IntegrationsView } from './views/integrations.js'
+import { OnboardingView } from './views/onboarding.js'
 import { ProjectsView } from './views/projects.js'
 import { RentalsView } from './views/rentals.js'
 import { TakeoffsView } from './views/takeoffs.js'
@@ -557,6 +558,19 @@ function AppShell() {
               refresh={refresh}
               refreshSummary={refreshSummary}
               runAction={runAction}
+            />
+          }
+        />
+        <Route
+          path="/onboarding"
+          element={
+            <OnboardingView
+              bootstrap={bootstrap}
+              activeCompanySlug={companySlug}
+              setCompanySlug={setCompanySlug}
+              onCompleted={() => {
+                void refresh()
+              }}
             />
           }
         />
