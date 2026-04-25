@@ -368,6 +368,8 @@ docker compose -f docker-compose.prod.yml logs worker
 
 Managed DigitalOcean Postgres includes automatic provider backups with short retention. Keep those as the first recovery path, but add logical backups before pilot data so an accidental cluster deletion, bad migration, or application-level data corruption has an independent restore point.
 
+Full layered strategy, retention, off-host copy details, and the restore drill runbook live in [BACKUP_STRATEGY.md](./BACKUP_STRATEGY.md). The summary below is just the install path.
+
 ### Manual Database Backup
 
 ```bash
@@ -378,22 +380,63 @@ BACKUP_DIR=/app/backups/postgres DATABASE_URL="$DATABASE_URL" scripts/backup-pos
 DATABASE_URL="$RESTORE_TARGET_DATABASE_URL" scripts/restore-postgres.sh /app/backups/postgres/sitelayer-YYYYMMDDTHHMMSSZ.sql.gz
 ```
 
-### Automated Logical Backups
+### Automated Logical Backups + Off-host Copy + Restore Drill
 
-Install a daily local logical backup timer on the production droplet after `/app/sitelayer/.env` exists:
+The installer wires up three timers on the production droplet:
+
+- `sitelayer-postgres-backup.timer` — daily logical pg_dump at 03:17 UTC (30-day retention).
+- `sitelayer-postgres-offsite.timer` — rsyncs the latest dump to the preview droplet over the 10.118.0.0/16 private network at 03:32 UTC. Verifies via `sha256sum`, atomic rename, mirrors retention.
+- `sitelayer-restore-drill.timer` — weekly (Sunday 04:00 UTC), log-only at `/var/log/sitelayer/restore-drill.log`. Restores the latest dump into a throwaway `postgres:18-alpine` container and runs sanity queries. **Does not page** — pager hookup is a separate concern.
+
+Install (run on prod droplet, idempotent):
 
 ```bash
-sudo APP_DIR=/app/sitelayer ENV_FILE=/app/sitelayer/.env BACKUP_DIR=/app/backups/postgres RETENTION_DAYS=30 \
+sudo APP_DIR=/app/sitelayer ENV_FILE=/app/sitelayer/.env \
+  BACKUP_DIR=/app/backups/postgres RETENTION_DAYS=30 \
+  OFFSITE_HOST=sitelayer@10.118.0.2 \
+  OFFSITE_DIR=/app/offsite-backups/postgres-from-prod \
   bash /app/sitelayer/scripts/install-postgres-backup-systemd.sh
 ```
 
 Useful checks:
 
 ```bash
-systemctl list-timers sitelayer-postgres-backup.timer
-systemctl status sitelayer-postgres-backup.service
+systemctl list-timers \
+  sitelayer-postgres-backup.timer \
+  sitelayer-postgres-offsite.timer \
+  sitelayer-restore-drill.timer
+systemctl status sitelayer-postgres-backup.service sitelayer-postgres-offsite.service
 ls -lh /app/backups/postgres
+ssh sitelayer@10.118.0.2 ls -lh /app/offsite-backups/postgres-from-prod
+tail -50 /var/log/sitelayer/restore-drill.log
 ```
+
+Monthly manual drill (regardless of weekly timer):
+
+```bash
+bash /app/sitelayer/scripts/restore-drill.sh
+```
+
+### Container Log Rotation
+
+`docker-compose.prod.yml` configures a per-service `logging` block:
+
+```yaml
+logging:
+  driver: json-file
+  options:
+    max-size: '20m'
+    max-file: '5'
+```
+
+Total cap per service: ~100 MB rolling. Applies to `api`, `web`, `worker`, and `caddy`. Without this, Docker's default `json-file` driver keeps a single unbounded log file under `/var/lib/docker/containers/*/*-json.log`, which on a long-running prod droplet eventually fills `/dev/vda1` (78G). After deploying this change, restart the stack so existing containers pick up the new logging config:
+
+```bash
+cd /app/sitelayer
+docker compose -f docker-compose.prod.yml up -d --force-recreate
+```
+
+(Docker only re-reads `logging` on container creation, not on simple restart.)
 
 ## Post-Deployment Checklist
 
