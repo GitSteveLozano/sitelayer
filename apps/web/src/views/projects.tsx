@@ -3,7 +3,6 @@ import { useUser } from '@clerk/clerk-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { apiDelete, apiPatch, apiPost, createCompany, FIXTURES_ENABLED, inviteMembership } from '../api.js'
-import { Button } from '../components/ui/button.js'
 
 // Component variant so callers in fixtures mode never trigger Clerk's hook
 // (which throws when ClerkProvider isn't mounted).
@@ -47,6 +46,7 @@ import type {
 } from '../api.js'
 import { BonusRuleEditor, CustomerEditor, PricingProfileEditor, WorkerEditor } from '../components/operations.js'
 import { FormRow } from '../components/forms.js'
+import { Button } from '../components/ui/button.js'
 import { Checkbox } from '../components/ui/checkbox.js'
 import { Input } from '../components/ui/input.js'
 import { SearchInput, usePersistedSearch } from '../components/ui/search-input.js'
@@ -434,6 +434,9 @@ export function ProjectsView({
           busy={busy === 'project'}
           onSubmit={(form) =>
             runAction('project', async () => {
+              const siteLatRaw = String(form.get('site_lat') ?? '').trim()
+              const siteLngRaw = String(form.get('site_lng') ?? '').trim()
+              const siteRadiusRaw = String(form.get('site_radius_m') ?? '').trim()
               await apiPost(
                 '/api/projects',
                 {
@@ -445,6 +448,9 @@ export function ProjectsView({
                   labor_rate: Number(form.get('labor_rate') ?? 38),
                   target_sqft_per_hr: Number(form.get('target_sqft_per_hr') ?? 0) || null,
                   bonus_pool: Number(form.get('bonus_pool') ?? 0),
+                  site_lat: siteLatRaw ? Number(siteLatRaw) : null,
+                  site_lng: siteLngRaw ? Number(siteLngRaw) : null,
+                  site_radius_m: siteRadiusRaw ? Number(siteRadiusRaw) : 100,
                 },
                 companySlug,
               )
@@ -464,7 +470,78 @@ export function ProjectsView({
           <Input name="labor_rate" placeholder="Labor rate" type="number" step="0.01" defaultValue="38" />
           <Input name="target_sqft_per_hr" placeholder="Target sqft/hr" type="number" step="0.01" />
           <Input name="bonus_pool" placeholder="Bonus pool" type="number" step="0.01" />
+          <Input name="site_lat" placeholder="Site latitude (e.g. 49.8951)" type="number" step="0.000001" />
+          <Input name="site_lng" placeholder="Site longitude (e.g. -97.1384)" type="number" step="0.000001" />
+          <Input name="site_radius_m" placeholder="Geofence radius (m)" type="number" step="1" defaultValue="100" />
         </FormRow>
+      </section>
+
+      <section className="panel">
+        <h2>Site Geofences</h2>
+        <p className="muted">
+          Set lat/lng and a radius (metres) per project. Crew clock-ins auto-resolve to the project whose geofence
+          contains their phone position. 100 m covers most residential lots.
+        </p>
+        <ul className="list compact">
+          {projects.map((project) => (
+            <li key={project.id}>
+              <form
+                className="formRow"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  const form = new FormData(event.currentTarget)
+                  const siteLatRaw = String(form.get('site_lat') ?? '').trim()
+                  const siteLngRaw = String(form.get('site_lng') ?? '').trim()
+                  const siteRadiusRaw = String(form.get('site_radius_m') ?? '').trim()
+                  runAction(`project-geofence:${project.id}`, async () => {
+                    await apiPatch(
+                      `/api/projects/${project.id}`,
+                      {
+                        site_lat: siteLatRaw ? Number(siteLatRaw) : null,
+                        site_lng: siteLngRaw ? Number(siteLngRaw) : null,
+                        site_radius_m: siteRadiusRaw ? Number(siteRadiusRaw) : null,
+                        expected_version: project.version,
+                      },
+                      companySlug,
+                    )
+                  })
+                }}
+              >
+                <div className="stacked">
+                  <strong>{project.name}</strong>
+                  <span className="muted compact">
+                    {project.customer_name} · {project.division_code}
+                  </span>
+                </div>
+                <Input
+                  name="site_lat"
+                  placeholder="Lat"
+                  type="number"
+                  step="0.000001"
+                  defaultValue={project.site_lat ?? ''}
+                />
+                <Input
+                  name="site_lng"
+                  placeholder="Lng"
+                  type="number"
+                  step="0.000001"
+                  defaultValue={project.site_lng ?? ''}
+                />
+                <Input
+                  name="site_radius_m"
+                  placeholder="Radius (m)"
+                  type="number"
+                  step="1"
+                  defaultValue={project.site_radius_m ?? 100}
+                />
+                <Button type="submit" disabled={busy === `project-geofence:${project.id}`}>
+                  {busy === `project-geofence:${project.id}` ? 'Saving...' : 'Save geofence'}
+                </Button>
+              </form>
+            </li>
+          ))}
+          {projects.length === 0 ? <li className="muted">No projects yet.</li> : null}
+        </ul>
       </section>
 
       <section className="panel">
