@@ -59,6 +59,8 @@ usermod -aG docker sitelayer
 
 Docker daemon access can build and run privileged containers. Treat the deployment SSH key as production-root-equivalent even though direct root login is not used.
 
+> **SECURITY NOTE (2026-04-24):** Membership in `docker` is functionally root because the Docker socket lets a caller mount any host path into a privileged container. We accept this on the production droplet today because the GitHub Actions deploy workflow (`.github/workflows/deploy-droplet.yml`) SSHes in as `sitelayer` and runs `docker compose ...` directly. Removing `sitelayer` from `docker` would also require either (a) a `/etc/sudoers.d/sitelayer-docker` granting `NOPASSWD: /usr/bin/docker, /usr/bin/docker-compose` and a deploy-script change to prepend `sudo`, or (b) a rootless-Docker reinstall. Tracked separately; do not silently fix during unrelated work. Until then: rotate `DEPLOY_SSH_KEY` if it ever leaves the GitHub secrets store and prefer non-root inside containers (see Dockerfile `USER node`).
+
 ### 4. Configure SSH Access for Deployment User
 
 On your local machine, generate an SSH key for deployments:
