@@ -3,6 +3,8 @@ import { createRoutesFromChildren, matchRoutes, useLocation, useNavigationType }
 import { useEffect } from 'react'
 
 const dsn = import.meta.env.VITE_SENTRY_DSN
+const tier = import.meta.env.VITE_APP_TIER ?? 'local'
+const defaultTraceRate = tier === 'prod' ? 0.1 : 1.0
 
 if (dsn) {
   const apiUrl = import.meta.env.VITE_API_URL
@@ -16,7 +18,7 @@ if (dsn) {
     environment:
       import.meta.env.VITE_SENTRY_ENVIRONMENT ?? import.meta.env.VITE_APP_TIER ?? import.meta.env.MODE ?? 'development',
     release: import.meta.env.VITE_SENTRY_RELEASE,
-    tracesSampleRate: Number(import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE ?? 1.0),
+    tracesSampleRate: Number(import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE ?? defaultTraceRate),
     tracePropagationTargets: propagationTargets,
     integrations: [
       Sentry.reactRouterV7BrowserTracingIntegration({
