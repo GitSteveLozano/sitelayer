@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import http from 'node:http'
+import { Webhook } from 'svix'
 
 const describeIntegration = process.env.RUN_API_INTEGRATION === '1' ? describe : describe.skip
 
@@ -43,6 +44,35 @@ async function apiCall<T>(method: string, path: string, body?: unknown): Promise
     if (body) {
       req.write(JSON.stringify(body))
     }
+    req.end()
+  })
+}
+
+async function rawHttpCall(
+  method: string,
+  path: string,
+  body: string,
+  headers: Record<string, string>,
+): Promise<{ status: number; body: string }> {
+  const options: http.RequestOptions = {
+    hostname: 'localhost',
+    port: 3001,
+    path,
+    method,
+    headers: { 'Content-Type': 'application/json', ...headers },
+  }
+  return new Promise((resolve, reject) => {
+    const req = http.request(options, (res) => {
+      let data = ''
+      res.on('data', (chunk) => {
+        data += chunk
+      })
+      res.on('end', () => {
+        resolve({ status: res.statusCode ?? 0, body: data })
+      })
+    })
+    req.on('error', reject)
+    req.write(body)
     req.end()
   })
 }
@@ -112,5 +142,40 @@ describeIntegration('API Integration Tests', () => {
   it('Unmapped routes return 404', async () => {
     const result = await apiCall<any>('GET', '/api/nonexistent')
     expect(result.status).toBe(404)
+  })
+
+  it('POST /api/webhooks/clerk rejects requests with no signature (public path, but svix-required)', async () => {
+    // No svix headers → 400 if secret configured, 503 if not. Either way, must NOT 401.
+    const result = await rawHttpCall('POST', '/api/webhooks/clerk', '{}', {})
+    expect([400, 503]).toContain(result.status)
+  })
+
+  it('POST /api/webhooks/clerk accepts a valid svix-signed payload when CLERK_WEBHOOK_SECRET is set', async () => {
+    const secret = process.env.CLERK_WEBHOOK_SECRET
+    if (!secret) {
+      // Skip when secret not configured in the integration env.
+      return
+    }
+    const wh = new Webhook(secret)
+    const body = JSON.stringify({ type: 'session.created', data: { id: 'sess_test' } })
+    const id = `msg_${Date.now()}`
+    const ts = new Date()
+    const sig = wh.sign(id, ts, body)
+    const result = await rawHttpCall('POST', '/api/webhooks/clerk', body, {
+      'svix-id': id,
+      'svix-timestamp': Math.floor(ts.getTime() / 1000).toString(),
+      'svix-signature': sig,
+    })
+    expect(result.status).toBe(204)
+  })
+
+  it('POST /api/webhooks/clerk rejects an invalid signature with 401', async () => {
+    if (!process.env.CLERK_WEBHOOK_SECRET) return
+    const result = await rawHttpCall('POST', '/api/webhooks/clerk', '{"type":"user.created"}', {
+      'svix-id': 'msg_x',
+      'svix-timestamp': Math.floor(Date.now() / 1000).toString(),
+      'svix-signature': 'v1,bogus',
+    })
+    expect(result.status).toBe(401)
   })
 })

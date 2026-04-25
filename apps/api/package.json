@@ -22,7 +22,8 @@
     "@sitelayer/logger": "file:../../packages/logger",
     "@sitelayer/queue": "file:../../packages/queue",
     "pg": "^8.13.1",
-    "prom-client": "^15.1.3"
+    "prom-client": "^15.1.3",
+    "svix": "1.92.2"
   },
   "devDependencies": {
     "@types/pg": "^8.11.11",

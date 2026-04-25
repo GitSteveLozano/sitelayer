@@ -34,6 +34,7 @@ import {
 import { recordAudit, isAuditableEntity } from './audit.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
 import { AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
+import { extractSvixHeaders, verifyClerkWebhook } from './clerk-webhook.js'
 import { attachPool, observeAudit, observeRequest, renderMetrics } from './metrics.js'
 
 const logger = createLogger('api')
@@ -172,6 +173,7 @@ const qboBaseUrl =
   process.env.QBO_BASE_URL ??
   (qboEnvironment === 'sandbox' ? 'https://sandbox-quickbooks.api.intuit.com' : 'https://quickbooks.api.intuit.com')
 const qboStateSecret = process.env.QBO_STATE_SECRET ?? qboClientSecret
+const clerkWebhookSecret = process.env.CLERK_WEBHOOK_SECRET?.trim() || null
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)
 
 function withTierOptions(config: PoolConfig): PoolConfig {
@@ -448,6 +450,33 @@ function readBody(req: http.IncomingMessage): Promise<Record<string, any>> {
       } catch {
         reject(new HttpError(400, 'invalid JSON body'))
       }
+    })
+    req.on('error', (error) => {
+      if (!rejected) reject(error)
+    })
+  })
+}
+
+function readRawBody(req: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    let receivedBytes = 0
+    let rejected = false
+    req.on('data', (chunk) => {
+      if (rejected) return
+      const buffer = Buffer.from(chunk)
+      receivedBytes += buffer.length
+      if (receivedBytes > maxJsonBodyBytes) {
+        rejected = true
+        reject(new HttpError(413, `request body exceeds ${maxJsonBodyBytes} bytes`))
+        req.destroy()
+        return
+      }
+      chunks.push(buffer)
+    })
+    req.on('end', () => {
+      if (rejected) return
+      resolve(Buffer.concat(chunks).toString('utf8'))
     })
     req.on('error', (error) => {
       if (!rejected) reject(error)
@@ -1541,7 +1570,46 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            const isPublicPath = url.pathname === '/api/integrations/qbo/callback'
+            // Clerk webhook: verified via svix signature, no Bearer/JWT.
+            // Must run before identity resolution and stay in PUBLIC_PATHS.
+            if (req.method === 'POST' && url.pathname === '/api/webhooks/clerk') {
+              if (!clerkWebhookSecret) {
+                sendJson(res, 503, { error: 'CLERK_WEBHOOK_SECRET not configured' })
+                return
+              }
+              const raw = await readRawBody(req)
+              const result = verifyClerkWebhook(raw, extractSvixHeaders(req.headers), clerkWebhookSecret)
+              if (!result.ok) {
+                logger.warn({ err: result.error }, '[clerk-webhook] verification failed')
+                sendJson(res, result.status, { error: result.error })
+                return
+              }
+              const { type, data } = result.event
+              const subjectId = typeof data.id === 'string' ? data.id : null
+              logger.info({ event: type, subjectId }, '[clerk-webhook] received')
+              switch (type) {
+                case 'user.created':
+                case 'user.updated':
+                  // Mirror table TBD; intentionally a no-op until the schema lands.
+                  break
+                case 'user.deleted':
+                  // Don't cascade-delete memberships; preserve audit trail by leaving
+                  // company_memberships intact. Future: nullify actor on audit_events.
+                  logger.info({ subjectId }, '[clerk-webhook] user.deleted — no-op (audit trail preserved)')
+                  break
+                case 'session.created':
+                  break
+                default:
+                  logger.debug({ event: type }, '[clerk-webhook] ignored event type')
+              }
+              // 204 keeps the webhook fast and signals "received, nothing to send".
+              res.writeHead(204, { 'access-control-allow-origin': getCorsOrigin(req) })
+              res.end()
+              return
+            }
+
+            const PUBLIC_PATHS = new Set(['/api/integrations/qbo/callback', '/api/webhooks/clerk'])
+            const isPublicPath = PUBLIC_PATHS.has(url.pathname)
             let identity: Identity
             try {
               identity = isPublicPath

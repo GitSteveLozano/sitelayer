@@ -1,4 +1,5 @@
 import { LA_TEMPLATE } from '@sitelayer/domain'
+import { useUser } from '@clerk/clerk-react'
 import { apiDelete, apiPatch, apiPost, createCompany, inviteMembership } from '../api.js'
 import type {
   BonusRuleRow,
@@ -21,7 +22,6 @@ type ProjectsViewProps = {
   session: SessionResponse | null
   companies: CompaniesResponse['companies']
   companySlug: string
-  userId: string
   busy: string | null
   error: string | null
   customers: BootstrapResponse['customers']
@@ -31,7 +31,6 @@ type ProjectsViewProps = {
   pricingProfiles: PricingProfileRow[]
   bonusRules: BonusRuleRow[]
   primaryDivision: string
-  setUserId: (userId: string) => void
   setCompanySlug: (companySlug: string) => void
   runAction: RunAction
 }
@@ -41,7 +40,6 @@ export function ProjectsView({
   session,
   companies,
   companySlug,
-  userId,
   busy,
   error,
   customers,
@@ -51,10 +49,12 @@ export function ProjectsView({
   pricingProfiles,
   bonusRules,
   primaryDivision,
-  setUserId,
   setCompanySlug,
   runAction,
 }: ProjectsViewProps) {
+  const { user } = useUser()
+  const clerkUserId = user?.id ?? '—'
+  const clerkEmail = user?.primaryEmailAddress?.emailAddress ?? '—'
   return (
     <>
       <section className="hero">
@@ -92,28 +92,18 @@ export function ProjectsView({
       </section>
 
       <section className="panel">
-        <h2>Clerk Bridge</h2>
-        <p className="muted">
-          The app speaks in Clerk-shaped user ids and company memberships, even while running locally.
-        </p>
-        <FormRow
-          actionLabel="Load user"
-          busy={busy === 'user'}
-          onSubmit={(form) =>
-            runAction(
-              'user',
-              async () => {
-                const nextUserId = String(form.get('user_id') ?? '').trim()
-                if (!nextUserId) throw new Error('user id is required')
-                setUserId(nextUserId)
-              },
-              { skipRefresh: true },
-            )
-          }
-        >
-          <Input name="user_id" defaultValue={userId} placeholder="Clerk user id" />
-          <Input name="display_name" defaultValue={session?.user.id ?? userId} placeholder="Display name" disabled />
-        </FormRow>
+        <h2>Clerk Identity</h2>
+        <p className="muted">Signed in via Clerk; the API receives the Clerk session JWT on every request.</p>
+        <dl className="kv">
+          <div>
+            <dt>Clerk user id</dt>
+            <dd>{clerkUserId}</dd>
+          </div>
+          <div>
+            <dt>Email</dt>
+            <dd>{clerkEmail}</dd>
+          </div>
+        </dl>
       </section>
 
       <section className="panel">
