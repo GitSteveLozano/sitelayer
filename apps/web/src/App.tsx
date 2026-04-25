@@ -39,6 +39,7 @@ import {
 } from './components/ui/dialog.js'
 import { Input } from './components/ui/input.js'
 import { Toaster, toastError, toastInfo, toastSuccess } from './components/ui/toast.js'
+import { AuditView } from './views/audit.js'
 import { ConfirmView } from './views/confirm.js'
 import { EstimatesView } from './views/estimates.js'
 import { IntegrationsView } from './views/integrations.js'
@@ -60,6 +61,16 @@ function ClerkTokenBridge() {
     }
   }, [getToken])
   return null
+}
+
+// Wrapper used by the Clerk-authenticated app shell to surface the public
+// metadata role to the audit view without forcing every route to depend on
+// useUser(). Never rendered in fixtures mode, so the hook call is always safe.
+function ClerkAuditRoute({ companySlug, session }: { companySlug: string; session: SessionResponse | null }) {
+  const { user } = useUser()
+  const raw = user?.publicMetadata?.role
+  const publicMetadataRole = typeof raw === 'string' ? raw : null
+  return <AuditView companySlug={companySlug} session={session} publicMetadataRole={publicMetadataRole} />
 }
 
 export function App() {
@@ -385,6 +396,10 @@ function AppShell() {
   const primaryDivision = divisions.find((division) => division.code === 'D4')?.code ?? divisions[0]?.code ?? 'D4'
   const measurableServiceItems = serviceItems.filter((item) => item.category === 'measurable')
   const devSurfaceEnabled = features?.tier !== 'prod'
+  // Audit nav gate. Fixtures keep it visible so the e2e harness can hit the
+  // route; otherwise require an admin/owner session role.
+  const sessionRole = session?.user.role
+  const auditNavVisible = FIXTURES_ENABLED || sessionRole === 'admin' || sessionRole === 'owner'
 
   return (
     <main className="shell">
@@ -411,6 +426,7 @@ function AppShell() {
         <NavLink to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}>Takeoffs</NavLink>
         <NavLink to="/estimates">Estimates</NavLink>
         <NavLink to="/integrations">Integrations</NavLink>
+        {auditNavVisible ? <NavLink to="/audit">Audit</NavLink> : null}
         {devSurfaceEnabled ? <NavLink to="/dev/scratch">Dev</NavLink> : null}
       </nav>
       <SentryRoutes>
@@ -536,6 +552,16 @@ function AppShell() {
               refreshSummary={refreshSummary}
               runAction={runAction}
             />
+          }
+        />
+        <Route
+          path="/audit"
+          element={
+            FIXTURES_ENABLED ? (
+              <AuditView companySlug={companySlug} session={session} />
+            ) : (
+              <ClerkAuditRoute companySlug={companySlug} session={session} />
+            )
           }
         />
         <Route

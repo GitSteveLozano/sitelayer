@@ -10,6 +10,29 @@ import './styles.css'
 
 captureWebVitals()
 
+// Sitelayer Clerk theming. The color values mirror the HSL triplets declared in
+// styles.css (`--primary`, `--background`, etc.) so the hosted <SignIn>/<SignUp>
+// widgets match the rest of the SPA. Keep these in sync if styles.css rotates.
+const clerkAppearance = {
+  layout: {
+    logoImageUrl: '/sitelayer-logo.svg',
+    logoPlacement: 'inside' as const,
+  },
+  variables: {
+    colorPrimary: 'hsl(204, 94%, 67%)',
+    colorBackground: 'hsl(222, 47%, 5%)',
+    colorText: 'hsl(226, 100%, 97%)',
+    colorInputBackground: 'hsl(218, 25%, 17%)',
+    colorInputText: 'hsl(226, 100%, 97%)',
+    borderRadius: '6px',
+    fontFamily: 'inherit',
+  },
+  elements: {
+    card: 'sitelayer-clerk-card',
+    rootBox: 'sitelayer-clerk-root',
+  },
+}
+
 const PUBLISHABLE_KEY = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY
 if (!PUBLISHABLE_KEY && !FIXTURES_ENABLED) {
   throw new Error('VITE_CLERK_PUBLISHABLE_KEY is not set; the SPA cannot mount without a Clerk frontend key')
@@ -36,7 +59,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
       {FIXTURES_ENABLED || !PUBLISHABLE_KEY ? (
         <App />
       ) : (
-        <ClerkProvider publishableKey={PUBLISHABLE_KEY}>
+        <ClerkProvider publishableKey={PUBLISHABLE_KEY} appearance={clerkAppearance}>
           <App />
         </ClerkProvider>
       )}
