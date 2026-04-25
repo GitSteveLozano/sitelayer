@@ -46,6 +46,12 @@ import {
   verifyQboWebhook,
 } from './qbo-webhook.js'
 import { attachPool, observeAudit, observeRequest, renderMetrics } from './metrics.js'
+import { loadEmailConfig } from './email.js'
+import {
+  enqueueNotificationRow,
+  listCompanyAdminIds,
+  type EnqueueNotificationInput as NotificationInput,
+} from './notifications.js'
 
 const logger = createLogger('api')
 const CORS_ALLOW_HEADERS =
@@ -123,6 +129,17 @@ try {
   logger.fatal({ err }, '[storage] refusing to start')
   process.exit(1)
 }
+
+const emailConfig = loadEmailConfig()
+logger.info(
+  {
+    provider: emailConfig.provider,
+    from: emailConfig.from,
+    resend_key: emailConfig.resendApiKey ? 'set' : 'missing',
+    sendgrid_key: emailConfig.sendgridApiKey ? 'set' : 'missing',
+  },
+  '[email] ready',
+)
 
 type CompanyRole = 'admin' | 'foreman' | 'office' | 'member'
 
@@ -624,16 +641,18 @@ async function recordSyncEvent(
   entityId: string,
   payload: Record<string, unknown>,
   integrationConnectionId: string | null = null,
+  opts: { status?: 'pending' | 'failed'; error?: string | null } = {},
 ) {
   const { sentryTrace, baggage } = currentTraceHeaders()
   const requestId = getRequestContext()?.requestId ?? null
+  const status = opts.status ?? 'pending'
   await pool.query(
     `
     insert into sync_events (
       company_id, integration_connection_id, direction, entity_type, entity_id, payload, status,
-      sentry_trace, sentry_baggage, request_id
+      sentry_trace, sentry_baggage, request_id, error
     )
-    values ($1, $2, 'local', $3, $4, $5::jsonb, 'pending', $6, $7, $8)
+    values ($1, $2, 'local', $3, $4, $5::jsonb, $6, $7, $8, $9, $10)
     `,
     [
       companyId,
@@ -641,11 +660,28 @@ async function recordSyncEvent(
       entityType,
       entityId,
       JSON.stringify(payload),
+      status,
       sentryTrace,
       baggage,
       requestId,
+      opts.error ?? null,
     ],
   )
+  if (status === 'failed') {
+    const subject = `[Sitelayer] Sync failed: ${entityType}`
+    const text = [
+      `A sync event failed for ${entityType} ${entityId}.`,
+      opts.error ? `Error: ${opts.error}` : 'No error detail was provided.',
+      'Visit https://sitelayer.sandolab.xyz/ to investigate.',
+    ].join('\n\n')
+    await enqueueAdminAlert(companyId, 'sync_failure', subject, text, {
+      entity_type: entityType,
+      entity_id: entityId,
+      error: opts.error ?? null,
+    }).catch((err) => {
+      logger.warn({ err, entityType, entityId }, '[notifications] sync_failure alert enqueue failed')
+    })
+  }
   if (isAuditableEntity(entityType)) {
     const action = typeof payload.action === 'string' ? payload.action : 'event'
     const after = (payload as Record<string, unknown>)[entityType] ?? payload
@@ -707,6 +743,47 @@ async function recordMutationOutbox(
       requestId,
     ],
   )
+}
+
+/**
+ * Insert a row into `notifications`. The worker drains pending rows and sends
+ * them via `sendEmail`. Rows with neither `recipientUserId` nor `recipientEmail`
+ * are still written and logged via the console provider at send time. Errors
+ * are logged but not rethrown: notifications are best-effort and should not
+ * block the caller path.
+ */
+async function enqueueNotification(input: NotificationInput): Promise<{ id: string } | null> {
+  try {
+    return await enqueueNotificationRow(pool, input)
+  } catch (err) {
+    logger.warn({ err, kind: input.kind, companyId: input.companyId }, '[notifications] enqueue failed')
+    return null
+  }
+}
+
+async function enqueueAdminAlert(
+  companyId: string,
+  kind: string,
+  subject: string,
+  text: string,
+  payload: Record<string, unknown> = {},
+): Promise<void> {
+  const adminIds = await listCompanyAdminIds(pool, companyId)
+  if (adminIds.length === 0) {
+    // Broadcast row — worker will log via console provider.
+    await enqueueNotification({ companyId, kind, subject, text, payload })
+    return
+  }
+  for (const clerkUserId of adminIds) {
+    await enqueueNotification({
+      companyId,
+      recipientUserId: clerkUserId,
+      kind,
+      subject,
+      text,
+      payload,
+    })
+  }
 }
 
 async function getIntegrationConnection(companyId: string, provider: string) {
@@ -2382,6 +2459,25 @@ const server = http.createServer(async (req, res) => {
                 after: membership,
               })
               observeAudit('company_membership', 'upsert')
+              await enqueueNotification({
+                companyId: targetCompanyId,
+                recipientUserId: membership.clerk_user_id,
+                kind: 'membership_welcome',
+                subject: `You've been added to Sitelayer as ${membership.role}`,
+                text: [
+                  `You've been added to a Sitelayer company as ${membership.role}.`,
+                  `Sign in to get started: https://sitelayer.sandolab.xyz/sign-in`,
+                ].join('\n\n'),
+                html: [
+                  `<p>You've been added to a Sitelayer company as <strong>${membership.role}</strong>.</p>`,
+                  `<p><a href="https://sitelayer.sandolab.xyz/sign-in">Sign in</a> to get started.</p>`,
+                ].join('\n'),
+                payload: {
+                  membership_id: membership.id,
+                  role: membership.role,
+                  invited_by: identity.userId,
+                },
+              })
               sendJson(res, 201, { membership })
               return
             }
@@ -4072,6 +4168,29 @@ const server = http.createServer(async (req, res) => {
                 result.rows[0],
                 `project:closeout:${projectId}`,
               )
+              // Margin shortfall alert: when the closing margin is below 10%,
+              // notify company admins so they can review before invoicing.
+              try {
+                const summary = await summarizeProject(company.id, projectId)
+                const marginPct = summary?.metrics?.margin?.margin
+                if (typeof marginPct === 'number' && marginPct < 10) {
+                  const project = result.rows[0] as { name?: string; customer_name?: string }
+                  const subject = `[Sitelayer] Margin shortfall on closeout: ${project.name ?? projectId}`
+                  const text = [
+                    `Project "${project.name ?? projectId}" (${project.customer_name ?? 'unknown customer'}) closed with a margin of ${marginPct.toFixed(2)}%.`,
+                    `Target is 10%. Review cost entries and invoicing before finalizing.`,
+                    `https://sitelayer.sandolab.xyz/projects/${projectId}`,
+                  ].join('\n\n')
+                  await enqueueAdminAlert(company.id, 'margin_shortfall', subject, text, {
+                    project_id: projectId,
+                    margin_pct: marginPct,
+                    revenue: summary?.metrics?.margin?.revenue ?? null,
+                    cost: summary?.metrics?.margin?.cost ?? null,
+                  })
+                }
+              } catch (err) {
+                logger.warn({ err, projectId }, '[notifications] margin_shortfall alert failed')
+              }
               sendJson(res, 200, result.rows[0])
               return
             }
