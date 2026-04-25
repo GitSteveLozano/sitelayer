@@ -46,6 +46,12 @@ import {
 import { recordAudit, isAuditableEntity } from './audit.js'
 import { buildEstimatePdfInputFromSummary, renderEstimatePdf } from './pdf.js'
 import { buildListProjectsQuery, parseProjectsQuery } from './projects-query.js'
+import {
+  listLaborByItem,
+  listLaborByWeek,
+  listLaborByWorker,
+  parseLaborReportFilters,
+} from './labor-reports.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
 import { AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
 import { extractSvixHeaders, verifyClerkWebhook } from './clerk-webhook.js'
@@ -5847,6 +5853,27 @@ const server = http.createServer(async (req, res) => {
                 return
               }
               sendJson(res, 200, await listServiceItemProductivity(company.id))
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname === '/api/analytics/labor/by-item') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const filters = parseLaborReportFilters(url.searchParams)
+              sendJson(res, 200, { rows: await listLaborByItem(pool, company.id, filters), filters })
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname === '/api/analytics/labor/by-worker') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const filters = parseLaborReportFilters(url.searchParams)
+              sendJson(res, 200, { rows: await listLaborByWorker(pool, company.id, filters), filters })
+              return
+            }
+
+            if (req.method === 'GET' && url.pathname === '/api/analytics/labor/by-week') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const filters = parseLaborReportFilters(url.searchParams)
+              sendJson(res, 200, { rows: await listLaborByWeek(pool, company.id, filters), filters })
               return
             }
 
