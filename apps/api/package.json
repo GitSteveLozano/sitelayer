@@ -21,6 +21,8 @@
     "@sitelayer/domain": "file:../../packages/domain",
     "@sitelayer/logger": "file:../../packages/logger",
     "@sitelayer/queue": "file:../../packages/queue",
+    "@types/pdfkit": "^0.17.6",
+    "pdfkit": "^0.18.0",
     "pg": "^8.13.1",
     "prom-client": "^15.1.3",
     "svix": "1.92.2"

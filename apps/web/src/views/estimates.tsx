@@ -1,5 +1,5 @@
 import { formatMoney } from '@sitelayer/domain'
-import { apiPatch, apiPost } from '../api.js'
+import { apiPatch, apiPost, downloadEstimatePdf } from '../api.js'
 import type { BootstrapResponse, ProjectSummary } from '../api.js'
 import { AnalyticsWidget, ProjectEditor } from '../components/operations.js'
 import { Button } from '../components/ui/button.js'
@@ -76,6 +76,17 @@ export function EstimatesView({
               </dl>
 
               <div className="actions">
+                <Button
+                  type="button"
+                  onClick={() =>
+                    void runAction('estimate-pdf', async () => {
+                      await downloadEstimatePdf(summary.project.id, summary.project.name, companySlug)
+                    })
+                  }
+                  data-testid="download-estimate-pdf"
+                >
+                  Download PDF
+                </Button>
                 <Button
                   type="button"
                   onClick={() =>
