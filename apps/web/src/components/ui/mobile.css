@@ -1,0 +1,402 @@
+/*
+ * mobile.css — mobile-first breakpoints + touch-friendly overrides.
+ *
+ * This file is co-located with the shadcn-style primitives under components/ui/
+ * and is imported from src/main.tsx AFTER src/styles.css so its rules win on
+ * equal specificity. The styles.css module is the "desktop baseline"; this file
+ * is the field-crew / foreman-on-phone overlay.
+ *
+ * Scope rules:
+ *   - Keep every selector wrapped in a mobile media query unless the rule is a
+ *     pure additive class used only here (e.g. .mobileNavToggle).
+ *   - Do NOT change styles.css. If a class needs a new style on desktop too,
+ *     add it as a base-rule here behind a comment explaining why.
+ *
+ * Target viewports:
+ *   - Phones:     max-width 639px        (iPhone 12 is 390×844)
+ *   - Tablets:    640px – 919px
+ *   - Desktop:    >= 920px (unchanged)
+ */
+
+/* ─── Mobile-only additive classes (no media query gate) ─── */
+/* These classes render on every viewport but only appear in the DOM when the
+   mobile nav code below hides the full <nav>. Keeping them outside a media
+   query means the hidden-by-default CSS doesn't flash on first paint. */
+.mobileNavToggle {
+  display: none;
+  min-height: 44px;
+  min-width: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 0.5rem 0.9rem;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(7, 10, 16, 0.68);
+  color: #f8fafc;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.mobileNavToggle[aria-expanded='true'] {
+  background: rgba(125, 211, 252, 0.14);
+  color: #7dd3fc;
+}
+
+/* ─── Tablet + phone (≤919px): sticky nav, scrollable nav row ─── */
+@media (max-width: 919px) {
+  .shell {
+    width: min(100%, calc(100vw - 16px));
+    padding: 12px 0 48px;
+    gap: 14px;
+  }
+
+  .appHeader {
+    padding: 6px 8px !important;
+    flex-wrap: wrap;
+    gap: 8px !important;
+  }
+
+  /* Sticky primary nav so foremen always have nav chrome while scrolling long
+     forms on /projects or /confirm. Keeps "Confirm Day" reachable everywhere. */
+  .appNav {
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    padding: 6px 8px;
+    gap: 4px;
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    backdrop-filter: blur(8px);
+    background: rgba(7, 10, 16, 0.92);
+  }
+
+  .appNav::-webkit-scrollbar {
+    display: none;
+  }
+
+  .appNav a {
+    flex: 0 0 auto;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.55rem 0.85rem;
+    font-size: 0.95rem;
+    white-space: nowrap;
+  }
+
+  /* Buttons — enforce 44x44 tap target HIG minimum. */
+  button,
+  [role='button'],
+  a[class*='button'] {
+    min-height: 44px;
+  }
+
+  button:not([class]) {
+    min-height: 44px;
+    padding: 0.85rem 1.1rem;
+    font-size: 1rem;
+  }
+
+  /* Inputs — 44px height + 16px font-size defeats iOS Safari zoom-on-focus. */
+  input,
+  textarea,
+  select {
+    font-size: 16px;
+    min-height: 44px;
+  }
+
+  input[type='checkbox'],
+  input[type='radio'] {
+    min-height: 24px;
+    min-width: 24px;
+    width: 24px;
+    height: 24px;
+  }
+
+  .selectWrap select:not([class]),
+  .form input:not([class]),
+  .form textarea:not([class]),
+  .form select:not([class]) {
+    min-height: 44px;
+    padding: 0.85rem 0.95rem;
+    font-size: 16px;
+  }
+
+  /* Panels breathe less on phones — preserve vertical real estate. */
+  .panel {
+    padding: 16px;
+    border-radius: 16px;
+  }
+
+  .hero {
+    padding: 18px;
+    border-radius: 20px;
+  }
+
+  .hero h1 {
+    font-size: clamp(2rem, 7vw, 3.2rem);
+  }
+
+  .toolbar {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .actions {
+    justify-content: stretch;
+  }
+
+  .actions > * {
+    flex: 1 1 auto;
+  }
+}
+
+/* ─── Tablet-specific tweaks (640–919px): relax forms to 2 columns again ─── */
+@media (min-width: 640px) and (max-width: 919px) {
+  .formGrid,
+  .grid,
+  .analytics,
+  .integrationGrid,
+  .summaryLists {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ─── Phones (≤639px): card-stack tables, stacked confirm rows ─── */
+@media (max-width: 639px) {
+  /* ── Tables → card stack ──
+     /audit uses a real <table>. Each row becomes a card; each cell becomes a
+     label/value pair. We flag columns via data-label in JSX OR fall back to
+     ::before with nth-child labels. Since audit.tsx uses bare <td> (no
+     data-label), we key off column index matching the column headers. */
+  .auditTableWrap {
+    overflow-x: visible;
+  }
+
+  .auditTable,
+  .auditTable thead,
+  .auditTable tbody,
+  .auditTable tr,
+  .auditTable th,
+  .auditTable td {
+    display: block;
+  }
+
+  .auditTable thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  .auditTable tr.auditRow {
+    margin-bottom: 12px;
+    padding: 12px;
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.035);
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+  }
+
+  .auditTable tr.auditRow td {
+    display: grid;
+    grid-template-columns: 104px 1fr;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px dashed rgba(148, 163, 184, 0.12);
+    word-break: break-word;
+  }
+
+  .auditTable tr.auditRow td:last-child {
+    border-bottom: 0;
+    grid-template-columns: 1fr;
+    justify-items: stretch;
+    padding-top: 10px;
+  }
+
+  .auditTable tr.auditRow td::before {
+    content: attr(data-mobile-label);
+    color: #94a3b8;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    align-self: center;
+  }
+
+  .auditTable tr.auditRow td:nth-of-type(1)::before {
+    content: 'Time';
+  }
+  .auditTable tr.auditRow td:nth-of-type(2)::before {
+    content: 'Actor';
+  }
+  .auditTable tr.auditRow td:nth-of-type(3)::before {
+    content: 'Entity';
+  }
+  .auditTable tr.auditRow td:nth-of-type(4)::before {
+    content: 'ID';
+  }
+  .auditTable tr.auditRow td:nth-of-type(5)::before {
+    content: 'Action';
+  }
+  .auditTable tr.auditRow td:nth-of-type(6)::before {
+    content: 'Request';
+  }
+  .auditTable tr.auditRow td:nth-of-type(7)::before {
+    content: '';
+  }
+
+  .auditTable tr.auditDetailRow td {
+    display: block;
+    padding: 8px 0;
+  }
+
+  /* ── /projects list → already a <ul>, but the hero + kv grids need stacking ── */
+  .kv,
+  .summaryGrid {
+    grid-template-columns: 1fr !important;
+  }
+
+  .list.compact li {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .list li {
+    padding: 14px;
+  }
+
+  /* ── /confirm polish: stack every crew entry as a card ──
+     confirm.tsx writes grid styles inline. We override with higher specificity
+     via .panel ul.list.confirmRow to beat the style= attribute. Browsers apply
+     inline styles over author CSS, so we instead target the <li class="confirmRow">
+     itself and swap display:grid → display:flex column via !important. */
+  .confirmRow {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 10px !important;
+    padding: 14px !important;
+    border-radius: 14px !important;
+    background: rgba(255, 255, 255, 0.04) !important;
+    border: 1px solid rgba(148, 163, 184, 0.18) !important;
+  }
+
+  .confirmRow > * {
+    width: 100%;
+  }
+
+  .confirmRow strong {
+    font-size: 1.05rem;
+  }
+
+  /* Big touch controls inside confirm rows. */
+  .confirmRow input,
+  .confirmRow select {
+    min-height: 48px;
+    font-size: 16px;
+  }
+
+  .confirmRow .checkbox {
+    padding: 6px 0;
+  }
+
+  /* Sticky confirm-day submit bar so foremen can always reach the main CTA
+     without scrolling past a dozen crew members on long days. */
+  [data-testid='confirm-view'] > div:last-of-type {
+    position: sticky;
+    bottom: 0;
+    z-index: 20;
+    margin-top: 16px;
+    padding: 12px;
+    border-radius: 14px 14px 0 0;
+    background: rgba(7, 10, 16, 0.94);
+    backdrop-filter: blur(8px);
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.35);
+  }
+
+  [data-testid='confirm-view'] [data-testid='confirm-day-submit'] {
+    width: 100%;
+    min-height: 52px;
+    font-size: 1.05rem;
+  }
+
+  /* ── Takeoff canvas: let touch zoom/pan work alongside the pan-overlay ── */
+  .takeoffStageWrap {
+    touch-action: pan-x pan-y pinch-zoom;
+    max-height: 65vh;
+  }
+
+  .takeoffStage {
+    height: 520px;
+  }
+
+  .takeoffPanControls {
+    flex-wrap: wrap;
+    gap: 6px !important;
+  }
+
+  .takeoffPanControls .muted {
+    font-size: 0.72rem;
+    line-height: 1.3;
+  }
+
+  .takeoffToolbar,
+  .takeoffActions,
+  .takeoffMeta {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Filter + form rows inside /audit on phones. */
+  .auditFilterActions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .auditFilterActions > button {
+    width: 100%;
+  }
+
+  .appHeader {
+    flex-direction: column;
+    align-items: stretch !important;
+  }
+}
+
+/* ─── Hamburger collapse: >4 nav items on narrow phones ───
+   The app has up to 7 nav items (Confirm, Projects, Takeoffs, Estimates,
+   Integrations, Audit, Dev). We never truly hide them — we keep a horizontal
+   scroller as the primary surface AND add an optional collapse toggle
+   visible only when JS sets data-collapsed="true" on the nav. That keeps the
+   default bundle zero-JS for nav. */
+@media (max-width: 479px) {
+  .appNav[data-collapsed='true'] a:not(.active) {
+    display: none;
+  }
+
+  .appNav[data-collapsed='true'] .mobileNavToggle {
+    display: inline-flex;
+  }
+}
+
+/* Large-touch focus rings that won't get clipped by rounded cards. */
+@media (max-width: 919px) {
+  :focus-visible {
+    outline: 2px solid rgba(125, 211, 252, 0.85);
+    outline-offset: 2px;
+  }
+}
+
+/* Prefers-reduced-motion safety net — mobile transitions should respect OS. */
+@media (max-width: 919px) and (prefers-reduced-motion: reduce) {
+  * {
+    transition-duration: 0s !important;
+    animation-duration: 0s !important;
+  }
+}
