@@ -1,5 +1,11 @@
 # Sitelayer Tech Stack Report
 
+> **🟡 RESEARCH ARTIFACT — preserved for historical context (banner added 2026-04-25).**
+>
+> Pre-build research. Some recommendations were taken (DigitalOcean managed Postgres, Spaces, Sentry, UptimeRobot) and some were *not*: shipped worker is a **bespoke Postgres-leased queue** (`packages/queue`), **not Hatchet**. Annotation is **inline SVG**, **not Konva.js**. Frontend is a **Vite SPA**, not Next.js. Read for decision history; do not use as a stack reference.
+>
+> Canonical stack: `CLAUDE.md`. Live infra: `INFRASTRUCTURE_READY.md`.
+
 **Construction SaaS — Blueprint Takeoff, QBO-Integrated, Multi-Tenant B2B**
 **April 2026 — Decision-Ready Reference (Pricing Verified April 23, 2026)**
 
@@ -247,7 +253,6 @@ Crunchy employs more Postgres core contributors than any other company. Their Ho
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------- |
 | Self-hosted on VPS     | Saves $30/mo, costs you every backup, upgrade, and disk-full incident                                                 |
 | Neon (serverless)      | Cold starts on always-on multi-tenant app; per-CU-hour billing unpredictable; Databricks acquisition adds uncertainty |
-| Supabase               | BaaS pricing model assumes you use auth/storage/realtime; DB-only is paying for features you don't need               |
 | Vultr Managed Postgres | $90/mo minimum — 3× DigitalOcean for the same hardware                                                                |
 | OVH Managed Postgres   | $87/mo minimum in US — similar problem                                                                                |
 

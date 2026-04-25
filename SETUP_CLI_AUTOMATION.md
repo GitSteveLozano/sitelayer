@@ -1,6 +1,10 @@
 # Sitelayer Setup via CLI (No UI Clicking Required)
 
-**Goal:** Automate as much as possible. Only UI required for OAuth flows (Clerk, Intuit QBO).
+> **🚫 SUPERSEDED — DO NOT RUN AS-IS (banner added 2026-04-25).**
+>
+> Live droplet, DBs, Spaces, DNS, and TLS are **already provisioned** — see `INFRASTRUCTURE_READY.md` for IDs/IPs/buckets to manipulate, not create. Auth env vars are wrong (`CLERK_SECRET_KEY` / `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`) — actual: `CLERK_JWT_KEY`, `CLERK_ISSUER`, `CLERK_WEBHOOK_SECRET`, `AUTH_ALLOW_HEADER_FALLBACK`, plus `VITE_*` for the SPA. Clerk roles wrong (`owner|admin|estimator|field`) — actual: `admin|foreman|office|member`.
+>
+> Treat as a reference for the *style* of CLI automation, not as a runnable script. Real deploys go through `.github/workflows/deploy-droplet.yml`.
 
 ---
 

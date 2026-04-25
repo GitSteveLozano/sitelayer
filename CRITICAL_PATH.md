@@ -48,10 +48,12 @@
 
 ### 🔴 Blockers for Pilot
 
-1. **Clerk auth integration** — hardcoded demo user blocks real multi-tenant onboarding.
-2. **DO Spaces/off-host file storage** — local blueprint persistence works, but off-host/object storage is still needed before customer data.
-3. **PDF viewer + annotation validation** — polygon drawing persists to DB and server-side geometry validation exists; still needs pilot-device validation against real PDFs.
-4. **Live QBO sync validation** — shared DB-backed queue processing exists with unit coverage; real QBO connector behavior still needs sandbox credentials and end-to-end testing.
+These are configuration / validation blockers; the underlying code is shipped.
+
+1. **Clerk auth cutover** — `apps/api/src/auth.ts` already verifies Clerk JWTs and `apps/web/src/App.tsx` mounts `/sign-in` and `/sign-up`. Production tier still falls back to `ACTIVE_USER_ID=demo-user` because `CLERK_JWT_KEY` is unset. Cutover = set Clerk env vars per tier and ensure `AUTH_ALLOW_HEADER_FALLBACK` is empty/0.
+2. **DO Spaces enablement** — `apps/api/src/storage.ts` auto-selects S3 when `DO_SPACES_BUCKET/KEY/SECRET` are populated. Per-tier buckets exist (`sitelayer-blueprints-prod` live; dev/preview via `scripts/provision-spaces-buckets.sh`). Cutover = inject Spaces creds into prod/preview deploy secrets so the prod tier stops writing to the local Docker volume.
+3. **Blueprint upload streaming** — current path buffers the entire PDF as base64 JSON (capped at `maxJsonBodyBytes`, ~20MB). Real construction PDFs are 30–80MB. Replace with streaming multipart → Spaces; serve downloads via presigned URLs.
+4. **Live QBO sync validation** — `mutation_outbox` + `sync_events` worker drain is unit-tested; real QBO sandbox credentials still need to be exercised end-to-end.
 
 ---
 
@@ -84,22 +86,14 @@ PHASE 1: INFRASTRUCTURE (Week 1, Days 1-3)
 └─ `/app/sitelayer/.env` on Droplet
    └─ Prerequisite for: all code deployment
 
-PHASE 2: CODE CHANGES (Week 1, Days 4-5 + Week 2)
-├─ Change 1: Clerk auth integration (2h)
-│  └─ Replace hardcoded ACTIVE_COMPANY_SLUG with JWT org_slug
-│  └─ Prerequisite for: pilot customer login
-├─ Change 2: DO Spaces file upload (2h)
-│  └─ POST /api/projects/:id/blueprints → Spaces/off-host object storage
-│  └─ Prerequisite for: customer-grade blueprint storage
-├─ Change 3: PDF viewer + SVG annotation (3h)
-│  └─ Browser PDF/image preview + polygon drawing
-│  └─ Prerequisite for: takeoff workflow
-├─ Change 4: Job queue (pg-boss) (2h)
-│  └─ Background job processor for QBO sync
-│  └─ Prerequisite for: QBO integration
-└─ Change 5: Observability (Sentry + logging) (1h)
-   └─ Error tracking + structured logging
-   └─ Prerequisite for: production debugging
+PHASE 2: CODE CHANGES (mostly DONE)
+├─ [DONE] Clerk SDK + JWT verification (apps/web/src/App.tsx, apps/api/src/auth.ts)
+├─ [DONE] DigitalOcean Spaces dual-mode storage (apps/api/src/storage.ts auto-selects S3)
+├─ [DONE] PDF viewer + SVG polygon annotation + server-side geometry validation
+├─ [DONE] Postgres-leased queue worker (mutation_outbox + sync_events; not pg-boss)
+└─ [DONE] Observability: Sentry across api/web/worker with trace propagation, Pino JSON logs
+
+REMAINING: Streaming blueprint upload (replace base64 buffering); live QBO sandbox validation.
 
 PHASE 3: DEPLOYMENT (Week 2-3)
 ├─ Apply Postgres schema through managed DB connection

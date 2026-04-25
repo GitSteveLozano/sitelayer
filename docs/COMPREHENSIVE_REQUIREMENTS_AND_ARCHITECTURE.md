@@ -161,8 +161,8 @@ The system must:
 
 The system must:
 
-- store blueprint PDFs in Supabase Storage
-- create signed URLs on demand
+- store blueprint PDFs in DigitalOcean Spaces (S3-compatible) when `DO_SPACES_*` are configured, otherwise on the local FS volume (`apps/api/src/storage.ts`)
+- serve downloads via the API: `GET /api/blueprints/:id/file` proxies the file through the Node server (presigned-URL/direct-download is on the post-pilot roadmap, not shipped)
 - preserve project-document linkage
 - allow replacement/remeasurement without losing history
 
@@ -176,17 +176,18 @@ The codebase already has the skeleton of the product:
 - `BlueprintCanvas` for PDF rendering and polygon takeoff
 - `Schedule`, `Workers`, and `DailyConfirm` for crew operations
 - `Settings` for company rates and QBO integration
-- `qbo-auth`, `qbo-callback`, and `qbo-sync` edge functions
+- `/api/integrations/qbo/auth`, `/callback`, and `/sync` HTTP endpoints (`apps/api/src/server.ts`)
 
-The current backend data model already includes:
+The current backend data model already includes (canonical source: `docker/postgres/init/*.sql`):
 
-- `companies`
-- `company_users`
-- `projects`
-- `labor_entries`
-- `workers`
-- `crew_schedules`
-- `integrations`
+- `companies`, `company_memberships` — multi-tenant + Clerk role mapping
+- `projects`, `customers`
+- `labor_entries`, `workers`, `crew_schedules`, `clock_events`
+- `blueprint_documents`, `takeoff_measurements`
+- `estimate_lines`, `service_items`, `service_item_divisions`, `divisions`, `pricing_profiles`, `bonus_rules`
+- `material_bills`, `rentals`
+- `integration_connections`, `integration_mappings` — per-provider OAuth state and external entity refs
+- `mutation_outbox`, `sync_events`, `audit_events`, `notifications` — outbox/sync/audit/notification ledgers (queue leasing is in-place on `mutation_outbox` and `sync_events` via `FOR UPDATE SKIP LOCKED`, not a separate `queue_leases` table)
 
 The app is therefore not a blank slate. The main job is to tighten the domain model, finish the missing workflow edges, and harden sync/reconciliation.
 
@@ -352,12 +353,12 @@ The UX should stay mobile-first for the field workflows, but full desktop suppor
 
 ### 8.2 Backend
 
-Supabase/Postgres should remain the operational store because the current app already uses:
+Postgres should remain the operational store. The current app uses:
 
-- tables for core data
-- RLS for company scoping
-- edge functions for QBO integration
-- storage for blueprint assets
+- managed Postgres (DigitalOcean) with raw `pg` driver — no ORM
+- app-layer company scoping via `getCompany()` membership checks (Clerk JWT once `CLERK_JWT_KEY` is set + `AUTH_ALLOW_HEADER_FALLBACK` flipped off)
+- plain Node HTTP handlers for QBO OAuth and sync (`apps/api/src/server.ts`)
+- DigitalOcean Spaces (S3-compatible) for blueprint assets when configured; local FS fallback otherwise (`apps/api/src/storage.ts`)
 
 Backend responsibilities:
 

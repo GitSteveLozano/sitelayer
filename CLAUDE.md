@@ -103,8 +103,8 @@ Layer 3: Derived Insight & Workflow UI
 | **Worker**          | Node.js background tasks                                  | Postgres-backed leased queue; no Hatchet yet                                                                  |
 | **Monorepo**        | npm workspaces                                            | apps: api, web, worker; packages: config, domain, logger, queue                                               |
 | **Database**        | Postgres (pg driver)                                      | Direct SQL queries in server.ts; no ORM                                                                       |
-| **Auth**            | TBD (hardcoded demo user)                                 | Clerk planned but not yet integrated                                                                          |
-| **File Storage**    | Local Docker volume fallback; DigitalOcean Spaces planned | Blueprint PDFs persist under `BLUEPRINT_STORAGE_ROOT`; Spaces/off-host copy still needed before customer data |
+| **Auth**            | Clerk wired in SPA + JWT verification in API; gated by env | `apps/web/src/App.tsx` runs SignIn/SignUp; `apps/api/src/auth.ts` verifies Clerk JWTs when `CLERK_JWT_KEY` is set. Header fallback to `ACTIVE_USER_ID=demo-user` is still active until `AUTH_ALLOW_HEADER_FALLBACK=0` and `CLERK_JWT_KEY` are configured per tier. |
+| **File Storage**    | Dual-mode shipped: local FS or DigitalOcean Spaces        | `apps/api/src/storage.ts` auto-selects `S3Storage` when `DO_SPACES_BUCKET/KEY/SECRET` are set, otherwise local FS at `BLUEPRINT_STORAGE_ROOT`. Default region `tor1`. |
 | **QBO Integration** | OAuth + REST API (direct HTTP)                            | Connector layer; sync state in `integration_mappings` table                                                   |
 | **Observability**   | Sentry v10 + Pino                                         | Trace propagation through browser/API/worker; request-scoped JSON logs via `@sitelayer/logger`                |
 
@@ -136,18 +136,57 @@ sitelayer/
 - **Database**: Direct pg client queries; no ORM
 - **Dependencies**: `pg`, `@sentry/node`, `@sitelayer/config`, `@sitelayer/domain`, `@sitelayer/logger`, `@sitelayer/queue`
 
-**Endpoints**:
+**Endpoints** (representative — `apps/api/src/server.ts` is the canonical list):
 
-- POST `/api/projects` — create project
-- GET `/api/bootstrap` — list projects and app seed data
-- POST `/api/projects/:id/blueprints` — upload blueprint PDF/image to local storage fallback
-- GET `/api/blueprints/:id/file` — stream stored blueprint file inline
-- POST `/api/projects/:id/takeoff/measurement` — append one polygon/manual measurement
-- POST `/api/projects/:id/takeoff/measurements` — replace a project's measurement set
-- GET `/api/projects/:id/summary` — retrieve estimate/operations summary
-- GET `/api/integrations/qbo/auth` — OAuth initiation
-- POST `/api/integrations/qbo/sync` — trigger QBO sync queue work
-- GET `/api/sync/status` — sync state
+System / observability:
+- GET `/health` (note: no `/api` prefix — what Caddy probes), GET `/api/version`
+- GET `/api/metrics` — Prometheus format, gated by `API_METRICS_TOKEN`
+- GET `/api/features`, GET `/api/spec`, GET `/api/session`
+- GET `/api/audit-events`
+- GET `/api/debug/traces/:traceId` — Sentry trace fetch, gated by `DEBUG_TRACE_TOKEN`
+
+Companies / auth:
+- GET/POST `/api/companies`, PATCH/DELETE `/api/companies/:id`
+- POST `/api/companies/:id/memberships`
+- POST `/api/webhooks/clerk` — Svix-signed Clerk webhook
+
+Bootstrap / projects:
+- GET `/api/bootstrap` — projects and seed data for current company
+- POST `/api/projects`, PATCH `/api/projects/:id`
+- GET `/api/projects/:id/summary`, POST `/api/projects/:id/closeout`
+
+Blueprints / takeoff:
+- POST `/api/projects/:id/blueprints` — upload (currently base64 JSON; streaming refactor pending)
+- GET `/api/projects/:id/blueprints`, GET `/api/blueprints/:id/file`
+- PATCH/DELETE `/api/blueprints/:id`, POST `/api/blueprints/:id/versions`
+- POST `/api/projects/:id/takeoff/measurement` — append one polygon
+- POST `/api/projects/:id/takeoff/measurements` — replace set
+- GET/PATCH/DELETE `/api/takeoff/measurements/:id`
+
+Estimation:
+- POST `/api/projects/:id/estimate/recompute`
+- GET `/api/projects/:id/estimate/scope-vs-bid`
+- POST `/api/projects/:id/estimate/push-qbo`
+- GET `/api/projects/:id/estimate/forecast-hours`
+
+Material bills:
+- GET/POST `/api/projects/:id/material-bills`
+- PATCH/DELETE `/api/material-bills/:id`
+
+Reference data CRUD: customers, workers, divisions, service-items, pricing-profiles, bonus-rules, labor-entries, schedules.
+
+Analytics:
+- GET `/api/analytics`, `/api/analytics/history`, `/api/analytics/divisions`, `/api/analytics/service-item-productivity`
+
+QBO integration:
+- GET `/api/integrations/qbo/auth`, GET `/api/integrations/qbo/callback`
+- GET/POST `/api/integrations/qbo`, POST `/api/integrations/qbo/sync`
+- GET `/api/integrations/qbo/mappings`, POST `/api/integrations/qbo/mappings`
+- PATCH/DELETE `/api/integrations/qbo/mappings/:id`
+
+Sync queue inspection:
+- GET `/api/sync/status`, `/api/sync/events`, `/api/sync/outbox`
+- POST `/api/sync/process` — manual drain trigger
 
 **Environment Variables**:
 
@@ -224,18 +263,24 @@ Background job processor:
 
 ### Database Schema
 
-**Core Tables**:
+**Core Tables** (canonical source: `docker/postgres/init/*.sql`):
 
-- `companies` — multi-tenant isolation
-- `users` — user accounts
-- `projects` — construction projects (customer, location, divisions)
-- `blueprint_documents` — uploaded PDF/image documents with local storage path and revision lineage
-- `takeoff_measurements` — measurements extracted from blueprints, including persisted polygon geometry
-- `estimates` — calculated estimates with line items (labor, material, overhead)
-- `workers` — crew roster
-- `labor_entries` — time tracking
-- `integration_mappings` — external system references (QBO customer ID → local project ID, etc.)
-- `sync_state` — last sync timestamp, pending changes, error log
+- `companies` — multi-tenant root
+- `company_memberships` — Clerk user → company role (`admin|foreman|office|member`); auth identity lives here, not a separate users table
+- `customers` — per-company customer roster
+- `projects` — construction projects
+- `blueprint_documents` — uploaded PDF/image documents with storage path (local FS or DO Spaces key) and revision lineage
+- `takeoff_measurements` — polygon/manual measurements with persisted geometry
+- `estimate_lines` — per-project estimate line items (no separate `estimates` parent table)
+- `service_items`, `service_item_divisions`, `divisions`, `pricing_profiles`, `bonus_rules` — reference data
+- `workers`, `labor_entries`, `crew_schedules`, `clock_events` — crew + time tracking
+- `material_bills`, `rentals` — material spend and rental ledger per project
+- `integration_connections` — QBO/etc. OAuth tokens, refresh state, webhook secrets
+- `integration_mappings` — external refs per `(provider, entity_type)` (customer/project/item)
+- `mutation_outbox` — outbound writes queued for external systems (worker drains)
+- `sync_events` — directional sync ledger with status, attempts, applied_at, error. Both queue tables are leased in-place via `FOR UPDATE SKIP LOCKED` (`packages/queue/src/index.ts`); there is no separate `queue_leases` table.
+- `audit_events` — append-only audit trail (also surfaced via `GET /api/audit-events`)
+- `notifications` — per-user/per-company notification ledger
 
 **Source of Truth Rules**:
 

@@ -1,7 +1,7 @@
 # Sitelayer Contractor Onboarding Runbook
 
 **Audience:** Sitelayer admin onboarding a new construction-company customer end-to-end.
-**Assumes:** Clerk SDK is wired into the SPA and `/sign-up` route is live. Until that ships, customers can't self-onboard — the bulk script at the bottom is the only path.
+**Assumes:** Clerk SDK is wired into the SPA (`apps/web/src/App.tsx` mounts `/sign-in` and `/sign-up`) **and** the API tier has `CLERK_JWT_KEY` set with header fallback disabled so JWTs are actually enforced. If the tier still falls back to the demo user, the bulk script at the bottom is the only path.
 
 The product flow is built on three already-shipped backend pieces:
 - `POST /api/companies` (creates the company; calls `seedCompanyDefaults` to provision divisions + service items + default pricing profile + default bonus rule).
@@ -145,7 +145,7 @@ All `applied`, zero `error` populated → green.
 
 - [ ] Admin Clerk user ID recorded in `mesh` (project=sitelayer, planning_note `customer_<slug>_admin`).
 - [ ] Admin knows how to invite more people (Team view + share `/sign-up` URL).
-- [ ] Admin knows audit log lives at `audit_log` table (no UI yet — query by API/SQL on request).
+- [ ] Admin knows audit log lives at `audit_events` table (or via `GET /api/audit-events`).
 - [ ] Support contact set: `taylor@releaserent.com`. Response SLA: 24h business days during pilot.
 - [ ] Backup/DR is invisible to customer but documented in `docs/DR_RESTORE.md`.
 
