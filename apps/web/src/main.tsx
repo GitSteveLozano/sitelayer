@@ -3,7 +3,10 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { App } from './App.js'
 import { Button } from './components/ui/button.js'
+import { captureWebVitals } from './web-vitals.js'
 import './styles.css'
+
+captureWebVitals()
 
 function FallbackError({ error, resetError }: { error: unknown; resetError: () => void }) {
   return (
