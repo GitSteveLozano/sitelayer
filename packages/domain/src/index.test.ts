@@ -4,6 +4,7 @@ import {
   calculateProjectCost,
   calculateMargin,
   calculateBonusPayout,
+  simulateBonusScenario,
   calculatePolygonArea,
   calculatePolygonCentroid,
   calculateTakeoffQuantity,
@@ -145,6 +146,105 @@ describe('domain functions', () => {
       const result = calculateBonusPayout(0.25, 0, DEFAULT_BONUS_RULE.tiers)
       expect(result.eligible).toBe(true)
       expect(result.payout).toBe(0)
+    })
+  })
+
+  describe('simulateBonusScenario', () => {
+    it('pays the tier exactly at a tier edge and projects the next threshold', () => {
+      // revenue 100k, cost 85k → 15% margin → first tier (4%).
+      const result = simulateBonusScenario({
+        revenue: 100_000,
+        cost: 85_000,
+        bonus_pool: 10_000,
+        tiers: DEFAULT_BONUS_RULE.tiers,
+      })
+      expect(result.margin).toBeCloseTo(0.15, 4)
+      expect(result.profit).toBe(15_000)
+      expect(result.eligible).toBe(true)
+      expect(result.payout_percent).toBeCloseTo(0.04, 4)
+      expect(result.payout).toBe(400)
+      expect(result.next_tier_threshold).toBeCloseTo(0.2, 4)
+      // cost / (1 - 0.2) = 106,250 → need $6,250 more revenue.
+      expect(result.revenue_to_next_tier).toBeCloseTo(6_250, 2)
+    })
+
+    it('handles a margin strictly between tiers', () => {
+      // 17% margin → tier 1 active, tier 2 (20%) next.
+      const result = simulateBonusScenario({
+        revenue: 100_000,
+        cost: 83_000,
+        bonus_pool: 10_000,
+        tiers: DEFAULT_BONUS_RULE.tiers,
+      })
+      expect(result.margin).toBeCloseTo(0.17, 4)
+      expect(result.eligible).toBe(true)
+      expect(result.payout_percent).toBeCloseTo(0.04, 4)
+      expect(result.next_tier_threshold).toBeCloseTo(0.2, 4)
+      // cost / (1 - 0.2) = 103,750 → $3,750 more revenue.
+      expect(result.revenue_to_next_tier).toBeCloseTo(3_750, 2)
+    })
+
+    it('reports null projections above the top tier', () => {
+      const result = simulateBonusScenario({
+        revenue: 100_000,
+        cost: 50_000,
+        bonus_pool: 10_000,
+        tiers: DEFAULT_BONUS_RULE.tiers,
+      })
+      expect(result.margin).toBeCloseTo(0.5, 4)
+      expect(result.eligible).toBe(true)
+      // top tier (30% → 19%) is active.
+      expect(result.payout_percent).toBeCloseTo(0.19, 4)
+      expect(result.payout).toBe(1900)
+      expect(result.next_tier_threshold).toBeNull()
+      expect(result.revenue_to_next_tier).toBeNull()
+    })
+
+    it('reports zero-revenue case as 0% margin, not eligible, with a null projection when cost is also zero', () => {
+      const result = simulateBonusScenario({
+        revenue: 0,
+        cost: 0,
+        bonus_pool: 10_000,
+        tiers: DEFAULT_BONUS_RULE.tiers,
+      })
+      expect(result.margin).toBe(0)
+      expect(result.profit).toBe(0)
+      expect(result.eligible).toBe(false)
+      expect(result.payout).toBe(0)
+      // First tier threshold is exposed for UI, but with zero cost we can't
+      // tell the user how much extra revenue to chase.
+      expect(result.next_tier_threshold).toBeCloseTo(0.15, 4)
+      expect(result.revenue_to_next_tier).toBeNull()
+    })
+
+    it('reports a concrete revenue gap when cost is non-zero and revenue is zero', () => {
+      const result = simulateBonusScenario({
+        revenue: 0,
+        cost: 50_000,
+        bonus_pool: 10_000,
+        tiers: DEFAULT_BONUS_RULE.tiers,
+      })
+      expect(result.margin).toBe(0)
+      expect(result.profit).toBe(-50_000)
+      expect(result.eligible).toBe(false)
+      expect(result.next_tier_threshold).toBeCloseTo(0.15, 4)
+      // cost / (1 - 0.15) ≈ 58,823.53 → that's the gap since current revenue is 0.
+      expect(result.revenue_to_next_tier).toBeCloseTo(58_823.53, 1)
+    })
+
+    it('returns eligibility with zero payout when the bonus pool is empty', () => {
+      const result = simulateBonusScenario({
+        revenue: 100_000,
+        cost: 70_000,
+        bonus_pool: 0,
+        tiers: DEFAULT_BONUS_RULE.tiers,
+      })
+      expect(result.margin).toBeCloseTo(0.3, 4)
+      expect(result.eligible).toBe(true)
+      expect(result.payout_percent).toBeCloseTo(0.19, 4)
+      expect(result.payout).toBe(0)
+      expect(result.next_tier_threshold).toBeNull()
+      expect(result.revenue_to_next_tier).toBeNull()
     })
   })
 
