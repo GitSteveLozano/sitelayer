@@ -260,7 +260,7 @@ The preview droplet also hosts the self-hosted GH Actions runner that runs the p
 
 **Grants:** nothing on their own — these are just IPs/hostnames the deploy workflows read. Listed here for completeness so the rotation checklist accounts for every `gh secret` row.
 
-**Stored in:** GitHub Actions secrets `DEPLOY_HOST` (private DO IP `10.118.0.4`) and `PREVIEW_HOST` (`159.203.53.218` or `sitelayer-preview.sandolab.xyz`).
+**Stored in:** GitHub Actions secrets `DEPLOY_HOST` (reserved IP `159.203.51.158` or domain `sitelayer.sandolab.xyz`) and `PREVIEW_HOST` (`159.203.53.218` or `sitelayer-preview.sandolab.xyz`).
 
 **When to update:** only if the droplet IP changes (resize, reprovision, reserved-IP swap). Then:
 

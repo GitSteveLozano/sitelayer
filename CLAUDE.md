@@ -113,9 +113,9 @@ Layer 3: Derived Insight & Workflow UI
 ```
 sitelayer/
 ├── apps/
-│   ├── api/                 # Backend HTTP server (2917 lines)
-│   ├── web/                 # Frontend React SPA (2444 lines)
-│   └── worker/              # Background job processor
+│   ├── api/                 # Backend HTTP server (apps/api/src/server.ts)
+│   ├── web/                 # Frontend React SPA (apps/web/src/App.tsx)
+│   └── worker/              # Background job processor (apps/worker/src/worker.ts)
 ├── packages/
 │   ├── config/              # Tier/env loading and deployment safety checks
 │   ├── domain/              # Shared types, business logic, constants
@@ -146,7 +146,7 @@ System / observability:
 - GET `/api/debug/traces/:traceId` — Sentry trace fetch, gated by `DEBUG_TRACE_TOKEN`
 
 Companies / auth:
-- GET/POST `/api/companies`, PATCH/DELETE `/api/companies/:id`
+- GET/POST `/api/companies`
 - POST `/api/companies/:id/memberships`
 - POST `/api/webhooks/clerk` — Svix-signed Clerk webhook
 
@@ -173,7 +173,11 @@ Material bills:
 - GET/POST `/api/projects/:id/material-bills`
 - PATCH/DELETE `/api/material-bills/:id`
 
-Reference data CRUD: customers, workers, divisions, service-items, pricing-profiles, bonus-rules, labor-entries, schedules.
+Reference data CRUD: customers, workers, divisions, service-items, pricing-profiles, bonus-rules, labor-entries, schedules, rentals.
+
+Time tracking (clock):
+- POST `/api/clock/in`, POST `/api/clock/out`
+- GET `/api/clock/timeline`
 
 Analytics:
 - GET `/api/analytics`, `/api/analytics/history`, `/api/analytics/divisions`, `/api/analytics/service-item-productivity`
@@ -181,6 +185,7 @@ Analytics:
 QBO integration:
 - GET `/api/integrations/qbo/auth`, GET `/api/integrations/qbo/callback`
 - GET/POST `/api/integrations/qbo`, POST `/api/integrations/qbo/sync`
+- POST `/api/integrations/qbo/sync/material-bills` — push material bills to QBO
 - GET `/api/integrations/qbo/mappings`, POST `/api/integrations/qbo/mappings`
 - PATCH/DELETE `/api/integrations/qbo/mappings/:id`
 
@@ -244,6 +249,15 @@ export const calculateTakeoffQuantity = (points, multiplier) => ...
 ```
 
 Takeoff geometry is intentionally shared between API and web. The web uses it for live polygon quantity/centroid display; the API uses it to validate and normalize polygon geometry before writing `takeoff_measurements`.
+
+### Cross-cutting middleware
+
+Three concerns wired into every API request, implemented as discrete modules in `apps/api/src/`:
+
+- **Rate limiting** (`rate-limit.ts`) — per-user and per-IP token bucket. Configurable via `RATE_LIMIT_PER_USER_PER_MIN` / `RATE_LIMIT_PER_IP_PER_MIN`; some routes (health, metrics, OAuth callbacks) are exempted via `isRateLimitExempt`.
+- **Version guard** (`version-guard.ts`) — optimistic concurrency on PATCH paths via `assertVersion`. Clients send the row's current `version` and the server rejects with 409 on stale writes. Used for projects, blueprints, takeoff measurements, etc.
+- **Catalog enforcement** (`catalog.ts`) — guards estimate/labor writes against the per-company curated `service_item_divisions` cross-reference (set up by migration `011_service_item_xref_backfill.sql`).
+- **LWW conflict resolution** (`lww.ts`) — last-writer-wins via `updated_at` for offline-queue replays from the SPA. Migration `012_takeoff_measurements_updated_at.sql` adds the column + index that this relies on.
 
 ### Queue Package (packages/queue/src/index.ts)
 
@@ -471,28 +485,32 @@ Background job processor:
 
 ## Pending Infrastructure & Setup
 
-### Phase 1 — Environment & Secrets (Week 1, Day 1-2)
+### Phase 1 — Environment & Secrets (DONE; snapshot in `INFRASTRUCTURE_READY.md`)
 
-- [ ] Domain registration (sitelayer.{local|site})
-- [ ] DigitalOcean Spaces buckets (`sitelayer-blueprints-dev`, `sitelayer-blueprints-preview`, `sitelayer-blueprints-prod`)
-- [ ] DigitalOcean database (Postgres 15+, 1GB RAM minimum)
-- [ ] Clerk organization setup + OAuth credentials
-- [ ] Environment file (`.env.local`)
-- [ ] Docker Compose: api + web + postgres + redis-equivalent (pg-boss)
+- [x] Domain (`sandolab.xyz` registered + DNS for prod and preview)
+- [x] DigitalOcean Spaces — `sitelayer-blueprints-prod` provisioned in `tor1`; dev/preview buckets via `scripts/provision-spaces-buckets.sh`
+- [x] DigitalOcean managed Postgres 18 (`sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev`)
+- [x] Clerk app + OAuth credentials (env vars wired; enforcement gated on `CLERK_JWT_KEY` + `AUTH_ALLOW_HEADER_FALLBACK`)
+- [x] `.env.example` scaffold; production `.env` lives at `/app/sitelayer/.env` (mode `600`); GitHub Actions injects build-time secrets at deploy
+- [x] Docker Compose: api + web + postgres + worker + MinIO (local), prod and preview variants
 
-### Phase 2 — Initial Deployment (Week 1, Day 3-5)
+### Phase 2 — Initial Deployment (DONE)
 
 - [x] Build Docker images (api, web, worker)
-- [x] Postgres schema migration runner and schema checker
-- [x] Seed data (LA Operations template)
-- [ ] Test QBO OAuth flow (sandbox)
-- [ ] Test blueprint upload → Spaces
+- [x] Postgres schema migration runner (`scripts/migrate-db.sh`) + schema checker (`scripts/check-db-schema.sh`)
+- [x] Seed data (LA Operations template via `seedCompanyDefaults` in `apps/api/src/onboarding.ts`)
+- [x] Sentry wired across api/web/worker with trace propagation
+- [x] Logical backup timer (`scripts/install-postgres-backup-systemd.sh`) running with `postgres:18-alpine` pg_dump
+- [ ] QBO OAuth flow validated end-to-end against sandbox (`scripts/qbo-sandbox-smoke.sh` exists; needs real creds)
+- [ ] Blueprint upload streamed directly to Spaces (current: base64 JSON, capped at `MAX_JSON_BODY_BYTES`)
 
-### Phase 3 — Pilot Customer Onboarding (Week 2+)
+### Phase 3 — Pilot Customer Onboarding
 
-- [ ] Hardcode first customer in schema
+- [ ] Cut over to enforced Clerk auth (`AUTH_ALLOW_HEADER_FALLBACK=0`, `CLERK_JWT_KEY` set in prod)
+- [ ] Inject `DO_SPACES_KEY/SECRET` into prod tier so storage flips off the local volume
+- [ ] Provision first pilot company + memberships via `/api/companies` + `/api/companies/:id/memberships`
 - [ ] Train on crew scheduling + labor entry
-- [ ] Daily sync with QBO
+- [ ] Daily QBO sync running clean
 - [ ] Weekly business review
 
 ## Migration Roadmap (Post-Pilot)

@@ -127,7 +127,7 @@ sudo journalctl --vacuum-time=7d                        # systemd journal
 
 **Investigate:** which volume grew? Compare `du -sh /var/lib/docker/* | sort -h`. If `/app/backups/postgres` is bloated, the retention env var on the systemd timer drifted — re-run `install-postgres-backup-systemd.sh` with `RETENTION_DAYS=30`.
 
-**Escalate:** if `/var/lib/docker` is genuinely needed at >50GB, resize the droplet (`doctl compute droplet resize 566798325 --size s-4vcpu-8gb-amd` or larger; reboots required).
+**Escalate:** if `/var/lib/docker` is genuinely needed at >50GB, resize the droplet to a larger size (run `doctl compute size list | grep '^s-'` to see options; reboots required).
 
 ---
 
