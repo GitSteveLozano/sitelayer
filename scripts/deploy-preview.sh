@@ -53,6 +53,65 @@ if [ ! -f "$SHARED_ENV" ]; then
   exit 1
 fi
 
+# Pre-flight orphan reap. The preview droplet has 4GB of RAM; left unchecked,
+# closed-PR stacks accumulate (the `cleanup` job in deploy-preview.yml fires
+# on `pull_request closed`, which silently no-ops when the self-hosted runner
+# is OOM). Before provisioning a new stack, tear down any `sitelayer-pr-*`
+# project whose corresponding PR is no longer open. Best-effort: never block
+# the deploy on reap failures — the daily preview-gc.yml workflow is the
+# durable backstop running from a hosted runner.
+if [ "${PREVIEW_DEPLOY_SKIP_REAP:-0}" != "1" ]; then
+  open_prs_csv="${PREVIEW_OPEN_PRS:-}"
+  if [ -z "$open_prs_csv" ] && command -v gh >/dev/null 2>&1; then
+    open_prs_csv="$(gh pr list --state open --limit 500 --json number \
+      --jq 'map(.number) | join(",")' 2>/dev/null || true)"
+  fi
+
+  if [ -z "$open_prs_csv" ]; then
+    echo "Pre-flight reap: skipped (no open-PR list available; daily GC will catch this)"
+  else
+    open_list="$(printf '%s\n' "$open_prs_csv" | tr ',' '\n' | awk 'NF')"
+    # Enumerate compose projects via container labels — invariant across the
+    # `docker compose ls` schema churn between Compose v2 minor releases.
+    mapfile -t reap_projects < <(
+      docker ps -a --format '{{.Label "com.docker.compose.project"}}' \
+        | awk 'NF' \
+        | grep -E '^sitelayer-pr-[0-9]+$' \
+        | sort -u
+    )
+
+    for stale in "${reap_projects[@]}"; do
+      stale_pr="${stale#sitelayer-pr-}"
+      [[ "$stale_pr" =~ ^[0-9]+$ ]] || continue
+      # Never reap the stack we're about to redeploy.
+      [ "$stale" = "$project_name" ] && continue
+      if printf '%s\n' "$open_list" | grep -Fxq "$stale_pr"; then
+        continue
+      fi
+      echo "Pre-flight reap: stale stack $stale (PR #$stale_pr is closed)"
+      stale_dir="$PREVIEW_ROOT/pr-$stale_pr"
+      stale_compose=""
+      for candidate in docker-compose.preview.yml docker-compose.preview-prod.yml; do
+        if [ -f "$stale_dir/$candidate" ]; then
+          stale_compose="$candidate"
+          break
+        fi
+      done
+      if [ -n "$stale_compose" ]; then
+        env_args=()
+        [ -f "$stale_dir/.env" ] && env_args=(--env-file "$stale_dir/.env")
+        ( cd "$stale_dir" && \
+          docker compose "${env_args[@]}" -f "$stale_compose" -p "$stale" \
+            down -v --remove-orphans \
+        ) || echo "WARN: pre-flight reap failed for $stale (continuing deploy)"
+      else
+        docker compose -p "$stale" down -v --remove-orphans \
+          || echo "WARN: pre-flight reap (project-only) failed for $stale (continuing deploy)"
+      fi
+    done
+  fi
+fi
+
 mkdir -p "$target_dir"
 
 t_start=$(date +%s)

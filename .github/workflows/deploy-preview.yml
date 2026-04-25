@@ -35,6 +35,19 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.ref || github.sha }}
 
+      - name: Collect open PR numbers (for pre-flight orphan reap)
+        id: open_prs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          csv="$(gh pr list --state open --limit 500 --json number \
+            --jq 'map(.number) | join(",")' 2>/dev/null || true)"
+          echo "csv=${csv}" >>"$GITHUB_OUTPUT"
+          echo "Open PRs: ${csv:-<none>}"
+
       - name: Deploy preview stack
         env:
           PREVIEW_SLUG: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || inputs.slug }}
@@ -42,6 +55,9 @@ jobs:
           # Dev-mode (source-mounted tsx/vite watch) by default. Add the
           # `preview-prod` label to the PR to force a full prod-bundle build.
           PREVIEW_MODE: ${{ (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'preview-prod')) && 'prod' || (inputs.mode || 'dev') }}
+          # Hand the pre-flight orphan-reap pass an authoritative open-PR list
+          # without relying on `gh` being authenticated on the preview droplet.
+          PREVIEW_OPEN_PRS: ${{ steps.open_prs.outputs.csv }}
         run: scripts/deploy-preview.sh
 
       - name: Comment preview URL
