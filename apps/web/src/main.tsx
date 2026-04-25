@@ -8,6 +8,9 @@ import { captureException, initSentry } from './instrument.js'
 import './styles.css'
 import './components/ui/mobile.css'
 
+const BUILD_ID = import.meta.env.VITE_SENTRY_RELEASE || import.meta.env.MODE || 'local'
+const CHUNK_RELOAD_STORAGE_KEY = 'sitelayer.chunk-reload-build'
+
 function runWhenIdle(run: () => void, timeout: number) {
   if (typeof window === 'undefined') return
   const requestIdleCallback = window.requestIdleCallback
@@ -18,10 +21,49 @@ function runWhenIdle(run: () => void, timeout: number) {
   }
 }
 
+function getChunkErrorMessage(error: unknown) {
+  if (error instanceof Error) return `${error.name} ${error.message}`
+  return String(error)
+}
+
+function isChunkLoadError(error: unknown) {
+  return /ChunkLoadError|CSS_CHUNK_LOAD_FAILED|Failed to fetch dynamically imported module|Importing a module script failed|error loading dynamically imported module/i.test(
+    getChunkErrorMessage(error),
+  )
+}
+
+function reloadOnceForChunkError(error: unknown, force = false) {
+  if (typeof window === 'undefined') return false
+  if (!force && !isChunkLoadError(error)) return false
+
+  try {
+    if (window.sessionStorage.getItem(CHUNK_RELOAD_STORAGE_KEY) === BUILD_ID) return false
+    window.sessionStorage.setItem(CHUNK_RELOAD_STORAGE_KEY, BUILD_ID)
+  } catch {
+    return false
+  }
+
+  window.location.reload()
+  return true
+}
+
+function installChunkRecovery() {
+  if (typeof window === 'undefined') return
+
+  window.addEventListener('vite:preloadError', (event) => {
+    const payload = (event as Event & { payload?: unknown }).payload ?? event
+    captureException(payload, { tags: { scope: 'vite_preload_error' } })
+    if (reloadOnceForChunkError(payload, true)) {
+      event.preventDefault()
+    }
+  })
+}
+
 runWhenIdle(initSentry, 3000)
 runWhenIdle(() => {
   void import('./web-vitals.js').then(({ captureWebVitals }) => captureWebVitals())
 }, 4000)
+installChunkRecovery()
 
 // Sitelayer Clerk theming. The color values mirror the HSL triplets declared in
 // styles.css (`--primary`, `--background`, etc.) so the hosted <SignIn>/<SignUp>
@@ -75,6 +117,7 @@ class AppErrorBoundary extends React.Component<{ children: React.ReactNode }, { 
 
   componentDidCatch(error: unknown) {
     captureException(error, { tags: { scope: 'react_error_boundary' } })
+    reloadOnceForChunkError(error)
   }
 
   resetError = () => {
