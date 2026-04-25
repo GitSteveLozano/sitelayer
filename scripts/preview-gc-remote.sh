@@ -8,6 +8,17 @@ set -euo pipefail
 open_csv="${OPEN_PRS_CSV:-}"
 open_list="$(printf '%s\n' "$open_csv" | tr ',' '\n' | awk 'NF')"
 
+# Safety belt: refuse to reap when the open-PR list is empty. An empty list
+# can happen because of an API failure upstream, and the reaper would then
+# tear down every sitelayer-pr-* stack — including currently-active ones.
+# (This is exactly what happened on workflow run 24935177139.) The caller
+# must explicitly set OPEN_PRS_ALLOW_EMPTY=1 to acknowledge the risk.
+if [ -z "$open_list" ] && [ "${OPEN_PRS_ALLOW_EMPTY:-0}" != "1" ]; then
+  echo "FATAL: OPEN_PRS_CSV is empty and OPEN_PRS_ALLOW_EMPTY is not set." >&2
+  echo "Refusing to reap to avoid deleting active stacks. Investigate the upstream PR-list query." >&2
+  exit 1
+fi
+
 mapfile -t projects < <(
   docker ps -a --format '{{.Label "com.docker.compose.project"}}' \
     | awk 'NF' \
