@@ -39,6 +39,12 @@ import { recordAudit, isAuditableEntity } from './audit.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
 import { AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
 import { extractSvixHeaders, verifyClerkWebhook } from './clerk-webhook.js'
+import {
+  extractIntuitSignature,
+  flattenQboWebhookPayload,
+  parseQboWebhookPayload,
+  verifyQboWebhook,
+} from './qbo-webhook.js'
 import { attachPool, observeAudit, observeRequest, renderMetrics } from './metrics.js'
 
 const logger = createLogger('api')
@@ -190,6 +196,7 @@ const qboBaseUrl =
   (qboEnvironment === 'sandbox' ? 'https://sandbox-quickbooks.api.intuit.com' : 'https://quickbooks.api.intuit.com')
 const qboStateSecret = process.env.QBO_STATE_SECRET ?? qboClientSecret
 const clerkWebhookSecret = process.env.CLERK_WEBHOOK_SECRET?.trim() || null
+const qboWebhookVerifier = process.env.QBO_WEBHOOK_VERIFIER?.trim() || null
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)
 
 function withTierOptions(config: PoolConfig): PoolConfig {
@@ -2155,7 +2162,90 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            const PUBLIC_PATHS = new Set(['/api/integrations/qbo/callback', '/api/webhooks/clerk'])
+            // QBO webhook: verified via intuit-signature HMAC, no Bearer/JWT.
+            // Public path — runs before identity resolution so Intuit's
+            // unauthenticated POSTs aren't rejected as 401.
+            if (req.method === 'POST' && url.pathname === '/api/webhooks/qbo') {
+              if (!qboWebhookVerifier) {
+                sendJson(res, 503, { error: 'QBO_WEBHOOK_VERIFIER not configured' })
+                return
+              }
+              const raw = await readRawBody(req)
+              const signature = extractIntuitSignature(req.headers as Record<string, unknown>)
+              const verify = verifyQboWebhook(raw, signature, qboWebhookVerifier)
+              if (!verify.ok) {
+                logger.warn({ err: verify.error, status: verify.status }, '[qbo-webhook] verification failed')
+                sendJson(res, verify.status, { error: verify.error })
+                return
+              }
+              const parsed = parseQboWebhookPayload(raw)
+              if (!parsed.ok) {
+                logger.warn({ err: parsed.error }, '[qbo-webhook] payload parse failed')
+                sendJson(res, parsed.status, { error: parsed.error })
+                return
+              }
+              const events = flattenQboWebhookPayload(parsed.payload)
+              // We resolve each realm → integration_connection → company_id.
+              // If a realm we've never connected sends us a webhook, we log and
+              // drop those events rather than fabricating a company.
+              const realmIds = Array.from(new Set(events.map((e) => e.realmId)))
+              const connectionMap = new Map<string, { companyId: string; connectionId: string }>()
+              for (const realmId of realmIds) {
+                const result = await pool.query<{ company_id: string; id: string }>(
+                  `select company_id, id from integration_connections
+                   where provider = 'qbo' and provider_account_id = $1
+                   order by created_at desc limit 1`,
+                  [realmId],
+                )
+                const row = result.rows[0]
+                if (row) connectionMap.set(realmId, { companyId: row.company_id, connectionId: row.id })
+              }
+              let persisted = 0
+              let skipped = 0
+              for (const event of events) {
+                const conn = connectionMap.get(event.realmId)
+                if (!conn) {
+                  skipped += 1
+                  continue
+                }
+                await pool.query(
+                  `insert into sync_events (
+                     company_id, integration_connection_id, direction, entity_type, entity_id, payload, status
+                   ) values ($1, $2, 'inbound', $3, $4, $5::jsonb, 'pending')`,
+                  [
+                    conn.companyId,
+                    conn.connectionId,
+                    event.entityType,
+                    event.entityId,
+                    JSON.stringify({
+                      source: 'qbo_webhook',
+                      realmId: event.realmId,
+                      operation: event.operation,
+                      lastUpdated: event.lastUpdated,
+                      raw: event.raw,
+                    }),
+                  ],
+                )
+                persisted += 1
+              }
+              logger.info(
+                { persisted, skipped, realms: realmIds.length },
+                '[qbo-webhook] received',
+              )
+              // 200 quickly; the worker will pull entity details asynchronously.
+              res.writeHead(200, {
+                'content-type': 'application/json; charset=utf-8',
+                'access-control-allow-origin': getCorsOrigin(req),
+              })
+              res.end(JSON.stringify({ ok: true, persisted, skipped }))
+              return
+            }
+
+            const PUBLIC_PATHS = new Set([
+              '/api/integrations/qbo/callback',
+              '/api/webhooks/clerk',
+              '/api/webhooks/qbo',
+            ])
             const isPublicPath = PUBLIC_PATHS.has(url.pathname)
             let identity: Identity
             try {
@@ -2899,6 +2989,175 @@ const server = http.createServer(async (req, res) => {
                 await upsertIntegrationConnection(company.id, 'qbo', { status: 'error' })
                 sendJson(res, 500, { error: 'sync failed' })
               }
+              return
+            }
+
+            // Push unsynced material_bills rows to QBO as Bills.
+            //
+            // Contract with the frontend/accounting ops:
+            //   - A mapping of entity_type='qbo_account' and local_ref='materials'
+            //     is required. The `external_id` is the QBO AccountRef.value for
+            //     the Materials expense account. Without it we error per-bill
+            //     rather than fabricating a default account.
+            //   - Vendors are resolved by DisplayName — we search QBO for one
+            //     matching `material_bills.vendor_name`, and create it if not
+            //     found. The resolved vendor is mirrored into
+            //     integration_mappings(entity_type='qbo_vendor', local_ref=vendor_name).
+            if (req.method === 'POST' && url.pathname === '/api/integrations/qbo/sync/material-bills') {
+              if (!requireRole(res, company, ['admin', 'office'], req)) return
+              const connection = await getIntegrationConnectionWithSecrets(company.id, 'qbo')
+              if (!connection?.access_token || !connection.provider_account_id) {
+                sendJson(res, 400, { error: 'QBO connection missing or not authorized' })
+                return
+              }
+              const realmId = connection.provider_account_id as string
+              const accessToken = connection.access_token as string
+
+              const accountMappingResult = await pool.query<{ external_id: string }>(
+                `select external_id from integration_mappings
+                 where company_id = $1 and provider = 'qbo'
+                   and entity_type = 'qbo_account' and local_ref = 'materials'
+                   and deleted_at is null
+                 limit 1`,
+                [company.id],
+              )
+              const materialsAccountId = accountMappingResult.rows[0]?.external_id ?? null
+
+              const unsynced = await pool.query<{
+                id: string
+                vendor_name: string
+                amount: string | number
+                description: string | null
+                occurred_on: string | null
+              }>(
+                `select mb.id, mb.vendor_name, mb.amount, mb.description, mb.occurred_on
+                 from material_bills mb
+                 where mb.company_id = $1 and mb.deleted_at is null
+                   and not exists (
+                     select 1 from integration_mappings im
+                     where im.company_id = mb.company_id and im.provider = 'qbo'
+                       and im.entity_type = 'material_bill' and im.local_ref = mb.id::text
+                       and im.deleted_at is null
+                   )`,
+                [company.id],
+              )
+
+              const errors: Array<{ bill_id: string; error: string }> = []
+              let synced = 0
+              // Cache vendor lookups within this request so N bills from one
+              // vendor only hit QBO once.
+              const vendorCache = new Map<string, string>()
+
+              for (const bill of unsynced.rows) {
+                if (!materialsAccountId) {
+                  errors.push({
+                    bill_id: bill.id,
+                    error: 'no Materials account mapped — set via /api/integrations/qbo/mappings',
+                  })
+                  continue
+                }
+                try {
+                  const displayName = bill.vendor_name.trim()
+                  if (!displayName) {
+                    errors.push({ bill_id: bill.id, error: 'vendor_name is empty' })
+                    continue
+                  }
+                  let vendorId = vendorCache.get(displayName) ?? null
+                  if (!vendorId) {
+                    // Try a cached mapping first — if we pushed a bill for
+                    // this vendor in a previous run we don't need to hit QBO.
+                    const mappedVendor = await pool.query<{ external_id: string }>(
+                      `select external_id from integration_mappings
+                       where company_id = $1 and provider = 'qbo'
+                         and entity_type = 'qbo_vendor' and local_ref = $2
+                         and deleted_at is null
+                       limit 1`,
+                      [company.id, displayName],
+                    )
+                    vendorId = mappedVendor.rows[0]?.external_id ?? null
+                  }
+                  if (!vendorId) {
+                    // QBO vendor query is quoted via single-quotes; escape any
+                    // embedded quotes to avoid breaking the V2 query grammar.
+                    const escaped = displayName.replace(/'/g, "\\'")
+                    const vendorSearch = await qboGet<{ QueryResponse?: { Vendor?: Array<{ Id?: string }> } }>(
+                      `/query?query=${encodeURIComponent(`select * from Vendor where DisplayName = '${escaped}'`)}`,
+                      realmId,
+                      accessToken,
+                    )
+                    vendorId = vendorSearch.QueryResponse?.Vendor?.[0]?.Id ?? null
+                    if (!vendorId) {
+                      const created = await qboPost<{ Vendor?: { Id?: string } }>(
+                        `/vendor`,
+                        realmId,
+                        accessToken,
+                        { DisplayName: displayName },
+                      )
+                      vendorId = created.Vendor?.Id ?? null
+                    }
+                    if (!vendorId) {
+                      errors.push({ bill_id: bill.id, error: 'failed to resolve or create QBO vendor' })
+                      continue
+                    }
+                    vendorCache.set(displayName, vendorId)
+                    await upsertIntegrationMapping(company.id, 'qbo', {
+                      entity_type: 'qbo_vendor',
+                      local_ref: displayName,
+                      external_id: vendorId,
+                      label: displayName,
+                      status: 'active',
+                      notes: 'resolved via material-bill push',
+                    })
+                  }
+
+                  const amount = Number(bill.amount) || 0
+                  const billPayload = {
+                    VendorRef: { value: vendorId },
+                    TxnDate: bill.occurred_on ?? undefined,
+                    Line: [
+                      {
+                        Amount: amount,
+                        DetailType: 'AccountBasedExpenseLineDetail',
+                        Description: bill.description ?? undefined,
+                        AccountBasedExpenseLineDetail: {
+                          AccountRef: { value: materialsAccountId },
+                        },
+                      },
+                    ],
+                  }
+                  const response = await qboPost<{ Bill?: { Id?: string } }>(
+                    `/bill`,
+                    realmId,
+                    accessToken,
+                    billPayload,
+                  )
+                  const qboBillId = response.Bill?.Id ?? null
+                  if (!qboBillId) {
+                    errors.push({ bill_id: bill.id, error: 'QBO did not return a Bill.Id' })
+                    continue
+                  }
+                  await upsertIntegrationMapping(company.id, 'qbo', {
+                    entity_type: 'material_bill',
+                    local_ref: bill.id,
+                    external_id: qboBillId,
+                    label: `${displayName} ${amount}`,
+                    status: 'active',
+                    notes: 'pushed via /sync/material-bills',
+                  })
+                  await recordSyncEvent(company.id, 'material_bill', bill.id, {
+                    action: 'push',
+                    provider: 'qbo',
+                    external_id: qboBillId,
+                  })
+                  synced += 1
+                } catch (err) {
+                  const message = err instanceof Error ? err.message : 'unknown error'
+                  logger.error({ err, scope: 'qbo_material_bill_push', bill_id: bill.id }, 'material bill push failed')
+                  Sentry.captureException(err, { tags: { scope: 'qbo_material_bill_push' } })
+                  errors.push({ bill_id: bill.id, error: message })
+                }
+              }
+              sendJson(res, 200, { synced, errors, total_candidates: unsynced.rowCount ?? 0 })
               return
             }
 
