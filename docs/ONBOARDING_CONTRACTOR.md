@@ -151,14 +151,14 @@ All `applied`, zero `error` populated → green.
 
 ---
 
-## Bulk-onboard script
+## Bulk-onboard script (example — not committed)
 
-For concierge onboarding when you already have the company name + crew list. Run from local machine with `JWT` set to a Sitelayer admin token (issued out-of-band from Clerk dashboard's "Impersonate" or a service-token Clerk JWT).
+For concierge onboarding when you already have the company name + crew list. The script below is an **example, not a committed file** — copy it into a local `onboard-company.sh`, make it executable, and run it. Run from a local machine with `JWT` set to a Sitelayer admin token (issued out-of-band from Clerk dashboard's "Impersonate" or a service-token Clerk JWT).
 
 ```bash
 #!/usr/bin/env bash
-# scripts/onboard-company.sh — bulk-onboard a construction company.
-# Usage: SITELAYER_JWT=... ./scripts/onboard-company.sh examples/acme.json
+# Bulk-onboard a construction company.
+# Usage: SITELAYER_JWT=... ./onboard-company.sh examples/acme.json
 
 set -euo pipefail
 

@@ -42,7 +42,7 @@ DATABASE_URL=postgres://doadmin:...@.../sitelayer_prod_restore \
   /app/sitelayer/scripts/restore-postgres.sh /app/backups/postgres/<dump>
 
 # 5. Promote restore: swap APP_TIER+DATABASE_URL in /app/sitelayer/.env, then
-docker compose -f /app/sitelayer/docker-compose.yml up -d --force-recreate api worker
+docker compose -f /app/sitelayer/docker-compose.prod.yml up -d --force-recreate api worker
 ```
 
 ## Procedure 1 — Restore droplet from snapshot
@@ -65,7 +65,7 @@ doctl compute droplet create sitelayer-restore \
 doctl compute reserved-ip-action assign 159.203.51.158 <NEW_DROPLET_ID>
 
 # Verify app boots
-ssh sitelayer@159.203.51.158 'docker compose -f /app/sitelayer/docker-compose.yml ps'
+ssh sitelayer@159.203.51.158 'docker compose -f /app/sitelayer/docker-compose.prod.yml ps'
 ```
 
 The managed DB trusted-sources firewall is on droplet UUID, not IP — update it:
@@ -139,7 +139,7 @@ psql "$RESTORE_URL" -c "SELECT count(*) FROM projects;"
 curl -fsS https://sitelayer.sandolab.xyz/api/bootstrap
 
 # Worker is processing
-ssh sitelayer 'docker compose -f /app/sitelayer/docker-compose.yml logs --tail=30 worker'
+ssh sitelayer 'docker compose -f /app/sitelayer/docker-compose.prod.yml logs --tail=30 worker'
 
 # Schema check
 ssh sitelayer 'cd /app/sitelayer && DATABASE_URL=$(grep ^DATABASE_URL= .env | cut -d= -f2-) ./scripts/check-db-schema.sh'
