@@ -43,6 +43,12 @@ import {
   StorageError,
   type BlueprintStorage,
 } from './storage.js'
+import {
+  BlueprintUploadError,
+  isMultipartRequest,
+  parseBlueprintMultipart,
+  type BlueprintMultipartResult,
+} from './blueprint-upload.js'
 import { recordAudit, isAuditableEntity } from './audit.js'
 import { buildEstimatePdfInputFromSummary, renderEstimatePdf } from './pdf.js'
 import { buildListProjectsQuery, parseProjectsQuery } from './projects-query.js'
@@ -252,6 +258,12 @@ const qboStateSecret = process.env.QBO_STATE_SECRET ?? qboClientSecret
 const clerkWebhookSecret = process.env.CLERK_WEBHOOK_SECRET?.trim() || null
 const qboWebhookVerifier = process.env.QBO_WEBHOOK_VERIFIER?.trim() || null
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)
+const maxBlueprintUploadBytes = Number(process.env.MAX_BLUEPRINT_UPLOAD_BYTES ?? 200 * 1024 * 1024)
+// Gate the presigned-URL 302 redirect on the blueprint download path. Off by
+// default so we don't break PDF.js fetches until Spaces CORS is validated;
+// when off, the API streams bytes itself the same way it did pre-streaming.
+const blueprintDownloadPresigned =
+  process.env.BLUEPRINT_DOWNLOAD_PRESIGNED === '1' || process.env.BLUEPRINT_DOWNLOAD_PRESIGNED === 'true'
 
 // Pool circuit-breaker knobs.
 // - max bounds connection count so a slow-query storm can't exhaust Postgres.
@@ -386,6 +398,7 @@ async function persistBlueprintFile(
   await storage.put(key, Buffer.from(source, 'base64'), getBlueprintMimeType(fileName))
   return key
 }
+
 
 async function copyBlueprintFile(
   companyId: string,
@@ -6171,28 +6184,43 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'project id is required' })
                 return
               }
-              const body = await readBody(req)
-              const fileName = String(body.file_name ?? body.original_file_name ?? '').trim()
+              let body: Record<string, any>
+              let multipartResult: BlueprintMultipartResult | null = null
+              let blueprintId: string
+              if (isMultipartRequest(req)) {
+                blueprintId = randomUUID()
+                multipartResult = await parseBlueprintMultipart(
+                  req,
+                  storage,
+                  company.id,
+                  blueprintId,
+                  'blueprint.pdf',
+                  { maxFileBytes: maxBlueprintUploadBytes },
+                )
+                body = multipartResult.fields
+              } else {
+                body = await readBody(req)
+                blueprintId = String(body.id ?? randomUUID())
+              }
+              const fileName = String(
+                body.file_name ?? body.original_file_name ?? multipartResult?.fileName ?? '',
+              ).trim()
               const requestedStoragePath = body.storage_path === undefined ? null : String(body.storage_path)
               const fileContentsBase64 = String(body.file_contents_base64 ?? body.file_contents ?? '').trim()
-              if (!fileName && !fileContentsBase64) {
-                sendJson(res, 400, { error: 'file_name or file_contents_base64 is required' })
+              if (!fileName && !fileContentsBase64 && !multipartResult) {
+                sendJson(res, 400, { error: 'file_name, file_contents_base64, or multipart upload is required' })
                 return
               }
-              const blueprintId = String(body.id ?? randomUUID())
               const versionResult = await pool.query<{ version: number }>(
                 'select coalesce(max(version), 0) + 1 as version from blueprint_documents where company_id = $1 and project_id = $2',
                 [company.id, projectId],
               )
               const version = Number(body.version ?? versionResult.rows[0]?.version ?? 1)
-              const resolvedFileName = fileName || 'blueprint.pdf'
-              let resolvedStoragePath = resolveBlueprintStoragePath(
-                company.id,
-                blueprintId,
-                resolvedFileName,
-                requestedStoragePath,
-              )
-              if (fileContentsBase64) {
+              const resolvedFileName = fileName || multipartResult?.fileName || 'blueprint.pdf'
+              let resolvedStoragePath = multipartResult
+                ? multipartResult.storagePath
+                : resolveBlueprintStoragePath(company.id, blueprintId, resolvedFileName, requestedStoragePath)
+              if (!multipartResult && fileContentsBase64) {
                 resolvedStoragePath = await persistBlueprintFile(
                   company.id,
                   blueprintId,
@@ -6245,11 +6273,26 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'blueprint id is required' })
                 return
               }
-              const body = await readBody(req)
+              let body: Record<string, any>
+              let multipartResult: BlueprintMultipartResult | null = null
+              if (isMultipartRequest(req)) {
+                multipartResult = await parseBlueprintMultipart(
+                  req,
+                  storage,
+                  company.id,
+                  blueprintId,
+                  'blueprint.pdf',
+                  { maxFileBytes: maxBlueprintUploadBytes },
+                )
+                body = multipartResult.fields
+              } else {
+                body = await readBody(req)
+              }
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
               const fileContentsBase64 = String(body.file_contents_base64 ?? body.file_contents ?? '').trim()
-              const storagePath =
-                body.storage_path === undefined || !String(body.storage_path).trim()
+              const storagePath = multipartResult
+                ? multipartResult.storagePath
+                : body.storage_path === undefined || !String(body.storage_path).trim()
                   ? null
                   : resolveBlueprintStoragePath(
                       company.id,
@@ -6274,7 +6317,7 @@ const server = http.createServer(async (req, res) => {
                 [
                   company.id,
                   blueprintId,
-                  body.file_name ?? null,
+                  body.file_name ?? multipartResult?.fileName ?? null,
                   storagePath,
                   body.preview_type ?? null,
                   body.calibration_length ?? null,
@@ -6344,23 +6387,41 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'blueprint not found' })
                 return
               }
-              const body = await readBody(req)
+              let body: Record<string, any>
+              let multipartResult: BlueprintMultipartResult | null = null
+              const blueprintId = randomUUID()
+              if (isMultipartRequest(req)) {
+                multipartResult = await parseBlueprintMultipart(
+                  req,
+                  storage,
+                  company.id,
+                  blueprintId,
+                  String(source.file_name ?? 'blueprint.pdf'),
+                  { maxFileBytes: maxBlueprintUploadBytes },
+                )
+                body = multipartResult.fields
+              } else {
+                body = await readBody(req)
+              }
               const copyMeasurements = body.copy_measurements !== false
-              const fileName = String(body.file_name ?? source.file_name ?? 'blueprint.pdf').trim()
+              const fileName = String(
+                body.file_name ?? multipartResult?.fileName ?? source.file_name ?? 'blueprint.pdf',
+              ).trim()
               const fileContentsBase64 = String(body.file_contents_base64 ?? body.file_contents ?? '').trim()
               const versionResult = await pool.query<{ version: number }>(
                 'select coalesce(max(version), 0) + 1 as version from blueprint_documents where company_id = $1 and project_id = $2',
                 [company.id, source.project_id],
               )
               const version = Number(body.version ?? versionResult.rows[0]?.version ?? 1)
-              const blueprintId = String(body.id ?? randomUUID())
               const requestedStoragePath = body.storage_path === undefined ? null : String(body.storage_path)
-              let storagePath = requestedStoragePath
-                ? resolveBlueprintStoragePath(company.id, blueprintId, fileName, requestedStoragePath)
-                : ''
-              if (fileContentsBase64) {
+              let storagePath = multipartResult
+                ? multipartResult.storagePath
+                : requestedStoragePath
+                  ? resolveBlueprintStoragePath(company.id, blueprintId, fileName, requestedStoragePath)
+                  : ''
+              if (!multipartResult && fileContentsBase64) {
                 storagePath = await persistBlueprintFile(company.id, blueprintId, fileName, fileContentsBase64)
-              } else if (source.storage_path) {
+              } else if (!multipartResult && source.storage_path) {
                 try {
                   storagePath = await copyBlueprintFile(company.id, blueprintId, source.storage_path, fileName)
                 } catch {
@@ -6457,11 +6518,26 @@ const server = http.createServer(async (req, res) => {
               }
               try {
                 const storageKey = assertBlueprintFilePath(company.id, String(blueprint.storage_path))
+                const fileName = String(blueprint.file_name)
+                if (blueprintDownloadPresigned) {
+                  const signedUrl = await storage.getDownloadUrl(storageKey, { fileName })
+                  if (signedUrl) {
+                    res.writeHead(302, {
+                      location: signedUrl,
+                      'cache-control': 'no-store',
+                      'access-control-allow-origin': getCorsOrigin(req),
+                      'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+                      'access-control-allow-headers': CORS_ALLOW_HEADERS,
+                    })
+                    res.end()
+                    return
+                  }
+                }
                 const content = await storage.get(storageKey)
-                const mimeType = getBlueprintMimeType(String(blueprint.file_name))
+                const mimeType = getBlueprintMimeType(fileName)
                 res.writeHead(200, {
                   'content-type': mimeType,
-                  'content-disposition': `inline; filename="${sanitizeFileName(String(blueprint.file_name))}"`,
+                  'content-disposition': `inline; filename="${sanitizeFileName(fileName)}"`,
                   'access-control-allow-origin': getCorsOrigin(req),
                   'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
                   'access-control-allow-headers': CORS_ALLOW_HEADERS,
@@ -6901,7 +6977,12 @@ const server = http.createServer(async (req, res) => {
           } catch (error) {
             logger.error({ err: error }, 'unhandled request error')
             Sentry.captureException(error)
-            const status = error instanceof HttpError ? error.status : 500
+            const status =
+              error instanceof HttpError
+                ? error.status
+                : error instanceof BlueprintUploadError
+                  ? error.status
+                  : 500
             if (rootSpan) {
               rootSpan.setStatus({ code: 2, message: error instanceof Error ? error.message : 'internal_error' })
             }

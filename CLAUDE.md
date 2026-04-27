@@ -162,7 +162,7 @@ Bootstrap / projects:
 
 Blueprints / takeoff:
 
-- POST `/api/projects/:id/blueprints` — upload (currently base64 JSON; streaming refactor pending)
+- POST `/api/projects/:id/blueprints` — upload; accepts streaming `multipart/form-data` (`blueprint_file` + metadata fields) or legacy base64 JSON (`file_contents_base64`)
 - GET `/api/projects/:id/blueprints`, GET `/api/blueprints/:id/file`
 - PATCH/DELETE `/api/blueprints/:id`, POST `/api/blueprints/:id/versions`
 - POST `/api/projects/:id/takeoff/measurement` — append one polygon
@@ -463,7 +463,7 @@ Background job processor:
 | **Supabase Storage**    | Built on S3, PostgreSQL-native       | Different S3 endpoint                   | ~$10/mo  | 🟡 Adds dependency   |
 | **Cloudinary**          | Image optimization built-in          | Per-request pricing, vendor lock-in     | $10+/mo  | ❌ Overkill for PDFs |
 
-**Recommendation**: Keep DigitalOcean Spaces as the production object store. Next storage work is streaming multipart upload plus presigned download so 30-80MB construction PDFs do not pass through the JSON body limit.
+**Recommendation**: Keep DigitalOcean Spaces as the production object store. Streaming multipart upload (`apps/api/src/blueprint-upload.ts`, busboy + `@aws-sdk/lib-storage`) and presigned download URLs (`@aws-sdk/s3-request-presigner`) ship today; 30–80MB construction PDFs no longer flow through the JSON body limit.
 
 ### Background Jobs
 
@@ -515,7 +515,7 @@ Background job processor:
 - [x] Sentry wired across api/web/worker with trace propagation
 - [x] Logical backup, Postgres off-host copy, blueprint-volume fallback copy, restore-drill, and timer-monitor timers running with Postgres 18 tooling
 - [ ] QBO OAuth flow validated end-to-end against sandbox (`scripts/qbo-sandbox-smoke.sh` exists; needs real creds)
-- [x] Blueprint uploads stored directly in Spaces (still base64 JSON through API, capped at `MAX_JSON_BODY_BYTES`)
+- [x] Blueprint uploads stream multipart through the API into Spaces (`MAX_BLUEPRINT_UPLOAD_BYTES`, default 200MB); legacy base64 JSON still accepted as a fallback for already-queued offline mutations
 
 ### Phase 3 — Pilot Customer Onboarding
 
