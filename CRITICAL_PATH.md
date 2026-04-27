@@ -1,8 +1,8 @@
 # Sitelayer Critical Path to Pilot Launch
 
 **Goal:** First customer onboarded in 4-6 weeks  
-**Today:** Production and preview infrastructure are live on DigitalOcean; prod deploys use immutable registry images through GitHub Actions; Clerk, Spaces, TLS, backups, and baseline observability are wired.
-**Next:** remove the blueprint upload size ceiling, validate live QBO sync end to end, then onboard the first pilot company.
+**Today:** Production and preview infrastructure are live on DigitalOcean; prod deploys use immutable registry images through GitHub Actions; Clerk, Spaces, TLS, backups, and baseline observability are wired. Blueprint uploads stream multipart through the API directly to Spaces, with presigned download URLs.
+**Next:** validate live QBO sync end to end, then onboard the first pilot company.
 
 **Mesh coordination:** project `sitelayer` / ID `282`; follow-up task chain `sitelayer-deploy-reconcile-20260423`
 
@@ -43,18 +43,18 @@
 - [x] Takeoff polygon annotations append to DB without replacing existing measurements
 - [x] Clerk auth cut over in production; unauthenticated app APIs return `401`
 - [x] DO Spaces enabled in production for blueprint object storage
+- [x] Blueprint upload streaming via multipart → Spaces (`apps/api/src/blueprint-upload.ts`, busboy + lib-storage); 30–80MB PDFs no longer fight the JSON body cap. Cap is `MAX_BLUEPRINT_UPLOAD_BYTES` (default 200MB).
+- [x] Presigned download URL plumbing in place (`@aws-sdk/s3-request-presigner`); 302 redirect gated on `BLUEPRINT_DOWNLOAD_PRESIGNED=1` until Spaces CORS is validated for PDF.js fetches.
 
 ### ⏳ In Progress
 
-- [ ] Blueprint upload streaming and presigned download path.
 - [ ] Live QBO sandbox/prod sync validation with real credentials.
 
 ### 🔴 Blockers for Pilot
 
 These are configuration / validation blockers; the underlying code is shipped.
 
-1. **Blueprint upload streaming** — current path buffers the entire PDF as base64 JSON (capped at `maxJsonBodyBytes`, ~20MB). Real construction PDFs are 30–80MB. Replace with streaming multipart → Spaces; serve downloads via presigned URLs.
-2. **Live QBO sync validation** — `mutation_outbox` + `sync_events` worker drain is unit-tested; real QBO sandbox credentials still need to be exercised end-to-end.
+1. **Live QBO sync validation** — `mutation_outbox` + `sync_events` worker drain is unit-tested; real QBO sandbox credentials still need to be exercised end-to-end.
 
 ---
 

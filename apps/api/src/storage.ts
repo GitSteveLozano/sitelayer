@@ -1,15 +1,37 @@
+import { createWriteStream } from 'node:fs'
 import { mkdir, readFile as fsReadFile, writeFile as fsWriteFile } from 'node:fs/promises'
 import path from 'node:path'
+import { pipeline } from 'node:stream/promises'
+import type { Readable } from 'node:stream'
 import type { AppTier } from './tier.js'
 
 export type StorageBackend = 'local-fs' | 's3'
+
+export interface PutStreamOptions {
+  contentType?: string
+  contentLength?: number
+}
+
+export interface DownloadUrlOptions {
+  /** Filename to send to the browser via Content-Disposition */
+  fileName?: string
+  /** TTL for the signed URL in seconds; ignored for backends that stream through the API */
+  expiresIn?: number
+}
 
 export interface BlueprintStorage {
   backend: StorageBackend
   bucket: string | null
   put(key: string, contents: Buffer, contentType?: string): Promise<void>
+  putStream(key: string, body: Readable, options?: PutStreamOptions): Promise<void>
   get(key: string): Promise<Buffer>
   copy(sourceKey: string, destKey: string): Promise<void>
+  /**
+   * Returns a presigned download URL when the backend supports it (S3); returns
+   * `null` when the caller should stream the bytes back through the API itself
+   * (local FS in dev / preview).
+   */
+  getDownloadUrl(key: string, options?: DownloadUrlOptions): Promise<string | null>
 }
 
 function sanitizeFileName(fileName: string): string {
@@ -87,6 +109,12 @@ class LocalFsStorage implements BlueprintStorage {
     await fsWriteFile(abs, contents)
   }
 
+  async putStream(key: string, body: Readable): Promise<void> {
+    const abs = this.abs(key)
+    await mkdir(path.dirname(abs), { recursive: true })
+    await pipeline(body, createWriteStream(abs))
+  }
+
   async get(key: string): Promise<Buffer> {
     const abs = this.abs(key)
     return fsReadFile(abs)
@@ -95,6 +123,10 @@ class LocalFsStorage implements BlueprintStorage {
   async copy(sourceKey: string, destKey: string): Promise<void> {
     const buf = await this.get(sourceKey)
     await this.put(destKey, buf)
+  }
+
+  async getDownloadUrl(): Promise<null> {
+    return null
   }
 }
 
@@ -105,11 +137,22 @@ type S3ClientLike = {
 type S3Ctor = new (config: unknown) => S3ClientLike
 type S3CommandCtor = new (input: unknown) => unknown
 
+type S3UploadCtor = new (input: {
+  client: S3ClientLike
+  params: Record<string, unknown>
+  queueSize?: number
+  partSize?: number
+}) => { done(): Promise<unknown> }
+
+type GetSignedUrlFn = (client: S3ClientLike, command: unknown, options: { expiresIn?: number }) => Promise<string>
+
 interface S3Module {
   S3Client: S3Ctor
   PutObjectCommand: S3CommandCtor
   GetObjectCommand: S3CommandCtor
   CopyObjectCommand: S3CommandCtor
+  Upload: S3UploadCtor
+  getSignedUrl: GetSignedUrlFn
 }
 
 class S3Storage implements BlueprintStorage {
@@ -131,6 +174,25 @@ class S3Storage implements BlueprintStorage {
     )
   }
 
+  async putStream(key: string, body: Readable, options: PutStreamOptions = {}): Promise<void> {
+    const params: Record<string, unknown> = {
+      Bucket: this.bucket,
+      Key: key,
+      Body: body,
+      ContentType: options.contentType ?? 'application/octet-stream',
+    }
+    if (options.contentLength !== undefined) {
+      params.ContentLength = options.contentLength
+    }
+    const upload = new this.mod.Upload({
+      client: this.client,
+      params,
+      queueSize: 4,
+      partSize: 8 * 1024 * 1024,
+    })
+    await upload.done()
+  }
+
   async get(key: string): Promise<Buffer> {
     const res = (await this.client.send(new this.mod.GetObjectCommand({ Bucket: this.bucket, Key: key }))) as {
       Body?: { transformToByteArray(): Promise<Uint8Array> }
@@ -148,6 +210,15 @@ class S3Storage implements BlueprintStorage {
         Key: destKey,
       }),
     )
+  }
+
+  async getDownloadUrl(key: string, options: DownloadUrlOptions = {}): Promise<string> {
+    const params: Record<string, unknown> = { Bucket: this.bucket, Key: key }
+    if (options.fileName) {
+      params.ResponseContentDisposition = `inline; filename="${sanitizeFileName(options.fileName)}"`
+    }
+    const expiresIn = options.expiresIn && options.expiresIn > 0 ? options.expiresIn : 900
+    return this.mod.getSignedUrl(this.client, new this.mod.GetObjectCommand(params), { expiresIn })
   }
 }
 
@@ -189,7 +260,19 @@ export async function createBlueprintStorage(storageEnv: StorageEnv): Promise<Bl
     return new LocalFsStorage(storageEnv.blueprintStorageRoot)
   }
 
-  const mod = (await import('@aws-sdk/client-s3')) as unknown as S3Module
+  const clientMod = (await import('@aws-sdk/client-s3')) as unknown as {
+    S3Client: S3Ctor
+    PutObjectCommand: S3CommandCtor
+    GetObjectCommand: S3CommandCtor
+    CopyObjectCommand: S3CommandCtor
+  }
+  const libStorage = (await import('@aws-sdk/lib-storage')) as unknown as { Upload: S3UploadCtor }
+  const presigner = (await import('@aws-sdk/s3-request-presigner')) as unknown as { getSignedUrl: GetSignedUrlFn }
+  const mod: S3Module = {
+    ...clientMod,
+    Upload: libStorage.Upload,
+    getSignedUrl: presigner.getSignedUrl,
+  }
   const client = new mod.S3Client({
     region: storageEnv.spacesRegion,
     endpoint: storageEnv.spacesEndpoint ?? undefined,

@@ -1,6 +1,7 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { Readable } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   assertKeyInCompany,
@@ -56,6 +57,21 @@ describe('blueprint storage', () => {
     const root = await makeTempDir()
     const storage = await createBlueprintStorage(readStorageEnv({ BLUEPRINT_STORAGE_ROOT: root }, 'local'))
     await expect(storage.put('../escape.pdf', Buffer.from('bad'))).rejects.toThrow(StorageError)
+  })
+
+  it('streams multipart-style writes to the local filesystem', async () => {
+    const root = await makeTempDir()
+    const storage = await createBlueprintStorage(readStorageEnv({ BLUEPRINT_STORAGE_ROOT: root }, 'local'))
+    const chunks = ['chunk-one ', 'chunk-two ', 'chunk-three']
+    const stream = Readable.from(chunks.map((c) => Buffer.from(c)))
+    await storage.putStream('company-1/blueprint-1/streamed.pdf', stream)
+    await expect(storage.get('company-1/blueprint-1/streamed.pdf')).resolves.toEqual(Buffer.from(chunks.join('')))
+  })
+
+  it('returns null download urls for the local backend so the API streams bytes itself', async () => {
+    const root = await makeTempDir()
+    const storage = await createBlueprintStorage(readStorageEnv({ BLUEPRINT_STORAGE_ROOT: root }, 'local'))
+    await expect(storage.getDownloadUrl('company-1/blueprint-1/file.pdf')).resolves.toBeNull()
   })
 
   it('defaults Spaces endpoint to Toronto and formats S3 copy source keys safely', () => {

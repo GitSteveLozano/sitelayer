@@ -634,6 +634,44 @@ export async function apiDelete<T>(path: string, companySlug: string, body?: unk
 }
 
 /**
+ * Streaming multipart blueprint upload. Bypasses the JSON+offline-queue path
+ * because binary file bodies don't survive IndexedDB persistence cleanly and
+ * blueprint uploads are typically office-side anyway. Caller is responsible
+ * for retry on network failure.
+ */
+export async function apiUploadBlueprint<T>(
+  method: 'POST' | 'PATCH',
+  path: string,
+  formData: FormData,
+  companySlug: string,
+): Promise<T> {
+  if (FIXTURES_ENABLED) {
+    const { mutateFixtureResponse } = await import('./fixtures.js')
+    const summary: Record<string, unknown> = {}
+    for (const [name, value] of formData.entries()) {
+      if (typeof value === 'string') summary[name] = value
+      else if (value instanceof File) summary[name] = { name: value.name, size: value.size }
+    }
+    return mutateFixtureResponse<T>(method, path, summary, companySlug)
+  }
+  const headers = await authHeaders(companySlug)
+  // Don't set content-type — fetch derives the multipart boundary from the FormData body.
+  const response = await fetch(`${API_URL}${path}`, {
+    method,
+    headers,
+    body: formData,
+  })
+  if (!response.ok) {
+    const fallback = await response.text()
+    throw new Error(`${method} ${path} failed: ${response.status} ${fallback}`)
+  }
+  const parsed = (await response.json()) as T
+  invalidateCompanyCache(companySlug)
+  cacheResponse(companySlug, path, parsed)
+  return parsed
+}
+
+/**
  * Pull an estimate PDF as a Blob and trigger a browser download. Stays out
  * of `apiGet` because the response is binary and shouldn't be cached or
  * fed through the offline-queue path.
