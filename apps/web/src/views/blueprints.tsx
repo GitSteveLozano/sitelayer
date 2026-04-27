@@ -1,4 +1,4 @@
-import { apiDelete, apiPatch, apiPost } from '../api.js'
+import { apiDelete, apiPatch, apiPost, apiUploadBlueprint } from '../api.js'
 import type { BlueprintRow } from '../api.js'
 import { BlueprintEditor, getBlueprintLineageLabel } from '../components/operations.js'
 import { FormRow } from '../components/forms.js'
@@ -15,27 +15,27 @@ type BlueprintDocumentsViewProps = {
   runAction: RunAction
 }
 
-async function fileToBase64(file: File): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onerror = () => reject(reader.error ?? new Error('failed to read file'))
-    reader.onload = () => {
-      const result = typeof reader.result === 'string' ? reader.result : ''
-      resolve(result.includes(',') ? (result.split(',', 2)[1] ?? result) : result)
-    }
-    reader.readAsDataURL(file)
-  })
+function pickBlueprintFile(form: FormData): File | null {
+  const file = form.get('blueprint_file')
+  return file instanceof File && file.size > 0 ? file : null
 }
 
-async function readBlueprintUpload(form: FormData) {
-  const file = form.get('blueprint_file')
-  if (!(file instanceof File) || !file.size) return null
-  return {
-    file_name: file.name,
-    original_file_name: file.name,
-    mime_type: file.type || 'application/pdf',
-    contents_base64: await fileToBase64(file),
+/**
+ * Build a multipart payload for blueprint create/version/patch endpoints.
+ * The API expects the binary as the `blueprint_file` part and all other
+ * metadata as plain text fields with the same names as the JSON path.
+ */
+function buildBlueprintFormData(
+  file: File,
+  fields: Record<string, string | number | boolean | null | undefined>,
+): FormData {
+  const data = new FormData()
+  data.append('blueprint_file', file, file.name)
+  for (const [name, value] of Object.entries(fields)) {
+    if (value === undefined || value === null) continue
+    data.append(name, String(value))
   }
+  return data
 }
 
 export function BlueprintDocumentsView({
@@ -56,23 +56,24 @@ export function BlueprintDocumentsView({
         onSubmit={(form) =>
           runAction('blueprint', async () => {
             if (!selectedProjectId) throw new Error('select a project first')
-            const upload = await readBlueprintUpload(form)
-            await apiPost(
-              `/api/projects/${selectedProjectId}/blueprints`,
-              {
-                file_name: String(form.get('file_name') ?? upload?.file_name ?? '').trim(),
-                storage_path: String(form.get('storage_path') ?? '').trim(),
-                preview_type: String(form.get('preview_type') ?? 'storage_path').trim(),
-                calibration_length: Number(form.get('calibration_length') ?? 0) || null,
-                calibration_unit: String(form.get('calibration_unit') ?? '').trim() || null,
-                sheet_scale: Number(form.get('sheet_scale') ?? 0) || null,
-                version: Number(form.get('version') ?? 0) || undefined,
-                file_contents_base64: upload?.contents_base64 ?? undefined,
-                original_file_name: upload?.original_file_name ?? undefined,
-                mime_type: upload?.mime_type ?? undefined,
-              },
-              companySlug,
-            )
+            const file = pickBlueprintFile(form)
+            const fields = {
+              file_name: String(form.get('file_name') ?? file?.name ?? '').trim(),
+              storage_path: String(form.get('storage_path') ?? '').trim(),
+              preview_type: String(form.get('preview_type') ?? 'storage_path').trim(),
+              calibration_length: Number(form.get('calibration_length') ?? 0) || null,
+              calibration_unit: String(form.get('calibration_unit') ?? '').trim() || null,
+              sheet_scale: Number(form.get('sheet_scale') ?? 0) || null,
+              version: Number(form.get('version') ?? 0) || undefined,
+              original_file_name: file?.name,
+              mime_type: file?.type || undefined,
+            }
+            const path = `/api/projects/${selectedProjectId}/blueprints`
+            if (file) {
+              await apiUploadBlueprint('POST', path, buildBlueprintFormData(file, fields), companySlug)
+            } else {
+              await apiPost(path, fields, companySlug)
+            }
             await refreshTakeoff(selectedProjectId)
           })
         }
@@ -95,47 +96,52 @@ export function BlueprintDocumentsView({
               busy={busy === `blueprint:${blueprint.id}`}
               onSubmit={(form) =>
                 runAction(`blueprint:${blueprint.id}`, async () => {
-                  const upload = await readBlueprintUpload(form)
-                  await apiPatch(
-                    `/api/blueprints/${blueprint.id}`,
-                    {
-                      file_name: String(form.get('file_name') ?? upload?.file_name ?? '').trim(),
-                      storage_path: String(form.get('storage_path') ?? '').trim(),
-                      preview_type: String(form.get('preview_type') ?? '').trim(),
-                      calibration_length: Number(form.get('calibration_length') ?? 0) || null,
-                      calibration_unit: String(form.get('calibration_unit') ?? '').trim() || null,
-                      sheet_scale: Number(form.get('sheet_scale') ?? 0) || null,
-                      expected_version: Number(form.get('expected_version') ?? 0) || undefined,
-                      file_contents_base64: upload?.contents_base64 ?? undefined,
-                      original_file_name: upload?.original_file_name ?? undefined,
-                      mime_type: upload?.mime_type ?? undefined,
-                    },
-                    companySlug,
-                  )
+                  const file = pickBlueprintFile(form)
+                  const fields = {
+                    file_name: String(form.get('file_name') ?? file?.name ?? '').trim(),
+                    storage_path: String(form.get('storage_path') ?? '').trim(),
+                    preview_type: String(form.get('preview_type') ?? '').trim(),
+                    calibration_length: Number(form.get('calibration_length') ?? 0) || null,
+                    calibration_unit: String(form.get('calibration_unit') ?? '').trim() || null,
+                    sheet_scale: Number(form.get('sheet_scale') ?? 0) || null,
+                    expected_version: Number(form.get('expected_version') ?? 0) || undefined,
+                    original_file_name: file?.name,
+                    mime_type: file?.type || undefined,
+                  }
+                  const path = `/api/blueprints/${blueprint.id}`
+                  if (file) {
+                    await apiUploadBlueprint('PATCH', path, buildBlueprintFormData(file, fields), companySlug)
+                  } else {
+                    await apiPatch(path, fields, companySlug)
+                  }
                   await refreshTakeoff(selectedProjectId)
                 })
               }
               onCreateVersion={(form) =>
                 runAction(`blueprint-version:${blueprint.id}`, async () => {
-                  const upload = await readBlueprintUpload(form)
-                  const response = await apiPost<BlueprintRow>(
-                    `/api/blueprints/${blueprint.id}/versions`,
-                    {
-                      file_name: String(form.get('file_name') ?? upload?.file_name ?? blueprint.file_name).trim(),
-                      storage_path: String(form.get('storage_path') ?? '').trim(),
-                      preview_type: String(form.get('preview_type') ?? blueprint.preview_type).trim(),
-                      calibration_length:
-                        Number(form.get('calibration_length') ?? 0) || blueprint.calibration_length || null,
-                      calibration_unit:
-                        String(form.get('calibration_unit') ?? '').trim() || blueprint.calibration_unit || null,
-                      sheet_scale: Number(form.get('sheet_scale') ?? 0) || blueprint.sheet_scale || null,
-                      copy_measurements: form.get('copy_measurements') !== 'off',
-                      file_contents_base64: upload?.contents_base64 ?? undefined,
-                      original_file_name: upload?.original_file_name ?? undefined,
-                      mime_type: upload?.mime_type ?? undefined,
-                    },
-                    companySlug,
-                  )
+                  const file = pickBlueprintFile(form)
+                  const fields = {
+                    file_name: String(form.get('file_name') ?? file?.name ?? blueprint.file_name).trim(),
+                    storage_path: String(form.get('storage_path') ?? '').trim(),
+                    preview_type: String(form.get('preview_type') ?? blueprint.preview_type).trim(),
+                    calibration_length:
+                      Number(form.get('calibration_length') ?? 0) || blueprint.calibration_length || null,
+                    calibration_unit:
+                      String(form.get('calibration_unit') ?? '').trim() || blueprint.calibration_unit || null,
+                    sheet_scale: Number(form.get('sheet_scale') ?? 0) || blueprint.sheet_scale || null,
+                    copy_measurements: form.get('copy_measurements') !== 'off',
+                    original_file_name: file?.name,
+                    mime_type: file?.type || undefined,
+                  }
+                  const path = `/api/blueprints/${blueprint.id}/versions`
+                  const response = file
+                    ? await apiUploadBlueprint<BlueprintRow>(
+                        'POST',
+                        path,
+                        buildBlueprintFormData(file, fields),
+                        companySlug,
+                      )
+                    : await apiPost<BlueprintRow>(path, fields, companySlug)
                   await refreshTakeoff(selectedProjectId)
                   setSelectedBlueprintId(response.id)
                 })

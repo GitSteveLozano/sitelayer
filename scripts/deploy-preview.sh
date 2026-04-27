@@ -121,6 +121,7 @@ rsync -az --delete \
   --exclude 'node_modules/' \
   --exclude 'dist/' \
   --exclude 'coverage/' \
+  --exclude 'storage/' \
   --exclude '.env' \
   --exclude '.env.*' \
   "$SOURCE_DIR/" "$target_dir/"
