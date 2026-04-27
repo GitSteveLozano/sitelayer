@@ -144,11 +144,7 @@ type S3UploadCtor = new (input: {
   partSize?: number
 }) => { done(): Promise<unknown> }
 
-type GetSignedUrlFn = (
-  client: S3ClientLike,
-  command: unknown,
-  options: { expiresIn?: number },
-) => Promise<string>
+type GetSignedUrlFn = (client: S3ClientLike, command: unknown, options: { expiresIn?: number }) => Promise<string>
 
 interface S3Module {
   S3Client: S3Ctor

@@ -399,7 +399,6 @@ async function persistBlueprintFile(
   return key
 }
 
-
 async function copyBlueprintFile(
   companyId: string,
   blueprintId: string,
@@ -6978,11 +6977,7 @@ const server = http.createServer(async (req, res) => {
             logger.error({ err: error }, 'unhandled request error')
             Sentry.captureException(error)
             const status =
-              error instanceof HttpError
-                ? error.status
-                : error instanceof BlueprintUploadError
-                  ? error.status
-                  : 500
+              error instanceof HttpError ? error.status : error instanceof BlueprintUploadError ? error.status : 500
             if (rootSpan) {
               rootSpan.setStatus({ code: 2, message: error instanceof Error ? error.message : 'internal_error' })
             }

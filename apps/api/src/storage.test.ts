@@ -65,9 +65,7 @@ describe('blueprint storage', () => {
     const chunks = ['chunk-one ', 'chunk-two ', 'chunk-three']
     const stream = Readable.from(chunks.map((c) => Buffer.from(c)))
     await storage.putStream('company-1/blueprint-1/streamed.pdf', stream)
-    await expect(storage.get('company-1/blueprint-1/streamed.pdf')).resolves.toEqual(
-      Buffer.from(chunks.join('')),
-    )
+    await expect(storage.get('company-1/blueprint-1/streamed.pdf')).resolves.toEqual(Buffer.from(chunks.join('')))
   })
 
   it('returns null download urls for the local backend so the API streams bytes itself', async () => {
