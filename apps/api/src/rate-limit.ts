@@ -105,6 +105,10 @@ export function createRateLimiter(config: RateLimitConfig = DEFAULT_RATE_LIMIT_C
 export function isRateLimitExempt(pathname: string): boolean {
   if (pathname === '/health' || pathname.startsWith('/health')) return true
   if (pathname.startsWith('/api/webhooks/')) return true
+  // OAuth callbacks redirect from third-party providers and must succeed in
+  // a single shot. Per-IP throttling can't tell a legit redirect from abuse,
+  // so we exempt them. /api/integrations/<provider>/callback.
+  if (/^\/api\/integrations\/[^/]+\/callback$/.test(pathname)) return true
   return false
 }
 

@@ -11,7 +11,8 @@
 # Env overrides:
 #   BACKUP_DIR              default: /app/backups/postgres
 #   BACKUP_NAME_GLOB        default: sitelayer-*.sql.gz
-#   PG_IMAGE                default: postgres:18-alpine
+#   PG_IMAGE                default: postgres:18-alpine pinned by digest
+#                           (override to track a newer Postgres minor)
 #   SCRATCH_CONTAINER       default: sitelayer-restore-drill-<epoch>
 #   SCRATCH_DB              default: sitelayer_drill
 #   RECENCY_HOURS           default: 48
@@ -20,7 +21,11 @@ set -euo pipefail
 
 BACKUP_DIR="${BACKUP_DIR:-/app/backups/postgres}"
 BACKUP_NAME_GLOB="${BACKUP_NAME_GLOB:-sitelayer-*.sql.gz}"
-PG_IMAGE="${PG_IMAGE:-postgres:18-alpine}"
+# Digest pin keeps restore drills deterministic: the drill exercises the
+# exact image we last validated rather than whatever upstream
+# postgres:18-alpine resolves to today. Bump after each successful
+# weekly drill against a fresh tag.
+PG_IMAGE="${PG_IMAGE:-postgres:18-alpine@sha256:54451ecb8ab38c24c3ec123f2fd501303a3a1856a5c66e98cecf2460d5e1e9d7}"
 SCRATCH_CONTAINER="${SCRATCH_CONTAINER:-sitelayer-restore-drill-$(date +%s)}"
 SCRATCH_DB="${SCRATCH_DB:-sitelayer_drill}"
 SCRATCH_PASSWORD="${SCRATCH_PASSWORD:-drill}"

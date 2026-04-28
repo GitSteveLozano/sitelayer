@@ -440,20 +440,48 @@ async function copyBlueprintFile(
   return destKey
 }
 
+// Bounded exponential backoff for transient QBO failures: 429 (rate limit)
+// and 5xx are retried up to 3 times with 200ms / 1s / 5s delays. 4xx other
+// than 429 fail fast — those are auth/validation errors that won't recover.
+// We deliberately don't retry forever (would hold HTTP request handlers
+// open during a long QBO outage); the request fails after ~6s of attempts
+// and the caller surfaces 5xx to the user.
+const QBO_RETRY_DELAYS_MS = [200, 1000, 5000] as const
+
+function qboShouldRetry(status: number): boolean {
+  return status === 429 || (status >= 500 && status < 600)
+}
+
+async function qboFetch<T>(url: string, init: RequestInit): Promise<T> {
+  let lastStatus = 0
+  let lastStatusText = ''
+  for (let attempt = 0; attempt <= QBO_RETRY_DELAYS_MS.length; attempt += 1) {
+    const response = await fetch(url, init)
+    if (response.ok) return (await response.json()) as T
+    lastStatus = response.status
+    lastStatusText = response.statusText
+    if (!qboShouldRetry(response.status) || attempt === QBO_RETRY_DELAYS_MS.length) {
+      throw new Error(`QBO API error: ${response.status} ${response.statusText}`)
+    }
+    const delay = QBO_RETRY_DELAYS_MS[attempt] ?? 0
+    await new Promise((resolve) => setTimeout(resolve, delay))
+  }
+  // Unreachable, but satisfies the type checker.
+  throw new Error(`QBO API error: ${lastStatus} ${lastStatusText}`)
+}
+
 async function qboGet<T>(endpoint: string, realmId: string, accessToken: string): Promise<T> {
-  const response = await fetch(`${qboBaseUrl}/v3/company/${realmId}${endpoint}`, {
+  return qboFetch<T>(`${qboBaseUrl}/v3/company/${realmId}${endpoint}`, {
     method: 'GET',
     headers: {
       Authorization: `Bearer ${accessToken}`,
       Accept: 'application/json',
     },
   })
-  if (!response.ok) throw new Error(`QBO API error: ${response.status} ${response.statusText}`)
-  return response.json() as Promise<T>
 }
 
 async function qboPost<T>(endpoint: string, realmId: string, accessToken: string, body: unknown): Promise<T> {
-  const response = await fetch(`${qboBaseUrl}/v3/company/${realmId}${endpoint}`, {
+  return qboFetch<T>(`${qboBaseUrl}/v3/company/${realmId}${endpoint}`, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -462,8 +490,6 @@ async function qboPost<T>(endpoint: string, realmId: string, accessToken: string
     },
     body: JSON.stringify(body),
   })
-  if (!response.ok) throw new Error(`QBO API error: ${response.status} ${response.statusText}`)
-  return response.json() as Promise<T>
 }
 
 type CompanyRow = {

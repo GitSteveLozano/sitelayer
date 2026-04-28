@@ -80,6 +80,16 @@ describe('isRateLimitExempt', () => {
     expect(isRateLimitExempt('/api/sign-in/callback')).toBe(false)
     expect(isRateLimitExempt('/api/companies')).toBe(false)
   })
+
+  it('exempts OAuth callbacks', () => {
+    expect(isRateLimitExempt('/api/integrations/qbo/callback')).toBe(true)
+    expect(isRateLimitExempt('/api/integrations/xero/callback')).toBe(true)
+  })
+
+  it('does not exempt nested OAuth-like paths', () => {
+    expect(isRateLimitExempt('/api/integrations/qbo/callback/extra')).toBe(false)
+    expect(isRateLimitExempt('/api/integrations/qbo/sync')).toBe(false)
+  })
 })
 
 describe('resolveRequestIp', () => {
