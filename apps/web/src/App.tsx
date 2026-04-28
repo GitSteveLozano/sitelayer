@@ -14,6 +14,7 @@ import { CompanySwitcher } from './components/company-switcher.js'
 import { EnvironmentRibbon } from './components/environment-ribbon.js'
 import { SyncStatusBadge } from './components/sync-status-badge.js'
 import { useBootstrapRefresh } from './machines/bootstrap-refresh.js'
+import { useDayConfirmed } from './machines/day-confirmed.js'
 import { useOfflineReplay } from './machines/offline-replay.js'
 import { useProjectSelection } from './machines/project-selection.js'
 import { Button } from './components/ui/button.js'
@@ -201,31 +202,9 @@ function AppShell() {
   // and online event listener. See machines/offline-replay.ts.
   const { offlineQueue } = useOfflineReplay(companySlug)
   const [features, setFeatures] = useState<FeaturesResponse | null>(null)
-  const [confirmDoneToday, setConfirmDoneToday] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false
-    try {
-      const today = new Date().toISOString().slice(0, 10)
-      return window.localStorage.getItem('sitelayer.lastConfirmedDay') === today
-    } catch {
-      return false
-    }
-  })
-
-  useEffect(() => {
-    function refreshConfirmState() {
-      if (typeof window === 'undefined') return
-      try {
-        const today = new Date().toISOString().slice(0, 10)
-        setConfirmDoneToday(window.localStorage.getItem('sitelayer.lastConfirmedDay') === today)
-      } catch {
-        setConfirmDoneToday(false)
-      }
-    }
-    refreshConfirmState()
-    const handler = () => refreshConfirmState()
-    window.addEventListener('sitelayer:day-confirmed', handler)
-    return () => window.removeEventListener('sitelayer:day-confirmed', handler)
-  }, [])
+  // Today's confirm state is owned by useDayConfirmed — reads localStorage,
+  // refreshes on the `sitelayer:day-confirmed` window event.
+  const confirmDoneToday = useDayConfirmed()
 
   useEffect(() => {
     let cancelled = false
