@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useMachine } from '@xstate/react'
 import { assign, fromPromise, setup } from 'xstate'
 
@@ -225,6 +225,14 @@ export function useBootstrapRefresh(companySlug: string): BootstrapRefreshSnapsh
     send({ type: 'COMPANY_SLUG_CHANGED', companySlug })
   }, [companySlug, send])
 
+  // Memoised so consumers' useEffect deps stay stable across renders. send is
+  // already a stable reference from useMachine; the wrappers around it would
+  // otherwise be fresh closures on every render and re-trigger any useEffect
+  // that depends on them. Maximum-update-depth bug otherwise.
+  const refresh = useCallback(() => send({ type: 'REFRESH' }), [send])
+  const setActionError = useCallback((message: string) => send({ type: 'SET_ACTION_ERROR', message }), [send])
+  const clearError = useCallback(() => send({ type: 'CLEAR_ERROR' }), [send])
+
   return {
     bootstrap: state.context.bootstrap,
     session: state.context.session,
@@ -234,8 +242,8 @@ export function useBootstrapRefresh(companySlug: string): BootstrapRefreshSnapsh
     error: state.context.error,
     isLoading: state.matches('loading'),
     refreshKey: state.context.refreshKey,
-    refresh: () => send({ type: 'REFRESH' }),
-    setActionError: (message: string) => send({ type: 'SET_ACTION_ERROR', message }),
-    clearError: () => send({ type: 'CLEAR_ERROR' }),
+    refresh,
+    setActionError,
+    clearError,
   }
 }
