@@ -172,11 +172,20 @@ jobs:
 
             # Update code. The production checkout is deployment-owned; keep
             # runtime files but clear drift from manual hotfixes/scripts.
+            #
+            # Check out the exact SHA the image was built for, not origin/main:
+            # when multiple PRs merge in quick succession the build steps queue
+            # up but only the in-progress run holds the concurrency lock, so by
+            # the time SSH runs origin/main may have advanced past the built
+            # image. Pinning to EXPECTED_GIT_SHA keeps image+code consistent.
+            # Migrations are checksum-ledgered, so a later deploy will apply
+            # any newer SQL on top — older deploys never roll forward past
+            # their own snapshot.
             git fetch origin
             git reset --hard
             git clean -fd -e .env -e ".last_*"
-            git checkout -B main origin/main
-            git reset --hard origin/main
+            git checkout -B main "$EXPECTED_GIT_SHA"
+            git reset --hard "$EXPECTED_GIT_SHA"
             export SENTRY_RELEASE="$(git rev-parse --short HEAD)"
             export VITE_SENTRY_RELEASE="$SENTRY_RELEASE"
             export GIT_SHA="$SENTRY_RELEASE"
