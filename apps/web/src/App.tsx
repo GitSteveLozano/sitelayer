@@ -6,9 +6,7 @@ import {
   DEFAULT_COMPANY_SLUG,
   FIXTURES_ENABLED,
   getStoredCompanySlug,
-  readOfflineQueue,
   registerClerkTokenProvider,
-  replayOfflineMutations,
   setStoredCompanySlug,
 } from './api.js'
 import type {
@@ -18,7 +16,6 @@ import type {
   FeaturesResponse,
   MaterialBillRow,
   MeasurementRow,
-  OfflineMutation,
   ProjectSummary,
   QboConnectionResponse,
   ScheduleRow,
@@ -28,6 +25,7 @@ import type {
 import { CompanySwitcher } from './components/company-switcher.js'
 import { EnvironmentRibbon } from './components/environment-ribbon.js'
 import { SyncStatusBadge } from './components/sync-status-badge.js'
+import { useOfflineReplay } from './machines/offline-replay.js'
 import { Button } from './components/ui/button.js'
 import {
   Dialog,
@@ -38,7 +36,7 @@ import {
   DialogTrigger,
 } from './components/ui/dialog.js'
 import { Input } from './components/ui/input.js'
-import { Toaster, toastError, toastInfo, toastSuccess } from './components/ui/toast.js'
+import { Toaster, toastError, toastSuccess } from './components/ui/toast.js'
 
 const loadAuditView = () => import('./views/audit.js')
 const loadBonusSimView = () => import('./views/bonus-sim.js')
@@ -192,7 +190,10 @@ function AppShell() {
   const [companies, setCompanies] = useState<CompaniesResponse['companies']>([])
   const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null)
   const [qboConnection, setQboConnection] = useState<QboConnectionResponse['connection'] | null>(null)
-  const [offlineQueue, setOfflineQueue] = useState<OfflineMutation[]>([])
+  // The offline-replay XState machine (machines/offline-replay.ts) owns the
+  // queue depth, the 15s replay loop, the `online` event listener, and the
+  // toast deltas. App.tsx only consumes the rendered queue.
+  const { offlineQueue } = useOfflineReplay(companySlug)
   const [syncRefreshKey, setSyncRefreshKey] = useState(0)
   const [features, setFeatures] = useState<FeaturesResponse | null>(null)
   const [confirmDoneToday, setConfirmDoneToday] = useState<boolean>(() => {
@@ -266,7 +267,9 @@ function AppShell() {
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : 'unknown error')
     }
-    setOfflineQueue(await readOfflineQueue())
+    // Offline queue depth is owned by the useOfflineReplay machine — no
+    // direct setOfflineQueue here. The machine refreshes its own state on
+    // company-slug change.
     setSyncRefreshKey((current) => current + 1)
   }, [companySlug])
 
@@ -280,44 +283,9 @@ function AppShell() {
       })
   }, [refresh])
 
-  useEffect(() => {
-    let active = true
-    let previousDepth = 0
-    const refreshQueueState = () => {
-      void readOfflineQueue().then((queue) => {
-        if (!active) return
-        // When depth drops, emit an info toast so crews know offline edits synced.
-        if (previousDepth > 0 && queue.length < previousDepth) {
-          const synced = previousDepth - queue.length
-          toastInfo(
-            `${synced} offline change${synced === 1 ? '' : 's'} synced`,
-            queue.length > 0 ? `${queue.length} pending` : undefined,
-          )
-        }
-        previousDepth = queue.length
-        setOfflineQueue(queue)
-      })
-    }
-    const replay = () => {
-      replayOfflineMutations(companySlug)
-        .then(refreshQueueState)
-        .catch((caught: unknown) => {
-          refreshQueueState()
-          toastError('Offline sync failed', caught instanceof Error ? caught.message : 'Will retry automatically')
-        })
-    }
-
-    replay()
-    window.addEventListener('online', replay)
-    window.addEventListener('sitelayer:offline-queue', refreshQueueState as EventListener)
-    const timer = window.setInterval(replay, 15000)
-    return () => {
-      active = false
-      window.removeEventListener('online', replay)
-      window.removeEventListener('sitelayer:offline-queue', refreshQueueState as EventListener)
-      window.clearInterval(timer)
-    }
-  }, [companySlug])
+  // Offline replay loop, the `online` listener, the
+  // `sitelayer:offline-queue` event handler, and the 15s timer are all owned
+  // by useOfflineReplay (see machines/offline-replay.ts).
 
   const refreshSummary = useCallback(
     async (projectId: string) => {
