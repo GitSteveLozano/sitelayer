@@ -36,6 +36,7 @@ import {
 import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigError } from './tier.js'
 import { validateQboStateSecret } from './qbo-config.js'
 import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './auth-types.js'
+import { handleCustomerRoutes } from './routes/customers.js'
 import {
   CORS_ALLOW_HEADERS,
   HttpError,
@@ -1447,13 +1448,7 @@ function assertServiceItemCatalogStatus(companyId: string, serviceItemCode: stri
   return assertServiceItemCatalogStatusImpl(pool, companyId, serviceItemCode, divisionCode)
 }
 
-async function listCustomers(companyId: string) {
-  const result = await pool.query(
-    'select id, external_id, name, source, version, deleted_at, created_at from customers where company_id = $1 and deleted_at is null order by name asc',
-    [companyId],
-  )
-  return result.rows
-}
+// listCustomers moved to routes/customers.ts.
 
 async function listWorkers(companyId: string) {
   const result = await pool.query(
@@ -2578,8 +2573,23 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'GET' && url.pathname === '/api/customers') {
-              sendJson(res, 200, { customers: await listCustomers(company.id) })
+            // Customer routes (GET /api/customers, POST/PATCH/DELETE
+            // /api/customers[/<id>]) are handled by the extracted route
+            // module. Same SQL, role gates, and ledger writes — just
+            // relocated. See routes/customers.ts.
+            if (
+              await handleCustomerRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
+                backfillCustomerMapping: (companyId, customer, executor) =>
+                  backfillCustomerMapping(companyId, customer, executor),
+              })
+            ) {
               return
             }
 
@@ -3844,136 +3854,6 @@ const server = http.createServer(async (req, res) => {
                 [company.id, limit],
               )
               sendJson(res, 200, { outbox: result.rows })
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname === '/api/customers') {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const body = await readBody(req)
-              const name = String(body.name ?? '').trim()
-              if (!name) {
-                sendJson(res, 400, { error: 'name is required' })
-                return
-              }
-              const customer = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        insert into customers (company_id, external_id, name, source, version)
-        values ($1, $2, $3, $4, 1)
-        returning id, external_id, name, source, version, deleted_at, created_at
-        `,
-                  [company.id, body.external_id ?? null, name, body.source ?? 'manual'],
-                )
-                const row = result.rows[0]
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'customer',
-                  entityId: row.id,
-                  action: 'create',
-                  row,
-                })
-                await backfillCustomerMapping(company.id, row, client)
-                return row
-              })
-              sendJson(res, 201, customer)
-              return
-            }
-
-            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/customers\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const customerId = url.pathname.split('/')[3] ?? ''
-              if (!customerId) {
-                sendJson(res, 400, { error: 'customer id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const updated = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update customers
-        set
-          external_id = coalesce($3, external_id),
-          name = coalesce($4, name),
-          source = coalesce($5, source),
-          version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null and ($6::int is null or version = $6)
-        returning id, external_id, name, source, version, deleted_at, created_at
-        `,
-                  [
-                    company.id,
-                    customerId,
-                    body.external_id ?? null,
-                    body.name ?? null,
-                    body.source ?? null,
-                    expectedVersion,
-                  ],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'customer',
-                  entityId: customerId,
-                  action: 'update',
-                  row,
-                })
-                await backfillCustomerMapping(company.id, row, client)
-                return row
-              })
-              if (!updated) {
-                if (
-                  !(await checkVersion(
-                    'customers',
-                    'company_id = $1 and id = $2 and deleted_at is null',
-                    [company.id, customerId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'customer not found' })
-                return
-              }
-              sendJson(res, 200, updated)
-              return
-            }
-
-            if (req.method === 'DELETE' && url.pathname.match(/^\/api\/customers\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const customerId = url.pathname.split('/')[3] ?? ''
-              if (!customerId) {
-                sendJson(res, 400, { error: 'customer id is required' })
-                return
-              }
-              const deleted = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update customers
-        set deleted_at = now(), version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null
-        returning id, external_id, name, source, version, deleted_at, created_at
-        `,
-                  [company.id, customerId],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'customer',
-                  entityId: customerId,
-                  action: 'delete',
-                  row,
-                })
-                return row
-              })
-              if (!deleted) {
-                sendJson(res, 404, { error: 'customer not found' })
-                return
-              }
-              sendJson(res, 200, deleted)
               return
             }
 
