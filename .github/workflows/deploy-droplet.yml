@@ -35,11 +35,12 @@ jobs:
         # `main` tag, then queue async garbage collection. Best-effort:
         # never blocks the deploy on a cleanup failure.
         env:
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
           REGISTRY_TAG_KEEP: ${{ vars.REGISTRY_TAG_KEEP || '5' }}
         run: |
           set +e
           set -u
-          tags="$(doctl registry repository list-tags sitelayer --no-header --format Tag,UpdatedAt 2>/dev/null \
+          tags="$(doctl --access-token "$DIGITALOCEAN_ACCESS_TOKEN" registry repository list-tags sitelayer --no-header --format Tag,UpdatedAt 2>/dev/null \
             | awk 'NF >= 2 && $1 != "main" && $1 != "" { print $0 }' \
             | sort -k2,2 -r \
             | awk '{ print $1 }')"
@@ -54,18 +55,19 @@ jobs:
               printf '%s\n' "$tags_to_delete" | while read -r tag; do
                 [ -z "$tag" ] && continue
                 echo "Deleting tag $tag"
-                doctl registry repository delete-tag sitelayer "$tag" --force || true
+                doctl --access-token "$DIGITALOCEAN_ACCESS_TOKEN" registry repository delete-tag sitelayer "$tag" --force || true
               done
               # Async GC runs in background; subsequent deploys may still hit
               # quota briefly while it processes, but we've already deleted
               # the manifests so the next push has space.
-              doctl registry garbage-collection start --include-untagged-manifests --force || true
+              doctl --access-token "$DIGITALOCEAN_ACCESS_TOKEN" registry garbage-collection start --include-untagged-manifests --force || true
             fi
           fi
           exit 0
 
       - name: Build and push immutable image
         env:
+          DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         run: |
           set -euo pipefail
@@ -81,7 +83,7 @@ jobs:
 
           docker_config_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/sitelayer-docker-config.XXXXXX")"
           trap 'rm -rf "$docker_config_dir"' EXIT
-          doctl registry docker-config sitelayer --read-write --expiry-seconds 3600 > "$docker_config_dir/config.json"
+          doctl --access-token "$DIGITALOCEAN_ACCESS_TOKEN" registry docker-config sitelayer --read-write --expiry-seconds 3600 > "$docker_config_dir/config.json"
 
           VITE_CLERK_PUBLISHABLE_KEY="${VITE_CLERK_PUBLISHABLE_KEY:-pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA}"
 
