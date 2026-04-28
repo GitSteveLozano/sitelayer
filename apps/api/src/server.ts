@@ -36,6 +36,7 @@ import { handleLaborEntryRoutes } from './routes/labor-entries.js'
 import { handlePricingProfileRoutes } from './routes/pricing-profiles.js'
 import { handleQboMappingRoutes } from './routes/qbo-mappings.js'
 import { handleRentalRoutes } from './routes/rentals.js'
+import { handleScheduleRoutes } from './routes/schedules.js'
 import { handleServiceItemRoutes } from './routes/service-items.js'
 import { getSyncStatus, handleSyncRoutes } from './routes/sync.js'
 import { handleWorkerRoutes } from './routes/workers.js'
@@ -43,7 +44,6 @@ import {
   CORS_ALLOW_HEADERS,
   HttpError,
   getCorsOrigin as getCorsOriginImpl,
-  isValidDateInput,
   isValidUuid,
   parseExpectedVersion,
   parseOptionalNumber,
@@ -1148,18 +1148,7 @@ async function listTakeoffMeasurements(companyId: string, projectId: string) {
   return result.rows
 }
 
-async function listSchedules(companyId: string, projectId: string) {
-  const result = await pool.query(
-    `
-    select id, project_id, scheduled_for, crew, status, version, deleted_at, created_at
-    from crew_schedules
-    where company_id = $1 and project_id = $2 and deleted_at is null
-    order by scheduled_for desc, created_at desc
-    `,
-    [companyId, projectId],
-  )
-  return result.rows
-}
+// listSchedules moved to routes/schedules.ts.
 
 async function createEstimateFromMeasurements(companyId: string, projectId: string, executor: LedgerExecutor = pool) {
   const projectResult = await executor.query<{
@@ -3751,6 +3740,24 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
+            // Crew-schedule routes (POST /api/schedules,
+            // GET /api/projects/<id>/schedules,
+            // POST /api/schedules/<id>/confirm) handled by the extracted
+            // route module. See routes/schedules.ts.
+            if (
+              await handleScheduleRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
+              })
+            ) {
+              return
+            }
+
             if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/push-qbo$/)) {
               if (!requireRole(res, company, ['admin', 'office'], req)) return
               const projectId = url.pathname.split('/')[3] ?? ''
@@ -3851,47 +3858,6 @@ const server = http.createServer(async (req, res) => {
                 Sentry.captureException(error, { tags: { scope: 'qbo_push_estimate' } })
                 sendJson(res, 500, { error: 'failed to push estimate to qbo' })
               }
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname === '/api/schedules') {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const body = await readBody(req)
-              if (!body.project_id || !body.scheduled_for) {
-                sendJson(res, 400, { error: 'project_id and scheduled_for are required' })
-                return
-              }
-              if (!isValidDateInput(body.scheduled_for)) {
-                sendJson(res, 400, { error: 'scheduled_for must be YYYY-MM-DD' })
-                return
-              }
-              const schedule = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        insert into crew_schedules (company_id, project_id, scheduled_for, crew, status, version)
-        values ($1, $2, $3, $4::jsonb, coalesce($5, 'draft'), 1)
-        returning id, project_id, scheduled_for, crew, status, version, deleted_at, created_at
-        `,
-                  [
-                    company.id,
-                    body.project_id,
-                    body.scheduled_for,
-                    JSON.stringify(body.crew ?? []),
-                    body.status ?? 'draft',
-                  ],
-                )
-                const row = result.rows[0]
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'crew_schedule',
-                  entityId: row.id,
-                  action: 'create',
-                  row,
-                  syncPayload: { action: 'create', schedule: row },
-                })
-                return row
-              })
-              sendJson(res, 201, schedule)
               return
             }
 
@@ -4750,16 +4716,6 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/schedules$/)) {
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              sendJson(res, 200, { schedules: await listSchedules(company.id, projectId) })
-              return
-            }
-
             if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/blueprints$/)) {
               if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const projectId = url.pathname.split('/')[3] ?? ''
@@ -5354,84 +5310,6 @@ const server = http.createServer(async (req, res) => {
                 return
               }
               sendJson(res, 200, deleted)
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname.match(/^\/api\/schedules\/[^/]+\/confirm$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman'], req)) return
-              const scheduleId = url.pathname.split('/')[3] ?? ''
-              if (!scheduleId) {
-                sendJson(res, 400, { error: 'schedule id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const entries = Array.isArray(body.entries) ? body.entries : []
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const confirmation = await withMutationTx(async (client) => {
-                const scheduleResult = await client.query(
-                  `
-        update crew_schedules
-        set status = 'confirmed', version = version + 1
-        where company_id = $1 and id = $2 and ($3::int is null or version = $3)
-        returning id, project_id, scheduled_for, crew, status, version, created_at
-        `,
-                  [company.id, scheduleId, expectedVersion],
-                )
-                const schedule = scheduleResult.rows[0]
-                if (!schedule) return null
-                const createdLaborEntries: Record<string, unknown>[] = []
-                for (const entry of entries) {
-                  if (!entry.service_item_code || entry.hours === undefined || !entry.occurred_on) continue
-                  const inserted = await client.query(
-                    `
-          insert into labor_entries (company_id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on)
-          values ($1, $2, $3, $4, $5, coalesce($6, 0), 'confirmed', $7)
-          returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, created_at
-          `,
-                    [
-                      company.id,
-                      schedule.project_id,
-                      entry.worker_id ?? null,
-                      entry.service_item_code,
-                      entry.hours,
-                      entry.sqft_done ?? 0,
-                      entry.occurred_on,
-                    ],
-                  )
-                  createdLaborEntries.push(inserted.rows[0])
-                }
-                await client.query(
-                  'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
-                  [company.id, schedule.project_id],
-                )
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'crew_schedule',
-                  entityId: scheduleId,
-                  action: 'confirm',
-                  row: schedule,
-                  syncPayload: { action: 'confirm', schedule, laborEntries: createdLaborEntries },
-                  outboxPayload: { schedule, laborEntries: createdLaborEntries },
-                })
-                return { schedule, laborEntries: createdLaborEntries }
-              })
-              if (!confirmation) {
-                if (
-                  !(await checkVersion(
-                    'crew_schedules',
-                    'company_id = $1 and id = $2',
-                    [company.id, scheduleId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'schedule not found' })
-                return
-              }
-              sendJson(res, 200, confirmation)
               return
             }
 
