@@ -187,20 +187,39 @@ type PendingNotificationRow = {
   attempt_count: number
 }
 
+// If this many sends fail back-to-back in one batch, treat the email provider
+// as down and stop processing the rest of the batch. The unprocessed rows
+// stay locked under `FOR UPDATE SKIP LOCKED`, so on COMMIT they release with
+// their original next_attempt_at and get re-claimed in the next heartbeat.
+// This avoids burning every queued notification's attempt counter against a
+// total provider outage.
+const NOTIFICATION_PROVIDER_FAILURE_THRESHOLD = (() => {
+  const n = Number(process.env.NOTIFICATION_PROVIDER_FAILURE_THRESHOLD ?? 3)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3
+})()
+
 /**
  * Claim up to `limit` pending notifications with `FOR UPDATE SKIP LOCKED` and
  * send them. On failure we increment `attempt_count`, back off exponentially
  * (5 minutes * 2^attempt_count), and mark `failed` after `NOTIFICATION_MAX_ATTEMPTS`.
+ *
+ * Includes a tiny per-batch circuit breaker: after
+ * `NOTIFICATION_PROVIDER_FAILURE_THRESHOLD` consecutive send failures we stop
+ * processing the batch and let the surviving rows go back into the pool with
+ * their original next_attempt_at intact.
  */
 async function drainNotifications(limit = notificationBatchLimit): Promise<{
   processed: number
   sent: number
   failed: number
+  shortCircuited: boolean
 }> {
   const client = await pool.connect()
   let processed = 0
   let sent = 0
   let failed = 0
+  let consecutiveFailures = 0
+  let shortCircuited = false
   try {
     await client.query('begin')
     const claimed = await client.query<PendingNotificationRow>(
@@ -215,6 +234,10 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
       [limit],
     )
     for (const row of claimed.rows) {
+      if (consecutiveFailures >= NOTIFICATION_PROVIDER_FAILURE_THRESHOLD) {
+        shortCircuited = true
+        break
+      }
       processed += 1
       const recipient = row.recipient_email ?? row.recipient_clerk_user_id
       // Broadcast rows with no email: log via console provider and mark sent
@@ -222,6 +245,7 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
       if (!recipient) {
         await client.query(`update notifications set status = 'sent', sent_at = now() where id = $1`, [row.id])
         sent += 1
+        consecutiveFailures = 0
         logger.info({ id: row.id, kind: row.kind, recipient: 'broadcast' }, '[notifications] logged broadcast')
         continue
       }
@@ -237,6 +261,7 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
           row.id,
         ])
         sent += 1
+        consecutiveFailures = 0
       } catch (err) {
         const nextAttemptCount = row.attempt_count + 1
         const message = err instanceof Error ? err.message : String(err)
@@ -257,6 +282,7 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
           [row.id, nextStatus, nextAttemptCount, backoffSeconds, message.slice(0, 2000)],
         )
         failed += 1
+        consecutiveFailures += 1
         logger.warn(
           {
             id: row.id,
@@ -269,6 +295,18 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
         )
       }
     }
+    if (shortCircuited) {
+      logger.warn(
+        {
+          consecutive_failures: consecutiveFailures,
+          processed,
+          sent,
+          failed,
+          remaining: claimed.rows.length - processed,
+        },
+        '[notifications] short-circuited batch (suspected provider outage)',
+      )
+    }
     await client.query('commit')
   } catch (error) {
     await client.query('rollback').catch(() => {})
@@ -276,7 +314,7 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
   } finally {
     client.release()
   }
-  return { processed, sent, failed }
+  return { processed, sent, failed, shortCircuited }
 }
 
 async function heartbeat(): Promise<{ idle: boolean }> {
@@ -301,7 +339,7 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     drainNotifications().catch((error) => {
       logger.error({ err: error }, '[worker] notification drain failed')
       Sentry.captureException(error)
-      return { processed: 0, sent: 0, failed: 0 }
+      return { processed: 0, sent: 0, failed: 0, shortCircuited: false }
     }),
   ])
 
