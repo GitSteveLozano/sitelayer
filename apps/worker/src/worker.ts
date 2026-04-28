@@ -1,7 +1,7 @@
 import { Sentry } from './instrument.js'
 import { loadAppConfig, postgresOptionsForTier, TierConfigError } from '@sitelayer/config'
 import { createLogger } from '@sitelayer/logger'
-import { fetchDueRentals, processQueueWithClient, processRentalInvoice } from '@sitelayer/queue'
+import { fetchDueRentals, processQueueWithClient, processRentalInvoice, recordLedger } from '@sitelayer/queue'
 import { Pool, type PoolConfig } from 'pg'
 import { spanForAppliedRow } from './trace.js'
 import { loadEmailConfig, sendEmail } from './email.js'
@@ -96,6 +96,52 @@ async function drainRentalInvoices(companyId: string): Promise<{
       await client.query('begin')
       try {
         const result = await processRentalInvoice(client, rental)
+        // Mirror the API's POST /api/rentals/:id/invoke ledger writes so a
+        // worker-billed rental still surfaces in sync_events / mutation_outbox
+        // and reaches QBO downstream. Same idempotency keys (versioned for
+        // rentals so consecutive ticks don't collapse into one outbox row).
+        if (result.bill) {
+          await recordLedger(client, {
+            companyId: rental.company_id,
+            entityType: 'material_bill',
+            entityId: result.bill.id,
+            mutationType: 'create',
+            idempotencyKey: `material_bill:create:${result.bill.id}`,
+            syncPayload: {
+              action: 'create',
+              bill: result.bill,
+              source: 'rental_invoice',
+              rental_id: rental.id,
+              origin: 'worker',
+            },
+            outboxPayload: {
+              ...(result.bill as unknown as Record<string, unknown>),
+              source: 'rental_invoice',
+              rental_id: rental.id,
+            },
+          })
+        }
+        await recordLedger(client, {
+          companyId: rental.company_id,
+          entityType: 'rental',
+          entityId: rental.id,
+          mutationType: 'invoice',
+          idempotencyKey: `rental:invoice:${rental.id}:${result.rental.version}`,
+          syncPayload: {
+            action: 'invoice',
+            rental: result.rental,
+            days: result.days,
+            amount: result.amount,
+            invoiced_through: result.invoiced_through,
+            origin: 'worker',
+          },
+          outboxPayload: {
+            rental: result.rental,
+            bill_id: result.bill?.id ?? null,
+            days: result.days,
+            amount: result.amount,
+          },
+        })
         await client.query('commit')
         if (result.bill) {
           billed += 1
@@ -233,11 +279,11 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
   return { processed, sent, failed }
 }
 
-async function heartbeat() {
+async function heartbeat(): Promise<{ idle: boolean }> {
   const companyId = await getCompanyId()
   if (!companyId) {
     logger.info({ company_slug: activeCompanySlug }, '[worker] waiting for company slug')
-    return
+    return { idle: true }
   }
 
   // Run queue polling and notification draining in parallel. Notifications are
@@ -287,7 +333,7 @@ async function heartbeat() {
       },
       '[worker] tick',
     )
-    return
+    return { idle: false }
   }
 
   if (notifications.processed > 0 || rentalSummary.processed > 0) {
@@ -304,7 +350,7 @@ async function heartbeat() {
       },
       '[worker] background tick',
     )
-    return
+    return { idle: false }
   }
 
   logger.debug(
@@ -315,29 +361,60 @@ async function heartbeat() {
     },
     '[worker] idle',
   )
+  return { idle: true }
 }
 
 let shutdownStarted = false
-let heartbeatInFlight: Promise<void> | null = null
-let heartbeatTimer: ReturnType<typeof setInterval> | null = null
+let heartbeatInFlight: Promise<{ idle: boolean } | undefined> | null = null
+let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
 
-async function runHeartbeat() {
-  if (shutdownStarted) return
+// Adaptive backoff: when a heartbeat finds no work, stretch the next tick to
+// `idlePollIntervalMs` (default 3x active). The first non-idle tick resets to
+// the active cadence. Saves CPU on busy hosts where the worker is mostly
+// waiting around.
+const idlePollIntervalMs = (() => {
+  const raw = process.env.WORKER_IDLE_POLL_INTERVAL_MS
+  const fallback = pollIntervalMs * 3
+  if (!raw) return fallback
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback
+})()
+
+async function runHeartbeat(): Promise<{ idle: boolean } | undefined> {
+  if (shutdownStarted) return undefined
   if (heartbeatInFlight) {
     logger.warn('[worker] previous heartbeat still running; skipping overlap')
-    return
+    return undefined
   }
 
   heartbeatInFlight = heartbeat()
     .catch((error) => {
       logger.error({ err: error }, '[worker] heartbeat failed')
       Sentry.captureException(error)
+      return undefined
     })
     .finally(() => {
       heartbeatInFlight = null
     })
 
-  await heartbeatInFlight
+  return await heartbeatInFlight
+}
+
+function scheduleNextHeartbeat(idle: boolean): void {
+  if (shutdownStarted) return
+  const delay = idle ? idlePollIntervalMs : pollIntervalMs
+  heartbeatTimer = setTimeout(() => {
+    void runHeartbeat()
+      .then((result) => {
+        const nextIdle = result?.idle ?? true
+        scheduleNextHeartbeat(nextIdle)
+      })
+      .catch(() => {
+        // runHeartbeat already logs/captures on failure; treat as idle so we
+        // back off a bit before the next attempt.
+        scheduleNextHeartbeat(true)
+      })
+  }, delay)
 }
 
 async function shutdown(signal: NodeJS.Signals) {
@@ -345,7 +422,7 @@ async function shutdown(signal: NodeJS.Signals) {
   shutdownStarted = true
   logger.info({ signal }, '[worker] shutting down')
   if (heartbeatTimer) {
-    clearInterval(heartbeatTimer)
+    clearTimeout(heartbeatTimer)
   }
 
   const forceExit = setTimeout(
@@ -381,7 +458,5 @@ process.on('SIGINT', () => {
   void shutdown('SIGINT')
 })
 
-await runHeartbeat()
-heartbeatTimer = setInterval(() => {
-  void runHeartbeat()
-}, pollIntervalMs)
+const initial = await runHeartbeat()
+scheduleNextHeartbeat(initial?.idle ?? true)
