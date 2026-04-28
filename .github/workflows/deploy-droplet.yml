@@ -26,6 +26,44 @@ jobs:
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
+      - name: Prune old registry tags
+        # The DO Container Registry Starter tier caps storage at 500 MB; each
+        # immutable git-sha image is ~50 MB so the registry fills after ~10
+        # deploys without cleanup. Runs BEFORE the build+push so a quota-
+        # stuck registry can self-heal — keep the most recent N sha tags
+        # (configurable via REGISTRY_TAG_KEEP, default 5) plus the floating
+        # `main` tag, then queue async garbage collection. Best-effort:
+        # never blocks the deploy on a cleanup failure.
+        env:
+          REGISTRY_TAG_KEEP: ${{ vars.REGISTRY_TAG_KEEP || '5' }}
+        run: |
+          set +e
+          set -u
+          tags="$(doctl registry repository list-tags sitelayer --no-header --format Tag,UpdatedAt 2>/dev/null \
+            | awk 'NF >= 2 && $1 != "main" && $1 != "" { print $0 }' \
+            | sort -k2,2 -r \
+            | awk '{ print $1 }')"
+          if [ -z "$tags" ]; then
+            echo "No tags to prune"
+          else
+            keep="${REGISTRY_TAG_KEEP:-5}"
+            tags_to_delete="$(printf '%s\n' "$tags" | tail -n +"$((keep + 1))")"
+            if [ -z "$tags_to_delete" ]; then
+              echo "Nothing to prune (have <= $keep tags)"
+            else
+              printf '%s\n' "$tags_to_delete" | while read -r tag; do
+                [ -z "$tag" ] && continue
+                echo "Deleting tag $tag"
+                doctl registry repository delete-tag sitelayer "$tag" --force || true
+              done
+              # Async GC runs in background; subsequent deploys may still hit
+              # quota briefly while it processes, but we've already deleted
+              # the manifests so the next push has space.
+              doctl registry garbage-collection start --include-untagged-manifests --force || true
+            fi
+          fi
+          exit 0
+
       - name: Build and push immutable image
         env:
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}

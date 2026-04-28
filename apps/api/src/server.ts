@@ -35,6 +35,7 @@ import {
 } from '@sitelayer/domain'
 import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigError } from './tier.js'
 import { validateQboStateSecret } from './qbo-config.js'
+import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './auth-types.js'
 import {
   CORS_ALLOW_HEADERS,
   HttpError,
@@ -170,24 +171,8 @@ logger.info(
   '[email] ready',
 )
 
-type CompanyRole = 'admin' | 'foreman' | 'office' | 'member'
-
-const COMPANY_ROLES: readonly CompanyRole[] = ['admin', 'foreman', 'office', 'member']
-
-function normalizeCompanyRole(value: unknown): CompanyRole {
-  if (typeof value === 'string' && (COMPANY_ROLES as readonly string[]).includes(value)) {
-    return value as CompanyRole
-  }
-  return 'member'
-}
-
-type ActiveCompany = {
-  id: string
-  slug: string
-  name: string
-  created_at: string
-  role: CompanyRole
-}
+// CompanyRole / ActiveCompany / normalizeCompanyRole moved to auth-types.ts so
+// extracted route modules can import them without circular-importing server.ts.
 
 type IntegrationMappingRow = {
   id: string
