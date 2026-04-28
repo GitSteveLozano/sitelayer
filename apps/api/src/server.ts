@@ -1,7 +1,7 @@
 import { Sentry } from './instrument.js'
 import http from 'node:http'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
-import { Pool, type PoolConfig } from 'pg'
+import { Pool, type PoolClient, type PoolConfig } from 'pg'
 import {
   processQueue as processDatabaseQueue,
   processRentalInvoice,
@@ -34,6 +34,7 @@ import {
   normalizePolygonGeometry,
 } from '@sitelayer/domain'
 import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigError } from './tier.js'
+import { validateQboStateSecret } from './qbo-config.js'
 import {
   assertKeyInCompany,
   buildBlueprintStorageKey,
@@ -55,6 +56,7 @@ import { buildListProjectsQuery, parseProjectsQuery } from './projects-query.js'
 import { listLaborByItem, listLaborByWeek, listLaborByWorker, parseLaborReportFilters } from './labor-reports.js'
 import {
   assertServiceItemCatalogStatus as assertServiceItemCatalogStatusImpl,
+  loadServiceItemCatalogIndex,
   rejectionMessageForCatalog,
 } from './catalog.js'
 import { evaluateLww } from './lww.js'
@@ -254,7 +256,20 @@ const qboEnvironment = (process.env.QBO_ENVIRONMENT ?? 'sandbox') as 'sandbox' |
 const qboBaseUrl =
   process.env.QBO_BASE_URL ??
   (qboEnvironment === 'sandbox' ? 'https://sandbox-quickbooks.api.intuit.com' : 'https://quickbooks.api.intuit.com')
-const qboStateSecret = process.env.QBO_STATE_SECRET ?? qboClientSecret
+const qboStateSecretCheck = validateQboStateSecret({
+  tier: appConfig.tier,
+  stateSecret: process.env.QBO_STATE_SECRET ?? null,
+  clientSecret: qboClientSecret,
+})
+if (!qboStateSecretCheck.ok) {
+  if (qboStateSecretCheck.reason === 'missing') {
+    logger.fatal('[qbo] APP_TIER=prod requires QBO_STATE_SECRET to be set')
+  } else {
+    logger.fatal('[qbo] APP_TIER=prod requires QBO_STATE_SECRET to differ from QBO_CLIENT_SECRET')
+  }
+  process.exit(1)
+}
+const qboStateSecret = qboStateSecretCheck.stateSecret
 const clerkWebhookSecret = process.env.CLERK_WEBHOOK_SECRET?.trim() || null
 const qboWebhookVerifier = process.env.QBO_WEBHOOK_VERIFIER?.trim() || null
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)
@@ -273,8 +288,14 @@ const blueprintDownloadPresigned =
 //   reachable even when Postgres is wedged.
 // - application_name is set so DB-side `pg_stat_activity` debug is easier.
 const pgPoolMax = (() => {
-  const n = Number(process.env.PG_POOL_MAX ?? 20)
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 20
+  // Production handles parallel /api/bootstrap fan-out (11 queries) plus concurrent
+  // user requests on a 4 vCPU droplet. Default to 40 for prod, 20 elsewhere; env
+  // override always wins.
+  const tierDefault = appConfig.tier === 'prod' ? 40 : 20
+  const raw = process.env.PG_POOL_MAX
+  if (raw === undefined || raw === '') return tierDefault
+  const n = Number(raw)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : tierDefault
 })()
 const pgStatementTimeoutMs = (() => {
   const n = Number(process.env.PG_STATEMENT_TIMEOUT_MS ?? 5000)
@@ -288,6 +309,13 @@ const pgHealthProbeTimeoutMs = (() => {
   const n = Number(process.env.PG_HEALTH_PROBE_TIMEOUT_MS ?? 1500)
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 1500
 })()
+// Bound how long pool.connect() waits for a backend before giving up. Without
+// this, a wedged Postgres or bad SSL config can hang every request handler
+// indefinitely instead of failing fast and surfacing a 5xx.
+const pgConnectionTimeoutMs = (() => {
+  const n = Number(process.env.PG_CONNECTION_TIMEOUT_MS ?? 5000)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5000
+})()
 
 function withTierOptions(config: PoolConfig): PoolConfig {
   return {
@@ -297,6 +325,7 @@ function withTierOptions(config: PoolConfig): PoolConfig {
     max: pgPoolMax,
     statement_timeout: pgStatementTimeoutMs,
     query_timeout: pgQueryTimeoutMs,
+    connectionTimeoutMillis: pgConnectionTimeoutMs,
   }
 }
 
@@ -729,8 +758,17 @@ async function loadBootstrap(companyId: string) {
       'select id, project_id, scheduled_for, crew, status from crew_schedules where company_id = $1 order by scheduled_for desc',
       [companyId],
     ),
+    // Bootstrap returns recent labor history only — capped to the last year
+    // and 1000 rows so the response stays bounded as company history grows.
+    // Older entries are still readable through GET /api/labor-entries with
+    // explicit filters.
     pool.query(
-      'select id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, version, deleted_at from labor_entries where company_id = $1 order by occurred_on desc, created_at desc',
+      `select id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, version, deleted_at
+         from labor_entries
+        where company_id = $1
+          and occurred_on >= (now() - interval '365 days')::date
+        order by occurred_on desc, created_at desc
+        limit 1000`,
       [companyId],
     ),
   ])
@@ -752,18 +790,47 @@ async function loadBootstrap(companyId: string) {
   }
 }
 
+type LedgerExecutor = Pick<Pool | PoolClient, 'query'>
+
+/**
+ * Run `fn` against a dedicated PoolClient inside BEGIN/COMMIT (or ROLLBACK on
+ * throw). The intended use is to scope a domain mutation together with the
+ * recordSyncEvent/recordMutationOutbox writes that ledger it, so a crash
+ * between the mutation and the ledger row cannot orphan the mutation. Pass the
+ * `client` to the helpers via their executor parameter.
+ */
+async function withMutationTx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const result = await fn(client)
+    await client.query('commit')
+    return result
+  } catch (err) {
+    try {
+      await client.query('rollback')
+    } catch {
+      // best-effort: rollback failure shouldn't mask the original error
+    }
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
 async function recordSyncEvent(
   companyId: string,
   entityType: string,
   entityId: string,
   payload: Record<string, unknown>,
   integrationConnectionId: string | null = null,
-  opts: { status?: 'pending' | 'failed'; error?: string | null } = {},
+  opts: { status?: 'pending' | 'failed'; error?: string | null; executor?: LedgerExecutor } = {},
 ) {
+  const executor: LedgerExecutor = opts.executor ?? pool
   const { sentryTrace, baggage } = currentTraceHeaders()
   const requestId = getRequestContext()?.requestId ?? null
   const status = opts.status ?? 'pending'
-  await pool.query(
+  await executor.query(
     `
     insert into sync_events (
       company_id, integration_connection_id, direction, entity_type, entity_id, payload, status,
@@ -785,6 +852,8 @@ async function recordSyncEvent(
     ],
   )
   if (status === 'failed') {
+    // Best-effort outside the caller's tx: alert delivery should not be able to
+    // roll back a successfully-failed sync event. Errors are swallowed.
     const subject = `[Sitelayer] Sync failed: ${entityType}`
     const text = [
       `A sync event failed for ${entityType} ${entityId}.`,
@@ -803,7 +872,7 @@ async function recordSyncEvent(
     const action = typeof payload.action === 'string' ? payload.action : 'event'
     const after = (payload as Record<string, unknown>)[entityType] ?? payload
     try {
-      await recordAudit(pool, {
+      await recordAudit(executor, {
         companyId,
         entityType,
         entityId,
@@ -827,10 +896,11 @@ async function recordMutationOutbox(
   idempotencyKey: string,
   deviceId = 'server',
   actorUserId: string | null = null,
+  executor: LedgerExecutor = pool,
 ) {
   const { sentryTrace, baggage } = currentTraceHeaders()
   const requestId = getRequestContext()?.requestId ?? null
-  await pool.query(
+  await executor.query(
     `
     insert into mutation_outbox (
       company_id, device_id, actor_user_id, entity_type, entity_id, mutation_type, payload, idempotency_key, status,
@@ -859,6 +929,64 @@ async function recordMutationOutbox(
       baggage,
       requestId,
     ],
+  )
+}
+
+type LedgerArgs = {
+  companyId: string
+  entityType: string
+  entityId: string
+  action: string
+  /** Domain row to embed in the default payloads. */
+  row?: object | null
+  /** Override the sync_event payload. Defaults to { action, [entityType]: row } when `row` is supplied. */
+  syncPayload?: Record<string, unknown>
+  /** Override the mutation_outbox payload. Defaults to `row` when supplied, else syncPayload. */
+  outboxPayload?: Record<string, unknown>
+  /** mutation_outbox.mutation_type (e.g. 'create' | 'update' | 'delete' | 'invoice'). Defaults to action. */
+  mutationType?: string
+  /** Idempotency key for mutation_outbox. Defaults to `${entityType}:${action}:${entityId}`. */
+  idempotencyKey?: string
+  integrationConnectionId?: string | null
+  deviceId?: string
+  actorUserId?: string | null
+  syncStatus?: 'pending' | 'failed'
+  syncError?: string | null
+}
+
+/**
+ * Write a sync_event + mutation_outbox row in one logical step using the same
+ * executor (typically a PoolClient inside withMutationTx). Replaces the
+ * recurring 7-line pair of recordSyncEvent/recordMutationOutbox calls.
+ *
+ * The default payload shape mirrors what the existing call sites used:
+ *   sync_event   payload = { action, [entityType]: row }
+ *   outbox       payload = row
+ * Override via syncPayload / outboxPayload when a handler needs more
+ * context (e.g. {action: 'invoice', rental, days, amount}).
+ */
+async function recordMutationLedger(executor: LedgerExecutor, args: LedgerArgs): Promise<void> {
+  const { companyId, entityType, entityId, action, row } = args
+  const syncPayload = args.syncPayload ?? { action, ...(row ? { [entityType]: row } : {}) }
+  const outboxPayload = args.outboxPayload ?? (row ? (row as Record<string, unknown>) : syncPayload)
+  const mutationType = args.mutationType ?? action
+  const idempotencyKey = args.idempotencyKey ?? `${entityType}:${action}:${entityId}`
+
+  await recordSyncEvent(companyId, entityType, entityId, syncPayload, args.integrationConnectionId ?? null, {
+    executor,
+    ...(args.syncStatus ? { status: args.syncStatus } : {}),
+    ...(args.syncError !== undefined ? { error: args.syncError } : {}),
+  })
+  await recordMutationOutbox(
+    companyId,
+    entityType,
+    entityId,
+    mutationType,
+    outboxPayload,
+    idempotencyKey,
+    args.deviceId ?? 'server',
+    args.actorUserId ?? null,
+    executor,
   )
 }
 
@@ -903,8 +1031,8 @@ async function enqueueAdminAlert(
   }
 }
 
-async function getIntegrationConnection(companyId: string, provider: string) {
-  const result = await pool.query(
+async function getIntegrationConnection(companyId: string, provider: string, executor: LedgerExecutor = pool) {
+  const result = await executor.query(
     `
     select id, provider, provider_account_id, sync_cursor, last_synced_at, retry_state, rate_limit_state, status, version, created_at
     from integration_connections
@@ -961,8 +1089,9 @@ async function upsertIntegrationMapping(
     status?: string | null
     notes?: string | null
   },
+  executor: LedgerExecutor = pool,
 ) {
-  const result = await pool.query(
+  const result = await executor.query(
     `
     insert into integration_mappings (company_id, provider, entity_type, local_ref, external_id, label, status, notes)
     values ($1, $2, $3, $4, $5, $6, coalesce($7, 'active'), $8)
@@ -994,28 +1123,32 @@ async function upsertIntegrationMapping(
 async function backfillCustomerMapping(
   companyId: string,
   customer: { id: string; external_id: string | null; name: string },
+  executor: LedgerExecutor = pool,
 ) {
   if (!customer.external_id) return null
-  const mapping = await upsertIntegrationMapping(companyId, 'qbo', {
-    entity_type: 'customer',
-    local_ref: customer.id,
-    external_id: customer.external_id,
-    label: customer.name,
-    status: 'active',
-    notes: 'backfilled from customer external_id',
-  })
-  await recordSyncEvent(companyId, 'integration_mapping', mapping.id, {
-    action: 'upsert',
-    mapping,
-  })
-  await recordMutationOutbox(
+  const mapping = await upsertIntegrationMapping(
     companyId,
-    'integration_mapping',
-    mapping.id,
-    'upsert',
-    mapping,
-    `integration_mapping:qbo:${mapping.id}`,
+    'qbo',
+    {
+      entity_type: 'customer',
+      local_ref: customer.id,
+      external_id: customer.external_id,
+      label: customer.name,
+      status: 'active',
+      notes: 'backfilled from customer external_id',
+    },
+    executor,
   )
+  await recordMutationLedger(executor, {
+    companyId,
+    entityType: 'integration_mapping',
+    entityId: mapping.id,
+    action: 'upsert',
+    row: mapping,
+    syncPayload: { action: 'upsert', mapping },
+    outboxPayload: mapping as Record<string, unknown>,
+    idempotencyKey: `integration_mapping:qbo:${mapping.id}`,
+  })
   return mapping
 }
 
@@ -1023,32 +1156,36 @@ async function backfillServiceItemMapping(
   companyId: string,
   serviceItem: { code: string; name: string; source?: string | null },
   externalId?: string | null,
+  executor: LedgerExecutor = pool,
 ) {
   const resolvedExternalId = externalId ?? (serviceItem.code.startsWith('qbo-') ? serviceItem.code.slice(4) : null)
   if (!resolvedExternalId) return null
-  const mapping = await upsertIntegrationMapping(companyId, 'qbo', {
-    entity_type: 'service_item',
-    local_ref: serviceItem.code,
-    external_id: resolvedExternalId,
-    label: serviceItem.name,
-    status: 'active',
-    notes:
-      serviceItem.source === 'qbo'
-        ? 'backfilled from qbo service_item import'
-        : 'backfilled from qbo-prefixed service_item',
-  })
-  await recordSyncEvent(companyId, 'integration_mapping', mapping.id, {
-    action: 'upsert',
-    mapping,
-  })
-  await recordMutationOutbox(
+  const mapping = await upsertIntegrationMapping(
     companyId,
-    'integration_mapping',
-    mapping.id,
-    'upsert',
-    mapping,
-    `integration_mapping:qbo:${mapping.id}`,
+    'qbo',
+    {
+      entity_type: 'service_item',
+      local_ref: serviceItem.code,
+      external_id: resolvedExternalId,
+      label: serviceItem.name,
+      status: 'active',
+      notes:
+        serviceItem.source === 'qbo'
+          ? 'backfilled from qbo service_item import'
+          : 'backfilled from qbo-prefixed service_item',
+    },
+    executor,
   )
+  await recordMutationLedger(executor, {
+    companyId,
+    entityType: 'integration_mapping',
+    entityId: mapping.id,
+    action: 'upsert',
+    row: mapping,
+    syncPayload: { action: 'upsert', mapping },
+    outboxPayload: mapping as Record<string, unknown>,
+    idempotencyKey: `integration_mapping:qbo:${mapping.id}`,
+  })
   return mapping
 }
 
@@ -1056,51 +1193,63 @@ async function backfillDivisionMapping(
   companyId: string,
   division: { code: string; name: string },
   externalId: string,
+  executor: LedgerExecutor = pool,
 ) {
-  const mapping = await upsertIntegrationMapping(companyId, 'qbo', {
-    entity_type: 'division',
-    local_ref: division.code,
-    external_id: externalId,
-    label: division.name,
-    status: 'active',
-    notes: 'backfilled from qbo class sync',
-  })
-  await recordSyncEvent(companyId, 'integration_mapping', mapping.id, {
-    action: 'upsert',
-    mapping,
-  })
-  await recordMutationOutbox(
+  const mapping = await upsertIntegrationMapping(
     companyId,
-    'integration_mapping',
-    mapping.id,
-    'upsert',
-    mapping,
-    `integration_mapping:qbo:${mapping.id}`,
+    'qbo',
+    {
+      entity_type: 'division',
+      local_ref: division.code,
+      external_id: externalId,
+      label: division.name,
+      status: 'active',
+      notes: 'backfilled from qbo class sync',
+    },
+    executor,
   )
+  await recordMutationLedger(executor, {
+    companyId,
+    entityType: 'integration_mapping',
+    entityId: mapping.id,
+    action: 'upsert',
+    row: mapping,
+    syncPayload: { action: 'upsert', mapping },
+    outboxPayload: mapping as Record<string, unknown>,
+    idempotencyKey: `integration_mapping:qbo:${mapping.id}`,
+  })
   return mapping
 }
 
-async function backfillProjectMapping(companyId: string, project: { id: string; name: string }, externalId: string) {
-  const mapping = await upsertIntegrationMapping(companyId, 'qbo', {
-    entity_type: 'project',
-    local_ref: project.id,
-    external_id: externalId,
-    label: project.name,
-    status: 'active',
-    notes: 'backfilled from qbo estimate push',
-  })
-  await recordSyncEvent(companyId, 'integration_mapping', mapping.id, {
-    action: 'upsert',
-    mapping,
-  })
-  await recordMutationOutbox(
+async function backfillProjectMapping(
+  companyId: string,
+  project: { id: string; name: string },
+  externalId: string,
+  executor: LedgerExecutor = pool,
+) {
+  const mapping = await upsertIntegrationMapping(
     companyId,
-    'integration_mapping',
-    mapping.id,
-    'upsert',
-    mapping,
-    `integration_mapping:qbo:${mapping.id}`,
+    'qbo',
+    {
+      entity_type: 'project',
+      local_ref: project.id,
+      external_id: externalId,
+      label: project.name,
+      status: 'active',
+      notes: 'backfilled from qbo estimate push',
+    },
+    executor,
   )
+  await recordMutationLedger(executor, {
+    companyId,
+    entityType: 'integration_mapping',
+    entityId: mapping.id,
+    action: 'upsert',
+    row: mapping,
+    syncPayload: { action: 'upsert', mapping },
+    outboxPayload: mapping as Record<string, unknown>,
+    idempotencyKey: `integration_mapping:qbo:${mapping.id}`,
+  })
   return mapping
 }
 
@@ -1115,10 +1264,11 @@ async function upsertIntegrationConnection(
     sync_cursor?: string | null
     status?: string | null
   },
+  executor: LedgerExecutor = pool,
 ) {
-  const existing = await getIntegrationConnection(companyId, provider)
+  const existing = await getIntegrationConnection(companyId, provider, executor)
   if (!existing) {
-    const inserted = await pool.query(
+    const inserted = await executor.query(
       `
       insert into integration_connections (
         company_id, provider, provider_account_id, access_token, refresh_token, webhook_secret, sync_cursor, status
@@ -1140,7 +1290,7 @@ async function upsertIntegrationConnection(
     return inserted.rows[0]
   }
 
-  const updated = await pool.query(
+  const updated = await executor.query(
     `
     update integration_connections
     set
@@ -1351,8 +1501,8 @@ async function listSchedules(companyId: string, projectId: string) {
   return result.rows
 }
 
-async function createEstimateFromMeasurements(companyId: string, projectId: string) {
-  const projectResult = await pool.query<{
+async function createEstimateFromMeasurements(companyId: string, projectId: string, executor: LedgerExecutor = pool) {
+  const projectResult = await executor.query<{
     id: string
     bid_total: string | number | null
     labor_rate: string | number | null
@@ -1366,7 +1516,7 @@ async function createEstimateFromMeasurements(companyId: string, projectId: stri
   if (!project) return null
 
   const [measurementsResult, serviceItemsResult] = await Promise.all([
-    pool.query<{
+    executor.query<{
       service_item_code: string
       quantity: string | number
       unit: string
@@ -1376,7 +1526,10 @@ async function createEstimateFromMeasurements(companyId: string, projectId: stri
       'select service_item_code, quantity, unit, notes, division_code from takeoff_measurements where company_id = $1 and project_id = $2 order by created_at asc',
       [companyId, projectId],
     ),
-    pool.query('select code, default_rate, unit from service_items where company_id = $1', [companyId]),
+    executor.query<{ code: string; default_rate: string | null; unit: string }>(
+      'select code, default_rate, unit from service_items where company_id = $1',
+      [companyId],
+    ),
   ])
 
   const itemIndex = new Map<string, { default_rate: string | null; unit: string }>()
@@ -1384,36 +1537,63 @@ async function createEstimateFromMeasurements(companyId: string, projectId: stri
     itemIndex.set(item.code, { default_rate: item.default_rate, unit: item.unit })
   }
 
-  await pool.query('delete from estimate_lines where company_id = $1 and project_id = $2', [companyId, projectId])
+  await executor.query('delete from estimate_lines where company_id = $1 and project_id = $2', [companyId, projectId])
 
   const projectDivisionCode = project.division_code ?? null
-  const createdLines = []
-  for (const measurement of measurementsResult.rows) {
-    const item = itemIndex.get(measurement.service_item_code)
-    const rate = Number(item?.default_rate ?? 0)
-    const amount = Number(measurement.quantity) * rate
-    // Per WhatsApp:227-229: an estimate line inherits the measurement's
-    // division_code when the takeoff captured one, otherwise falls back to
-    // the project's division_code so existing flows keep working.
-    const effectiveDivisionCode = measurement.division_code ?? projectDivisionCode
-    const insertResult = await pool.query(
+  type EstimateLineRow = {
+    service_item_code: string
+    quantity: string | number
+    unit: string
+    rate: number
+    amount: number
+    division_code: string | null
+    created_at: string
+  }
+  let createdLines: EstimateLineRow[] = []
+  if (measurementsResult.rows.length > 0) {
+    // Single multi-row INSERT replaces the previous N round-trips. unnest()
+    // turns the parallel arrays back into one row per measurement so we keep
+    // the per-measurement rate/amount semantics.
+    const codes: string[] = []
+    const quantities: string[] = []
+    const units: string[] = []
+    const rates: string[] = []
+    const amounts: string[] = []
+    const divisions: (string | null)[] = []
+    for (const measurement of measurementsResult.rows) {
+      const item = itemIndex.get(measurement.service_item_code)
+      const rate = Number(item?.default_rate ?? 0)
+      const amount = Number(measurement.quantity) * rate
+      // Per WhatsApp:227-229: an estimate line inherits the measurement's
+      // division_code when the takeoff captured one, otherwise falls back to
+      // the project's division_code so existing flows keep working.
+      const effectiveDivisionCode = measurement.division_code ?? projectDivisionCode
+      codes.push(measurement.service_item_code)
+      quantities.push(String(measurement.quantity))
+      units.push(item?.unit ?? measurement.unit)
+      rates.push(String(rate))
+      amounts.push(String(amount))
+      divisions.push(effectiveDivisionCode)
+    }
+    const insertResult = await executor.query<EstimateLineRow>(
       `
       insert into estimate_lines (company_id, project_id, service_item_code, quantity, unit, rate, amount, division_code)
-      values ($1, $2, $3, $4, $5, $6, $7, $8)
+      select
+        $1::uuid,
+        $2::uuid,
+        code,
+        quantity::numeric,
+        unit,
+        rate::numeric,
+        amount::numeric,
+        division_code
+      from unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[])
+        as t(code, quantity, unit, rate, amount, division_code)
       returning service_item_code, quantity, unit, rate, amount, division_code, created_at
       `,
-      [
-        companyId,
-        projectId,
-        measurement.service_item_code,
-        measurement.quantity,
-        item?.unit ?? measurement.unit,
-        rate,
-        amount,
-        effectiveDivisionCode,
-      ],
+      [companyId, projectId, codes, quantities, units, rates, amounts, divisions],
     )
-    createdLines.push(insertResult.rows[0])
+    createdLines = insertResult.rows
   }
 
   const scopeTotal = createdLines.reduce((total, line) => total + Number(line.amount), 0)
@@ -1425,12 +1605,12 @@ async function createEstimateFromMeasurements(companyId: string, projectId: stri
   const existingBidTotal = Number(project.bid_total ?? 0)
   const bidTotal = existingBidTotal > 0 ? existingBidTotal : scopeTotal
   if (existingBidTotal <= 0 && scopeTotal > 0) {
-    await pool.query(
+    await executor.query(
       'update projects set bid_total = $1, updated_at = now(), version = version + 1 where company_id = $2 and id = $3',
       [scopeTotal, companyId, projectId],
     )
   } else {
-    await pool.query(
+    await executor.query(
       'update projects set updated_at = now(), version = version + 1 where company_id = $1 and id = $2',
       [companyId, projectId],
     )
@@ -1719,8 +1899,11 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
       )
     }
     quantity = calculateGeometryQuantity(geometry)
-    if (quantity <= 0) {
-      throw new HttpError(400, `${label}.geometry must produce a positive quantity`)
+    // Reject NaN/Infinity explicitly: a self-intersecting polygon or a
+    // pathological volume box can produce NaN, and `n <= 0` is false for NaN
+    // so the trailing check would emit a less specific error.
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      throw new HttpError(400, `${label}.geometry must produce a positive, finite quantity`)
     }
     geometryJson = JSON.stringify(geometry)
   }
@@ -2335,6 +2518,11 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'GET' && url.pathname === '/api/features') {
+              // Static config response — let the SPA cache for a few minutes
+              // so a refresh doesn't refetch the same flags. private because
+              // the body is per-tier (and could differ per company once flags
+              // become company-scoped).
+              res.setHeader('Cache-Control', 'private, max-age=300')
               sendJson(res, 200, {
                 tier: appConfig.tier,
                 flags: Array.from(appConfig.flags).sort(),
@@ -2641,6 +2829,8 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'GET' && url.pathname === '/api/spec') {
+              // Per-tenant static config; same caching policy as /api/features.
+              res.setHeader('Cache-Control', 'private, max-age=300')
               sendJson(res, 200, {
                 product: 'Sitelayer',
                 company,
@@ -2790,15 +2980,27 @@ const server = http.createServer(async (req, res) => {
                 refresh_token: string
                 expires_in: number
               }
-              const connection = await upsertIntegrationConnection(stateData.companyId, 'qbo', {
-                provider_account_id: realmId,
-                access_token: tokenData.access_token,
-                refresh_token: tokenData.refresh_token,
-                status: 'connected',
-              })
-              await recordSyncEvent(stateData.companyId, 'integration_connection', connection.id, {
-                action: 'oauth_connect',
-                provider: 'qbo',
+              const connection = await withMutationTx(async (client) => {
+                const row = await upsertIntegrationConnection(
+                  stateData.companyId,
+                  'qbo',
+                  {
+                    provider_account_id: realmId,
+                    access_token: tokenData.access_token,
+                    refresh_token: tokenData.refresh_token,
+                    status: 'connected',
+                  },
+                  client,
+                )
+                await recordSyncEvent(
+                  stateData.companyId,
+                  'integration_connection',
+                  row.id,
+                  { action: 'oauth_connect', provider: 'qbo' },
+                  null,
+                  { executor: client },
+                )
+                return row
               })
               if (qboSuccessRedirectUri) {
                 sendRedirect(res, qboSuccessRedirectUri)
@@ -2827,26 +3029,32 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'entity_type, local_ref, and external_id are required' })
                 return
               }
-              const mapping = await upsertIntegrationMapping(company.id, 'qbo', {
-                entity_type: entityType,
-                local_ref: localRef,
-                external_id: externalId,
-                label: body.label ? String(body.label).trim() : null,
-                status: body.status ? String(body.status).trim() : 'active',
-                notes: body.notes ? String(body.notes).trim() : null,
+              const mapping = await withMutationTx(async (client) => {
+                const row = await upsertIntegrationMapping(
+                  company.id,
+                  'qbo',
+                  {
+                    entity_type: entityType,
+                    local_ref: localRef,
+                    external_id: externalId,
+                    label: body.label ? String(body.label).trim() : null,
+                    status: body.status ? String(body.status).trim() : 'active',
+                    notes: body.notes ? String(body.notes).trim() : null,
+                  },
+                  client,
+                )
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'integration_mapping',
+                  entityId: row.id,
+                  action: 'upsert',
+                  row,
+                  syncPayload: { action: 'upsert', mapping: row },
+                  outboxPayload: row as Record<string, unknown>,
+                  idempotencyKey: `integration_mapping:qbo:${row.id}`,
+                })
+                return row
               })
-              await recordSyncEvent(company.id, 'integration_mapping', mapping.id, {
-                action: 'upsert',
-                mapping,
-              })
-              await recordMutationOutbox(
-                company.id,
-                'integration_mapping',
-                mapping.id,
-                'upsert',
-                mapping,
-                `integration_mapping:qbo:${mapping.id}`,
-              )
               sendJson(res, 201, mapping)
               return
             }
@@ -2860,8 +3068,9 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                `
+              const updated = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update integration_mappings
         set
           entity_type = coalesce($3, entity_type),
@@ -2876,19 +3085,32 @@ const server = http.createServer(async (req, res) => {
         where company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null and ($9::int is null or version = $9)
         returning id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
         `,
-                [
-                  company.id,
-                  mappingId,
-                  body.entity_type ?? null,
-                  body.local_ref ?? null,
-                  body.external_id ?? null,
-                  body.label ?? null,
-                  body.status ?? null,
-                  body.notes ?? null,
-                  expectedVersion,
-                ],
-              )
-              if (!result.rows[0]) {
+                  [
+                    company.id,
+                    mappingId,
+                    body.entity_type ?? null,
+                    body.local_ref ?? null,
+                    body.external_id ?? null,
+                    body.label ?? null,
+                    body.status ?? null,
+                    body.notes ?? null,
+                    expectedVersion,
+                  ],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'integration_mapping',
+                  entityId: mappingId,
+                  action: 'update',
+                  row,
+                  syncPayload: { action: 'update', mapping: row },
+                  idempotencyKey: `integration_mapping:qbo:update:${mappingId}`,
+                })
+                return row
+              })
+              if (!updated) {
                 if (
                   !(await checkVersion(
                     'integration_mappings',
@@ -2904,19 +3126,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'mapping not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'integration_mapping', mappingId, {
-                action: 'update',
-                mapping: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'integration_mapping',
-                mappingId,
-                'update',
-                result.rows[0],
-                `integration_mapping:qbo:update:${mappingId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, updated)
               return
             }
 
@@ -2929,16 +3139,30 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                `
+              const deleted = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update integration_mappings
         set deleted_at = now(), version = version + 1, status = 'deleted', updated_at = now()
         where company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null and ($3::int is null or version = $3)
         returning id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
         `,
-                [company.id, mappingId, expectedVersion],
-              )
-              if (!result.rows[0]) {
+                  [company.id, mappingId, expectedVersion],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'integration_mapping',
+                  entityId: mappingId,
+                  action: 'delete',
+                  row,
+                  syncPayload: { action: 'delete', mapping: row },
+                  idempotencyKey: `integration_mapping:qbo:delete:${mappingId}`,
+                })
+                return row
+              })
+              if (!deleted) {
                 if (
                   !(await checkVersion(
                     'integration_mappings',
@@ -2954,19 +3178,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'mapping not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'integration_mapping', mappingId, {
-                action: 'delete',
-                mapping: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'integration_mapping',
-                mappingId,
-                'delete',
-                result.rows[0],
-                `integration_mapping:qbo:delete:${mappingId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, deleted)
               return
             }
 
@@ -2983,27 +3195,35 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 409, { error: 'version conflict', current_version: Number(currentConnection.version) })
                 return
               }
-              const connection = await upsertIntegrationConnection(company.id, 'qbo', {
-                provider_account_id: body.provider_account_id ?? null,
-                access_token: body.access_token ?? null,
-                refresh_token: body.refresh_token ?? null,
-                webhook_secret: body.webhook_secret ?? null,
-                sync_cursor: body.sync_cursor ?? null,
-                status: body.status ?? 'connected',
+              const connection = await withMutationTx(async (client) => {
+                const row = await upsertIntegrationConnection(
+                  company.id,
+                  'qbo',
+                  {
+                    provider_account_id: body.provider_account_id ?? null,
+                    access_token: body.access_token ?? null,
+                    refresh_token: body.refresh_token ?? null,
+                    webhook_secret: body.webhook_secret ?? null,
+                    sync_cursor: body.sync_cursor ?? null,
+                    status: body.status ?? 'connected',
+                  },
+                  client,
+                )
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'integration_connection',
+                  entityId: row.id,
+                  action: 'upsert',
+                  row,
+                  syncPayload: {
+                    action: currentConnection ? 'upsert' : 'create',
+                    provider: 'qbo',
+                    connection: row,
+                  },
+                  idempotencyKey: `integration_connection:qbo:${row.id}`,
+                })
+                return row
               })
-              await recordSyncEvent(company.id, 'integration_connection', connection.id, {
-                action: currentConnection ? 'upsert' : 'create',
-                provider: 'qbo',
-                connection,
-              })
-              await recordMutationOutbox(
-                company.id,
-                'integration_connection',
-                connection.id,
-                'upsert',
-                connection,
-                `integration_connection:qbo:${connection.id}`,
-              )
               sendJson(res, 200, { connection })
               return
             }
@@ -3032,52 +3252,59 @@ const server = http.createServer(async (req, res) => {
                     syncedDivisions: divisionsResult.rowCount,
                     simulated: true,
                   }
-                  for (const row of customersResult.rows) {
-                    const customer = row as { id: string; external_id: string; name: string }
-                    await backfillCustomerMapping(company.id, customer)
-                  }
-                  for (const row of serviceItemsResult.rows) {
-                    const serviceItem = row as { code: string; name: string; source?: string | null }
-                    await backfillServiceItemMapping(
-                      company.id,
-                      serviceItem,
-                      serviceItem.code.startsWith('qbo-') ? serviceItem.code.slice(4) : null,
-                    )
-                  }
-                  for (const row of divisionsResult.rows) {
-                    const division = row as { code: string; name: string }
-                    await backfillDivisionMapping(company.id, division, division.code)
-                  }
-                  const refreshedConnection = await pool.query(
-                    `
+                  // Refresh integration_mappings for the company's existing
+                  // QBO-tagged rows. The simulated sync just rebuilds the
+                  // mapping table from local data; one tx per entity type
+                  // keeps the mapping refresh atomic per kind.
+                  await withMutationTx(async (client) => {
+                    for (const row of customersResult.rows) {
+                      const customer = row as { id: string; external_id: string; name: string }
+                      await backfillCustomerMapping(company.id, customer, client)
+                    }
+                    for (const row of serviceItemsResult.rows) {
+                      const serviceItem = row as { code: string; name: string; source?: string | null }
+                      await backfillServiceItemMapping(
+                        company.id,
+                        serviceItem,
+                        serviceItem.code.startsWith('qbo-') ? serviceItem.code.slice(4) : null,
+                        client,
+                      )
+                    }
+                    for (const row of divisionsResult.rows) {
+                      const division = row as { code: string; name: string }
+                      await backfillDivisionMapping(company.id, division, division.code, client)
+                    }
+                  })
+                  const refreshed = await withMutationTx(async (client) => {
+                    const result = await client.query(
+                      `
             update integration_connections
             set sync_cursor = $2, last_synced_at = now(), status = 'connected', version = version + 1
             where company_id = $1 and provider = 'qbo'
             returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_state, rate_limit_state, status, version, created_at
             `,
-                    [company.id, new Date().toISOString()],
-                  )
-                  await recordSyncEvent(
-                    company.id,
-                    'integration_connection',
-                    connection?.id ?? refreshedConnection.rows[0].id,
-                    {
+                      [company.id, new Date().toISOString()],
+                    )
+                    const row = result.rows[0]
+                    const connectionId = connection?.id ?? row.id
+                    await recordMutationLedger(client, {
+                      companyId: company.id,
+                      entityType: 'integration_connection',
+                      entityId: connectionId,
                       action: 'sync',
-                      provider: 'qbo',
-                      snapshot: qboSnapshot,
-                      simulated: true,
-                    },
-                  )
-                  await recordMutationOutbox(
-                    company.id,
-                    'integration_connection',
-                    connection?.id ?? refreshedConnection.rows[0].id,
-                    'sync',
-                    qboSnapshot,
-                    `integration_connection:qbo:sync:${connection?.id ?? refreshedConnection.rows[0].id}`,
-                  )
+                      syncPayload: {
+                        action: 'sync',
+                        provider: 'qbo',
+                        snapshot: qboSnapshot,
+                        simulated: true,
+                      },
+                      outboxPayload: qboSnapshot,
+                      idempotencyKey: `integration_connection:qbo:sync:${connectionId}`,
+                    })
+                    return row
+                  })
                   sendJson(res, 200, {
-                    connection: refreshedConnection.rows[0],
+                    connection: refreshed,
                     snapshot: qboSnapshot,
                   })
                   return
@@ -3101,30 +3328,63 @@ const server = http.createServer(async (req, res) => {
                   Sentry.captureException(e, { tags: { scope: 'qbo_customers' } })
                 }
 
-                // Upsert QBO customers into local database
-                const syncedCustomers: string[] = []
+                // Upsert QBO customers in one batch instead of N round-trips.
+                // External-id and name arrays are zipped via unnest; the mapping
+                // upsert reuses the resulting customer ids so we don't have to
+                // re-query.
+                const customerExternalIds: string[] = []
+                const customerNames: string[] = []
                 for (const qboCustomer of qboCustomers) {
                   const externalId = String(qboCustomer.Id ?? qboCustomer.id ?? '')
                   if (!externalId) continue
                   const name = qboCustomer.DisplayName ?? qboCustomer.displayName ?? externalId
-                  const customerResult = await pool.query(
-                    `
+                  customerExternalIds.push(externalId)
+                  customerNames.push(name)
+                }
+                const syncedCustomers: string[] = []
+                if (customerExternalIds.length > 0) {
+                  await withMutationTx(async (client) => {
+                    const upserted = await client.query<{
+                      id: string
+                      external_id: string
+                      name: string
+                    }>(
+                      `
             insert into customers (company_id, external_id, name, source)
-            values ($1, $2, $3, 'qbo')
-            on conflict (company_id, external_id) do update set name = $3, updated_at = now()
-            returning id, external_id, name, source, version, deleted_at, created_at
+            select $1::uuid, t.external_id, t.name, 'qbo'
+            from unnest($2::text[], $3::text[]) as t(external_id, name)
+            on conflict (company_id, external_id) do update set name = excluded.name, updated_at = now()
+            returning id, external_id, name
             `,
-                    [company.id, externalId, name],
-                  )
-                  await upsertIntegrationMapping(company.id, 'qbo', {
-                    entity_type: 'customer',
-                    local_ref: customerResult.rows[0].id,
-                    external_id: externalId,
-                    label: name,
-                    status: 'active',
-                    notes: 'synced from qbo customer import',
+                      [company.id, customerExternalIds, customerNames],
+                    )
+                    const localRefs: string[] = []
+                    const externalIds: string[] = []
+                    const labels: string[] = []
+                    for (const row of upserted.rows) {
+                      localRefs.push(row.id)
+                      externalIds.push(row.external_id)
+                      labels.push(row.name)
+                      syncedCustomers.push(row.external_id)
+                    }
+                    await client.query(
+                      `
+            insert into integration_mappings (company_id, provider, entity_type, local_ref, external_id, label, status, notes)
+            select $1::uuid, 'qbo', 'customer', local_ref, external_id, label, 'active', 'synced from qbo customer import'
+            from unnest($2::text[], $3::text[], $4::text[]) as t(local_ref, external_id, label)
+            on conflict (company_id, provider, entity_type, local_ref)
+            do update set
+              external_id = excluded.external_id,
+              label = excluded.label,
+              status = excluded.status,
+              notes = excluded.notes,
+              version = integration_mappings.version + 1,
+              updated_at = now(),
+              deleted_at = null
+            `,
+                      [company.id, localRefs, externalIds, labels],
+                    )
                   })
-                  syncedCustomers.push(externalId)
                 }
 
                 // Fetch items from QBO. Parse each row through `parseQboItem`
@@ -3145,7 +3405,13 @@ const server = http.createServer(async (req, res) => {
                   Sentry.captureException(e, { tags: { scope: 'qbo_items' } })
                 }
 
-                const syncedItems: string[] = []
+                // Parse first, write second: parse failures emit per-row
+                // sync_event markers, then the survivors are upserted in one
+                // batch. Same idea as the customers path above.
+                const itemCodes: string[] = []
+                const itemNames: string[] = []
+                const itemPrices: string[] = []
+                const itemExternalIds: string[] = []
                 for (const rawItem of qboItemsRaw) {
                   let qboItem
                   try {
@@ -3166,18 +3432,49 @@ const server = http.createServer(async (req, res) => {
                     }
                     throw e
                   }
-                  const code = `qbo-${qboItem.id}`
-                  const itemResult = await pool.query(
-                    `
+                  itemCodes.push(`qbo-${qboItem.id}`)
+                  itemNames.push(qboItem.name)
+                  itemPrices.push(String(qboItem.unitPrice ?? 0))
+                  itemExternalIds.push(qboItem.id)
+                }
+                const syncedItems: string[] = []
+                if (itemCodes.length > 0) {
+                  await withMutationTx(async (client) => {
+                    const upserted = await client.query<{ code: string; name: string }>(
+                      `
             insert into service_items (company_id, code, name, default_rate, category, unit, source)
-            values ($1, $2, $3, $4, 'accounting', 'ea', 'qbo')
-            on conflict (company_id, code) do update set name = $3, default_rate = $4, source = 'qbo', updated_at = now()
-            returning code, name, category, unit, default_rate, source, created_at
+            select $1::uuid, t.code, t.name, t.price::numeric, 'accounting', 'ea', 'qbo'
+            from unnest($2::text[], $3::text[], $4::text[]) as t(code, name, price)
+            on conflict (company_id, code) do update set
+              name = excluded.name,
+              default_rate = excluded.default_rate,
+              source = 'qbo',
+              updated_at = now()
+            returning code, name
             `,
-                    [company.id, code, qboItem.name, qboItem.unitPrice],
-                  )
-                  await backfillServiceItemMapping(company.id, itemResult.rows[0], qboItem.id)
-                  syncedItems.push(code)
+                      [company.id, itemCodes, itemNames, itemPrices],
+                    )
+                    for (const row of upserted.rows) {
+                      syncedItems.push(row.code)
+                    }
+                    await client.query(
+                      `
+            insert into integration_mappings (company_id, provider, entity_type, local_ref, external_id, label, status, notes)
+            select $1::uuid, 'qbo', 'service_item', t.local_ref, t.external_id, t.label, 'active', 'backfilled from qbo service_item import'
+            from unnest($2::text[], $3::text[], $4::text[]) as t(local_ref, external_id, label)
+            on conflict (company_id, provider, entity_type, local_ref)
+            do update set
+              external_id = excluded.external_id,
+              label = excluded.label,
+              status = excluded.status,
+              notes = excluded.notes,
+              version = integration_mappings.version + 1,
+              updated_at = now(),
+              deleted_at = null
+            `,
+                      [company.id, itemCodes, itemExternalIds, itemNames],
+                    )
+                  })
                 }
 
                 // Fetch classes from QBO and backfill division mappings by
@@ -3200,6 +3497,11 @@ const server = http.createServer(async (req, res) => {
                   'select code, name from divisions where company_id = $1 order by sort_order asc',
                   [company.id],
                 )
+                // Match QBO classes against local divisions in memory, then
+                // batch the resulting integration_mapping upserts.
+                const divisionLocalRefs: string[] = []
+                const divisionExternalIds: string[] = []
+                const divisionLabels: string[] = []
                 const syncedDivisions: string[] = []
                 for (const rawClass of qboClassesRaw) {
                   let qboClass
@@ -3227,8 +3529,31 @@ const server = http.createServer(async (req, res) => {
                       row.code.toLowerCase() === qboClass.name.toLowerCase(),
                   )
                   if (!division) continue
-                  await backfillDivisionMapping(company.id, division, qboClass.id)
+                  divisionLocalRefs.push(division.code)
+                  divisionExternalIds.push(qboClass.id)
+                  divisionLabels.push(division.name)
                   syncedDivisions.push(division.code)
+                }
+                if (divisionLocalRefs.length > 0) {
+                  await withMutationTx(async (client) => {
+                    await client.query(
+                      `
+            insert into integration_mappings (company_id, provider, entity_type, local_ref, external_id, label, status, notes)
+            select $1::uuid, 'qbo', 'division', t.local_ref, t.external_id, t.label, 'active', 'backfilled from qbo class sync'
+            from unnest($2::text[], $3::text[], $4::text[]) as t(local_ref, external_id, label)
+            on conflict (company_id, provider, entity_type, local_ref)
+            do update set
+              external_id = excluded.external_id,
+              label = excluded.label,
+              status = excluded.status,
+              notes = excluded.notes,
+              version = integration_mappings.version + 1,
+              updated_at = now(),
+              deleted_at = null
+            `,
+                      [company.id, divisionLocalRefs, divisionExternalIds, divisionLabels],
+                    )
+                  })
                 }
 
                 const qboSnapshot = {
@@ -3237,32 +3562,30 @@ const server = http.createServer(async (req, res) => {
                   syncedDivisions: syncedDivisions.length,
                 }
 
-                const refreshedConnection = await pool.query(
-                  `
+                const refreshed = await withMutationTx(async (client) => {
+                  const result = await client.query(
+                    `
           update integration_connections
           set sync_cursor = $2, last_synced_at = now(), status = 'connected', version = version + 1
           where company_id = $1 and provider = 'qbo'
           returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_state, rate_limit_state, status, version, created_at
           `,
-                  [company.id, new Date().toISOString()],
-                )
-
-                await recordSyncEvent(company.id, 'integration_connection', connection.id, {
-                  action: 'sync',
-                  provider: 'qbo',
-                  snapshot: qboSnapshot,
+                    [company.id, new Date().toISOString()],
+                  )
+                  await recordMutationLedger(client, {
+                    companyId: company.id,
+                    entityType: 'integration_connection',
+                    entityId: connection.id,
+                    action: 'sync',
+                    syncPayload: { action: 'sync', provider: 'qbo', snapshot: qboSnapshot },
+                    outboxPayload: qboSnapshot,
+                    idempotencyKey: `integration_connection:qbo:sync:${connection.id}`,
+                  })
+                  return result.rows[0] ?? connection
                 })
-                await recordMutationOutbox(
-                  company.id,
-                  'integration_connection',
-                  connection.id,
-                  'sync',
-                  qboSnapshot,
-                  `integration_connection:qbo:sync:${connection.id}`,
-                )
 
                 sendJson(res, 200, {
-                  connection: refreshedConnection.rows[0] ?? connection,
+                  connection: refreshed,
                   snapshot: qboSnapshot,
                 })
               } catch (error) {
@@ -3410,18 +3733,31 @@ const server = http.createServer(async (req, res) => {
                     errors.push({ bill_id: bill.id, error: 'QBO did not return a Bill.Id' })
                     continue
                   }
-                  await upsertIntegrationMapping(company.id, 'qbo', {
-                    entity_type: 'material_bill',
-                    local_ref: bill.id,
-                    external_id: qboBillId,
-                    label: `${displayName} ${amount}`,
-                    status: 'active',
-                    notes: 'pushed via /sync/material-bills',
-                  })
-                  await recordSyncEvent(company.id, 'material_bill', bill.id, {
-                    action: 'push',
-                    provider: 'qbo',
-                    external_id: qboBillId,
+                  // Pair the mapping upsert with the success ledger row so we
+                  // never end up with a `material_bill:push` sync_event for a
+                  // bill that has no integration_mapping (or vice versa).
+                  await withMutationTx(async (client) => {
+                    await upsertIntegrationMapping(
+                      company.id,
+                      'qbo',
+                      {
+                        entity_type: 'material_bill',
+                        local_ref: bill.id,
+                        external_id: qboBillId,
+                        label: `${displayName} ${amount}`,
+                        status: 'active',
+                        notes: 'pushed via /sync/material-bills',
+                      },
+                      client,
+                    )
+                    await recordSyncEvent(
+                      company.id,
+                      'material_bill',
+                      bill.id,
+                      { action: 'push', provider: 'qbo', external_id: qboBillId },
+                      null,
+                      { executor: client },
+                    )
                   })
                   synced += 1
                 } catch (err) {
@@ -3450,30 +3786,34 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'config must be valid json' })
                 return
               }
-              if (body.is_default) {
-                await pool.query('update pricing_profiles set is_default = false where company_id = $1', [company.id])
-              }
-              const result = await pool.query(
-                `
+              const profile = await withMutationTx(async (client) => {
+                // Clear previous default inside the same tx so we never leave
+                // the company with zero defaults if the INSERT below fails.
+                if (body.is_default) {
+                  await client.query('update pricing_profiles set is_default = false where company_id = $1', [
+                    company.id,
+                  ])
+                }
+                const result = await client.query(
+                  `
         insert into pricing_profiles (company_id, name, is_default, config, version)
         values ($1, $2, coalesce($3, false), $4::jsonb, 1)
         returning id, name, is_default, config, version, created_at
         `,
-                [company.id, name, body.is_default ?? false, JSON.stringify(config)],
-              )
-              await recordSyncEvent(company.id, 'pricing_profile', result.rows[0].id, {
-                action: 'create',
-                pricingProfile: result.rows[0],
+                  [company.id, name, body.is_default ?? false, JSON.stringify(config)],
+                )
+                const row = result.rows[0]
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'pricing_profile',
+                  entityId: row.id,
+                  action: 'create',
+                  row,
+                  syncPayload: { action: 'create', pricingProfile: row },
+                })
+                return row
               })
-              await recordMutationOutbox(
-                company.id,
-                'pricing_profile',
-                result.rows[0].id,
-                'create',
-                result.rows[0],
-                `pricing_profile:create:${result.rows[0].id}`,
-              )
-              sendJson(res, 201, result.rows[0])
+              sendJson(res, 201, profile)
               return
             }
 
@@ -3494,15 +3834,16 @@ const server = http.createServer(async (req, res) => {
                   return
                 }
               }
-              if (body.is_default) {
-                await pool.query('update pricing_profiles set is_default = false where company_id = $1 and id <> $2', [
-                  company.id,
-                  pricingProfileId,
-                ])
-              }
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                `
+              const updated = await withMutationTx(async (client) => {
+                if (body.is_default) {
+                  await client.query(
+                    'update pricing_profiles set is_default = false where company_id = $1 and id <> $2',
+                    [company.id, pricingProfileId],
+                  )
+                }
+                const result = await client.query(
+                  `
         update pricing_profiles
         set
           name = coalesce($3, name),
@@ -3512,16 +3853,28 @@ const server = http.createServer(async (req, res) => {
         where company_id = $1 and id = $2 and ($6::int is null or version = $6)
         returning id, name, is_default, config, version, created_at
         `,
-                [
-                  company.id,
-                  pricingProfileId,
-                  body.name ?? null,
-                  body.is_default ?? null,
-                  config ? JSON.stringify(config) : null,
-                  expectedVersion,
-                ],
-              )
-              if (!result.rows[0]) {
+                  [
+                    company.id,
+                    pricingProfileId,
+                    body.name ?? null,
+                    body.is_default ?? null,
+                    config ? JSON.stringify(config) : null,
+                    expectedVersion,
+                  ],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'pricing_profile',
+                  entityId: pricingProfileId,
+                  action: 'update',
+                  row,
+                  syncPayload: { action: 'update', pricingProfile: row },
+                })
+                return row
+              })
+              if (!updated) {
                 if (
                   !(await checkVersion(
                     'pricing_profiles',
@@ -3537,19 +3890,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'pricing profile not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'pricing_profile', pricingProfileId, {
-                action: 'update',
-                pricingProfile: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'pricing_profile',
-                pricingProfileId,
-                'update',
-                result.rows[0],
-                `pricing_profile:update:${pricingProfileId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, updated)
               return
             }
 
@@ -3562,11 +3903,24 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                'delete from pricing_profiles where company_id = $1 and id = $2 and ($3::int is null or version = $3) returning id, name, is_default, config, version, created_at',
-                [company.id, pricingProfileId, expectedVersion],
-              )
-              if (!result.rows[0]) {
+              const deleted = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  'delete from pricing_profiles where company_id = $1 and id = $2 and ($3::int is null or version = $3) returning id, name, is_default, config, version, created_at',
+                  [company.id, pricingProfileId, expectedVersion],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'pricing_profile',
+                  entityId: pricingProfileId,
+                  action: 'delete',
+                  row,
+                  syncPayload: { action: 'delete', pricingProfile: row },
+                })
+                return row
+              })
+              if (!deleted) {
                 if (
                   !(await checkVersion(
                     'pricing_profiles',
@@ -3582,19 +3936,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'pricing profile not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'pricing_profile', pricingProfileId, {
-                action: 'delete',
-                pricingProfile: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'pricing_profile',
-                pricingProfileId,
-                'delete',
-                result.rows[0],
-                `pricing_profile:delete:${pricingProfileId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, deleted)
               return
             }
 
@@ -3613,27 +3955,27 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'config must be valid json' })
                 return
               }
-              const result = await pool.query(
-                `
+              const rule = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         insert into bonus_rules (company_id, name, config, is_active, version)
         values ($1, $2, $3::jsonb, coalesce($4, true), 1)
         returning id, name, config, is_active, version, created_at
         `,
-                [company.id, name, JSON.stringify(config), body.is_active ?? true],
-              )
-              await recordSyncEvent(company.id, 'bonus_rule', result.rows[0].id, {
-                action: 'create',
-                bonusRule: result.rows[0],
+                  [company.id, name, JSON.stringify(config), body.is_active ?? true],
+                )
+                const row = result.rows[0]
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'bonus_rule',
+                  entityId: row.id,
+                  action: 'create',
+                  row,
+                  syncPayload: { action: 'create', bonusRule: row },
+                })
+                return row
               })
-              await recordMutationOutbox(
-                company.id,
-                'bonus_rule',
-                result.rows[0].id,
-                'create',
-                result.rows[0],
-                `bonus_rule:create:${result.rows[0].id}`,
-              )
-              sendJson(res, 201, result.rows[0])
+              sendJson(res, 201, rule)
               return
             }
 
@@ -3655,8 +3997,9 @@ const server = http.createServer(async (req, res) => {
                 }
               }
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                `
+              const updated = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update bonus_rules
         set
           name = coalesce($3, name),
@@ -3666,16 +4009,28 @@ const server = http.createServer(async (req, res) => {
         where company_id = $1 and id = $2 and ($6::int is null or version = $6)
         returning id, name, config, is_active, version, created_at
         `,
-                [
-                  company.id,
-                  bonusRuleId,
-                  body.name ?? null,
-                  config ? JSON.stringify(config) : null,
-                  body.is_active ?? null,
-                  expectedVersion,
-                ],
-              )
-              if (!result.rows[0]) {
+                  [
+                    company.id,
+                    bonusRuleId,
+                    body.name ?? null,
+                    config ? JSON.stringify(config) : null,
+                    body.is_active ?? null,
+                    expectedVersion,
+                  ],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'bonus_rule',
+                  entityId: bonusRuleId,
+                  action: 'update',
+                  row,
+                  syncPayload: { action: 'update', bonusRule: row },
+                })
+                return row
+              })
+              if (!updated) {
                 if (
                   !(await checkVersion(
                     'bonus_rules',
@@ -3691,19 +4046,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'bonus rule not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'bonus_rule', bonusRuleId, {
-                action: 'update',
-                bonusRule: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'bonus_rule',
-                bonusRuleId,
-                'update',
-                result.rows[0],
-                `bonus_rule:update:${bonusRuleId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, updated)
               return
             }
 
@@ -3716,11 +4059,24 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                'delete from bonus_rules where company_id = $1 and id = $2 and ($3::int is null or version = $3) returning id, name, config, is_active, version, created_at',
-                [company.id, bonusRuleId, expectedVersion],
-              )
-              if (!result.rows[0]) {
+              const deleted = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  'delete from bonus_rules where company_id = $1 and id = $2 and ($3::int is null or version = $3) returning id, name, config, is_active, version, created_at',
+                  [company.id, bonusRuleId, expectedVersion],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'bonus_rule',
+                  entityId: bonusRuleId,
+                  action: 'delete',
+                  row,
+                  syncPayload: { action: 'delete', bonusRule: row },
+                })
+                return row
+              })
+              if (!deleted) {
                 if (
                   !(await checkVersion(
                     'bonus_rules',
@@ -3736,19 +4092,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'bonus rule not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'bonus_rule', bonusRuleId, {
-                action: 'delete',
-                bonusRule: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'bonus_rule',
-                bonusRuleId,
-                'delete',
-                result.rows[0],
-                `bonus_rule:delete:${bonusRuleId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, deleted)
               return
             }
 
@@ -3794,28 +4138,27 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'name is required' })
                 return
               }
-              const result = await pool.query(
-                `
+              const customer = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         insert into customers (company_id, external_id, name, source, version)
         values ($1, $2, $3, $4, 1)
         returning id, external_id, name, source, version, deleted_at, created_at
         `,
-                [company.id, body.external_id ?? null, name, body.source ?? 'manual'],
-              )
-              await recordSyncEvent(company.id, 'customer', result.rows[0].id, {
-                action: 'create',
-                customer: result.rows[0],
+                  [company.id, body.external_id ?? null, name, body.source ?? 'manual'],
+                )
+                const row = result.rows[0]
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'customer',
+                  entityId: row.id,
+                  action: 'create',
+                  row,
+                })
+                await backfillCustomerMapping(company.id, row, client)
+                return row
               })
-              await recordMutationOutbox(
-                company.id,
-                'customer',
-                result.rows[0].id,
-                'create',
-                result.rows[0],
-                `customer:create:${result.rows[0].id}`,
-              )
-              await backfillCustomerMapping(company.id, result.rows[0])
-              sendJson(res, 201, result.rows[0])
+              sendJson(res, 201, customer)
               return
             }
 
@@ -3828,8 +4171,9 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                `
+              const updated = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update customers
         set
           external_id = coalesce($3, external_id),
@@ -3839,16 +4183,28 @@ const server = http.createServer(async (req, res) => {
         where company_id = $1 and id = $2 and deleted_at is null and ($6::int is null or version = $6)
         returning id, external_id, name, source, version, deleted_at, created_at
         `,
-                [
-                  company.id,
-                  customerId,
-                  body.external_id ?? null,
-                  body.name ?? null,
-                  body.source ?? null,
-                  expectedVersion,
-                ],
-              )
-              if (!result.rows[0]) {
+                  [
+                    company.id,
+                    customerId,
+                    body.external_id ?? null,
+                    body.name ?? null,
+                    body.source ?? null,
+                    expectedVersion,
+                  ],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'customer',
+                  entityId: customerId,
+                  action: 'update',
+                  row,
+                })
+                await backfillCustomerMapping(company.id, row, client)
+                return row
+              })
+              if (!updated) {
                 if (
                   !(await checkVersion(
                     'customers',
@@ -3864,17 +4220,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'customer not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'customer', customerId, { action: 'update', customer: result.rows[0] })
-              await recordMutationOutbox(
-                company.id,
-                'customer',
-                customerId,
-                'update',
-                result.rows[0],
-                `customer:update:${customerId}`,
-              )
-              await backfillCustomerMapping(company.id, result.rows[0])
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, updated)
               return
             }
 
@@ -3885,29 +4231,32 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'customer id is required' })
                 return
               }
-              const result = await pool.query(
-                `
+              const deleted = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update customers
         set deleted_at = now(), version = version + 1
         where company_id = $1 and id = $2 and deleted_at is null
         returning id, external_id, name, source, version, deleted_at, created_at
         `,
-                [company.id, customerId],
-              )
-              if (!result.rows[0]) {
+                  [company.id, customerId],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'customer',
+                  entityId: customerId,
+                  action: 'delete',
+                  row,
+                })
+                return row
+              })
+              if (!deleted) {
                 sendJson(res, 404, { error: 'customer not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'customer', customerId, { action: 'delete', customer: result.rows[0] })
-              await recordMutationOutbox(
-                company.id,
-                'customer',
-                customerId,
-                'delete',
-                result.rows[0],
-                `customer:delete:${customerId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, deleted)
               return
             }
 
@@ -3919,27 +4268,26 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'name is required' })
                 return
               }
-              const result = await pool.query(
-                `
+              const worker = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         insert into workers (company_id, name, role)
         values ($1, $2, $3)
         returning id, name, role, version, deleted_at, created_at
         `,
-                [company.id, name, body.role ?? 'crew'],
-              )
-              await recordSyncEvent(company.id, 'worker', result.rows[0].id, {
-                action: 'create',
-                worker: result.rows[0],
+                  [company.id, name, body.role ?? 'crew'],
+                )
+                const row = result.rows[0]
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'worker',
+                  entityId: row.id,
+                  action: 'create',
+                  row,
+                })
+                return row
               })
-              await recordMutationOutbox(
-                company.id,
-                'worker',
-                result.rows[0].id,
-                'create',
-                result.rows[0],
-                `worker:create:${result.rows[0].id}`,
-              )
-              sendJson(res, 201, result.rows[0])
+              sendJson(res, 201, worker)
               return
             }
 
@@ -3952,8 +4300,9 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                `
+              const updated = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update workers
         set
           name = coalesce($3, name),
@@ -3962,9 +4311,20 @@ const server = http.createServer(async (req, res) => {
         where company_id = $1 and id = $2 and deleted_at is null and ($5::int is null or version = $5)
         returning id, name, role, version, deleted_at, created_at
         `,
-                [company.id, workerId, body.name ?? null, body.role ?? null, expectedVersion],
-              )
-              if (!result.rows[0]) {
+                  [company.id, workerId, body.name ?? null, body.role ?? null, expectedVersion],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'worker',
+                  entityId: workerId,
+                  action: 'update',
+                  row,
+                })
+                return row
+              })
+              if (!updated) {
                 if (
                   !(await checkVersion(
                     'workers',
@@ -3980,16 +4340,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'worker not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'worker', workerId, { action: 'update', worker: result.rows[0] })
-              await recordMutationOutbox(
-                company.id,
-                'worker',
-                workerId,
-                'update',
-                result.rows[0],
-                `worker:update:${workerId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, updated)
               return
             }
 
@@ -4000,29 +4351,32 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'worker id is required' })
                 return
               }
-              const result = await pool.query(
-                `
+              const deleted = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update workers
         set deleted_at = now(), version = version + 1
         where company_id = $1 and id = $2 and deleted_at is null
         returning id, name, role, version, deleted_at, created_at
         `,
-                [company.id, workerId],
-              )
-              if (!result.rows[0]) {
+                  [company.id, workerId],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'worker',
+                  entityId: workerId,
+                  action: 'delete',
+                  row,
+                })
+                return row
+              })
+              if (!deleted) {
                 sendJson(res, 404, { error: 'worker not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'worker', workerId, { action: 'delete', worker: result.rows[0] })
-              await recordMutationOutbox(
-                company.id,
-                'worker',
-                workerId,
-                'delete',
-                result.rows[0],
-                `worker:delete:${workerId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, deleted)
               return
             }
 
@@ -4037,27 +4391,26 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'code and name are required' })
                 return
               }
-              const result = await pool.query(
-                `
+              const item = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         insert into service_items (company_id, code, name, category, unit, default_rate, source, version, created_at)
         values ($1, $2, $3, $4, $5, $6, coalesce($7, 'manual'), 1, now())
         returning code, name, category, unit, default_rate, source, version, created_at
         `,
-                [company.id, code, name, category, unit, body.default_rate ?? null, body.source ?? 'manual'],
-              )
-              await recordSyncEvent(company.id, 'service_item', code, {
-                action: 'create',
-                service_item: result.rows[0],
+                  [company.id, code, name, category, unit, body.default_rate ?? null, body.source ?? 'manual'],
+                )
+                const row = result.rows[0]
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'service_item',
+                  entityId: code,
+                  action: 'create',
+                  row,
+                })
+                return row
               })
-              await recordMutationOutbox(
-                company.id,
-                'service_item',
-                code,
-                'create',
-                result.rows[0],
-                `service_item:create:${code}`,
-              )
-              sendJson(res, 201, result.rows[0])
+              sendJson(res, 201, item)
               return
             }
 
@@ -4070,8 +4423,9 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                `
+              const updated = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update service_items
         set
           name = coalesce($3, name),
@@ -4082,17 +4436,28 @@ const server = http.createServer(async (req, res) => {
         where company_id = $1 and code = $2 and ($7::int is null or version = $7)
         returning code, name, category, unit, default_rate, source, version, created_at
         `,
-                [
-                  company.id,
-                  code,
-                  body.name ?? null,
-                  body.category ?? null,
-                  body.unit ?? null,
-                  body.default_rate ?? null,
-                  expectedVersion,
-                ],
-              )
-              if (!result.rows[0]) {
+                  [
+                    company.id,
+                    code,
+                    body.name ?? null,
+                    body.category ?? null,
+                    body.unit ?? null,
+                    body.default_rate ?? null,
+                    expectedVersion,
+                  ],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'service_item',
+                  entityId: code,
+                  action: 'update',
+                  row,
+                })
+                return row
+              })
+              if (!updated) {
                 if (
                   !(await checkVersion(
                     'service_items',
@@ -4108,19 +4473,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'service item not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'service_item', code, {
-                action: 'update',
-                service_item: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'service_item',
-                code,
-                'update',
-                result.rows[0],
-                `service_item:update:${code}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, updated)
               return
             }
 
@@ -4132,22 +4485,35 @@ const server = http.createServer(async (req, res) => {
                 return
               }
               const body = await readBody(req)
-              const result = await pool.query(
-                `
+              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
+              const deleted = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update service_items
         set deleted_at = now(), version = version + 1
         where company_id = $1 and code = $2 and deleted_at is null and ($3::int is null or version = $3)
         returning code, name, category, unit, default_rate, source, version, created_at
         `,
-                [company.id, code, parseExpectedVersion(body.expected_version ?? body.version)],
-              )
-              if (!result.rows[0]) {
+                  [company.id, code, expectedVersion],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'service_item',
+                  entityId: code,
+                  action: 'delete',
+                  row,
+                })
+                return row
+              })
+              if (!deleted) {
                 if (
                   !(await checkVersion(
                     'service_items',
                     'company_id = $1 and code = $2',
                     [company.id, code],
-                    parseExpectedVersion(body.expected_version ?? body.version),
+                    expectedVersion,
                     res,
                     req,
                   ))
@@ -4157,19 +4523,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'service item not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'service_item', code, {
-                action: 'delete',
-                service_item: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'service_item',
-                code,
-                'delete',
-                result.rows[0],
-                `service_item:delete:${code}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, deleted)
               return
             }
 
@@ -4196,8 +4550,9 @@ const server = http.createServer(async (req, res) => {
               const siteLng = parseOptionalNumber(body.site_lng)
               const siteRadiusMeters = parseOptionalNumber(body.site_radius_m)
 
-              const created = await pool.query(
-                `
+              const created = await withMutationTx(async (client) => {
+                const inserted = await client.query(
+                  `
         insert into projects (
           company_id, customer_id, name, customer_name, division_code, status,
           bid_total, labor_rate, target_sqft_per_hr, bonus_pool,
@@ -4221,35 +4576,33 @@ const server = http.createServer(async (req, res) => {
         )
         returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, version, created_at, updated_at
         `,
-                [
-                  company.id,
-                  customerId,
-                  name,
-                  customerName,
-                  divisionCode,
-                  body.status ?? 'lead',
-                  body.bid_total ?? 0,
-                  body.labor_rate ?? 0,
-                  body.target_sqft_per_hr ?? null,
-                  body.bonus_pool ?? 0,
-                  siteLat,
-                  siteLng,
-                  siteRadiusMeters,
-                ],
-              )
-              await recordSyncEvent(company.id, 'project', created.rows[0].id, {
-                action: 'create',
-                project: created.rows[0],
+                  [
+                    company.id,
+                    customerId,
+                    name,
+                    customerName,
+                    divisionCode,
+                    body.status ?? 'lead',
+                    body.bid_total ?? 0,
+                    body.labor_rate ?? 0,
+                    body.target_sqft_per_hr ?? null,
+                    body.bonus_pool ?? 0,
+                    siteLat,
+                    siteLng,
+                    siteRadiusMeters,
+                  ],
+                )
+                const row = inserted.rows[0]
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'project',
+                  entityId: row.id,
+                  action: 'create',
+                  row,
+                })
+                return row
               })
-              await recordMutationOutbox(
-                company.id,
-                'project',
-                created.rows[0].id,
-                'create',
-                created.rows[0],
-                `project:create:${created.rows[0].id}`,
-              )
-              sendJson(res, 201, created.rows[0])
+              sendJson(res, 201, created)
               return
             }
 
@@ -4265,8 +4618,9 @@ const server = http.createServer(async (req, res) => {
               const patchSiteLat = body.site_lat === undefined ? null : parseOptionalNumber(body.site_lat)
               const patchSiteLng = body.site_lng === undefined ? null : parseOptionalNumber(body.site_lng)
               const patchSiteRadius = body.site_radius_m === undefined ? null : parseOptionalNumber(body.site_radius_m)
-              const result = await pool.query(
-                `
+              const updated = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update projects
         set
           name = coalesce($3, name),
@@ -4285,27 +4639,38 @@ const server = http.createServer(async (req, res) => {
         where company_id = $1 and id = $2 and ($11::int is null or version = $11)
         returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, version, created_at, updated_at
         `,
-                [
-                  company.id,
-                  projectId,
-                  body.name ?? null,
-                  body.customer_name ?? null,
-                  body.division_code ?? null,
-                  body.status ?? null,
-                  body.bid_total ?? null,
-                  body.labor_rate ?? null,
-                  body.target_sqft_per_hr ?? null,
-                  body.bonus_pool ?? null,
-                  expectedVersion,
-                  body.site_lat !== undefined,
-                  patchSiteLat,
-                  body.site_lng !== undefined,
-                  patchSiteLng,
-                  body.site_radius_m !== undefined,
-                  patchSiteRadius,
-                ],
-              )
-              if (!result.rows[0]) {
+                  [
+                    company.id,
+                    projectId,
+                    body.name ?? null,
+                    body.customer_name ?? null,
+                    body.division_code ?? null,
+                    body.status ?? null,
+                    body.bid_total ?? null,
+                    body.labor_rate ?? null,
+                    body.target_sqft_per_hr ?? null,
+                    body.bonus_pool ?? null,
+                    expectedVersion,
+                    body.site_lat !== undefined,
+                    patchSiteLat,
+                    body.site_lng !== undefined,
+                    patchSiteLng,
+                    body.site_radius_m !== undefined,
+                    patchSiteRadius,
+                  ],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'project',
+                  entityId: projectId,
+                  action: 'update',
+                  row,
+                })
+                return row
+              })
+              if (!updated) {
                 if (
                   !(await checkVersion(
                     'projects',
@@ -4321,19 +4686,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'project not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'project', projectId, {
-                action: 'update',
-                project: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'project',
-                projectId,
-                'update',
-                result.rows[0],
-                `project:update:${projectId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, updated)
               return
             }
 
@@ -4345,8 +4698,10 @@ const server = http.createServer(async (req, res) => {
                 return
               }
               const body = await readBody(req)
-              const result = await pool.query(
-                `
+              const expectedVersion = parseExpectedVersion(body?.expected_version ?? body?.version)
+              const closed = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update projects
         set
           status = 'completed',
@@ -4357,15 +4712,26 @@ const server = http.createServer(async (req, res) => {
         where company_id = $1 and id = $2 and ($3::int is null or version = $3)
         returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at
         `,
-                [company.id, projectId, parseExpectedVersion(body?.expected_version ?? body?.version)],
-              )
-              if (!result.rows[0]) {
+                  [company.id, projectId, expectedVersion],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'project',
+                  entityId: projectId,
+                  action: 'closeout',
+                  row,
+                })
+                return row
+              })
+              if (!closed) {
                 if (
                   !(await checkVersion(
                     'projects',
                     'company_id = $1 and id = $2',
                     [company.id, projectId],
-                    parseExpectedVersion(body?.expected_version ?? body?.version),
+                    expectedVersion,
                     res,
                     req,
                   ))
@@ -4375,22 +4741,15 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'project not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'project', projectId, { action: 'closeout', project: result.rows[0] })
-              await recordMutationOutbox(
-                company.id,
-                'project',
-                projectId,
-                'closeout',
-                result.rows[0],
-                `project:closeout:${projectId}`,
-              )
               // Margin shortfall alert: when the closing margin is below 10%,
               // notify company admins so they can review before invoicing.
+              // Best-effort, post-commit — alert delivery must not roll back
+              // the closeout.
               try {
                 const summary = await summarizeProject(company.id, projectId)
                 const marginPct = summary?.metrics?.margin?.margin
                 if (typeof marginPct === 'number' && marginPct < 10) {
-                  const project = result.rows[0] as { name?: string; customer_name?: string }
+                  const project = closed as { name?: string; customer_name?: string }
                   const subject = `[Sitelayer] Margin shortfall on closeout: ${project.name ?? projectId}`
                   const text = [
                     `Project "${project.name ?? projectId}" (${project.customer_name ?? 'unknown customer'}) closed with a margin of ${marginPct.toFixed(2)}%.`,
@@ -4407,7 +4766,7 @@ const server = http.createServer(async (req, res) => {
               } catch (err) {
                 logger.warn({ err, projectId }, '[notifications] margin_shortfall alert failed')
               }
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, closed)
               return
             }
 
@@ -4458,39 +4817,39 @@ const server = http.createServer(async (req, res) => {
                   return
                 }
               }
-              const result = await pool.query(
-                `
+              const bill = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         insert into material_bills (company_id, project_id, vendor_name, amount, bill_type, description, occurred_on)
         values ($1, $2, $3, $4, $5, $6, coalesce($7, now()::date))
         returning id, project_id, vendor_name as vendor, amount, bill_type, description, occurred_on, version, deleted_at, created_at
         `,
-                [
-                  company.id,
-                  projectId,
-                  body.vendor,
-                  body.amount,
-                  body.bill_type,
-                  body.description ?? null,
-                  body.occurred_on ?? null,
-                ],
-              )
-              await recordSyncEvent(company.id, 'material_bill', result.rows[0].id, {
-                action: 'create',
-                bill: result.rows[0],
+                  [
+                    company.id,
+                    projectId,
+                    body.vendor,
+                    body.amount,
+                    body.bill_type,
+                    body.description ?? null,
+                    body.occurred_on ?? null,
+                  ],
+                )
+                const row = result.rows[0]
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'material_bill',
+                  entityId: row.id,
+                  action: 'create',
+                  row,
+                  syncPayload: { action: 'create', bill: row },
+                })
+                await client.query(
+                  'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
+                  [company.id, projectId],
+                )
+                return row
               })
-              await recordMutationOutbox(
-                company.id,
-                'material_bill',
-                result.rows[0].id,
-                'create',
-                result.rows[0],
-                `material_bill:create:${result.rows[0].id}`,
-              )
-              await pool.query(
-                'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
-                [company.id, projectId],
-              )
-              sendJson(res, 201, result.rows[0])
+              sendJson(res, 201, bill)
               return
             }
 
@@ -4503,8 +4862,9 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                `
+              const updated = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update material_bills
         set
           vendor_name = coalesce($3, vendor_name),
@@ -4516,18 +4876,34 @@ const server = http.createServer(async (req, res) => {
         where company_id = $1 and id = $2 and deleted_at is null and ($8::int is null or version = $8)
         returning id, project_id, vendor_name as vendor, amount, bill_type, description, occurred_on, version, deleted_at, created_at
         `,
-                [
-                  company.id,
-                  billId,
-                  body.vendor ?? null,
-                  body.amount ?? null,
-                  body.bill_type ?? null,
-                  body.description ?? null,
-                  body.occurred_on ?? null,
-                  expectedVersion,
-                ],
-              )
-              if (!result.rows[0]) {
+                  [
+                    company.id,
+                    billId,
+                    body.vendor ?? null,
+                    body.amount ?? null,
+                    body.bill_type ?? null,
+                    body.description ?? null,
+                    body.occurred_on ?? null,
+                    expectedVersion,
+                  ],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'material_bill',
+                  entityId: billId,
+                  action: 'update',
+                  row,
+                  syncPayload: { action: 'update', bill: row },
+                })
+                await client.query(
+                  'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
+                  [company.id, row.project_id],
+                )
+                return row
+              })
+              if (!updated) {
                 if (
                   !(await checkVersion(
                     'material_bills',
@@ -4543,23 +4919,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'bill not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'material_bill', billId, {
-                action: 'update',
-                bill: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'material_bill',
-                billId,
-                'update',
-                result.rows[0],
-                `material_bill:update:${billId}`,
-              )
-              await pool.query(
-                'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
-                [company.id, result.rows[0].project_id],
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, updated)
               return
             }
 
@@ -4572,16 +4932,33 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                `
+              const deleted = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update material_bills
         set deleted_at = now(), version = version + 1
         where company_id = $1 and id = $2 and deleted_at is null and ($3::int is null or version = $3)
         returning id, project_id, vendor_name as vendor, amount, bill_type, description, occurred_on, version, deleted_at, created_at
         `,
-                [company.id, billId, expectedVersion],
-              )
-              if (!result.rows[0]) {
+                  [company.id, billId, expectedVersion],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'material_bill',
+                  entityId: billId,
+                  action: 'delete',
+                  row,
+                  syncPayload: { action: 'delete', bill: row },
+                })
+                await client.query(
+                  'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
+                  [company.id, row.project_id],
+                )
+                return row
+              })
+              if (!deleted) {
                 if (
                   !(await checkVersion(
                     'material_bills',
@@ -4597,23 +4974,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'bill not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'material_bill', billId, {
-                action: 'delete',
-                bill: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'material_bill',
-                billId,
-                'delete',
-                result.rows[0],
-                `material_bill:delete:${billId}`,
-              )
-              await pool.query(
-                'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
-                [company.id, result.rows[0].project_id],
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, deleted)
               return
             }
 
@@ -4698,8 +5059,9 @@ const server = http.createServer(async (req, res) => {
                   return
                 }
               }
-              const inserted = await pool.query<RentalRow>(
-                `
+              const rental = await withMutationTx(async (client) => {
+                const inserted = await client.query<RentalRow>(
+                  `
                 insert into rentals (
                   company_id, project_id, customer_id, item_description, daily_rate,
                   delivered_on, returned_on, invoice_cadence_days, next_invoice_at, status, notes
@@ -4707,29 +5069,29 @@ const server = http.createServer(async (req, res) => {
                 values ($1, $2, $3, $4, $5, $6::date, $7::date, $8, $9, 'active', $10)
                 returning ${RENTAL_SELECT_COLUMNS}
                 `,
-                [
-                  company.id,
-                  projectId,
-                  customerId,
-                  itemDescription,
-                  dailyRate,
-                  body.delivered_on,
-                  body.returned_on ?? null,
-                  cadence,
-                  nextInvoiceAt,
-                  body.notes ? String(body.notes) : null,
-                ],
-              )
-              const rental = inserted.rows[0]!
-              await recordSyncEvent(company.id, 'rental', rental.id, { action: 'create', rental })
-              await recordMutationOutbox(
-                company.id,
-                'rental',
-                rental.id,
-                'create',
-                rental as unknown as Record<string, unknown>,
-                `rental:create:${rental.id}`,
-              )
+                  [
+                    company.id,
+                    projectId,
+                    customerId,
+                    itemDescription,
+                    dailyRate,
+                    body.delivered_on,
+                    body.returned_on ?? null,
+                    cadence,
+                    nextInvoiceAt,
+                    body.notes ? String(body.notes) : null,
+                  ],
+                )
+                const row = inserted.rows[0]!
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'rental',
+                  entityId: row.id,
+                  action: 'create',
+                  row,
+                })
+                return row
+              })
               sendJson(res, 201, rental)
               return
             }
@@ -4759,8 +5121,9 @@ const server = http.createServer(async (req, res) => {
               // explicitly or by setting returned_on. We honour whichever the
               // client sent; the worker will transition returned -> closed once
               // the final invoice fires.
-              const result = await pool.query<RentalRow>(
-                `
+              const updated = await withMutationTx(async (client) => {
+                const result = await client.query<RentalRow>(
+                  `
                 update rentals
                 set
                   item_description = coalesce($3, item_description),
@@ -4784,22 +5147,36 @@ const server = http.createServer(async (req, res) => {
                   and ($12::int is null or version = $12)
                 returning ${RENTAL_SELECT_COLUMNS}
                 `,
-                [
-                  company.id,
-                  rentalId,
-                  body.item_description ?? null,
-                  body.daily_rate ?? null,
-                  body.delivered_on ?? null,
-                  body.returned_on === null ? '__clear__' : (body.returned_on ?? null),
-                  body.invoice_cadence_days ?? null,
-                  body.status ?? (body.returned_on ? 'returned' : null),
-                  body.notes ?? null,
-                  body.project_id === null ? '__clear__' : (body.project_id ?? null),
-                  body.customer_id === null ? '__clear__' : (body.customer_id ?? null),
-                  expectedVersion,
-                ],
-              )
-              if (!result.rows[0]) {
+                  [
+                    company.id,
+                    rentalId,
+                    body.item_description ?? null,
+                    body.daily_rate ?? null,
+                    body.delivered_on ?? null,
+                    body.returned_on === null ? '__clear__' : (body.returned_on ?? null),
+                    body.invoice_cadence_days ?? null,
+                    body.status ?? (body.returned_on ? 'returned' : null),
+                    body.notes ?? null,
+                    body.project_id === null ? '__clear__' : (body.project_id ?? null),
+                    body.customer_id === null ? '__clear__' : (body.customer_id ?? null),
+                    expectedVersion,
+                  ],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'rental',
+                  entityId: rentalId,
+                  action: 'update',
+                  row,
+                  // Versioned key so consecutive updates produce distinct
+                  // outbox rows instead of upserting the latest payload only.
+                  idempotencyKey: `rental:update:${rentalId}:${row.version}`,
+                })
+                return row
+              })
+              if (!updated) {
                 if (
                   !(await checkVersion(
                     'rentals',
@@ -4815,17 +5192,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'rental not found' })
                 return
               }
-              const rental = result.rows[0]
-              await recordSyncEvent(company.id, 'rental', rentalId, { action: 'update', rental })
-              await recordMutationOutbox(
-                company.id,
-                'rental',
-                rentalId,
-                'update',
-                rental as unknown as Record<string, unknown>,
-                `rental:update:${rentalId}:${rental.version}`,
-              )
-              sendJson(res, 200, rental)
+              sendJson(res, 200, updated)
               return
             }
 
@@ -4838,17 +5205,29 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query<RentalRow>(
-                `
+              const deleted = await withMutationTx(async (client) => {
+                const result = await client.query<RentalRow>(
+                  `
                 update rentals
                 set deleted_at = now(), version = version + 1, updated_at = now()
                 where company_id = $1 and id = $2 and deleted_at is null
                   and ($3::int is null or version = $3)
                 returning ${RENTAL_SELECT_COLUMNS}
                 `,
-                [company.id, rentalId, expectedVersion],
-              )
-              if (!result.rows[0]) {
+                  [company.id, rentalId, expectedVersion],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'rental',
+                  entityId: rentalId,
+                  action: 'delete',
+                  row,
+                })
+                return row
+              })
+              if (!deleted) {
                 if (
                   !(await checkVersion(
                     'rentals',
@@ -4864,17 +5243,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'rental not found' })
                 return
               }
-              const rental = result.rows[0]
-              await recordSyncEvent(company.id, 'rental', rentalId, { action: 'delete', rental })
-              await recordMutationOutbox(
-                company.id,
-                'rental',
-                rentalId,
-                'delete',
-                rental as unknown as Record<string, unknown>,
-                `rental:delete:${rentalId}`,
-              )
-              sendJson(res, 200, rental)
+              sendJson(res, 200, deleted)
               return
             }
 
@@ -4898,54 +5267,49 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'rental must be linked to a project to invoice' })
                 return
               }
-              const client = await pool.connect()
-              let processed: Awaited<ReturnType<typeof processRentalInvoice>>
-              try {
-                await client.query('begin')
-                processed = await processRentalInvoice(client, rental)
-                await client.query('commit')
-              } catch (error) {
-                await client.query('rollback')
-                throw error
-              } finally {
-                client.release()
-              }
-              if (processed.bill) {
-                await recordSyncEvent(company.id, 'material_bill', processed.bill.id, {
-                  action: 'create',
-                  bill: processed.bill,
-                  source: 'rental_invoice',
-                  rental_id: rentalId,
+              const processed = await withMutationTx(async (client) => {
+                const result = await processRentalInvoice(client, rental)
+                if (result.bill) {
+                  await recordMutationLedger(client, {
+                    companyId: company.id,
+                    entityType: 'material_bill',
+                    entityId: result.bill.id,
+                    action: 'create',
+                    row: result.bill,
+                    syncPayload: {
+                      action: 'create',
+                      bill: result.bill,
+                      source: 'rental_invoice',
+                      rental_id: rentalId,
+                    },
+                    outboxPayload: { ...result.bill, source: 'rental_invoice', rental_id: rentalId },
+                  })
+                }
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'rental',
+                  entityId: rentalId,
+                  action: 'invoice',
+                  row: result.rental,
+                  syncPayload: {
+                    action: 'invoice',
+                    rental: result.rental,
+                    days: result.days,
+                    amount: result.amount,
+                    invoiced_through: result.invoiced_through,
+                  },
+                  outboxPayload: {
+                    rental: result.rental,
+                    bill_id: result.bill?.id ?? null,
+                    days: result.days,
+                    amount: result.amount,
+                  },
+                  // Versioned key so consecutive invoices for the same rental
+                  // produce distinct outbox rows instead of upserting.
+                  idempotencyKey: `rental:invoice:${rentalId}:${result.rental.version}`,
                 })
-                await recordMutationOutbox(
-                  company.id,
-                  'material_bill',
-                  processed.bill.id,
-                  'create',
-                  { ...processed.bill, source: 'rental_invoice', rental_id: rentalId },
-                  `material_bill:create:${processed.bill.id}`,
-                )
-              }
-              await recordSyncEvent(company.id, 'rental', rentalId, {
-                action: 'invoice',
-                rental: processed.rental,
-                days: processed.days,
-                amount: processed.amount,
-                invoiced_through: processed.invoiced_through,
+                return result
               })
-              await recordMutationOutbox(
-                company.id,
-                'rental',
-                rentalId,
-                'invoice',
-                {
-                  rental: processed.rental,
-                  bill_id: processed.bill?.id ?? null,
-                  days: processed.days,
-                  amount: processed.amount,
-                },
-                `rental:invoice:${rentalId}:${processed.rental.version}`,
-              )
               sendJson(res, 200, {
                 rental: processed.rental,
                 bill: processed.bill,
@@ -4978,7 +5342,6 @@ const server = http.createServer(async (req, res) => {
               try {
                 if (!connection?.access_token) {
                   const simulatedExternalId = `SIM-EST-${project.id.slice(0, 8)}`
-                  await backfillProjectMapping(company.id, project, simulatedExternalId)
                   const payload = {
                     simulated: true,
                     estimateId: simulatedExternalId,
@@ -4986,19 +5349,17 @@ const server = http.createServer(async (req, res) => {
                     projectName: project.name,
                     amount: project.bid_total,
                   }
-                  await recordSyncEvent(company.id, 'project', project.id, {
-                    action: 'push_qbo',
-                    payload,
-                    simulated: true,
+                  await withMutationTx(async (client) => {
+                    await backfillProjectMapping(company.id, project, simulatedExternalId, client)
+                    await recordMutationLedger(client, {
+                      companyId: company.id,
+                      entityType: 'project',
+                      entityId: project.id,
+                      action: 'push-qbo',
+                      syncPayload: { action: 'push_qbo', payload, simulated: true },
+                      outboxPayload: payload,
+                    })
                   })
-                  await recordMutationOutbox(
-                    company.id,
-                    'project',
-                    project.id,
-                    'push-qbo',
-                    payload,
-                    `project:push-qbo:${project.id}`,
-                  )
                   sendJson(res, 200, payload)
                   return
                 }
@@ -5045,13 +5406,13 @@ const server = http.createServer(async (req, res) => {
                   }
                   throw e
                 }
-                if (qboEstimateId) {
-                  await backfillProjectMapping(company.id, project, qboEstimateId)
-                }
-
-                await recordSyncEvent(company.id, 'project', projectId, {
-                  action: 'push_qbo',
-                  result: result,
+                await withMutationTx(async (client) => {
+                  if (qboEstimateId) {
+                    await backfillProjectMapping(company.id, project, qboEstimateId, client)
+                  }
+                  await recordSyncEvent(company.id, 'project', projectId, { action: 'push_qbo', result }, null, {
+                    executor: client,
+                  })
                 })
                 sendJson(res, 200, { success: true, result })
               } catch (error) {
@@ -5073,33 +5434,33 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'scheduled_for must be YYYY-MM-DD' })
                 return
               }
-              const result = await pool.query(
-                `
+              const schedule = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         insert into crew_schedules (company_id, project_id, scheduled_for, crew, status, version)
         values ($1, $2, $3, $4::jsonb, coalesce($5, 'draft'), 1)
         returning id, project_id, scheduled_for, crew, status, version, deleted_at, created_at
         `,
-                [
-                  company.id,
-                  body.project_id,
-                  body.scheduled_for,
-                  JSON.stringify(body.crew ?? []),
-                  body.status ?? 'draft',
-                ],
-              )
-              await recordSyncEvent(company.id, 'crew_schedule', result.rows[0].id, {
-                action: 'create',
-                schedule: result.rows[0],
+                  [
+                    company.id,
+                    body.project_id,
+                    body.scheduled_for,
+                    JSON.stringify(body.crew ?? []),
+                    body.status ?? 'draft',
+                  ],
+                )
+                const row = result.rows[0]
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'crew_schedule',
+                  entityId: row.id,
+                  action: 'create',
+                  row,
+                  syncPayload: { action: 'create', schedule: row },
+                })
+                return row
               })
-              await recordMutationOutbox(
-                company.id,
-                'crew_schedule',
-                result.rows[0].id,
-                'create',
-                result.rows[0],
-                `crew_schedule:create:${result.rows[0].id}`,
-              )
-              sendJson(res, 201, result.rows[0])
+              sendJson(res, 201, schedule)
               return
             }
 
@@ -5155,41 +5516,41 @@ const server = http.createServer(async (req, res) => {
                   return
                 }
               }
-              const result = await pool.query(
-                `
+              const entry = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         insert into labor_entries (company_id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code)
         values ($1, $2, $3, $4, $5, coalesce($6, 0), coalesce($7, 'draft'), $8, $9)
         returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, created_at
         `,
-                [
-                  company.id,
-                  body.project_id,
-                  body.worker_id ?? null,
-                  serviceItemCode,
-                  body.hours,
-                  body.sqft_done ?? 0,
-                  body.status ?? 'draft',
-                  body.occurred_on,
-                  divisionCodeInput,
-                ],
-              )
-              await recordSyncEvent(company.id, 'labor_entry', result.rows[0].id, {
-                action: 'create',
-                laborEntry: result.rows[0],
+                  [
+                    company.id,
+                    body.project_id,
+                    body.worker_id ?? null,
+                    serviceItemCode,
+                    body.hours,
+                    body.sqft_done ?? 0,
+                    body.status ?? 'draft',
+                    body.occurred_on,
+                    divisionCodeInput,
+                  ],
+                )
+                const row = result.rows[0]
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'labor_entry',
+                  entityId: row.id,
+                  action: 'create',
+                  row,
+                  syncPayload: { action: 'create', laborEntry: row },
+                })
+                await client.query(
+                  'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
+                  [company.id, body.project_id],
+                )
+                return row
               })
-              await recordMutationOutbox(
-                company.id,
-                'labor_entry',
-                result.rows[0].id,
-                'create',
-                result.rows[0],
-                `labor_entry:create:${result.rows[0].id}`,
-              )
-              await pool.query(
-                'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
-                [company.id, body.project_id],
-              )
-              sendJson(res, 201, result.rows[0])
+              sendJson(res, 201, entry)
               return
             }
 
@@ -5256,8 +5617,9 @@ const server = http.createServer(async (req, res) => {
                   }
                 }
               }
-              const result = await pool.query(
-                `
+              const updated = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update labor_entries
         set
           worker_id = coalesce($3, worker_id),
@@ -5271,36 +5633,36 @@ const server = http.createServer(async (req, res) => {
         where company_id = $1 and id = $2 and deleted_at is null
         returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, version, deleted_at, created_at
         `,
-                [
-                  company.id,
-                  laborEntryId,
-                  body.worker_id ?? null,
-                  patchServiceItemCode,
-                  body.hours ?? null,
-                  body.sqft_done ?? null,
-                  body.status ?? null,
-                  body.occurred_on ?? null,
-                  patchDivisionCode,
-                  body.division_code !== undefined,
-                ],
-              )
-              if (!result.rows[0]) {
+                  [
+                    company.id,
+                    laborEntryId,
+                    body.worker_id ?? null,
+                    patchServiceItemCode,
+                    body.hours ?? null,
+                    body.sqft_done ?? null,
+                    body.status ?? null,
+                    body.occurred_on ?? null,
+                    patchDivisionCode,
+                    body.division_code !== undefined,
+                  ],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'labor_entry',
+                  entityId: laborEntryId,
+                  action: 'update',
+                  row,
+                  syncPayload: { action: 'update', laborEntry: row },
+                })
+                return row
+              })
+              if (!updated) {
                 sendJson(res, 404, { error: 'labor entry not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'labor_entry', laborEntryId, {
-                action: 'update',
-                laborEntry: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'labor_entry',
-                laborEntryId,
-                'update',
-                result.rows[0],
-                `labor_entry:update:${laborEntryId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, updated)
               return
             }
 
@@ -5311,32 +5673,33 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'labor entry id is required' })
                 return
               }
-              const result = await pool.query(
-                `
+              const deleted = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update labor_entries
         set deleted_at = now(), version = version + 1
         where company_id = $1 and id = $2 and deleted_at is null
         returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, version, deleted_at, created_at
         `,
-                [company.id, laborEntryId],
-              )
-              if (!result.rows[0]) {
+                  [company.id, laborEntryId],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'labor_entry',
+                  entityId: laborEntryId,
+                  action: 'delete',
+                  row,
+                  syncPayload: { action: 'delete', laborEntry: row },
+                })
+                return row
+              })
+              if (!deleted) {
                 sendJson(res, 404, { error: 'labor entry not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'labor_entry', laborEntryId, {
-                action: 'delete',
-                laborEntry: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'labor_entry',
-                laborEntryId,
-                'delete',
-                result.rows[0],
-                `labor_entry:delete:${laborEntryId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, deleted)
               return
             }
 
@@ -5577,8 +5940,9 @@ const server = http.createServer(async (req, res) => {
                   if (rawHours > 0 && rawHours < 24) {
                     const hours = Math.round(rawHours * 100) / 100
                     const occurredOn = new Date(startMs).toISOString().slice(0, 10)
-                    const laborInsert = await pool.query(
-                      `
+                    laborEntry = await withMutationTx(async (client) => {
+                      const laborInsert = await client.query(
+                        `
                       insert into labor_entries (
                         company_id, project_id, worker_id, service_item_code,
                         hours, sqft_done, status, occurred_on
@@ -5587,22 +5951,19 @@ const server = http.createServer(async (req, res) => {
                       returning id, project_id, worker_id, service_item_code, hours,
                                 sqft_done, status, occurred_on, version, deleted_at, created_at
                       `,
-                      [company.id, projectId, workerId, hours, occurredOn],
-                    )
-                    laborEntry = laborInsert.rows[0] as Record<string, unknown>
-                    await recordSyncEvent(company.id, 'labor_entry', String(laborEntry.id), {
-                      action: 'create',
-                      source: 'clock_out',
-                      laborEntry,
+                        [company.id, projectId, workerId, hours, occurredOn],
+                      )
+                      const row = laborInsert.rows[0] as Record<string, unknown>
+                      await recordMutationLedger(client, {
+                        companyId: company.id,
+                        entityType: 'labor_entry',
+                        entityId: String(row.id),
+                        action: 'create',
+                        row,
+                        syncPayload: { action: 'create', source: 'clock_out', laborEntry: row },
+                      })
+                      return row
                     })
-                    await recordMutationOutbox(
-                      company.id,
-                      'labor_entry',
-                      String(laborEntry.id),
-                      'create',
-                      laborEntry,
-                      `labor_entry:create:${laborEntry.id}`,
-                    )
                   }
                 }
               }
@@ -5688,45 +6049,45 @@ const server = http.createServer(async (req, res) => {
                 return
               }
 
-              const insertResult = await pool.query(
-                `
+              const measurement = await withMutationTx(async (client) => {
+                const insertResult = await client.query(
+                  `
         insert into takeoff_measurements (
           company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code
         )
         values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9)
         returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, version, deleted_at, created_at
         `,
-                [
-                  company.id,
-                  projectId,
-                  measurementInput.blueprintDocumentId,
-                  measurementInput.serviceItemCode,
-                  measurementInput.quantity,
-                  measurementInput.unit,
-                  measurementInput.notes,
-                  measurementInput.geometryJson,
-                  measurementInput.divisionCode,
-                ],
-              )
-
-              const measurement = insertResult.rows[0]
+                  [
+                    company.id,
+                    projectId,
+                    measurementInput.blueprintDocumentId,
+                    measurementInput.serviceItemCode,
+                    measurementInput.quantity,
+                    measurementInput.unit,
+                    measurementInput.notes,
+                    measurementInput.geometryJson,
+                    measurementInput.divisionCode,
+                  ],
+                )
+                const row = insertResult.rows[0]
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'takeoff_measurement',
+                  entityId: row.id,
+                  action: 'create',
+                  row,
+                  syncPayload: { action: 'create', measurement: row },
+                  outboxPayload: { measurement: row },
+                  actorUserId: getCurrentUserId(req),
+                })
+                return row
+              })
+              // Estimate recompute is a separate side-effect that fans out to
+              // estimate_lines; not inside the mutation tx because a recompute
+              // failure must not roll back a successfully-recorded measurement.
               const estimate = await createEstimateFromMeasurements(company.id, projectId)
               const scopeVsBid = await getScopeVsBid(company.id, projectId)
-              await recordSyncEvent(company.id, 'takeoff_measurement', measurement.id, {
-                action: 'create',
-                measurement,
-                estimate,
-              })
-              await recordMutationOutbox(
-                company.id,
-                'takeoff_measurement',
-                measurement.id,
-                'create',
-                { measurement, estimate },
-                `takeoff_measurement:create:${measurement.id}`,
-                'server',
-                getCurrentUserId(req),
-              )
               sendJson(res, 201, { measurement, estimate, scope_vs_bid: scopeVsBid })
               return
             }
@@ -5767,19 +6128,22 @@ const server = http.createServer(async (req, res) => {
 
               // Curated-catalog enforcement applied per measurement BEFORE the
               // destructive soft-delete of the existing set, so a single bad
-              // row doesn't wipe the project's takeoff history.
+              // row doesn't wipe the project's takeoff history. Pre-load the
+              // (service_item_code, division_code) tuples in one query so a
+              // 50-measurement replay doesn't fan out to 100 round-trips.
               const projectDivisionResult = await pool.query<{ division_code: string | null }>(
                 'select division_code from projects where company_id = $1 and id = $2',
                 [company.id, projectId],
               )
               const projectDivisionCode = projectDivisionResult.rows[0]?.division_code ?? null
+              const catalogIndex = await loadServiceItemCatalogIndex(
+                pool,
+                company.id,
+                preparedMeasurements.map((m) => m.serviceItemCode),
+              )
               for (const measurement of preparedMeasurements) {
                 const fallbackDivision = measurement.divisionCode ?? projectDivisionCode
-                const catalogStatus = await assertServiceItemCatalogStatus(
-                  company.id,
-                  measurement.serviceItemCode,
-                  fallbackDivision,
-                )
+                const catalogStatus = catalogIndex.check(measurement.serviceItemCode, fallbackDivision)
                 if (!catalogStatus.ok) {
                   sendJson(res, 422, {
                     error: rejectionMessageForCatalog(catalogStatus.reason),
@@ -5790,57 +6154,67 @@ const server = http.createServer(async (req, res) => {
                 }
               }
 
-              await pool.query(
-                `
+              const replaced = await withMutationTx(async (client) => {
+                await client.query(
+                  `
         update takeoff_measurements
         set deleted_at = now(), version = version + 1
         where company_id = $1 and project_id = $2 and deleted_at is null
         `,
-                [company.id, projectId],
-              )
+                  [company.id, projectId],
+                )
 
-              const createdRows = []
-              for (const measurement of preparedMeasurements) {
-                const insertResult = await pool.query(
-                  `
+                const createdRows: Record<string, unknown>[] = []
+                for (const measurement of preparedMeasurements) {
+                  const insertResult = await client.query(
+                    `
           insert into takeoff_measurements (
             company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code
           )
           values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9)
           returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, version, deleted_at, created_at
           `,
-                  [
-                    company.id,
-                    projectId,
-                    measurement.blueprintDocumentId,
-                    measurement.serviceItemCode,
-                    measurement.quantity,
-                    measurement.unit,
-                    measurement.notes,
-                    measurement.geometryJson,
-                    measurement.divisionCode,
-                  ],
-                )
-                createdRows.push(insertResult.rows[0])
-              }
+                    [
+                      company.id,
+                      projectId,
+                      measurement.blueprintDocumentId,
+                      measurement.serviceItemCode,
+                      measurement.quantity,
+                      measurement.unit,
+                      measurement.notes,
+                      measurement.geometryJson,
+                      measurement.divisionCode,
+                    ],
+                  )
+                  createdRows.push(insertResult.rows[0])
+                }
 
-              const estimate = await createEstimateFromMeasurements(company.id, projectId)
-              const scopeVsBid = await getScopeVsBid(company.id, projectId)
-              await recordSyncEvent(company.id, 'takeoff_measurement', projectId, {
-                action: 'replace',
-                measurementCount: createdRows.length,
-                measurements: createdRows,
-                estimate,
+                const estimate = await createEstimateFromMeasurements(company.id, projectId, client)
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'takeoff_measurement',
+                  entityId: projectId,
+                  action: 'replace',
+                  syncPayload: {
+                    action: 'replace',
+                    measurementCount: createdRows.length,
+                    measurements: createdRows,
+                    estimate,
+                  },
+                  outboxPayload: {
+                    measurementCount: createdRows.length,
+                    measurements: createdRows,
+                    estimate,
+                  },
+                })
+                return { createdRows, estimate }
               })
-              await recordMutationOutbox(
-                company.id,
-                'takeoff_measurement',
-                projectId,
-                'replace',
-                { measurementCount: createdRows.length, measurements: createdRows, estimate },
-                `takeoff_measurement:replace:${projectId}`,
-              )
-              sendJson(res, 201, { measurements: createdRows, estimate, scope_vs_bid: scopeVsBid })
+              const scopeVsBid = await getScopeVsBid(company.id, projectId)
+              sendJson(res, 201, {
+                measurements: replaced.createdRows,
+                estimate: replaced.estimate,
+                scope_vs_bid: scopeVsBid,
+              })
               return
             }
 
@@ -5851,25 +6225,25 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'project id is required' })
                 return
               }
-              const estimate = await createEstimateFromMeasurements(company.id, projectId)
+              const estimate = await withMutationTx(async (client) => {
+                const computed = await createEstimateFromMeasurements(company.id, projectId, client)
+                if (!computed) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'estimate',
+                  entityId: projectId,
+                  action: 'recompute',
+                  syncPayload: { action: 'recompute', estimate: computed },
+                  outboxPayload: computed as Record<string, unknown>,
+                })
+                return computed
+              })
               if (!estimate) {
                 sendJson(res, 404, { error: 'project not found' })
                 return
               }
               const scopeVsBid = await getScopeVsBid(company.id, projectId)
               ;(estimate as { scope_vs_bid?: unknown }).scope_vs_bid = scopeVsBid
-              await recordSyncEvent(company.id, 'estimate', projectId, {
-                action: 'recompute',
-                estimate,
-              })
-              await recordMutationOutbox(
-                company.id,
-                'estimate',
-                projectId,
-                'recompute',
-                estimate,
-                `estimate:recompute:${projectId}`,
-              )
               sendJson(res, 200, estimate)
               return
             }
@@ -5988,33 +6362,34 @@ const server = http.createServer(async (req, res) => {
                       return
                     }
                   }
-                  const client = await pool.connect()
-                  try {
-                    await client.query('begin')
+                  await withMutationTx(async (client) => {
                     await client.query(
                       `delete from service_item_divisions where company_id = $1 and service_item_code = $2`,
                       [company.id, code],
                     )
-                    for (const divisionCode of divisionCodes) {
+                    if (divisionCodes.length > 0) {
+                      // Single multi-row INSERT replaces the previous
+                      // per-division round-trip. on conflict do nothing keeps
+                      // the migration idempotent if a division pair is
+                      // re-asserted between the delete and insert.
                       await client.query(
                         `insert into service_item_divisions (company_id, service_item_code, division_code)
-                         values ($1, $2, $3)
+                         select $1::uuid, $2::text, division_code
+                         from unnest($3::text[]) as t(division_code)
                          on conflict do nothing`,
-                        [company.id, code, divisionCode],
+                        [company.id, code, divisionCodes],
                       )
                     }
-                    await client.query('commit')
-                  } catch (err) {
-                    await client.query('rollback').catch(() => {})
-                    throw err
-                  } finally {
-                    client.release()
-                  }
-                  const divisions = await listServiceItemDivisions(company.id, code)
-                  await recordSyncEvent(company.id, 'service_item_divisions', code, {
-                    action: 'replace',
-                    divisions: divisionCodes,
+                    await recordSyncEvent(
+                      company.id,
+                      'service_item_divisions',
+                      code,
+                      { action: 'replace', divisions: divisionCodes },
+                      null,
+                      { executor: client },
+                    )
                   })
+                  const divisions = await listServiceItemDivisions(company.id, code)
                   sendJson(res, 200, { service_item_code: code, divisions })
                   return
                 }
@@ -6227,41 +6602,41 @@ const server = http.createServer(async (req, res) => {
                   fileContentsBase64,
                 )
               }
-              const inserted = await pool.query(
-                `
+              const blueprint = await withMutationTx(async (client) => {
+                const inserted = await client.query(
+                  `
         insert into blueprint_documents (
           id, company_id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, replaces_blueprint_document_id
         )
         values ($1, $2, $3, $4, $5, coalesce($6, 'storage_path'), $7, $8, $9, $10, $11)
         returning id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, deleted_at, replaces_blueprint_document_id, concat('/api/blueprints/', id, '/file') as file_url, created_at
         `,
-                [
-                  blueprintId,
-                  company.id,
-                  projectId,
-                  resolvedFileName,
-                  resolvedStoragePath,
-                  body.preview_type ?? null,
-                  body.calibration_length ?? null,
-                  body.calibration_unit ?? null,
-                  body.sheet_scale ?? null,
-                  version,
-                  body.replaces_blueprint_document_id ?? null,
-                ],
-              )
-              await recordSyncEvent(company.id, 'blueprint_document', inserted.rows[0].id, {
-                action: 'create',
-                blueprint: inserted.rows[0],
+                  [
+                    blueprintId,
+                    company.id,
+                    projectId,
+                    resolvedFileName,
+                    resolvedStoragePath,
+                    body.preview_type ?? null,
+                    body.calibration_length ?? null,
+                    body.calibration_unit ?? null,
+                    body.sheet_scale ?? null,
+                    version,
+                    body.replaces_blueprint_document_id ?? null,
+                  ],
+                )
+                const row = inserted.rows[0]
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'blueprint_document',
+                  entityId: row.id,
+                  action: 'create',
+                  row,
+                  syncPayload: { action: 'create', blueprint: row },
+                })
+                return row
               })
-              await recordMutationOutbox(
-                company.id,
-                'blueprint_document',
-                inserted.rows[0].id,
-                'create',
-                inserted.rows[0],
-                `blueprint_document:create:${inserted.rows[0].id}`,
-              )
-              sendJson(res, 201, inserted.rows[0])
+              sendJson(res, 201, blueprint)
               return
             }
 
@@ -6299,8 +6674,9 @@ const server = http.createServer(async (req, res) => {
                       String(body.file_name ?? 'blueprint.pdf'),
                       String(body.storage_path),
                     )
-              const result = await pool.query(
-                `
+              const updated = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update blueprint_documents
         set
           file_name = coalesce($3, file_name),
@@ -6313,19 +6689,31 @@ const server = http.createServer(async (req, res) => {
         where company_id = $1 and id = $2 and deleted_at is null and ($9::int is null or version = $9)
         returning id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, deleted_at, replaces_blueprint_document_id, concat('/api/blueprints/', id, '/file') as file_url, created_at
         `,
-                [
-                  company.id,
-                  blueprintId,
-                  body.file_name ?? multipartResult?.fileName ?? null,
-                  storagePath,
-                  body.preview_type ?? null,
-                  body.calibration_length ?? null,
-                  body.calibration_unit ?? null,
-                  body.sheet_scale ?? null,
-                  expectedVersion,
-                ],
-              )
-              if (!result.rows[0]) {
+                  [
+                    company.id,
+                    blueprintId,
+                    body.file_name ?? multipartResult?.fileName ?? null,
+                    storagePath,
+                    body.preview_type ?? null,
+                    body.calibration_length ?? null,
+                    body.calibration_unit ?? null,
+                    body.sheet_scale ?? null,
+                    expectedVersion,
+                  ],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'blueprint_document',
+                  entityId: blueprintId,
+                  action: 'update',
+                  row,
+                  syncPayload: { action: 'update', blueprint: row },
+                })
+                return row
+              })
+              if (!updated) {
                 if (
                   !(await checkVersion(
                     'blueprint_documents',
@@ -6341,27 +6729,17 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'blueprint not found' })
                 return
               }
+              // Persisting blob is post-commit: a storage write is not part of
+              // the DB transaction, so blobs only land after the row is durable.
               if (fileContentsBase64) {
                 await persistBlueprintFile(
                   company.id,
                   blueprintId,
-                  String(result.rows[0].file_name ?? body.file_name ?? 'blueprint.pdf'),
+                  String(updated.file_name ?? body.file_name ?? 'blueprint.pdf'),
                   fileContentsBase64,
                 )
               }
-              await recordSyncEvent(company.id, 'blueprint_document', blueprintId, {
-                action: 'update',
-                blueprint: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'blueprint_document',
-                blueprintId,
-                'update',
-                result.rows[0],
-                `blueprint_document:update:${blueprintId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, updated)
               return
             }
 
@@ -6429,74 +6807,73 @@ const server = http.createServer(async (req, res) => {
               } else if (!storagePath) {
                 storagePath = getBlueprintFilePath(company.id, blueprintId, fileName)
               }
-              const inserted = await pool.query(
-                `
+              const newBlueprint = await withMutationTx(async (client) => {
+                const inserted = await client.query(
+                  `
         insert into blueprint_documents (
           id, company_id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, replaces_blueprint_document_id
         )
         values ($1, $2, $3, $4, $5, coalesce($6, 'storage_path'), $7, $8, $9, $10, $11)
         returning id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, deleted_at, replaces_blueprint_document_id, concat('/api/blueprints/', id, '/file') as file_url, created_at
         `,
-                [
-                  blueprintId,
-                  company.id,
-                  source.project_id,
-                  fileName,
-                  storagePath,
-                  body.preview_type ?? source.preview_type ?? null,
-                  body.calibration_length ?? source.calibration_length ?? null,
-                  body.calibration_unit ?? source.calibration_unit ?? null,
-                  body.sheet_scale ?? source.sheet_scale ?? null,
-                  version,
-                  source.id,
-                ],
-              )
-              if (copyMeasurements) {
-                const sourceMeasurements = await pool.query(
-                  `
+                  [
+                    blueprintId,
+                    company.id,
+                    source.project_id,
+                    fileName,
+                    storagePath,
+                    body.preview_type ?? source.preview_type ?? null,
+                    body.calibration_length ?? source.calibration_length ?? null,
+                    body.calibration_unit ?? source.calibration_unit ?? null,
+                    body.sheet_scale ?? source.sheet_scale ?? null,
+                    version,
+                    source.id,
+                  ],
+                )
+                const row = inserted.rows[0]
+                if (copyMeasurements) {
+                  const sourceMeasurements = await client.query(
+                    `
           select project_id, service_item_code, quantity, unit, notes, geometry, division_code
           from takeoff_measurements
           where company_id = $1 and blueprint_document_id = $2 and deleted_at is null
           order by created_at asc
           `,
-                  [company.id, source.id],
-                )
-                for (const measurement of sourceMeasurements.rows) {
-                  await pool.query(
-                    `
+                    [company.id, source.id],
+                  )
+                  for (const measurement of sourceMeasurements.rows) {
+                    await client.query(
+                      `
             insert into takeoff_measurements (
               company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code
             )
             values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 1, $9)
             `,
-                    [
-                      company.id,
-                      measurement.project_id,
-                      inserted.rows[0].id,
-                      measurement.service_item_code,
-                      measurement.quantity,
-                      measurement.unit,
-                      `${measurement.notes ?? ''}${measurement.notes ? ' · ' : ''}copied from blueprint v${source.version}`,
-                      JSON.stringify(measurement.geometry ?? {}),
-                      measurement.division_code ?? null,
-                    ],
-                  )
+                      [
+                        company.id,
+                        measurement.project_id,
+                        row.id,
+                        measurement.service_item_code,
+                        measurement.quantity,
+                        measurement.unit,
+                        `${measurement.notes ?? ''}${measurement.notes ? ' · ' : ''}copied from blueprint v${source.version}`,
+                        JSON.stringify(measurement.geometry ?? {}),
+                        measurement.division_code ?? null,
+                      ],
+                    )
+                  }
                 }
-              }
-              await recordSyncEvent(company.id, 'blueprint_document', inserted.rows[0].id, {
-                action: 'version',
-                source_blueprint_id: source.id,
-                blueprint: inserted.rows[0],
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'blueprint_document',
+                  entityId: row.id,
+                  action: 'version',
+                  row,
+                  syncPayload: { action: 'version', source_blueprint_id: source.id, blueprint: row },
+                })
+                return row
               })
-              await recordMutationOutbox(
-                company.id,
-                'blueprint_document',
-                inserted.rows[0].id,
-                'version',
-                inserted.rows[0],
-                `blueprint_document:version:${inserted.rows[0].id}`,
-              )
-              sendJson(res, 201, inserted.rows[0])
+              sendJson(res, 201, newBlueprint)
               return
             }
 
@@ -6569,8 +6946,12 @@ const server = http.createServer(async (req, res) => {
                 if (quantity === null || quantity === undefined || quantity === '') {
                   quantity = calculateTakeoffQuantity(geometry.points, geometry.sheet_scale ?? 1)
                 }
-                if (Number(quantity) <= 0) {
-                  sendJson(res, 400, { error: 'geometry must produce a positive area' })
+                const numericQuantity = Number(quantity)
+                // Reject NaN/Infinity explicitly: a self-intersecting polygon
+                // can produce NaN, and `n <= 0` is false for NaN so the next
+                // check would let it through with a less helpful message.
+                if (!Number.isFinite(numericQuantity) || numericQuantity <= 0) {
+                  sendJson(res, 400, { error: 'geometry must produce a positive, finite area' })
                   return
                 }
               }
@@ -6656,8 +7037,9 @@ const server = http.createServer(async (req, res) => {
                 }
               }
 
-              const result = await pool.query(
-                `
+              const updated = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update takeoff_measurements
         set
           service_item_code = coalesce($3, service_item_code),
@@ -6671,19 +7053,31 @@ const server = http.createServer(async (req, res) => {
         where company_id = $1 and id = $2 and deleted_at is null and ($9::int is null or version = $9)
         returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at, updated_at
         `,
-                [
-                  company.id,
-                  measurementId,
-                  body.service_item_code ?? null,
-                  quantity,
-                  body.unit ?? null,
-                  body.notes ?? null,
-                  patchBlueprintDocumentId,
-                  geometryJson,
-                  expectedVersion,
-                ],
-              )
-              if (!result.rows[0]) {
+                  [
+                    company.id,
+                    measurementId,
+                    body.service_item_code ?? null,
+                    quantity,
+                    body.unit ?? null,
+                    body.notes ?? null,
+                    patchBlueprintDocumentId,
+                    geometryJson,
+                    expectedVersion,
+                  ],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'takeoff_measurement',
+                  entityId: measurementId,
+                  action: 'update',
+                  row,
+                  syncPayload: { action: 'update', measurement: row },
+                })
+                return row
+              })
+              if (!updated) {
                 if (
                   !(await checkVersion(
                     'takeoff_measurements',
@@ -6699,19 +7093,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'measurement not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'takeoff_measurement', measurementId, {
-                action: 'update',
-                measurement: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'takeoff_measurement',
-                measurementId,
-                'update',
-                result.rows[0],
-                `takeoff_measurement:update:${measurementId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, updated)
               return
             }
 
@@ -6724,16 +7106,29 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                `
+              const deleted = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update takeoff_measurements
         set deleted_at = now(), version = version + 1
         where company_id = $1 and id = $2 and deleted_at is null and ($3::int is null or version = $3)
         returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at
         `,
-                [company.id, measurementId, expectedVersion],
-              )
-              if (!result.rows[0]) {
+                  [company.id, measurementId, expectedVersion],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'takeoff_measurement',
+                  entityId: measurementId,
+                  action: 'delete',
+                  row,
+                  syncPayload: { action: 'delete', measurement: row },
+                })
+                return row
+              })
+              if (!deleted) {
                 if (
                   !(await checkVersion(
                     'takeoff_measurements',
@@ -6749,19 +7144,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'measurement not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'takeoff_measurement', measurementId, {
-                action: 'delete',
-                measurement: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'takeoff_measurement',
-                measurementId,
-                'delete',
-                result.rows[0],
-                `takeoff_measurement:delete:${measurementId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, deleted)
               return
             }
 
@@ -6775,17 +7158,55 @@ const server = http.createServer(async (req, res) => {
               const body = await readBody(req)
               const entries = Array.isArray(body.entries) ? body.entries : []
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const scheduleResult = await pool.query(
-                `
+              const confirmation = await withMutationTx(async (client) => {
+                const scheduleResult = await client.query(
+                  `
         update crew_schedules
         set status = 'confirmed', version = version + 1
         where company_id = $1 and id = $2 and ($3::int is null or version = $3)
         returning id, project_id, scheduled_for, crew, status, version, created_at
         `,
-                [company.id, scheduleId, expectedVersion],
-              )
-              const schedule = scheduleResult.rows[0]
-              if (!schedule) {
+                  [company.id, scheduleId, expectedVersion],
+                )
+                const schedule = scheduleResult.rows[0]
+                if (!schedule) return null
+                const createdLaborEntries: Record<string, unknown>[] = []
+                for (const entry of entries) {
+                  if (!entry.service_item_code || entry.hours === undefined || !entry.occurred_on) continue
+                  const inserted = await client.query(
+                    `
+          insert into labor_entries (company_id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on)
+          values ($1, $2, $3, $4, $5, coalesce($6, 0), 'confirmed', $7)
+          returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, created_at
+          `,
+                    [
+                      company.id,
+                      schedule.project_id,
+                      entry.worker_id ?? null,
+                      entry.service_item_code,
+                      entry.hours,
+                      entry.sqft_done ?? 0,
+                      entry.occurred_on,
+                    ],
+                  )
+                  createdLaborEntries.push(inserted.rows[0])
+                }
+                await client.query(
+                  'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
+                  [company.id, schedule.project_id],
+                )
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'crew_schedule',
+                  entityId: scheduleId,
+                  action: 'confirm',
+                  row: schedule,
+                  syncPayload: { action: 'confirm', schedule, laborEntries: createdLaborEntries },
+                  outboxPayload: { schedule, laborEntries: createdLaborEntries },
+                })
+                return { schedule, laborEntries: createdLaborEntries }
+              })
+              if (!confirmation) {
                 if (
                   !(await checkVersion(
                     'crew_schedules',
@@ -6801,45 +7222,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'schedule not found' })
                 return
               }
-              const createdLaborEntries = []
-              for (const entry of entries) {
-                if (!entry.service_item_code || entry.hours === undefined || !entry.occurred_on) continue
-                const inserted = await pool.query(
-                  `
-          insert into labor_entries (company_id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on)
-          values ($1, $2, $3, $4, $5, coalesce($6, 0), 'confirmed', $7)
-          returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, created_at
-          `,
-                  [
-                    company.id,
-                    schedule.project_id,
-                    entry.worker_id ?? null,
-                    entry.service_item_code,
-                    entry.hours,
-                    entry.sqft_done ?? 0,
-                    entry.occurred_on,
-                  ],
-                )
-                createdLaborEntries.push(inserted.rows[0])
-              }
-              await pool.query(
-                'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
-                [company.id, schedule.project_id],
-              )
-              await recordSyncEvent(company.id, 'crew_schedule', scheduleId, {
-                action: 'confirm',
-                schedule,
-                laborEntries: createdLaborEntries,
-              })
-              await recordMutationOutbox(
-                company.id,
-                'crew_schedule',
-                scheduleId,
-                'confirm',
-                { schedule, laborEntries: createdLaborEntries },
-                `crew_schedule:confirm:${scheduleId}`,
-              )
-              sendJson(res, 200, { schedule, laborEntries: createdLaborEntries })
+              sendJson(res, 200, confirmation)
               return
             }
 
@@ -6852,16 +7235,29 @@ const server = http.createServer(async (req, res) => {
               }
               const body = await readBody(req)
               const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const result = await pool.query(
-                `
+              const deleted = await withMutationTx(async (client) => {
+                const result = await client.query(
+                  `
         update blueprint_documents
         set deleted_at = now(), version = version + 1
         where company_id = $1 and id = $2 and deleted_at is null and ($3::int is null or version = $3)
         returning id, project_id, file_name, storage_path, version, deleted_at, created_at
         `,
-                [company.id, blueprintId, expectedVersion],
-              )
-              if (!result.rows[0]) {
+                  [company.id, blueprintId, expectedVersion],
+                )
+                const row = result.rows[0]
+                if (!row) return null
+                await recordMutationLedger(client, {
+                  companyId: company.id,
+                  entityType: 'blueprint_document',
+                  entityId: blueprintId,
+                  action: 'delete',
+                  row,
+                  syncPayload: { action: 'delete', blueprint: row },
+                })
+                return row
+              })
+              if (!deleted) {
                 if (
                   !(await checkVersion(
                     'blueprint_documents',
@@ -6877,19 +7273,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 404, { error: 'blueprint not found' })
                 return
               }
-              await recordSyncEvent(company.id, 'blueprint_document', blueprintId, {
-                action: 'delete',
-                blueprint: result.rows[0],
-              })
-              await recordMutationOutbox(
-                company.id,
-                'blueprint_document',
-                blueprintId,
-                'delete',
-                result.rows[0],
-                `blueprint_document:delete:${blueprintId}`,
-              )
-              sendJson(res, 200, result.rows[0])
+              sendJson(res, 200, deleted)
               return
             }
 

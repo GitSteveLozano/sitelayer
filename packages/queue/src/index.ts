@@ -9,6 +9,8 @@ export {
   type RentalRow,
 } from './rentals.js'
 
+export { recordLedger, type RecordLedgerArgs, type LedgerTraceContext } from './ledger.js'
+
 export interface QueueClient {
   query<T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<T>>
 }

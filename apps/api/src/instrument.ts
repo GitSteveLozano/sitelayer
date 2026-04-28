@@ -1,6 +1,7 @@
 import * as Sentry from '@sentry/node'
 import { loadLocalEnv } from '@sitelayer/config'
 import { registerSentry } from '@sitelayer/logger'
+import { scrubSentryEvent, type ScrubbableEvent } from './sentry-scrub.js'
 
 loadLocalEnv()
 
@@ -26,6 +27,12 @@ if (dsn) {
       Sentry.postgresIntegration(),
       Sentry.contextLinesIntegration(),
     ],
+    beforeSend(event) {
+      return scrubSentryEvent(event as ScrubbableEvent) as typeof event
+    },
+    beforeSendTransaction(event) {
+      return scrubSentryEvent(event as ScrubbableEvent) as typeof event
+    },
   })
 }
 
