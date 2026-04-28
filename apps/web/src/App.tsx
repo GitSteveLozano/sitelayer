@@ -27,6 +27,7 @@ import type {
 } from './api.js'
 import { CompanySwitcher } from './components/company-switcher.js'
 import { EnvironmentRibbon } from './components/environment-ribbon.js'
+import { SyncStatusBadge } from './components/sync-status-badge.js'
 import { Button } from './components/ui/button.js'
 import {
   Dialog,
@@ -668,6 +669,7 @@ function AppShell() {
           <Route path="*" element={<Navigate to="/confirm" replace />} />
         </SentryRoutes>
       </Suspense>
+      <SyncStatusBadge syncStatus={syncStatus} offlineQueue={offlineQueue} />
     </main>
   )
 }
