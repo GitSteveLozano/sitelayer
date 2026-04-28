@@ -34,6 +34,7 @@ import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './au
 import { handleAuditEventRoutes } from './routes/audit-events.js'
 import { handleBonusRuleRoutes } from './routes/bonus-rules.js'
 import { handleCustomerRoutes } from './routes/customers.js'
+import { handleLaborEntryRoutes } from './routes/labor-entries.js'
 import { handlePricingProfileRoutes } from './routes/pricing-profiles.js'
 import { handleQboMappingRoutes } from './routes/qbo-mappings.js'
 import { handleServiceItemRoutes } from './routes/service-items.js'
@@ -4213,242 +4214,20 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'POST' && url.pathname === '/api/labor-entries') {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const body = await readBody(req)
-              const required = ['project_id', 'service_item_code', 'hours', 'occurred_on']
-              for (const key of required) {
-                if (body[key] === undefined || body[key] === null || body[key] === '') {
-                  sendJson(res, 400, { error: `${key} is required` })
-                  return
-                }
-              }
-              if (!isValidDateInput(body.occurred_on)) {
-                sendJson(res, 400, { error: 'occurred_on must be YYYY-MM-DD' })
-                return
-              }
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              if (expectedVersion !== null) {
-                const projectVersionResult = await pool.query(
-                  'select version from projects where company_id = $1 and id = $2',
-                  [company.id, body.project_id],
-                )
-                const currentProject = projectVersionResult.rows[0]
-                if (!currentProject) {
-                  sendJson(res, 404, { error: 'project not found' })
-                  return
-                }
-                if (Number(currentProject.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(currentProject.version) })
-                  return
-                }
-              }
-              const serviceItemCode = String(body.service_item_code)
-              const divisionCodeInput =
-                body.division_code === undefined ||
-                body.division_code === null ||
-                String(body.division_code).trim() === ''
-                  ? null
-                  : String(body.division_code).trim()
-              if (divisionCodeInput) {
-                const allowed = await assertDivisionAllowedForServiceItem(
-                  company.id,
-                  serviceItemCode,
-                  divisionCodeInput,
-                )
-                if (!allowed) {
-                  sendJson(res, 400, {
-                    error: 'division_code not allowed for this service item',
-                    service_item_code: serviceItemCode,
-                    division_code: divisionCodeInput,
-                  })
-                  return
-                }
-              }
-              const entry = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        insert into labor_entries (company_id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code)
-        values ($1, $2, $3, $4, $5, coalesce($6, 0), coalesce($7, 'draft'), $8, $9)
-        returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, created_at
-        `,
-                  [
-                    company.id,
-                    body.project_id,
-                    body.worker_id ?? null,
-                    serviceItemCode,
-                    body.hours,
-                    body.sqft_done ?? 0,
-                    body.status ?? 'draft',
-                    body.occurred_on,
-                    divisionCodeInput,
-                  ],
-                )
-                const row = result.rows[0]
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'labor_entry',
-                  entityId: row.id,
-                  action: 'create',
-                  row,
-                  syncPayload: { action: 'create', laborEntry: row },
-                })
-                await client.query(
-                  'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
-                  [company.id, body.project_id],
-                )
-                return row
+            // Labor-entry routes (POST/GET /api/labor-entries,
+            // PATCH/DELETE /api/labor-entries/<id>) handled by the
+            // extracted route module. See routes/labor-entries.ts.
+            if (
+              await handleLaborEntryRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                assertDivisionAllowedForServiceItem: (companyId, serviceItemCode, divisionCode) =>
+                  assertDivisionAllowedForServiceItem(companyId, serviceItemCode, divisionCode),
               })
-              sendJson(res, 201, entry)
-              return
-            }
-
-            if (req.method === 'GET' && url.pathname === '/api/labor-entries') {
-              const projectId = String(url.searchParams.get('project_id') ?? '').trim()
-              const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') ?? 50)))
-              const result = await pool.query(
-                `
-        select id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, version, deleted_at, created_at
-        from labor_entries
-        where company_id = $1 and ($2 = '' or project_id = $2)
-        order by occurred_on desc, created_at desc
-        limit $3
-        `,
-                [company.id, projectId, limit],
-              )
-              sendJson(res, 200, { laborEntries: result.rows })
-              return
-            }
-
-            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/labor-entries\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const laborEntryId = url.pathname.split('/')[3] ?? ''
-              if (!laborEntryId) {
-                sendJson(res, 400, { error: 'labor entry id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const patchServiceItemCode =
-                body.service_item_code === undefined || body.service_item_code === null
-                  ? null
-                  : String(body.service_item_code)
-              const patchDivisionCode =
-                body.division_code === undefined
-                  ? null
-                  : body.division_code === null || String(body.division_code).trim() === ''
-                    ? null
-                    : String(body.division_code).trim()
-              // If the caller is changing either the service item or the division,
-              // re-validate against the xref so we don't accept labor for a
-              // combination that is no longer allowed.
-              if (patchDivisionCode && (patchServiceItemCode || body.service_item_code !== undefined)) {
-                const effectiveServiceItemCode =
-                  patchServiceItemCode ??
-                  (
-                    await pool.query<{ service_item_code: string }>(
-                      'select service_item_code from labor_entries where company_id = $1 and id = $2',
-                      [company.id, laborEntryId],
-                    )
-                  ).rows[0]?.service_item_code
-                if (effectiveServiceItemCode) {
-                  const allowed = await assertDivisionAllowedForServiceItem(
-                    company.id,
-                    effectiveServiceItemCode,
-                    patchDivisionCode,
-                  )
-                  if (!allowed) {
-                    sendJson(res, 400, {
-                      error: 'division_code not allowed for this service item',
-                      service_item_code: effectiveServiceItemCode,
-                      division_code: patchDivisionCode,
-                    })
-                    return
-                  }
-                }
-              }
-              const updated = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update labor_entries
-        set
-          worker_id = coalesce($3, worker_id),
-          service_item_code = coalesce($4, service_item_code),
-          hours = coalesce($5, hours),
-          sqft_done = coalesce($6, sqft_done),
-          status = coalesce($7, status),
-          occurred_on = coalesce($8, occurred_on),
-          division_code = case when $10::boolean then $9 else division_code end,
-          version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null
-        returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, version, deleted_at, created_at
-        `,
-                  [
-                    company.id,
-                    laborEntryId,
-                    body.worker_id ?? null,
-                    patchServiceItemCode,
-                    body.hours ?? null,
-                    body.sqft_done ?? null,
-                    body.status ?? null,
-                    body.occurred_on ?? null,
-                    patchDivisionCode,
-                    body.division_code !== undefined,
-                  ],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'labor_entry',
-                  entityId: laborEntryId,
-                  action: 'update',
-                  row,
-                  syncPayload: { action: 'update', laborEntry: row },
-                })
-                return row
-              })
-              if (!updated) {
-                sendJson(res, 404, { error: 'labor entry not found' })
-                return
-              }
-              sendJson(res, 200, updated)
-              return
-            }
-
-            if (req.method === 'DELETE' && url.pathname.match(/^\/api\/labor-entries\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const laborEntryId = url.pathname.split('/')[3] ?? ''
-              if (!laborEntryId) {
-                sendJson(res, 400, { error: 'labor entry id is required' })
-                return
-              }
-              const deleted = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update labor_entries
-        set deleted_at = now(), version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null
-        returning id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, version, deleted_at, created_at
-        `,
-                  [company.id, laborEntryId],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'labor_entry',
-                  entityId: laborEntryId,
-                  action: 'delete',
-                  row,
-                  syncPayload: { action: 'delete', laborEntry: row },
-                })
-                return row
-              })
-              if (!deleted) {
-                sendJson(res, 404, { error: 'labor entry not found' })
-                return
-              }
-              sendJson(res, 200, deleted)
+            ) {
               return
             }
 
