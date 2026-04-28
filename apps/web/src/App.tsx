@@ -11,20 +11,17 @@ import {
 } from './api.js'
 import type {
   BlueprintRow,
-  BootstrapResponse,
-  CompaniesResponse,
   FeaturesResponse,
   MaterialBillRow,
   MeasurementRow,
   ProjectSummary,
-  QboConnectionResponse,
   ScheduleRow,
   SessionResponse,
-  SyncStatusResponse,
 } from './api.js'
 import { CompanySwitcher } from './components/company-switcher.js'
 import { EnvironmentRibbon } from './components/environment-ribbon.js'
 import { SyncStatusBadge } from './components/sync-status-badge.js'
+import { useBootstrapRefresh } from './machines/bootstrap-refresh.js'
 import { useOfflineReplay } from './machines/offline-replay.js'
 import { Button } from './components/ui/button.js'
 import {
@@ -175,26 +172,33 @@ function UnauthShell() {
 }
 
 function AppShell() {
-  const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null)
+  const [companySlug, setCompanySlug] = useState(() => getStoredCompanySlug() || DEFAULT_COMPANY_SLUG)
+  // The bootstrap-refresh XState machine owns the company-level fan-out
+  // (session/bootstrap/companies/syncStatus/qboConnection) and the
+  // single error banner. See machines/bootstrap-refresh.ts.
+  const {
+    bootstrap,
+    session,
+    companies,
+    syncStatus,
+    qboConnection,
+    error,
+    refreshKey: syncRefreshKey,
+    refresh: triggerRefresh,
+    setActionError,
+    clearError,
+  } = useBootstrapRefresh(companySlug)
   const [summary, setSummary] = useState<ProjectSummary | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
   const [selectedBlueprintId, setSelectedBlueprintId] = useState<string>('')
-  const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
-  const [companySlug, setCompanySlug] = useState(() => getStoredCompanySlug() || DEFAULT_COMPANY_SLUG)
   const [blueprints, setBlueprints] = useState<BlueprintRow[]>([])
   const [measurements, setMeasurements] = useState<MeasurementRow[]>([])
   const [schedules, setSchedules] = useState<ScheduleRow[]>([])
   const [materialBills, setMaterialBills] = useState<MaterialBillRow[]>([])
-  const [session, setSession] = useState<SessionResponse | null>(null)
-  const [companies, setCompanies] = useState<CompaniesResponse['companies']>([])
-  const [syncStatus, setSyncStatus] = useState<SyncStatusResponse | null>(null)
-  const [qboConnection, setQboConnection] = useState<QboConnectionResponse['connection'] | null>(null)
-  // The offline-replay XState machine (machines/offline-replay.ts) owns the
-  // queue depth, the 15s replay loop, the `online` event listener, and the
-  // toast deltas. App.tsx only consumes the rendered queue.
+  // Offline-replay XState machine owns the offline queue depth, replay loop,
+  // and online event listener. See machines/offline-replay.ts.
   const { offlineQueue } = useOfflineReplay(companySlug)
-  const [syncRefreshKey, setSyncRefreshKey] = useState(0)
   const [features, setFeatures] = useState<FeaturesResponse | null>(null)
   const [confirmDoneToday, setConfirmDoneToday] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false
@@ -240,48 +244,25 @@ function AppShell() {
     setStoredCompanySlug(companySlug)
   }, [companySlug])
 
+  // The bootstrap fan-out + error handling is owned by useBootstrapRefresh.
+  // We just need to clear the local project + summary selection on company
+  // change so we don't render stale picks against the new tenant's data.
   const refresh = useCallback(async () => {
-    const [sessionData, data] = await Promise.all([
-      apiGet<SessionResponse>('/api/session', companySlug),
-      apiGet<BootstrapResponse>('/api/bootstrap', companySlug),
-    ])
-    setSession(sessionData)
-    try {
-      const companyData = await apiGet<CompaniesResponse>('/api/companies', companySlug)
-      setCompanies(companyData.companies)
-    } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught.message : 'unknown error')
-    }
-    setBootstrap(data)
-    setSelectedProjectId((current) => current || data.projects[0]?.id || '')
-    try {
-      const status = await apiGet<SyncStatusResponse>('/api/sync/status', companySlug)
-      setSyncStatus(status)
-    } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught.message : 'unknown error')
-    }
-    try {
-      const qbo = await apiGet<QboConnectionResponse>('/api/integrations/qbo', companySlug)
-      setQboConnection(qbo.connection)
-      setSyncStatus(qbo.status)
-    } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught.message : 'unknown error')
-    }
-    // Offline queue depth is owned by the useOfflineReplay machine — no
-    // direct setOfflineQueue here. The machine refreshes its own state on
-    // company-slug change.
-    setSyncRefreshKey((current) => current + 1)
-  }, [companySlug])
+    triggerRefresh()
+  }, [triggerRefresh])
 
   useEffect(() => {
     setSelectedProjectId('')
     setSummary(null)
-    void refresh()
-      .then(() => setError(null))
-      .catch((caught: unknown) => {
-        setError(caught instanceof Error ? caught.message : 'unknown error')
-      })
-  }, [refresh])
+    // The hook auto-refreshes on companySlug change; no manual trigger here.
+  }, [companySlug])
+
+  // Auto-pick the first project when bootstrap data arrives and nothing is
+  // selected (matches the legacy behaviour after refresh()).
+  useEffect(() => {
+    if (!bootstrap) return
+    setSelectedProjectId((current) => current || bootstrap.projects[0]?.id || '')
+  }, [bootstrap])
 
   // Offline replay loop, the `online` listener, the
   // `sitelayer:offline-queue` event handler, and the 15s timer are all owned
@@ -333,12 +314,12 @@ function AppShell() {
 
   useEffect(() => {
     void refreshSummary(selectedProjectId).catch((caught: unknown) => {
-      setError(caught instanceof Error ? caught.message : 'unknown error')
+      setActionError(caught instanceof Error ? caught.message : 'unknown error')
     })
     void refreshTakeoff(selectedProjectId).catch((caught: unknown) => {
-      setError(caught instanceof Error ? caught.message : 'unknown error')
+      setActionError(caught instanceof Error ? caught.message : 'unknown error')
     })
-  }, [refreshSummary, refreshTakeoff, selectedProjectId])
+  }, [refreshSummary, refreshTakeoff, selectedProjectId, setActionError])
 
   // Fetch bootstrap data across all visible schedules so /confirm can
   // aggregate today's schedules without needing a project to be selected.
@@ -350,7 +331,7 @@ function AppShell() {
   async function runAction(label: string, action: () => Promise<void>, options?: { skipRefresh?: boolean }) {
     try {
       setBusy(label)
-      setError(null)
+      clearError()
       await action()
       if (!options?.skipRefresh) {
         await refresh()
@@ -365,7 +346,7 @@ function AppShell() {
       if (label === 'qbo-sync') toastSuccess('QBO sync triggered')
     } catch (caught: unknown) {
       const message = caught instanceof Error ? caught.message : 'unknown error'
-      setError(message)
+      setActionError(message)
       toastError(`${label} failed`, message)
     } finally {
       setBusy(null)
