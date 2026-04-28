@@ -10,13 +10,9 @@ import {
   parseTraceIdFromSentryTraceHeader,
 } from './debug-trace.js'
 import {
-  DEFAULT_BONUS_RULE,
   LA_TEMPLATE,
   WORKFLOW_STAGES,
-  calculateBonusPayout,
   calculateGeometryQuantity,
-  calculateMargin,
-  calculateProjectCost,
   compareBidVsScope,
   formatMoney,
   normalizeGeometry,
@@ -33,26 +29,27 @@ import { handleLaborEntryRoutes } from './routes/labor-entries.js'
 import { handleMaterialBillRoutes } from './routes/material-bills.js'
 import { handlePricingProfileRoutes } from './routes/pricing-profiles.js'
 import { handleQboMappingRoutes } from './routes/qbo-mappings.js'
+import { handleRentalInventoryRoutes } from './routes/rental-inventory.js'
 import { handleRentalRoutes } from './routes/rentals.js'
 import { handleScheduleRoutes } from './routes/schedules.js'
 import { handleTakeoffMeasurementRoutes } from './routes/takeoff-measurements.js'
 import { handleServiceItemRoutes } from './routes/service-items.js'
 import { getSyncStatus, handleSyncRoutes } from './routes/sync.js'
 import { handleWorkerRoutes } from './routes/workers.js'
+import { handleBlueprintRoutes } from './routes/blueprints.js'
+import { handleProjectRoutes, summarizeProject } from './routes/projects.js'
 import {
   CORS_ALLOW_HEADERS,
   HttpError,
   getCorsOrigin as getCorsOriginImpl,
   isValidUuid,
   parseExpectedVersion,
-  parseOptionalNumber,
   readBody as readBodyImpl,
   sendJson as sendJsonImpl,
   sendRedirect,
 } from './http-utils.js'
 import {
   attachMutationTx,
-  enqueueAdminAlert,
   enqueueNotification,
   recordMutationLedger,
   recordSyncEvent,
@@ -60,20 +57,11 @@ import {
   type LedgerExecutor,
 } from './mutation-tx.js'
 import {
-  assertKeyInCompany,
-  buildBlueprintStorageKey,
   createBlueprintStorage,
-  getBlueprintMimeType,
   readStorageEnv,
-  StorageError,
   type BlueprintStorage,
 } from './storage.js'
-import {
-  BlueprintUploadError,
-  isMultipartRequest,
-  parseBlueprintMultipart,
-  type BlueprintMultipartResult,
-} from './blueprint-upload.js'
+import { BlueprintUploadError } from './blueprint-upload.js'
 import { recordAudit } from './audit.js'
 import { buildEstimatePdfInputFromSummary, renderEstimatePdf } from './pdf.js'
 import { buildListProjectsQuery, parseProjectsQuery } from './projects-query.js'
@@ -189,21 +177,6 @@ type IntegrationMappingRow = {
   updated_at: string
 }
 
-type BlueprintDocumentRow = {
-  id: string
-  project_id: string
-  file_name: string
-  storage_path: string
-  preview_type: string
-  calibration_length: string | null
-  calibration_unit: string | null
-  sheet_scale: string | null
-  version: number
-  deleted_at: string | null
-  replaces_blueprint_document_id: string | null
-  file_url: string
-  created_at: string
-}
 
 const port = Number(process.env.PORT ?? 3001)
 const databaseUrl = appConfig.databaseUrl
@@ -362,58 +335,7 @@ function getCorsOrigin(req: http.IncomingMessage): string {
   return getCorsOriginImpl(req, allowedOrigins)
 }
 
-function sanitizeFileName(fileName: string): string {
-  const cleaned = fileName.trim().replace(/[^a-zA-Z0-9._-]+/g, '-')
-  return cleaned || 'blueprint.pdf'
-}
-
-function getBlueprintFilePath(companyId: string, blueprintId: string, fileName: string): string {
-  return buildBlueprintStorageKey(companyId, blueprintId, fileName)
-}
-
-function assertBlueprintFilePath(companyId: string, filePath: string): string {
-  try {
-    return assertKeyInCompany(companyId, filePath)
-  } catch (err) {
-    if (err instanceof StorageError) throw new HttpError(err.status, err.message)
-    throw err
-  }
-}
-
-function resolveBlueprintStoragePath(
-  companyId: string,
-  blueprintId: string,
-  fileName: string,
-  requestedPath?: string | null,
-): string {
-  const cleanRequested = requestedPath?.trim()
-  if (!cleanRequested) return buildBlueprintStorageKey(companyId, blueprintId, fileName)
-  return assertBlueprintFilePath(companyId, cleanRequested)
-}
-
-async function persistBlueprintFile(
-  companyId: string,
-  blueprintId: string,
-  fileName: string,
-  contentsBase64: string,
-): Promise<string> {
-  const key = buildBlueprintStorageKey(companyId, blueprintId, fileName)
-  const source = contentsBase64.includes(',') ? (contentsBase64.split(',', 2)[1] ?? '') : contentsBase64
-  await storage.put(key, Buffer.from(source, 'base64'), getBlueprintMimeType(fileName))
-  return key
-}
-
-async function copyBlueprintFile(
-  companyId: string,
-  blueprintId: string,
-  sourcePath: string,
-  fileName: string,
-): Promise<string> {
-  const sourceKey = assertBlueprintFilePath(companyId, sourcePath)
-  const destKey = buildBlueprintStorageKey(companyId, blueprintId, fileName)
-  await storage.copy(sourceKey, destKey)
-  return destKey
-}
+// Blueprint file helpers moved to routes/blueprints.ts.
 
 // Bounded exponential backoff for transient QBO failures: 429 (rate limit)
 // and 5xx are retried up to 3 times with 200ms / 1s / 5s delays. 4xx other
@@ -1039,98 +961,9 @@ async function upsertIntegrationConnection(
 
 // countQueueRows / processQueue / getSyncStatus moved to routes/sync.ts.
 
-async function summarizeProject(companyId: string, projectId: string) {
-  const projectResult = await pool.query(
-    'select id, company_id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, version from projects where company_id = $1 and id = $2 limit 1',
-    [companyId, projectId],
-  )
-  const project = projectResult.rows[0]
-  if (!project) return null
+// summarizeProject moved to routes/projects.ts.
 
-  const [measurementsResult, estimateLinesResult, laborEntriesResult, materialBillsResult, bonusRuleResult] =
-    await Promise.all([
-      pool.query(
-        'select service_item_code, quantity, unit, notes, created_at from takeoff_measurements where company_id = $1 and project_id = $2 order by created_at asc',
-        [companyId, projectId],
-      ),
-      pool.query(
-        'select service_item_code, quantity, unit, rate, amount, created_at from estimate_lines where company_id = $1 and project_id = $2 order by created_at asc',
-        [companyId, projectId],
-      ),
-      pool.query(
-        'select service_item_code, hours, sqft_done, status, occurred_on from labor_entries where company_id = $1 and project_id = $2 order by occurred_on desc, created_at desc',
-        [companyId, projectId],
-      ),
-      pool.query(
-        'select amount, bill_type from material_bills where company_id = $1 and project_id = $2 and deleted_at is null',
-        [companyId, projectId],
-      ),
-      pool.query('select config from bonus_rules where company_id = $1 order by created_at desc limit 1', [companyId]),
-    ])
-
-  const laborCost = laborEntriesResult.rows.reduce(
-    (total, entry) => total + Number(entry.hours) * Number(project.labor_rate ?? 0),
-    0,
-  )
-  const materialCost = materialBillsResult.rows
-    .filter((b) => b.bill_type !== 'sub')
-    .reduce((total, b) => total + Number(b.amount ?? 0), 0)
-  const subCost = materialBillsResult.rows
-    .filter((b) => b.bill_type === 'sub')
-    .reduce((total, b) => total + Number(b.amount ?? 0), 0)
-  const totalCost = calculateProjectCost({ laborCost, materialCost, subCost })
-  const margin = calculateMargin({ revenue: Number(project.bid_total ?? 0), cost: totalCost })
-  const bonusTiers = bonusRuleResult.rows[0]?.config?.tiers ?? DEFAULT_BONUS_RULE.tiers
-  const bonus = calculateBonusPayout(margin.margin, Number(project.bonus_pool ?? 0), bonusTiers)
-  const totalMeasurementQuantity = measurementsResult.rows.reduce(
-    (total, measurement) => total + Number(measurement.quantity),
-    0,
-  )
-  const estimateTotal = estimateLinesResult.rows.reduce((total, line) => total + Number(line.amount), 0)
-
-  return {
-    project,
-    metrics: {
-      totalMeasurementQuantity,
-      estimateTotal,
-      laborCost,
-      materialCost,
-      subCost,
-      totalCost,
-      margin,
-      bonus,
-    },
-    measurements: measurementsResult.rows,
-    estimateLines: estimateLinesResult.rows,
-    laborEntries: laborEntriesResult.rows,
-  }
-}
-
-async function listBlueprintDocuments(companyId: string, projectId: string) {
-  const result = await pool.query(
-    `
-    select
-      id,
-      project_id,
-      file_name,
-      storage_path,
-      preview_type,
-      calibration_length,
-      calibration_unit,
-      sheet_scale,
-      version,
-      deleted_at,
-      replaces_blueprint_document_id,
-      concat('/api/blueprints/', id, '/file') as file_url,
-      created_at
-    from blueprint_documents
-    where company_id = $1 and project_id = $2 and deleted_at is null
-    order by version desc, created_at desc
-    `,
-    [companyId, projectId],
-  )
-  return result.rows as BlueprintDocumentRow[]
-}
+// listBlueprintDocuments moved to routes/blueprints.ts.
 
 // listTakeoffMeasurements moved to routes/takeoff-measurements.ts.
 
@@ -2935,246 +2768,20 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'POST' && url.pathname === '/api/projects') {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const body = await readBody(req)
-              const name = String(body.name ?? '').trim()
-              const customerName = String(body.customer_name ?? '').trim()
-              const divisionCode = String(body.division_code ?? 'D4')
-              if (!name || !customerName) {
-                sendJson(res, 400, { error: 'name and customer_name are required' })
-                return
-              }
-              const customerId =
-                body.customer_id === undefined || body.customer_id === null || body.customer_id === ''
-                  ? null
-                  : String(body.customer_id).trim()
-              if (customerId && !isValidUuid(customerId)) {
-                sendJson(res, 400, { error: 'customer_id must be a valid uuid' })
-                return
-              }
-
-              const siteLat = parseOptionalNumber(body.site_lat)
-              const siteLng = parseOptionalNumber(body.site_lng)
-              const siteRadiusMeters = parseOptionalNumber(body.site_radius_m)
-
-              const created = await withMutationTx(async (client) => {
-                const inserted = await client.query(
-                  `
-        insert into projects (
-          company_id, customer_id, name, customer_name, division_code, status,
-          bid_total, labor_rate, target_sqft_per_hr, bonus_pool,
-          site_lat, site_lng, site_radius_m, version
-        )
-        values (
-          $1,
-          nullif($2, '')::uuid,
-          $3,
-          $4,
-          $5,
-          coalesce($6, 'lead'),
-          coalesce($7, 0),
-          coalesce($8, 0),
-          $9,
-          coalesce($10, 0),
-          $11,
-          $12,
-          coalesce($13, 100),
-          1
-        )
-        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, version, created_at, updated_at
-        `,
-                  [
-                    company.id,
-                    customerId,
-                    name,
-                    customerName,
-                    divisionCode,
-                    body.status ?? 'lead',
-                    body.bid_total ?? 0,
-                    body.labor_rate ?? 0,
-                    body.target_sqft_per_hr ?? null,
-                    body.bonus_pool ?? 0,
-                    siteLat,
-                    siteLng,
-                    siteRadiusMeters,
-                  ],
-                )
-                const row = inserted.rows[0]
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'project',
-                  entityId: row.id,
-                  action: 'create',
-                  row,
-                })
-                return row
+            // Project mutation routes (POST /api/projects, PATCH /api/projects/<id>,
+            // POST /api/projects/<id>/closeout, GET /api/projects/<id>/summary)
+            // handled by the extracted route module. See routes/projects.ts.
+            if (
+              await handleProjectRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
               })
-              sendJson(res, 201, created)
-              return
-            }
-
-            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/projects\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const patchSiteLat = body.site_lat === undefined ? null : parseOptionalNumber(body.site_lat)
-              const patchSiteLng = body.site_lng === undefined ? null : parseOptionalNumber(body.site_lng)
-              const patchSiteRadius = body.site_radius_m === undefined ? null : parseOptionalNumber(body.site_radius_m)
-              const updated = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update projects
-        set
-          name = coalesce($3, name),
-          customer_name = coalesce($4, customer_name),
-          division_code = coalesce($5, division_code),
-          status = coalesce($6, status),
-          bid_total = coalesce($7, bid_total),
-          labor_rate = coalesce($8, labor_rate),
-          target_sqft_per_hr = coalesce($9, target_sqft_per_hr),
-          bonus_pool = coalesce($10, bonus_pool),
-          site_lat = case when $12::boolean then $13::numeric else site_lat end,
-          site_lng = case when $14::boolean then $15::numeric else site_lng end,
-          site_radius_m = case when $16::boolean then $17::int else site_radius_m end,
-          updated_at = now(),
-          version = version + 1
-        where company_id = $1 and id = $2 and ($11::int is null or version = $11)
-        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, version, created_at, updated_at
-        `,
-                  [
-                    company.id,
-                    projectId,
-                    body.name ?? null,
-                    body.customer_name ?? null,
-                    body.division_code ?? null,
-                    body.status ?? null,
-                    body.bid_total ?? null,
-                    body.labor_rate ?? null,
-                    body.target_sqft_per_hr ?? null,
-                    body.bonus_pool ?? null,
-                    expectedVersion,
-                    body.site_lat !== undefined,
-                    patchSiteLat,
-                    body.site_lng !== undefined,
-                    patchSiteLng,
-                    body.site_radius_m !== undefined,
-                    patchSiteRadius,
-                  ],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'project',
-                  entityId: projectId,
-                  action: 'update',
-                  row,
-                })
-                return row
-              })
-              if (!updated) {
-                if (
-                  !(await checkVersion(
-                    'projects',
-                    'company_id = $1 and id = $2',
-                    [company.id, projectId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'project not found' })
-                return
-              }
-              sendJson(res, 200, updated)
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/closeout$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body?.expected_version ?? body?.version)
-              const closed = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update projects
-        set
-          status = 'completed',
-          closed_at = coalesce(closed_at, now()),
-          summary_locked_at = coalesce(summary_locked_at, now()),
-          updated_at = now(),
-          version = version + 1
-        where company_id = $1 and id = $2 and ($3::int is null or version = $3)
-        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at
-        `,
-                  [company.id, projectId, expectedVersion],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'project',
-                  entityId: projectId,
-                  action: 'closeout',
-                  row,
-                })
-                return row
-              })
-              if (!closed) {
-                if (
-                  !(await checkVersion(
-                    'projects',
-                    'company_id = $1 and id = $2',
-                    [company.id, projectId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'project not found' })
-                return
-              }
-              // Margin shortfall alert: when the closing margin is below 10%,
-              // notify company admins so they can review before invoicing.
-              // Best-effort, post-commit — alert delivery must not roll back
-              // the closeout.
-              try {
-                const summary = await summarizeProject(company.id, projectId)
-                const marginPct = summary?.metrics?.margin?.margin
-                if (typeof marginPct === 'number' && marginPct < 10) {
-                  const project = closed as { name?: string; customer_name?: string }
-                  const subject = `[Sitelayer] Margin shortfall on closeout: ${project.name ?? projectId}`
-                  const text = [
-                    `Project "${project.name ?? projectId}" (${project.customer_name ?? 'unknown customer'}) closed with a margin of ${marginPct.toFixed(2)}%.`,
-                    `Target is 10%. Review cost entries and invoicing before finalizing.`,
-                    `https://sitelayer.sandolab.xyz/projects/${projectId}`,
-                  ].join('\n\n')
-                  await enqueueAdminAlert(company.id, 'margin_shortfall', subject, text, {
-                    project_id: projectId,
-                    margin_pct: marginPct,
-                    revenue: summary?.metrics?.margin?.revenue ?? null,
-                    cost: summary?.metrics?.margin?.cost ?? null,
-                  })
-                }
-              } catch (err) {
-                logger.warn({ err, projectId }, '[notifications] margin_shortfall alert failed')
-              }
-              sendJson(res, 200, closed)
+            ) {
               return
             }
 
@@ -3210,6 +2817,24 @@ const server = http.createServer(async (req, res) => {
                   checkVersion(table, where, params, expectedVersion, res, req),
                 assertBlueprintDocumentsBelongToProject: (companyId, projectId, blueprintDocumentIds) =>
                   assertBlueprintDocumentsBelongToProject(companyId, projectId, blueprintDocumentIds),
+              })
+            ) {
+              return
+            }
+
+            // ---------------------------------------------------------------
+            // Rental inventory replacement — inventory catalog, job rental
+            // contracts, movement ledger, and generated billing runs.
+            // ---------------------------------------------------------------
+            if (
+              await handleRentalInventoryRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
               })
             ) {
               return
@@ -3647,21 +3272,6 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/summary$/)) {
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              const summary = await summarizeProject(company.id, projectId)
-              if (!summary) {
-                sendJson(res, 404, { error: 'project not found' })
-                return
-              }
-              sendJson(res, 200, summary)
-              return
-            }
-
             if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\.pdf$/)) {
               if (!requireRole(res, company, ['admin', 'office'], req)) return
               const projectId = url.pathname.split('/')[3] ?? ''
@@ -3669,7 +3279,7 @@ const server = http.createServer(async (req, res) => {
                 sendJson(res, 400, { error: 'project id is required' })
                 return
               }
-              const summary = await summarizeProject(company.id, projectId)
+              const summary = await summarizeProject(pool, company.id, projectId)
               if (!summary) {
                 sendJson(res, 404, { error: 'project not found' })
                 return
@@ -3840,438 +3450,44 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/blueprints$/)) {
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              sendJson(res, 200, { blueprints: await listBlueprintDocuments(company.id, projectId) })
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/blueprints$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              let body: Record<string, any>
-              let multipartResult: BlueprintMultipartResult | null = null
-              let blueprintId: string
-              if (isMultipartRequest(req)) {
-                blueprintId = randomUUID()
-                multipartResult = await parseBlueprintMultipart(
-                  req,
-                  storage,
-                  company.id,
-                  blueprintId,
-                  'blueprint.pdf',
-                  { maxFileBytes: maxBlueprintUploadBytes },
-                )
-                body = multipartResult.fields
-              } else {
-                body = await readBody(req)
-                blueprintId = String(body.id ?? randomUUID())
-              }
-              const fileName = String(
-                body.file_name ?? body.original_file_name ?? multipartResult?.fileName ?? '',
-              ).trim()
-              const requestedStoragePath = body.storage_path === undefined ? null : String(body.storage_path)
-              const fileContentsBase64 = String(body.file_contents_base64 ?? body.file_contents ?? '').trim()
-              if (!fileName && !fileContentsBase64 && !multipartResult) {
-                sendJson(res, 400, { error: 'file_name, file_contents_base64, or multipart upload is required' })
-                return
-              }
-              const versionResult = await pool.query<{ version: number }>(
-                'select coalesce(max(version), 0) + 1 as version from blueprint_documents where company_id = $1 and project_id = $2',
-                [company.id, projectId],
-              )
-              const version = Number(body.version ?? versionResult.rows[0]?.version ?? 1)
-              const resolvedFileName = fileName || multipartResult?.fileName || 'blueprint.pdf'
-              let resolvedStoragePath = multipartResult
-                ? multipartResult.storagePath
-                : resolveBlueprintStoragePath(company.id, blueprintId, resolvedFileName, requestedStoragePath)
-              if (!multipartResult && fileContentsBase64) {
-                resolvedStoragePath = await persistBlueprintFile(
-                  company.id,
-                  blueprintId,
-                  resolvedFileName,
-                  fileContentsBase64,
-                )
-              }
-              const blueprint = await withMutationTx(async (client) => {
-                const inserted = await client.query(
-                  `
-        insert into blueprint_documents (
-          id, company_id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, replaces_blueprint_document_id
-        )
-        values ($1, $2, $3, $4, $5, coalesce($6, 'storage_path'), $7, $8, $9, $10, $11)
-        returning id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, deleted_at, replaces_blueprint_document_id, concat('/api/blueprints/', id, '/file') as file_url, created_at
-        `,
-                  [
-                    blueprintId,
-                    company.id,
-                    projectId,
-                    resolvedFileName,
-                    resolvedStoragePath,
-                    body.preview_type ?? null,
-                    body.calibration_length ?? null,
-                    body.calibration_unit ?? null,
-                    body.sheet_scale ?? null,
-                    version,
-                    body.replaces_blueprint_document_id ?? null,
-                  ],
-                )
-                const row = inserted.rows[0]
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'blueprint_document',
-                  entityId: row.id,
-                  action: 'create',
-                  row,
-                  syncPayload: { action: 'create', blueprint: row },
-                })
-                return row
+            // Blueprint document routes (GET/POST /api/projects/<id>/blueprints,
+            // PATCH /api/blueprints/<id>, POST /api/blueprints/<id>/versions,
+            // GET /api/blueprints/<id>/file, DELETE /api/blueprints/<id>)
+            // handled by the extracted route module. See routes/blueprints.ts.
+            if (
+              await handleBlueprintRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
+                storage,
+                maxBlueprintUploadBytes,
+                blueprintDownloadPresigned,
+                sendFileContent: (mimeType, fileName, content) => {
+                  res.writeHead(200, {
+                    'content-type': mimeType,
+                    'content-disposition': `inline; filename="${fileName}"`,
+                    'access-control-allow-origin': getCorsOrigin(req),
+                    'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+                    'access-control-allow-headers': CORS_ALLOW_HEADERS,
+                  })
+                  res.end(content)
+                },
+                sendFileRedirect: (location) => {
+                  res.writeHead(302, {
+                    location,
+                    'cache-control': 'no-store',
+                    'access-control-allow-origin': getCorsOrigin(req),
+                    'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+                    'access-control-allow-headers': CORS_ALLOW_HEADERS,
+                  })
+                  res.end()
+                },
               })
-              sendJson(res, 201, blueprint)
-              return
-            }
-
-            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/blueprints\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const blueprintId = url.pathname.split('/')[3] ?? ''
-              if (!blueprintId) {
-                sendJson(res, 400, { error: 'blueprint id is required' })
-                return
-              }
-              let body: Record<string, any>
-              let multipartResult: BlueprintMultipartResult | null = null
-              if (isMultipartRequest(req)) {
-                multipartResult = await parseBlueprintMultipart(
-                  req,
-                  storage,
-                  company.id,
-                  blueprintId,
-                  'blueprint.pdf',
-                  { maxFileBytes: maxBlueprintUploadBytes },
-                )
-                body = multipartResult.fields
-              } else {
-                body = await readBody(req)
-              }
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const fileContentsBase64 = String(body.file_contents_base64 ?? body.file_contents ?? '').trim()
-              const storagePath = multipartResult
-                ? multipartResult.storagePath
-                : body.storage_path === undefined || !String(body.storage_path).trim()
-                  ? null
-                  : resolveBlueprintStoragePath(
-                      company.id,
-                      blueprintId,
-                      String(body.file_name ?? 'blueprint.pdf'),
-                      String(body.storage_path),
-                    )
-              const updated = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update blueprint_documents
-        set
-          file_name = coalesce($3, file_name),
-          storage_path = coalesce($4, storage_path),
-          preview_type = coalesce($5, preview_type),
-          calibration_length = coalesce($6, calibration_length),
-          calibration_unit = coalesce($7, calibration_unit),
-          sheet_scale = coalesce($8, sheet_scale),
-          version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null and ($9::int is null or version = $9)
-        returning id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, deleted_at, replaces_blueprint_document_id, concat('/api/blueprints/', id, '/file') as file_url, created_at
-        `,
-                  [
-                    company.id,
-                    blueprintId,
-                    body.file_name ?? multipartResult?.fileName ?? null,
-                    storagePath,
-                    body.preview_type ?? null,
-                    body.calibration_length ?? null,
-                    body.calibration_unit ?? null,
-                    body.sheet_scale ?? null,
-                    expectedVersion,
-                  ],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'blueprint_document',
-                  entityId: blueprintId,
-                  action: 'update',
-                  row,
-                  syncPayload: { action: 'update', blueprint: row },
-                })
-                return row
-              })
-              if (!updated) {
-                if (
-                  !(await checkVersion(
-                    'blueprint_documents',
-                    'company_id = $1 and id = $2',
-                    [company.id, blueprintId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'blueprint not found' })
-                return
-              }
-              // Persisting blob is post-commit: a storage write is not part of
-              // the DB transaction, so blobs only land after the row is durable.
-              if (fileContentsBase64) {
-                await persistBlueprintFile(
-                  company.id,
-                  blueprintId,
-                  String(updated.file_name ?? body.file_name ?? 'blueprint.pdf'),
-                  fileContentsBase64,
-                )
-              }
-              sendJson(res, 200, updated)
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname.match(/^\/api\/blueprints\/[^/]+\/versions$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const sourceBlueprintId = url.pathname.split('/')[3] ?? ''
-              if (!sourceBlueprintId) {
-                sendJson(res, 400, { error: 'blueprint id is required' })
-                return
-              }
-              const sourceResult = await pool.query(
-                `
-        select id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, deleted_at
-        from blueprint_documents
-        where company_id = $1 and id = $2 and deleted_at is null
-        limit 1
-        `,
-                [company.id, sourceBlueprintId],
-              )
-              const source = sourceResult.rows[0]
-              if (!source) {
-                sendJson(res, 404, { error: 'blueprint not found' })
-                return
-              }
-              let body: Record<string, any>
-              let multipartResult: BlueprintMultipartResult | null = null
-              const blueprintId = randomUUID()
-              if (isMultipartRequest(req)) {
-                multipartResult = await parseBlueprintMultipart(
-                  req,
-                  storage,
-                  company.id,
-                  blueprintId,
-                  String(source.file_name ?? 'blueprint.pdf'),
-                  { maxFileBytes: maxBlueprintUploadBytes },
-                )
-                body = multipartResult.fields
-              } else {
-                body = await readBody(req)
-              }
-              const copyMeasurements = body.copy_measurements !== false
-              const fileName = String(
-                body.file_name ?? multipartResult?.fileName ?? source.file_name ?? 'blueprint.pdf',
-              ).trim()
-              const fileContentsBase64 = String(body.file_contents_base64 ?? body.file_contents ?? '').trim()
-              const versionResult = await pool.query<{ version: number }>(
-                'select coalesce(max(version), 0) + 1 as version from blueprint_documents where company_id = $1 and project_id = $2',
-                [company.id, source.project_id],
-              )
-              const version = Number(body.version ?? versionResult.rows[0]?.version ?? 1)
-              const requestedStoragePath = body.storage_path === undefined ? null : String(body.storage_path)
-              let storagePath = multipartResult
-                ? multipartResult.storagePath
-                : requestedStoragePath
-                  ? resolveBlueprintStoragePath(company.id, blueprintId, fileName, requestedStoragePath)
-                  : ''
-              if (!multipartResult && fileContentsBase64) {
-                storagePath = await persistBlueprintFile(company.id, blueprintId, fileName, fileContentsBase64)
-              } else if (!multipartResult && source.storage_path) {
-                try {
-                  storagePath = await copyBlueprintFile(company.id, blueprintId, source.storage_path, fileName)
-                } catch {
-                  storagePath = getBlueprintFilePath(company.id, blueprintId, fileName)
-                }
-              } else if (!storagePath) {
-                storagePath = getBlueprintFilePath(company.id, blueprintId, fileName)
-              }
-              const newBlueprint = await withMutationTx(async (client) => {
-                const inserted = await client.query(
-                  `
-        insert into blueprint_documents (
-          id, company_id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, replaces_blueprint_document_id
-        )
-        values ($1, $2, $3, $4, $5, coalesce($6, 'storage_path'), $7, $8, $9, $10, $11)
-        returning id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, deleted_at, replaces_blueprint_document_id, concat('/api/blueprints/', id, '/file') as file_url, created_at
-        `,
-                  [
-                    blueprintId,
-                    company.id,
-                    source.project_id,
-                    fileName,
-                    storagePath,
-                    body.preview_type ?? source.preview_type ?? null,
-                    body.calibration_length ?? source.calibration_length ?? null,
-                    body.calibration_unit ?? source.calibration_unit ?? null,
-                    body.sheet_scale ?? source.sheet_scale ?? null,
-                    version,
-                    source.id,
-                  ],
-                )
-                const row = inserted.rows[0]
-                if (copyMeasurements) {
-                  const sourceMeasurements = await client.query(
-                    `
-          select project_id, service_item_code, quantity, unit, notes, geometry, division_code
-          from takeoff_measurements
-          where company_id = $1 and blueprint_document_id = $2 and deleted_at is null
-          order by created_at asc
-          `,
-                    [company.id, source.id],
-                  )
-                  for (const measurement of sourceMeasurements.rows) {
-                    await client.query(
-                      `
-            insert into takeoff_measurements (
-              company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code
-            )
-            values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 1, $9)
-            `,
-                      [
-                        company.id,
-                        measurement.project_id,
-                        row.id,
-                        measurement.service_item_code,
-                        measurement.quantity,
-                        measurement.unit,
-                        `${measurement.notes ?? ''}${measurement.notes ? ' · ' : ''}copied from blueprint v${source.version}`,
-                        JSON.stringify(measurement.geometry ?? {}),
-                        measurement.division_code ?? null,
-                      ],
-                    )
-                  }
-                }
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'blueprint_document',
-                  entityId: row.id,
-                  action: 'version',
-                  row,
-                  syncPayload: { action: 'version', source_blueprint_id: source.id, blueprint: row },
-                })
-                return row
-              })
-              sendJson(res, 201, newBlueprint)
-              return
-            }
-
-            if (req.method === 'GET' && url.pathname.match(/^\/api\/blueprints\/[^/]+\/file$/)) {
-              const blueprintId = url.pathname.split('/')[3] ?? ''
-              if (!blueprintId) {
-                sendJson(res, 400, { error: 'blueprint id is required' })
-                return
-              }
-              const result = await pool.query(
-                'select file_name, storage_path from blueprint_documents where company_id = $1 and id = $2 and deleted_at is null limit 1',
-                [company.id, blueprintId],
-              )
-              const blueprint = result.rows[0]
-              if (!blueprint) {
-                sendJson(res, 404, { error: 'blueprint not found' })
-                return
-              }
-              try {
-                const storageKey = assertBlueprintFilePath(company.id, String(blueprint.storage_path))
-                const fileName = String(blueprint.file_name)
-                if (blueprintDownloadPresigned) {
-                  const signedUrl = await storage.getDownloadUrl(storageKey, { fileName })
-                  if (signedUrl) {
-                    res.writeHead(302, {
-                      location: signedUrl,
-                      'cache-control': 'no-store',
-                      'access-control-allow-origin': getCorsOrigin(req),
-                      'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-                      'access-control-allow-headers': CORS_ALLOW_HEADERS,
-                    })
-                    res.end()
-                    return
-                  }
-                }
-                const content = await storage.get(storageKey)
-                const mimeType = getBlueprintMimeType(fileName)
-                res.writeHead(200, {
-                  'content-type': mimeType,
-                  'content-disposition': `inline; filename="${sanitizeFileName(fileName)}"`,
-                  'access-control-allow-origin': getCorsOrigin(req),
-                  'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-                  'access-control-allow-headers': CORS_ALLOW_HEADERS,
-                })
-                res.end(content)
-              } catch {
-                sendJson(res, 404, { error: 'blueprint file not found' })
-              }
-              return
-            }
-
-            if (req.method === 'DELETE' && url.pathname.match(/^\/api\/blueprints\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const blueprintId = url.pathname.split('/')[3] ?? ''
-              if (!blueprintId) {
-                sendJson(res, 400, { error: 'blueprint id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const deleted = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update blueprint_documents
-        set deleted_at = now(), version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null and ($3::int is null or version = $3)
-        returning id, project_id, file_name, storage_path, version, deleted_at, created_at
-        `,
-                  [company.id, blueprintId, expectedVersion],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'blueprint_document',
-                  entityId: blueprintId,
-                  action: 'delete',
-                  row,
-                  syncPayload: { action: 'delete', blueprint: row },
-                })
-                return row
-              })
-              if (!deleted) {
-                if (
-                  !(await checkVersion(
-                    'blueprint_documents',
-                    'company_id = $1 and id = $2',
-                    [company.id, blueprintId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'blueprint not found' })
-                return
-              }
-              sendJson(res, 200, deleted)
+            ) {
               return
             }
 
