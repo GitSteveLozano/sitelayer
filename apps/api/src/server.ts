@@ -2,12 +2,7 @@ import { Sentry } from './instrument.js'
 import http from 'node:http'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { Pool, type PoolConfig } from 'pg'
-import {
-  processQueue as processDatabaseQueue,
-  processRentalInvoice,
-  RENTAL_SELECT_COLUMNS,
-  type RentalRow,
-} from '@sitelayer/queue'
+import { processRentalInvoice, RENTAL_SELECT_COLUMNS, type RentalRow } from '@sitelayer/queue'
 import { createLogger, getRequestContext, runWithRequestContext, type RequestContext } from '@sitelayer/logger'
 import {
   authorizeDebugTraceRequest,
@@ -39,6 +34,7 @@ import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './au
 import { handleBonusRuleRoutes } from './routes/bonus-rules.js'
 import { handleCustomerRoutes } from './routes/customers.js'
 import { handlePricingProfileRoutes } from './routes/pricing-profiles.js'
+import { getSyncStatus, handleSyncRoutes } from './routes/sync.js'
 import { handleWorkerRoutes } from './routes/workers.js'
 import {
   CORS_ALLOW_HEADERS,
@@ -1041,67 +1037,7 @@ async function upsertIntegrationConnection(
   return updated.rows[0] ?? existing
 }
 
-async function countQueueRows(companyId: string) {
-  const [outboxResult, syncResult] = await Promise.all([
-    pool.query<{ pending_count: number }>(
-      `
-      select count(*)::int as pending_count
-      from mutation_outbox
-      where company_id = $1
-        and status in ('pending', 'processing')
-      `,
-      [companyId],
-    ),
-    pool.query<{ pending_count: number }>(
-      `
-      select count(*)::int as pending_count
-      from sync_events
-      where company_id = $1
-        and status in ('pending', 'processing')
-      `,
-      [companyId],
-    ),
-  ])
-  return {
-    pendingOutboxCount: outboxResult.rows[0]?.pending_count ?? 0,
-    pendingSyncEventCount: syncResult.rows[0]?.pending_count ?? 0,
-  }
-}
-
-async function processQueue(companyId: string, limit = 25) {
-  return processDatabaseQueue(pool, companyId, limit)
-}
-
-async function getSyncStatus(companyId: string) {
-  const queue = await countQueueRows(companyId)
-  const [connections, latestSyncEvent] = await Promise.all([
-    pool.query(
-      `
-      select id, provider, provider_account_id, sync_cursor, last_synced_at, status, version, created_at
-      from integration_connections
-      where company_id = $1
-      order by created_at asc
-      `,
-      [companyId],
-    ),
-    pool.query(
-      `
-      select created_at, entity_type, entity_id, direction, status, attempt_count, applied_at, error
-      from sync_events
-      where company_id = $1
-      order by created_at desc
-      limit 1
-      `,
-      [companyId],
-    ),
-  ])
-
-  return {
-    ...queue,
-    connections: connections.rows,
-    latestSyncEvent: latestSyncEvent.rows[0] ?? null,
-  }
-}
+// countQueueRows / processQueue / getSyncStatus moved to routes/sync.ts.
 
 async function summarizeProject(companyId: string, projectId: string) {
   const projectResult = await pool.query(
@@ -2646,19 +2582,17 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'GET' && url.pathname === '/api/sync/status') {
-              sendJson(res, 200, {
+            // Sync routes (status/process at this position; events/outbox
+            // are matched here too because handleSyncRoutes covers all four).
+            if (
+              await handleSyncRoutes(req, url, {
+                pool,
                 company,
-                ...(await getSyncStatus(company.id)),
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
               })
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname === '/api/sync/process') {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const body = await readBody(req)
-              const limit = Math.max(1, Math.min(100, Number(body.limit ?? 25)))
-              sendJson(res, 200, await processQueue(company.id, limit))
+            ) {
               return
             }
 
@@ -2754,7 +2688,7 @@ const server = http.createServer(async (req, res) => {
               const connection = await getIntegrationConnection(company.id, 'qbo')
               sendJson(res, 200, {
                 connection,
-                status: await getSyncStatus(company.id),
+                status: await getSyncStatus(pool, company.id),
               })
               return
             }
@@ -3508,40 +3442,6 @@ const server = http.createServer(async (req, res) => {
                 }
               }
               sendJson(res, 200, { synced, errors, total_candidates: unsynced.rowCount ?? 0 })
-              return
-            }
-
-            if (req.method === 'GET' && url.pathname === '/api/sync/events') {
-              const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 25)))
-              const result = await pool.query(
-                `
-        select id, integration_connection_id, direction, entity_type, entity_id, payload, status, attempt_count, next_attempt_at, applied_at, error, created_at
-        from sync_events
-        where company_id = $1
-        order by created_at desc
-        limit $2
-        `,
-                [company.id, limit],
-              )
-              sendJson(res, 200, { events: result.rows })
-              return
-            }
-
-            if (req.method === 'GET' && url.pathname === '/api/sync/outbox') {
-              const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 25)))
-              const result = await pool.query(
-                `
-        select
-          id, device_id, actor_user_id, entity_type, entity_id, mutation_type, payload,
-          idempotency_key, status, attempt_count, next_attempt_at, applied_at, error, created_at
-        from mutation_outbox
-        where company_id = $1
-        order by created_at desc
-        limit $2
-        `,
-                [company.id, limit],
-              )
-              sendJson(res, 200, { outbox: result.rows })
               return
             }
 
