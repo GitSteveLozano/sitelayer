@@ -2,7 +2,6 @@ import { Sentry } from './instrument.js'
 import http from 'node:http'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { Pool, type PoolConfig } from 'pg'
-import { processRentalInvoice, RENTAL_SELECT_COLUMNS, type RentalRow } from '@sitelayer/queue'
 import { createLogger, getRequestContext, runWithRequestContext, type RequestContext } from '@sitelayer/logger'
 import {
   authorizeDebugTraceRequest,
@@ -23,7 +22,6 @@ import {
   computeProductivity,
   formatMoney,
   haversineDistanceMeters,
-  initialRentalNextInvoiceAt,
   isInsideGeofence,
   normalizeGeometry,
   normalizePolygonGeometry,
