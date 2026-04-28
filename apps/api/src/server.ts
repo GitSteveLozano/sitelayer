@@ -36,6 +36,18 @@ import {
 import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigError } from './tier.js'
 import { validateQboStateSecret } from './qbo-config.js'
 import {
+  CORS_ALLOW_HEADERS,
+  HttpError,
+  getCorsOrigin as getCorsOriginImpl,
+  isValidDateInput,
+  isValidUuid,
+  parseExpectedVersion,
+  parseOptionalNumber,
+  readBody as readBodyImpl,
+  sendJson as sendJsonImpl,
+  sendRedirect,
+} from './http-utils.js'
+import {
   assertKeyInCompany,
   buildBlueprintStorageKey,
   createBlueprintStorage,
@@ -81,8 +93,6 @@ import { applyRateLimit, createRateLimiter, isRateLimitExempt, loadRateLimitConf
 import { assertVersion } from './version-guard.js'
 
 const logger = createLogger('api')
-const CORS_ALLOW_HEADERS =
-  'content-type, authorization, baggage, sentry-trace, traceparent, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id'
 
 function currentTraceHeaders(): { sentryTrace: string | null; baggage: string | null } {
   try {
@@ -370,21 +380,8 @@ logger.info(
   '[pool] configured',
 )
 
-class HttpError extends Error {
-  constructor(
-    readonly status: number,
-    message: string,
-  ) {
-    super(message)
-    this.name = 'HttpError'
-  }
-}
-
 function getCorsOrigin(req: http.IncomingMessage): string {
-  const origin = req.headers.origin
-  if (!origin) return allowedOrigins[0] ?? '*'
-  const originStr = Array.isArray(origin) ? origin[0] : origin
-  return allowedOrigins.includes(originStr) ? originStr : (allowedOrigins[0] ?? '*')
+  return getCorsOriginImpl(req, allowedOrigins)
 }
 
 function sanitizeFileName(fileName: string): string {
@@ -635,18 +632,7 @@ function decodeQboState(rawState: string): QboOAuthState {
 }
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown, req?: http.IncomingMessage) {
-  res.writeHead(status, {
-    'content-type': 'application/json; charset=utf-8',
-    'access-control-allow-origin': req ? getCorsOrigin(req) : '*',
-    'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
-    'access-control-allow-headers': CORS_ALLOW_HEADERS,
-  })
-  res.end(JSON.stringify(body, null, 2))
-}
-
-function sendRedirect(res: http.ServerResponse, location: string) {
-  res.writeHead(303, { location })
-  res.end()
+  sendJsonImpl(res, status, body, req ? { req, allowedOrigins } : { allowedOrigins })
 }
 
 /**
@@ -667,39 +653,7 @@ async function checkVersion(
 }
 
 function readBody(req: http.IncomingMessage): Promise<Record<string, any>> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = []
-    let receivedBytes = 0
-    let rejected = false
-    req.on('data', (chunk) => {
-      if (rejected) return
-      const buffer = Buffer.from(chunk)
-      receivedBytes += buffer.length
-      if (receivedBytes > maxJsonBodyBytes) {
-        rejected = true
-        reject(new HttpError(413, `request body exceeds ${maxJsonBodyBytes} bytes`))
-        req.destroy()
-        return
-      }
-      chunks.push(buffer)
-    })
-    req.on('end', () => {
-      if (rejected) return
-      const raw = Buffer.concat(chunks).toString('utf8')
-      if (!raw.trim()) {
-        resolve({})
-        return
-      }
-      try {
-        resolve(JSON.parse(raw) as Record<string, any>)
-      } catch {
-        reject(new HttpError(400, 'invalid JSON body'))
-      }
-    })
-    req.on('error', (error) => {
-      if (!rejected) reject(error)
-    })
-  })
+  return readBodyImpl(req, maxJsonBodyBytes) as Promise<Record<string, any>>
 }
 
 function readRawBody(req: http.IncomingMessage): Promise<string> {
@@ -1846,30 +1800,6 @@ function parseConfigPayload(value: unknown) {
     return JSON.parse(trimmed) as Record<string, unknown>
   }
   return {}
-}
-
-function isValidDateInput(value: unknown) {
-  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
-}
-
-function parseOptionalNumber(value: unknown): number | null {
-  if (value === undefined || value === null || value === '') return null
-  const parsed = typeof value === 'number' ? value : Number(value)
-  if (!Number.isFinite(parsed)) return null
-  return parsed
-}
-
-function parseExpectedVersion(value: unknown) {
-  if (value === undefined || value === null || value === '') return null
-  const parsed = Number(value)
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
-}
-
-function isValidUuid(value: unknown) {
-  return (
-    typeof value === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
-  )
 }
 
 type PreparedTakeoffMeasurementInput = {
