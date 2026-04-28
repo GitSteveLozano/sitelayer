@@ -13,14 +13,13 @@ import {
   LA_TEMPLATE,
   WORKFLOW_STAGES,
   calculateGeometryQuantity,
-  compareBidVsScope,
   formatMoney,
   normalizeGeometry,
 } from '@sitelayer/domain'
 import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigError } from './tier.js'
 import { validateQboStateSecret } from './qbo-config.js'
 import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './auth-types.js'
-import { handleAnalyticsRoutes, listServiceItemProductivity } from './routes/analytics.js'
+import { handleAnalyticsRoutes } from './routes/analytics.js'
 import { handleAuditEventRoutes } from './routes/audit-events.js'
 import { handleBonusRuleRoutes } from './routes/bonus-rules.js'
 import { handleClockRoutes } from './routes/clock.js'
@@ -37,7 +36,8 @@ import { handleServiceItemRoutes } from './routes/service-items.js'
 import { getSyncStatus, handleSyncRoutes } from './routes/sync.js'
 import { handleWorkerRoutes } from './routes/workers.js'
 import { handleBlueprintRoutes } from './routes/blueprints.js'
-import { handleProjectRoutes, summarizeProject } from './routes/projects.js'
+import { handleProjectRoutes } from './routes/projects.js'
+import { handleEstimateRoutes, createEstimateFromMeasurements, getScopeVsBid } from './routes/estimate.js'
 import {
   CORS_ALLOW_HEADERS,
   HttpError,
@@ -56,14 +56,10 @@ import {
   withMutationTx,
   type LedgerExecutor,
 } from './mutation-tx.js'
-import {
-  createBlueprintStorage,
-  readStorageEnv,
-  type BlueprintStorage,
-} from './storage.js'
+import { createBlueprintStorage, readStorageEnv, type BlueprintStorage } from './storage.js'
 import { BlueprintUploadError } from './blueprint-upload.js'
 import { recordAudit } from './audit.js'
-import { buildEstimatePdfInputFromSummary, renderEstimatePdf } from './pdf.js'
+import { renderEstimatePdf } from './pdf.js'
 import { buildListProjectsQuery, parseProjectsQuery } from './projects-query.js'
 import {
   assertServiceItemCatalogStatus as assertServiceItemCatalogStatusImpl,
@@ -176,7 +172,6 @@ type IntegrationMappingRow = {
   created_at: string
   updated_at: string
 }
-
 
 const port = Number(process.env.PORT ?? 3001)
 const databaseUrl = appConfig.databaseUrl
@@ -969,175 +964,9 @@ async function upsertIntegrationConnection(
 
 // listSchedules moved to routes/schedules.ts.
 
-async function createEstimateFromMeasurements(companyId: string, projectId: string, executor: LedgerExecutor = pool) {
-  const projectResult = await executor.query<{
-    id: string
-    bid_total: string | number | null
-    labor_rate: string | number | null
-    bonus_pool: string | number | null
-    division_code: string | null
-  }>(
-    'select id, bid_total, labor_rate, bonus_pool, division_code from projects where company_id = $1 and id = $2 limit 1',
-    [companyId, projectId],
-  )
-  const project = projectResult.rows[0]
-  if (!project) return null
-
-  const [measurementsResult, serviceItemsResult] = await Promise.all([
-    executor.query<{
-      service_item_code: string
-      quantity: string | number
-      unit: string
-      notes: string | null
-      division_code: string | null
-    }>(
-      'select service_item_code, quantity, unit, notes, division_code from takeoff_measurements where company_id = $1 and project_id = $2 order by created_at asc',
-      [companyId, projectId],
-    ),
-    executor.query<{ code: string; default_rate: string | null; unit: string }>(
-      'select code, default_rate, unit from service_items where company_id = $1',
-      [companyId],
-    ),
-  ])
-
-  const itemIndex = new Map<string, { default_rate: string | null; unit: string }>()
-  for (const item of serviceItemsResult.rows) {
-    itemIndex.set(item.code, { default_rate: item.default_rate, unit: item.unit })
-  }
-
-  await executor.query('delete from estimate_lines where company_id = $1 and project_id = $2', [companyId, projectId])
-
-  const projectDivisionCode = project.division_code ?? null
-  type EstimateLineRow = {
-    service_item_code: string
-    quantity: string | number
-    unit: string
-    rate: number
-    amount: number
-    division_code: string | null
-    created_at: string
-  }
-  let createdLines: EstimateLineRow[] = []
-  if (measurementsResult.rows.length > 0) {
-    // Single multi-row INSERT replaces the previous N round-trips. unnest()
-    // turns the parallel arrays back into one row per measurement so we keep
-    // the per-measurement rate/amount semantics.
-    const codes: string[] = []
-    const quantities: string[] = []
-    const units: string[] = []
-    const rates: string[] = []
-    const amounts: string[] = []
-    const divisions: (string | null)[] = []
-    for (const measurement of measurementsResult.rows) {
-      const item = itemIndex.get(measurement.service_item_code)
-      const rate = Number(item?.default_rate ?? 0)
-      const amount = Number(measurement.quantity) * rate
-      // Per WhatsApp:227-229: an estimate line inherits the measurement's
-      // division_code when the takeoff captured one, otherwise falls back to
-      // the project's division_code so existing flows keep working.
-      const effectiveDivisionCode = measurement.division_code ?? projectDivisionCode
-      codes.push(measurement.service_item_code)
-      quantities.push(String(measurement.quantity))
-      units.push(item?.unit ?? measurement.unit)
-      rates.push(String(rate))
-      amounts.push(String(amount))
-      divisions.push(effectiveDivisionCode)
-    }
-    const insertResult = await executor.query<EstimateLineRow>(
-      `
-      insert into estimate_lines (company_id, project_id, service_item_code, quantity, unit, rate, amount, division_code)
-      select
-        $1::uuid,
-        $2::uuid,
-        code,
-        quantity::numeric,
-        unit,
-        rate::numeric,
-        amount::numeric,
-        division_code
-      from unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[])
-        as t(code, quantity, unit, rate, amount, division_code)
-      returning service_item_code, quantity, unit, rate, amount, division_code, created_at
-      `,
-      [companyId, projectId, codes, quantities, units, rates, amounts, divisions],
-    )
-    createdLines = insertResult.rows
-  }
-
-  const scopeTotal = createdLines.reduce((total, line) => total + Number(line.amount), 0)
-  // Preserve the human-entered bid_total once set. Only overwrite it on the
-  // first estimate computation for a brand-new project (bid_total === 0),
-  // which keeps the seed/demo flow working. Afterwards, bid_total is the
-  // source of truth for the contract price and drift is surfaced through
-  // `scope_vs_bid`.
-  const existingBidTotal = Number(project.bid_total ?? 0)
-  const bidTotal = existingBidTotal > 0 ? existingBidTotal : scopeTotal
-  if (existingBidTotal <= 0 && scopeTotal > 0) {
-    await executor.query(
-      'update projects set bid_total = $1, updated_at = now(), version = version + 1 where company_id = $2 and id = $3',
-      [scopeTotal, companyId, projectId],
-    )
-  } else {
-    await executor.query(
-      'update projects set updated_at = now(), version = version + 1 where company_id = $1 and id = $2',
-      [companyId, projectId],
-    )
-  }
-
-  return {
-    projectId,
-    bidTotal,
-    scopeTotal,
-    lines: createdLines,
-  }
-}
-
-/**
- * Fetch the project's stored `bid_total` and the current sum of
- * estimate_lines.amount, then return the scope-vs-bid summary. Returns null
- * if the project does not exist for the given company.
- *
- * The estimate_lines payload mirrors what clients already receive from the
- * estimate endpoints (service_item_code + quantity + unit + rate + amount +
- * division_code when present) so the UI can render a side-by-side list next
- * to the comparison header.
- */
-async function getScopeVsBid(companyId: string, projectId: string) {
-  const projectResult = await pool.query<{ bid_total: string | number | null }>(
-    'select bid_total from projects where company_id = $1 and id = $2 limit 1',
-    [companyId, projectId],
-  )
-  const project = projectResult.rows[0]
-  if (!project) return null
-
-  const linesResult = await pool.query(
-    `select service_item_code, quantity, unit, rate, amount, division_code, created_at
-     from estimate_lines
-     where company_id = $1 and project_id = $2
-     order by created_at asc, service_item_code asc`,
-    [companyId, projectId],
-  )
-
-  const bidTotal = Number(project.bid_total ?? 0)
-  const scopeTotal = linesResult.rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0)
-  const comparison = compareBidVsScope({ bidTotal, scopeTotal })
-
-  return {
-    ...comparison,
-    lines: linesResult.rows,
-  }
-}
-
-async function listServiceItemDivisions(companyId: string, serviceItemCode: string) {
-  const result = await pool.query<{ division_code: string; created_at: string }>(
-    `select division_code, created_at
-     from service_item_divisions
-     where company_id = $1 and service_item_code = $2
-     order by division_code asc`,
-    [companyId, serviceItemCode],
-  )
-  return result.rows
-}
+// createEstimateFromMeasurements moved to routes/estimate.ts.
+// getScopeVsBid moved to routes/estimate.ts.
+// listServiceItemDivisions moved to routes/estimate.ts.
 
 /**
  * Validate the division_code against the service item's allowed divisions.
@@ -1321,115 +1150,7 @@ async function assertBlueprintDocumentsBelongToProject(
   }
 }
 
-type ForecastMeasurementInput = {
-  service_item_code: string
-  quantity: number
-  unit?: string
-}
-
-async function forecastProjectHours(companyId: string, projectId: string, body: unknown) {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) {
-    throw new HttpError(400, 'body must be an object')
-  }
-  const measurements = (body as { measurements?: unknown }).measurements
-  if (!Array.isArray(measurements) || measurements.length === 0) {
-    throw new HttpError(400, 'measurements[] is required')
-  }
-
-  const normalized: ForecastMeasurementInput[] = measurements.map((entry, index) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      throw new HttpError(400, `measurements[${index}] must be an object`)
-    }
-    const m = entry as Record<string, unknown>
-    const code = String(m.service_item_code ?? '').trim()
-    const quantity = Number(m.quantity ?? 0)
-    const unit = m.unit === undefined || m.unit === null ? '' : String(m.unit).trim()
-    if (!code) throw new HttpError(400, `measurements[${index}].service_item_code is required`)
-    if (!Number.isFinite(quantity) || quantity <= 0) {
-      throw new HttpError(400, `measurements[${index}].quantity must be positive`)
-    }
-    return { service_item_code: code, quantity, unit }
-  })
-
-  const [projectRows, serviceItemRows, bonusRuleRows, productivity] = await Promise.all([
-    pool.query('select id, target_sqft_per_hr, labor_rate from projects where company_id = $1 and id = $2 limit 1', [
-      companyId,
-      projectId,
-    ]),
-    pool.query('select code, default_rate from service_items where company_id = $1 and deleted_at is null', [
-      companyId,
-    ]),
-    pool.query('select config from bonus_rules where company_id = $1 order by created_at desc limit 1', [companyId]),
-    listServiceItemProductivity(pool, companyId),
-  ])
-
-  const project = projectRows.rows[0]
-  if (!project) throw new HttpError(404, 'project not found')
-
-  const laborRate = Number(project.labor_rate ?? 0)
-  const projectTarget =
-    project.target_sqft_per_hr != null && Number(project.target_sqft_per_hr) > 0
-      ? Number(project.target_sqft_per_hr)
-      : null
-
-  const bonusConfig = bonusRuleRows.rows[0]?.config as { target_sqft_per_hr?: number } | undefined
-  const bonusTarget =
-    bonusConfig?.target_sqft_per_hr != null && Number(bonusConfig.target_sqft_per_hr) > 0
-      ? Number(bonusConfig.target_sqft_per_hr)
-      : null
-
-  const productivityByCode = new Map<string, (typeof productivity.service_items)[number]>()
-  for (const item of productivity.service_items) {
-    productivityByCode.set(item.code, item)
-  }
-
-  const defaultRateByCode = new Map<string, number | null>()
-  for (const row of serviceItemRows.rows) {
-    const code = String(row.code)
-    const rate = row.default_rate == null ? null : Number(row.default_rate)
-    defaultRateByCode.set(code, Number.isFinite(rate ?? NaN) ? (rate as number) : null)
-  }
-
-  const forecast = normalized.map((m) => {
-    const stats = productivityByCode.get(m.service_item_code)
-    let rate: number | null = null
-    let basis: 'p50' | 'p90' | 'project_target' | 'bonus_rule_target' | 'default_rate' | 'no_data' = 'no_data'
-
-    if (stats && stats.samples >= 3 && stats.p50_quantity_per_hour && stats.p50_quantity_per_hour > 0) {
-      rate = stats.p50_quantity_per_hour
-      basis = 'p50'
-    } else if (projectTarget) {
-      rate = projectTarget
-      basis = 'project_target'
-    } else if (bonusTarget) {
-      rate = bonusTarget
-      basis = 'bonus_rule_target'
-    } else {
-      const defaultRate = defaultRateByCode.get(m.service_item_code) ?? null
-      if (defaultRate && defaultRate > 0) {
-        rate = defaultRate
-        basis = 'default_rate'
-      }
-    }
-
-    const projectedHours = rate && rate > 0 ? m.quantity / rate : null
-    const projectedCost = projectedHours != null ? projectedHours * laborRate : null
-
-    return {
-      service_item_code: m.service_item_code,
-      quantity: m.quantity,
-      projected_hours: projectedHours == null ? null : round2(projectedHours),
-      projected_cost: projectedCost == null ? null : round2(projectedCost),
-      basis,
-    }
-  })
-
-  return { forecast }
-}
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100
-}
+// forecastProjectHours / ForecastMeasurementInput / round2 moved to routes/estimate.ts.
 
 const server = http.createServer(async (req, res) => {
   const requestStartedAt = Date.now()
@@ -3110,8 +2831,8 @@ const server = http.createServer(async (req, res) => {
               // Estimate recompute is a separate side-effect that fans out to
               // estimate_lines; not inside the mutation tx because a recompute
               // failure must not roll back a successfully-recorded measurement.
-              const estimate = await createEstimateFromMeasurements(company.id, projectId)
-              const scopeVsBid = await getScopeVsBid(company.id, projectId)
+              const estimate = await createEstimateFromMeasurements(pool, company.id, projectId)
+              const scopeVsBid = await getScopeVsBid(pool, company.id, projectId)
               sendJson(res, 201, { measurement, estimate, scope_vs_bid: scopeVsBid })
               return
             }
@@ -3213,7 +2934,7 @@ const server = http.createServer(async (req, res) => {
                   createdRows.push(insertResult.rows[0])
                 }
 
-                const estimate = await createEstimateFromMeasurements(company.id, projectId, client)
+                const estimate = await createEstimateFromMeasurements(pool, company.id, projectId, client)
                 await recordMutationLedger(client, {
                   companyId: company.id,
                   entityType: 'takeoff_measurement',
@@ -3233,7 +2954,7 @@ const server = http.createServer(async (req, res) => {
                 })
                 return { createdRows, estimate }
               })
-              const scopeVsBid = await getScopeVsBid(company.id, projectId)
+              const scopeVsBid = await getScopeVsBid(pool, company.id, projectId)
               sendJson(res, 201, {
                 measurements: replaced.createdRows,
                 estimate: replaced.estimate,
@@ -3242,167 +2963,32 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/recompute$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              const estimate = await withMutationTx(async (client) => {
-                const computed = await createEstimateFromMeasurements(company.id, projectId, client)
-                if (!computed) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'estimate',
-                  entityId: projectId,
-                  action: 'recompute',
-                  syncPayload: { action: 'recompute', estimate: computed },
-                  outboxPayload: computed as Record<string, unknown>,
-                })
-                return computed
-              })
-              if (!estimate) {
-                sendJson(res, 404, { error: 'project not found' })
-                return
-              }
-              const scopeVsBid = await getScopeVsBid(company.id, projectId)
-              ;(estimate as { scope_vs_bid?: unknown }).scope_vs_bid = scopeVsBid
-              sendJson(res, 200, estimate)
-              return
-            }
-
-            if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\.pdf$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              const summary = await summarizeProject(pool, company.id, projectId)
-              if (!summary) {
-                sendJson(res, 404, { error: 'project not found' })
-                return
-              }
-              const pdfInput = buildEstimatePdfInputFromSummary({
-                company: { name: company.name, slug: company.slug },
-                summary,
-                appUrl: process.env.APP_PUBLIC_URL ?? 'https://sitelayer.sandolab.xyz',
-              })
-              const filename = `estimate-${summary.project.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80)}.pdf`
-              res.writeHead(200, {
-                'content-type': 'application/pdf',
-                'content-disposition': `attachment; filename="${filename}"`,
-                'cache-control': 'no-store',
-                'access-control-allow-origin': getCorsOrigin(req),
-                'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
-                'access-control-allow-headers': CORS_ALLOW_HEADERS,
-                'access-control-allow-credentials': 'true',
-                'x-request-id': getRequestContext()?.requestId ?? '',
-              })
-              await renderEstimatePdf(pdfInput, res)
-              return
-            }
-
-            if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/scope-vs-bid$/)) {
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              const result = await getScopeVsBid(company.id, projectId)
-              if (!result) {
-                sendJson(res, 404, { error: 'project not found' })
-                return
-              }
-              sendJson(res, 200, result)
-              return
-            }
-
-            {
-              const match = url.pathname.match(/^\/api\/service-items\/([^/]+)\/divisions$/)
-              if (match) {
-                const code = decodeURIComponent(match[1] ?? '')
-                if (req.method === 'GET') {
-                  const divisions = await listServiceItemDivisions(company.id, code)
-                  sendJson(res, 200, { service_item_code: code, divisions })
-                  return
-                }
-                if (req.method === 'PUT') {
-                  if (!requireRole(res, company, ['admin', 'office'], req)) return
-                  const body = await readBody(req)
-                  const rawCodes = Array.isArray(body.division_codes) ? body.division_codes : null
-                  if (!rawCodes) {
-                    sendJson(res, 400, { error: 'division_codes must be an array' })
-                    return
-                  }
-                  const divisionCodes = Array.from(
-                    new Set(
-                      rawCodes
-                        .map((value: unknown) => (typeof value === 'string' ? value.trim() : ''))
-                        .filter((value: string) => value.length > 0),
-                    ),
-                  )
-                  // Verify the service item exists for this company so we can
-                  // return a clean 404 rather than a FK error.
-                  const serviceItemExists = await pool.query<{ exists: boolean }>(
-                    `select exists(
-                       select 1 from service_items
-                        where company_id = $1 and code = $2 and deleted_at is null
-                     ) as exists`,
-                    [company.id, code],
-                  )
-                  if (!serviceItemExists.rows[0]?.exists) {
-                    sendJson(res, 404, { error: 'service item not found' })
-                    return
-                  }
-                  if (divisionCodes.length > 0) {
-                    const validDivisions = await pool.query<{ code: string }>(
-                      `select code from divisions where company_id = $1 and code = any($2::text[])`,
-                      [company.id, divisionCodes],
-                    )
-                    const validSet = new Set(validDivisions.rows.map((row) => row.code))
-                    const unknown = divisionCodes.filter((value) => !validSet.has(value))
-                    if (unknown.length > 0) {
-                      sendJson(res, 400, {
-                        error: 'one or more division_codes do not exist for this company',
-                        unknown,
-                      })
-                      return
-                    }
-                  }
-                  await withMutationTx(async (client) => {
-                    await client.query(
-                      `delete from service_item_divisions where company_id = $1 and service_item_code = $2`,
-                      [company.id, code],
-                    )
-                    if (divisionCodes.length > 0) {
-                      // Single multi-row INSERT replaces the previous
-                      // per-division round-trip. on conflict do nothing keeps
-                      // the migration idempotent if a division pair is
-                      // re-asserted between the delete and insert.
-                      await client.query(
-                        `insert into service_item_divisions (company_id, service_item_code, division_code)
-                         select $1::uuid, $2::text, division_code
-                         from unnest($3::text[]) as t(division_code)
-                         on conflict do nothing`,
-                        [company.id, code, divisionCodes],
-                      )
-                    }
-                    await recordSyncEvent(
-                      company.id,
-                      'service_item_divisions',
-                      code,
-                      { action: 'replace', divisions: divisionCodes },
-                      null,
-                      { executor: client },
-                    )
+            // Estimate routes (POST estimate/recompute, GET estimate/scope-vs-bid,
+            // GET estimate.pdf, POST estimate/forecast-hours, GET/PUT service-items/<code>/divisions)
+            // handled by the extracted route module. See routes/estimate.ts.
+            if (
+              await handleEstimateRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                sendPdf: async (contentDisposition, input) => {
+                  res.writeHead(200, {
+                    'content-type': 'application/pdf',
+                    'content-disposition': contentDisposition,
+                    'cache-control': 'no-store',
+                    'access-control-allow-origin': getCorsOrigin(req),
+                    'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
+                    'access-control-allow-headers': CORS_ALLOW_HEADERS,
+                    'access-control-allow-credentials': 'true',
+                    'x-request-id': getRequestContext()?.requestId ?? '',
                   })
-                  const divisions = await listServiceItemDivisions(company.id, code)
-                  sendJson(res, 200, { service_item_code: code, divisions })
-                  return
-                }
-              }
+                  await renderEstimatePdf(input, res)
+                },
+              })
+            ) {
+              return
             }
 
             // Analytics routes (GET /api/analytics, /history, /divisions,
@@ -3417,36 +3003,6 @@ const server = http.createServer(async (req, res) => {
                 sendJson: (status, body) => sendJson(res, status, body, req),
               })
             ) {
-              return
-            }
-
-            const forecastHoursMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/estimate\/forecast-hours$/)
-            if (req.method === 'POST' && forecastHoursMatch) {
-              const roleCheck = await pool.query<{ role: string }>(
-                'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
-                [company.id, identity.userId],
-              )
-              const role = roleCheck.rows[0]?.role ?? null
-              if (role !== 'admin' && role !== 'office') {
-                sendJson(res, 403, { error: 'admin or office role required' })
-                return
-              }
-              const projectId = forecastHoursMatch[1] ?? ''
-              if (!projectId || !isValidUuid(projectId)) {
-                sendJson(res, 400, { error: 'project id must be a valid uuid' })
-                return
-              }
-              const body = await readBody(req)
-              try {
-                const result = await forecastProjectHours(company.id, projectId, body)
-                sendJson(res, 200, result)
-              } catch (err) {
-                if (err instanceof HttpError) {
-                  sendJson(res, err.status, { error: err.message })
-                  return
-                }
-                throw err
-              }
               return
             }
 
