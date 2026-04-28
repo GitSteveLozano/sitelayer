@@ -1,7 +1,15 @@
 import { Sentry } from './instrument.js'
 import { loadAppConfig, postgresOptionsForTier, TierConfigError } from '@sitelayer/config'
 import { createLogger } from '@sitelayer/logger'
-import { fetchDueRentals, processQueueWithClient, processRentalInvoice, recordLedger } from '@sitelayer/queue'
+import {
+  fetchDueRentals,
+  processQueueWithClient,
+  processRentalBillingInvoicePush,
+  processRentalInvoice,
+  recordLedger,
+  type RentalBillingInvoicePushFn,
+  type RentalBillingInvoicePushSummary,
+} from '@sitelayer/queue'
 import { Pool, type PoolConfig } from 'pg'
 import { spanForAppliedRow } from './trace.js'
 import { loadEmailConfig, sendEmail } from './email.js'
@@ -317,6 +325,36 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
   return { processed, sent, failed, shortCircuited }
 }
 
+// Stub QBO Invoice push for the rental billing workflow. Returns a
+// deterministic synthetic id so the deterministic plumbing (route → outbox
+// → worker → POST_SUCCEEDED → state=posted) can be exercised end-to-end
+// without a live QBO connection. Real QBO Invoice REST integration is a
+// follow-up — see Phase C2 follow-up in the plan.
+//
+// When the live integration lands it should:
+//   1. Resolve the QBO connection via getIntegrationConnectionWithSecrets.
+//   2. Resolve customer + service-item mappings via integration_mappings.
+//   3. POST /v3/company/<realm>/invoice with a Line[] derived from payload.lines.
+//   4. Return the QBO Invoice.Id from the response.
+const stubRentalBillingInvoicePush: RentalBillingInvoicePushFn = async ({ runId }) => {
+  return { qbo_invoice_id: `STUB-INV-${runId.slice(0, 8)}-${Date.now()}` }
+}
+
+async function drainRentalBillingInvoicePushes(companyId: string): Promise<RentalBillingInvoicePushSummary> {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const summary = await processRentalBillingInvoicePush(client, companyId, stubRentalBillingInvoicePush, 5)
+    await client.query('commit')
+    return summary
+  } catch (error) {
+    await client.query('rollback').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 async function heartbeat(): Promise<{ idle: boolean }> {
   const companyId = await getCompanyId()
   if (!companyId) {
@@ -352,6 +390,12 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     return { processed: 0, billed: 0, skipped: 0, amount: 0 }
   })
 
+  const rentalBillingPushSummary = await drainRentalBillingInvoicePushes(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] rental billing invoice push drain failed')
+    Sentry.captureException(error, { tags: { scope: 'rental_billing_invoice_push' } })
+    return { processed: 0, posted: 0, failed: 0, skipped: 0 }
+  })
+
   if (pendingOutbox || pendingSyncEvents) {
     const processed = await processQueue(companyId)
     logger.info(
@@ -368,13 +412,17 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         rentals_billed: rentalSummary.billed,
         rentals_skipped: rentalSummary.skipped,
         rentals_billed_amount: rentalSummary.amount,
+        rental_billing_push_processed: rentalBillingPushSummary.processed,
+        rental_billing_push_posted: rentalBillingPushSummary.posted,
+        rental_billing_push_failed: rentalBillingPushSummary.failed,
+        rental_billing_push_skipped: rentalBillingPushSummary.skipped,
       },
       '[worker] tick',
     )
     return { idle: false }
   }
 
-  if (notifications.processed > 0 || rentalSummary.processed > 0) {
+  if (notifications.processed > 0 || rentalSummary.processed > 0 || rentalBillingPushSummary.processed > 0) {
     logger.info(
       {
         company_slug: activeCompanySlug,
@@ -385,6 +433,10 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         rentals_billed: rentalSummary.billed,
         rentals_skipped: rentalSummary.skipped,
         rentals_billed_amount: rentalSummary.amount,
+        rental_billing_push_processed: rentalBillingPushSummary.processed,
+        rental_billing_push_posted: rentalBillingPushSummary.posted,
+        rental_billing_push_failed: rentalBillingPushSummary.failed,
+        rental_billing_push_skipped: rentalBillingPushSummary.skipped,
       },
       '[worker] background tick',
     )

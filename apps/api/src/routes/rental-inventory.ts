@@ -1490,6 +1490,8 @@ export async function handleRentalInventoryRoutes(
            order by created_at asc`,
           [ctx.company.id, runId],
         )
+        // Audit/event ledger row keyed on state_version so each transition
+        // produces a distinct row (history-friendly).
         await recordMutationLedger(client, {
           companyId: ctx.company.id,
           entityType: 'rental_billing_run',
@@ -1498,6 +1500,32 @@ export async function handleRentalInventoryRoutes(
           row: updated,
           idempotencyKey: `rental_billing_run:event:${updated.id}:${updated.state_version}`,
         })
+        // POST_REQUESTED additionally enqueues a stable-keyed outbox row that
+        // the worker QBO-push handler claims. The key is per-run (NOT per
+        // state_version) so RETRY_POST → POST_REQUESTED replays the same key
+        // and the row's `on conflict do update` resets it to pending without
+        // creating duplicate work.
+        if (eventType === 'POST_REQUESTED') {
+          await recordMutationLedger(client, {
+            companyId: ctx.company.id,
+            entityType: 'rental_billing_run',
+            entityId: updated.id,
+            action: 'post_qbo_invoice',
+            mutationType: 'post_qbo_invoice',
+            row: updated,
+            outboxPayload: {
+              billing_run_id: updated.id,
+              contract_id: updated.contract_id,
+              project_id: updated.project_id,
+              customer_id: updated.customer_id,
+              period_start: updated.period_start,
+              period_end: updated.period_end,
+              subtotal: updated.subtotal,
+              lines: linesResult.rows,
+            },
+            idempotencyKey: `rental_billing_run:post:${updated.id}`,
+          })
+        }
         return { kind: 'ok' as const, run: updated, lines: linesResult.rows, eventType }
       })
 

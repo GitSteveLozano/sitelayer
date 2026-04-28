@@ -586,4 +586,40 @@ describeIntegration('API Integration Tests', () => {
     expect(result.status).toBe(400)
     expect(result.error).toMatch(/APPROVE/)
   })
+
+  it('POST_REQUESTED enqueues a stable-keyed mutation_outbox row for the worker', async () => {
+    if (!dbPool) return
+    const runId = await seedBillingRun()
+    if (!runId) return
+    // APPROVE first.
+    const approve = await apiCall<{ status: number; state_version?: number }>(
+      'POST',
+      `/api/rental-billing-runs/${runId}/events`,
+      { event: 'APPROVE', state_version: 1 },
+    )
+    expect(approve.status).toBe(200)
+    expect(approve.state_version).toBe(2)
+    // POST_REQUESTED.
+    const post = await apiCall<{ status: number; state?: string }>('POST', `/api/rental-billing-runs/${runId}/events`, {
+      event: 'POST_REQUESTED',
+      state_version: 2,
+    })
+    expect(post.status).toBe(200)
+    expect(post.state).toBe('posting')
+    // Outbox row must exist with the stable per-run key and post_qbo_invoice
+    // mutation_type, regardless of state_version. RETRY_POST replays should
+    // upsert this same row, not duplicate it.
+    const outboxRows = await dbPool.query<{
+      mutation_type: string
+      idempotency_key: string
+      status: string
+    }>(
+      `select mutation_type, idempotency_key, status from mutation_outbox
+       where entity_type = 'rental_billing_run' and entity_id = $1 and mutation_type = 'post_qbo_invoice'`,
+      [runId],
+    )
+    expect(outboxRows.rowCount).toBe(1)
+    expect(outboxRows.rows[0]?.idempotency_key).toBe(`rental_billing_run:post:${runId}`)
+    expect(['pending', 'processing', 'applied']).toContain(outboxRows.rows[0]?.status ?? '')
+  })
 })
