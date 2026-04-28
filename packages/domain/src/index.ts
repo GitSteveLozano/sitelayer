@@ -846,3 +846,287 @@ export function initialRentalNextInvoiceAt(deliveredOn: string, invoiceCadenceDa
   if (Number.isNaN(delivered.getTime())) return `${deliveredOn}T00:00:00.000Z`
   return `${formatISODate(addDaysUtc(delivered, cadence))}T00:00:00.000Z`
 }
+
+// ---------------------------------------------------------------------------
+// Job rental contracts (inventory replacement billing)
+// ---------------------------------------------------------------------------
+
+export type JobRentalRateUnit = 'day' | 'cycle' | 'week' | 'month' | 'each'
+
+export interface JobRentalContractForBilling {
+  billing_cycle_days: number
+  billing_start_date: string // YYYY-MM-DD
+  last_billed_through?: string | null // YYYY-MM-DD | null
+  next_billing_date?: string | null // YYYY-MM-DD | null
+}
+
+export interface JobRentalLineForBilling {
+  id: string
+  inventory_item_id?: string | null
+  item_code?: string | null
+  item_description?: string | null
+  quantity: number | string
+  agreed_rate: number | string
+  rate_unit: string
+  on_rent_date: string // YYYY-MM-DD
+  off_rent_date?: string | null // YYYY-MM-DD | null
+  last_billed_through?: string | null // YYYY-MM-DD | null
+  billable?: boolean | null
+  taxable?: boolean | null
+  status?: string | null
+}
+
+export interface JobRentalBillingLineResult {
+  line_id: string
+  inventory_item_id: string | null
+  quantity: number
+  agreed_rate: number
+  rate_unit: JobRentalRateUnit
+  billable_days: number
+  period_start: string
+  period_end: string
+  amount: number
+  taxable: boolean
+  description: string
+}
+
+export interface JobRentalBillingRunResult {
+  period_start: string
+  period_end: string
+  due_date: string
+  next_billing_date: string
+  billing_cycle_days: number
+  is_due: boolean
+  subtotal: number
+  lines: JobRentalBillingLineResult[]
+}
+
+function maxISODate(values: readonly string[]): string {
+  return values.reduce((max, value) => (parseISODate(value).getTime() > parseISODate(max).getTime() ? value : max))
+}
+
+function minISODate(values: readonly string[]): string {
+  return values.reduce((min, value) => (parseISODate(value).getTime() < parseISODate(min).getTime() ? value : min))
+}
+
+function normalizeRentalRateUnit(value: string): JobRentalRateUnit {
+  if (value === 'cycle' || value === 'week' || value === 'month' || value === 'each') return value
+  return 'day'
+}
+
+function calculateJobRentalLineAmount(input: {
+  quantity: number
+  agreedRate: number
+  rateUnit: JobRentalRateUnit
+  billableDays: number
+  cycleDays: number
+}): number {
+  const { quantity, agreedRate, rateUnit, billableDays, cycleDays } = input
+  let amount = 0
+  if (rateUnit === 'day') amount = quantity * agreedRate * billableDays
+  if (rateUnit === 'cycle') amount = quantity * agreedRate * (billableDays / cycleDays)
+  if (rateUnit === 'week') amount = quantity * agreedRate * (billableDays / 7)
+  if (rateUnit === 'month') amount = quantity * agreedRate * (billableDays / 30)
+  if (rateUnit === 'each') amount = quantity * agreedRate
+  return roundMoney(amount)
+}
+
+/**
+ * Compute the first billing date for a job rental contract. A 25-day cycle
+ * starting 2026-04-01 covers 2026-04-01 through 2026-04-25 and becomes due
+ * on 2026-04-26.
+ */
+export function initialJobRentalNextBillingDate(billingStartDate: string, billingCycleDays: number): string {
+  const cadence = Math.max(1, Math.floor(Number(billingCycleDays) || 25))
+  const start = parseISODate(billingStartDate)
+  if (Number.isNaN(start.getTime())) return billingStartDate
+  return formatISODate(addDaysUtc(start, cadence))
+}
+
+/**
+ * Preview the next job-level rental billing run.
+ *
+ * The contract defines the billing window. Each line is independently clipped
+ * by on/off-rent dates and its own last-billed-through marker so repeated runs
+ * cannot double-bill the same line-period.
+ */
+export function calculateJobRentalBillingRun(
+  contract: JobRentalContractForBilling,
+  lines: readonly JobRentalLineForBilling[],
+  referenceDate: string = formatISODate(new Date()),
+): JobRentalBillingRunResult {
+  const cycleDays = Math.max(1, Math.floor(Number(contract.billing_cycle_days) || 25))
+  const periodStart = contract.last_billed_through
+    ? formatISODate(addDaysUtc(parseISODate(contract.last_billed_through), 1))
+    : contract.billing_start_date
+  const periodEnd = formatISODate(addDaysUtc(parseISODate(periodStart), cycleDays - 1))
+  const dueDate = formatISODate(addDaysUtc(parseISODate(periodEnd), 1))
+  const nextBillingDate = formatISODate(addDaysUtc(parseISODate(periodEnd), cycleDays + 1))
+  const isDue = parseISODate(referenceDate).getTime() >= parseISODate(dueDate).getTime()
+
+  const billableLines: JobRentalBillingLineResult[] = []
+  for (const line of lines) {
+    if (line.billable === false) continue
+    if (line.status === 'void' || line.status === 'cancelled') continue
+
+    const quantity = Number(line.quantity) || 0
+    const agreedRate = Number(line.agreed_rate) || 0
+    if (quantity <= 0 || agreedRate < 0) continue
+
+    const startCandidates = [periodStart, line.on_rent_date]
+    if (line.last_billed_through)
+      startCandidates.push(formatISODate(addDaysUtc(parseISODate(line.last_billed_through), 1)))
+    const effectiveStart = maxISODate(startCandidates)
+
+    const endCandidates = [periodEnd]
+    if (line.off_rent_date) endCandidates.push(line.off_rent_date)
+    const effectiveEnd = minISODate(endCandidates)
+
+    if (parseISODate(effectiveEnd).getTime() < parseISODate(effectiveStart).getTime()) continue
+
+    const billableDays = diffDaysUtc(effectiveEnd, effectiveStart) + 1
+    const rateUnit = normalizeRentalRateUnit(String(line.rate_unit ?? 'day'))
+    const amount = calculateJobRentalLineAmount({
+      quantity,
+      agreedRate,
+      rateUnit,
+      billableDays,
+      cycleDays,
+    })
+
+    if (amount <= 0) continue
+
+    const label = [line.item_code, line.item_description].filter(Boolean).join(' - ') || 'Rental item'
+    billableLines.push({
+      line_id: line.id,
+      inventory_item_id: line.inventory_item_id ?? null,
+      quantity,
+      agreed_rate: agreedRate,
+      rate_unit: rateUnit,
+      billable_days: billableDays,
+      period_start: effectiveStart,
+      period_end: effectiveEnd,
+      amount,
+      taxable: line.taxable !== false,
+      description: `${label} (${effectiveStart} to ${effectiveEnd}, ${billableDays} day${
+        billableDays === 1 ? '' : 's'
+      }, qty ${quantity})`,
+    })
+  }
+
+  const subtotal = roundMoney(billableLines.reduce((sum, line) => sum + line.amount, 0))
+  return {
+    period_start: periodStart,
+    period_end: periodEnd,
+    due_date: dueDate,
+    next_billing_date: nextBillingDate,
+    billing_cycle_days: cycleDays,
+    is_due: isDue,
+    subtotal,
+    lines: billableLines,
+  }
+}
+
+export type RentalBillingWorkflowState = 'generated' | 'approved' | 'posting' | 'posted' | 'failed' | 'voided'
+
+export type RentalBillingWorkflowEvent =
+  | { type: 'APPROVE'; approved_at: string; approved_by: string }
+  | { type: 'POST_REQUESTED' }
+  | { type: 'POST_SUCCEEDED'; posted_at: string; qbo_invoice_id: string }
+  | { type: 'POST_FAILED'; failed_at: string; error: string }
+  | { type: 'RETRY_POST' }
+  | { type: 'VOID' }
+
+export interface RentalBillingWorkflowSnapshot {
+  state: RentalBillingWorkflowState
+  state_version: number
+  approved_at?: string | null
+  approved_by?: string | null
+  posted_at?: string | null
+  failed_at?: string | null
+  error?: string | null
+  qbo_invoice_id?: string | null
+}
+
+function assertRentalBillingTransition(
+  state: RentalBillingWorkflowState,
+  allowed: readonly RentalBillingWorkflowState[],
+  eventType: string,
+): void {
+  if (!allowed.includes(state)) {
+    throw new Error(`event ${eventType} is not allowed from rental billing state ${state}`)
+  }
+}
+
+/**
+ * Pure transition reducer for rental billing runs. It intentionally has no
+ * wall-clock reads, random ids, network calls, or DB access so the same
+ * transition table can be used from an API handler, XState machine, or
+ * Temporal workflow activity boundary.
+ */
+export function transitionRentalBillingWorkflow(
+  snapshot: RentalBillingWorkflowSnapshot,
+  event: RentalBillingWorkflowEvent,
+): RentalBillingWorkflowSnapshot {
+  const nextVersion = snapshot.state_version + 1
+  if (event.type === 'APPROVE') {
+    assertRentalBillingTransition(snapshot.state, ['generated'], event.type)
+    return {
+      ...snapshot,
+      state: 'approved',
+      state_version: nextVersion,
+      approved_at: event.approved_at,
+      approved_by: event.approved_by,
+      error: null,
+      failed_at: null,
+    }
+  }
+  if (event.type === 'POST_REQUESTED') {
+    assertRentalBillingTransition(snapshot.state, ['approved', 'failed'], event.type)
+    return {
+      ...snapshot,
+      state: 'posting',
+      state_version: nextVersion,
+      error: null,
+      failed_at: null,
+    }
+  }
+  if (event.type === 'POST_SUCCEEDED') {
+    assertRentalBillingTransition(snapshot.state, ['posting'], event.type)
+    return {
+      ...snapshot,
+      state: 'posted',
+      state_version: nextVersion,
+      posted_at: event.posted_at,
+      qbo_invoice_id: event.qbo_invoice_id,
+      error: null,
+      failed_at: null,
+    }
+  }
+  if (event.type === 'POST_FAILED') {
+    assertRentalBillingTransition(snapshot.state, ['posting'], event.type)
+    return {
+      ...snapshot,
+      state: 'failed',
+      state_version: nextVersion,
+      failed_at: event.failed_at,
+      error: event.error,
+    }
+  }
+  if (event.type === 'RETRY_POST') {
+    assertRentalBillingTransition(snapshot.state, ['failed'], event.type)
+    return {
+      ...snapshot,
+      state: 'approved',
+      state_version: nextVersion,
+      error: null,
+      failed_at: null,
+    }
+  }
+  assertRentalBillingTransition(snapshot.state, ['generated', 'approved', 'failed'], event.type)
+  return {
+    ...snapshot,
+    state: 'voided',
+    state_version: nextVersion,
+  }
+}
