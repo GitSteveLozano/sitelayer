@@ -37,6 +37,7 @@ import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigEr
 import { validateQboStateSecret } from './qbo-config.js'
 import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './auth-types.js'
 import { handleCustomerRoutes } from './routes/customers.js'
+import { handleWorkerRoutes } from './routes/workers.js'
 import {
   CORS_ALLOW_HEADERS,
   HttpError,
@@ -1450,13 +1451,7 @@ function assertServiceItemCatalogStatus(companyId: string, serviceItemCode: stri
 
 // listCustomers moved to routes/customers.ts.
 
-async function listWorkers(companyId: string) {
-  const result = await pool.query(
-    'select id, name, role, version, deleted_at, created_at from workers where company_id = $1 and deleted_at is null order by name asc',
-    [companyId],
-  )
-  return result.rows
-}
+// listWorkers moved to routes/workers.ts.
 
 async function listDivisions(companyId: string) {
   const result = await pool.query(
@@ -2593,8 +2588,21 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'GET' && url.pathname === '/api/workers') {
-              sendJson(res, 200, { workers: await listWorkers(company.id) })
+            // Worker routes (GET /api/workers, POST/PATCH/DELETE
+            // /api/workers[/<id>]) are handled by the extracted route
+            // module. Same SQL, role gates, and ledger writes — just
+            // relocated. See routes/workers.ts.
+            if (
+              await handleWorkerRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
+              })
+            ) {
               return
             }
 
@@ -3854,126 +3862,6 @@ const server = http.createServer(async (req, res) => {
                 [company.id, limit],
               )
               sendJson(res, 200, { outbox: result.rows })
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname === '/api/workers') {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const body = await readBody(req)
-              const name = String(body.name ?? '').trim()
-              if (!name) {
-                sendJson(res, 400, { error: 'name is required' })
-                return
-              }
-              const worker = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        insert into workers (company_id, name, role)
-        values ($1, $2, $3)
-        returning id, name, role, version, deleted_at, created_at
-        `,
-                  [company.id, name, body.role ?? 'crew'],
-                )
-                const row = result.rows[0]
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'worker',
-                  entityId: row.id,
-                  action: 'create',
-                  row,
-                })
-                return row
-              })
-              sendJson(res, 201, worker)
-              return
-            }
-
-            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/workers\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const workerId = url.pathname.split('/')[3] ?? ''
-              if (!workerId) {
-                sendJson(res, 400, { error: 'worker id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const updated = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update workers
-        set
-          name = coalesce($3, name),
-          role = coalesce($4, role),
-          version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null and ($5::int is null or version = $5)
-        returning id, name, role, version, deleted_at, created_at
-        `,
-                  [company.id, workerId, body.name ?? null, body.role ?? null, expectedVersion],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'worker',
-                  entityId: workerId,
-                  action: 'update',
-                  row,
-                })
-                return row
-              })
-              if (!updated) {
-                if (
-                  !(await checkVersion(
-                    'workers',
-                    'company_id = $1 and id = $2 and deleted_at is null',
-                    [company.id, workerId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'worker not found' })
-                return
-              }
-              sendJson(res, 200, updated)
-              return
-            }
-
-            if (req.method === 'DELETE' && url.pathname.match(/^\/api\/workers\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const workerId = url.pathname.split('/')[3] ?? ''
-              if (!workerId) {
-                sendJson(res, 400, { error: 'worker id is required' })
-                return
-              }
-              const deleted = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update workers
-        set deleted_at = now(), version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null
-        returning id, name, role, version, deleted_at, created_at
-        `,
-                  [company.id, workerId],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'worker',
-                  entityId: workerId,
-                  action: 'delete',
-                  row,
-                })
-                return row
-              })
-              if (!deleted) {
-                sendJson(res, 404, { error: 'worker not found' })
-                return
-              }
-              sendJson(res, 200, deleted)
               return
             }
 
