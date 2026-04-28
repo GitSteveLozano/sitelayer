@@ -9,20 +9,13 @@ import {
   registerClerkTokenProvider,
   setStoredCompanySlug,
 } from './api.js'
-import type {
-  BlueprintRow,
-  FeaturesResponse,
-  MaterialBillRow,
-  MeasurementRow,
-  ProjectSummary,
-  ScheduleRow,
-  SessionResponse,
-} from './api.js'
+import type { FeaturesResponse, ScheduleRow, SessionResponse } from './api.js'
 import { CompanySwitcher } from './components/company-switcher.js'
 import { EnvironmentRibbon } from './components/environment-ribbon.js'
 import { SyncStatusBadge } from './components/sync-status-badge.js'
 import { useBootstrapRefresh } from './machines/bootstrap-refresh.js'
 import { useOfflineReplay } from './machines/offline-replay.js'
+import { useProjectSelection } from './machines/project-selection.js'
 import { Button } from './components/ui/button.js'
 import {
   Dialog,
@@ -188,14 +181,22 @@ function AppShell() {
     setActionError,
     clearError,
   } = useBootstrapRefresh(companySlug)
-  const [summary, setSummary] = useState<ProjectSummary | null>(null)
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
-  const [selectedBlueprintId, setSelectedBlueprintId] = useState<string>('')
+  // The project-selection XState machine owns the per-project fan-out
+  // (summary, blueprints, measurements, materialBills, schedules,
+  // selectedBlueprintId). See machines/project-selection.ts.
+  const {
+    summary,
+    blueprints,
+    measurements,
+    materialBills,
+    schedules,
+    selectedBlueprintId,
+    refresh: refreshProject,
+    setSelectedBlueprintId,
+    error: projectError,
+  } = useProjectSelection(companySlug, selectedProjectId)
   const [busy, setBusy] = useState<string | null>(null)
-  const [blueprints, setBlueprints] = useState<BlueprintRow[]>([])
-  const [measurements, setMeasurements] = useState<MeasurementRow[]>([])
-  const [schedules, setSchedules] = useState<ScheduleRow[]>([])
-  const [materialBills, setMaterialBills] = useState<MaterialBillRow[]>([])
   // Offline-replay XState machine owns the offline queue depth, replay loop,
   // and online event listener. See machines/offline-replay.ts.
   const { offlineQueue } = useOfflineReplay(companySlug)
@@ -253,8 +254,8 @@ function AppShell() {
 
   useEffect(() => {
     setSelectedProjectId('')
-    setSummary(null)
-    // The hook auto-refreshes on companySlug change; no manual trigger here.
+    // Project-selection machine resets summary/blueprints/measurements/etc.
+    // automatically on COMPANY_CHANGED.
   }, [companySlug])
 
   // Auto-pick the first project when bootstrap data arrives and nothing is
@@ -268,58 +269,27 @@ function AppShell() {
   // `sitelayer:offline-queue` event handler, and the 15s timer are all owned
   // by useOfflineReplay (see machines/offline-replay.ts).
 
-  const refreshSummary = useCallback(
-    async (projectId: string) => {
-      if (!projectId) {
-        setSummary(null)
-        return
-      }
-      const data = await apiGet<ProjectSummary>(`/api/projects/${projectId}/summary`, companySlug)
-      setSummary(data)
-    },
-    [companySlug],
-  )
-
-  const refreshTakeoff = useCallback(
-    async (projectId: string) => {
-      if (!projectId) {
-        setBlueprints([])
-        setMeasurements([])
-        setSchedules([])
-        setMaterialBills([])
-        setSelectedBlueprintId('')
-        return
-      }
-      const [blueprintData, measurementData, billData] = await Promise.all([
-        apiGet<{ blueprints: BlueprintRow[] }>(`/api/projects/${projectId}/blueprints`, companySlug),
-        apiGet<{ measurements: MeasurementRow[] }>(`/api/projects/${projectId}/takeoff/measurements`, companySlug),
-        apiGet<{ materialBills: MaterialBillRow[] }>(`/api/projects/${projectId}/material-bills`, companySlug),
-      ])
-      setBlueprints(blueprintData.blueprints)
-      setMeasurements(measurementData.measurements)
-      setMaterialBills(billData.materialBills)
-      setSelectedBlueprintId((current) =>
-        current && blueprintData.blueprints.some((blueprint) => blueprint.id === current)
-          ? current
-          : (blueprintData.blueprints[0]?.id ?? ''),
-      )
-      const scheduleData = await apiGet<{ schedules: ScheduleRow[] }>(
-        `/api/projects/${projectId}/schedules`,
-        companySlug,
-      )
-      setSchedules(scheduleData.schedules)
-    },
-    [companySlug],
-  )
-
+  // Surface project-fetch errors into the same banner as bootstrap errors.
   useEffect(() => {
-    void refreshSummary(selectedProjectId).catch((caught: unknown) => {
-      setActionError(caught instanceof Error ? caught.message : 'unknown error')
-    })
-    void refreshTakeoff(selectedProjectId).catch((caught: unknown) => {
-      setActionError(caught instanceof Error ? caught.message : 'unknown error')
-    })
-  }, [refreshSummary, refreshTakeoff, selectedProjectId, setActionError])
+    if (projectError) setActionError(projectError)
+  }, [projectError, setActionError])
+
+  // refreshSummary / refreshTakeoff used to be useCallbacks driving the
+  // per-project fan-out. The project-selection machine owns that now;
+  // these wrappers preserve the call shape for legacy view-prop wiring
+  // until the views are updated to read state directly.
+  const refreshSummary = useCallback(
+    async (_projectId: string) => {
+      refreshProject()
+    },
+    [refreshProject],
+  )
+  const refreshTakeoff = useCallback(
+    async (_projectId: string) => {
+      refreshProject()
+    },
+    [refreshProject],
+  )
 
   // Fetch bootstrap data across all visible schedules so /confirm can
   // aggregate today's schedules without needing a project to be selected.
