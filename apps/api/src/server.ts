@@ -37,6 +37,7 @@ import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigEr
 import { validateQboStateSecret } from './qbo-config.js'
 import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './auth-types.js'
 import { handleCustomerRoutes } from './routes/customers.js'
+import { handlePricingProfileRoutes } from './routes/pricing-profiles.js'
 import { handleWorkerRoutes } from './routes/workers.js'
 import {
   CORS_ALLOW_HEADERS,
@@ -44,6 +45,7 @@ import {
   getCorsOrigin as getCorsOriginImpl,
   isValidDateInput,
   isValidUuid,
+  parseConfigPayload,
   parseExpectedVersion,
   parseOptionalNumber,
   readBody as readBodyImpl,
@@ -1461,13 +1463,7 @@ async function listDivisions(companyId: string) {
   return result.rows
 }
 
-async function listPricingProfiles(companyId: string) {
-  const result = await pool.query(
-    'select id, name, is_default, config, version, created_at from pricing_profiles where company_id = $1 order by created_at asc',
-    [companyId],
-  )
-  return result.rows
-}
+// listPricingProfiles moved to routes/pricing-profiles.ts.
 
 async function listAuditEvents(
   companyId: string,
@@ -1518,16 +1514,7 @@ async function listBonusRules(companyId: string) {
   return result.rows
 }
 
-function parseConfigPayload(value: unknown) {
-  if (value === undefined || value === null || value === '') return {}
-  if (typeof value === 'object') return value as Record<string, unknown>
-  if (typeof value === 'string') {
-    const trimmed = value.trim()
-    if (!trimmed) return {}
-    return JSON.parse(trimmed) as Record<string, unknown>
-  }
-  return {}
-}
+// parseConfigPayload moved to http-utils.ts.
 
 type PreparedTakeoffMeasurementInput = {
   serviceItemCode: string
@@ -2611,8 +2598,20 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'GET' && url.pathname === '/api/pricing-profiles') {
-              sendJson(res, 200, { pricingProfiles: await listPricingProfiles(company.id) })
+            // Pricing-profile routes (GET/POST /api/pricing-profiles,
+            // PATCH/DELETE /api/pricing-profiles/<id>) are handled by the
+            // extracted route module. See routes/pricing-profiles.ts.
+            if (
+              await handlePricingProfileRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
+              })
+            ) {
               return
             }
 
@@ -3503,175 +3502,6 @@ const server = http.createServer(async (req, res) => {
                 }
               }
               sendJson(res, 200, { synced, errors, total_candidates: unsynced.rowCount ?? 0 })
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname === '/api/pricing-profiles') {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const body = await readBody(req)
-              const name = String(body.name ?? '').trim()
-              if (!name) {
-                sendJson(res, 400, { error: 'name is required' })
-                return
-              }
-              let config: Record<string, unknown>
-              try {
-                config = parseConfigPayload(body.config ?? body.config_json)
-              } catch {
-                sendJson(res, 400, { error: 'config must be valid json' })
-                return
-              }
-              const profile = await withMutationTx(async (client) => {
-                // Clear previous default inside the same tx so we never leave
-                // the company with zero defaults if the INSERT below fails.
-                if (body.is_default) {
-                  await client.query('update pricing_profiles set is_default = false where company_id = $1', [
-                    company.id,
-                  ])
-                }
-                const result = await client.query(
-                  `
-        insert into pricing_profiles (company_id, name, is_default, config, version)
-        values ($1, $2, coalesce($3, false), $4::jsonb, 1)
-        returning id, name, is_default, config, version, created_at
-        `,
-                  [company.id, name, body.is_default ?? false, JSON.stringify(config)],
-                )
-                const row = result.rows[0]
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'pricing_profile',
-                  entityId: row.id,
-                  action: 'create',
-                  row,
-                  syncPayload: { action: 'create', pricingProfile: row },
-                })
-                return row
-              })
-              sendJson(res, 201, profile)
-              return
-            }
-
-            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/pricing-profiles\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const pricingProfileId = url.pathname.split('/')[3] ?? ''
-              if (!pricingProfileId) {
-                sendJson(res, 400, { error: 'pricing profile id is required' })
-                return
-              }
-              const body = await readBody(req)
-              let config: Record<string, unknown> | null = null
-              if (body.config !== undefined || body.config_json !== undefined) {
-                try {
-                  config = parseConfigPayload(body.config ?? body.config_json)
-                } catch {
-                  sendJson(res, 400, { error: 'config must be valid json' })
-                  return
-                }
-              }
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const updated = await withMutationTx(async (client) => {
-                if (body.is_default) {
-                  await client.query(
-                    'update pricing_profiles set is_default = false where company_id = $1 and id <> $2',
-                    [company.id, pricingProfileId],
-                  )
-                }
-                const result = await client.query(
-                  `
-        update pricing_profiles
-        set
-          name = coalesce($3, name),
-          is_default = coalesce($4, is_default),
-          config = coalesce($5::jsonb, config),
-          version = version + 1
-        where company_id = $1 and id = $2 and ($6::int is null or version = $6)
-        returning id, name, is_default, config, version, created_at
-        `,
-                  [
-                    company.id,
-                    pricingProfileId,
-                    body.name ?? null,
-                    body.is_default ?? null,
-                    config ? JSON.stringify(config) : null,
-                    expectedVersion,
-                  ],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'pricing_profile',
-                  entityId: pricingProfileId,
-                  action: 'update',
-                  row,
-                  syncPayload: { action: 'update', pricingProfile: row },
-                })
-                return row
-              })
-              if (!updated) {
-                if (
-                  !(await checkVersion(
-                    'pricing_profiles',
-                    'company_id = $1 and id = $2',
-                    [company.id, pricingProfileId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'pricing profile not found' })
-                return
-              }
-              sendJson(res, 200, updated)
-              return
-            }
-
-            if (req.method === 'DELETE' && url.pathname.match(/^\/api\/pricing-profiles\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const pricingProfileId = url.pathname.split('/')[3] ?? ''
-              if (!pricingProfileId) {
-                sendJson(res, 400, { error: 'pricing profile id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const deleted = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  'delete from pricing_profiles where company_id = $1 and id = $2 and ($3::int is null or version = $3) returning id, name, is_default, config, version, created_at',
-                  [company.id, pricingProfileId, expectedVersion],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'pricing_profile',
-                  entityId: pricingProfileId,
-                  action: 'delete',
-                  row,
-                  syncPayload: { action: 'delete', pricingProfile: row },
-                })
-                return row
-              })
-              if (!deleted) {
-                if (
-                  !(await checkVersion(
-                    'pricing_profiles',
-                    'company_id = $1 and id = $2',
-                    [company.id, pricingProfileId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'pricing profile not found' })
-                return
-              }
-              sendJson(res, 200, deleted)
               return
             }
 
