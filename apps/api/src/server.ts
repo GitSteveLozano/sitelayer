@@ -32,6 +32,7 @@ import { handleBonusRuleRoutes } from './routes/bonus-rules.js'
 import { handleClockRoutes } from './routes/clock.js'
 import { handleCustomerRoutes } from './routes/customers.js'
 import { handleLaborEntryRoutes } from './routes/labor-entries.js'
+import { handleMaterialBillRoutes } from './routes/material-bills.js'
 import { handlePricingProfileRoutes } from './routes/pricing-profiles.js'
 import { handleQboMappingRoutes } from './routes/qbo-mappings.js'
 import { handleRentalRoutes } from './routes/rentals.js'
@@ -3190,211 +3191,20 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/material-bills$/)) {
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              const result = await pool.query(
-                `
-        select id, project_id, vendor_name as vendor, amount, bill_type, description, occurred_on, version, deleted_at, created_at
-        from material_bills
-        where company_id = $1 and project_id = $2 and deleted_at is null
-        order by occurred_on desc, created_at desc
-        `,
-                [company.id, projectId],
-              )
-              sendJson(res, 200, { materialBills: result.rows })
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/material-bills$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              const body = await readBody(req)
-              if (!body.vendor || body.amount === undefined || !body.bill_type) {
-                sendJson(res, 400, { error: 'vendor, amount, and bill_type are required' })
-                return
-              }
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              if (expectedVersion !== null) {
-                const projectVersionResult = await pool.query(
-                  'select version from projects where company_id = $1 and id = $2',
-                  [company.id, projectId],
-                )
-                const currentProject = projectVersionResult.rows[0]
-                if (!currentProject) {
-                  sendJson(res, 404, { error: 'project not found' })
-                  return
-                }
-                if (Number(currentProject.version) !== expectedVersion) {
-                  sendJson(res, 409, { error: 'version conflict', current_version: Number(currentProject.version) })
-                  return
-                }
-              }
-              const bill = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        insert into material_bills (company_id, project_id, vendor_name, amount, bill_type, description, occurred_on)
-        values ($1, $2, $3, $4, $5, $6, coalesce($7, now()::date))
-        returning id, project_id, vendor_name as vendor, amount, bill_type, description, occurred_on, version, deleted_at, created_at
-        `,
-                  [
-                    company.id,
-                    projectId,
-                    body.vendor,
-                    body.amount,
-                    body.bill_type,
-                    body.description ?? null,
-                    body.occurred_on ?? null,
-                  ],
-                )
-                const row = result.rows[0]
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'material_bill',
-                  entityId: row.id,
-                  action: 'create',
-                  row,
-                  syncPayload: { action: 'create', bill: row },
-                })
-                await client.query(
-                  'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
-                  [company.id, projectId],
-                )
-                return row
+            // Material-bill routes (GET/POST /api/projects/<id>/material-bills,
+            // PATCH/DELETE /api/material-bills/<id>) handled by the extracted
+            // route module. See routes/material-bills.ts.
+            if (
+              await handleMaterialBillRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
               })
-              sendJson(res, 201, bill)
-              return
-            }
-
-            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/material-bills\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const billId = url.pathname.split('/')[3] ?? ''
-              if (!billId) {
-                sendJson(res, 400, { error: 'bill id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const updated = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update material_bills
-        set
-          vendor_name = coalesce($3, vendor_name),
-          amount = coalesce($4, amount),
-          bill_type = coalesce($5, bill_type),
-          description = coalesce($6, description),
-          occurred_on = coalesce($7, occurred_on),
-          version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null and ($8::int is null or version = $8)
-        returning id, project_id, vendor_name as vendor, amount, bill_type, description, occurred_on, version, deleted_at, created_at
-        `,
-                  [
-                    company.id,
-                    billId,
-                    body.vendor ?? null,
-                    body.amount ?? null,
-                    body.bill_type ?? null,
-                    body.description ?? null,
-                    body.occurred_on ?? null,
-                    expectedVersion,
-                  ],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'material_bill',
-                  entityId: billId,
-                  action: 'update',
-                  row,
-                  syncPayload: { action: 'update', bill: row },
-                })
-                await client.query(
-                  'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
-                  [company.id, row.project_id],
-                )
-                return row
-              })
-              if (!updated) {
-                if (
-                  !(await checkVersion(
-                    'material_bills',
-                    'company_id = $1 and id = $2',
-                    [company.id, billId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'bill not found' })
-                return
-              }
-              sendJson(res, 200, updated)
-              return
-            }
-
-            if (req.method === 'DELETE' && url.pathname.match(/^\/api\/material-bills\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const billId = url.pathname.split('/')[3] ?? ''
-              if (!billId) {
-                sendJson(res, 400, { error: 'bill id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const deleted = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update material_bills
-        set deleted_at = now(), version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null and ($3::int is null or version = $3)
-        returning id, project_id, vendor_name as vendor, amount, bill_type, description, occurred_on, version, deleted_at, created_at
-        `,
-                  [company.id, billId, expectedVersion],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'material_bill',
-                  entityId: billId,
-                  action: 'delete',
-                  row,
-                  syncPayload: { action: 'delete', bill: row },
-                })
-                await client.query(
-                  'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
-                  [company.id, row.project_id],
-                )
-                return row
-              })
-              if (!deleted) {
-                if (
-                  !(await checkVersion(
-                    'material_bills',
-                    'company_id = $1 and id = $2',
-                    [company.id, billId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'bill not found' })
-                return
-              }
-              sendJson(res, 200, deleted)
+            ) {
               return
             }
 
