@@ -892,3 +892,79 @@ export async function startQboOAuth(companySlug: string) {
   if (!payload.authUrl) throw new Error('QBO auth URL was not returned')
   window.location.assign(payload.authUrl)
 }
+
+// ── Inventory ────────────────────────────────────────────────────────────────
+
+export type InventoryItemRow = {
+  id: string
+  company_id: string
+  part_number: string
+  name: string
+  description: string | null
+  category: string | null
+  unit: string
+  rate_25day: number
+  rate_daily: number
+  rate_weekly: number
+  replacement_cost: number
+  total_stock: number
+  is_active: boolean
+  metadata: Record<string, unknown>
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export type InventoryAvailRow = {
+  item_id: string
+  part_number: string
+  name: string
+  category: string | null
+  total_stock: number
+  qty_on_rent: number
+  qty_available: number
+}
+
+export async function listInventory(companySlug: string): Promise<{ items: InventoryItemRow[] }> {
+  return apiGet<{ items: InventoryItemRow[] }>('/api/inventory', companySlug)
+}
+
+export async function listInventoryAvailability(companySlug: string): Promise<{ items: InventoryAvailRow[] }> {
+  return apiGet<{ items: InventoryAvailRow[] }>('/api/inventory?availability=1', companySlug)
+}
+
+export type CreateInventoryInput = {
+  part_number: string
+  name: string
+  description?: string | null
+  category?: string | null
+  unit?: string
+  rate_25day?: number
+  rate_daily?: number
+  rate_weekly?: number
+  replacement_cost?: number
+  total_stock?: number
+}
+
+export async function createInventoryItem(input: CreateInventoryInput, companySlug: string): Promise<InventoryItemRow> {
+  return apiPost<InventoryItemRow>('/api/inventory', input, companySlug)
+}
+
+export async function updateInventoryItem(
+  id: string,
+  input: Partial<CreateInventoryInput & { is_active: boolean; expected_version: number }>,
+  companySlug: string,
+): Promise<InventoryItemRow> {
+  return apiPatch<InventoryItemRow>(`/api/inventory/${id}`, input, companySlug)
+}
+
+export async function deleteInventoryItem(id: string, companySlug: string): Promise<void> {
+  return apiDelete(`/api/inventory/${id}`, companySlug)
+}
+
+export async function importInventoryItems(
+  items: CreateInventoryInput[],
+  companySlug: string,
+): Promise<{ imported: number }> {
+  return apiPost<{ imported: number }>('/api/inventory/import', { items }, companySlug)
+}

@@ -34,6 +34,7 @@ import { handleMaterialBillRoutes } from './routes/material-bills.js'
 import { handlePricingProfileRoutes } from './routes/pricing-profiles.js'
 import { handleQboMappingRoutes } from './routes/qbo-mappings.js'
 import { handleRentalRoutes } from './routes/rentals.js'
+import { handleInventoryRoutes } from './routes/inventory.js'
 import { handleScheduleRoutes } from './routes/schedules.js'
 import { handleTakeoffMeasurementRoutes } from './routes/takeoff-measurements.js'
 import { handleServiceItemRoutes } from './routes/service-items.js'
@@ -3227,6 +3228,21 @@ const server = http.createServer(async (req, res) => {
             // routes/rentals.ts.
             if (
               await handleRentalRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
+              })
+            ) {
+              return
+            }
+
+            // Inventory catalog routes. See routes/inventory.ts.
+            if (
+              await handleInventoryRoutes(req, url, {
                 pool,
                 company,
                 requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
