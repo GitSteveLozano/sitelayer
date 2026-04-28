@@ -36,6 +36,7 @@ import { handleBonusRuleRoutes } from './routes/bonus-rules.js'
 import { handleCustomerRoutes } from './routes/customers.js'
 import { handlePricingProfileRoutes } from './routes/pricing-profiles.js'
 import { handleQboMappingRoutes } from './routes/qbo-mappings.js'
+import { handleServiceItemRoutes } from './routes/service-items.js'
 import { getSyncStatus, handleSyncRoutes } from './routes/sync.js'
 import { handleWorkerRoutes } from './routes/workers.js'
 import {
@@ -3258,150 +3259,20 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'POST' && url.pathname === '/api/service-items') {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const body = await readBody(req)
-              const code = String(body.code ?? '').trim()
-              const name = String(body.name ?? '').trim()
-              const category = String(body.category ?? 'labor').trim()
-              const unit = String(body.unit ?? 'hr').trim()
-              if (!code || !name) {
-                sendJson(res, 400, { error: 'code and name are required' })
-                return
-              }
-              const item = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        insert into service_items (company_id, code, name, category, unit, default_rate, source, version, created_at)
-        values ($1, $2, $3, $4, $5, $6, coalesce($7, 'manual'), 1, now())
-        returning code, name, category, unit, default_rate, source, version, created_at
-        `,
-                  [company.id, code, name, category, unit, body.default_rate ?? null, body.source ?? 'manual'],
-                )
-                const row = result.rows[0]
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'service_item',
-                  entityId: code,
-                  action: 'create',
-                  row,
-                })
-                return row
+            // Service-item mutation routes (POST /api/service-items,
+            // PATCH/DELETE /api/service-items/<code>) handled by the
+            // extracted route module. Code-keyed (not uuid). See
+            // routes/service-items.ts.
+            if (
+              await handleServiceItemRoutes(req, url, {
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
               })
-              sendJson(res, 201, item)
-              return
-            }
-
-            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/service-items\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const code = url.pathname.split('/')[3] ?? ''
-              if (!code) {
-                sendJson(res, 400, { error: 'service item code is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const updated = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update service_items
-        set
-          name = coalesce($3, name),
-          category = coalesce($4, category),
-          unit = coalesce($5, unit),
-          default_rate = coalesce($6, default_rate),
-          version = version + 1
-        where company_id = $1 and code = $2 and ($7::int is null or version = $7)
-        returning code, name, category, unit, default_rate, source, version, created_at
-        `,
-                  [
-                    company.id,
-                    code,
-                    body.name ?? null,
-                    body.category ?? null,
-                    body.unit ?? null,
-                    body.default_rate ?? null,
-                    expectedVersion,
-                  ],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'service_item',
-                  entityId: code,
-                  action: 'update',
-                  row,
-                })
-                return row
-              })
-              if (!updated) {
-                if (
-                  !(await checkVersion(
-                    'service_items',
-                    'company_id = $1 and code = $2',
-                    [company.id, code],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'service item not found' })
-                return
-              }
-              sendJson(res, 200, updated)
-              return
-            }
-
-            if (req.method === 'DELETE' && url.pathname.match(/^\/api\/service-items\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const code = url.pathname.split('/')[3] ?? ''
-              if (!code) {
-                sendJson(res, 400, { error: 'service item code is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const deleted = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update service_items
-        set deleted_at = now(), version = version + 1
-        where company_id = $1 and code = $2 and deleted_at is null and ($3::int is null or version = $3)
-        returning code, name, category, unit, default_rate, source, version, created_at
-        `,
-                  [company.id, code, expectedVersion],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'service_item',
-                  entityId: code,
-                  action: 'delete',
-                  row,
-                })
-                return row
-              })
-              if (!deleted) {
-                if (
-                  !(await checkVersion(
-                    'service_items',
-                    'company_id = $1 and code = $2',
-                    [company.id, code],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'service item not found' })
-                return
-              }
-              sendJson(res, 200, deleted)
+            ) {
               return
             }
 
