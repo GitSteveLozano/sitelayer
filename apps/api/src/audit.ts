@@ -20,6 +20,12 @@ const DOMAIN_ENTITY_TYPES = new Set([
   'integration_connection',
   'integration_mapping',
   'estimate_line',
+  'inventory_item',
+  'inventory_location',
+  'inventory_movement',
+  'job_rental_contract',
+  'job_rental_line',
+  'rental_billing_run',
 ])
 
 export type AuditInput = {
