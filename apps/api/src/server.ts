@@ -36,6 +36,7 @@ import {
 import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigError } from './tier.js'
 import { validateQboStateSecret } from './qbo-config.js'
 import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './auth-types.js'
+import { handleBonusRuleRoutes } from './routes/bonus-rules.js'
 import { handleCustomerRoutes } from './routes/customers.js'
 import { handlePricingProfileRoutes } from './routes/pricing-profiles.js'
 import { handleWorkerRoutes } from './routes/workers.js'
@@ -45,7 +46,6 @@ import {
   getCorsOrigin as getCorsOriginImpl,
   isValidDateInput,
   isValidUuid,
-  parseConfigPayload,
   parseExpectedVersion,
   parseOptionalNumber,
   readBody as readBodyImpl,
@@ -1506,13 +1506,7 @@ async function listAuditEvents(
   return result.rows
 }
 
-async function listBonusRules(companyId: string) {
-  const result = await pool.query(
-    'select id, name, config, is_active, version, created_at from bonus_rules where company_id = $1 order by created_at asc',
-    [companyId],
-  )
-  return result.rows
-}
+// listBonusRules moved to routes/bonus-rules.ts.
 
 // parseConfigPayload moved to http-utils.ts.
 
@@ -2615,8 +2609,20 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'GET' && url.pathname === '/api/bonus-rules') {
-              sendJson(res, 200, { bonusRules: await listBonusRules(company.id) })
+            // Bonus-rule routes (GET/POST /api/bonus-rules,
+            // PATCH/DELETE /api/bonus-rules/<id>) are handled by the
+            // extracted route module. See routes/bonus-rules.ts.
+            if (
+              await handleBonusRuleRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
+              })
+            ) {
               return
             }
 
@@ -3502,162 +3508,6 @@ const server = http.createServer(async (req, res) => {
                 }
               }
               sendJson(res, 200, { synced, errors, total_candidates: unsynced.rowCount ?? 0 })
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname === '/api/bonus-rules') {
-              if (!requireRole(res, company, ['admin'], req)) return
-              const body = await readBody(req)
-              const name = String(body.name ?? '').trim()
-              if (!name) {
-                sendJson(res, 400, { error: 'name is required' })
-                return
-              }
-              let config: Record<string, unknown>
-              try {
-                config = parseConfigPayload(body.config ?? body.config_json)
-              } catch {
-                sendJson(res, 400, { error: 'config must be valid json' })
-                return
-              }
-              const rule = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        insert into bonus_rules (company_id, name, config, is_active, version)
-        values ($1, $2, $3::jsonb, coalesce($4, true), 1)
-        returning id, name, config, is_active, version, created_at
-        `,
-                  [company.id, name, JSON.stringify(config), body.is_active ?? true],
-                )
-                const row = result.rows[0]
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'bonus_rule',
-                  entityId: row.id,
-                  action: 'create',
-                  row,
-                  syncPayload: { action: 'create', bonusRule: row },
-                })
-                return row
-              })
-              sendJson(res, 201, rule)
-              return
-            }
-
-            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/bonus-rules\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin'], req)) return
-              const bonusRuleId = url.pathname.split('/')[3] ?? ''
-              if (!bonusRuleId) {
-                sendJson(res, 400, { error: 'bonus rule id is required' })
-                return
-              }
-              const body = await readBody(req)
-              let config: Record<string, unknown> | null = null
-              if (body.config !== undefined || body.config_json !== undefined) {
-                try {
-                  config = parseConfigPayload(body.config ?? body.config_json)
-                } catch {
-                  sendJson(res, 400, { error: 'config must be valid json' })
-                  return
-                }
-              }
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const updated = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update bonus_rules
-        set
-          name = coalesce($3, name),
-          config = coalesce($4::jsonb, config),
-          is_active = coalesce($5, is_active),
-          version = version + 1
-        where company_id = $1 and id = $2 and ($6::int is null or version = $6)
-        returning id, name, config, is_active, version, created_at
-        `,
-                  [
-                    company.id,
-                    bonusRuleId,
-                    body.name ?? null,
-                    config ? JSON.stringify(config) : null,
-                    body.is_active ?? null,
-                    expectedVersion,
-                  ],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'bonus_rule',
-                  entityId: bonusRuleId,
-                  action: 'update',
-                  row,
-                  syncPayload: { action: 'update', bonusRule: row },
-                })
-                return row
-              })
-              if (!updated) {
-                if (
-                  !(await checkVersion(
-                    'bonus_rules',
-                    'company_id = $1 and id = $2',
-                    [company.id, bonusRuleId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'bonus rule not found' })
-                return
-              }
-              sendJson(res, 200, updated)
-              return
-            }
-
-            if (req.method === 'DELETE' && url.pathname.match(/^\/api\/bonus-rules\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin'], req)) return
-              const bonusRuleId = url.pathname.split('/')[3] ?? ''
-              if (!bonusRuleId) {
-                sendJson(res, 400, { error: 'bonus rule id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const deleted = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  'delete from bonus_rules where company_id = $1 and id = $2 and ($3::int is null or version = $3) returning id, name, config, is_active, version, created_at',
-                  [company.id, bonusRuleId, expectedVersion],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'bonus_rule',
-                  entityId: bonusRuleId,
-                  action: 'delete',
-                  row,
-                  syncPayload: { action: 'delete', bonusRule: row },
-                })
-                return row
-              })
-              if (!deleted) {
-                if (
-                  !(await checkVersion(
-                    'bonus_rules',
-                    'company_id = $1 and id = $2',
-                    [company.id, bonusRuleId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'bonus rule not found' })
-                return
-              }
-              sendJson(res, 200, deleted)
               return
             }
 
