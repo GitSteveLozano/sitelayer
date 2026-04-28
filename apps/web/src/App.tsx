@@ -34,6 +34,7 @@ const loadAuditView = () => import('./views/audit.js')
 const loadBonusSimView = () => import('./views/bonus-sim.js')
 const loadClockView = () => import('./views/clock.js')
 const loadConfirmView = () => import('./views/confirm.js')
+const loadBillingReviewView = () => import('./views/billing-review.js')
 const loadEstimatesView = () => import('./views/estimates.js')
 const loadIntegrationsView = () => import('./views/integrations.js')
 const loadOnboardingView = () => import('./views/onboarding.js')
@@ -46,6 +47,9 @@ const AuditView = lazy(() => loadAuditView().then(({ AuditView }) => ({ default:
 const BonusSimView = lazy(() => loadBonusSimView().then(({ BonusSimView }) => ({ default: BonusSimView })))
 const ClockView = lazy(() => loadClockView().then(({ ClockView }) => ({ default: ClockView })))
 const ConfirmView = lazy(() => loadConfirmView().then(({ ConfirmView }) => ({ default: ConfirmView })))
+const BillingReviewView = lazy(() =>
+  loadBillingReviewView().then(({ BillingReviewView }) => ({ default: BillingReviewView })),
+)
 const EstimatesView = lazy(() => loadEstimatesView().then(({ EstimatesView }) => ({ default: EstimatesView })))
 const IntegrationsView = lazy(() =>
   loadIntegrationsView().then(({ IntegrationsView }) => ({ default: IntegrationsView })),
@@ -61,6 +65,7 @@ const ROUTE_PRELOADS: Record<string, () => Promise<unknown>> = {
   '/bonus-sim': loadBonusSimView,
   '/clock': loadClockView,
   '/confirm': loadConfirmView,
+  '/billing-review': loadBillingReviewView,
   '/estimates': loadEstimatesView,
   '/integrations': loadIntegrationsView,
   '/onboarding': loadOnboardingView,
@@ -100,6 +105,14 @@ function ClerkAuditRoute({ companySlug, session }: { companySlug: string; sessio
   const raw = user?.publicMetadata?.role
   const publicMetadataRole = typeof raw === 'string' ? raw : null
   return <AuditView companySlug={companySlug} session={session} publicMetadataRole={publicMetadataRole} />
+}
+
+// Path wrapper for /billing-review/:runId. Pulls the run id out of the
+// route and hands the screen the bare minimum it needs.
+function BillingReviewRoute({ companySlug }: { companySlug: string }) {
+  const { runId } = useParams()
+  if (!runId) return <Navigate to="/projects" replace />
+  return <BillingReviewView runId={runId} companySlug={companySlug} />
 }
 
 function RouteFallback() {
@@ -516,6 +529,7 @@ function AppShell() {
               />
             }
           />
+          <Route path="/billing-review/:runId" element={<BillingReviewRoute companySlug={companySlug} />} />
           <Route
             path="/dev/*"
             element={devSurfaceEnabled ? <DevScratchView features={features} /> : <Navigate to="/projects" replace />}
