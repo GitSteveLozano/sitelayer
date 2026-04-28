@@ -24,11 +24,7 @@ export type WorkerRouteCtx = {
  * one of the routes in this module (regardless of response status); false
  * to let the parent dispatch fall through to the next handler.
  */
-export async function handleWorkerRoutes(
-  req: http.IncomingMessage,
-  url: URL,
-  ctx: WorkerRouteCtx,
-): Promise<boolean> {
+export async function handleWorkerRoutes(req: http.IncomingMessage, url: URL, ctx: WorkerRouteCtx): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/workers') {
     const result = await ctx.pool.query(
       'select id, name, role, version, deleted_at, created_at from workers where company_id = $1 and deleted_at is null order by name asc',
