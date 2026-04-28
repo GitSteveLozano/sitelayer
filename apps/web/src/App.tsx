@@ -17,6 +17,7 @@ import { useDayConfirmed } from './machines/day-confirmed.js'
 import { useFeatures } from './machines/features.js'
 import { useOfflineReplay } from './machines/offline-replay.js'
 import { useProjectSelection } from './machines/project-selection.js'
+import { useRunAction } from './machines/run-action.js'
 import { Button } from './components/ui/button.js'
 import {
   Dialog,
@@ -27,7 +28,7 @@ import {
   DialogTrigger,
 } from './components/ui/dialog.js'
 import { Input } from './components/ui/input.js'
-import { Toaster, toastError, toastSuccess } from './components/ui/toast.js'
+import { Toaster } from './components/ui/toast.js'
 
 const loadAuditView = () => import('./views/audit.js')
 const loadBonusSimView = () => import('./views/bonus-sim.js')
@@ -184,7 +185,6 @@ function AppShell() {
     setSelectedBlueprintId,
     error: projectError,
   } = useProjectSelection(companySlug, selectedProjectId)
-  const [busy, setBusy] = useState<string | null>(null)
   // Offline-replay XState machine owns the offline queue depth, replay loop,
   // and online event listener. See machines/offline-replay.ts.
   const { offlineQueue } = useOfflineReplay(companySlug)
@@ -251,30 +251,15 @@ function AppShell() {
     setAllSchedules((bootstrap?.schedules ?? []) as ScheduleRow[])
   }, [bootstrap?.schedules])
 
-  async function runAction(label: string, action: () => Promise<void>, options?: { skipRefresh?: boolean }) {
-    try {
-      setBusy(label)
-      clearError()
-      await action()
-      if (!options?.skipRefresh) {
-        await refresh()
-        if (selectedProjectId) {
-          await refreshSummary(selectedProjectId)
-        }
-      }
-      // Surface lightweight success toasts for user-visible high-signal actions.
-      // Other labels are mutation-internal and would be noisy.
-      if (label === 'create-company') toastSuccess('Company created')
-      if (label === 'invite-member') toastSuccess('Invitation sent')
-      if (label === 'qbo-sync') toastSuccess('QBO sync triggered')
-    } catch (caught: unknown) {
-      const message = caught instanceof Error ? caught.message : 'unknown error'
-      setActionError(message)
-      toastError(`${label} failed`, message)
-    } finally {
-      setBusy(null)
-    }
-  }
+  // Mutation lifecycle (busy + error banner + auto-refresh + success
+  // toasts) is owned by useRunAction — see machines/run-action.ts.
+  const { busy, runAction } = useRunAction({
+    refresh,
+    refreshSummary,
+    clearError,
+    setActionError,
+    selectedProjectId,
+  })
 
   const divisions = bootstrap?.divisions ?? []
   const serviceItems = bootstrap?.serviceItems ?? []
