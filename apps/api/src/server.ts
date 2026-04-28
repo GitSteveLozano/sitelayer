@@ -16,12 +16,10 @@ import {
   calculateBonusPayout,
   calculateGeometryQuantity,
   calculateMargin,
-  calculateTakeoffQuantity,
   calculateProjectCost,
   compareBidVsScope,
   formatMoney,
   normalizeGeometry,
-  normalizePolygonGeometry,
 } from '@sitelayer/domain'
 import { loadAppConfig, logAppConfigBanner, postgresOptionsForTier, TierConfigError } from './tier.js'
 import { validateQboStateSecret } from './qbo-config.js'
@@ -37,6 +35,7 @@ import { handlePricingProfileRoutes } from './routes/pricing-profiles.js'
 import { handleQboMappingRoutes } from './routes/qbo-mappings.js'
 import { handleRentalRoutes } from './routes/rentals.js'
 import { handleScheduleRoutes } from './routes/schedules.js'
+import { handleTakeoffMeasurementRoutes } from './routes/takeoff-measurements.js'
 import { handleServiceItemRoutes } from './routes/service-items.js'
 import { getSyncStatus, handleSyncRoutes } from './routes/sync.js'
 import { handleWorkerRoutes } from './routes/workers.js'
@@ -83,7 +82,6 @@ import {
   loadServiceItemCatalogIndex,
   rejectionMessageForCatalog,
 } from './catalog.js'
-import { evaluateLww } from './lww.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
 import { AuthConfigError, AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
 import { extractSvixHeaders, verifyClerkWebhook } from './clerk-webhook.js'
@@ -1134,18 +1132,7 @@ async function listBlueprintDocuments(companyId: string, projectId: string) {
   return result.rows as BlueprintDocumentRow[]
 }
 
-async function listTakeoffMeasurements(companyId: string, projectId: string) {
-  const result = await pool.query(
-    `
-    select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at
-    from takeoff_measurements
-    where company_id = $1 and project_id = $2 and deleted_at is null
-    order by created_at desc
-    `,
-    [companyId, projectId],
-  )
-  return result.rows
-}
+// listTakeoffMeasurements moved to routes/takeoff-measurements.ts.
 
 // listSchedules moved to routes/schedules.ts.
 
@@ -3208,6 +3195,26 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
+            // Takeoff measurement read + LWW-gated PATCH/DELETE handled by
+            // the extracted route module. POST handlers stay here because
+            // they share catalog-enforcement helpers with measurement
+            // create. See routes/takeoff-measurements.ts.
+            if (
+              await handleTakeoffMeasurementRoutes(req, url, {
+                pool,
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
+                assertBlueprintDocumentsBelongToProject: (companyId, projectId, blueprintDocumentIds) =>
+                  assertBlueprintDocumentsBelongToProject(companyId, projectId, blueprintDocumentIds),
+              })
+            ) {
+              return
+            }
+
             // ---------------------------------------------------------------
             // Rentals — Avontus-style equipment rental tracking.
             //
@@ -3843,16 +3850,6 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/takeoff\/measurements$/)) {
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              sendJson(res, 200, { measurements: await listTakeoffMeasurements(company.id, projectId) })
-              return
-            }
-
             if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/blueprints$/)) {
               if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
               const projectId = url.pathname.split('/')[3] ?? ''
@@ -4224,229 +4221,6 @@ const server = http.createServer(async (req, res) => {
               } catch {
                 sendJson(res, 404, { error: 'blueprint file not found' })
               }
-              return
-            }
-
-            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/takeoff\/measurements\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const measurementId = url.pathname.split('/')[4] ?? ''
-              if (!measurementId) {
-                sendJson(res, 400, { error: 'measurement id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              let geometryJson: string | null = null
-              let quantity = body.quantity ?? null
-              if (body.geometry !== undefined && body.geometry !== null && body.geometry !== '') {
-                const geometry = normalizePolygonGeometry(body.geometry)
-                if (!geometry) {
-                  sendJson(res, 400, { error: 'geometry must be a polygon with at least 3 points inside the board' })
-                  return
-                }
-                geometryJson = JSON.stringify(geometry)
-                if (quantity === null || quantity === undefined || quantity === '') {
-                  quantity = calculateTakeoffQuantity(geometry.points, geometry.sheet_scale ?? 1)
-                }
-                const numericQuantity = Number(quantity)
-                // Reject NaN/Infinity explicitly: a self-intersecting polygon
-                // can produce NaN, and `n <= 0` is false for NaN so the next
-                // check would let it through with a less helpful message.
-                if (!Number.isFinite(numericQuantity) || numericQuantity <= 0) {
-                  sendJson(res, 400, { error: 'geometry must produce a positive, finite area' })
-                  return
-                }
-              }
-              if (quantity !== null && quantity !== undefined && quantity !== '') {
-                const parsedQuantity = Number(quantity)
-                if (!Number.isFinite(parsedQuantity) || parsedQuantity < 0) {
-                  sendJson(res, 400, { error: 'quantity must be a non-negative number' })
-                  return
-                }
-                quantity = parsedQuantity
-              }
-              const patchBlueprintDocumentId =
-                body.blueprint_document_id === undefined ||
-                body.blueprint_document_id === null ||
-                body.blueprint_document_id === ''
-                  ? null
-                  : String(body.blueprint_document_id)
-              if (patchBlueprintDocumentId) {
-                if (!isValidUuid(patchBlueprintDocumentId)) {
-                  sendJson(res, 400, { error: 'blueprint_document_id must be a valid uuid' })
-                  return
-                }
-                const measurementProjectResult = await pool.query<{ project_id: string }>(
-                  'select project_id from takeoff_measurements where company_id = $1 and id = $2 and deleted_at is null limit 1',
-                  [company.id, measurementId],
-                )
-                const measurementProjectId = measurementProjectResult.rows[0]?.project_id
-                if (!measurementProjectId) {
-                  sendJson(res, 404, { error: 'measurement not found' })
-                  return
-                }
-                await assertBlueprintDocumentsBelongToProject(company.id, measurementProjectId, [
-                  patchBlueprintDocumentId,
-                ])
-              }
-
-              // LWW gate: if the client tells us the row hasn't changed since
-              // a particular timestamp, but the server's `updated_at` is
-              // newer, reject with 409 + the authoritative server row so the
-              // offline replayer can show "your local edit was discarded".
-              const ifUnmodifiedSince = req.headers['if-unmodified-since']
-              if (ifUnmodifiedSince) {
-                const currentRow = await pool.query<{
-                  id: string
-                  project_id: string
-                  blueprint_document_id: string | null
-                  service_item_code: string
-                  quantity: string
-                  unit: string
-                  notes: string | null
-                  geometry: unknown
-                  version: number
-                  deleted_at: string | null
-                  created_at: string
-                  updated_at: string
-                }>(
-                  `select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes,
-                          geometry, version, deleted_at, created_at, updated_at
-                   from takeoff_measurements
-                   where company_id = $1 and id = $2`,
-                  [company.id, measurementId],
-                )
-                const current = currentRow.rows[0]
-                if (current) {
-                  const lww = evaluateLww(current.updated_at, ifUnmodifiedSince)
-                  if (!lww.ok && lww.reason === 'server_newer') {
-                    sendJson(res, 409, {
-                      error: 'server has a newer change',
-                      entity: 'takeoff_measurement',
-                      server_value: current,
-                      server_updated_at: lww.serverUpdatedAt.toISOString(),
-                      client_reference: lww.clientReference.toISOString(),
-                    })
-                    return
-                  }
-                  if (!lww.ok && lww.reason === 'header_unparseable') {
-                    sendJson(res, 400, {
-                      error: 'If-Unmodified-Since header is not a valid timestamp',
-                      raw: lww.rawHeader,
-                    })
-                    return
-                  }
-                }
-              }
-
-              const updated = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update takeoff_measurements
-        set
-          service_item_code = coalesce($3, service_item_code),
-          quantity = coalesce($4, quantity),
-          unit = coalesce($5, unit),
-          notes = coalesce($6, notes),
-          blueprint_document_id = coalesce($7, blueprint_document_id),
-          geometry = coalesce($8::jsonb, geometry),
-          version = version + 1,
-          updated_at = now()
-        where company_id = $1 and id = $2 and deleted_at is null and ($9::int is null or version = $9)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at, updated_at
-        `,
-                  [
-                    company.id,
-                    measurementId,
-                    body.service_item_code ?? null,
-                    quantity,
-                    body.unit ?? null,
-                    body.notes ?? null,
-                    patchBlueprintDocumentId,
-                    geometryJson,
-                    expectedVersion,
-                  ],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'takeoff_measurement',
-                  entityId: measurementId,
-                  action: 'update',
-                  row,
-                  syncPayload: { action: 'update', measurement: row },
-                })
-                return row
-              })
-              if (!updated) {
-                if (
-                  !(await checkVersion(
-                    'takeoff_measurements',
-                    'company_id = $1 and id = $2',
-                    [company.id, measurementId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'measurement not found' })
-                return
-              }
-              sendJson(res, 200, updated)
-              return
-            }
-
-            if (req.method === 'DELETE' && url.pathname.match(/^\/api\/takeoff\/measurements\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'foreman', 'office'], req)) return
-              const measurementId = url.pathname.split('/')[4] ?? ''
-              if (!measurementId) {
-                sendJson(res, 400, { error: 'measurement id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const deleted = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update takeoff_measurements
-        set deleted_at = now(), version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null and ($3::int is null or version = $3)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at
-        `,
-                  [company.id, measurementId, expectedVersion],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'takeoff_measurement',
-                  entityId: measurementId,
-                  action: 'delete',
-                  row,
-                  syncPayload: { action: 'delete', measurement: row },
-                })
-                return row
-              })
-              if (!deleted) {
-                if (
-                  !(await checkVersion(
-                    'takeoff_measurements',
-                    'company_id = $1 and id = $2',
-                    [company.id, measurementId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'measurement not found' })
-                return
-              }
-              sendJson(res, 200, deleted)
               return
             }
 
