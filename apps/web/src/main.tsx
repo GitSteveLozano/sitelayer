@@ -59,7 +59,10 @@ function installChunkRecovery() {
   })
 }
 
-runWhenIdle(initSentry, 3000)
+// Kick off the Sentry SDK dynamic import immediately so that early errors
+// (which can land before the browser goes idle on slow devices or offline)
+// still reach the captureException buffer. Web vitals stay deferred.
+initSentry()
 runWhenIdle(() => {
   void import('./web-vitals.js').then(({ captureWebVitals }) => captureWebVitals())
 }, 4000)

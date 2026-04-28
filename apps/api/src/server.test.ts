@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import http from 'node:http'
 import { Webhook } from 'svix'
+import { Pool } from 'pg'
 
 const describeIntegration = process.env.RUN_API_INTEGRATION === '1' ? describe : describe.skip
 
@@ -8,6 +9,15 @@ beforeAll(async () => {
   process.env.DATABASE_URL = 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer'
   process.env.ACTIVE_COMPANY_SLUG = 'la-operations'
   process.env.ACTIVE_USER_ID = 'demo-user'
+})
+
+const dbPool: Pool | null =
+  process.env.RUN_API_INTEGRATION === '1'
+    ? new Pool({ connectionString: 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer', max: 2 })
+    : null
+
+afterAll(async () => {
+  if (dbPool) await dbPool.end()
 })
 
 async function apiCall<T>(
@@ -137,6 +147,40 @@ describeIntegration('API Integration Tests', () => {
     })
     expect(result.status).toBe(201)
     expect(result.id).toBeDefined()
+  })
+
+  // Regression test for the outbox-tx scoping fix: a successful project
+  // create must produce both a sync_events row AND a mutation_outbox row in
+  // the SAME transaction window as the projects insert. Before the fix the
+  // ledger writes ran on a separate pool connection and could be lost if the
+  // process died between the insert and the ledger.
+  it('POST /api/projects writes project + sync_event + mutation_outbox atomically', async () => {
+    if (!dbPool) return
+    const result = await apiCall<{ id: string }>('POST', '/api/projects', {
+      name: `Tx Atomicity Test ${Date.now()}`,
+      customer_name: 'Tx Atomicity Customer',
+      division_code: 'D1',
+      bid_total: 12345,
+      labor_rate: 10,
+    })
+    expect(result.status).toBe(201)
+    expect(result.id).toBeDefined()
+
+    const projectId = result.id
+    const [syncRows, outboxRows] = await Promise.all([
+      dbPool.query<{ payload: { action?: string } }>(
+        `select payload from sync_events where entity_type = 'project' and entity_id = $1`,
+        [projectId],
+      ),
+      dbPool.query<{ mutation_type: string; idempotency_key: string }>(
+        `select mutation_type, idempotency_key from mutation_outbox where entity_type = 'project' and entity_id = $1`,
+        [projectId],
+      ),
+    ])
+    expect(syncRows.rowCount).toBeGreaterThanOrEqual(1)
+    expect(outboxRows.rowCount).toBe(1)
+    expect(outboxRows.rows[0]?.mutation_type).toBe('create')
+    expect(outboxRows.rows[0]?.idempotency_key).toBe(`project:create:${projectId}`)
   })
 
   it('POST /api/labor-entries records hours', async () => {

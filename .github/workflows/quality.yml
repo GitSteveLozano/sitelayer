@@ -62,3 +62,88 @@ jobs:
           fi
 
       - run: npm run e2e
+
+  test-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_DB: sitelayer
+          POSTGRES_USER: sitelayer
+          POSTGRES_PASSWORD: sitelayer
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sitelayer"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://sitelayer:sitelayer@localhost:5432/sitelayer
+      APP_TIER: local
+      ACTIVE_COMPANY_SLUG: la-operations
+      ACTIVE_USER_ID: demo-user
+      ALLOWED_ORIGINS: http://localhost:3000,http://localhost:5173
+      AUTH_ALLOW_HEADER_FALLBACK: '1'
+      PORT: '3001'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install postgres client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - run: npm ci
+
+      - name: Apply database migrations
+        run: bash scripts/migrate-db.sh
+
+      - name: Build API and dependencies
+        run: |
+          npm run build --workspace @sitelayer/config
+          npm run build --workspace @sitelayer/domain
+          npm run build --workspace @sitelayer/logger
+          npm run build --workspace @sitelayer/queue
+          npm run build --workspace @sitelayer/api
+
+      - name: Start API server
+        run: |
+          npm run start --workspace @sitelayer/api > /tmp/api.log 2>&1 &
+          echo $! > /tmp/api.pid
+
+      - name: Wait for API health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3001/health > /dev/null; then
+              echo "API healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "API failed to come up; logs:"
+          cat /tmp/api.log
+          exit 1
+
+      - name: Run integration tests
+        env:
+          RUN_API_INTEGRATION: '1'
+        run: npm run test --workspace @sitelayer/api
+
+      - name: Capture API logs on failure
+        if: failure()
+        run: cat /tmp/api.log || true
+
+      - name: Stop API server
+        if: always()
+        run: |
+          if [ -f /tmp/api.pid ]; then
+            kill "$(cat /tmp/api.pid)" 2>/dev/null || true
+          fi
