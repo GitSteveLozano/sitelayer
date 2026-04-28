@@ -20,8 +20,11 @@ import {
   calculateVolumeQuantity,
   calculateGeometryQuantity,
   computeProductivity,
+  calculateJobRentalBillingRun,
   calculateRentalInvoice,
+  initialJobRentalNextBillingDate,
   initialRentalNextInvoiceAt,
+  transitionRentalBillingWorkflow,
   haversineDistanceMeters,
   isInsideGeofence,
 } from './index.js'
@@ -727,6 +730,182 @@ describe('domain functions', () => {
 
     it('defaults to weekly when cadence is invalid', () => {
       expect(initialRentalNextInvoiceAt('2026-04-01', 0)).toBe('2026-04-08T00:00:00.000Z')
+    })
+  })
+
+  describe('calculateJobRentalBillingRun', () => {
+    it('bills a full 25-day cycle using agreed cycle pricing', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+          last_billed_through: null,
+        },
+        [
+          {
+            id: 'line-1',
+            inventory_item_id: 'item-1',
+            item_code: 'FRAME',
+            item_description: 'Scaffold frame',
+            quantity: 10,
+            agreed_rate: 4,
+            rate_unit: 'cycle',
+            on_rent_date: '2026-04-01',
+            billable: true,
+          },
+        ],
+        '2026-04-26',
+      )
+
+      expect(result.period_start).toBe('2026-04-01')
+      expect(result.period_end).toBe('2026-04-25')
+      expect(result.due_date).toBe('2026-04-26')
+      expect(result.next_billing_date).toBe('2026-05-21')
+      expect(result.is_due).toBe(true)
+      expect(result.lines).toHaveLength(1)
+      expect(result.lines[0]?.billable_days).toBe(25)
+      expect(result.lines[0]?.amount).toBe(40)
+      expect(result.subtotal).toBe(40)
+    })
+
+    it('prorates cycle pricing when the line starts mid-cycle', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+        },
+        [
+          {
+            id: 'line-1',
+            quantity: 2,
+            agreed_rate: 100,
+            rate_unit: 'cycle',
+            on_rent_date: '2026-04-11',
+          },
+        ],
+        '2026-04-26',
+      )
+
+      expect(result.lines[0]?.period_start).toBe('2026-04-11')
+      expect(result.lines[0]?.period_end).toBe('2026-04-25')
+      expect(result.lines[0]?.billable_days).toBe(15)
+      expect(result.lines[0]?.amount).toBe(120)
+    })
+
+    it('does not double-bill a line already billed through part of the period', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+        },
+        [
+          {
+            id: 'line-1',
+            quantity: 1,
+            agreed_rate: 10,
+            rate_unit: 'day',
+            on_rent_date: '2026-04-01',
+            last_billed_through: '2026-04-10',
+          },
+        ],
+        '2026-04-26',
+      )
+
+      expect(result.lines[0]?.period_start).toBe('2026-04-11')
+      expect(result.lines[0]?.billable_days).toBe(15)
+      expect(result.lines[0]?.amount).toBe(150)
+    })
+
+    it('clips billing at off_rent_date', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+        },
+        [
+          {
+            id: 'line-1',
+            quantity: 3,
+            agreed_rate: 5,
+            rate_unit: 'day',
+            on_rent_date: '2026-04-01',
+            off_rent_date: '2026-04-05',
+          },
+        ],
+        '2026-04-26',
+      )
+
+      expect(result.lines[0]?.period_end).toBe('2026-04-05')
+      expect(result.lines[0]?.billable_days).toBe(5)
+      expect(result.lines[0]?.amount).toBe(75)
+    })
+  })
+
+  describe('initialJobRentalNextBillingDate', () => {
+    it('sets the first 25-day rental billing due date after the covered period', () => {
+      expect(initialJobRentalNextBillingDate('2026-04-01', 25)).toBe('2026-04-26')
+    })
+
+    it('defaults invalid cadence to 25 days', () => {
+      expect(initialJobRentalNextBillingDate('2026-04-01', 0)).toBe('2026-04-26')
+    })
+  })
+
+  describe('transitionRentalBillingWorkflow', () => {
+    it('walks the deterministic approval and posting path', () => {
+      const generated = { state: 'generated' as const, state_version: 1 }
+      const approved = transitionRentalBillingWorkflow(generated, {
+        type: 'APPROVE',
+        approved_at: '2026-04-26T12:00:00.000Z',
+        approved_by: 'office-user',
+      })
+      expect(approved).toMatchObject({
+        state: 'approved',
+        state_version: 2,
+        approved_by: 'office-user',
+      })
+
+      const posting = transitionRentalBillingWorkflow(approved, { type: 'POST_REQUESTED' })
+      expect(posting).toMatchObject({ state: 'posting', state_version: 3 })
+
+      const posted = transitionRentalBillingWorkflow(posting, {
+        type: 'POST_SUCCEEDED',
+        posted_at: '2026-04-26T12:01:00.000Z',
+        qbo_invoice_id: 'qbo-123',
+      })
+      expect(posted).toMatchObject({
+        state: 'posted',
+        state_version: 4,
+        qbo_invoice_id: 'qbo-123',
+      })
+    })
+
+    it('supports failed QBO posting retry without losing approval metadata', () => {
+      const approved = {
+        state: 'approved' as const,
+        state_version: 2,
+        approved_at: '2026-04-26T12:00:00.000Z',
+        approved_by: 'office-user',
+      }
+      const posting = transitionRentalBillingWorkflow(approved, { type: 'POST_REQUESTED' })
+      const failed = transitionRentalBillingWorkflow(posting, {
+        type: 'POST_FAILED',
+        failed_at: '2026-04-26T12:01:00.000Z',
+        error: 'rate limited',
+      })
+      const retryable = transitionRentalBillingWorkflow(failed, { type: 'RETRY_POST' })
+      expect(retryable).toMatchObject({
+        state: 'approved',
+        approved_by: 'office-user',
+        error: null,
+        failed_at: null,
+      })
+    })
+
+    it('rejects invalid transitions', () => {
+      expect(() =>
+        transitionRentalBillingWorkflow({ state: 'posted', state_version: 4 }, { type: 'POST_REQUESTED' }),
+      ).toThrow('not allowed')
     })
   })
 
