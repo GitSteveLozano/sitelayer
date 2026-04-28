@@ -661,6 +661,47 @@ export function TakeoffWorkspace({
     }
   }, [serviceItemCode, serviceItems])
 
+  // Keyboard shortcuts for the polygon editor:
+  //   • Escape — clear the entire draft (matches the "Clear draft" button)
+  //   • Ctrl/Cmd+Z — undo the last point (matches the "Undo point" button)
+  //   • Enter — save the polygon when ≥3 points are drawn
+  // Skipped while busy or while focus is in a form input/textarea so people
+  // can still type calibration values, search, etc. without triggering.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    function isEditableTarget(target: EventTarget | null): boolean {
+      if (!(target instanceof HTMLElement)) return false
+      if (target.isContentEditable) return true
+      const tag = target.tagName
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (busy) return
+      if (isEditableTarget(event.target)) return
+      if (event.key === 'Escape' && draftPoints.length > 0) {
+        event.preventDefault()
+        setDraftPoints([])
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+        if (draftPoints.length === 0) return
+        event.preventDefault()
+        setDraftPoints((current) => current.slice(0, -1))
+        return
+      }
+      if (event.key === 'Enter' && draftPoints.length >= 3) {
+        event.preventDefault()
+        void saveDraftMeasurement()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+    // saveDraftMeasurement is stable for our purposes (closes over current
+    // state via React), but we deliberately don't include it in the deps —
+    // including it would re-bind the listener every keystroke.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, draftPoints.length])
+
   async function saveDraftMeasurement() {
     if (!activeBlueprint) {
       throw new Error('select a blueprint first')
