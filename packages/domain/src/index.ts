@@ -1130,3 +1130,48 @@ export function transitionRentalBillingWorkflow(
     state_version: nextVersion,
   }
 }
+
+export type WorkflowNextEvent<EventType extends string> = {
+  type: EventType
+  label: string
+  disabled_reason?: string
+}
+
+export type WorkflowSnapshot<State extends string, EventType extends string, Context> = {
+  state: State
+  state_version: number
+  context: Context
+  next_events: Array<WorkflowNextEvent<EventType>>
+}
+
+export type RentalBillingHumanEventType = 'APPROVE' | 'POST_REQUESTED' | 'RETRY_POST' | 'VOID'
+
+export function nextRentalBillingEvents(
+  state: RentalBillingWorkflowState,
+): Array<WorkflowNextEvent<RentalBillingHumanEventType>> {
+  switch (state) {
+    case 'generated':
+      return [
+        { type: 'APPROVE', label: 'Approve billing run' },
+        { type: 'VOID', label: 'Void' },
+      ]
+    case 'approved':
+      return [
+        { type: 'POST_REQUESTED', label: 'Post invoice to QuickBooks' },
+        { type: 'VOID', label: 'Void' },
+      ]
+    case 'failed':
+      return [
+        { type: 'RETRY_POST', label: 'Retry QuickBooks post' },
+        { type: 'VOID', label: 'Void' },
+      ]
+    case 'posting':
+    case 'posted':
+    case 'voided':
+      return []
+  }
+}
+
+export function isHumanRentalBillingEvent(eventType: string): eventType is RentalBillingHumanEventType {
+  return eventType === 'APPROVE' || eventType === 'POST_REQUESTED' || eventType === 'RETRY_POST' || eventType === 'VOID'
+}
