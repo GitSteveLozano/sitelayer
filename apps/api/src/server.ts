@@ -34,6 +34,7 @@ import { normalizeCompanyRole, type ActiveCompany, type CompanyRole } from './au
 import { handleBonusRuleRoutes } from './routes/bonus-rules.js'
 import { handleCustomerRoutes } from './routes/customers.js'
 import { handlePricingProfileRoutes } from './routes/pricing-profiles.js'
+import { handleQboMappingRoutes } from './routes/qbo-mappings.js'
 import { getSyncStatus, handleSyncRoutes } from './routes/sync.js'
 import { handleWorkerRoutes } from './routes/workers.js'
 import {
@@ -2576,9 +2577,23 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'GET' && url.pathname === '/api/integrations/qbo/mappings') {
-              const entityType = url.searchParams.get('entity_type')
-              sendJson(res, 200, { mappings: await listIntegrationMappings(company.id, 'qbo', entityType) })
+            // QBO mapping routes (GET/POST /api/integrations/qbo/mappings,
+            // PATCH/DELETE /api/integrations/qbo/mappings/<id>) are handled
+            // by the extracted route module. See routes/qbo-mappings.ts.
+            if (
+              await handleQboMappingRoutes(req, url, {
+                company,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
+                listMappings: (companyId, provider, entityType) =>
+                  listIntegrationMappings(companyId, provider, entityType),
+                upsertMapping: (companyId, provider, values, executor) =>
+                  upsertIntegrationMapping(companyId, provider, values, executor),
+              })
+            ) {
               return
             }
 
@@ -2690,169 +2705,6 @@ const server = http.createServer(async (req, res) => {
                 connection,
                 status: await getSyncStatus(pool, company.id),
               })
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname === '/api/integrations/qbo/mappings') {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const body = await readBody(req)
-              const entityType = String(body.entity_type ?? '').trim()
-              const localRef = String(body.local_ref ?? '').trim()
-              const externalId = String(body.external_id ?? '').trim()
-              if (!entityType || !localRef || !externalId) {
-                sendJson(res, 400, { error: 'entity_type, local_ref, and external_id are required' })
-                return
-              }
-              const mapping = await withMutationTx(async (client) => {
-                const row = await upsertIntegrationMapping(
-                  company.id,
-                  'qbo',
-                  {
-                    entity_type: entityType,
-                    local_ref: localRef,
-                    external_id: externalId,
-                    label: body.label ? String(body.label).trim() : null,
-                    status: body.status ? String(body.status).trim() : 'active',
-                    notes: body.notes ? String(body.notes).trim() : null,
-                  },
-                  client,
-                )
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'integration_mapping',
-                  entityId: row.id,
-                  action: 'upsert',
-                  row,
-                  syncPayload: { action: 'upsert', mapping: row },
-                  outboxPayload: row as Record<string, unknown>,
-                  idempotencyKey: `integration_mapping:qbo:${row.id}`,
-                })
-                return row
-              })
-              sendJson(res, 201, mapping)
-              return
-            }
-
-            if (req.method === 'PATCH' && url.pathname.match(/^\/api\/integrations\/qbo\/mappings\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const mappingId = url.pathname.split('/')[5] ?? ''
-              if (!mappingId) {
-                sendJson(res, 400, { error: 'mapping id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const updated = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update integration_mappings
-        set
-          entity_type = coalesce($3, entity_type),
-          local_ref = coalesce($4, local_ref),
-          external_id = coalesce($5, external_id),
-          label = coalesce($6, label),
-          status = coalesce($7, status),
-          notes = coalesce($8, notes),
-          version = version + 1,
-          updated_at = now(),
-          deleted_at = null
-        where company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null and ($9::int is null or version = $9)
-        returning id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
-        `,
-                  [
-                    company.id,
-                    mappingId,
-                    body.entity_type ?? null,
-                    body.local_ref ?? null,
-                    body.external_id ?? null,
-                    body.label ?? null,
-                    body.status ?? null,
-                    body.notes ?? null,
-                    expectedVersion,
-                  ],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'integration_mapping',
-                  entityId: mappingId,
-                  action: 'update',
-                  row,
-                  syncPayload: { action: 'update', mapping: row },
-                  idempotencyKey: `integration_mapping:qbo:update:${mappingId}`,
-                })
-                return row
-              })
-              if (!updated) {
-                if (
-                  !(await checkVersion(
-                    'integration_mappings',
-                    "company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null",
-                    [company.id, mappingId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'mapping not found' })
-                return
-              }
-              sendJson(res, 200, updated)
-              return
-            }
-
-            if (req.method === 'DELETE' && url.pathname.match(/^\/api\/integrations\/qbo\/mappings\/[^/]+$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const mappingId = url.pathname.split('/')[5] ?? ''
-              if (!mappingId) {
-                sendJson(res, 400, { error: 'mapping id is required' })
-                return
-              }
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const deleted = await withMutationTx(async (client) => {
-                const result = await client.query(
-                  `
-        update integration_mappings
-        set deleted_at = now(), version = version + 1, status = 'deleted', updated_at = now()
-        where company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null and ($3::int is null or version = $3)
-        returning id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
-        `,
-                  [company.id, mappingId, expectedVersion],
-                )
-                const row = result.rows[0]
-                if (!row) return null
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'integration_mapping',
-                  entityId: mappingId,
-                  action: 'delete',
-                  row,
-                  syncPayload: { action: 'delete', mapping: row },
-                  idempotencyKey: `integration_mapping:qbo:delete:${mappingId}`,
-                })
-                return row
-              })
-              if (!deleted) {
-                if (
-                  !(await checkVersion(
-                    'integration_mappings',
-                    "company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null",
-                    [company.id, mappingId],
-                    expectedVersion,
-                    res,
-                    req,
-                  ))
-                ) {
-                  return
-                }
-                sendJson(res, 404, { error: 'mapping not found' })
-                return
-              }
-              sendJson(res, 200, deleted)
               return
             }
 
