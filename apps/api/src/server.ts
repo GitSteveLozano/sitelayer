@@ -1,6 +1,6 @@
 import { Sentry } from './instrument.js'
 import http from 'node:http'
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
 import { Pool, type PoolConfig } from 'pg'
 import { createLogger, getRequestContext, runWithRequestContext, type RequestContext } from '@sitelayer/logger'
 import {
@@ -27,37 +27,34 @@ import { handleRentalRoutes } from './routes/rentals.js'
 import { handleScheduleRoutes } from './routes/schedules.js'
 import { handleTakeoffMeasurementRoutes } from './routes/takeoff-measurements.js'
 import { handleServiceItemRoutes } from './routes/service-items.js'
-import { getSyncStatus, handleSyncRoutes } from './routes/sync.js'
+import { handleSyncRoutes } from './routes/sync.js'
 import { handleWorkerRoutes } from './routes/workers.js'
 import { handleBlueprintRoutes } from './routes/blueprints.js'
 import { handleProjectRoutes } from './routes/projects.js'
 import { handleEstimateRoutes } from './routes/estimate.js'
 import { assertBlueprintDocumentsBelongToProject, handleTakeoffWriteRoutes } from './routes/takeoff-write.js'
+import { getMemberships, handleCompanyRoutes } from './routes/companies.js'
+import {
+  backfillCustomerMapping,
+  handleQboRoutes,
+  listIntegrationMappings,
+  upsertIntegrationMapping,
+} from './routes/qbo.js'
 import {
   CORS_ALLOW_HEADERS,
   HttpError,
   getCorsOrigin as getCorsOriginImpl,
-  parseExpectedVersion,
   readBody as readBodyImpl,
   sendJson as sendJsonImpl,
   sendRedirect,
 } from './http-utils.js'
-import {
-  attachMutationTx,
-  enqueueNotification,
-  recordMutationLedger,
-  recordSyncEvent,
-  withMutationTx,
-  type LedgerExecutor,
-} from './mutation-tx.js'
+import { attachMutationTx } from './mutation-tx.js'
 import { createBlueprintStorage, readStorageEnv, type BlueprintStorage } from './storage.js'
 import { BlueprintUploadError } from './blueprint-upload.js'
-import { recordAudit } from './audit.js'
 import { renderEstimatePdf } from './pdf.js'
 import { buildListProjectsQuery, parseProjectsQuery } from './projects-query.js'
 // assertServiceItemCatalogStatus, loadServiceItemCatalogIndex, rejectionMessageForCatalog
 // moved to routes/takeoff-write.ts.
-import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from './onboarding.js'
 import { AuthConfigError, AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
 import { extractSvixHeaders, verifyClerkWebhook } from './clerk-webhook.js'
 import {
@@ -66,9 +63,8 @@ import {
   parseQboWebhookPayload,
   verifyQboWebhook,
 } from './qbo-webhook.js'
-import { attachPool, observeAudit, observeRequest, renderMetrics } from './metrics.js'
+import { attachPool, observeRequest, renderMetrics } from './metrics.js'
 import { loadEmailConfig } from './email.js'
-import { QboParseError, parseQboClass, parseQboEstimateCreateResponse, parseQboItem } from './qbo-parse.js'
 import { applyRateLimit, createRateLimiter, isRateLimitExempt, loadRateLimitConfig } from './rate-limit.js'
 import { assertVersion } from './version-guard.js'
 
@@ -148,21 +144,6 @@ logger.info(
 
 // CompanyRole / ActiveCompany / normalizeCompanyRole moved to auth-types.ts so
 // extracted route modules can import them without circular-importing server.ts.
-
-type IntegrationMappingRow = {
-  id: string
-  provider: string
-  entity_type: string
-  local_ref: string
-  external_id: string
-  label: string | null
-  status: string
-  notes: string | null
-  version: number
-  deleted_at: string | null
-  created_at: string
-  updated_at: string
-}
 
 const port = Number(process.env.PORT ?? 3001)
 const databaseUrl = appConfig.databaseUrl
@@ -323,58 +304,6 @@ function getCorsOrigin(req: http.IncomingMessage): string {
 
 // Blueprint file helpers moved to routes/blueprints.ts.
 
-// Bounded exponential backoff for transient QBO failures: 429 (rate limit)
-// and 5xx are retried up to 3 times with 200ms / 1s / 5s delays. 4xx other
-// than 429 fail fast — those are auth/validation errors that won't recover.
-// We deliberately don't retry forever (would hold HTTP request handlers
-// open during a long QBO outage); the request fails after ~6s of attempts
-// and the caller surfaces 5xx to the user.
-const QBO_RETRY_DELAYS_MS = [200, 1000, 5000] as const
-
-function qboShouldRetry(status: number): boolean {
-  return status === 429 || (status >= 500 && status < 600)
-}
-
-async function qboFetch<T>(url: string, init: RequestInit): Promise<T> {
-  let lastStatus = 0
-  let lastStatusText = ''
-  for (let attempt = 0; attempt <= QBO_RETRY_DELAYS_MS.length; attempt += 1) {
-    const response = await fetch(url, init)
-    if (response.ok) return (await response.json()) as T
-    lastStatus = response.status
-    lastStatusText = response.statusText
-    if (!qboShouldRetry(response.status) || attempt === QBO_RETRY_DELAYS_MS.length) {
-      throw new Error(`QBO API error: ${response.status} ${response.statusText}`)
-    }
-    const delay = QBO_RETRY_DELAYS_MS[attempt] ?? 0
-    await new Promise((resolve) => setTimeout(resolve, delay))
-  }
-  // Unreachable, but satisfies the type checker.
-  throw new Error(`QBO API error: ${lastStatus} ${lastStatusText}`)
-}
-
-async function qboGet<T>(endpoint: string, realmId: string, accessToken: string): Promise<T> {
-  return qboFetch<T>(`${qboBaseUrl}/v3/company/${realmId}${endpoint}`, {
-    method: 'GET',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: 'application/json',
-    },
-  })
-}
-
-async function qboPost<T>(endpoint: string, realmId: string, accessToken: string, body: unknown): Promise<T> {
-  return qboFetch<T>(`${qboBaseUrl}/v3/company/${realmId}${endpoint}`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify(body),
-  })
-}
-
 type CompanyRow = {
   id: string
   slug: string
@@ -445,20 +374,6 @@ function requireRole(
   return false
 }
 
-async function getMemberships(userId: string) {
-  const result = await pool.query(
-    `
-    select cm.id, cm.company_id, cm.clerk_user_id, cm.role, cm.created_at, c.slug, c.name
-    from company_memberships cm
-    join companies c on c.id = cm.company_id
-    where cm.clerk_user_id = $1
-    order by c.created_at asc
-    `,
-    [userId],
-  )
-  return result.rows
-}
-
 function getHeaderValue(req: http.IncomingMessage | undefined, key: string): string | null {
   const value = req?.headers[key]
   if (Array.isArray(value)) return value[0] ?? null
@@ -473,48 +388,6 @@ function getCurrentUserId(req?: http.IncomingMessage): string {
 
 function getCurrentCompanySlug(req?: http.IncomingMessage): string {
   return getHeaderValue(req, 'x-sitelayer-company-slug') ?? activeCompanySlug
-}
-
-type QboOAuthState = {
-  companyId: string
-  userId: string
-  exp: number
-  nonce: string
-}
-
-function signQboStatePayload(payload: string) {
-  return createHmac('sha256', qboStateSecret).update(payload).digest('base64url')
-}
-
-function isSafeEqual(left: string, right: string) {
-  const leftBuffer = Buffer.from(left)
-  const rightBuffer = Buffer.from(right)
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer)
-}
-
-function encodeQboState(state: QboOAuthState) {
-  const payload = Buffer.from(JSON.stringify(state)).toString('base64url')
-  const signature = signQboStatePayload(payload)
-  return `${payload}.${signature}`
-}
-
-function decodeQboState(rawState: string): QboOAuthState {
-  const [payload, signature] = rawState.split('.', 2)
-  if (!payload || !signature || !isSafeEqual(signQboStatePayload(payload), signature)) {
-    throw new HttpError(400, 'invalid state')
-  }
-
-  let parsed: QboOAuthState
-  try {
-    parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as QboOAuthState
-  } catch {
-    throw new HttpError(400, 'invalid state')
-  }
-
-  if (!parsed.companyId || !parsed.userId || !parsed.exp || parsed.exp < Date.now()) {
-    throw new HttpError(400, 'expired state')
-  }
-  return parsed
 }
 
 function sendJson(res: http.ServerResponse, status: number, body: unknown, req?: http.IncomingMessage) {
@@ -654,295 +527,6 @@ async function loadBootstrap(companyId: string) {
     schedules: schedules.rows,
     laborEntries: laborEntries.rows,
   }
-}
-
-async function getIntegrationConnection(companyId: string, provider: string, executor: LedgerExecutor = pool) {
-  const result = await executor.query(
-    `
-    select id, provider, provider_account_id, sync_cursor, last_synced_at, retry_state, rate_limit_state, status, version, created_at
-    from integration_connections
-    where company_id = $1 and provider = $2
-    order by created_at desc
-    limit 1
-    `,
-    [companyId, provider],
-  )
-  return result.rows[0] ?? null
-}
-
-async function getIntegrationConnectionWithSecrets(companyId: string, provider: string) {
-  const result = await pool.query(
-    `
-    select id, provider, provider_account_id, access_token, refresh_token, webhook_secret, sync_cursor, last_synced_at, retry_state, rate_limit_state, status, version, created_at
-    from integration_connections
-    where company_id = $1 and provider = $2
-    order by created_at desc
-    limit 1
-    `,
-    [companyId, provider],
-  )
-  return result.rows[0] ?? null
-}
-
-async function listIntegrationMappings(companyId: string, provider: string, entityType?: string | null) {
-  const filters: string[] = ['company_id = $1', 'provider = $2', 'deleted_at is null']
-  const values: unknown[] = [companyId, provider]
-  if (entityType) {
-    values.push(entityType)
-    filters.push(`entity_type = $${values.length}`)
-  }
-  const result = await pool.query(
-    `
-    select id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
-    from integration_mappings
-    where ${filters.join(' and ')}
-    order by entity_type asc, created_at asc
-    `,
-    values,
-  )
-  return result.rows as IntegrationMappingRow[]
-}
-
-async function upsertIntegrationMapping(
-  companyId: string,
-  provider: string,
-  values: {
-    entity_type: string
-    local_ref: string
-    external_id: string
-    label?: string | null
-    status?: string | null
-    notes?: string | null
-  },
-  executor: LedgerExecutor = pool,
-) {
-  const result = await executor.query(
-    `
-    insert into integration_mappings (company_id, provider, entity_type, local_ref, external_id, label, status, notes)
-    values ($1, $2, $3, $4, $5, $6, coalesce($7, 'active'), $8)
-    on conflict (company_id, provider, entity_type, local_ref)
-    do update set
-      external_id = excluded.external_id,
-      label = coalesce(excluded.label, integration_mappings.label),
-      status = coalesce(excluded.status, integration_mappings.status),
-      notes = coalesce(excluded.notes, integration_mappings.notes),
-      version = integration_mappings.version + 1,
-      updated_at = now(),
-      deleted_at = null
-    returning id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
-    `,
-    [
-      companyId,
-      provider,
-      values.entity_type,
-      values.local_ref,
-      values.external_id,
-      values.label ?? null,
-      values.status ?? 'active',
-      values.notes ?? null,
-    ],
-  )
-  return result.rows[0] as IntegrationMappingRow
-}
-
-async function backfillCustomerMapping(
-  companyId: string,
-  customer: { id: string; external_id: string | null; name: string },
-  executor: LedgerExecutor = pool,
-) {
-  if (!customer.external_id) return null
-  const mapping = await upsertIntegrationMapping(
-    companyId,
-    'qbo',
-    {
-      entity_type: 'customer',
-      local_ref: customer.id,
-      external_id: customer.external_id,
-      label: customer.name,
-      status: 'active',
-      notes: 'backfilled from customer external_id',
-    },
-    executor,
-  )
-  await recordMutationLedger(executor, {
-    companyId,
-    entityType: 'integration_mapping',
-    entityId: mapping.id,
-    action: 'upsert',
-    row: mapping,
-    syncPayload: { action: 'upsert', mapping },
-    outboxPayload: mapping as Record<string, unknown>,
-    idempotencyKey: `integration_mapping:qbo:${mapping.id}`,
-  })
-  return mapping
-}
-
-async function backfillServiceItemMapping(
-  companyId: string,
-  serviceItem: { code: string; name: string; source?: string | null },
-  externalId?: string | null,
-  executor: LedgerExecutor = pool,
-) {
-  const resolvedExternalId = externalId ?? (serviceItem.code.startsWith('qbo-') ? serviceItem.code.slice(4) : null)
-  if (!resolvedExternalId) return null
-  const mapping = await upsertIntegrationMapping(
-    companyId,
-    'qbo',
-    {
-      entity_type: 'service_item',
-      local_ref: serviceItem.code,
-      external_id: resolvedExternalId,
-      label: serviceItem.name,
-      status: 'active',
-      notes:
-        serviceItem.source === 'qbo'
-          ? 'backfilled from qbo service_item import'
-          : 'backfilled from qbo-prefixed service_item',
-    },
-    executor,
-  )
-  await recordMutationLedger(executor, {
-    companyId,
-    entityType: 'integration_mapping',
-    entityId: mapping.id,
-    action: 'upsert',
-    row: mapping,
-    syncPayload: { action: 'upsert', mapping },
-    outboxPayload: mapping as Record<string, unknown>,
-    idempotencyKey: `integration_mapping:qbo:${mapping.id}`,
-  })
-  return mapping
-}
-
-async function backfillDivisionMapping(
-  companyId: string,
-  division: { code: string; name: string },
-  externalId: string,
-  executor: LedgerExecutor = pool,
-) {
-  const mapping = await upsertIntegrationMapping(
-    companyId,
-    'qbo',
-    {
-      entity_type: 'division',
-      local_ref: division.code,
-      external_id: externalId,
-      label: division.name,
-      status: 'active',
-      notes: 'backfilled from qbo class sync',
-    },
-    executor,
-  )
-  await recordMutationLedger(executor, {
-    companyId,
-    entityType: 'integration_mapping',
-    entityId: mapping.id,
-    action: 'upsert',
-    row: mapping,
-    syncPayload: { action: 'upsert', mapping },
-    outboxPayload: mapping as Record<string, unknown>,
-    idempotencyKey: `integration_mapping:qbo:${mapping.id}`,
-  })
-  return mapping
-}
-
-async function backfillProjectMapping(
-  companyId: string,
-  project: { id: string; name: string },
-  externalId: string,
-  executor: LedgerExecutor = pool,
-) {
-  const mapping = await upsertIntegrationMapping(
-    companyId,
-    'qbo',
-    {
-      entity_type: 'project',
-      local_ref: project.id,
-      external_id: externalId,
-      label: project.name,
-      status: 'active',
-      notes: 'backfilled from qbo estimate push',
-    },
-    executor,
-  )
-  await recordMutationLedger(executor, {
-    companyId,
-    entityType: 'integration_mapping',
-    entityId: mapping.id,
-    action: 'upsert',
-    row: mapping,
-    syncPayload: { action: 'upsert', mapping },
-    outboxPayload: mapping as Record<string, unknown>,
-    idempotencyKey: `integration_mapping:qbo:${mapping.id}`,
-  })
-  return mapping
-}
-
-async function upsertIntegrationConnection(
-  companyId: string,
-  provider: string,
-  values: {
-    provider_account_id?: string | null
-    access_token?: string | null
-    refresh_token?: string | null
-    webhook_secret?: string | null
-    sync_cursor?: string | null
-    status?: string | null
-  },
-  executor: LedgerExecutor = pool,
-) {
-  const existing = await getIntegrationConnection(companyId, provider, executor)
-  if (!existing) {
-    const inserted = await executor.query(
-      `
-      insert into integration_connections (
-        company_id, provider, provider_account_id, access_token, refresh_token, webhook_secret, sync_cursor, status
-      )
-      values ($1, $2, $3, $4, $5, $6, $7, coalesce($8, 'connected'))
-      returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_state, rate_limit_state, status, version, created_at
-      `,
-      [
-        companyId,
-        provider,
-        values.provider_account_id ?? null,
-        values.access_token ?? null,
-        values.refresh_token ?? null,
-        values.webhook_secret ?? null,
-        values.sync_cursor ?? null,
-        values.status ?? 'connected',
-      ],
-    )
-    return inserted.rows[0]
-  }
-
-  const updated = await executor.query(
-    `
-    update integration_connections
-    set
-      provider_account_id = coalesce($3, provider_account_id),
-      access_token = coalesce($4, access_token),
-      refresh_token = coalesce($5, refresh_token),
-      webhook_secret = coalesce($6, webhook_secret),
-      sync_cursor = coalesce($7, sync_cursor),
-      status = coalesce($8, status),
-      last_synced_at = coalesce(last_synced_at, now()),
-      version = version + 1
-    where company_id = $1 and provider = $2 and id = $9
-    returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_state, rate_limit_state, status, version, created_at
-    `,
-    [
-      companyId,
-      provider,
-      values.provider_account_id ?? null,
-      values.access_token ?? null,
-      values.refresh_token ?? null,
-      values.webhook_secret ?? null,
-      values.sync_cursor ?? null,
-      values.status ?? null,
-      existing.id,
-    ],
-  )
-  return updated.rows[0] ?? existing
 }
 
 // countQueueRows / processQueue / getSyncStatus moved to routes/sync.ts.
@@ -1342,142 +926,17 @@ const server = http.createServer(async (req, res) => {
               }
             }
 
-            if (req.method === 'GET' && url.pathname === '/api/companies') {
-              const memberships = await getMemberships(identity.userId)
-              const companies = memberships.map((m) => ({
-                id: m.company_id,
-                slug: m.slug,
-                name: m.name,
-                created_at: m.created_at,
-                role: m.role,
-              }))
-              sendJson(res, 200, { companies })
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname === '/api/companies') {
-              const body = await readBody(req)
-              const slug = String(body.slug ?? '')
-                .trim()
-                .toLowerCase()
-              const name = String(body.name ?? '').trim()
-              if (!slug || !COMPANY_SLUG_PATTERN.test(slug)) {
-                sendJson(res, 400, { error: 'slug must be 2-64 chars, lowercase letters/digits/dashes' })
-                return
-              }
-              if (!name) {
-                sendJson(res, 400, { error: 'name is required' })
-                return
-              }
-              const seedDefaults = body.seed_defaults !== false
-              const client = await pool.connect()
-              try {
-                await client.query('begin')
-                const existing = await client.query('select id from companies where slug = $1 limit 1', [slug])
-                if (existing.rows[0]) {
-                  await client.query('rollback')
-                  sendJson(res, 409, { error: 'slug already in use' })
-                  return
-                }
-                const created = await client.query<{ id: string; slug: string; name: string; created_at: string }>(
-                  `insert into companies (slug, name) values ($1, $2)
-                   returning id, slug, name, created_at`,
-                  [slug, name],
-                )
-                const newCompany = created.rows[0]!
-                await client.query(
-                  `insert into company_memberships (company_id, clerk_user_id, role)
-                   values ($1, $2, 'admin')`,
-                  [newCompany.id, identity.userId],
-                )
-                if (seedDefaults) {
-                  await seedCompanyDefaults(client, newCompany.id)
-                }
-                await client.query('commit')
-                await recordAudit(pool, {
-                  companyId: newCompany.id,
-                  actorUserId: identity.userId,
-                  entityType: 'company',
-                  entityId: newCompany.id,
-                  action: 'create',
-                  after: newCompany,
-                })
-                observeAudit('company', 'create')
-                sendJson(res, 201, { company: newCompany, role: 'admin' })
-              } catch (err) {
-                await client.query('rollback').catch(() => {})
-                throw err
-              } finally {
-                client.release()
-              }
-              return
-            }
-
-            const companyMembershipMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/memberships$/)
-            if (req.method === 'POST' && companyMembershipMatch) {
-              const targetCompanyId = companyMembershipMatch[1]!
-              const adminCheck = await pool.query<{ role: string }>(
-                'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
-                [targetCompanyId, identity.userId],
-              )
-              if (!adminCheck.rows[0] || adminCheck.rows[0].role !== 'admin') {
-                sendJson(res, 403, { error: 'admin role required' })
-                return
-              }
-              const body = await readBody(req)
-              const inviteUserId = String(body.clerk_user_id ?? body.user_id ?? '').trim()
-              const role = String(body.role ?? 'member').trim() || 'member'
-              if (!inviteUserId) {
-                sendJson(res, 400, { error: 'clerk_user_id is required' })
-                return
-              }
-              if (!['admin', 'member', 'foreman', 'office'].includes(role)) {
-                sendJson(res, 400, { error: 'role must be admin, member, foreman, or office' })
-                return
-              }
-              const inserted = await pool.query<{
-                id: string
-                company_id: string
-                clerk_user_id: string
-                role: string
-                created_at: string
-              }>(
-                `insert into company_memberships (company_id, clerk_user_id, role)
-                 values ($1, $2, $3)
-                 on conflict (company_id, clerk_user_id) do update set role = excluded.role
-                 returning id, company_id, clerk_user_id, role, created_at`,
-                [targetCompanyId, inviteUserId, role],
-              )
-              const membership = inserted.rows[0]!
-              await recordAudit(pool, {
-                companyId: targetCompanyId,
-                actorUserId: identity.userId,
-                entityType: 'company_membership',
-                entityId: membership.id,
-                action: 'upsert',
-                after: membership,
+            // Company routes (GET/POST /api/companies,
+            // POST /api/companies/:id/memberships) handled by the extracted
+            // route module. See routes/companies.ts.
+            if (
+              await handleCompanyRoutes(req, url, {
+                pool,
+                userId: identity.userId,
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                readBody: () => readBody(req),
               })
-              observeAudit('company_membership', 'upsert')
-              await enqueueNotification({
-                companyId: targetCompanyId,
-                recipientUserId: membership.clerk_user_id,
-                kind: 'membership_welcome',
-                subject: `You've been added to Sitelayer as ${membership.role}`,
-                text: [
-                  `You've been added to a Sitelayer company as ${membership.role}.`,
-                  `Sign in to get started: https://sitelayer.sandolab.xyz/sign-in`,
-                ].join('\n\n'),
-                html: [
-                  `<p>You've been added to a Sitelayer company as <strong>${membership.role}</strong>.</p>`,
-                  `<p><a href="https://sitelayer.sandolab.xyz/sign-in">Sign in</a> to get started.</p>`,
-                ].join('\n'),
-                payload: {
-                  membership_id: membership.id,
-                  role: membership.role,
-                  invited_by: identity.userId,
-                },
-              })
-              sendJson(res, 201, { membership })
+            ) {
               return
             }
 
@@ -1530,7 +989,7 @@ const server = http.createServer(async (req, res) => {
 
             if (req.method === 'GET' && url.pathname === '/api/session') {
               const userId = getCurrentUserId(req)
-              const membershipRows = await getMemberships(userId)
+              const membershipRows = await getMemberships(pool, userId)
               sendJson(res, 200, {
                 user: { id: userId, role: membershipRows[0]?.role ?? 'admin' },
                 activeCompany: company,
@@ -1564,7 +1023,7 @@ const server = http.createServer(async (req, res) => {
                 checkVersion: (table, where, params, expectedVersion) =>
                   checkVersion(table, where, params, expectedVersion, res, req),
                 backfillCustomerMapping: (companyId, customer, executor) =>
-                  backfillCustomerMapping(companyId, customer, executor),
+                  backfillCustomerMapping(pool, companyId, customer, executor),
               })
             ) {
               return
@@ -1652,9 +1111,9 @@ const server = http.createServer(async (req, res) => {
                 checkVersion: (table, where, params, expectedVersion) =>
                   checkVersion(table, where, params, expectedVersion, res, req),
                 listMappings: (companyId, provider, entityType) =>
-                  listIntegrationMappings(companyId, provider, entityType),
+                  listIntegrationMappings(pool, companyId, provider, entityType),
                 upsertMapping: (companyId, provider, values, executor) =>
-                  upsertIntegrationMapping(companyId, provider, values, executor),
+                  upsertIntegrationMapping(pool, companyId, provider, values, executor),
               })
             ) {
               return
@@ -1674,692 +1133,28 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            if (req.method === 'GET' && url.pathname === '/api/integrations/qbo/auth') {
-              const state = encodeQboState({
-                companyId: company.id,
-                userId: getCurrentUserId(req),
-                exp: Date.now() + 10 * 60 * 1000,
-                nonce: randomUUID(),
-              })
-              const authUrl = `https://appcenter.intuit.com/connect/oauth2?client_id=${encodeURIComponent(qboClientId)}&redirect_uri=${encodeURIComponent(qboRedirectUri)}&response_type=code&scope=com.intuit.quickbooks.accounting&state=${encodeURIComponent(state)}`
-              sendJson(res, 200, { authUrl })
-              return
-            }
-
-            if (req.method === 'GET' && url.pathname === '/api/integrations/qbo/callback') {
-              const code = url.searchParams.get('code')
-              const realmId = url.searchParams.get('realmId')
-              const state = url.searchParams.get('state')
-              if (!code || !realmId || !state) {
-                sendJson(res, 400, { error: 'missing code, realmId, or state' })
-                return
-              }
-              let stateData: QboOAuthState
-              try {
-                stateData = decodeQboState(state)
-              } catch (error) {
-                const status = error instanceof HttpError ? error.status : 400
-                sendJson(res, status, { error: error instanceof Error ? error.message : 'invalid state' })
-                return
-              }
-              const stateMembership = await pool.query(
-                'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
-                [stateData.companyId, stateData.userId],
-              )
-              if (!stateMembership.rows.length) {
-                sendJson(res, 403, { error: 'state user is not a member of this company' })
-                return
-              }
-              const auth = Buffer.from(`${qboClientId}:${qboClientSecret}`).toString('base64')
-              const tokenResponse = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/x-www-form-urlencoded',
-                  Authorization: `Basic ${auth}`,
+            // QBO auth, connection, and sync routes. See routes/qbo.ts.
+            if (
+              await handleQboRoutes(req, url, {
+                pool,
+                company,
+                currentUserId: getCurrentUserId(req),
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                sendRedirect: (location) => sendRedirect(res, location),
+                qboConfig: {
+                  clientId: qboClientId,
+                  clientSecret: qboClientSecret,
+                  redirectUri: qboRedirectUri,
+                  successRedirectUri: qboSuccessRedirectUri,
+                  stateSecret: qboStateSecret,
+                  baseUrl: qboBaseUrl,
                 },
-                body: new URLSearchParams({
-                  grant_type: 'authorization_code',
-                  code,
-                  redirect_uri: qboRedirectUri,
-                }).toString(),
               })
-              if (!tokenResponse.ok) {
-                sendJson(res, 400, { error: 'token exchange failed' })
-                return
-              }
-              const tokenData = (await tokenResponse.json()) as {
-                access_token: string
-                refresh_token: string
-                expires_in: number
-              }
-              const connection = await withMutationTx(async (client) => {
-                const row = await upsertIntegrationConnection(
-                  stateData.companyId,
-                  'qbo',
-                  {
-                    provider_account_id: realmId,
-                    access_token: tokenData.access_token,
-                    refresh_token: tokenData.refresh_token,
-                    status: 'connected',
-                  },
-                  client,
-                )
-                await recordSyncEvent(
-                  stateData.companyId,
-                  'integration_connection',
-                  row.id,
-                  { action: 'oauth_connect', provider: 'qbo' },
-                  null,
-                  { executor: client },
-                )
-                return row
-              })
-              if (qboSuccessRedirectUri) {
-                sendRedirect(res, qboSuccessRedirectUri)
-                return
-              }
-              sendJson(res, 200, { connection, success: true })
+            ) {
               return
             }
-
-            if (req.method === 'GET' && url.pathname === '/api/integrations/qbo') {
-              const connection = await getIntegrationConnection(company.id, 'qbo')
-              sendJson(res, 200, {
-                connection,
-                status: await getSyncStatus(pool, company.id),
-              })
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname === '/api/integrations/qbo') {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const body = await readBody(req)
-              const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-              const currentConnection = await getIntegrationConnection(company.id, 'qbo')
-              if (
-                currentConnection &&
-                expectedVersion !== null &&
-                Number(currentConnection.version) !== expectedVersion
-              ) {
-                sendJson(res, 409, { error: 'version conflict', current_version: Number(currentConnection.version) })
-                return
-              }
-              const connection = await withMutationTx(async (client) => {
-                const row = await upsertIntegrationConnection(
-                  company.id,
-                  'qbo',
-                  {
-                    provider_account_id: body.provider_account_id ?? null,
-                    access_token: body.access_token ?? null,
-                    refresh_token: body.refresh_token ?? null,
-                    webhook_secret: body.webhook_secret ?? null,
-                    sync_cursor: body.sync_cursor ?? null,
-                    status: body.status ?? 'connected',
-                  },
-                  client,
-                )
-                await recordMutationLedger(client, {
-                  companyId: company.id,
-                  entityType: 'integration_connection',
-                  entityId: row.id,
-                  action: 'upsert',
-                  row,
-                  syncPayload: {
-                    action: currentConnection ? 'upsert' : 'create',
-                    provider: 'qbo',
-                    connection: row,
-                  },
-                  idempotencyKey: `integration_connection:qbo:${row.id}`,
-                })
-                return row
-              })
-              sendJson(res, 200, { connection })
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname === '/api/integrations/qbo/sync') {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const connection = await getIntegrationConnectionWithSecrets(company.id, 'qbo')
-              await upsertIntegrationConnection(company.id, 'qbo', { status: 'syncing' })
-              try {
-                if (!connection?.access_token) {
-                  const customersResult = await pool.query(
-                    'select id, external_id, name from customers where company_id = $1 and deleted_at is null and external_id is not null',
-                    [company.id],
-                  )
-                  const serviceItemsResult = await pool.query(
-                    "select code, name, source from service_items where company_id = $1 and deleted_at is null and (source = 'qbo' or code like 'qbo-%')",
-                    [company.id],
-                  )
-                  const divisionsResult = await pool.query(
-                    'select code, name from divisions where company_id = $1 order by sort_order asc',
-                    [company.id],
-                  )
-                  const qboSnapshot = {
-                    syncedCustomers: customersResult.rowCount,
-                    syncedItems: serviceItemsResult.rowCount,
-                    syncedDivisions: divisionsResult.rowCount,
-                    simulated: true,
-                  }
-                  // Refresh integration_mappings for the company's existing
-                  // QBO-tagged rows. The simulated sync just rebuilds the
-                  // mapping table from local data; one tx per entity type
-                  // keeps the mapping refresh atomic per kind.
-                  await withMutationTx(async (client) => {
-                    for (const row of customersResult.rows) {
-                      const customer = row as { id: string; external_id: string; name: string }
-                      await backfillCustomerMapping(company.id, customer, client)
-                    }
-                    for (const row of serviceItemsResult.rows) {
-                      const serviceItem = row as { code: string; name: string; source?: string | null }
-                      await backfillServiceItemMapping(
-                        company.id,
-                        serviceItem,
-                        serviceItem.code.startsWith('qbo-') ? serviceItem.code.slice(4) : null,
-                        client,
-                      )
-                    }
-                    for (const row of divisionsResult.rows) {
-                      const division = row as { code: string; name: string }
-                      await backfillDivisionMapping(company.id, division, division.code, client)
-                    }
-                  })
-                  const refreshed = await withMutationTx(async (client) => {
-                    const result = await client.query(
-                      `
-            update integration_connections
-            set sync_cursor = $2, last_synced_at = now(), status = 'connected', version = version + 1
-            where company_id = $1 and provider = 'qbo'
-            returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_state, rate_limit_state, status, version, created_at
-            `,
-                      [company.id, new Date().toISOString()],
-                    )
-                    const row = result.rows[0]
-                    const connectionId = connection?.id ?? row.id
-                    await recordMutationLedger(client, {
-                      companyId: company.id,
-                      entityType: 'integration_connection',
-                      entityId: connectionId,
-                      action: 'sync',
-                      syncPayload: {
-                        action: 'sync',
-                        provider: 'qbo',
-                        snapshot: qboSnapshot,
-                        simulated: true,
-                      },
-                      outboxPayload: qboSnapshot,
-                      idempotencyKey: `integration_connection:qbo:sync:${connectionId}`,
-                    })
-                    return row
-                  })
-                  sendJson(res, 200, {
-                    connection: refreshed,
-                    snapshot: qboSnapshot,
-                  })
-                  return
-                }
-                const realmId = connection.provider_account_id ?? ''
-                const accessToken = connection.access_token ?? ''
-
-                // QBO returns PascalCase field names; some legacy responses use camelCase
-                // so we accept both shapes when reading.
-                type QboCustomer = { Id?: string; DisplayName?: string; id?: string; displayName?: string }
-                let qboCustomers: QboCustomer[] = []
-                try {
-                  const customerResponse = await qboGet<{ QueryResponse?: { Customer?: QboCustomer[] } }>(
-                    `/query?query=${encodeURIComponent('SELECT * FROM Customer')}`,
-                    realmId,
-                    accessToken,
-                  )
-                  qboCustomers = customerResponse.QueryResponse?.Customer ?? []
-                } catch (e) {
-                  logger.error({ err: e, scope: 'qbo_customers' }, 'Failed to sync customers from QBO')
-                  Sentry.captureException(e, { tags: { scope: 'qbo_customers' } })
-                }
-
-                // Upsert QBO customers in one batch instead of N round-trips.
-                // External-id and name arrays are zipped via unnest; the mapping
-                // upsert reuses the resulting customer ids so we don't have to
-                // re-query.
-                const customerExternalIds: string[] = []
-                const customerNames: string[] = []
-                for (const qboCustomer of qboCustomers) {
-                  const externalId = String(qboCustomer.Id ?? qboCustomer.id ?? '')
-                  if (!externalId) continue
-                  const name = qboCustomer.DisplayName ?? qboCustomer.displayName ?? externalId
-                  customerExternalIds.push(externalId)
-                  customerNames.push(name)
-                }
-                const syncedCustomers: string[] = []
-                if (customerExternalIds.length > 0) {
-                  await withMutationTx(async (client) => {
-                    const upserted = await client.query<{
-                      id: string
-                      external_id: string
-                      name: string
-                    }>(
-                      `
-            insert into customers (company_id, external_id, name, source)
-            select $1::uuid, t.external_id, t.name, 'qbo'
-            from unnest($2::text[], $3::text[]) as t(external_id, name)
-            on conflict (company_id, external_id) do update set name = excluded.name, updated_at = now()
-            returning id, external_id, name
-            `,
-                      [company.id, customerExternalIds, customerNames],
-                    )
-                    const localRefs: string[] = []
-                    const externalIds: string[] = []
-                    const labels: string[] = []
-                    for (const row of upserted.rows) {
-                      localRefs.push(row.id)
-                      externalIds.push(row.external_id)
-                      labels.push(row.name)
-                      syncedCustomers.push(row.external_id)
-                    }
-                    await client.query(
-                      `
-            insert into integration_mappings (company_id, provider, entity_type, local_ref, external_id, label, status, notes)
-            select $1::uuid, 'qbo', 'customer', local_ref, external_id, label, 'active', 'synced from qbo customer import'
-            from unnest($2::text[], $3::text[], $4::text[]) as t(local_ref, external_id, label)
-            on conflict (company_id, provider, entity_type, local_ref)
-            do update set
-              external_id = excluded.external_id,
-              label = excluded.label,
-              status = excluded.status,
-              notes = excluded.notes,
-              version = integration_mappings.version + 1,
-              updated_at = now(),
-              deleted_at = null
-            `,
-                      [company.id, localRefs, externalIds, labels],
-                    )
-                  })
-                }
-
-                // Fetch items from QBO. Parse each row through `parseQboItem`
-                // so we get a stable shape regardless of PascalCase vs
-                // camelCase variance from Intuit. A QboParseError on any row
-                // is recorded as a sync_event so the failure isn't silently
-                // dropped.
-                let qboItemsRaw: unknown[] = []
-                try {
-                  const itemResponse = await qboGet<{ QueryResponse?: { Item?: unknown[] } }>(
-                    `/query?query=${encodeURIComponent("SELECT * FROM Item WHERE Type IN ('Service', 'Inventory')")}`,
-                    realmId,
-                    accessToken,
-                  )
-                  qboItemsRaw = itemResponse.QueryResponse?.Item ?? []
-                } catch (e) {
-                  logger.error({ err: e, scope: 'qbo_items' }, 'Failed to sync items from QBO')
-                  Sentry.captureException(e, { tags: { scope: 'qbo_items' } })
-                }
-
-                // Parse first, write second: parse failures emit per-row
-                // sync_event markers, then the survivors are upserted in one
-                // batch. Same idea as the customers path above.
-                const itemCodes: string[] = []
-                const itemNames: string[] = []
-                const itemPrices: string[] = []
-                const itemExternalIds: string[] = []
-                for (const rawItem of qboItemsRaw) {
-                  let qboItem
-                  try {
-                    qboItem = parseQboItem(rawItem)
-                  } catch (e) {
-                    if (e instanceof QboParseError) {
-                      logger.error({ err: e, scope: 'qbo_items_parse' }, 'QBO item parse failed')
-                      Sentry.captureException(e, { tags: { scope: 'qbo_items_parse' } })
-                      await recordSyncEvent(
-                        company.id,
-                        'service_item',
-                        'unknown',
-                        { action: 'parse_failed', provider: 'qbo', raw: e.raw },
-                        connection.id,
-                        { status: 'failed', error: e.message },
-                      )
-                      continue
-                    }
-                    throw e
-                  }
-                  itemCodes.push(`qbo-${qboItem.id}`)
-                  itemNames.push(qboItem.name)
-                  itemPrices.push(String(qboItem.unitPrice ?? 0))
-                  itemExternalIds.push(qboItem.id)
-                }
-                const syncedItems: string[] = []
-                if (itemCodes.length > 0) {
-                  await withMutationTx(async (client) => {
-                    const upserted = await client.query<{ code: string; name: string }>(
-                      `
-            insert into service_items (company_id, code, name, default_rate, category, unit, source)
-            select $1::uuid, t.code, t.name, t.price::numeric, 'accounting', 'ea', 'qbo'
-            from unnest($2::text[], $3::text[], $4::text[]) as t(code, name, price)
-            on conflict (company_id, code) do update set
-              name = excluded.name,
-              default_rate = excluded.default_rate,
-              source = 'qbo',
-              updated_at = now()
-            returning code, name
-            `,
-                      [company.id, itemCodes, itemNames, itemPrices],
-                    )
-                    for (const row of upserted.rows) {
-                      syncedItems.push(row.code)
-                    }
-                    await client.query(
-                      `
-            insert into integration_mappings (company_id, provider, entity_type, local_ref, external_id, label, status, notes)
-            select $1::uuid, 'qbo', 'service_item', t.local_ref, t.external_id, t.label, 'active', 'backfilled from qbo service_item import'
-            from unnest($2::text[], $3::text[], $4::text[]) as t(local_ref, external_id, label)
-            on conflict (company_id, provider, entity_type, local_ref)
-            do update set
-              external_id = excluded.external_id,
-              label = excluded.label,
-              status = excluded.status,
-              notes = excluded.notes,
-              version = integration_mappings.version + 1,
-              updated_at = now(),
-              deleted_at = null
-            `,
-                      [company.id, itemCodes, itemExternalIds, itemNames],
-                    )
-                  })
-                }
-
-                // Fetch classes from QBO and backfill division mappings by
-                // name match. Per-row parse failures are recorded as
-                // sync_events; the overall sync continues.
-                let qboClassesRaw: unknown[] = []
-                try {
-                  const classResponse = await qboGet<{ QueryResponse?: { Class?: unknown[] } }>(
-                    `/query?query=${encodeURIComponent('SELECT * FROM Class')}`,
-                    realmId,
-                    accessToken,
-                  )
-                  qboClassesRaw = classResponse.QueryResponse?.Class ?? []
-                } catch (e) {
-                  logger.error({ err: e, scope: 'qbo_classes' }, 'Failed to sync classes from QBO')
-                  Sentry.captureException(e, { tags: { scope: 'qbo_classes' } })
-                }
-
-                const divisionsResult = await pool.query(
-                  'select code, name from divisions where company_id = $1 order by sort_order asc',
-                  [company.id],
-                )
-                // Match QBO classes against local divisions in memory, then
-                // batch the resulting integration_mapping upserts.
-                const divisionLocalRefs: string[] = []
-                const divisionExternalIds: string[] = []
-                const divisionLabels: string[] = []
-                const syncedDivisions: string[] = []
-                for (const rawClass of qboClassesRaw) {
-                  let qboClass
-                  try {
-                    qboClass = parseQboClass(rawClass)
-                  } catch (e) {
-                    if (e instanceof QboParseError) {
-                      logger.error({ err: e, scope: 'qbo_classes_parse' }, 'QBO class parse failed')
-                      Sentry.captureException(e, { tags: { scope: 'qbo_classes_parse' } })
-                      await recordSyncEvent(
-                        company.id,
-                        'division',
-                        'unknown',
-                        { action: 'parse_failed', provider: 'qbo', raw: e.raw },
-                        connection.id,
-                        { status: 'failed', error: e.message },
-                      )
-                      continue
-                    }
-                    throw e
-                  }
-                  const division = divisionsResult.rows.find(
-                    (row) =>
-                      row.name.toLowerCase() === qboClass.name.toLowerCase() ||
-                      row.code.toLowerCase() === qboClass.name.toLowerCase(),
-                  )
-                  if (!division) continue
-                  divisionLocalRefs.push(division.code)
-                  divisionExternalIds.push(qboClass.id)
-                  divisionLabels.push(division.name)
-                  syncedDivisions.push(division.code)
-                }
-                if (divisionLocalRefs.length > 0) {
-                  await withMutationTx(async (client) => {
-                    await client.query(
-                      `
-            insert into integration_mappings (company_id, provider, entity_type, local_ref, external_id, label, status, notes)
-            select $1::uuid, 'qbo', 'division', t.local_ref, t.external_id, t.label, 'active', 'backfilled from qbo class sync'
-            from unnest($2::text[], $3::text[], $4::text[]) as t(local_ref, external_id, label)
-            on conflict (company_id, provider, entity_type, local_ref)
-            do update set
-              external_id = excluded.external_id,
-              label = excluded.label,
-              status = excluded.status,
-              notes = excluded.notes,
-              version = integration_mappings.version + 1,
-              updated_at = now(),
-              deleted_at = null
-            `,
-                      [company.id, divisionLocalRefs, divisionExternalIds, divisionLabels],
-                    )
-                  })
-                }
-
-                const qboSnapshot = {
-                  syncedCustomers: syncedCustomers.length,
-                  syncedItems: syncedItems.length,
-                  syncedDivisions: syncedDivisions.length,
-                }
-
-                const refreshed = await withMutationTx(async (client) => {
-                  const result = await client.query(
-                    `
-          update integration_connections
-          set sync_cursor = $2, last_synced_at = now(), status = 'connected', version = version + 1
-          where company_id = $1 and provider = 'qbo'
-          returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_state, rate_limit_state, status, version, created_at
-          `,
-                    [company.id, new Date().toISOString()],
-                  )
-                  await recordMutationLedger(client, {
-                    companyId: company.id,
-                    entityType: 'integration_connection',
-                    entityId: connection.id,
-                    action: 'sync',
-                    syncPayload: { action: 'sync', provider: 'qbo', snapshot: qboSnapshot },
-                    outboxPayload: qboSnapshot,
-                    idempotencyKey: `integration_connection:qbo:sync:${connection.id}`,
-                  })
-                  return result.rows[0] ?? connection
-                })
-
-                sendJson(res, 200, {
-                  connection: refreshed,
-                  snapshot: qboSnapshot,
-                })
-              } catch (error) {
-                logger.error({ err: error, scope: 'qbo_sync' }, 'QBO sync error')
-                Sentry.captureException(error, { tags: { scope: 'qbo_sync' } })
-                await upsertIntegrationConnection(company.id, 'qbo', { status: 'error' })
-                sendJson(res, 500, { error: 'sync failed' })
-              }
-              return
-            }
-
-            // Push unsynced material_bills rows to QBO as Bills.
-            //
-            // Contract with the frontend/accounting ops:
-            //   - A mapping of entity_type='qbo_account' and local_ref='materials'
-            //     is required. The `external_id` is the QBO AccountRef.value for
-            //     the Materials expense account. Without it we error per-bill
-            //     rather than fabricating a default account.
-            //   - Vendors are resolved by DisplayName — we search QBO for one
-            //     matching `material_bills.vendor_name`, and create it if not
-            //     found. The resolved vendor is mirrored into
-            //     integration_mappings(entity_type='qbo_vendor', local_ref=vendor_name).
-            if (req.method === 'POST' && url.pathname === '/api/integrations/qbo/sync/material-bills') {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const connection = await getIntegrationConnectionWithSecrets(company.id, 'qbo')
-              if (!connection?.access_token || !connection.provider_account_id) {
-                sendJson(res, 400, { error: 'QBO connection missing or not authorized' })
-                return
-              }
-              const realmId = connection.provider_account_id as string
-              const accessToken = connection.access_token as string
-
-              const accountMappingResult = await pool.query<{ external_id: string }>(
-                `select external_id from integration_mappings
-                 where company_id = $1 and provider = 'qbo'
-                   and entity_type = 'qbo_account' and local_ref = 'materials'
-                   and deleted_at is null
-                 limit 1`,
-                [company.id],
-              )
-              const materialsAccountId = accountMappingResult.rows[0]?.external_id ?? null
-
-              const unsynced = await pool.query<{
-                id: string
-                vendor_name: string
-                amount: string | number
-                description: string | null
-                occurred_on: string | null
-              }>(
-                `select mb.id, mb.vendor_name, mb.amount, mb.description, mb.occurred_on
-                 from material_bills mb
-                 where mb.company_id = $1 and mb.deleted_at is null
-                   and not exists (
-                     select 1 from integration_mappings im
-                     where im.company_id = mb.company_id and im.provider = 'qbo'
-                       and im.entity_type = 'material_bill' and im.local_ref = mb.id::text
-                       and im.deleted_at is null
-                   )`,
-                [company.id],
-              )
-
-              const errors: Array<{ bill_id: string; error: string }> = []
-              let synced = 0
-              // Cache vendor lookups within this request so N bills from one
-              // vendor only hit QBO once.
-              const vendorCache = new Map<string, string>()
-
-              for (const bill of unsynced.rows) {
-                if (!materialsAccountId) {
-                  errors.push({
-                    bill_id: bill.id,
-                    error: 'no Materials account mapped — set via /api/integrations/qbo/mappings',
-                  })
-                  continue
-                }
-                try {
-                  const displayName = bill.vendor_name.trim()
-                  if (!displayName) {
-                    errors.push({ bill_id: bill.id, error: 'vendor_name is empty' })
-                    continue
-                  }
-                  let vendorId = vendorCache.get(displayName) ?? null
-                  if (!vendorId) {
-                    // Try a cached mapping first — if we pushed a bill for
-                    // this vendor in a previous run we don't need to hit QBO.
-                    const mappedVendor = await pool.query<{ external_id: string }>(
-                      `select external_id from integration_mappings
-                       where company_id = $1 and provider = 'qbo'
-                         and entity_type = 'qbo_vendor' and local_ref = $2
-                         and deleted_at is null
-                       limit 1`,
-                      [company.id, displayName],
-                    )
-                    vendorId = mappedVendor.rows[0]?.external_id ?? null
-                  }
-                  if (!vendorId) {
-                    // QBO vendor query is quoted via single-quotes; escape any
-                    // embedded quotes to avoid breaking the V2 query grammar.
-                    const escaped = displayName.replace(/'/g, "\\'")
-                    const vendorSearch = await qboGet<{ QueryResponse?: { Vendor?: Array<{ Id?: string }> } }>(
-                      `/query?query=${encodeURIComponent(`select * from Vendor where DisplayName = '${escaped}'`)}`,
-                      realmId,
-                      accessToken,
-                    )
-                    vendorId = vendorSearch.QueryResponse?.Vendor?.[0]?.Id ?? null
-                    if (!vendorId) {
-                      const created = await qboPost<{ Vendor?: { Id?: string } }>(`/vendor`, realmId, accessToken, {
-                        DisplayName: displayName,
-                      })
-                      vendorId = created.Vendor?.Id ?? null
-                    }
-                    if (!vendorId) {
-                      errors.push({ bill_id: bill.id, error: 'failed to resolve or create QBO vendor' })
-                      continue
-                    }
-                    vendorCache.set(displayName, vendorId)
-                    await upsertIntegrationMapping(company.id, 'qbo', {
-                      entity_type: 'qbo_vendor',
-                      local_ref: displayName,
-                      external_id: vendorId,
-                      label: displayName,
-                      status: 'active',
-                      notes: 'resolved via material-bill push',
-                    })
-                  }
-
-                  const amount = Number(bill.amount) || 0
-                  const billPayload = {
-                    VendorRef: { value: vendorId },
-                    TxnDate: bill.occurred_on ?? undefined,
-                    Line: [
-                      {
-                        Amount: amount,
-                        DetailType: 'AccountBasedExpenseLineDetail',
-                        Description: bill.description ?? undefined,
-                        AccountBasedExpenseLineDetail: {
-                          AccountRef: { value: materialsAccountId },
-                        },
-                      },
-                    ],
-                  }
-                  const response = await qboPost<{ Bill?: { Id?: string } }>(`/bill`, realmId, accessToken, billPayload)
-                  const qboBillId = response.Bill?.Id ?? null
-                  if (!qboBillId) {
-                    errors.push({ bill_id: bill.id, error: 'QBO did not return a Bill.Id' })
-                    continue
-                  }
-                  // Pair the mapping upsert with the success ledger row so we
-                  // never end up with a `material_bill:push` sync_event for a
-                  // bill that has no integration_mapping (or vice versa).
-                  await withMutationTx(async (client) => {
-                    await upsertIntegrationMapping(
-                      company.id,
-                      'qbo',
-                      {
-                        entity_type: 'material_bill',
-                        local_ref: bill.id,
-                        external_id: qboBillId,
-                        label: `${displayName} ${amount}`,
-                        status: 'active',
-                        notes: 'pushed via /sync/material-bills',
-                      },
-                      client,
-                    )
-                    await recordSyncEvent(
-                      company.id,
-                      'material_bill',
-                      bill.id,
-                      { action: 'push', provider: 'qbo', external_id: qboBillId },
-                      null,
-                      { executor: client },
-                    )
-                  })
-                  synced += 1
-                } catch (err) {
-                  const message = err instanceof Error ? err.message : 'unknown error'
-                  logger.error({ err, scope: 'qbo_material_bill_push', bill_id: bill.id }, 'material bill push failed')
-                  Sentry.captureException(err, { tags: { scope: 'qbo_material_bill_push' } })
-                  errors.push({ bill_id: bill.id, error: message })
-                }
-              }
-              sendJson(res, 200, { synced, errors, total_candidates: unsynced.rowCount ?? 0 })
-              return
-            }
-
             // Service-item mutation routes (POST /api/service-items,
             // PATCH/DELETE /api/service-items/<code>) handled by the
             // extracted route module. Code-keyed (not uuid). See
@@ -2488,109 +1283,6 @@ const server = http.createServer(async (req, res) => {
                   checkVersion(table, where, params, expectedVersion, res, req),
               })
             ) {
-              return
-            }
-
-            if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/push-qbo$/)) {
-              if (!requireRole(res, company, ['admin', 'office'], req)) return
-              const projectId = url.pathname.split('/')[3] ?? ''
-              if (!projectId) {
-                sendJson(res, 400, { error: 'project id is required' })
-                return
-              }
-              const connection = await getIntegrationConnectionWithSecrets(company.id, 'qbo')
-
-              const projectResult = await pool.query(
-                'select id, name, customer_name, bid_total from projects where company_id = $1 and id = $2',
-                [company.id, projectId],
-              )
-              if (!projectResult.rows[0]) {
-                sendJson(res, 404, { error: 'project not found' })
-                return
-              }
-
-              const project = projectResult.rows[0]
-              try {
-                if (!connection?.access_token) {
-                  const simulatedExternalId = `SIM-EST-${project.id.slice(0, 8)}`
-                  const payload = {
-                    simulated: true,
-                    estimateId: simulatedExternalId,
-                    projectId: project.id,
-                    projectName: project.name,
-                    amount: project.bid_total,
-                  }
-                  await withMutationTx(async (client) => {
-                    await backfillProjectMapping(company.id, project, simulatedExternalId, client)
-                    await recordMutationLedger(client, {
-                      companyId: company.id,
-                      entityType: 'project',
-                      entityId: project.id,
-                      action: 'push-qbo',
-                      syncPayload: { action: 'push_qbo', payload, simulated: true },
-                      outboxPayload: payload,
-                    })
-                  })
-                  sendJson(res, 200, payload)
-                  return
-                }
-                const estimatePayload = {
-                  DocNumber: `EST-${project.id.slice(0, 8)}`,
-                  CustomerRef: { value: connection.provider_account_id },
-                  Line: [
-                    {
-                      Amount: Number(project.bid_total),
-                      Description: project.name,
-                      DetailType: 'SalesItemLineDetail',
-                      SalesItemLineDetail: {
-                        Qty: 1,
-                        UnitPrice: Number(project.bid_total),
-                      },
-                    },
-                  ],
-                }
-
-                const result = await qboPost(
-                  '/estimate',
-                  connection.provider_account_id ?? '',
-                  connection.access_token ?? '',
-                  estimatePayload,
-                )
-
-                let qboEstimateId = ''
-                try {
-                  qboEstimateId = parseQboEstimateCreateResponse(result).id
-                } catch (e) {
-                  if (e instanceof QboParseError) {
-                    logger.error({ err: e, scope: 'qbo_push_estimate_parse' }, 'QBO estimate response parse failed')
-                    Sentry.captureException(e, { tags: { scope: 'qbo_push_estimate_parse' } })
-                    await recordSyncEvent(
-                      company.id,
-                      'project',
-                      projectId,
-                      { action: 'push_qbo', provider: 'qbo', raw: e.raw },
-                      connection.id ?? null,
-                      { status: 'failed', error: e.message },
-                    )
-                    sendJson(res, 502, { error: 'qbo returned malformed estimate response' })
-                    return
-                  }
-                  throw e
-                }
-                await withMutationTx(async (client) => {
-                  if (qboEstimateId) {
-                    await backfillProjectMapping(company.id, project, qboEstimateId, client)
-                  }
-                  await recordSyncEvent(company.id, 'project', projectId, { action: 'push_qbo', result }, null, {
-                    executor: client,
-                  })
-                })
-                sendJson(res, 200, { success: true, result })
-              } catch (error) {
-                logger.error({ err: error, scope: 'qbo_push_estimate' }, 'Failed to push estimate to QBO')
-                Sentry.captureException(error, { tags: { scope: 'qbo_push_estimate' } })
-                sendJson(res, 500, { error: 'failed to push estimate to qbo' })
-              }
               return
             }
 
