@@ -2,7 +2,6 @@ import { lazy, Suspense, useCallback, useEffect, useState, type ComponentProps }
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
 import { SignedIn, SignedOut, SignIn, SignUp, UserButton, useAuth, useUser } from '@clerk/clerk-react'
 import {
-  apiGet,
   DEFAULT_COMPANY_SLUG,
   FIXTURES_ENABLED,
   getStoredCompanySlug,
@@ -15,6 +14,7 @@ import { EnvironmentRibbon } from './components/environment-ribbon.js'
 import { SyncStatusBadge } from './components/sync-status-badge.js'
 import { useBootstrapRefresh } from './machines/bootstrap-refresh.js'
 import { useDayConfirmed } from './machines/day-confirmed.js'
+import { useFeatures } from './machines/features.js'
 import { useOfflineReplay } from './machines/offline-replay.js'
 import { useProjectSelection } from './machines/project-selection.js'
 import { Button } from './components/ui/button.js'
@@ -135,20 +135,7 @@ export function App() {
 
 function UnauthShell() {
   // Best-effort tier ribbon for unsigned users — does not require a token.
-  const [features, setFeatures] = useState<FeaturesResponse | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    apiGet<FeaturesResponse>('/api/features', DEFAULT_COMPANY_SLUG)
-      .then((data) => {
-        if (!cancelled) setFeatures(data)
-      })
-      .catch(() => {
-        /* ribbon is best-effort */
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  const features = useFeatures(DEFAULT_COMPANY_SLUG)
 
   return (
     <main className="shell">
@@ -201,24 +188,11 @@ function AppShell() {
   // Offline-replay XState machine owns the offline queue depth, replay loop,
   // and online event listener. See machines/offline-replay.ts.
   const { offlineQueue } = useOfflineReplay(companySlug)
-  const [features, setFeatures] = useState<FeaturesResponse | null>(null)
+  // Tier ribbon features fetched per company — see machines/features.ts.
+  const features = useFeatures(companySlug)
   // Today's confirm state is owned by useDayConfirmed — reads localStorage,
   // refreshes on the `sitelayer:day-confirmed` window event.
   const confirmDoneToday = useDayConfirmed()
-
-  useEffect(() => {
-    let cancelled = false
-    apiGet<FeaturesResponse>('/api/features', companySlug)
-      .then((data) => {
-        if (!cancelled) setFeatures(data)
-      })
-      .catch(() => {
-        /* ribbon is best-effort; don't block app */
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [companySlug])
 
   useEffect(() => {
     setStoredCompanySlug(companySlug)
