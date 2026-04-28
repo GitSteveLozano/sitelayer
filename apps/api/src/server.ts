@@ -2849,6 +2849,30 @@ const server = http.createServer(async (req, res) => {
             }
 
             if (req.method === 'GET' && url.pathname === '/api/bootstrap') {
+              // ETag short-circuit using the company-bootstrap-state token
+              // bumped by per-statement triggers on every bootstrap-source
+              // table (migration 014). Saves the 11-query fan-out on a
+              // session restore where nothing has changed.
+              const tokenResult = await pool.query<{ token: string | null }>(
+                'select token from company_bootstrap_state where company_id = $1',
+                [company.id],
+              )
+              const token = tokenResult.rows[0]?.token
+              const etag = token ? `"${token}"` : null
+              if (etag) {
+                res.setHeader('ETag', etag)
+                res.setHeader('Cache-Control', 'private, no-cache')
+                const ifNoneMatch = req.headers['if-none-match']
+                const candidate = Array.isArray(ifNoneMatch) ? ifNoneMatch[0] : ifNoneMatch
+                if (candidate && candidate === etag) {
+                  res.writeHead(304, {
+                    ETag: etag,
+                    'access-control-allow-origin': getCorsOrigin(req),
+                  })
+                  res.end()
+                  return
+                }
+              }
               const bootstrap = await loadBootstrap(company.id)
               sendJson(res, 200, { company, ...bootstrap })
               return
