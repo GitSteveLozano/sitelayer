@@ -88,22 +88,28 @@ function detectColumn(header: string): keyof InventoryItemInput | null {
 }
 
 function parseCsv(text: string): { headers: string[]; rows: string[][] } {
-  // Naive CSV parser — splits on newlines and commas, handles quoted fields
-  // with embedded commas. Good enough for inventory imports; users with weird
-  // data should sanitize externally.
+  // Handles comma/semicolon CSV plus tab-separated rows copied or exported
+  // from Excel/Sheets. This keeps the browser bundle small while covering the
+  // common "Excel import" workflow without a spreadsheet parser dependency.
   const lines = text.split(/\r?\n/).filter((line) => line.length > 0)
   if (!lines.length) return { headers: [], rows: [] }
+  const delimiter = detectDelimiter(lines[0]!)
   const parseLine = (line: string): string[] => {
     const out: string[] = []
     let current = ''
     let inQuotes = false
     for (let i = 0; i < line.length; i += 1) {
       const ch = line[i]
-      if (ch === '"' && line[i - 1] !== '\\') {
+      if (ch === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"'
+          i += 1
+          continue
+        }
         inQuotes = !inQuotes
         continue
       }
-      if (ch === ',' && !inQuotes) {
+      if (ch === delimiter && !inQuotes) {
         out.push(current)
         current = ''
         continue
@@ -116,6 +122,20 @@ function parseCsv(text: string): { headers: string[]; rows: string[][] } {
   const headers = parseLine(lines[0]!)
   const rows = lines.slice(1).map(parseLine)
   return { headers, rows }
+}
+
+function detectDelimiter(headerLine: string): ',' | '\t' | ';' {
+  const candidates = [',', '\t', ';'] as const
+  let best: ',' | '\t' | ';' = candidates[0]
+  let bestCount = -1
+  for (const delimiter of candidates) {
+    const count = headerLine.split(delimiter).length - 1
+    if (count > bestCount) {
+      best = delimiter
+      bestCount = count
+    }
+  }
+  return best
 }
 
 export function InventoryView({ companySlug }: InventoryViewProps) {
@@ -175,10 +195,17 @@ export function InventoryView({ companySlug }: InventoryViewProps) {
     })
   }, [items, search, categoryFilter, showInactive])
   const inventoryStats = useMemo(() => {
-    const active = items.filter((item) => item.active).length
+    const totalStock = Array.from(availability.values()).reduce(
+      (sum, row) => sum + Number(row.total_stock_quantity || 0),
+      0,
+    )
+    const availableStock = Array.from(availability.values()).reduce(
+      (sum, row) => sum + Number(row.available_quantity || 0),
+      0,
+    )
     const onRent = Array.from(availability.values()).reduce((sum, row) => sum + Number(row.on_rent_quantity || 0), 0)
     const dailyRate = items.reduce((sum, item) => sum + Number(item.default_rental_rate || 0), 0)
-    return { active, onRent, dailyRate }
+    return { totalStock, availableStock, onRent, dailyRate }
   }, [availability, items])
 
   async function handleDelete(item: InventoryItemRow) {
@@ -232,12 +259,19 @@ export function InventoryView({ companySlug }: InventoryViewProps) {
         <article>
           <PackageCheck aria-hidden="true" />
           <div>
-            <span>Active</span>
-            <strong>{inventoryStats.active}</strong>
+            <span>Tracked stock</span>
+            <strong>{inventoryStats.totalStock}</strong>
           </div>
         </article>
         <article>
           <PackageCheck aria-hidden="true" />
+          <div>
+            <span>Available</span>
+            <strong>{inventoryStats.availableStock}</strong>
+          </div>
+        </article>
+        <article>
+          <Boxes aria-hidden="true" />
           <div>
             <span>On rent</span>
             <strong>{inventoryStats.onRent}</strong>
@@ -285,7 +319,9 @@ export function InventoryView({ companySlug }: InventoryViewProps) {
         <p className="text-sm text-slate-500">Loading…</p>
       ) : filtered.length === 0 ? (
         <p className="text-sm text-slate-500">
-          {items.length === 0 ? 'No inventory items yet — add one or import from CSV.' : 'No items match this filter.'}
+          {items.length === 0
+            ? 'No inventory items yet — add one or import from CSV / Excel.'
+            : 'No items match this filter.'}
         </p>
       ) : (
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
@@ -297,6 +333,8 @@ export function InventoryView({ companySlug }: InventoryViewProps) {
                 <th className="px-3 py-2">Category</th>
                 <th className="px-3 py-2">Unit</th>
                 <th className="px-3 py-2 text-right">Rate</th>
+                <th className="px-3 py-2 text-right">Stock</th>
+                <th className="px-3 py-2 text-right">Available</th>
                 <th className="px-3 py-2 text-right">Replacement</th>
                 <th className="px-3 py-2 text-right">On rent</th>
                 <th className="px-3 py-2">Tracking</th>
@@ -312,6 +350,20 @@ export function InventoryView({ companySlug }: InventoryViewProps) {
                   <td className="px-3 py-2 text-slate-600">{item.category}</td>
                   <td className="px-3 py-2 text-slate-600">{item.unit}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(item.default_rental_rate)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {availability.get(item.id)?.total_stock_quantity ?? '0.00'}
+                  </td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {(() => {
+                      const a = availability.get(item.id)
+                      if (!a) return <span className="text-slate-400">0.00</span>
+                      return (
+                        <span title={`${a.yard_quantity} in yard after movement-ledger adjustments`}>
+                          {a.available_quantity}
+                        </span>
+                      )
+                    })()}
+                  </td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(item.replacement_value)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">
                     {(() => {
@@ -623,21 +675,21 @@ function ImportDialog({ companySlug, onImported }: ImportDialogProps) {
       <DialogTrigger asChild>
         <Button variant="outline">
           <Upload aria-hidden="true" />
-          Import CSV
+          Import CSV / Excel
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
-          <DialogTitle>Import inventory from CSV</DialogTitle>
+          <DialogTitle>Import inventory</DialogTitle>
           <DialogDescription>
-            Headers are auto-detected (code, description, category, unit, rate, replacement, tracking, active, notes).
-            Existing items match by code and update in place; new codes insert.
+            Upload CSV/TSV or paste rows copied from Excel. Headers are auto-detected; existing item codes update in
+            place and new codes insert.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
-          <Input type="file" accept=".csv,text/csv" onChange={handleFile} />
+          <Input type="file" accept=".csv,.tsv,.txt,text/csv,text/tab-separated-values" onChange={handleFile} />
           <Textarea
-            placeholder="…or paste CSV text directly"
+            placeholder="...or paste CSV / Excel rows directly"
             rows={8}
             value={csvText}
             onChange={(e) => setCsvText(e.target.value)}

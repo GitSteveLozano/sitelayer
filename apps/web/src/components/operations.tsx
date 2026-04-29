@@ -1,11 +1,15 @@
 import { useEffect, useState, type PointerEvent } from 'react'
 import {
+  calculateLinealLength,
+  calculateLinealQuantity,
   calculatePolygonArea,
   calculatePolygonCentroid,
   calculateTakeoffQuantity,
+  calculateVolumeQuantity,
   clampBoardCoordinate,
   formatMoney,
-  normalizePolygonGeometry,
+  normalizeGeometry,
+  type TakeoffGeometry,
   type TakeoffPoint,
 } from '@sitelayer/domain'
 import { API_URL, apiGet, apiPost } from '../api.js'
@@ -28,6 +32,14 @@ import { Checkbox } from './ui/checkbox.js'
 import { Input } from './ui/input.js'
 import { Select } from './ui/select.js'
 import { Textarea } from './ui/textarea.js'
+
+type TakeoffTool = 'polygon' | 'lineal' | 'volume'
+
+const TAKEOFF_TOOLS: Array<{ value: TakeoffTool; label: string; unitHint: string; minPoints: number }> = [
+  { value: 'polygon', label: 'Area polygon', unitHint: 'sqft', minPoints: 3 },
+  { value: 'lineal', label: 'Lineal path', unitHint: 'lf', minPoints: 2 },
+  { value: 'volume', label: 'Volume box', unitHint: 'cu', minPoints: 0 },
+]
 
 export function AnalyticsWidget({ companySlug }: { companySlug: string }) {
   const [data, setData] = useState<{
@@ -621,19 +633,49 @@ export function TakeoffWorkspace({
   const [pointerPoint, setPointerPoint] = useState<TakeoffPoint | null>(null)
   const [zoom, setZoom] = useState(1)
   const [serviceItemCode, setServiceItemCode] = useState(serviceItems[0]?.code ?? '')
+  const [takeoffTool, setTakeoffTool] = useState<TakeoffTool>('polygon')
   const [quantityMultiplier, setQuantityMultiplier] = useState(1)
   const [calibrationLength, setCalibrationLength] = useState('100')
   const [calibrationUnit, setCalibrationUnit] = useState('ft')
+  const [volumeLength, setVolumeLength] = useState('')
+  const [volumeWidth, setVolumeWidth] = useState('')
+  const [volumeHeight, setVolumeHeight] = useState('')
 
   const activeBlueprint = blueprints.find((blueprint) => blueprint.id === selectedBlueprintId) ?? blueprints[0] ?? null
   const blueprintMeasurements = measurements.filter(
     (measurement) => measurement.blueprint_document_id === activeBlueprint?.id,
   )
+  const selectedTool = TAKEOFF_TOOLS.find((tool) => tool.value === takeoffTool) ?? TAKEOFF_TOOLS[0]!
   const quantityMultiplierValue = Number.isFinite(quantityMultiplier) && quantityMultiplier > 0 ? quantityMultiplier : 1
   const draftArea = calculatePolygonArea(draftPoints)
-  const draftQuantity = calculateTakeoffQuantity(draftPoints, quantityMultiplierValue)
+  const draftLinealLength = calculateLinealLength(draftPoints)
+  const volumeDimensions = {
+    length: Number(volumeLength),
+    width: Number(volumeWidth),
+    height: Number(volumeHeight),
+  }
+  const draftQuantity =
+    takeoffTool === 'polygon'
+      ? calculateTakeoffQuantity(draftPoints, quantityMultiplierValue)
+      : takeoffTool === 'lineal'
+        ? calculateLinealQuantity(draftPoints, quantityMultiplierValue)
+        : calculateVolumeQuantity(volumeDimensions)
   const selectedServiceItem = serviceItems.find((item) => item.code === serviceItemCode)
-  const selectedUnit = selectedServiceItem?.unit ?? 'sqft'
+  const selectedUnit = selectedServiceItem?.unit ?? selectedTool.unitHint
+  const multiplierIsValid = takeoffTool === 'volume' || (Number.isFinite(quantityMultiplier) && quantityMultiplier > 0)
+  const draftDirty =
+    draftPoints.length > 0 ||
+    volumeLength.trim().length > 0 ||
+    volumeWidth.trim().length > 0 ||
+    volumeHeight.trim().length > 0
+  const canSaveDraft =
+    Boolean(activeBlueprint) &&
+    Boolean(serviceItemCode) &&
+    multiplierIsValid &&
+    draftQuantity > 0 &&
+    (takeoffTool === 'volume' ? true : draftPoints.length >= selectedTool.minPoints)
+  const saveActionLabel =
+    takeoffTool === 'polygon' ? 'Save area' : takeoffTool === 'lineal' ? 'Save line' : 'Save volume'
 
   useEffect(() => {
     if (!selectedBlueprintId && blueprints[0]) {
@@ -644,6 +686,9 @@ export function TakeoffWorkspace({
   useEffect(() => {
     setDraftPoints([])
     setPointerPoint(null)
+    setVolumeLength('')
+    setVolumeWidth('')
+    setVolumeHeight('')
     const sheetScale = Number(activeBlueprint?.sheet_scale ?? 1)
     setQuantityMultiplier(Number.isFinite(sheetScale) && sheetScale > 0 ? sheetScale : 1)
     setCalibrationLength(activeBlueprint?.calibration_length ?? '100')
@@ -661,10 +706,16 @@ export function TakeoffWorkspace({
     }
   }, [serviceItemCode, serviceItems])
 
-  // Keyboard shortcuts for the polygon editor:
+  useEffect(() => {
+    setDraftPoints([])
+    setPointerPoint(null)
+    setError(null)
+  }, [takeoffTool])
+
+  // Keyboard shortcuts for the takeoff editor:
   //   • Escape — clear the entire draft (matches the "Clear draft" button)
   //   • Ctrl/Cmd+Z — undo the last point (matches the "Undo point" button)
-  //   • Enter — save the polygon when ≥3 points are drawn
+  //   • Enter — save when the active tool has enough data
   // Skipped while busy or while focus is in a form input/textarea so people
   // can still type calibration values, search, etc. without triggering.
   useEffect(() => {
@@ -678,18 +729,23 @@ export function TakeoffWorkspace({
     function onKeyDown(event: KeyboardEvent) {
       if (busy) return
       if (isEditableTarget(event.target)) return
-      if (event.key === 'Escape' && draftPoints.length > 0) {
+      if (event.key === 'Escape' && draftDirty) {
         event.preventDefault()
-        setDraftPoints([])
+        clearDraft()
         return
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+      if (
+        takeoffTool !== 'volume' &&
+        (event.ctrlKey || event.metaKey) &&
+        event.key.toLowerCase() === 'z' &&
+        !event.shiftKey
+      ) {
         if (draftPoints.length === 0) return
         event.preventDefault()
         setDraftPoints((current) => current.slice(0, -1))
         return
       }
-      if (event.key === 'Enter' && draftPoints.length >= 3) {
+      if (event.key === 'Enter' && canSaveDraft) {
         event.preventDefault()
         void saveDraftMeasurement()
       }
@@ -700,27 +756,76 @@ export function TakeoffWorkspace({
     // state via React), but we deliberately don't include it in the deps —
     // including it would re-bind the listener every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [busy, draftPoints.length])
+  }, [busy, canSaveDraft, draftDirty, draftPoints.length, takeoffTool])
+
+  function clearDraft() {
+    setDraftPoints([])
+    setPointerPoint(null)
+    setVolumeLength('')
+    setVolumeWidth('')
+    setVolumeHeight('')
+  }
 
   async function saveDraftMeasurement() {
-    if (!activeBlueprint) {
-      throw new Error('select a blueprint first')
-    }
-    if (!serviceItemCode) {
-      throw new Error('service item is required')
-    }
-    if (draftPoints.length < 3) {
-      throw new Error('draw at least 3 points')
-    }
-    if (!Number.isFinite(quantityMultiplier) || quantityMultiplier <= 0) {
-      throw new Error('quantity multiplier must be greater than zero')
-    }
-    if (draftQuantity <= 0) {
-      throw new Error('polygon area must be greater than zero')
-    }
-    setBusy(true)
     setError(null)
     try {
+      if (!activeBlueprint) {
+        throw new Error('select a blueprint first')
+      }
+      if (!serviceItemCode) {
+        throw new Error('service item is required')
+      }
+      if (takeoffTool !== 'volume' && (!Number.isFinite(quantityMultiplier) || quantityMultiplier <= 0)) {
+        throw new Error('quantity multiplier must be greater than zero')
+      }
+
+      let geometry: TakeoffGeometry
+      let notes: string
+      if (takeoffTool === 'polygon') {
+        if (draftPoints.length < selectedTool.minPoints) {
+          throw new Error('draw at least 3 points')
+        }
+        if (draftQuantity <= 0) {
+          throw new Error('polygon area must be greater than zero')
+        }
+        geometry = {
+          kind: 'polygon',
+          points: draftPoints,
+          sheet_scale: quantityMultiplierValue,
+          calibration_length: Number(calibrationLength) || null,
+          calibration_unit: calibrationUnit,
+        }
+        notes = `polygon:${draftPoints.length}`
+      } else if (takeoffTool === 'lineal') {
+        if (draftPoints.length < selectedTool.minPoints) {
+          throw new Error('draw at least 2 points')
+        }
+        if (draftQuantity <= 0) {
+          throw new Error('lineal length must be greater than zero')
+        }
+        geometry = {
+          kind: 'lineal',
+          points: draftPoints,
+          sheet_scale: quantityMultiplierValue,
+          calibration_length: Number(calibrationLength) || null,
+          calibration_unit: calibrationUnit,
+        }
+        notes = `lineal:${draftPoints.length}`
+      } else {
+        if (draftQuantity <= 0) {
+          throw new Error('volume dimensions must be greater than zero')
+        }
+        geometry = {
+          kind: 'volume',
+          length: volumeDimensions.length,
+          width: volumeDimensions.width,
+          height: volumeDimensions.height,
+          unit: selectedUnit,
+        }
+        notes = `volume:${volumeDimensions.length}x${volumeDimensions.width}x${volumeDimensions.height} ${selectedUnit}`
+      }
+
+      setBusy(true)
       await apiPost(
         `/api/projects/${projectId}/takeoff/measurement`,
         {
@@ -728,18 +833,12 @@ export function TakeoffWorkspace({
           service_item_code: serviceItemCode,
           quantity: draftQuantity,
           unit: selectedUnit,
-          notes: `polygon:${draftPoints.length}`,
-          geometry: {
-            kind: 'polygon',
-            points: draftPoints,
-            sheet_scale: quantityMultiplierValue,
-            calibration_length: Number(calibrationLength) || null,
-            calibration_unit: calibrationUnit,
-          },
+          notes,
+          geometry,
         },
         companySlug,
       )
-      setDraftPoints([])
+      clearDraft()
       onSaved()
     } catch (caught: unknown) {
       setError(caught instanceof Error ? caught.message : 'unknown error')
@@ -783,27 +882,74 @@ export function TakeoffWorkspace({
           </Select>
         </label>
         <label className="selectWrap">
-          <span>Quantity multiplier</span>
-          <Input
-            value={quantityMultiplier}
-            onChange={(event) => setQuantityMultiplier(Number(event.target.value))}
-            type="number"
-            step="0.01"
-          />
+          <span>Measurement type</span>
+          <Select value={takeoffTool} onChange={(event) => setTakeoffTool(event.target.value as TakeoffTool)}>
+            {TAKEOFF_TOOLS.map((tool) => (
+              <option key={tool.value} value={tool.value}>
+                {tool.label}
+              </option>
+            ))}
+          </Select>
         </label>
-        <label className="selectWrap">
-          <span>Calibration length</span>
-          <Input
-            value={calibrationLength}
-            onChange={(event) => setCalibrationLength(event.target.value)}
-            type="number"
-            step="0.01"
-          />
-        </label>
-        <label className="selectWrap">
-          <span>Calibration unit</span>
-          <Input value={calibrationUnit} onChange={(event) => setCalibrationUnit(event.target.value)} />
-        </label>
+        {takeoffTool === 'volume' ? (
+          <>
+            <label className="selectWrap">
+              <span>Length</span>
+              <Input
+                value={volumeLength}
+                onChange={(event) => setVolumeLength(event.target.value)}
+                type="number"
+                min="0"
+                step="0.01"
+              />
+            </label>
+            <label className="selectWrap">
+              <span>Width</span>
+              <Input
+                value={volumeWidth}
+                onChange={(event) => setVolumeWidth(event.target.value)}
+                type="number"
+                min="0"
+                step="0.01"
+              />
+            </label>
+            <label className="selectWrap">
+              <span>Height</span>
+              <Input
+                value={volumeHeight}
+                onChange={(event) => setVolumeHeight(event.target.value)}
+                type="number"
+                min="0"
+                step="0.01"
+              />
+            </label>
+          </>
+        ) : (
+          <>
+            <label className="selectWrap">
+              <span>Quantity multiplier</span>
+              <Input
+                value={quantityMultiplier}
+                onChange={(event) => setQuantityMultiplier(Number(event.target.value))}
+                type="number"
+                step="0.01"
+              />
+            </label>
+            <label className="selectWrap">
+              <span>Calibration length</span>
+              <Input
+                value={calibrationLength}
+                onChange={(event) => setCalibrationLength(event.target.value)}
+                type="number"
+                step="0.01"
+              />
+            </label>
+            <label className="selectWrap">
+              <span>Calibration unit</span>
+              <Input value={calibrationUnit} onChange={(event) => setCalibrationUnit(event.target.value)} />
+            </label>
+          </>
+        )}
         <label className="selectWrap">
           <span>Zoom</span>
           <Input
@@ -833,42 +979,66 @@ export function TakeoffWorkspace({
             viewBox="0 0 100 100"
             preserveAspectRatio="none"
             onPointerMove={(event) => {
+              if (takeoffTool === 'volume') {
+                setPointerPoint(null)
+                return
+              }
               setPointerPoint(getBoardPointerPoint(event))
             }}
             onPointerLeave={() => setPointerPoint(null)}
             onPointerDown={(event) => {
+              if (takeoffTool === 'volume') return
               if (event.pointerType === 'mouse' && event.button !== 0) return
               event.preventDefault()
               event.currentTarget.setPointerCapture(event.pointerId)
               setDraftPoints((current) => [...current, getBoardPointerPoint(event)])
             }}
           >
-            {pointerPoint ? (
+            {takeoffTool !== 'volume' && pointerPoint ? (
               <>
                 <line x1={pointerPoint.x} y1={0} x2={pointerPoint.x} y2={100} className="takeoffCrosshair" />
                 <line x1={0} y1={pointerPoint.y} x2={100} y2={pointerPoint.y} className="takeoffCrosshair" />
               </>
             ) : null}
             {blueprintMeasurements.map((measurement) => {
-              const geometry = normalizePolygonGeometry(measurement.geometry)
+              const geometry = normalizeGeometry(measurement.geometry)
               if (!geometry) return null
-              const points = geometry.points
-              const labelPoint = calculatePolygonCentroid(points)
-              return (
-                <g key={measurement.id}>
-                  <polygon points={polygonPointsToString(points)} className="takeoffPolygon measurementPolygon" />
-                  {labelPoint ? (
-                    <text x={labelPoint.x} y={labelPoint.y} className="takeoffLabel">
-                      {measurement.service_item_code} · {measurement.quantity} {measurement.unit}
-                    </text>
-                  ) : null}
-                </g>
-              )
+              if (geometry.kind === 'polygon') {
+                const points = geometry.points
+                const labelPoint = calculatePolygonCentroid(points)
+                return (
+                  <g key={measurement.id}>
+                    <polygon points={polygonPointsToString(points)} className="takeoffPolygon measurementPolygon" />
+                    {labelPoint ? (
+                      <text x={labelPoint.x} y={labelPoint.y} className="takeoffLabel">
+                        {measurement.service_item_code} · {measurement.quantity} {measurement.unit}
+                      </text>
+                    ) : null}
+                  </g>
+                )
+              }
+              if (geometry.kind === 'lineal') {
+                const points = geometry.points
+                const labelPoint = pathLabelPoint(points)
+                return (
+                  <g key={measurement.id}>
+                    <polyline points={polygonPointsToString(points)} className="takeoffLine measurementLine" />
+                    {labelPoint ? (
+                      <text x={labelPoint.x} y={labelPoint.y} className="takeoffLabel">
+                        {measurement.service_item_code} · {measurement.quantity} {measurement.unit}
+                      </text>
+                    ) : null}
+                  </g>
+                )
+              }
+              return null
             })}
-            {draftPoints.length > 0 ? (
+            {takeoffTool !== 'volume' && draftPoints.length > 0 ? (
               <>
                 <polyline points={polygonPointsToString(draftPoints)} className="takeoffLine draftLine" />
-                <polygon points={polygonPointsToString(draftPoints)} className="takeoffPolygon draftPolygon" />
+                {takeoffTool === 'polygon' && draftPoints.length >= 3 ? (
+                  <polygon points={polygonPointsToString(draftPoints)} className="takeoffPolygon draftPolygon" />
+                ) : null}
                 {draftPoints.map((point, index) => (
                   <g key={`${index}-${point.x}-${point.y}`}>
                     <circle cx={point.x} cy={point.y} r={1.15} className="takeoffPoint" />
@@ -884,18 +1054,18 @@ export function TakeoffWorkspace({
       </div>
 
       <div className="takeoffActions">
-        <Button type="button" onClick={() => setDraftPoints([])} disabled={busy || !draftPoints.length}>
+        <Button type="button" onClick={clearDraft} disabled={busy || !draftDirty}>
           Clear draft
         </Button>
         <Button
           type="button"
           onClick={() => setDraftPoints((current) => current.slice(0, -1))}
-          disabled={busy || !draftPoints.length}
+          disabled={busy || takeoffTool === 'volume' || !draftPoints.length}
         >
           Undo point
         </Button>
-        <Button type="button" onClick={() => void saveDraftMeasurement()} disabled={busy || draftPoints.length < 3}>
-          Save polygon
+        <Button type="button" onClick={() => void saveDraftMeasurement()} disabled={busy || !canSaveDraft}>
+          {saveActionLabel}
         </Button>
       </div>
 
@@ -913,33 +1083,49 @@ export function TakeoffWorkspace({
             {draftQuantity} {selectedUnit}
           </strong>
           <p className="muted">
-            {draftPoints.length} points · board area {draftArea.toFixed(2)} × {quantityMultiplierValue}
+            {takeoffTool === 'polygon'
+              ? `${draftPoints.length} points · board area ${draftArea.toFixed(2)} × ${quantityMultiplierValue}`
+              : takeoffTool === 'lineal'
+                ? `${draftPoints.length} points · board length ${draftLinealLength.toFixed(2)} × ${quantityMultiplierValue}`
+                : `${volumeLength || '0'} × ${volumeWidth || '0'} × ${volumeHeight || '0'} ${selectedUnit}`}
           </p>
         </div>
         <div>
           <strong>
-            {calibrationLength || '0'} {calibrationUnit}
+            {takeoffTool === 'volume' ? selectedTool.label : `${calibrationLength || '0'} ${calibrationUnit}`}
           </strong>
-          <p className="muted">Calibration metadata is saved with each measurement for later refinement.</p>
+          <p className="muted">
+            {takeoffTool === 'volume'
+              ? 'Dimensions are saved as volume geometry for estimate recompute.'
+              : 'Calibration metadata is saved with each measurement for later refinement.'}
+          </p>
         </div>
       </div>
 
       {error ? <p className="error">{error}</p> : null}
       <p className="muted takeoffHint">
-        Click or tap the board to place vertices. The current draft is highlighted with numbered points and a live
-        crosshair.
+        {takeoffTool === 'polygon'
+          ? 'Click or tap the board to place area vertices. The current draft is highlighted with numbered points and a live crosshair.'
+          : takeoffTool === 'lineal'
+            ? 'Click or tap the board to trace a lineal path. Use Enter to save once the path has at least two points.'
+            : 'Enter length, width, and height for volume-based scope. The saved measurement stays tied to the selected blueprint.'}
       </p>
       <ul className="list compact takeoffMeasurements">
         {blueprintMeasurements.length ? (
-          blueprintMeasurements.map((measurement) => (
-            <li key={measurement.id}>
-              <strong>{measurement.service_item_code}</strong>
-              <span>
-                {measurement.quantity} {measurement.unit}
-                {measurement.notes ? ` · ${measurement.notes}` : ''}
-              </span>
-            </li>
-          ))
+          blueprintMeasurements.map((measurement) => {
+            const geometry = normalizeGeometry(measurement.geometry)
+            return (
+              <li key={measurement.id}>
+                <strong>{measurement.service_item_code}</strong>
+                <span>
+                  {measurement.quantity} {measurement.unit}
+                  {geometry ? ` · ${geometryKindLabel(geometry)}` : ''}
+                  {geometry ? ` · ${geometryMetaLabel(geometry)}` : ''}
+                  {measurement.notes ? ` · ${measurement.notes}` : ''}
+                </span>
+              </li>
+            )
+          })
         ) : (
           <li>No measurements on this blueprint yet</li>
         )}
@@ -950,6 +1136,23 @@ export function TakeoffWorkspace({
 
 function polygonPointsToString(points: readonly TakeoffPoint[]) {
   return points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`).join(' ')
+}
+
+function pathLabelPoint(points: readonly TakeoffPoint[]) {
+  if (points.length === 0) return null
+  return points[Math.floor((points.length - 1) / 2)] ?? null
+}
+
+function geometryKindLabel(geometry: TakeoffGeometry) {
+  if (geometry.kind === 'polygon') return 'area'
+  if (geometry.kind === 'lineal') return 'lineal'
+  return 'volume'
+}
+
+function geometryMetaLabel(geometry: TakeoffGeometry) {
+  if (geometry.kind === 'polygon') return `${geometry.points.length} points`
+  if (geometry.kind === 'lineal') return `${geometry.points.length} points`
+  return `${geometry.length} × ${geometry.width} × ${geometry.height}${geometry.unit ? ` ${geometry.unit}` : ''}`
 }
 
 export function getBlueprintLineageLabel(blueprints: BlueprintRow[], blueprintId: string) {

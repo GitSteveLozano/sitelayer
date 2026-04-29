@@ -11,7 +11,7 @@ Built for exterior cladding contractors (EIFS, stucco, masonry, siding) to manag
 - **PDF upload and storage** — Upload construction blueprints (PDF) with dual-mode storage (DigitalOcean Spaces or local filesystem). Blueprint versioning and revision tracking.
 - **Interactive measurement canvas** — Draw polygons, lines, and volumes directly on blueprints in the browser. Calibrate scale against known dimensions. Supports area (sqft), lineal (lf), and volume measurements.
 - **Scope item management** — 9 pre-configured scope items (EPS, Basecoat, Finish Coat, Cultured Stone, Air Barrier, Cementboard, Envelope Seal, Caulking, Flashing) with per-item colors, units, and default rates. Assignable to divisions per project.
-- **Multi-draft system** — Multiple measurement drafts per project. Create, rename, duplicate, switch between drafts. Each draft has its own canvas state and estimate. Auto-saves polygons and calibration. Extensible `type` column supports future tools (scaffolding design).
+- **Planned multi-draft system** — Multiple measurement drafts per project are designed but not shipped yet. See `docs/MULTI_DRAFT_TAKEOFF_SPEC.md` for the schema/API/UI plan.
 - **Zoom and pan** — Ctrl+scroll zooms to cursor position. Right-click drag pans the blueprint. Full horizontal and vertical scrolling.
 
 ### Estimation & Costing
@@ -47,22 +47,22 @@ Built for exterior cladding contractors (EIFS, stucco, masonry, siding) to manag
 
 ### Rental & Inventory Management
 
-- **Inventory catalog** — Master catalog of rental equipment with part numbers, names, categories, and multi-tier pricing (25-day cycle, daily, weekly rates). Replacement cost tracking for lost/damaged items.
-- **Stock availability** — Real-time available stock calculation via Postgres function: total_stock minus items currently on active rentals.
+- **Inventory catalog** — Master catalog of rental equipment with part numbers, names, categories, default rental pricing, and replacement cost tracking for lost/damaged items. Contract lines can still bill by cycle, day, week, month, or each.
+- **Stock availability** — Real-time availability via movement-ledger stock totals minus items currently on active rentals, exposed through the API and `get_inventory_availability()`.
 - **Inventory locations** — Track where equipment is stored.
 - **Movement ledger** — Full audit trail of inventory movements (dispatch, return, loss, transfer).
 - **Rental contracts** — Per-project rental contracts with line items. Link inventory items to jobs.
 - **Billing workflow** — Deterministic state machine: generated -> approved -> posting -> posted (or failed/void). Headless UI with API-owned reducer. Events: APPROVE, POST_REQUESTED, POST_SUCCEEDED, POST_FAILED, RETRY_POST, VOID.
 - **Billing runs** — List and review billing runs with state filtering. Per-run line items with amounts.
-- **CSV/Excel import** — Upload inventory catalog from CSV with auto-column detection, preview, and batch upsert (up to 1000 items).
+- **CSV/Excel import** — Upload CSV/TSV or paste rows copied from Excel with auto-column detection, preview, and batch upsert (up to 1000 items).
 
 ### QuickBooks Online Integration
 
 - **OAuth flow** — Full QBO OAuth 2.0 connection with token exchange, refresh, and realm ID tracking. Sandbox and production environment support.
 - **Integration mappings** — Map SiteLayer entities (customers, service items, divisions, projects) to QBO external IDs. Auto-backfill on first sync.
-- **Sync operations** — Pull bills, time activities, and estimates from QBO. Push material bills and rental invoices to QBO. Mutation outbox with retry tracking.
+- **Sync operations** — Pull customers, items, classes, time activities, and bills from QBO. Push material bills and project estimates to QBO. Mutation outbox with retry tracking.
 - **Estimate push** — Push project estimates to QBO as estimates/invoices.
-- **Rental invoice push** — Worker-driven QBO invoice creation from rental billing runs.
+- **Rental invoice push** — Worker-driven QBO invoice creation from rental billing runs; live posting is environment-gated with stub mode for dev/preview.
 
 ### Bonus Rules & Simulation
 
