@@ -180,6 +180,12 @@ docker compose "${compose_args[@]}" config >/dev/null
 if [ "$PREVIEW_MODE" = "prod" ]; then
   docker compose "${compose_args[@]}" "${profile_args[@]}" up -d --build --remove-orphans "${services[@]}"
 else
+  # Install workspace dependencies once before services start. Running npm
+  # install concurrently from api/web/worker against the shared node_modules
+  # volume creates noisy tar ENOENT warnings and can leave a partial install.
+  docker compose "${compose_args[@]}" run --rm --no-deps api \
+    npm install --no-audit --no-fund --prefer-offline
+
   # Dev-mode: no --build (images are node:20-alpine pulled once). Containers stay up
   # across deploys; rsync + tsx watch + vite HMR propagate changes in seconds.
   docker compose "${compose_args[@]}" "${profile_args[@]}" up -d --remove-orphans "${services[@]}"
