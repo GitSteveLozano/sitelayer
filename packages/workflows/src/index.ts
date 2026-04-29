@@ -69,6 +69,27 @@ export {
 } from './crew-schedule.js'
 
 export {
+  PROJECT_CLOSEOUT_ALL_STATES,
+  PROJECT_CLOSEOUT_EVENT_TYPES,
+  PROJECT_CLOSEOUT_TERMINAL_STATES,
+  PROJECT_CLOSEOUT_WORKFLOW_NAME,
+  PROJECT_CLOSEOUT_WORKFLOW_SCHEMA_VERSION,
+  ProjectCloseoutEventRequestSchema,
+  projectCloseoutWorkflow,
+  isHumanProjectCloseoutEvent,
+  nextProjectCloseoutEvents,
+  parseProjectCloseoutEventRequest,
+  projectStatusToCloseoutState,
+  transitionProjectCloseoutWorkflow,
+  type ProjectCloseoutEventParseResult,
+  type ProjectCloseoutEventRequest,
+  type ProjectCloseoutHumanEventType,
+  type ProjectCloseoutWorkflowEvent,
+  type ProjectCloseoutWorkflowSnapshot,
+  type ProjectCloseoutWorkflowState,
+} from './project-closeout.js'
+
+export {
   RENTAL_ALL_STATES,
   RENTAL_EVENT_TYPES,
   RENTAL_TERMINAL_STATES,

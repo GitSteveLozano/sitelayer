@@ -8,8 +8,15 @@ import {
   sumMoney,
 } from '@sitelayer/domain'
 import { createLogger } from '@sitelayer/logger'
+import {
+  PROJECT_CLOSEOUT_WORKFLOW_NAME,
+  PROJECT_CLOSEOUT_WORKFLOW_SCHEMA_VERSION,
+  projectStatusToCloseoutState,
+  transitionProjectCloseoutWorkflow,
+  type ProjectCloseoutWorkflowSnapshot,
+} from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
-import { enqueueAdminAlert, recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { enqueueAdminAlert, recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid, parseExpectedVersion, parseOptionalNumber } from '../http-utils.js'
 
 const logger = createLogger('api:projects')
@@ -17,6 +24,8 @@ const logger = createLogger('api:projects')
 export type ProjectRouteCtx = {
   pool: Pool
   company: ActiveCompany
+  /** Currently-active Clerk user id (for the workflow event log actor). */
+  currentUserId: string
   requireRole: (allowed: readonly string[]) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
@@ -274,22 +283,107 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     const body = await ctx.readBody()
     const expectedVersion = parseExpectedVersion(body?.expected_version ?? body?.version)
     const closed = await withMutationTx(async (client) => {
+      // Lock + load so the deterministic reducer can run against the
+      // current snapshot. Optimistic version check stays on `version`
+      // for the SPA's existing PATCH plumbing; workflow `state_version`
+      // is bumped by the reducer.
+      const lockedResult = await client.query<{
+        id: string
+        status: string
+        state_version: number
+        closed_at: string | null
+        closed_by: string | null
+        summary_locked_at: string | null
+        version: number
+      }>(
+        `select id, status, state_version, closed_at, closed_by, summary_locked_at, version
+         from projects
+         where company_id = $1 and id = $2 and deleted_at is null
+         for update`,
+        [ctx.company.id, projectId],
+      )
+      const current = lockedResult.rows[0]
+      if (!current) return null
+      if (expectedVersion != null && current.version !== expectedVersion) {
+        // Match the legacy not-found path so the existing checkVersion
+        // 409 response stays correct.
+        return null
+      }
+
+      // Idempotent: a second closeout call on an already-completed
+      // project is a no-op success rather than a 4xx, matching the
+      // pre-workflow behaviour (the route used to silently re-run the
+      // UPDATE which was a no-op).
+      if (current.status === 'completed') {
+        const existing = await client.query(
+          `select id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at
+           from projects
+           where company_id = $1 and id = $2`,
+          [ctx.company.id, projectId],
+        )
+        return existing.rows[0]
+      }
+
+      const reducerEvent = {
+        type: 'CLOSEOUT' as const,
+        closed_at: new Date().toISOString(),
+        closed_by: ctx.currentUserId,
+      }
+      const beforeStateVersion = current.state_version
+      let nextSnapshot: ProjectCloseoutWorkflowSnapshot
+      try {
+        nextSnapshot = transitionProjectCloseoutWorkflow(
+          {
+            state: projectStatusToCloseoutState(current.status),
+            state_version: current.state_version,
+            closed_at: current.closed_at,
+            closed_by: current.closed_by,
+            summary_locked_at: current.summary_locked_at,
+          },
+          reducerEvent,
+        )
+      } catch {
+        return null
+      }
+
       const result = await client.query(
         `
         update projects
         set
           status = 'completed',
-          closed_at = coalesce(closed_at, now()),
-          summary_locked_at = coalesce(summary_locked_at, now()),
+          state_version = $4,
+          closed_at = coalesce(closed_at, $5::timestamptz),
+          closed_by = coalesce(closed_by, $6),
+          summary_locked_at = coalesce(summary_locked_at, $5::timestamptz),
           updated_at = now(),
           version = version + 1
         where company_id = $1 and id = $2 and ($3::int is null or version = $3)
-        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at
+        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, closed_by, summary_locked_at, version, created_at, updated_at
         `,
-        [ctx.company.id, projectId, expectedVersion],
+        [
+          ctx.company.id,
+          projectId,
+          expectedVersion,
+          nextSnapshot.state_version,
+          reducerEvent.closed_at,
+          reducerEvent.closed_by,
+        ],
       )
       const row = result.rows[0]
       if (!row) return null
+
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: PROJECT_CLOSEOUT_WORKFLOW_NAME,
+        schemaVersion: PROJECT_CLOSEOUT_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'project',
+        entityId: projectId,
+        stateVersion: beforeStateVersion,
+        eventType: 'CLOSEOUT',
+        eventPayload: reducerEvent as unknown as Record<string, unknown>,
+        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        actorUserId: ctx.currentUserId,
+      })
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'project',
