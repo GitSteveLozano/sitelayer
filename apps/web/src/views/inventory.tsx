@@ -3,8 +3,10 @@ import {
   createInventoryItem,
   deleteInventoryItem,
   importInventoryItems,
+  listInventoryAvailability,
   listInventoryItems,
   updateInventoryItem,
+  type InventoryAvailabilityRow,
   type InventoryImportResult,
   type InventoryItemInput,
   type InventoryItemRow,
@@ -117,6 +119,7 @@ function parseCsv(text: string): { headers: string[]; rows: string[][] } {
 
 export function InventoryView({ companySlug }: InventoryViewProps) {
   const [items, setItems] = useState<InventoryItemRow[]>([])
+  const [availability, setAvailability] = useState<Map<string, InventoryAvailabilityRow>>(new Map())
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -128,8 +131,14 @@ export function InventoryView({ companySlug }: InventoryViewProps) {
   async function refresh() {
     setLoading(true)
     try {
-      const result = await listInventoryItems(companySlug)
-      setItems(result.inventoryItems)
+      const [itemsResult, availabilityResult] = await Promise.all([
+        listInventoryItems(companySlug),
+        listInventoryAvailability(companySlug),
+      ])
+      setItems(itemsResult.inventoryItems)
+      const map = new Map<string, InventoryAvailabilityRow>()
+      for (const row of availabilityResult.availability) map.set(row.inventory_item_id, row)
+      setAvailability(map)
       setError(null)
     } catch (caught) {
       const message = caught instanceof Error ? caught.message : 'failed to load inventory'
@@ -241,6 +250,7 @@ export function InventoryView({ companySlug }: InventoryViewProps) {
                 <th className="px-3 py-2">Unit</th>
                 <th className="px-3 py-2 text-right">Rate</th>
                 <th className="px-3 py-2 text-right">Replacement</th>
+                <th className="px-3 py-2 text-right">On rent</th>
                 <th className="px-3 py-2">Tracking</th>
                 <th className="px-3 py-2">Status</th>
                 <th className="px-3 py-2"></th>
@@ -255,6 +265,19 @@ export function InventoryView({ companySlug }: InventoryViewProps) {
                   <td className="px-3 py-2 text-slate-600">{item.unit}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(item.default_rental_rate)}</td>
                   <td className="px-3 py-2 text-right tabular-nums">{formatCurrency(item.replacement_value)}</td>
+                  <td className="px-3 py-2 text-right tabular-nums">
+                    {(() => {
+                      const a = availability.get(item.id)
+                      if (!a) return <span className="text-slate-400">0</span>
+                      return (
+                        <span
+                          title={`${a.on_rent_lines} line${a.on_rent_lines === 1 ? '' : 's'} across ${a.on_rent_projects} project${a.on_rent_projects === 1 ? '' : 's'}`}
+                        >
+                          {a.on_rent_quantity}
+                        </span>
+                      )
+                    })()}
+                  </td>
                   <td className="px-3 py-2 text-xs text-slate-600">{item.tracking_mode}</td>
                   <td className="px-3 py-2">
                     <span

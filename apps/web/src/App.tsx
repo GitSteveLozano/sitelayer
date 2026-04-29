@@ -38,6 +38,7 @@ const loadBillingReviewView = () => import('./views/billing-review.js')
 const loadBillingRunsView = () => import('./views/billing-runs.js')
 const loadEstimatesView = () => import('./views/estimates.js')
 const loadInventoryView = () => import('./views/inventory.js')
+const loadMovementsView = () => import('./views/movements.js')
 const loadRentalContractsView = () => import('./views/rental-contracts.js')
 const loadIntegrationsView = () => import('./views/integrations.js')
 const loadOnboardingView = () => import('./views/onboarding.js')
@@ -56,6 +57,7 @@ const BillingReviewView = lazy(() =>
 const BillingRunsView = lazy(() => loadBillingRunsView().then(({ BillingRunsView }) => ({ default: BillingRunsView })))
 const EstimatesView = lazy(() => loadEstimatesView().then(({ EstimatesView }) => ({ default: EstimatesView })))
 const InventoryView = lazy(() => loadInventoryView().then(({ InventoryView }) => ({ default: InventoryView })))
+const MovementsView = lazy(() => loadMovementsView().then(({ MovementsView }) => ({ default: MovementsView })))
 const RentalContractsView = lazy(() =>
   loadRentalContractsView().then(({ RentalContractsView }) => ({ default: RentalContractsView })),
 )
@@ -77,6 +79,7 @@ const ROUTE_PRELOADS: Record<string, () => Promise<unknown>> = {
   '/billing-runs': loadBillingRunsView,
   '/estimates': loadEstimatesView,
   '/inventory': loadInventoryView,
+  '/movements': loadMovementsView,
   '/rental-contracts': loadRentalContractsView,
   '/integrations': loadIntegrationsView,
   '/onboarding': loadOnboardingView,
@@ -542,6 +545,10 @@ function AppShell() {
           />
           <Route path="/inventory" element={<InventoryView companySlug={companySlug} />} />
           <Route
+            path="/movements"
+            element={<MovementsView companySlug={companySlug} projects={bootstrap?.projects ?? []} />}
+          />
+          <Route
             path="/rental-contracts/:projectId"
             element={<RentalContractsView companySlug={companySlug} projects={bootstrap?.projects ?? []} />}
           />
@@ -675,6 +682,15 @@ function MobileNav({
           onFocus={() => preloadRoute('/inventory')}
         >
           Inventory
+        </NavLink>
+      ) : null}
+      {rentalsNavVisible ? (
+        <NavLink
+          to="/movements"
+          onMouseEnter={() => preloadRoute('/movements')}
+          onFocus={() => preloadRoute('/movements')}
+        >
+          Movements
         </NavLink>
       ) : null}
       {rentalsNavVisible ? (

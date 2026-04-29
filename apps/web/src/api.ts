@@ -1115,6 +1115,88 @@ export async function generateBillingRun(
   )
 }
 
+export type InventoryAvailabilityRow = {
+  inventory_item_id: string
+  on_rent_quantity: string
+  on_rent_lines: number
+  on_rent_projects: number
+}
+
+export async function listInventoryAvailability(
+  companySlug: string,
+): Promise<{ availability: InventoryAvailabilityRow[] }> {
+  return apiGet<{ availability: InventoryAvailabilityRow[] }>('/api/inventory/items/availability', companySlug)
+}
+
+export type InventoryMovementRow = {
+  id: string
+  inventory_item_id: string
+  from_location_id: string | null
+  to_location_id: string | null
+  project_id: string | null
+  movement_type: 'deliver' | 'return' | 'transfer' | 'adjustment' | 'damaged' | 'lost' | 'repair'
+  quantity: string
+  occurred_on: string
+  ticket_number: string | null
+  notes: string | null
+  version: number
+  created_at: string
+  item_code: string | null
+  item_description: string | null
+  from_location_name: string | null
+  to_location_name: string | null
+  project_name: string | null
+}
+
+export async function listInventoryMovements(
+  companySlug: string,
+  filters?: { itemId?: string; projectId?: string; type?: InventoryMovementRow['movement_type'] },
+): Promise<{ inventoryMovements: InventoryMovementRow[] }> {
+  const params = new URLSearchParams()
+  if (filters?.itemId) params.set('item_id', filters.itemId)
+  if (filters?.projectId) params.set('project_id', filters.projectId)
+  if (filters?.type) params.set('type', filters.type)
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  return apiGet<{ inventoryMovements: InventoryMovementRow[] }>(`/api/inventory/movements${suffix}`, companySlug)
+}
+
+export type InventoryLocationRow = {
+  id: string
+  project_id: string | null
+  name: string
+  location_type: 'yard' | 'job' | 'in_transit' | 'repair' | 'lost' | 'damaged'
+  is_default: boolean
+  version: number
+  deleted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function listInventoryLocations(
+  companySlug: string,
+): Promise<{ inventoryLocations: InventoryLocationRow[] }> {
+  return apiGet<{ inventoryLocations: InventoryLocationRow[] }>('/api/inventory/locations', companySlug)
+}
+
+export type CreateMovementInput = {
+  inventory_item_id: string
+  movement_type: InventoryMovementRow['movement_type']
+  quantity: number | string
+  from_location_id?: string | null
+  to_location_id?: string | null
+  project_id?: string | null
+  occurred_on?: string
+  ticket_number?: string | null
+  notes?: string | null
+}
+
+export async function createInventoryMovement(
+  input: CreateMovementInput,
+  companySlug: string,
+): Promise<InventoryMovementRow> {
+  return apiPost<InventoryMovementRow>('/api/inventory/movements', input, companySlug)
+}
+
 export type InventoryImportResult = {
   total: number
   inserted: number

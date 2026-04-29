@@ -576,6 +576,11 @@ export function ProjectsView({
                 <Button type="submit" disabled={busy === `project-geofence:${project.id}`}>
                   {busy === `project-geofence:${project.id}` ? 'Saving...' : 'Save geofence'}
                 </Button>
+                <Link to={`/rental-contracts/${project.id}`} className="ml-2">
+                  <Button type="button" variant="outline">
+                    Manage rental
+                  </Button>
+                </Link>
               </form>
             </li>
           ))}
