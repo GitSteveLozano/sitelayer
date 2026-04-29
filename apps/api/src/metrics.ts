@@ -40,6 +40,13 @@ const auditEventsTotal = new client.Counter({
   registers: [registry],
 })
 
+const supportPacketsTotal = new client.Counter({
+  name: 'sitelayer_support_packets_total',
+  help: 'Support/debug packets created by users or support staff',
+  labelNames: ['action'],
+  registers: [registry],
+})
+
 const dbPoolGauge = new client.Gauge({
   name: 'sitelayer_db_pool_state',
   help: 'pg Pool client counts (total / idle / waiting)',
@@ -65,6 +72,10 @@ export function observeRequest(method: string, route: string, status: number, du
 
 export function observeAudit(entityType: string, action: string): void {
   auditEventsTotal.inc({ entity_type: entityType, action })
+}
+
+export function observeSupportPacket(action: string): void {
+  supportPacketsTotal.inc({ action })
 }
 
 let lastQueueRefreshAt = 0

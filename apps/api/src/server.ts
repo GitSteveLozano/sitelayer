@@ -27,6 +27,7 @@ import { handleRentalRoutes } from './routes/rentals.js'
 import { handleScheduleRoutes } from './routes/schedules.js'
 import { handleTakeoffMeasurementRoutes } from './routes/takeoff-measurements.js'
 import { handleServiceItemRoutes } from './routes/service-items.js'
+import { handleSupportPacketRoutes } from './routes/support-packets.js'
 import { handleSyncRoutes } from './routes/sync.js'
 import { handleWorkerRoutes } from './routes/workers.js'
 import { handleBlueprintRoutes } from './routes/blueprints.js'
@@ -108,6 +109,32 @@ async function fetchQueueRowsForTraceOrRequest(params: { traceId?: string; reque
     values,
   )
   return { outbox: outbox.rows, syncEvents: syncEvents.rows }
+}
+
+async function fetchAuditRowsForTraceOrRequest(companyId: string, params: { traceId?: string; requestId?: string }) {
+  const clauses: string[] = ['company_id = $1']
+  const values: unknown[] = [companyId]
+  const correlationClauses: string[] = []
+  if (params.requestId) {
+    values.push(params.requestId)
+    correlationClauses.push(`request_id = $${values.length}`)
+  }
+  if (params.traceId) {
+    values.push(`%${params.traceId}%`)
+    correlationClauses.push(`sentry_trace like $${values.length}`)
+  }
+  if (!correlationClauses.length) return []
+  clauses.push(`(${correlationClauses.join(' or ')})`)
+  const audit = await pool.query(
+    `select id, actor_user_id, actor_role, entity_type, entity_id, action,
+            before, after, request_id, sentry_trace, created_at
+       from audit_events
+      where ${clauses.join(' and ')}
+      order by created_at asc
+      limit 200`,
+    values,
+  )
+  return audit.rows
 }
 
 let appConfig: ReturnType<typeof loadAppConfig>
@@ -1099,6 +1126,23 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
+            // Support/debug packets let users submit a bounded, redacted
+            // client timeline that the API enriches with audit/queue context.
+            if (
+              await handleSupportPacketRoutes(req, url, {
+                pool,
+                company,
+                identity,
+                tier: appConfig.tier,
+                buildSha,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+              })
+            ) {
+              return
+            }
+
             // QBO mapping routes (GET/POST /api/integrations/qbo/mappings,
             // PATCH/DELETE /api/integrations/qbo/mappings/<id>) are handled
             // by the extracted route module. See routes/qbo-mappings.ts.
@@ -1483,6 +1527,10 @@ const server = http.createServer(async (req, res) => {
                   clearTimeout(timeout)
                   sentryError = 'no trace_id found; pass ?by=request_id only when request has at least one enqueued row'
                 }
+                const auditRows = await fetchAuditRowsForTraceOrRequest(
+                  company.id,
+                  byRequest ? { requestId: lookupId } : { traceId: traceId ?? lookupId },
+                )
                 sendJson(res, 200, {
                   request_id: requestId,
                   lookup: { kind: byRequest ? 'request_id' : 'trace_id', id: lookupId },
@@ -1490,6 +1538,7 @@ const server = http.createServer(async (req, res) => {
                   sentry: sentryPayload,
                   sentry_error: sentryError,
                   queue: queueRows,
+                  audit_events: auditRows,
                 })
               } catch (err) {
                 logger.error({ err, scope: 'debug_trace' }, 'debug trace lookup failed')

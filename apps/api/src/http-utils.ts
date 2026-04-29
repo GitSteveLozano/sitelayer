@@ -1,7 +1,8 @@
 import http from 'node:http'
 
 export const CORS_ALLOW_HEADERS =
-  'content-type, authorization, baggage, sentry-trace, traceparent, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id'
+  'content-type, authorization, baggage, sentry-trace, traceparent, x-request-id, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id'
+export const CORS_EXPOSE_HEADERS = 'x-request-id, etag'
 
 export class HttpError extends Error {
   constructor(
@@ -42,6 +43,7 @@ export function sendJson(
     'access-control-allow-origin': opts?.req ? getCorsOrigin(opts.req, allowedOrigins) : '*',
     'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
     'access-control-allow-headers': CORS_ALLOW_HEADERS,
+    'access-control-expose-headers': CORS_EXPOSE_HEADERS,
   })
   res.end(JSON.stringify(body, null, 2))
 }

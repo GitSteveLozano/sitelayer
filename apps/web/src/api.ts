@@ -1,4 +1,12 @@
 import { Sentry } from './instrument.js'
+import {
+  buildSupportPacket,
+  finishSupportRequest,
+  recordSupportEvent,
+  sanitizeForSupport,
+  startSupportRequest,
+  type SupportPacketClient,
+} from './support-recorder.js'
 
 // Shared API types
 export type BootstrapResponse = {
@@ -387,6 +395,30 @@ export type AuditEventsResponse = {
   events: AuditEventRow[]
 }
 
+export type SupportPacketResponse = {
+  support_id: string
+  request_id: string
+  expires_at: string | null
+}
+
+export type SupportPacketDetailResponse = {
+  support_packet: {
+    id: string
+    company_id: string
+    actor_user_id: string
+    request_id: string | null
+    route: string | null
+    build_sha: string | null
+    problem: string | null
+    client: SupportPacketClient
+    server_context: Record<string, unknown>
+    created_at: string
+    expires_at: string | null
+    redaction_version: string
+  }
+  agent_prompt: string
+}
+
 export type AuditEventFilters = {
   entityType?: string
   entityId?: string
@@ -407,6 +439,32 @@ export async function listAuditEventsApi(
   if (filters.limit) params.set('limit', String(filters.limit))
   const suffix = params.toString() ? `?${params.toString()}` : ''
   return apiGet<AuditEventsResponse>(`/api/audit-events${suffix}`, companySlug)
+}
+
+export async function createSupportPacket(problem: string, companySlug: string): Promise<SupportPacketResponse> {
+  const client = buildSupportPacket(problem)
+  if (FIXTURES_ENABLED) {
+    return {
+      support_id: `fixture-${Date.now()}`,
+      request_id: client.requests.at(-1)?.request_id ?? 'fixture',
+      expires_at: null,
+    }
+  }
+  const headers = await authHeaders(companySlug)
+  headers['content-type'] = 'application/json'
+  const response = await apiFetch('/api/support-packets', companySlug, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ problem, client }),
+  })
+  if (!response.ok) {
+    throw new Error(requestFailureMessage('POST', '/api/support-packets', response, await readFailureText(response)))
+  }
+  return (await response.json()) as SupportPacketResponse
+}
+
+export async function getSupportPacket(id: string, companySlug: string): Promise<SupportPacketDetailResponse> {
+  return apiGet<SupportPacketDetailResponse>(`/api/support-packets/${encodeURIComponent(id)}`, companySlug)
 }
 
 type QboAuthResponse = {
@@ -450,6 +508,76 @@ async function authHeaders(companySlug: string): Promise<Record<string, string>>
     Sentry.captureException(error, { tags: { scope: 'clerk_token_provider' } })
   }
   return headers
+}
+
+function nextClientRequestId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `web-${crypto.randomUUID()}`
+  }
+  return `web-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+function requestFailureMessage(method: string, path: string, response: Response, fallback = ''): string {
+  const responseRequestId = response.headers.get('x-request-id')
+  const requestId = responseRequestId ? ` request_id=${responseRequestId}` : ''
+  const body = fallback.trim() ? ` ${String(sanitizeForSupport(fallback)).slice(0, 500)}` : ''
+  return `${method} ${path} failed: ${response.status}${requestId}${body}`
+}
+
+async function readFailureText(response: Response): Promise<string> {
+  try {
+    return await response.text()
+  } catch {
+    return ''
+  }
+}
+
+async function apiFetch(path: string, companySlug: string, init: RequestInit = {}): Promise<Response> {
+  const method = String(init.method ?? 'GET').toUpperCase()
+  const headers = new Headers(init.headers)
+  if (!headers.has('x-request-id')) {
+    headers.set('x-request-id', nextClientRequestId())
+  }
+  const requestId = headers.get('x-request-id') ?? undefined
+  const trackingId = startSupportRequest({
+    method,
+    path,
+    companySlug,
+    ...(requestId ? { requestId } : {}),
+  })
+  try {
+    const response = await fetch(`${API_URL}${path}`, { ...init, headers })
+    const responseRequestId = response.headers.get('x-request-id')
+    finishSupportRequest(trackingId, {
+      status: response.status,
+      ok: response.ok,
+      responseRequestId,
+    })
+    Sentry.addBreadcrumb({
+      category: 'api',
+      type: 'http',
+      level: response.ok ? 'info' : 'warning',
+      message: `${method} ${path} ${response.status}`,
+      data: {
+        method,
+        path,
+        status: response.status,
+        request_id: responseRequestId ?? requestId ?? null,
+        companySlug,
+      },
+    })
+    return response
+  } catch (error) {
+    finishSupportRequest(trackingId, { error })
+    Sentry.addBreadcrumb({
+      category: 'api',
+      type: 'http',
+      level: 'error',
+      message: `${method} ${path} network error`,
+      data: { method, path, request_id: requestId ?? null, companySlug },
+    })
+    throw error
+  }
 }
 
 /** @deprecated The SPA uses Clerk session JWTs now; user id is server-derived. Fixtures still read this. */
@@ -553,13 +681,13 @@ export async function apiGet<T>(path: string, companySlug: string): Promise<T> {
     const { getFixtureResponse } = await import('./fixtures.js')
     return getFixtureResponse<T>(path, companySlug)
   }
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await apiFetch(path, companySlug, {
     headers: await authHeaders(companySlug),
   })
   if (!response.ok) {
     const cached = readCachedResponse<T>(companySlug, path)
     if (cached !== null) return cached
-    throw new Error(`GET ${path} failed: ${response.status}`)
+    throw new Error(requestFailureMessage('GET', path, response, await readFailureText(response)))
   }
   const parsed = (await response.json()) as T
   cacheResponse(companySlug, path, parsed)
@@ -586,13 +714,13 @@ async function apiMutate<T>(
     if (body !== undefined) {
       requestInit.body = JSON.stringify(body)
     }
-    const response = await fetch(`${API_URL}${path}`, requestInit)
+    const response = await apiFetch(path, companySlug, requestInit)
     if (!response.ok) {
-      const fallback = await response.text()
+      const fallback = await readFailureText(response)
       if (response.status >= 500) {
-        throw new QueueableMutationError(`${method} ${path} failed: ${response.status} ${fallback}`)
+        throw new QueueableMutationError(requestFailureMessage(method, path, response, fallback))
       }
-      throw new Error(`${method} ${path} failed: ${response.status} ${fallback}`)
+      throw new Error(requestFailureMessage(method, path, response, fallback))
     }
     const parsed = (await response.json()) as T
     invalidateCompanyCache(companySlug)
@@ -615,6 +743,12 @@ async function apiMutate<T>(
       // set explicitly here so the call site is self-documenting and so future
       // refactors that hoist enqueue out of the catch path retain the value.
       clientUpdatedAt: new Date().toISOString(),
+    })
+    recordSupportEvent({
+      category: 'offline_queue',
+      name: 'mutation.queued',
+      level: 'warning',
+      data: { method, path, companySlug, error },
     })
     console.warn(`[offline] queued ${method} ${path}`, error)
     return (body ?? { queued: true }) as T
@@ -656,14 +790,13 @@ export async function apiUploadBlueprint<T>(
   }
   const headers = await authHeaders(companySlug)
   // Don't set content-type — fetch derives the multipart boundary from the FormData body.
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await apiFetch(path, companySlug, {
     method,
     headers,
     body: formData,
   })
   if (!response.ok) {
-    const fallback = await response.text()
-    throw new Error(`${method} ${path} failed: ${response.status} ${fallback}`)
+    throw new Error(requestFailureMessage(method, path, response, await readFailureText(response)))
   }
   const parsed = (await response.json()) as T
   invalidateCompanyCache(companySlug)
@@ -678,9 +811,10 @@ export async function apiUploadBlueprint<T>(
  */
 export async function downloadEstimatePdf(projectId: string, projectName: string, companySlug: string): Promise<void> {
   const headers = await authHeaders(companySlug)
-  const response = await fetch(`${API_URL}/api/projects/${projectId}/estimate.pdf`, { headers })
+  const path = `/api/projects/${projectId}/estimate.pdf`
+  const response = await apiFetch(path, companySlug, { headers })
   if (!response.ok) {
-    throw new Error(`Estimate PDF download failed: ${response.status}`)
+    throw new Error(requestFailureMessage('GET', path, response, await readFailureText(response)))
   }
   const blob = await response.blob()
   const url = URL.createObjectURL(blob)
@@ -756,7 +890,7 @@ export async function replayOfflineMutations(companySlug: string) {
           if (mutation.body !== undefined) {
             requestInit.body = JSON.stringify(mutation.body)
           }
-          const response = await fetch(`${API_URL}${mutation.path}`, requestInit)
+          const response = await apiFetch(mutation.path, mutation.companySlug, requestInit)
           if (!response.ok) {
             if (response.status === 409) {
               // Last-write-wins: a newer change was synced from another
@@ -791,7 +925,9 @@ export async function replayOfflineMutations(companySlug: string) {
               })
               continue
             }
-            throw new Error(`${mutation.method} ${mutation.path} failed: ${response.status}`)
+            throw new Error(
+              requestFailureMessage(mutation.method, mutation.path, response, await readFailureText(response)),
+            )
           }
           const parsed = await response.json().catch(() => null)
           if (parsed !== null) {
@@ -1316,12 +1452,12 @@ export async function listRentalBillingRuns(
 
 export async function startQboOAuth(companySlug: string) {
   if (FIXTURES_ENABLED) return
-  const response = await fetch(`${API_URL}/api/integrations/qbo/auth`, {
+  const path = '/api/integrations/qbo/auth'
+  const response = await apiFetch(path, companySlug, {
     headers: await authHeaders(companySlug),
   })
   if (!response.ok) {
-    const fallback = await response.text()
-    throw new Error(`GET /api/integrations/qbo/auth failed: ${response.status} ${fallback}`)
+    throw new Error(requestFailureMessage('GET', path, response, await readFailureText(response)))
   }
   const payload = (await response.json()) as QboAuthResponse
   if (!payload.authUrl) throw new Error('QBO auth URL was not returned')

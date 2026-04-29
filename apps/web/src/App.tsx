@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState, type ComponentProps } from 'react'
-import { BrowserRouter, Navigate, NavLink, Route, Routes, useNavigate, useParams } from 'react-router-dom'
+import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { SignedIn, SignedOut, SignIn, SignUp, UserButton, useAuth, useUser } from '@clerk/clerk-react'
 import {
   DEFAULT_COMPANY_SLUG,
@@ -8,9 +8,18 @@ import {
   registerClerkTokenProvider,
   setStoredCompanySlug,
 } from './api.js'
-import type { FeaturesResponse, ScheduleRow, SessionResponse } from './api.js'
+import type {
+  BootstrapResponse,
+  FeaturesResponse,
+  OfflineMutation,
+  QboConnectionResponse,
+  ScheduleRow,
+  SessionResponse,
+  SyncStatusResponse,
+} from './api.js'
 import { CompanySwitcher } from './components/company-switcher.js'
 import { EnvironmentRibbon } from './components/environment-ribbon.js'
+import { SupportReportButton } from './components/support-report-button.js'
 import { SyncStatusBadge } from './components/sync-status-badge.js'
 import { useBootstrapRefresh } from './machines/bootstrap-refresh.js'
 import { useDayConfirmed } from './machines/day-confirmed.js'
@@ -29,6 +38,7 @@ import {
 } from './components/ui/dialog.js'
 import { Input } from './components/ui/input.js'
 import { Toaster } from './components/ui/toast.js'
+import { recordSupportRoute, recordSupportState } from './support-recorder.js'
 
 const loadAuditView = () => import('./views/audit.js')
 const loadBonusSimView = () => import('./views/bonus-sim.js')
@@ -183,6 +193,82 @@ function UnauthShell() {
       </div>
     </main>
   )
+}
+
+function SupportTelemetryBridge({
+  companySlug,
+  session,
+  bootstrap,
+  selectedProjectId,
+  selectedBlueprintId,
+  offlineQueue,
+  syncStatus,
+  qboConnection,
+  features,
+}: {
+  companySlug: string
+  session: SessionResponse | null
+  bootstrap: BootstrapResponse | null
+  selectedProjectId: string
+  selectedBlueprintId: string
+  offlineQueue: OfflineMutation[]
+  syncStatus: SyncStatusResponse | null
+  qboConnection: QboConnectionResponse['connection'] | null
+  features: FeaturesResponse | null
+}) {
+  const location = useLocation()
+
+  useEffect(() => {
+    recordSupportRoute(location.pathname, location.search)
+  }, [location.pathname, location.search])
+
+  useEffect(() => {
+    recordSupportState('app_shell', {
+      companySlug,
+      userRole: session?.user.role ?? null,
+      selectedProjectId: selectedProjectId || null,
+      selectedBlueprintId: selectedBlueprintId || null,
+      route: location.pathname,
+      bootstrapLoaded: Boolean(bootstrap),
+      counts: {
+        projects: bootstrap?.projects.length ?? 0,
+        customers: bootstrap?.customers.length ?? 0,
+        schedules: bootstrap?.schedules.length ?? 0,
+        laborEntries: bootstrap?.laborEntries.length ?? 0,
+        offlineQueue: offlineQueue.length,
+      },
+      sync: syncStatus
+        ? {
+            pendingOutboxCount: syncStatus.pendingOutboxCount,
+            pendingSyncEventCount: syncStatus.pendingSyncEventCount,
+            latestSyncEvent: syncStatus.latestSyncEvent,
+          }
+        : null,
+      qbo: {
+        connected: Boolean(qboConnection),
+        status: qboConnection?.status ?? null,
+      },
+      features: features
+        ? {
+            tier: features.tier,
+            flags: features.flags,
+          }
+        : null,
+    })
+  }, [
+    bootstrap,
+    companySlug,
+    features,
+    location.pathname,
+    offlineQueue.length,
+    qboConnection,
+    selectedBlueprintId,
+    selectedProjectId,
+    session?.user.role,
+    syncStatus,
+  ])
+
+  return null
 }
 
 function AppShell() {
@@ -347,6 +433,17 @@ function AppShell() {
     <main className="shell">
       <EnvironmentRibbon features={features} />
       <Toaster />
+      <SupportTelemetryBridge
+        companySlug={companySlug}
+        session={session}
+        bootstrap={bootstrap}
+        selectedProjectId={selectedProjectId}
+        selectedBlueprintId={selectedBlueprintId}
+        offlineQueue={offlineQueue}
+        syncStatus={syncStatus}
+        qboConnection={qboConnection}
+        features={features}
+      />
       <div
         className="appHeader"
         style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, padding: '8px 16px' }}
@@ -357,6 +454,7 @@ function AppShell() {
           onSelect={(slug) => setCompanySlug(slug)}
           onCreated={() => void refresh()}
         />
+        <SupportReportButton companySlug={companySlug} />
         {FIXTURES_ENABLED ? null : <UserButton afterSignOutUrl="/sign-in" />}
       </div>
       <MobileNav

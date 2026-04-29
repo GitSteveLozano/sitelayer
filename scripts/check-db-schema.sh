@@ -46,6 +46,7 @@ with expected_tables(table_name) as (
     ('rental_billing_runs'),
     ('rental_billing_run_lines'),
     ('clock_events'),
+    ('support_debug_packets'),
     ('schema_migrations')
 ),
 expected_origin_columns(table_name) as (
@@ -108,6 +109,10 @@ expected_required_columns(table_name, column_name) as (
     ('rental_billing_run_lines', 'billable_days'),
     ('clock_events', 'inside_geofence'),
     ('takeoff_measurements', 'updated_at'),
+    ('support_debug_packets', 'client'),
+    ('support_debug_packets', 'server_context'),
+    ('support_debug_packets', 'expires_at'),
+    ('support_debug_packets', 'redaction_version'),
     ('schema_migrations', 'checksum')
 ),
 missing_tables as (

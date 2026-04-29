@@ -5,6 +5,7 @@ import { App } from './App.js'
 import { Button } from './components/ui/button.js'
 import { FIXTURES_ENABLED } from './api.js'
 import { captureException, initSentry } from './instrument.js'
+import { installSupportRecorder } from './support-recorder.js'
 import './styles.css'
 import './components/ui/mobile.css'
 
@@ -63,6 +64,7 @@ function installChunkRecovery() {
 // (which can land before the browser goes idle on slow devices or offline)
 // still reach the captureException buffer. Web vitals stay deferred.
 initSentry()
+installSupportRecorder()
 runWhenIdle(() => {
   void import('./web-vitals.js').then(({ captureWebVitals }) => captureWebVitals())
 }, 4000)

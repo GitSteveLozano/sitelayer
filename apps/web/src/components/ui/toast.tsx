@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { recordSupportEvent } from '../../support-recorder.js'
 
 // Minimal in-memory pub/sub toast system. No external deps.
 // Call showToast() from anywhere; <Toaster /> subscribes once and renders.
@@ -34,6 +35,16 @@ export function showToast(input: Omit<ToastPayload, 'id'> & { id?: string }) {
     ...(input.description !== undefined ? { description: input.description } : {}),
   }
   emit(payload)
+  recordSupportEvent({
+    category: 'toast',
+    name: 'toast.shown',
+    level: input.variant === 'error' ? 'error' : 'info',
+    data: {
+      variant: input.variant,
+      title: input.title,
+      ...(input.description !== undefined ? { description: input.description } : {}),
+    },
+  })
   return payload.id
 }
 
