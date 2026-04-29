@@ -467,20 +467,23 @@ describeIntegration('API Integration Tests', () => {
 
   async function seedBillingRun(): Promise<string | null> {
     if (!dbPool) return null
-    // Resolve company + a project to attach the contract to.
+    // Resolve company. We need a *fresh* project per seed call because the
+    // job_rental_contracts table has a unique partial index on
+    // (project_id, active) that prevents two active contracts on the same
+    // project — sharing one project across tests would collide.
     const companyResult = await dbPool.query<{ id: string }>(
       `select id from companies where slug = 'la-operations' limit 1`,
     )
     const companyId = companyResult.rows[0]?.id
     if (!companyId) return null
     const projectResult = await dbPool.query<{ id: string }>(
-      `select id from projects where company_id = $1 and deleted_at is null limit 1`,
-      [companyId],
+      `insert into projects
+         (company_id, name, customer_name, division_code, bid_total, labor_rate, status)
+       values ($1, $2, 'BillingRunSeed', 'D1', 100, 50, 'active')
+       returning id`,
+      [companyId, `BillingRunSeed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`],
     )
-    const projectId = projectResult.rows[0]?.id
-    if (!projectId) return null
-    // Inline seed: contract → billing run. We don't need lines for the
-    // workflow surface tests (state transitions don't depend on line data).
+    const projectId = projectResult.rows[0]!.id
     const contractResult = await dbPool.query<{ id: string }>(
       `insert into job_rental_contracts
          (company_id, project_id, billing_cycle_days, billing_mode, billing_start_date, next_billing_date, status)
