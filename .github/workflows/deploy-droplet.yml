@@ -38,10 +38,15 @@ jobs:
         env:
           DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
           # main + N SHA tags × ~100 MB compressed each must stay under the
-          # 500 MB Starter quota. 5+main = 600 MB — over quota even when
-          # nothing else is in the registry. Keep 3 by default so we have
-          # rollback headroom without crowding the quota.
-          REGISTRY_TAG_KEEP: ${{ vars.REGISTRY_TAG_KEEP || '3' }}
+          # 500 MB Starter quota. The retry-after-GC fallback works but
+          # DO storage GC is async — between deleting tags and the
+          # storage actually freeing, an in-flight push can still hit
+          # quota. Keep N small enough that we always have ~200 MB
+          # headroom for one extra concurrent push.
+          # 2 SHAs + main = 300 MB. .last_previous_deployed_sha + main
+          # is sufficient for one-step rollback; older rollbacks need
+          # to be re-promoted from the build cache or re-pushed manually.
+          REGISTRY_TAG_KEEP: ${{ vars.REGISTRY_TAG_KEEP || '2' }}
         run: |
           set +e
           set -u
@@ -58,7 +63,7 @@ jobs:
             echo "No tags to prune"
             exit 0
           fi
-          keep="${REGISTRY_TAG_KEEP:-5}"
+          keep="${REGISTRY_TAG_KEEP:-2}"
           tags_to_delete="$(printf '%s\n' "$tags" | tail -n +"$((keep + 1))")"
           if [ -z "$tags_to_delete" ]; then
             echo "Nothing to prune (have <= $keep tags)"
