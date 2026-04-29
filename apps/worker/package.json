@@ -14,7 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@sentry/node": "^10.50.0",
+    "@sentry/node": "^10.51.0",
     "@sitelayer/config": "file:../../packages/config",
     "@sitelayer/logger": "file:../../packages/logger",
     "@sitelayer/queue": "file:../../packages/queue",

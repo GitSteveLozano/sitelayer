@@ -15,10 +15,10 @@
     "test:integration": "RUN_API_INTEGRATION=1 vitest run"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1037.0",
-    "@aws-sdk/lib-storage": "^3.1037.0",
-    "@aws-sdk/s3-request-presigner": "^3.1037.0",
-    "@sentry/node": "^10.50.0",
+    "@aws-sdk/client-s3": "^3.1038.0",
+    "@aws-sdk/lib-storage": "^3.1038.0",
+    "@aws-sdk/s3-request-presigner": "^3.1038.0",
+    "@sentry/node": "^10.51.0",
     "@sitelayer/config": "file:../../packages/config",
     "@sitelayer/domain": "file:../../packages/domain",
     "@sitelayer/logger": "file:../../packages/logger",
