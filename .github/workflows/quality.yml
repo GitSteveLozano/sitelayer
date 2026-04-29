@@ -112,6 +112,7 @@ jobs:
           npm run build --workspace @sitelayer/domain
           npm run build --workspace @sitelayer/logger
           npm run build --workspace @sitelayer/queue
+          npm run build --workspace @sitelayer/workflows
           npm run build --workspace @sitelayer/api
 
       - name: Start API server
