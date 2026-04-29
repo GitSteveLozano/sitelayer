@@ -19,6 +19,16 @@ function manualChunks(id: string): string | undefined {
   return undefined
 }
 
+function readAllowedHosts(): true | string[] | undefined {
+  const raw = process.env.VITE_ALLOWED_HOSTS?.trim()
+  if (!raw) return undefined
+  if (raw === 'true') return true
+  return raw
+    .split(',')
+    .map((host) => host.trim())
+    .filter(Boolean)
+}
+
 export default defineConfig({
   plugins: [react()],
   cacheDir: process.env.VITE_CACHE_DIR ?? '.vite-cache',
@@ -48,5 +58,6 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',
     port: 3000,
+    allowedHosts: readAllowedHosts(),
   },
 })
