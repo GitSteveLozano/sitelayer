@@ -268,3 +268,52 @@ Before the first paying customer is on prod:
 
 The unchecked items are the work to wrap up before customer #1 lands
 or before flipping QBO live.
+
+## Post-pilot follow-ups (deferred, not blockers)
+
+These came out of the 2026-04-29 pre-pilot audit but were deemed
+post-pilot work — none would burn the first customer:
+
+### LOW
+
+- **Zod-validate the rest of the API mutation routes.** The workflow
+  event endpoints set the pattern (`parseRentalBillingEventRequest`,
+  `parseEstimatePushEventRequest`, `parseCrewScheduleEventRequest`,
+  `parseRentalEventRequest`). Roughly 25 non-workflow mutation routes
+  still take `Record<string, unknown>` from `ctx.readBody()` and trust
+  the shape. Current callers (the SPA) send well-formed bodies, but a
+  hostile or buggy client today bypasses validation. Mechanical sweep
+  ~1 day.
+- **Workflowize `projects` closeout** (`routes/projects.ts:270`,
+  status='completed' flip + margin alert) and **blueprint revisions**
+  (revision lineage today via copied-from notes). Both small lifts,
+  low regression risk. The pattern is set by crew_schedules — copy +
+  paste + adjust column names.
+
+### Phase-2 of partially-shipped work
+
+- **Rentals workflow phase 2.** Phase 1 (PR #126) added the schema
+  scaffolding and registered the reducer; the replay sweep covers
+  rentals. Phase 2 rewrites `routes/rentals.ts` to dispatch reducer
+  events instead of direct PATCH-set-status, and wires the worker's
+  cadence-driven flow (INVOICE_QUEUED, INVOICE_POSTED) through the
+  reducer. Bigger than crew_schedules because of the worker
+  integration, but the abstraction is in place.
+
+### DEFER
+
+- **Workflowize `integration_connections` / QBO sync.** Implicit
+  retry FSM in JSONB, multi-API coordination, large lift. Best
+  candidate for Temporal once we add it. **Don't take this on under
+  the Postgres reducer model** — it'll outgrow the abstraction.
+  Revisit after pilot when we know the real failure modes.
+
+### Operational follow-ups
+
+- **On-call rotation.** Single-developer pilot for now.
+- **OnFailure= for sitelayer-replay-sweep.timer.** Currently a
+  divergence exits the unit non-zero which surfaces in
+  `systemctl list-units --failed`; wire to Sentry/Slack once an
+  on-call destination exists.
+- **Periodic rollback drills.** First drill executed 2026-04-29;
+  schedule one quarterly to keep the muscle warm.
