@@ -120,9 +120,10 @@ sitelayer/
 │   └── worker/              # Background job processor (apps/worker/src/worker.ts)
 ├── packages/
 │   ├── config/              # Tier/env loading and deployment safety checks
-│   ├── domain/              # Shared types, business logic, constants
+│   ├── domain/              # Shared types, business math, constants
 │   ├── logger/              # Pino logger with request and Sentry trace context
-│   └── queue/               # Shared Postgres queue claiming/apply helpers
+│   ├── queue/               # Shared Postgres queue claiming/apply helpers
+│   └── workflows/           # Deterministic workflow reducers + Zod schemas (see docs/DETERMINISTIC_WORKFLOWS.md)
 ├── docker/
 │   └── postgres/init/       # Schema initialization
 ├── docs/                    # Architecture, requirements, findings
@@ -199,6 +200,15 @@ QBO integration:
 - POST `/api/integrations/qbo/sync/material-bills` — push material bills to QBO
 - GET `/api/integrations/qbo/mappings`, POST `/api/integrations/qbo/mappings`
 - PATCH/DELETE `/api/integrations/qbo/mappings/:id`
+
+Rental inventory + billing workflow (see `docs/DETERMINISTIC_WORKFLOWS.md`):
+
+- GET/POST/PATCH/DELETE `/api/inventory-items`, `/api/inventory-locations`, `/api/inventory-movements`
+- GET/POST/PATCH/DELETE `/api/projects/:id/rental-contracts`, `/api/job-rental-lines`
+- POST `/api/rental-contracts/:id/billing-runs/preview`, GET/POST `/api/rental-contracts/:id/billing-runs`
+- GET `/api/rental-billing-runs?state=...` — company-scoped list (entry surface for the headless review UI)
+- GET `/api/rental-billing-runs/:id` — returns `WorkflowSnapshot { state, state_version, context, next_events }`
+- POST `/api/rental-billing-runs/:id/events` — `{ event, state_version }` applies the pure reducer in one tx; 409 on stale `state_version` or illegal transition
 
 Sync queue inspection:
 
@@ -563,6 +573,32 @@ Background job processor:
    - Post-pilot: Need to implement per-user company isolation
 
 ## Decisions
+
+### 5. Deterministic Workflows — Pure Reducers, Headless UI, Workflow Package (2026-04-28)
+
+**Question (resolved):** How do we model multi-step business processes (rental billing, future estimate-push approval, ...) without scattering `if (status === 'foo')` across the codebase?
+
+**Decision:** Every multi-step process is a deterministic state machine. Pure reducer + state version + headless UI + outbox-driven side effects. Documented in `docs/DETERMINISTIC_WORKFLOWS.md`.
+
+**Mechanics:**
+
+- Workflow definitions live in `packages/workflows/`. Each workflow exports state types, event types, snapshot type, pure transition function `(snapshot, event) → next_snapshot`, and a `nextEvents(state)` selector that the API uses to populate `WorkflowSnapshot.next_events`.
+- API endpoints expose two routes per workflow: `GET /…/:id` returns a `WorkflowSnapshot { state, state_version, context, next_events }`, `POST /…/:id/events` takes `{ event, state_version }`, applies the reducer in one tx with optimistic version check, persists `state_version + 1`, and emits any side-effect intent (e.g. QBO push) into `mutation_outbox` with a stable per-entity idempotency key.
+- Workers drain dedicated outbox mutation_types via `processRentalBillingInvoicePush(client, push)` etc. (added to `@sitelayer/queue`), check the entity's external-id field for idempotency before calling external APIs, and emit `*_SUCCEEDED` / `*_FAILED` events back through the same reducer.
+- Frontend renders `state` + `context` + `next_events` straight from the snapshot. XState wraps **only** UI state (loading / submitting / showingError / outOfSync), never mirrors business state. 409s reload the fresh snapshot.
+- Event request bodies are validated by Zod schemas exported from `@sitelayer/workflows` (e.g. `parseRentalBillingEventRequest`).
+
+**Why this shape (not status toggles or Temporal-from-day-one):**
+
+- Pure reducers are easy to reason about, test in isolation, and replay — the same transition table will move to Temporal activities when timers/retries justify it.
+- Headless UI means a screen never accidentally invents new business states (e.g. an "approved-locally-pending-server" state that doesn't exist on the backend). The component is a thin renderer.
+- One outbox row per workflow event keeps retries safe: stable idempotency_key per run id (not per state_version) so RETRY_POST replays upsert the same row.
+
+**Scope:**
+
+- First (and currently only) workflow: `rental_billing_runs`. States: `generated → approved → posting → posted | failed → voided`. Events: `APPROVE`, `POST_REQUESTED`, `POST_SUCCEEDED`, `POST_FAILED`, `RETRY_POST`, `VOID`. `POST_SUCCEEDED`/`POST_FAILED` are worker-only — rejected at the human event endpoint.
+- Worker activates real QBO Invoice push when `QBO_LIVE_RENTAL_INVOICE=1`; otherwise a stub returns synthetic ids so dev/preview/fixtures still exercise the deterministic plumbing.
+- Future workflows that fit this pattern: estimate push approval, schedule confirmation, blueprint review.
 
 ### 4. Offline Sync Conflict Resolution — Last-Write-Wins + Diagnostic Toast (2026-04-24)
 
