@@ -42,14 +42,19 @@ export interface WorkflowDefinition<
   sideEffectTypes: readonly string[]
 }
 
-const REGISTRY = new Map<string, WorkflowDefinition<string, { type: string }, string, { state: string; state_version: number }>>()
+const REGISTRY = new Map<
+  string,
+  WorkflowDefinition<string, { type: string }, string, { state: string; state_version: number }>
+>()
 
 export function registerWorkflow<
   State extends string,
   Event extends { type: string },
   HumanEventType extends string,
   Snapshot extends { state: State; state_version: number },
->(definition: WorkflowDefinition<State, Event, HumanEventType, Snapshot>): WorkflowDefinition<State, Event, HumanEventType, Snapshot> {
+>(
+  definition: WorkflowDefinition<State, Event, HumanEventType, Snapshot>,
+): WorkflowDefinition<State, Event, HumanEventType, Snapshot> {
   if (REGISTRY.has(definition.name)) {
     const existing = REGISTRY.get(definition.name)!
     if (existing.schemaVersion !== definition.schemaVersion) {
@@ -61,14 +66,19 @@ export function registerWorkflow<
   }
   REGISTRY.set(
     definition.name,
-    definition as unknown as WorkflowDefinition<string, { type: string }, string, { state: string; state_version: number }>,
+    definition as unknown as WorkflowDefinition<
+      string,
+      { type: string },
+      string,
+      { state: string; state_version: number }
+    >,
   )
   return definition
 }
 
-export function getWorkflow(name: string):
-  | WorkflowDefinition<string, { type: string }, string, { state: string; state_version: number }>
-  | undefined {
+export function getWorkflow(
+  name: string,
+): WorkflowDefinition<string, { type: string }, string, { state: string; state_version: number }> | undefined {
   return REGISTRY.get(name)
 }
 

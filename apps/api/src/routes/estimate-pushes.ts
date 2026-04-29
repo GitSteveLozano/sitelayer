@@ -159,10 +159,7 @@ function snapshotResponse(
   }
 }
 
-function buildReducerEvent(
-  eventType: EstimatePushHumanEventType,
-  actorUserId: string,
-): EstimatePushWorkflowEvent {
+function buildReducerEvent(eventType: EstimatePushHumanEventType, actorUserId: string): EstimatePushWorkflowEvent {
   const now = new Date().toISOString()
   switch (eventType) {
     case 'REVIEW':

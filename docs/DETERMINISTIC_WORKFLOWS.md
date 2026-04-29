@@ -351,10 +351,10 @@ The `schema_version` column already exists on `workflow_event_log`; multi-versio
 
 ## Workflow Inventory
 
-| Workflow | Status | Schema | States | Side effects |
-|---|---|---|---|---|
-| `rental_billing_run` | Live in API + worker, event log enabled in both human and worker paths | v1 | generated, approved, posting, posted, failed, voided | `post_qbo_invoice` |
-| `estimate_push` | Live in API + worker (worker uses stub QBO push until `qbo-estimate-push.ts` ships and `QBO_LIVE_ESTIMATE_PUSH=1` is set) | v1 | drafted, reviewed, approved, posting, posted, failed, voided | `post_qbo_estimate` |
+| Workflow             | Status                                                                                                                    | Schema | States                                                       | Side effects        |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------ | ------------------- |
+| `rental_billing_run` | Live in API + worker, event log enabled in both human and worker paths                                                    | v1     | generated, approved, posting, posted, failed, voided         | `post_qbo_invoice`  |
+| `estimate_push`      | Live in API + worker (worker uses stub QBO push until `qbo-estimate-push.ts` ships and `QBO_LIVE_ESTIMATE_PUSH=1` is set) | v1     | drafted, reviewed, approved, posting, posted, failed, voided | `post_qbo_estimate` |
 
 Implicit state machines that are next on the workflow-ization list (today they live as `set status = '...'` in scattered handlers):
 

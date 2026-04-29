@@ -1461,14 +1461,7 @@ export async function listRentalBillingRuns(
 // rental-billing helpers because the UI machine treatment is identical.
 // ---------------------------------------------------------------------------
 
-export type EstimatePushWorkflowState =
-  | 'drafted'
-  | 'reviewed'
-  | 'approved'
-  | 'posting'
-  | 'posted'
-  | 'failed'
-  | 'voided'
+export type EstimatePushWorkflowState = 'drafted' | 'reviewed' | 'approved' | 'posting' | 'posted' | 'failed' | 'voided'
 
 export type EstimatePushHumanEvent = 'REVIEW' | 'APPROVE' | 'POST_REQUESTED' | 'RETRY_POST' | 'VOID'
 
@@ -1518,11 +1511,7 @@ export async function createEstimatePush(
   projectId: string,
   companySlug: string,
 ): Promise<EstimatePushWorkflowSnapshotResponse> {
-  return apiPost<EstimatePushWorkflowSnapshotResponse>(
-    `/api/projects/${projectId}/estimate-pushes`,
-    {},
-    companySlug,
-  )
+  return apiPost<EstimatePushWorkflowSnapshotResponse>(`/api/projects/${projectId}/estimate-pushes`, {}, companySlug)
 }
 
 export async function getEstimatePushSnapshot(

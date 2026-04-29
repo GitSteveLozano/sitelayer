@@ -31,10 +31,7 @@ type Context = {
   outOfSync: boolean
 }
 
-type Event =
-  | { type: 'LOAD' }
-  | { type: 'DISPATCH'; event: EstimatePushHumanEvent }
-  | { type: 'DISMISS_ERROR' }
+type Event = { type: 'LOAD' } | { type: 'DISPATCH'; event: EstimatePushHumanEvent } | { type: 'DISMISS_ERROR' }
 
 type LoadInput = { pushId: string; companySlug: string }
 type DispatchInput = {

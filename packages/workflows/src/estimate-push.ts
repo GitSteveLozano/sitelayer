@@ -19,14 +19,7 @@ import { registerWorkflow } from './registry.js'
  * plus events endpoints that call transitionEstimatePushWorkflow.
  */
 
-export type EstimatePushWorkflowState =
-  | 'drafted'
-  | 'reviewed'
-  | 'approved'
-  | 'posting'
-  | 'posted'
-  | 'failed'
-  | 'voided'
+export type EstimatePushWorkflowState = 'drafted' | 'reviewed' | 'approved' | 'posting' | 'posted' | 'failed' | 'voided'
 
 export const ESTIMATE_PUSH_WORKFLOW_NAME = 'estimate_push'
 export const ESTIMATE_PUSH_WORKFLOW_SCHEMA_VERSION = 1
@@ -231,9 +224,7 @@ export const EstimatePushEventRequestSchema = z.object({
 })
 
 export type EstimatePushEventRequest = z.infer<typeof EstimatePushEventRequestSchema>
-export type EstimatePushEventParseResult =
-  | { ok: true; value: EstimatePushEventRequest }
-  | { ok: false; error: string }
+export type EstimatePushEventParseResult = { ok: true; value: EstimatePushEventRequest } | { ok: false; error: string }
 
 export function parseEstimatePushEventRequest(body: unknown): EstimatePushEventParseResult {
   const normalized: Record<string, unknown> =

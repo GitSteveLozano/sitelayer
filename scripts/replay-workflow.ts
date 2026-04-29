@@ -83,9 +83,7 @@ async function main(): Promise<void> {
   const def = getWorkflow(workflowName)
   if (!def) {
     console.error(`no workflow registered as "${workflowName}"`)
-    console.error(
-      `known workflows: ${Object.keys(ENTITY_TABLE).join(', ')}`,
-    )
+    console.error(`known workflows: ${Object.keys(ENTITY_TABLE).join(', ')}`)
     process.exit(1)
   }
   const entityMeta = ENTITY_TABLE[workflowName]
@@ -151,9 +149,7 @@ async function main(): Promise<void> {
     if (!result.ok) {
       console.error('\n[FAIL] event-log replay diverged:')
       for (const issue of result.issues) {
-        console.error(
-          `  state_version=${issue.state_version} event=${issue.event_type} reason=${issue.reason}`,
-        )
+        console.error(`  state_version=${issue.state_version} event=${issue.event_type} reason=${issue.reason}`)
         if (issue.detail) console.error(`    ${issue.detail}`)
       }
       process.exit(2)

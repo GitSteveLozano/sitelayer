@@ -39,12 +39,12 @@ careless merge cannot break a paying customer.
 
 ## What runs where
 
-| Stage | Trigger | Workflow | Target |
-|---|---|---|---|
-| PR opened | every push to a PR branch | `.github/workflows/quality.yml` | none (validates only) |
-| PR opened | every push to a PR branch | `.github/workflows/deploy-preview.yml` | `pr-N.preview.sitelayer.sandolab.xyz`, `sitelayer_preview` Postgres |
-| PR closed | merged or discarded | `.github/workflows/deploy-preview.yml` (cleanup) | tears down preview stack |
-| Push to `main` | merged PR | `.github/workflows/deploy-droplet.yml` | production droplet, `sitelayer_prod` Postgres |
+| Stage          | Trigger                   | Workflow                                         | Target                                                              |
+| -------------- | ------------------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
+| PR opened      | every push to a PR branch | `.github/workflows/quality.yml`                  | none (validates only)                                               |
+| PR opened      | every push to a PR branch | `.github/workflows/deploy-preview.yml`           | `pr-N.preview.sitelayer.sandolab.xyz`, `sitelayer_preview` Postgres |
+| PR closed      | merged or discarded       | `.github/workflows/deploy-preview.yml` (cleanup) | tears down preview stack                                            |
+| Push to `main` | merged PR                 | `.github/workflows/deploy-droplet.yml`           | production droplet, `sitelayer_prod` Postgres                       |
 
 The production deploy job runs on the same self-hosted runner as preview
 (`sitelayer-preview`), then SSHes from there to the production droplet.

@@ -127,9 +127,7 @@ describe('estimate-push reducer — property invariants', () => {
   it('terminal states reject every event', () => {
     fc.assert(
       fc.property(fc.constantFrom(...ESTIMATE_PUSH_TERMINAL_STATES), ANY_EVENT, (state, event) => {
-        expect(() =>
-          transitionEstimatePushWorkflow({ state, state_version: 1 }, event),
-        ).toThrow(/not allowed/)
+        expect(() => transitionEstimatePushWorkflow({ state, state_version: 1 }, event)).toThrow(/not allowed/)
       }),
     )
   })
