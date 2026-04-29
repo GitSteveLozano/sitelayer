@@ -356,15 +356,13 @@ if (liveRentalBillingInvoicePushEnabled) {
 }
 
 async function drainRentalBillingInvoicePushes(companyId: string): Promise<RentalBillingInvoicePushSummary> {
+  // processRentalBillingInvoicePush manages its own per-phase
+  // transactions internally so a failure on one row can't strand
+  // earlier rows' work or leave the outbox in 'processing' beyond
+  // the 5-minute lease. We just hand it a connection.
   const client = await pool.connect()
   try {
-    await client.query('begin')
-    const summary = await processRentalBillingInvoicePush(client, companyId, rentalBillingInvoicePush, 5)
-    await client.query('commit')
-    return summary
-  } catch (error) {
-    await client.query('rollback').catch(() => {})
-    throw error
+    return await processRentalBillingInvoicePush(client, companyId, rentalBillingInvoicePush, 5)
   } finally {
     client.release()
   }
@@ -387,15 +385,11 @@ if (liveEstimatePushEnabled) {
 }
 
 async function drainEstimatePushes(companyId: string): Promise<EstimatePushSummary> {
+  // See drainRentalBillingInvoicePushes — same transaction-scope
+  // contract.
   const client = await pool.connect()
   try {
-    await client.query('begin')
-    const summary = await processEstimatePush(client, companyId, estimatePush, 5)
-    await client.query('commit')
-    return summary
-  } catch (error) {
-    await client.query('rollback').catch(() => {})
-    throw error
+    return await processEstimatePush(client, companyId, estimatePush, 5)
   } finally {
     client.release()
   }

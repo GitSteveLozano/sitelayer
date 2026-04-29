@@ -421,45 +421,93 @@ async function recordInvoicePushSyncEvent(
   )
 }
 
+/**
+ * Mark a single outbox row failed in its own transaction. Used after a
+ * per-row work tx has been rolled back so the failure is recorded even
+ * when the inner catch path's recovery work itself threw. Best-effort:
+ * if even this update can't succeed, the row will be re-claimed once
+ * its 5-minute lease elapses.
+ */
+async function markOutboxRowFailedFresh(
+  client: QueueClient,
+  companyId: string,
+  outboxId: string,
+  errorMessage: string,
+  retryDelayMinutes = 15,
+): Promise<void> {
+  try {
+    await client.query('begin')
+    await client.query(
+      `update mutation_outbox
+         set status = 'failed', error = $3, next_attempt_at = now() + ($4 || ' minutes')::interval
+       where company_id = $1 and id = $2`,
+      [companyId, outboxId, errorMessage.slice(0, 1000), String(retryDelayMinutes)],
+    )
+    await client.query('commit')
+  } catch (markErr) {
+    await client.query('rollback').catch(() => {})
+    // Re-throw so the caller can log it; the row will be re-claimed once
+    // next_attempt_at elapses (the original claim already set this).
+    throw markErr
+  }
+}
+
 export async function processRentalBillingInvoicePush(
   client: QueueClient,
   companyId: string,
   push: RentalBillingInvoicePushFn,
   limit = 5,
 ): Promise<RentalBillingInvoicePushSummary> {
-  const claimed = await client.query<ClaimedInvoicePushRow>(
-    `
-    update mutation_outbox
-    set
-      status = 'processing',
-      attempt_count = attempt_count + 1,
-      next_attempt_at = now() + interval '5 minutes',
-      error = null
-    where id in (
-      select id
-      from mutation_outbox
-      where company_id = $1
-        and entity_type = 'rental_billing_run'
-        and mutation_type = 'post_qbo_invoice'
-        and (
-          (status = 'pending' and next_attempt_at <= now())
-          or (status = 'processing' and next_attempt_at <= now())
-        )
-      order by next_attempt_at asc, created_at asc
-      limit $2
-      for update skip locked
+  // Phase 1: claim. Own transaction so the 'processing' marker is durable
+  // even if every per-row work tx fails. The next_attempt_at = now()+5min
+  // set here keeps a row off the claim list until either a per-row tx
+  // commits a final state OR the 5-minute lease elapses (watchdog path).
+  await client.query('begin')
+  let claimed: { rows: ClaimedInvoicePushRow[]; rowCount: number | null }
+  try {
+    const result = await client.query<ClaimedInvoicePushRow>(
+      `
+      update mutation_outbox
+      set
+        status = 'processing',
+        attempt_count = attempt_count + 1,
+        next_attempt_at = now() + interval '5 minutes',
+        error = null
+      where id in (
+        select id
+        from mutation_outbox
+        where company_id = $1
+          and entity_type = 'rental_billing_run'
+          and mutation_type = 'post_qbo_invoice'
+          and (
+            (status = 'pending' and next_attempt_at <= now())
+            or (status = 'processing' and next_attempt_at <= now())
+          )
+        order by next_attempt_at asc, created_at asc
+        limit $2
+        for update skip locked
+      )
+      returning id, entity_id, payload, attempt_count
+      `,
+      [companyId, limit],
     )
-    returning id, entity_id, payload, attempt_count
-    `,
-    [companyId, limit],
-  )
+    claimed = { rows: result.rows, rowCount: result.rowCount ?? null }
+    await client.query('commit')
+  } catch (err) {
+    await client.query('rollback').catch(() => {})
+    throw err
+  }
 
   let posted = 0
   let failed = 0
   let skipped = 0
 
+  // Phase 2: per-row work, each in its own transaction. A failure in one
+  // row's body or recovery path cannot strand earlier rows' state — each
+  // row commits or rolls back independently.
   for (const row of claimed.rows) {
     const runId = row.entity_id
+    await client.query('begin')
     try {
       // Idempotency check: if QBO invoice id already exists, skip the push
       // and emit POST_SUCCEEDED with the existing id. Worker retries against
@@ -476,6 +524,7 @@ export async function processRentalBillingInvoicePush(
            where company_id = $1 and id = $2`,
           [companyId, row.id, 'rental_billing_run not found'],
         )
+        await client.query('commit')
         failed += 1
         continue
       }
@@ -498,6 +547,7 @@ export async function processRentalBillingInvoicePush(
            where company_id = $1 and id = $2`,
           [companyId, row.id],
         )
+        await client.query('commit')
         skipped += 1
         continue
       }
@@ -518,25 +568,59 @@ export async function processRentalBillingInvoicePush(
          where company_id = $1 and id = $2`,
         [companyId, row.id],
       )
+      await client.query('commit')
       posted += 1
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unknown error'
-      await applyWorkerEmittedEvent(client, companyId, row.entity_id, {
-        kind: 'failed',
-        error: message,
-      })
-      await recordInvoicePushSyncEvent(client, companyId, row.entity_id, {
-        action: 'post_failed',
-        provider: 'qbo',
-        error: message,
-      })
-      await client.query(
-        `update mutation_outbox
-           set status = 'failed', error = $3, next_attempt_at = now() + interval '15 minutes'
-         where company_id = $1 and id = $2`,
-        [companyId, row.id, message.slice(0, 1000)],
-      )
-      failed += 1
+      // Roll back the per-row tx so the partial work doesn't leak. Then
+      // attempt the failure-recording sequence in fresh transactions so a
+      // second crash here doesn't strand the outbox row in 'processing'.
+      await client.query('rollback').catch(() => {})
+
+      // Best-effort: emit POST_FAILED through the reducer and record a
+      // sync_event. If either fails (constraint, connection), proceed to
+      // marking the outbox row failed regardless — that's the load-bearing
+      // step for un-sticking the queue.
+      try {
+        await client.query('begin')
+        await applyWorkerEmittedEvent(client, companyId, row.entity_id, {
+          kind: 'failed',
+          error: message,
+        })
+        await recordInvoicePushSyncEvent(client, companyId, row.entity_id, {
+          action: 'post_failed',
+          provider: 'qbo',
+          error: message,
+        })
+        await client.query('commit')
+      } catch (recoveryErr) {
+        await client.query('rollback').catch(() => {})
+        // Surface the recovery failure but don't bail — still try to
+        // mark the outbox row failed below.
+        try {
+          // Best-effort sentry/log breadcrumb; the actual recovery is the
+          // outbox status update below.
+          ;(globalThis as { console?: { warn?: (...a: unknown[]) => void } }).console?.warn?.(
+            '[queue] rental-billing recovery path threw',
+            { runId: row.entity_id, originalError: message, recoveryError: recoveryErr },
+          )
+        } catch {
+          /* ignore */
+        }
+      }
+
+      try {
+        await markOutboxRowFailedFresh(client, companyId, row.id, message)
+        failed += 1
+      } catch (markErr) {
+        // Truly hopeless: the lease (next_attempt_at = now+5min) means
+        // the row gets re-claimed eventually. Surface the error so it's
+        // visible in worker logs/Sentry.
+        ;(globalThis as { console?: { warn?: (...a: unknown[]) => void } }).console?.warn?.(
+          '[queue] rental-billing failed to mark outbox row failed; will be re-claimed after lease',
+          { outboxId: row.id, error: markErr },
+        )
+      }
     }
   }
 
@@ -715,44 +799,60 @@ export async function processEstimatePush(
   push: EstimatePushFn,
   limit = 5,
 ): Promise<EstimatePushSummary> {
-  const claimed = await client.query<{
-    id: string
-    entity_id: string
-    payload: Record<string, unknown>
-    attempt_count: number
-  }>(
-    `
-    update mutation_outbox
-    set
-      status = 'processing',
-      attempt_count = attempt_count + 1,
-      next_attempt_at = now() + interval '5 minutes',
-      error = null
-    where id in (
-      select id
-      from mutation_outbox
-      where company_id = $1
-        and entity_type = 'estimate_push'
-        and mutation_type = 'post_qbo_estimate'
-        and (
-          (status = 'pending' and next_attempt_at <= now())
-          or (status = 'processing' and next_attempt_at <= now())
-        )
-      order by next_attempt_at asc, created_at asc
-      limit $2
-      for update skip locked
+  // Phase 1: claim in its own tx — see processRentalBillingInvoicePush
+  // for the structural rationale; same shape applies here.
+  await client.query('begin')
+  let claimed: {
+    rows: Array<{ id: string; entity_id: string; payload: Record<string, unknown>; attempt_count: number }>
+    rowCount: number | null
+  }
+  try {
+    const result = await client.query<{
+      id: string
+      entity_id: string
+      payload: Record<string, unknown>
+      attempt_count: number
+    }>(
+      `
+      update mutation_outbox
+      set
+        status = 'processing',
+        attempt_count = attempt_count + 1,
+        next_attempt_at = now() + interval '5 minutes',
+        error = null
+      where id in (
+        select id
+        from mutation_outbox
+        where company_id = $1
+          and entity_type = 'estimate_push'
+          and mutation_type = 'post_qbo_estimate'
+          and (
+            (status = 'pending' and next_attempt_at <= now())
+            or (status = 'processing' and next_attempt_at <= now())
+          )
+        order by next_attempt_at asc, created_at asc
+        limit $2
+        for update skip locked
+      )
+      returning id, entity_id, payload, attempt_count
+      `,
+      [companyId, limit],
     )
-    returning id, entity_id, payload, attempt_count
-    `,
-    [companyId, limit],
-  )
+    claimed = { rows: result.rows, rowCount: result.rowCount ?? null }
+    await client.query('commit')
+  } catch (err) {
+    await client.query('rollback').catch(() => {})
+    throw err
+  }
 
   let posted = 0
   let failed = 0
   let skipped = 0
 
+  // Phase 2: per-row work in its own tx.
   for (const row of claimed.rows) {
     const pushId = row.entity_id
+    await client.query('begin')
     try {
       const existing = await client.query<{ qbo_estimate_id: string | null; status: string }>(
         `select qbo_estimate_id, status from estimate_pushes
@@ -766,6 +866,7 @@ export async function processEstimatePush(
            where company_id = $1 and id = $2`,
           [companyId, row.id, 'estimate_push not found'],
         )
+        await client.query('commit')
         failed += 1
         continue
       }
@@ -787,6 +888,7 @@ export async function processEstimatePush(
            where company_id = $1 and id = $2`,
           [companyId, row.id],
         )
+        await client.query('commit')
         skipped += 1
         continue
       }
@@ -807,25 +909,43 @@ export async function processEstimatePush(
          where company_id = $1 and id = $2`,
         [companyId, row.id],
       )
+      await client.query('commit')
       posted += 1
     } catch (err) {
       const message = err instanceof Error ? err.message : 'unknown error'
-      await applyEstimatePushWorkerEvent(client, companyId, row.entity_id, {
-        kind: 'failed',
-        error: message,
-      })
-      await recordEstimatePushSyncEvent(client, companyId, row.entity_id, {
-        action: 'post_failed',
-        provider: 'qbo',
-        error: message,
-      })
-      await client.query(
-        `update mutation_outbox
-           set status = 'failed', error = $3, next_attempt_at = now() + interval '15 minutes'
-         where company_id = $1 and id = $2`,
-        [companyId, row.id, message.slice(0, 1000)],
-      )
-      failed += 1
+      await client.query('rollback').catch(() => {})
+
+      // Best-effort recovery in a fresh tx; identical pattern to
+      // processRentalBillingInvoicePush.
+      try {
+        await client.query('begin')
+        await applyEstimatePushWorkerEvent(client, companyId, row.entity_id, {
+          kind: 'failed',
+          error: message,
+        })
+        await recordEstimatePushSyncEvent(client, companyId, row.entity_id, {
+          action: 'post_failed',
+          provider: 'qbo',
+          error: message,
+        })
+        await client.query('commit')
+      } catch (recoveryErr) {
+        await client.query('rollback').catch(() => {})
+        ;(globalThis as { console?: { warn?: (...a: unknown[]) => void } }).console?.warn?.(
+          '[queue] estimate-push recovery path threw',
+          { pushId: row.entity_id, originalError: message, recoveryError: recoveryErr },
+        )
+      }
+
+      try {
+        await markOutboxRowFailedFresh(client, companyId, row.id, message)
+        failed += 1
+      } catch (markErr) {
+        ;(globalThis as { console?: { warn?: (...a: unknown[]) => void } }).console?.warn?.(
+          '[queue] estimate-push failed to mark outbox row failed; will be re-claimed after lease',
+          { outboxId: row.id, error: markErr },
+        )
+      }
     }
   }
 
