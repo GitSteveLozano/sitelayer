@@ -29,17 +29,17 @@
   align-items: center;
   justify-content: center;
   padding: 0.5rem 0.9rem;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(7, 10, 16, 0.68);
-  color: #f8fafc;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--ink);
   font-weight: 700;
   cursor: pointer;
 }
 
 .mobileNavToggle[aria-expanded='true'] {
-  background: rgba(125, 211, 252, 0.14);
-  color: #7dd3fc;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
 /* ─── Tablet + phone (≤919px): sticky nav, scrollable nav row ─── */
@@ -69,7 +69,7 @@
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
     backdrop-filter: blur(8px);
-    background: rgba(7, 10, 16, 0.92);
+    background: rgb(255 255 255 / 0.94);
   }
 
   .appNav::-webkit-scrollbar {
@@ -127,12 +127,11 @@
   /* Panels breathe less on phones — preserve vertical real estate. */
   .panel {
     padding: 16px;
-    border-radius: 16px;
+    border-radius: 8px;
   }
 
   .hero {
-    padding: 18px;
-    border-radius: 20px;
+    padding: 4px 2px 8px;
   }
 
   .hero h1 {
@@ -199,10 +198,10 @@
   .auditTable tr.auditRow {
     margin-bottom: 12px;
     padding: 12px;
-    border-radius: 14px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    background: rgba(255, 255, 255, 0.035);
-    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    box-shadow: var(--shadow-1);
   }
 
   .auditTable tr.auditRow td {
@@ -210,7 +209,7 @@
     grid-template-columns: 104px 1fr;
     gap: 8px;
     padding: 6px 0;
-    border-bottom: 1px dashed rgba(148, 163, 184, 0.12);
+    border-bottom: 1px dashed var(--line);
     word-break: break-word;
   }
 
@@ -223,10 +222,10 @@
 
   .auditTable tr.auditRow td::before {
     content: attr(data-mobile-label);
-    color: #94a3b8;
+    color: var(--ink-3);
     font-size: 0.72rem;
     text-transform: uppercase;
-    letter-spacing: 0.14em;
+    letter-spacing: 0;
     align-self: center;
   }
 
@@ -250,6 +249,10 @@
   }
   .auditTable tr.auditRow td:nth-of-type(7)::before {
     content: '';
+  }
+
+  .auditTable tr.auditRow td[data-mobile-label]::before {
+    content: attr(data-mobile-label);
   }
 
   .auditTable tr.auditDetailRow td {
@@ -282,9 +285,9 @@
     flex-direction: column !important;
     gap: 10px !important;
     padding: 14px !important;
-    border-radius: 14px !important;
-    background: rgba(255, 255, 255, 0.04) !important;
-    border: 1px solid rgba(148, 163, 184, 0.18) !important;
+    border-radius: 8px !important;
+    background: var(--surface) !important;
+    border: 1px solid var(--line) !important;
   }
 
   .confirmRow > * {
@@ -314,10 +317,10 @@
     z-index: 20;
     margin-top: 16px;
     padding: 12px;
-    border-radius: 14px 14px 0 0;
-    background: rgba(7, 10, 16, 0.94);
+    border-radius: 8px 8px 0 0;
+    background: rgb(255 255 255 / 0.94);
     backdrop-filter: blur(8px);
-    box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 -12px 28px rgb(31 42 55 / 0.12);
   }
 
   [data-testid='confirm-view'] [data-testid='confirm-day-submit'] {
@@ -388,7 +391,7 @@
 /* Large-touch focus rings that won't get clipped by rounded cards. */
 @media (max-width: 919px) {
   :focus-visible {
-    outline: 2px solid rgba(125, 211, 252, 0.85);
+    outline: 2px solid rgb(217 120 45 / 0.75);
     outline-offset: 2px;
   }
 }
