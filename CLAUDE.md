@@ -2,6 +2,22 @@
 
 Construction operations platform: blueprint takeoff, estimation, crew scheduling, and QBO sync.
 
+## Agent skills
+
+This repo uses repo-local agent docs to make imported skills explicit and repeatable. When a root `SKILL.md` exists, treat it as the project-local workflow skill for this repository.
+
+### Issue tracker
+
+Agent workflow issues use: Mesh orchestrated tasks. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Triage roles are represented through the tracker mapping in `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Domain language lives in `CONTEXT.md` when present; durable architectural decisions live in `docs/adr/`; project-specific reading order lives in `docs/agents/domain.md`.
+
 ## Agent Coordination Source of Truth
 
 **Last reconciled:** 2026-04-25
