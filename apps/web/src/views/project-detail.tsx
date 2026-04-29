@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import type { ProjectRow } from '../api.js'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { createEstimatePush, type ProjectRow } from '../api.js'
 import { Button } from '../components/ui/button.js'
+import { toastError } from '../components/ui/toast.js'
 import { useProjectSelection } from '../machines/project-selection.js'
 
 /**
@@ -44,9 +45,29 @@ function formatPercent(value: number | null | undefined): string {
 
 export function ProjectDetailView({ companySlug, projects }: ProjectDetailViewProps) {
   const { projectId } = useParams<{ projectId: string }>()
+  const navigate = useNavigate()
   const project = useMemo(() => projects.find((p) => p.id === projectId) ?? null, [projects, projectId])
   const [tab, setTab] = useState<Tab>('overview')
+  const [pushBusy, setPushBusy] = useState(false)
   const selection = useProjectSelection(companySlug, projectId ?? '')
+
+  // Capture the project's current estimate_lines into a new estimate_push
+  // (workflow row) and navigate to its review screen. Refuses if a push
+  // already exists for this project — surfaces the existing one's id in
+  // the 409 toast so the user can navigate there manually.
+  async function handleStartEstimatePush() {
+    if (!projectId) return
+    setPushBusy(true)
+    try {
+      const snapshot = await createEstimatePush(projectId, companySlug)
+      navigate(`/estimate-push/${snapshot.context.id}`)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'failed to start estimate push'
+      toastError('Could not start estimate push', message)
+    } finally {
+      setPushBusy(false)
+    }
+  }
 
   if (!projectId) return null
   if (!project) {
@@ -75,6 +96,9 @@ export function ProjectDetailView({ companySlug, projects }: ProjectDetailViewPr
               Manage rental
             </Button>
           </Link>
+          <Button variant="outline" size="sm" onClick={handleStartEstimatePush} disabled={pushBusy}>
+            {pushBusy ? 'Starting…' : 'Push estimate to QBO'}
+          </Button>
           <Button variant="outline" size="sm" onClick={selection.refresh} disabled={selection.isFetching}>
             {selection.isFetching ? 'Refreshing…' : 'Refresh'}
           </Button>
