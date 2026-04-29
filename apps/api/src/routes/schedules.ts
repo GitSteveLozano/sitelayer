@@ -156,5 +156,86 @@ export async function handleScheduleRoutes(
     return true
   }
 
+  // POST /api/schedules/copy-week
+  // Body: { from_monday, to_monday }
+  // Clones every crew_schedules row whose scheduled_for falls in the
+  // [from_monday, from_monday+6] range to the matching offset day in
+  // [to_monday, to_monday+6]. New rows always come back as status='draft'
+  // so the foreman re-confirms — copying a week shouldn't auto-confirm
+  // labor entries on the new dates. Idempotent at the (project_id,
+  // scheduled_for) level: if a row already exists for the target day +
+  // project, it's left alone (the office can edit it directly).
+  if (req.method === 'POST' && url.pathname === '/api/schedules/copy-week') {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const body = await ctx.readBody()
+    const fromMonday = typeof body.from_monday === 'string' ? body.from_monday.trim() : ''
+    const toMonday = typeof body.to_monday === 'string' ? body.to_monday.trim() : ''
+    if (!fromMonday || !isValidDateInput(fromMonday) || !toMonday || !isValidDateInput(toMonday)) {
+      ctx.sendJson(400, { error: 'from_monday and to_monday must be YYYY-MM-DD' })
+      return true
+    }
+    const result = await withMutationTx(async (client: PoolClient) => {
+      // Pull all source rows in [fromMonday, fromMonday+6]
+      const source = await client.query(
+        `
+        select project_id, scheduled_for, crew
+        from crew_schedules
+        where company_id = $1
+          and deleted_at is null
+          and scheduled_for >= $2::date
+          and scheduled_for <= ($2::date + interval '6 days')
+        `,
+        [ctx.company.id, fromMonday],
+      )
+      let copied = 0
+      let skipped = 0
+      const created: Array<Record<string, unknown>> = []
+      for (const src of source.rows) {
+        const offsetDays = Math.round(
+          (new Date(`${src.scheduled_for}T00:00:00Z`).getTime() - new Date(`${fromMonday}T00:00:00Z`).getTime()) /
+            86_400_000,
+        )
+        const targetDate = new Date(`${toMonday}T00:00:00Z`)
+        targetDate.setUTCDate(targetDate.getUTCDate() + offsetDays)
+        const targetISO = targetDate.toISOString().slice(0, 10)
+        // Don't clobber an existing schedule on the target day for the
+        // same project; the office can edit it directly.
+        const existing = await client.query(
+          `select 1 from crew_schedules
+           where company_id = $1 and project_id = $2 and scheduled_for = $3::date
+             and deleted_at is null`,
+          [ctx.company.id, src.project_id, targetISO],
+        )
+        if (existing.rowCount && existing.rowCount > 0) {
+          skipped += 1
+          continue
+        }
+        const insert = await client.query(
+          `
+          insert into crew_schedules (company_id, project_id, scheduled_for, crew, status, version)
+          values ($1, $2, $3::date, $4::jsonb, 'draft', 1)
+          returning id, project_id, scheduled_for, crew, status, version, created_at
+          `,
+          [ctx.company.id, src.project_id, targetISO, JSON.stringify(src.crew)],
+        )
+        const row = insert.rows[0]
+        copied += 1
+        created.push(row)
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'crew_schedule',
+          entityId: row.id,
+          action: 'copy_week_clone',
+          row,
+          idempotencyKey: `crew_schedule:copy_week_clone:${row.id}`,
+          syncPayload: { action: 'create', schedule: row, source_week: fromMonday, target_week: toMonday },
+        })
+      }
+      return { copied, skipped, total: source.rowCount ?? 0, schedules: created }
+    })
+    ctx.sendJson(200, result)
+    return true
+  }
+
   return false
 }
