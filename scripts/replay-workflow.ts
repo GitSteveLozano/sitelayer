@@ -39,11 +39,15 @@ import {
   rentalBillingWorkflow as _rentalBillingWorkflow,
   estimatePushWorkflow as _estimatePushWorkflow,
   crewScheduleWorkflow as _crewScheduleWorkflow,
+  rentalWorkflow as _rentalWorkflow,
+  projectCloseoutWorkflow as _projectCloseoutWorkflow,
 } from '@sitelayer/workflows'
 
 void _rentalBillingWorkflow
 void _estimatePushWorkflow
 void _crewScheduleWorkflow
+void _rentalWorkflow
+void _projectCloseoutWorkflow
 
 const ENTITY_TABLE: Record<string, { table: string; columns: string[] }> = {
   rental_billing_run: {
@@ -77,6 +81,10 @@ const ENTITY_TABLE: Record<string, { table: string; columns: string[] }> = {
   crew_schedule: {
     table: 'crew_schedules',
     columns: ['status', 'state_version', 'confirmed_at', 'confirmed_by'],
+  },
+  project_closeout: {
+    table: 'projects',
+    columns: ['status', 'state_version', 'closed_at', 'closed_by'],
   },
 }
 
