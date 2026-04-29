@@ -487,6 +487,12 @@ export const FIXTURES_ENABLED = import.meta.env.VITE_FIXTURES === '1' || import.
 const RESPONSE_CACHE_PREFIX = 'sitelayer.cache'
 const MUTATION_QUEUE_KEY = 'sitelayer.offlineQueue'
 
+// Workflow event endpoints (deterministic state-machine transitions).
+// 409 from these has different semantics than from row-LWW PATCHes —
+// the workflow advanced server-side, the queued action no longer
+// applies. See replayOfflineMutations 409 handling.
+const WORKFLOW_EVENT_PATH = /^\/api\/(rental-billing-runs|estimate-pushes)\/[^/]+\/events$/
+
 // Clerk session token provider. Registered once at boot from <App> via useAuth().getToken.
 // Returning null means "no signed-in user" — calls fall back to no Authorization header,
 // which the prod API will reject once AUTH_ALLOW_HEADER_FALLBACK is flipped to 0.
@@ -893,23 +899,50 @@ export async function replayOfflineMutations(companySlug: string) {
           const response = await apiFetch(mutation.path, mutation.companySlug, requestInit)
           if (!response.ok) {
             if (response.status === 409) {
-              // Last-write-wins: a newer change was synced from another
-              // device, so drop this queued mutation rather than re-queue.
+              // 409s come in two flavors. Distinguish them so the user gets
+              // an honest message and the breadcrumb tells the story.
+              //
+              // 1. WORKFLOW EVENT (POST /…/<id>/events) — the run advanced
+              //    server-side (another user approved, the worker posted, a
+              //    void landed). Replaying the offline event makes no sense
+              //    because the workflow is no longer in a state that accepts
+              //    it. Dropping is correct, but the message is NOT "your edit
+              //    was discarded" — the user enqueued a workflow action, not
+              //    a row edit.
+              //
+              // 2. LAST-WRITE-WINS (PATCH /…/<id> with If-Unmodified-Since)
+              //    — a newer device wrote first; we drop our edit and tell
+              //    the user.
               conflicts += 1
               dropped += 1
               const entityLabel = mutation.entityLabel ?? inferEntityLabel(mutation.path)
+              const isWorkflowEvent = WORKFLOW_EVENT_PATH.test(mutation.path)
               Sentry.addBreadcrumb({
                 category: 'offline_queue',
                 level: 'warning',
-                message: `lww conflict ${mutation.method} ${mutation.path}`,
-                data: { status: 409, path: mutation.path, entity: entityLabel },
+                message: isWorkflowEvent
+                  ? `workflow conflict ${mutation.method} ${mutation.path}`
+                  : `lww conflict ${mutation.method} ${mutation.path}`,
+                data: {
+                  status: 409,
+                  path: mutation.path,
+                  entity: entityLabel,
+                  kind: isWorkflowEvent ? 'workflow_event' : 'lww',
+                },
               })
               try {
                 const { toastInfo } = await import('./components/ui/toast.js')
-                toastInfo(
-                  'Local edit discarded',
-                  `A newer change for ${entityLabel} was synced from another device — your local edit was discarded.`,
-                )
+                if (isWorkflowEvent) {
+                  toastInfo(
+                    'Offline action could not be applied',
+                    `${entityLabel} advanced while you were offline — your queued action was not applied. Reload to see the current state.`,
+                  )
+                } else {
+                  toastInfo(
+                    'Local edit discarded',
+                    `A newer change for ${entityLabel} was synced from another device — your local edit was discarded.`,
+                  )
+                }
               } catch (toastErr) {
                 Sentry.captureException(toastErr, { tags: { scope: 'offline_replay_toast' } })
               }
