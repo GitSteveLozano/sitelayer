@@ -105,8 +105,14 @@ services:
     profiles:
       - worker
     restart: unless-stopped
+    # The worker needs the `router` network for egress to the managed
+    # Postgres private endpoint and any external API (Clerk webhooks,
+    # QBO, etc.). The `app` network is `internal: true` so on its own
+    # it has no DNS resolution to non-Docker hosts, which manifests as
+    # `getaddrinfo EAI_AGAIN` errors against private-sitelayer-db-...
     networks:
       - app
+      - router
 
 networks:
   app:
