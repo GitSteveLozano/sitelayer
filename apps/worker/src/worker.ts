@@ -13,6 +13,7 @@ import {
 import { Pool, type PoolConfig } from 'pg'
 import { spanForAppliedRow } from './trace.js'
 import { loadEmailConfig, sendEmail } from './email.js'
+import { createQboRentalInvoicePush } from './qbo-invoice-push.js'
 
 const logger = createLogger('worker')
 
@@ -325,26 +326,37 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
   return { processed, sent, failed, shortCircuited }
 }
 
-// Stub QBO Invoice push for the rental billing workflow. Returns a
-// deterministic synthetic id so the deterministic plumbing (route → outbox
-// → worker → POST_SUCCEEDED → state=posted) can be exercised end-to-end
-// without a live QBO connection. Real QBO Invoice REST integration is a
-// follow-up — see Phase C2 follow-up in the plan.
+// Rental billing invoice push fn selection.
 //
-// When the live integration lands it should:
-//   1. Resolve the QBO connection via getIntegrationConnectionWithSecrets.
-//   2. Resolve customer + service-item mappings via integration_mappings.
-//   3. POST /v3/company/<realm>/invoice with a Line[] derived from payload.lines.
-//   4. Return the QBO Invoice.Id from the response.
+// Stub mode (default): returns a synthetic invoice id so the deterministic
+// plumbing (route → outbox → worker → POST_SUCCEEDED → state=posted) can
+// be exercised end-to-end without QBO. Useful for dev/preview tiers and
+// for fixtures.
+//
+// Live mode (QBO_LIVE_RENTAL_INVOICE=1): builds the real push fn that
+// queries integration_connections + integration_mappings via the same tx
+// client, POSTs /invoice to QBO, and returns the new Invoice.Id. See
+// apps/worker/src/qbo-invoice-push.ts.
 const stubRentalBillingInvoicePush: RentalBillingInvoicePushFn = async ({ runId }) => {
   return { qbo_invoice_id: `STUB-INV-${runId.slice(0, 8)}-${Date.now()}` }
+}
+
+const liveRentalBillingInvoicePushEnabled = process.env.QBO_LIVE_RENTAL_INVOICE === '1'
+const rentalBillingInvoicePush: RentalBillingInvoicePushFn = liveRentalBillingInvoicePushEnabled
+  ? createQboRentalInvoicePush()
+  : stubRentalBillingInvoicePush
+
+if (liveRentalBillingInvoicePushEnabled) {
+  logger.info('[rental-billing] live QBO invoice push enabled')
+} else {
+  logger.info('[rental-billing] stub QBO invoice push (set QBO_LIVE_RENTAL_INVOICE=1 to go live)')
 }
 
 async function drainRentalBillingInvoicePushes(companyId: string): Promise<RentalBillingInvoicePushSummary> {
   const client = await pool.connect()
   try {
     await client.query('begin')
-    const summary = await processRentalBillingInvoicePush(client, companyId, stubRentalBillingInvoicePush, 5)
+    const summary = await processRentalBillingInvoicePush(client, companyId, rentalBillingInvoicePush, 5)
     await client.query('commit')
     return summary
   } catch (error) {
