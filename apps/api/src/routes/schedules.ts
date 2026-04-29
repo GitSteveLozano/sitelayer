@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import {
   CREW_SCHEDULE_WORKFLOW_NAME,
   CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
@@ -8,7 +9,26 @@ import {
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
-import { isValidDateInput, parseExpectedVersion } from '../http-utils.js'
+import { isValidDateInput, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
+
+// POST /api/schedules wire-format validation. Mirrors the
+// workflow-event parser pattern (see packages/workflows/src/*.ts) so
+// shape errors surface as explicit 400s rather than runtime null/NaN
+// drift downstream.
+//
+// `project_id` is required and must look like a UUID (constraint
+// enforced by the FK; we just shape-check). `scheduled_for` must be
+// YYYY-MM-DD per existing isValidDateInput. `crew` is jsonb; we
+// accept any array (workers + roles vary). `status` defaults to
+// 'draft' on insert; we constrain the legal values the route accepts.
+const CreateScheduleBodySchema = z.object({
+  project_id: z.uuid(),
+  scheduled_for: z.string().refine((v) => isValidDateInput(v), {
+    message: 'must be YYYY-MM-DD',
+  }),
+  crew: z.array(z.unknown()).optional(),
+  status: z.enum(['draft', 'confirmed']).optional(),
+})
 
 export type ScheduleRouteCtx = {
   pool: Pool
@@ -36,15 +56,12 @@ export async function handleScheduleRoutes(
 ): Promise<boolean> {
   if (req.method === 'POST' && url.pathname === '/api/schedules') {
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
-    const body = await ctx.readBody()
-    if (!body.project_id || !body.scheduled_for) {
-      ctx.sendJson(400, { error: 'project_id and scheduled_for are required' })
+    const parsed = parseJsonBody(CreateScheduleBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
       return true
     }
-    if (!isValidDateInput(body.scheduled_for)) {
-      ctx.sendJson(400, { error: 'scheduled_for must be YYYY-MM-DD' })
-      return true
-    }
+    const body = parsed.value
     const schedule = await withMutationTx(async (client: PoolClient) => {
       const result = await client.query(
         `
