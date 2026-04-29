@@ -69,6 +69,26 @@ export {
 } from './crew-schedule.js'
 
 export {
+  RENTAL_ALL_STATES,
+  RENTAL_EVENT_TYPES,
+  RENTAL_TERMINAL_STATES,
+  RENTAL_WORKFLOW_NAME,
+  RENTAL_WORKFLOW_SCHEMA_VERSION,
+  RentalEventRequestSchema,
+  rentalWorkflow,
+  isHumanRentalEvent,
+  nextRentalEvents,
+  parseRentalEventRequest,
+  transitionRentalWorkflow,
+  type RentalEventParseResult,
+  type RentalEventRequest,
+  type RentalHumanEventType,
+  type RentalWorkflowEvent,
+  type RentalWorkflowSnapshot,
+  type RentalWorkflowState,
+} from './rental.js'
+
+export {
   ESTIMATE_PUSH_ALL_STATES,
   ESTIMATE_PUSH_EVENT_TYPES,
   ESTIMATE_PUSH_TERMINAL_STATES,
