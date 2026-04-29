@@ -230,16 +230,18 @@ export async function handleEstimatePushRoutes(
           return { kind: 'conflict' as const, openId: openResult.rows[0].id }
         }
 
+        // estimate_lines has no `description` column — derive a label from
+        // service_item_code at snapshot time. estimate_push_lines.description
+        // is the authoritative captured label going forward.
         const linesResult = await client.query<{
           id: string
           service_item_code: string | null
-          description: string | null
           quantity: string
           rate: string
           amount: string
           division_code: string | null
         }>(
-          `select id, service_item_code, description, quantity, rate, amount, division_code
+          `select id, service_item_code, quantity, rate, amount, division_code
            from estimate_lines
            where company_id = $1 and project_id = $2
            order by created_at asc`,
@@ -281,7 +283,7 @@ export async function handleEstimatePushRoutes(
               ctx.company.id,
               created.id,
               src.id,
-              src.description ?? src.service_item_code ?? '',
+              src.service_item_code ?? '',
               src.service_item_code,
               src.division_code,
               Number.isFinite(qty) ? qty : 0,
