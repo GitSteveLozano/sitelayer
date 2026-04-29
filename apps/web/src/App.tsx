@@ -37,6 +37,7 @@ const loadConfirmView = () => import('./views/confirm.js')
 const loadBillingReviewView = () => import('./views/billing-review.js')
 const loadBillingRunsView = () => import('./views/billing-runs.js')
 const loadEstimatesView = () => import('./views/estimates.js')
+const loadInventoryView = () => import('./views/inventory.js')
 const loadIntegrationsView = () => import('./views/integrations.js')
 const loadOnboardingView = () => import('./views/onboarding.js')
 const loadProjectsView = () => import('./views/projects.js')
@@ -53,6 +54,7 @@ const BillingReviewView = lazy(() =>
 )
 const BillingRunsView = lazy(() => loadBillingRunsView().then(({ BillingRunsView }) => ({ default: BillingRunsView })))
 const EstimatesView = lazy(() => loadEstimatesView().then(({ EstimatesView }) => ({ default: EstimatesView })))
+const InventoryView = lazy(() => loadInventoryView().then(({ InventoryView }) => ({ default: InventoryView })))
 const IntegrationsView = lazy(() =>
   loadIntegrationsView().then(({ IntegrationsView }) => ({ default: IntegrationsView })),
 )
@@ -70,6 +72,7 @@ const ROUTE_PRELOADS: Record<string, () => Promise<unknown>> = {
   '/billing-review': loadBillingReviewView,
   '/billing-runs': loadBillingRunsView,
   '/estimates': loadEstimatesView,
+  '/inventory': loadInventoryView,
   '/integrations': loadIntegrationsView,
   '/onboarding': loadOnboardingView,
   '/projects': loadProjectsView,
@@ -532,6 +535,7 @@ function AppShell() {
               />
             }
           />
+          <Route path="/inventory" element={<InventoryView companySlug={companySlug} />} />
           <Route path="/billing-runs" element={<BillingRunsView companySlug={companySlug} />} />
           <Route path="/billing-review/:runId" element={<BillingReviewRoute companySlug={companySlug} />} />
           <Route
@@ -653,6 +657,15 @@ function MobileNav({
       {rentalsNavVisible ? (
         <NavLink to="/rentals" onMouseEnter={() => preloadRoute('/rentals')} onFocus={() => preloadRoute('/rentals')}>
           Rentals
+        </NavLink>
+      ) : null}
+      {rentalsNavVisible ? (
+        <NavLink
+          to="/inventory"
+          onMouseEnter={() => preloadRoute('/inventory')}
+          onFocus={() => preloadRoute('/inventory')}
+        >
+          Inventory
         </NavLink>
       ) : null}
       {rentalsNavVisible ? (

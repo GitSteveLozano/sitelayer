@@ -880,6 +880,81 @@ export async function deleteRental(
 }
 
 // ---------------------------------------------------------------------------
+// Inventory catalog client.
+// ---------------------------------------------------------------------------
+
+export type InventoryItemRow = {
+  id: string
+  code: string
+  description: string
+  category: string
+  unit: string
+  default_rental_rate: string
+  replacement_value: string | null
+  tracking_mode: 'quantity' | 'serialized'
+  active: boolean
+  notes: string | null
+  version: number
+  deleted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type InventoryItemInput = {
+  code: string
+  description: string
+  category?: string | null
+  unit?: string | null
+  default_rental_rate?: number | string | null
+  replacement_value?: number | string | null
+  tracking_mode?: 'quantity' | 'serialized' | null
+  active?: boolean | null
+  notes?: string | null
+}
+
+export async function listInventoryItems(companySlug: string): Promise<{ inventoryItems: InventoryItemRow[] }> {
+  return apiGet<{ inventoryItems: InventoryItemRow[] }>('/api/inventory/items', companySlug)
+}
+
+export async function createInventoryItem(input: InventoryItemInput, companySlug: string): Promise<InventoryItemRow> {
+  return apiPost<InventoryItemRow>('/api/inventory/items', input, companySlug)
+}
+
+export async function updateInventoryItem(
+  itemId: string,
+  input: Partial<InventoryItemInput> & { expected_version?: number },
+  companySlug: string,
+): Promise<InventoryItemRow> {
+  return apiPatch<InventoryItemRow>(`/api/inventory/items/${itemId}`, input, companySlug)
+}
+
+export async function deleteInventoryItem(
+  itemId: string,
+  companySlug: string,
+  expectedVersion?: number,
+): Promise<InventoryItemRow> {
+  return apiDelete<InventoryItemRow>(
+    `/api/inventory/items/${itemId}`,
+    companySlug,
+    expectedVersion ? { expected_version: expectedVersion } : undefined,
+  )
+}
+
+export type InventoryImportResult = {
+  total: number
+  inserted: number
+  updated: number
+  errors: Array<{ index: number; code: string | null; error: string }>
+}
+
+export async function importInventoryItems(
+  items: InventoryItemInput[],
+  companySlug: string,
+): Promise<InventoryImportResult> {
+  return apiPost<InventoryImportResult>('/api/inventory/items/import', { items }, companySlug)
+}
+
+// ---------------------------------------------------------------------------
 // Rental billing run workflow client. See docs/DETERMINISTIC_WORKFLOWS.md.
 // The UI consumes the WorkflowSnapshot returned by the API verbatim — it does
 // NOT compute next_events locally or invent its own state vocabulary.
