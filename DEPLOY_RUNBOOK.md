@@ -119,25 +119,43 @@ containers keep serving.
 
 Migrations are forward-only, so rolling back the **schema** requires a
 follow-up migration — there is no automatic reverse. Rolling back the
-**code** (without a schema change) is:
+**code** (without a schema change) uses
+`scripts/rollback-droplet.sh`:
 
 ```sh
-ssh sitelayer@165.245.230.3
-cd /app/sitelayer
-previous_sha="$(cat .last_previous_deployed_sha)"
-APP_IMAGE="registry.digitalocean.com/sitelayer/sitelayer:${previous_sha}" \
-  docker compose -f docker-compose.prod.yml pull api web worker
-docker image inspect "$APP_IMAGE" >/dev/null  # confirm image exists
-docker compose -f docker-compose.prod.yml up -d --remove-orphans
+ssh root@165.245.230.3
+sudo bash /app/sitelayer/scripts/rollback-droplet.sh
 ```
 
-The deploy script writes `.last_previous_deployed_sha` after a
-successful deploy, so this is always one variable away from being
-reproducible.
+That script:
+
+1. Reads `TARGET_SHA` from arg (`TARGET_SHA=abcdef1`) or
+   `.last_previous_deployed_sha`.
+2. Pulls the image using the deploy user's `~/.docker/config.json`
+   (the prod registry token lives there; root's docker config is
+   typically empty, which is why a manual `docker compose pull` as
+   root returns `401 Unauthorized`).
+3. Verifies the image is on disk before swapping.
+4. Exports `APP_BUILD_SHA`, `GIT_SHA`, `SENTRY_RELEASE` so the
+   rolled-back container reports the correct `build_sha` on the
+   `/api/version` endpoint and Sentry release tag. Without these,
+   the version endpoint reports `build_sha: "unknown"` (a real
+   wrinkle discovered in the first rollback drill).
+5. Polls `/health` until the new container is ready.
+6. Verifies live `/api/version` matches the target SHA.
+
+`DRY_RUN=1` pulls the image without swapping — useful for periodic
+rollback drills.
 
 If the schema migration that shipped with the bad code is itself bad,
 write a new migration that reverses the damage and ship it the same
 way (PR → preview → main).
+
+#### Rollback drill log
+
+| Date       | Drill | Result | Notes                                                                                                                                                                                                                    |
+| ---------- | ----- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2026-04-29 | First | OK     | Rolled `09afad2 → 563d372 → 09afad2` on prod, ~30s downtime each swap. Discovered `DOCKER_CONFIG=/home/sitelayer/.docker` requirement and `APP_BUILD_SHA` export needed. Both folded into `scripts/rollback-droplet.sh`. |
 
 ### Workflow event log replay
 
@@ -186,8 +204,8 @@ Before the first paying customer is on prod:
 - [ ] Periodic `scripts/replay-workflow.ts` cron against live customer
       data (set up after first customer onboarded)
 - [ ] On-call rotation defined (single-developer until pilot scales)
-- [ ] Rollback drill — exercise the
-      `previous_sha → docker compose up` path on preview at least once
-      before the pilot starts
+- [x] Rollback drill — exercised on prod 2026-04-29 (see Rollback
+      drill log above). `scripts/rollback-droplet.sh` is now the
+      canonical rollback path.
 
 The unchecked items are the work to wrap up before customer #1 lands.
