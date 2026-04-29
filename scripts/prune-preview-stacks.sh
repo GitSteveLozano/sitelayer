@@ -43,5 +43,27 @@ find "$PREVIEW_ROOT" -mindepth 1 -maxdepth 1 -type d -print0 | while IFS= read -
 done
 
 if [ "$DRY_RUN" != "1" ]; then
+  # Untagged-image cleanup. The 14d filter is intentionally loose; the
+  # registry-side image churn is what really moves the needle.
   docker image prune -f --filter "until=${MAX_AGE_DAYS}d"
+
+  # Aggressive untagged-image sweep: drops registry image tags that
+  # aren't referenced by any running container. The deploy pulls a new
+  # tag on every prod push and never deletes the old one, so 60+ tags
+  # had accumulated (~40 GB) before this guard. Keep only what's
+  # actively in use plus the floating `main` tag for fast rollback.
+  docker image prune -af --filter "label!=keep" --filter "until=${IMAGE_PRUNE_UNTIL:-72h}" || true
+
+  # Build cache cleanup. BuildKit caches every layer of every build.
+  # On a host that runs both the prod-image build AND ~20 preview
+  # stacks per week, this is the dominant disk consumer (~41 GB
+  # observed on 2026-04-29, triggering DO disk >80% alerts every
+  # 30 min). 72h retention gives next-deploy cache reuse without
+  # letting the cache balloon. Keep at least 2 GB so a normal incremental
+  # rebuild still benefits from cache.
+  docker builder prune -af --filter "until=${BUILDER_PRUNE_UNTIL:-72h}" \
+    --keep-storage "${BUILDER_PRUNE_KEEP_STORAGE:-2GB}" || true
+
+  # Volumes orphaned by deleted preview stacks.
+  docker volume prune -f || true
 fi
