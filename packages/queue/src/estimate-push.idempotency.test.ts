@@ -58,8 +58,10 @@ describe('processEstimatePush — idempotent replay (path A)', () => {
       return { qbo_estimate_id: 'should-not-be-used' }
     }
 
+    const TX = { rows: [] as never[], rowCount: null as number | null }
     const responses: QueuedResponse[] = [
-      // 1. claim outbox row (the update returning ...)
+      // Phase 1: claim
+      TX, // begin
       {
         rows: [
           {
@@ -71,12 +73,15 @@ describe('processEstimatePush — idempotent replay (path A)', () => {
         ],
         rowCount: 1,
       },
-      // 2. existence check on estimate_pushes — already has qbo_estimate_id, status='posting'
+      TX, // commit
+      // Phase 2: row work
+      TX, // begin
+      // existence check on estimate_pushes — already has qbo_estimate_id, status='posting'
       {
         rows: [{ qbo_estimate_id: 'qbo-EST-existing', status: 'posting' }],
         rowCount: 1,
       },
-      // 3. applyEstimatePushWorkerEvent → lock row
+      // applyEstimatePushWorkerEvent → lock row
       {
         rows: [
           {
@@ -95,7 +100,7 @@ describe('processEstimatePush — idempotent replay (path A)', () => {
         ],
         rowCount: 1,
       },
-      // 4. update estimate_pushes → posted
+      // update estimate_pushes → posted
       {
         rows: [
           {
@@ -114,12 +119,13 @@ describe('processEstimatePush — idempotent replay (path A)', () => {
         ],
         rowCount: 1,
       },
-      // 5. workflow_event_log insert (on conflict do nothing — no rows returned)
+      // workflow_event_log insert (on conflict do nothing — no rows returned)
       { rows: [], rowCount: 1 },
-      // 6. sync_events insert
+      // sync_events insert
       { rows: [], rowCount: 1 },
-      // 7. mutation_outbox set status='applied'
+      // mutation_outbox set status='applied'
       { rows: [], rowCount: 1 },
+      TX, // commit
     ]
 
     const client = new FakeQueueClient(responses)
@@ -129,40 +135,45 @@ describe('processEstimatePush — idempotent replay (path A)', () => {
     expect(pushCalls).toBe(0) // no second QBO call
 
     const summaries = sqlSummaries(client)
-    // Outbox claim
-    expect(summaries[0]).toMatch(/update mutation_outbox.*set\s+status = 'processing'/i)
-    // Existence check
-    expect(summaries[1]).toMatch(/select qbo_estimate_id, status from estimate_pushes/i)
-    // Lock for state update
-    expect(summaries[2]).toMatch(/select id, status, state_version, qbo_estimate_id.*for update/i)
-    // Posted update
-    expect(summaries[3]).toMatch(/update estimate_pushes\s+set status = 'posted'/i)
-    // Event log insert
-    expect(summaries[4]).toMatch(/insert into workflow_event_log.*on conflict \(entity_id, state_version\) do nothing/i)
-    // Sync event
-    expect(summaries[5]).toMatch(/insert into sync_events/i)
-    // Outbox applied
-    expect(summaries[6]).toMatch(/update mutation_outbox set status = 'applied'/i)
+    // Index map: 0 begin, 1 claim, 2 commit, 3 begin, 4 existing-check,
+    // 5 lock, 6 update-to-posted, 7 event_log, 8 sync_event, 9 outbox-applied,
+    // 10 commit
+    expect(summaries[1]).toMatch(/update mutation_outbox.*set\s+status = 'processing'/i)
+    expect(summaries[4]).toMatch(/select qbo_estimate_id, status from estimate_pushes/i)
+    expect(summaries[5]).toMatch(/select id, status, state_version, qbo_estimate_id.*for update/i)
+    expect(summaries[6]).toMatch(/update estimate_pushes\s+set status = 'posted'/i)
+    expect(summaries[7]).toMatch(/insert into workflow_event_log.*on conflict \(entity_id, state_version\) do nothing/i)
+    expect(summaries[8]).toMatch(/insert into sync_events/i)
+    expect(summaries[9]).toMatch(/update mutation_outbox set status = 'applied'/i)
   })
 
   it('marks outbox failed and never calls QBO when estimate_push row vanished', async () => {
     const push: EstimatePushFn = async () => {
       throw new Error('should not be called')
     }
+    const TX = { rows: [] as never[], rowCount: null as number | null }
     const responses: QueuedResponse[] = [
+      // Phase 1: claim
+      TX, // begin
       {
         rows: [{ id: 'outbox-1', entity_id: 'push-missing', payload: {}, attempt_count: 1 }],
         rowCount: 1,
       },
+      TX, // commit
+      // Phase 2: row work — existence check fails, marks outbox failed in same tx
+      TX, // begin
       // existence check returns nothing
       { rows: [], rowCount: 0 },
-      // outbox failed update
+      // outbox failed update (same tx as the existence check — entity_not_found path)
       { rows: [], rowCount: 1 },
+      TX, // commit
     ]
     const client = new FakeQueueClient(responses)
     const summary = await processEstimatePush(client, 'company-1', push, 5)
     expect(summary).toEqual({ processed: 1, posted: 0, failed: 1, skipped: 0 })
     const summaries = sqlSummaries(client)
-    expect(summaries[2]).toMatch(/update mutation_outbox set status = 'failed'/i)
+    // Index 5 is the outbox-failed update inside the row work tx (after
+    // begin + existence-check returning nothing).
+    expect(summaries[5]).toMatch(/update mutation_outbox set status = 'failed'/i)
   })
 })

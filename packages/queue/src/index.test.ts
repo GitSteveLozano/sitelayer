@@ -189,17 +189,30 @@ describe('queue processing', () => {
 })
 
 describe('processRentalBillingInvoicePush', () => {
+  // begin/commit/rollback all go through client.query() in our impl, so
+  // the FakeQueueClient must have a response slot for each. Empty rows
+  // are correct (pg's BEGIN/COMMIT/ROLLBACK return rowCount=null).
+  const TX = { rows: [], rowCount: null as number | null }
+
   // Builds a FakeQueueClient response stack matching the SQL order of the
-  // happy path:
-  //   1. claim mutation_outbox row (returns one row)
-  //   2. select rental_billing_runs (qbo_invoice_id, status) → not yet posted
-  //   3. lock rental_billing_runs for update → status='posting'
-  //   4. update rental_billing_runs to 'posted'
-  //   5. insert sync_events
-  //   6. update mutation_outbox to applied
+  // happy path under the per-row-tx structure:
+  //   Phase 1 (claim tx):
+  //     1. BEGIN
+  //     2. claim mutation_outbox UPDATE (returns one row)
+  //     3. COMMIT
+  //   Phase 2 (per-row work tx):
+  //     4. BEGIN
+  //     5. select rental_billing_runs (qbo_invoice_id, status)
+  //     6. lock rental_billing_runs for update
+  //     7. update rental_billing_runs to 'posted'
+  //     8. insert workflow_event_log
+  //     9. insert sync_events
+  //    10. update mutation_outbox to applied
+  //    11. COMMIT
   function happyPathResponses(runId: string) {
     return [
-      // 1. claim
+      // Phase 1: claim
+      TX, // begin
       {
         rows: [
           {
@@ -211,9 +224,12 @@ describe('processRentalBillingInvoicePush', () => {
         ],
         rowCount: 1,
       },
-      // 2. existing row check (not yet posted)
+      TX, // commit
+      // Phase 2: row work
+      TX, // begin
+      // existing row check (not yet posted)
       { rows: [{ qbo_invoice_id: null, status: 'posting' }], rowCount: 1 },
-      // 3. lock for update
+      // lock for update
       {
         rows: [
           {
@@ -230,7 +246,7 @@ describe('processRentalBillingInvoicePush', () => {
         ],
         rowCount: 1,
       },
-      // 4. update to posted
+      // update to posted
       {
         rows: [
           {
@@ -247,12 +263,13 @@ describe('processRentalBillingInvoicePush', () => {
         ],
         rowCount: 1,
       },
-      // 5. insert workflow_event_log (POST_SUCCEEDED)
+      // insert workflow_event_log (POST_SUCCEEDED)
       { rows: [], rowCount: 1 },
-      // 6. insert sync_event
+      // insert sync_event
       { rows: [], rowCount: 1 },
-      // 7. update mutation_outbox applied
+      // update mutation_outbox applied
       { rows: [], rowCount: 1 },
+      TX, // commit
     ]
   }
 
@@ -268,17 +285,23 @@ describe('processRentalBillingInvoicePush', () => {
     expect(result).toEqual({ processed: 1, posted: 1, failed: 0, skipped: 0 })
     expect(pushed).toBe(1)
     const sql = sqlCalls(client)
-    expect(sql[3]).toMatch(/update rental_billing_runs/)
-    expect(sql[3]).toMatch(/'posted'/)
-    expect(sql[4]).toMatch(/insert into workflow_event_log/i)
-    expect(sql[6]).toMatch(/update mutation_outbox/)
-    expect(sql[6]).toMatch(/applied/)
+    // Index map (see happyPathResponses): 0 begin, 1 claim, 2 commit,
+    // 3 begin, 4 existing-check, 5 lock-for-update, 6 update-to-posted,
+    // 7 event_log, 8 sync_event, 9 outbox-applied, 10 commit.
+    expect(sql[1]).toMatch(/update mutation_outbox/i)
+    expect(sql[1]).toMatch(/'processing'/)
+    expect(sql[6]).toMatch(/update rental_billing_runs/)
+    expect(sql[6]).toMatch(/'posted'/)
+    expect(sql[7]).toMatch(/insert into workflow_event_log/i)
+    expect(sql[9]).toMatch(/update mutation_outbox/)
+    expect(sql[9]).toMatch(/applied/)
   })
 
   it('idempotent replay: existing qbo_invoice_id skips the push function', async () => {
     const runId = '22222222-2222-2222-2222-222222222222'
     const client = new FakeQueueClient([
-      // 1. claim
+      // Phase 1: claim
+      TX, // begin
       {
         rows: [
           {
@@ -290,9 +313,12 @@ describe('processRentalBillingInvoicePush', () => {
         ],
         rowCount: 1,
       },
-      // 2. existing row check — already pushed
+      TX, // commit
+      // Phase 2: row work
+      TX, // begin
+      // existing row check — already pushed
       { rows: [{ qbo_invoice_id: 'INV-PRE', status: 'posting' }], rowCount: 1 },
-      // 3. lock for update (still posting)
+      // lock for update (still posting)
       {
         rows: [
           {
@@ -309,7 +335,7 @@ describe('processRentalBillingInvoicePush', () => {
         ],
         rowCount: 1,
       },
-      // 4. update to posted (same invoice id)
+      // update to posted (same invoice id)
       {
         rows: [
           {
@@ -326,12 +352,13 @@ describe('processRentalBillingInvoicePush', () => {
         ],
         rowCount: 1,
       },
-      // 5. insert workflow_event_log (POST_SUCCEEDED)
+      // insert workflow_event_log (POST_SUCCEEDED)
       { rows: [], rowCount: 1 },
-      // 6. insert sync_event
+      // insert sync_event
       { rows: [], rowCount: 1 },
-      // 7. update mutation_outbox applied
+      // update mutation_outbox applied
       { rows: [], rowCount: 1 },
+      TX, // commit
     ])
     let pushed = 0
     const push: RentalBillingInvoicePushFn = async () => {
@@ -347,7 +374,8 @@ describe('processRentalBillingInvoicePush', () => {
   it('push rejection lands as POST_FAILED with run state=failed and outbox=failed', async () => {
     const runId = '33333333-3333-3333-3333-333333333333'
     const client = new FakeQueueClient([
-      // 1. claim
+      // Phase 1: claim
+      TX, // begin
       {
         rows: [
           {
@@ -359,10 +387,16 @@ describe('processRentalBillingInvoicePush', () => {
         ],
         rowCount: 1,
       },
-      // 2. existing row check — not posted
+      TX, // commit
+      // Phase 2: row work tx — push will throw inside it
+      TX, // begin
+      // existing row check — not posted
       { rows: [{ qbo_invoice_id: null, status: 'posting' }], rowCount: 1 },
-      // (push throws → catch path)
-      // 3. lock for update inside applyWorkerEmittedEvent
+      // (push throws → catch block rolls back this tx and opens a fresh one)
+      TX, // rollback
+      // Recovery tx: applyWorkerEmittedEvent for failed kind + sync_event
+      TX, // begin
+      // lock for update inside applyWorkerEmittedEvent
       {
         rows: [
           {
@@ -379,7 +413,7 @@ describe('processRentalBillingInvoicePush', () => {
         ],
         rowCount: 1,
       },
-      // 4. update to failed
+      // update to failed
       {
         rows: [
           {
@@ -396,12 +430,16 @@ describe('processRentalBillingInvoicePush', () => {
         ],
         rowCount: 1,
       },
-      // 5. insert workflow_event_log (POST_FAILED)
+      // insert workflow_event_log (POST_FAILED)
       { rows: [], rowCount: 1 },
-      // 6. insert sync_event
+      // insert sync_event
       { rows: [], rowCount: 1 },
-      // 7. update mutation_outbox failed
+      TX, // commit recovery tx
+      // markOutboxRowFailedFresh tx
+      TX, // begin
+      // update mutation_outbox failed
       { rows: [], rowCount: 1 },
+      TX, // commit
     ])
     const push: RentalBillingInvoicePushFn = async () => {
       throw new Error('rate limited')
@@ -410,9 +448,66 @@ describe('processRentalBillingInvoicePush', () => {
     expect(result.failed).toBe(1)
     expect(result.posted).toBe(0)
     const sql = sqlCalls(client)
-    expect(sql[3]).toMatch(/'failed'/)
-    expect(sql[4]).toMatch(/insert into workflow_event_log/i)
-    expect(sql[6]).toMatch(/update mutation_outbox/)
-    expect(sql[6]).toMatch(/'failed'/)
+    // Index map: 0 begin, 1 claim, 2 commit, 3 begin, 4 existing-check,
+    // 5 rollback, 6 begin (recovery), 7 lock-for-update, 8 update-to-failed,
+    // 9 event_log, 10 sync_event, 11 commit, 12 begin (markFailed),
+    // 13 outbox-failed, 14 commit.
+    expect(sql[5]).toMatch(/^rollback$/i)
+    expect(sql[8]).toMatch(/update rental_billing_runs/)
+    expect(sql[8]).toMatch(/'failed'/)
+    expect(sql[9]).toMatch(/insert into workflow_event_log/i)
+    expect(sql[13]).toMatch(/update mutation_outbox/)
+    expect(sql[13]).toMatch(/'failed'/)
+  })
+
+  it('row recovery path failure still marks the outbox row failed', async () => {
+    // Regression: the original implementation wrapped the entire batch
+    // in one transaction. If the catch block's recovery work itself
+    // threw (e.g. row deleted concurrently, deadlock detected), the
+    // whole tx rolled back and the outbox row stayed in 'processing',
+    // re-claimed every 5 minutes forever.
+    //
+    // The fix is per-row transactions plus a fresh-tx markFailed so
+    // the outbox row gets durably marked failed even when the recovery
+    // path can't re-emit the workflow event. This test forces the
+    // applyWorkerEmittedEvent path to throw on the lock SELECT and
+    // asserts the outbox row STILL ends up failed.
+    const runId = '44444444-4444-4444-4444-444444444444'
+    const client = new FakeQueueClient([
+      // Phase 1: claim
+      TX, // begin
+      {
+        rows: [{ id: 'outbox-recovery', entity_id: runId, payload: {}, attempt_count: 1 }],
+        rowCount: 1,
+      },
+      TX, // commit
+      // Phase 2: row work — push throws
+      TX, // begin
+      // existing-row check
+      { rows: [{ qbo_invoice_id: null, status: 'posting' }], rowCount: 1 },
+      TX, // rollback
+      // Recovery tx — applyWorkerEmittedEvent's lock SELECT explodes
+      TX, // begin
+      new Error('lock failed mid-recovery'),
+      TX, // rollback (recovery tx)
+      // markOutboxRowFailedFresh tx — must still run and succeed
+      TX, // begin
+      { rows: [], rowCount: 1 }, // outbox failed update
+      TX, // commit
+    ])
+    const push: RentalBillingInvoicePushFn = async () => {
+      throw new Error('rate limited')
+    }
+    const result = await processRentalBillingInvoicePush(client, 'company-1', push, 5)
+    expect(result.failed).toBe(1)
+    expect(result.posted).toBe(0)
+    const sql = sqlCalls(client)
+    // Recovery rolled back; markFailed update fired in its own tx.
+    // 0 begin, 1 claim, 2 commit, 3 begin, 4 existing-check, 5 rollback,
+    // 6 begin (recovery), 7 lock-for-update (throws), 8 rollback,
+    // 9 begin (markFailed), 10 outbox-failed, 11 commit
+    expect(sql[8]).toMatch(/^rollback$/i)
+    expect(sql[10]).toMatch(/update mutation_outbox/i)
+    expect(sql[10]).toMatch(/'failed'/)
   })
 })
