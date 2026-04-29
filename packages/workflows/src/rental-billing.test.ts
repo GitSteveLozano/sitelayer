@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   isHumanRentalBillingEvent,
   nextRentalBillingEvents,
+  parseRentalBillingEventRequest,
   transitionRentalBillingWorkflow,
 } from './rental-billing.js'
 
@@ -107,5 +108,49 @@ describe('isHumanRentalBillingEvent', () => {
   })
   it('rejects garbage', () => {
     expect(isHumanRentalBillingEvent('garbage')).toBe(false)
+  })
+})
+
+describe('parseRentalBillingEventRequest', () => {
+  it('accepts a well-formed APPROVE request', () => {
+    const result = parseRentalBillingEventRequest({ event: 'APPROVE', state_version: 1 })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value).toEqual({ event: 'APPROVE', state_version: 1 })
+    }
+  })
+  it('accepts state_version as a numeric string from offline-replay paths', () => {
+    const result = parseRentalBillingEventRequest({ event: 'POST_REQUESTED', state_version: '3' })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value.state_version).toBe(3)
+    }
+  })
+  it('rejects worker-only POST_SUCCEEDED', () => {
+    const result = parseRentalBillingEventRequest({ event: 'POST_SUCCEEDED', state_version: 1 })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/event/)
+  })
+  it('rejects unknown event types', () => {
+    const result = parseRentalBillingEventRequest({ event: 'BOGUS', state_version: 1 })
+    expect(result.ok).toBe(false)
+  })
+  it('rejects zero or negative state_version', () => {
+    expect(parseRentalBillingEventRequest({ event: 'APPROVE', state_version: 0 }).ok).toBe(false)
+    expect(parseRentalBillingEventRequest({ event: 'APPROVE', state_version: -1 }).ok).toBe(false)
+  })
+  it('rejects non-integer state_version', () => {
+    expect(parseRentalBillingEventRequest({ event: 'APPROVE', state_version: 1.5 }).ok).toBe(false)
+  })
+  it('rejects missing fields', () => {
+    expect(parseRentalBillingEventRequest({ event: 'APPROVE' }).ok).toBe(false)
+    expect(parseRentalBillingEventRequest({ state_version: 1 }).ok).toBe(false)
+    expect(parseRentalBillingEventRequest({}).ok).toBe(false)
+  })
+  it('handles non-object bodies safely', () => {
+    expect(parseRentalBillingEventRequest(null).ok).toBe(false)
+    expect(parseRentalBillingEventRequest(undefined).ok).toBe(false)
+    expect(parseRentalBillingEventRequest('not an object').ok).toBe(false)
+    expect(parseRentalBillingEventRequest(['array', 'is', 'not', 'object']).ok).toBe(false)
   })
 })

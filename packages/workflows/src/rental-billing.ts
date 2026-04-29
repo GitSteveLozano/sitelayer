@@ -1,3 +1,4 @@
+import { z } from 'zod'
 import type { WorkflowNextEvent } from './index.js'
 
 export type RentalBillingWorkflowState = 'generated' | 'approved' | 'posting' | 'posted' | 'failed' | 'voided'
@@ -134,4 +135,45 @@ export function nextRentalBillingEvents(
 
 export function isHumanRentalBillingEvent(eventType: string): eventType is RentalBillingHumanEventType {
   return eventType === 'APPROVE' || eventType === 'POST_REQUESTED' || eventType === 'RETRY_POST' || eventType === 'VOID'
+}
+
+// Wire-format request schema for POST /api/rental-billing-runs/:id/events.
+// Workflow event endpoints across the codebase should adopt this same shape:
+//   { event: <human-event-type>, state_version: <positive integer> }
+// and use Zod to parse so the route never sees an unvalidated body.
+export const RentalBillingEventRequestSchema = z.object({
+  event: z.enum(['APPROVE', 'POST_REQUESTED', 'RETRY_POST', 'VOID']),
+  state_version: z.number().int().positive(),
+})
+
+export type RentalBillingEventRequest = z.infer<typeof RentalBillingEventRequestSchema>
+
+export type RentalBillingEventParseResult =
+  | { ok: true; value: RentalBillingEventRequest }
+  | { ok: false; error: string }
+
+/**
+ * Parse a JSON-body Record<string, unknown> as a rental-billing event
+ * request. Returns a discriminated result so route handlers can render a
+ * 400 with the human-readable error without throwing.
+ *
+ * Numeric `state_version` is accepted as either a number or a numeric
+ * string (browsers serialize integers as JSON numbers but offline-replay
+ * paths can stringify) — Zod's coerce isn't used because we want to
+ * reject non-numeric strings explicitly rather than silently coercing.
+ */
+export function parseRentalBillingEventRequest(body: unknown): RentalBillingEventParseResult {
+  const normalized: Record<string, unknown> =
+    body && typeof body === 'object' && !Array.isArray(body) ? { ...(body as Record<string, unknown>) } : {}
+  if (typeof normalized.state_version === 'string') {
+    const numeric = Number(normalized.state_version)
+    if (Number.isFinite(numeric)) {
+      normalized.state_version = numeric
+    }
+  }
+  const result = RentalBillingEventRequestSchema.safeParse(normalized)
+  if (result.success) return { ok: true, value: result.data }
+  const issue = result.error.issues[0]
+  const path = issue?.path.join('.') || '(root)'
+  return { ok: false, error: `${path}: ${issue?.message ?? 'invalid request body'}` }
 }

@@ -21,7 +21,11 @@ export type WorkflowSnapshot<State extends string, EventType extends string, Con
 export {
   isHumanRentalBillingEvent,
   nextRentalBillingEvents,
+  parseRentalBillingEventRequest,
+  RentalBillingEventRequestSchema,
   transitionRentalBillingWorkflow,
+  type RentalBillingEventParseResult,
+  type RentalBillingEventRequest,
   type RentalBillingHumanEventType,
   type RentalBillingWorkflowEvent,
   type RentalBillingWorkflowSnapshot,
