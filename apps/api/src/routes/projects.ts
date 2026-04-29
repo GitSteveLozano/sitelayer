@@ -1,6 +1,12 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
-import { calculateBonusPayout, calculateMargin, calculateProjectCost, DEFAULT_BONUS_RULE } from '@sitelayer/domain'
+import {
+  calculateBonusPayout,
+  calculateMargin,
+  calculateProjectCost,
+  DEFAULT_BONUS_RULE,
+  sumMoney,
+} from '@sitelayer/domain'
 import { createLogger } from '@sitelayer/logger'
 import type { ActiveCompany } from '../auth-types.js'
 import { enqueueAdminAlert, recordMutationLedger, withMutationTx } from '../mutation-tx.js'
@@ -46,25 +52,30 @@ export async function summarizeProject(pool: Pool, companyId: string, projectId:
       pool.query('select config from bonus_rules where company_id = $1 order by created_at desc limit 1', [companyId]),
     ])
 
-  const laborCost = laborEntriesResult.rows.reduce(
-    (total, entry) => total + Number(entry.hours) * Number(project.labor_rate ?? 0),
-    0,
+  // Money sums use sumMoney (integer-cents arithmetic) — JS float
+  // accumulation drifts on numeric(12,2) sums. The downstream consumers
+  // (calculateProjectCost, calculateMargin) still take JS numbers, so
+  // we parse the cents-precise string back. This keeps the boundary
+  // narrow: the SUM is exact, individual values are still numbers.
+  const laborRate = Number(project.labor_rate ?? 0)
+  const laborCost = Number(sumMoney(laborEntriesResult.rows.map((entry) => Number(entry.hours) * laborRate)))
+  const materialCost = Number(
+    sumMoney(materialBillsResult.rows.filter((b) => b.bill_type !== 'sub').map((b) => b.amount ?? 0)),
   )
-  const materialCost = materialBillsResult.rows
-    .filter((b) => b.bill_type !== 'sub')
-    .reduce((total, b) => total + Number(b.amount ?? 0), 0)
-  const subCost = materialBillsResult.rows
-    .filter((b) => b.bill_type === 'sub')
-    .reduce((total, b) => total + Number(b.amount ?? 0), 0)
+  const subCost = Number(
+    sumMoney(materialBillsResult.rows.filter((b) => b.bill_type === 'sub').map((b) => b.amount ?? 0)),
+  )
   const totalCost = calculateProjectCost({ laborCost, materialCost, subCost })
   const margin = calculateMargin({ revenue: Number(project.bid_total ?? 0), cost: totalCost })
   const bonusTiers = bonusRuleResult.rows[0]?.config?.tiers ?? DEFAULT_BONUS_RULE.tiers
   const bonus = calculateBonusPayout(margin.margin, Number(project.bonus_pool ?? 0), bonusTiers)
+  // Quantities aren't currency — drift here is bounded by the small
+  // measurement count and ≤ 4 decimal places, so plain JS sum is fine.
   const totalMeasurementQuantity = measurementsResult.rows.reduce(
     (total, measurement) => total + Number(measurement.quantity),
     0,
   )
-  const estimateTotal = estimateLinesResult.rows.reduce((total, line) => total + Number(line.amount), 0)
+  const estimateTotal = Number(sumMoney(estimateLinesResult.rows.map((line) => line.amount)))
 
   return {
     project,
