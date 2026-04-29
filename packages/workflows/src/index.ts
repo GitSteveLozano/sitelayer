@@ -49,6 +49,26 @@ export {
 export { applyEventLog, type WorkflowEventLogEntry, type ReplayResult } from './replay.js'
 
 export {
+  CREW_SCHEDULE_ALL_STATES,
+  CREW_SCHEDULE_EVENT_TYPES,
+  CREW_SCHEDULE_TERMINAL_STATES,
+  CREW_SCHEDULE_WORKFLOW_NAME,
+  CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
+  CrewScheduleEventRequestSchema,
+  crewScheduleWorkflow,
+  isHumanCrewScheduleEvent,
+  nextCrewScheduleEvents,
+  parseCrewScheduleEventRequest,
+  transitionCrewScheduleWorkflow,
+  type CrewScheduleEventParseResult,
+  type CrewScheduleEventRequest,
+  type CrewScheduleHumanEventType,
+  type CrewScheduleWorkflowEvent,
+  type CrewScheduleWorkflowSnapshot,
+  type CrewScheduleWorkflowState,
+} from './crew-schedule.js'
+
+export {
   ESTIMATE_PUSH_ALL_STATES,
   ESTIMATE_PUSH_EVENT_TYPES,
   ESTIMATE_PUSH_TERMINAL_STATES,
