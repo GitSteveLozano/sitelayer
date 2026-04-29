@@ -124,6 +124,8 @@ rsync -az --delete \
   --exclude 'storage/' \
   --exclude '.env' \
   --exclude '.env.*' \
+  --exclude '.vite-cache/' \
+  --exclude '.vite/' \
   "$SOURCE_DIR/" "$target_dir/"
 
 {

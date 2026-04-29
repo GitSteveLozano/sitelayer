@@ -74,6 +74,8 @@ COPY --from=builder /app/packages/logger/package.json /app/packages/logger/packa
 COPY --from=builder /app/packages/logger/dist /app/packages/logger/dist
 COPY --from=builder /app/packages/queue/package.json /app/packages/queue/package.json
 COPY --from=builder /app/packages/queue/dist /app/packages/queue/dist
+COPY --from=builder /app/packages/workflows/package.json /app/packages/workflows/package.json
+COPY --from=builder /app/packages/workflows/dist /app/packages/workflows/dist
 
 # Run as the unprivileged `node` user (uid 1000) baked into node:20-alpine.
 # The blueprint_storage volume mounts at /app/storage/blueprints — pre-create
