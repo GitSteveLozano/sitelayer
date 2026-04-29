@@ -38,6 +38,7 @@ const loadBillingReviewView = () => import('./views/billing-review.js')
 const loadBillingRunsView = () => import('./views/billing-runs.js')
 const loadEstimatesView = () => import('./views/estimates.js')
 const loadInventoryView = () => import('./views/inventory.js')
+const loadRentalContractsView = () => import('./views/rental-contracts.js')
 const loadIntegrationsView = () => import('./views/integrations.js')
 const loadOnboardingView = () => import('./views/onboarding.js')
 const loadProjectsView = () => import('./views/projects.js')
@@ -55,6 +56,9 @@ const BillingReviewView = lazy(() =>
 const BillingRunsView = lazy(() => loadBillingRunsView().then(({ BillingRunsView }) => ({ default: BillingRunsView })))
 const EstimatesView = lazy(() => loadEstimatesView().then(({ EstimatesView }) => ({ default: EstimatesView })))
 const InventoryView = lazy(() => loadInventoryView().then(({ InventoryView }) => ({ default: InventoryView })))
+const RentalContractsView = lazy(() =>
+  loadRentalContractsView().then(({ RentalContractsView }) => ({ default: RentalContractsView })),
+)
 const IntegrationsView = lazy(() =>
   loadIntegrationsView().then(({ IntegrationsView }) => ({ default: IntegrationsView })),
 )
@@ -73,6 +77,7 @@ const ROUTE_PRELOADS: Record<string, () => Promise<unknown>> = {
   '/billing-runs': loadBillingRunsView,
   '/estimates': loadEstimatesView,
   '/inventory': loadInventoryView,
+  '/rental-contracts': loadRentalContractsView,
   '/integrations': loadIntegrationsView,
   '/onboarding': loadOnboardingView,
   '/projects': loadProjectsView,
@@ -536,6 +541,10 @@ function AppShell() {
             }
           />
           <Route path="/inventory" element={<InventoryView companySlug={companySlug} />} />
+          <Route
+            path="/rental-contracts/:projectId"
+            element={<RentalContractsView companySlug={companySlug} projects={bootstrap?.projects ?? []} />}
+          />
           <Route path="/billing-runs" element={<BillingRunsView companySlug={companySlug} />} />
           <Route path="/billing-review/:runId" element={<BillingReviewRoute companySlug={companySlug} />} />
           <Route
