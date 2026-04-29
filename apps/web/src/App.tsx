@@ -65,6 +65,8 @@ const loadClockView = () => import('./views/clock.js')
 const loadConfirmView = () => import('./views/confirm.js')
 const loadBillingReviewView = () => import('./views/billing-review.js')
 const loadBillingRunsView = () => import('./views/billing-runs.js')
+const loadEstimatePushView = () => import('./views/estimate-push.js')
+const loadEstimatePushesView = () => import('./views/estimate-pushes.js')
 const loadEstimatesView = () => import('./views/estimates.js')
 const loadInventoryView = () => import('./views/inventory.js')
 const loadMovementsView = () => import('./views/movements.js')
@@ -85,6 +87,12 @@ const BillingReviewView = lazy(() =>
   loadBillingReviewView().then(({ BillingReviewView }) => ({ default: BillingReviewView })),
 )
 const BillingRunsView = lazy(() => loadBillingRunsView().then(({ BillingRunsView }) => ({ default: BillingRunsView })))
+const EstimatePushView = lazy(() =>
+  loadEstimatePushView().then(({ EstimatePushView }) => ({ default: EstimatePushView })),
+)
+const EstimatePushesView = lazy(() =>
+  loadEstimatePushesView().then(({ EstimatePushesView }) => ({ default: EstimatePushesView })),
+)
 const EstimatesView = lazy(() => loadEstimatesView().then(({ EstimatesView }) => ({ default: EstimatesView })))
 const InventoryView = lazy(() => loadInventoryView().then(({ InventoryView }) => ({ default: InventoryView })))
 const MovementsView = lazy(() => loadMovementsView().then(({ MovementsView }) => ({ default: MovementsView })))
@@ -110,6 +118,8 @@ const ROUTE_PRELOADS: Record<string, () => Promise<unknown>> = {
   '/confirm': loadConfirmView,
   '/billing-review': loadBillingReviewView,
   '/billing-runs': loadBillingRunsView,
+  '/estimate-push': loadEstimatePushView,
+  '/estimate-pushes': loadEstimatePushesView,
   '/estimates': loadEstimatesView,
   '/inventory': loadInventoryView,
   '/movements': loadMovementsView,
@@ -161,6 +171,13 @@ function BillingReviewRoute({ companySlug }: { companySlug: string }) {
   const { runId } = useParams()
   if (!runId) return <Navigate to="/projects" replace />
   return <BillingReviewView runId={runId} companySlug={companySlug} />
+}
+
+// Same shape for /estimate-push/:pushId.
+function EstimatePushRoute({ companySlug }: { companySlug: string }) {
+  const { pushId } = useParams()
+  if (!pushId) return <Navigate to="/estimate-pushes" replace />
+  return <EstimatePushView pushId={pushId} companySlug={companySlug} />
 }
 
 function RouteFallback() {
@@ -688,6 +705,8 @@ function AppShell() {
           />
           <Route path="/billing-runs" element={<BillingRunsView companySlug={companySlug} />} />
           <Route path="/billing-review/:runId" element={<BillingReviewRoute companySlug={companySlug} />} />
+          <Route path="/estimate-pushes" element={<EstimatePushesView companySlug={companySlug} />} />
+          <Route path="/estimate-push/:pushId" element={<EstimatePushRoute companySlug={companySlug} />} />
           <Route
             path="/dev/*"
             element={devSurfaceEnabled ? <DevScratchView features={features} /> : <Navigate to="/projects" replace />}
