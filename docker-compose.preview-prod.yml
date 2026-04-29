@@ -115,8 +115,11 @@ services:
     profiles:
       - worker
     restart: unless-stopped
+    # Worker needs egress for managed Postgres + external integrations.
+    # `app` is internal-only so egress comes from `router`.
     networks:
       - app
+      - router
 
 networks:
   app:

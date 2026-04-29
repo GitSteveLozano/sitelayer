@@ -148,6 +148,70 @@ describe('rental-billing — replay harness against synthetic event log', () => 
     expect(result.issues[0]?.reason).toBe('gap')
   })
 
+  it('treats missing-and-null as equal so reducer-fresh output matches persisted snapshot_after with all null fields', () => {
+    // Persisted snapshot_after carries all schema fields populated to
+    // null because the API handler spreads the live row before applying
+    // the transition. Reducer-fresh output from a minimal initial state
+    // omits keys the transition didn't touch. The harness MUST treat
+    // these as equivalent or every replay would falsely report
+    // snapshot_divergence.
+    const initial: RentalBillingWorkflowSnapshot = { state: 'generated', state_version: 1 }
+    const approveEvent = { type: 'APPROVE', approved_at: '2026-04-29T10:00:00.000Z', approved_by: 'office-user' }
+    const log: WorkflowEventLogEntry[] = [
+      {
+        workflow_name: RENTAL_BILLING_WORKFLOW_NAME,
+        schema_version: RENTAL_BILLING_WORKFLOW_SCHEMA_VERSION,
+        entity_id: '00000000-0000-0000-0000-000000000001',
+        state_version: 1,
+        event_payload: approveEvent,
+        // What the API handler actually persists: every reducer-snapshot
+        // field present, nulls explicit. Reducer-fresh output won't carry
+        // posted_at / failed_at / qbo_invoice_id, but they are all null
+        // anyway, so the harness must accept this as equivalent.
+        snapshot_after: {
+          state: 'approved',
+          state_version: 2,
+          approved_at: '2026-04-29T10:00:00.000Z',
+          approved_by: 'office-user',
+          posted_at: null,
+          failed_at: null,
+          error: null,
+          qbo_invoice_id: null,
+        },
+      },
+    ]
+    const result = applyEventLog<RentalBillingWorkflowSnapshot>(initial, log)
+    expect(result.ok).toBe(true)
+    expect(result.issues).toEqual([])
+  })
+
+  it('still flags real divergence when a non-null field differs', () => {
+    const initial: RentalBillingWorkflowSnapshot = { state: 'generated', state_version: 1 }
+    const approveEvent = { type: 'APPROVE', approved_at: '2026-04-29T10:00:00.000Z', approved_by: 'office-user' }
+    const log: WorkflowEventLogEntry[] = [
+      {
+        workflow_name: RENTAL_BILLING_WORKFLOW_NAME,
+        schema_version: RENTAL_BILLING_WORKFLOW_SCHEMA_VERSION,
+        entity_id: '00000000-0000-0000-0000-000000000001',
+        state_version: 1,
+        event_payload: approveEvent,
+        snapshot_after: {
+          state: 'approved',
+          state_version: 2,
+          approved_at: '2026-04-29T10:00:00.000Z',
+          approved_by: 'WRONG-USER',
+          posted_at: null,
+          failed_at: null,
+          error: null,
+          qbo_invoice_id: null,
+        },
+      },
+    ]
+    const result = applyEventLog<RentalBillingWorkflowSnapshot>(initial, log)
+    expect(result.ok).toBe(false)
+    expect(result.issues[0]?.reason).toBe('snapshot_divergence')
+  })
+
   it('rejects event log written under a different schema_version', () => {
     const initial: RentalBillingWorkflowSnapshot = { state: 'generated', state_version: 1 }
     const log: WorkflowEventLogEntry[] = [
