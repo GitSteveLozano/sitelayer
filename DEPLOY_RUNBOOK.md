@@ -279,11 +279,19 @@ post-pilot work — none would burn the first customer:
 - **Zod-validate the rest of the API mutation routes.** The workflow
   event endpoints set the pattern (`parseRentalBillingEventRequest`,
   `parseEstimatePushEventRequest`, `parseCrewScheduleEventRequest`,
-  `parseRentalEventRequest`). Roughly 25 non-workflow mutation routes
-  still take `Record<string, unknown>` from `ctx.readBody()` and trust
-  the shape. Current callers (the SPA) send well-formed bodies, but a
-  hostile or buggy client today bypasses validation. Mechanical sweep
-  ~1 day.
+  `parseRentalEventRequest`, `parseProjectCloseoutEventRequest`).
+  The shared helper `parseJsonBody(schema, body)` lives in
+  `apps/api/src/http-utils.ts`. `POST /api/schedules` was migrated as
+  the canonical example (`CreateScheduleBodySchema`). Remaining
+  routes still using `body.foo ?? ...` ad-hoc shape checks:
+  `clock.ts` (/in, /out), `projects.ts` (POST, PATCH),
+  `customers.ts`, `workers.ts`, `divisions.ts`, `service-items.ts`,
+  `pricing-profiles.ts`, `bonus-rules.ts`, `labor-entries.ts`,
+  `material-bills.ts`, `takeoff-write.ts`, non-workflow paths in
+  `rental-inventory.ts`, and `rentals.ts` POST/PATCH. Mechanical
+  sweep ~1 day. Pattern: define `<Op><Entity>BodySchema` at module
+  top, swap `await ctx.readBody()` with
+  `const parsed = parseJsonBody(Schema, await ctx.readBody())`.
 - **Workflowize `projects` closeout** (`routes/projects.ts:270`,
   status='completed' flip + margin alert) and **blueprint revisions**
   (revision lineage today via copied-from notes). Both small lifts,

@@ -134,3 +134,55 @@ export function parseConfigPayload(value: unknown): Record<string, unknown> {
   }
   return {}
 }
+
+/**
+ * Validate a route's JSON body against a Zod schema. Mirror of the
+ * pattern used by workflow event endpoints
+ * (parseRentalBillingEventRequest etc.) but without coupling to a
+ * specific workflow shape.
+ *
+ * Returns a discriminated result. The route handler should:
+ *   const parsed = parseJsonBody(MySchema, await ctx.readBody())
+ *   if (!parsed.ok) {
+ *     ctx.sendJson(400, { error: parsed.error })
+ *     return true
+ *   }
+ *   const body = parsed.value
+ *
+ * No numeric coercion is performed — a route that needs to accept
+ * "5" alongside 5 should declare the field as `z.coerce.number()`
+ * (or `.union([z.number(), z.string()])`). Coercing every numeric
+ * string globally would silently mutate fields like "01234" zip
+ * codes, which is too risky for a generic helper.
+ *
+ * The error message follows the workflow-event-parser convention
+ * ("path: zod issue message") so route handlers can pass the error
+ * straight to the client without additional formatting.
+ */
+export interface ParseJsonBodyOk<T> {
+  ok: true
+  value: T
+}
+export interface ParseJsonBodyErr {
+  ok: false
+  error: string
+}
+export type ParseJsonBodyResult<T> = ParseJsonBodyOk<T> | ParseJsonBodyErr
+
+export function parseJsonBody<T>(
+  schema: {
+    safeParse: (value: unknown) =>
+      | { success: true; data: T }
+      | {
+          success: false
+          error: { issues: ReadonlyArray<{ path: ReadonlyArray<PropertyKey>; message: string }> }
+        }
+  },
+  body: unknown,
+): ParseJsonBodyResult<T> {
+  const result = schema.safeParse(body ?? {})
+  if (result.success) return { ok: true, value: result.data }
+  const issue = result.error.issues[0]
+  const path = issue?.path.length ? issue.path.map((p) => String(p)).join('.') : '(root)'
+  return { ok: false, error: `${path}: ${issue?.message ?? 'invalid request body'}` }
+}
