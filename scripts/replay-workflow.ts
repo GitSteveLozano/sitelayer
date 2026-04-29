@@ -97,7 +97,26 @@ async function main(): Promise<void> {
     process.exit(1)
   }
 
-  const pool = new Pool({ connectionString: databaseUrl })
+  // Managed Postgres (DO) uses a self-signed cert chain. The api and
+  // worker pools handle this by stripping `sslmode` from the URL and
+  // passing `ssl: { rejectUnauthorized: false }`. Mirror that here so
+  // ops runs against managed PG don't fail with SELF_SIGNED_CERT_IN_CHAIN.
+  // Set DATABASE_SSL_REJECT_UNAUTHORIZED=true to enforce strict verification.
+  const sslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED === 'true'
+  const poolConfig = (() => {
+    try {
+      const url = new URL(databaseUrl)
+      const sslMode = url.searchParams.get('sslmode')
+      if (!sslRejectUnauthorized && sslMode && sslMode !== 'disable') {
+        url.searchParams.delete('sslmode')
+        return { connectionString: url.toString(), ssl: { rejectUnauthorized: false } }
+      }
+    } catch {
+      // fall through
+    }
+    return { connectionString: databaseUrl }
+  })()
+  const pool = new Pool(poolConfig)
   try {
     const eventResult = await pool.query<{
       workflow_name: string
@@ -201,10 +220,12 @@ async function main(): Promise<void> {
 function shallowEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true
   if (a == null || b == null) return a == null && b == null
-  if (typeof a !== typeof b) return false
-  // Postgres returns Date for timestamptz; reducer outputs string. Compare as strings.
+  // Date comparison must happen BEFORE the typeof check: pg returns
+  // timestamptz as a Date object, while the reducer (and event_payload)
+  // emits an ISO string. Compare via toISOString in either direction.
   if (a instanceof Date) return a.toISOString() === b
-  if (b instanceof Date) return (b as Date).toISOString() === a
+  if (b instanceof Date) return a === (b as Date).toISOString()
+  if (typeof a !== typeof b) return false
   return JSON.stringify(a) === JSON.stringify(b)
 }
 

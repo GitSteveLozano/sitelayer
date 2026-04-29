@@ -113,14 +113,40 @@ export function applyEventLog<Snapshot extends { state: string; state_version: n
   return { ok: issues.length === 0, finalSnapshot: snapshot, issues }
 }
 
+/**
+ * Semantic equality for snapshots.
+ *
+ * Persisted snapshot_after JSON includes every reducer-snapshot field
+ * (nulls preserved because the API handler spreads the live row before
+ * the transition). Reducer-fresh output from a minimal initial state
+ * only carries fields the transitions touched. They are equivalent when
+ * every key on either side that's missing on the other is null.
+ *
+ * Non-null differences and array/scalar mismatches are still caught.
+ */
 function snapshotsEqual(a: unknown, b: unknown): boolean {
-  return canonicalize(a) === canonicalize(b)
-}
-
-function canonicalize(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(canonicalize).join(',')}]`
-  const obj = value as Record<string, unknown>
-  const keys = Object.keys(obj).sort()
-  return `{${keys.map((k) => JSON.stringify(k) + ':' + canonicalize(obj[k])).join(',')}}`
+  if (a === b) return true
+  if (a === null || b === null) return a == null && b == null
+  if (typeof a !== typeof b) return false
+  if (typeof a !== 'object') return false
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) {
+      if (!snapshotsEqual(a[i], b[i])) return false
+    }
+    return true
+  }
+  const aObj = a as Record<string, unknown>
+  const bObj = b as Record<string, unknown>
+  const keys = new Set([...Object.keys(aObj), ...Object.keys(bObj)])
+  for (const k of keys) {
+    const av = aObj[k]
+    const bv = bObj[k]
+    // Treat missing-and-null as equal so reducer-fresh snapshots (no
+    // explicit null fields) match persisted snapshots (all null fields).
+    if (av === undefined && bv === null) continue
+    if (av === null && bv === undefined) continue
+    if (!snapshotsEqual(av, bv)) return false
+  }
+  return true
 }
