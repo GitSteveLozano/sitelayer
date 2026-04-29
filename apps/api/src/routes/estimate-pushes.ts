@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { sumMoney } from '@sitelayer/domain'
 import {
   ESTIMATE_PUSH_WORKFLOW_NAME,
   ESTIMATE_PUSH_WORKFLOW_SCHEMA_VERSION,
@@ -251,11 +252,11 @@ export async function handleEstimatePushRoutes(
           return { kind: 'no_lines' as const }
         }
 
-        let subtotal = 0
-        for (const line of linesResult.rows) {
-          const amt = Number(line.amount)
-          if (Number.isFinite(amt)) subtotal += amt
-        }
+        // Use integer-cents accumulation (sumMoney) — JS float
+        // accumulation drifts on numeric(12,2) sums (0.1 + 0.2 != 0.3).
+        // Per-row writes are still safe as JS numbers below; only the
+        // running sum needs the helper.
+        const subtotal = sumMoney(linesResult.rows.map((line) => line.amount))
 
         const insertResult = await client.query<EstimatePushRow>(
           `insert into estimate_pushes (
@@ -263,7 +264,7 @@ export async function handleEstimatePushRoutes(
            )
            values ($1, $2, $3, 'drafted', 1, $4)
            returning ${ESTIMATE_PUSH_COLUMNS}`,
-          [ctx.company.id, projectId, project.customer_id, subtotal.toFixed(2)],
+          [ctx.company.id, projectId, project.customer_id, subtotal],
         )
         const created = insertResult.rows[0]!
 
