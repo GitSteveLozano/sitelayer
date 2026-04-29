@@ -47,6 +47,7 @@ import type {
 } from '../api.js'
 import { BonusRuleEditor, CustomerEditor, PricingProfileEditor, WorkerEditor } from '../components/operations.js'
 import { FormRow } from '../components/forms.js'
+import { CreateProjectWizard } from './create-project-wizard.js'
 import { Button } from '../components/ui/button.js'
 import { Checkbox } from '../components/ui/checkbox.js'
 import { Input } from '../components/ui/input.js'
@@ -467,7 +468,17 @@ export function ProjectsView({
       </section>
 
       <section className="panel">
-        <h2>Create Project</h2>
+        <div className="flex items-baseline justify-between">
+          <h2>Create Project</h2>
+          <CreateProjectWizard
+            companySlug={companySlug}
+            divisions={divisions}
+            primaryDivision={primaryDivision}
+            onCreated={async () => {
+              await runAction('project', async () => {})
+            }}
+          />
+        </div>
         <FormRow
           actionLabel="Add project"
           busy={busy === 'project'}
@@ -576,6 +587,16 @@ export function ProjectsView({
                 <Button type="submit" disabled={busy === `project-geofence:${project.id}`}>
                   {busy === `project-geofence:${project.id}` ? 'Saving...' : 'Save geofence'}
                 </Button>
+                <Link to={`/projects/${project.id}`} className="ml-2">
+                  <Button type="button" variant="outline">
+                    View
+                  </Button>
+                </Link>
+                <Link to={`/rental-contracts/${project.id}`} className="ml-2">
+                  <Button type="button" variant="outline">
+                    Manage rental
+                  </Button>
+                </Link>
               </form>
             </li>
           ))}

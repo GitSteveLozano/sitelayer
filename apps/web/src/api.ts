@@ -880,6 +880,338 @@ export async function deleteRental(
 }
 
 // ---------------------------------------------------------------------------
+// Inventory catalog client.
+// ---------------------------------------------------------------------------
+
+export type InventoryItemRow = {
+  id: string
+  code: string
+  description: string
+  category: string
+  unit: string
+  default_rental_rate: string
+  replacement_value: string | null
+  tracking_mode: 'quantity' | 'serialized'
+  active: boolean
+  notes: string | null
+  version: number
+  deleted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type InventoryItemInput = {
+  code: string
+  description: string
+  category?: string | null
+  unit?: string | null
+  default_rental_rate?: number | string | null
+  replacement_value?: number | string | null
+  tracking_mode?: 'quantity' | 'serialized' | null
+  active?: boolean | null
+  notes?: string | null
+}
+
+export async function listInventoryItems(companySlug: string): Promise<{ inventoryItems: InventoryItemRow[] }> {
+  return apiGet<{ inventoryItems: InventoryItemRow[] }>('/api/inventory/items', companySlug)
+}
+
+export async function createInventoryItem(input: InventoryItemInput, companySlug: string): Promise<InventoryItemRow> {
+  return apiPost<InventoryItemRow>('/api/inventory/items', input, companySlug)
+}
+
+export async function updateInventoryItem(
+  itemId: string,
+  input: Partial<InventoryItemInput> & { expected_version?: number },
+  companySlug: string,
+): Promise<InventoryItemRow> {
+  return apiPatch<InventoryItemRow>(`/api/inventory/items/${itemId}`, input, companySlug)
+}
+
+export async function deleteInventoryItem(
+  itemId: string,
+  companySlug: string,
+  expectedVersion?: number,
+): Promise<InventoryItemRow> {
+  return apiDelete<InventoryItemRow>(
+    `/api/inventory/items/${itemId}`,
+    companySlug,
+    expectedVersion ? { expected_version: expectedVersion } : undefined,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Job rental contracts + lines client. Each project gets at most one active
+// contract (per the unique partial index on job_rental_contracts (project_id,
+// active)); each contract has 0+ rental lines that map an inventory item to
+// an agreed price + rate unit + on/off-rent dates. Billing runs preview and
+// generate against this shape.
+// ---------------------------------------------------------------------------
+
+export type JobRentalContractRow = {
+  id: string
+  project_id: string
+  customer_id: string | null
+  billing_cycle_days: number
+  billing_mode: string
+  billing_start_date: string
+  last_billed_through: string | null
+  next_billing_date: string
+  status: 'draft' | 'active' | 'paused' | 'closed'
+  notes: string | null
+  version: number
+  deleted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type JobRentalLineRow = {
+  id: string
+  contract_id: string
+  inventory_item_id: string
+  item_code: string | null
+  item_description: string | null
+  quantity: string
+  agreed_rate: string
+  rate_unit: 'day' | 'cycle' | 'week' | 'month' | 'each'
+  on_rent_date: string
+  off_rent_date: string | null
+  last_billed_through: string | null
+  billable: boolean
+  taxable: boolean
+  status: string
+  notes: string | null
+  version: number
+  deleted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function listProjectRentalContracts(
+  projectId: string,
+  companySlug: string,
+): Promise<{ rentalContracts: JobRentalContractRow[] }> {
+  return apiGet<{ rentalContracts: JobRentalContractRow[] }>(`/api/projects/${projectId}/rental-contracts`, companySlug)
+}
+
+export type CreateRentalContractInput = {
+  customer_id?: string | null
+  billing_cycle_days?: number
+  billing_mode?: string
+  billing_start_date?: string
+  notes?: string | null
+}
+
+export async function createRentalContract(
+  projectId: string,
+  input: CreateRentalContractInput,
+  companySlug: string,
+): Promise<JobRentalContractRow> {
+  return apiPost<JobRentalContractRow>(`/api/projects/${projectId}/rental-contracts`, input, companySlug)
+}
+
+export async function updateRentalContract(
+  contractId: string,
+  input: Partial<CreateRentalContractInput & { status: string; expected_version: number }>,
+  companySlug: string,
+): Promise<JobRentalContractRow> {
+  return apiPatch<JobRentalContractRow>(`/api/rental-contracts/${contractId}`, input, companySlug)
+}
+
+export async function listRentalContractLines(
+  contractId: string,
+  companySlug: string,
+): Promise<{ rentalLines: JobRentalLineRow[] }> {
+  return apiGet<{ rentalLines: JobRentalLineRow[] }>(`/api/rental-contracts/${contractId}/lines`, companySlug)
+}
+
+export type RentalLineInput = {
+  inventory_item_id: string
+  quantity: number | string
+  agreed_rate: number | string
+  rate_unit?: JobRentalLineRow['rate_unit']
+  on_rent_date?: string
+  off_rent_date?: string | null
+  billable?: boolean
+  taxable?: boolean
+  notes?: string | null
+}
+
+export async function createRentalLine(
+  contractId: string,
+  input: RentalLineInput,
+  companySlug: string,
+): Promise<JobRentalLineRow> {
+  return apiPost<JobRentalLineRow>(`/api/rental-contracts/${contractId}/lines`, input, companySlug)
+}
+
+export async function updateRentalLine(
+  lineId: string,
+  input: Partial<RentalLineInput & { status: string; expected_version: number }>,
+  companySlug: string,
+): Promise<JobRentalLineRow> {
+  return apiPatch<JobRentalLineRow>(`/api/rental-contract-lines/${lineId}`, input, companySlug)
+}
+
+export async function deleteRentalLine(
+  lineId: string,
+  companySlug: string,
+  expectedVersion?: number,
+): Promise<JobRentalLineRow> {
+  return apiDelete<JobRentalLineRow>(
+    `/api/rental-contract-lines/${lineId}`,
+    companySlug,
+    expectedVersion ? { expected_version: expectedVersion } : undefined,
+  )
+}
+
+export type RentalBillingRunPreview = {
+  period_start: string
+  period_end: string
+  due_date: string
+  next_billing_date: string
+  billing_cycle_days: number
+  is_due: boolean
+  subtotal: number
+  lines: Array<{
+    line_id: string
+    inventory_item_id: string | null
+    quantity: number
+    agreed_rate: number
+    rate_unit: string
+    billable_days: number
+    period_start: string
+    period_end: string
+    amount: number
+    taxable: boolean
+    description: string | null
+  }>
+}
+
+export async function previewBillingRun(
+  contractId: string,
+  companySlug: string,
+  referenceDate?: string,
+): Promise<{ contract: JobRentalContractRow; preview: RentalBillingRunPreview }> {
+  return apiPost<{ contract: JobRentalContractRow; preview: RentalBillingRunPreview }>(
+    `/api/rental-contracts/${contractId}/billing-runs/preview`,
+    referenceDate ? { reference_date: referenceDate } : {},
+    companySlug,
+  )
+}
+
+export async function generateBillingRun(
+  contractId: string,
+  companySlug: string,
+  options?: { referenceDate?: string; force?: boolean },
+): Promise<{ billingRun: { id: string }; lines: unknown[]; contract: JobRentalContractRow }> {
+  return apiPost(
+    `/api/rental-contracts/${contractId}/billing-runs`,
+    {
+      ...(options?.referenceDate ? { reference_date: options.referenceDate } : {}),
+      ...(options?.force ? { force: true } : {}),
+    },
+    companySlug,
+  )
+}
+
+export type InventoryAvailabilityRow = {
+  inventory_item_id: string
+  on_rent_quantity: string
+  on_rent_lines: number
+  on_rent_projects: number
+}
+
+export async function listInventoryAvailability(
+  companySlug: string,
+): Promise<{ availability: InventoryAvailabilityRow[] }> {
+  return apiGet<{ availability: InventoryAvailabilityRow[] }>('/api/inventory/items/availability', companySlug)
+}
+
+export type InventoryMovementRow = {
+  id: string
+  inventory_item_id: string
+  from_location_id: string | null
+  to_location_id: string | null
+  project_id: string | null
+  movement_type: 'deliver' | 'return' | 'transfer' | 'adjustment' | 'damaged' | 'lost' | 'repair'
+  quantity: string
+  occurred_on: string
+  ticket_number: string | null
+  notes: string | null
+  version: number
+  created_at: string
+  item_code: string | null
+  item_description: string | null
+  from_location_name: string | null
+  to_location_name: string | null
+  project_name: string | null
+}
+
+export async function listInventoryMovements(
+  companySlug: string,
+  filters?: { itemId?: string; projectId?: string; type?: InventoryMovementRow['movement_type'] },
+): Promise<{ inventoryMovements: InventoryMovementRow[] }> {
+  const params = new URLSearchParams()
+  if (filters?.itemId) params.set('item_id', filters.itemId)
+  if (filters?.projectId) params.set('project_id', filters.projectId)
+  if (filters?.type) params.set('type', filters.type)
+  const suffix = params.toString() ? `?${params.toString()}` : ''
+  return apiGet<{ inventoryMovements: InventoryMovementRow[] }>(`/api/inventory/movements${suffix}`, companySlug)
+}
+
+export type InventoryLocationRow = {
+  id: string
+  project_id: string | null
+  name: string
+  location_type: 'yard' | 'job' | 'in_transit' | 'repair' | 'lost' | 'damaged'
+  is_default: boolean
+  version: number
+  deleted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function listInventoryLocations(
+  companySlug: string,
+): Promise<{ inventoryLocations: InventoryLocationRow[] }> {
+  return apiGet<{ inventoryLocations: InventoryLocationRow[] }>('/api/inventory/locations', companySlug)
+}
+
+export type CreateMovementInput = {
+  inventory_item_id: string
+  movement_type: InventoryMovementRow['movement_type']
+  quantity: number | string
+  from_location_id?: string | null
+  to_location_id?: string | null
+  project_id?: string | null
+  occurred_on?: string
+  ticket_number?: string | null
+  notes?: string | null
+}
+
+export async function createInventoryMovement(
+  input: CreateMovementInput,
+  companySlug: string,
+): Promise<InventoryMovementRow> {
+  return apiPost<InventoryMovementRow>('/api/inventory/movements', input, companySlug)
+}
+
+export type InventoryImportResult = {
+  total: number
+  inserted: number
+  updated: number
+  errors: Array<{ index: number; code: string | null; error: string }>
+}
+
+export async function importInventoryItems(
+  items: InventoryItemInput[],
+  companySlug: string,
+): Promise<InventoryImportResult> {
+  return apiPost<InventoryImportResult>('/api/inventory/items/import', { items }, companySlug)
+}
+
+// ---------------------------------------------------------------------------
 // Rental billing run workflow client. See docs/DETERMINISTIC_WORKFLOWS.md.
 // The UI consumes the WorkflowSnapshot returned by the API verbatim — it does
 // NOT compute next_events locally or invent its own state vocabulary.

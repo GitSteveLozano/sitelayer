@@ -288,69 +288,38 @@ export function ScheduleView({
   )
 
   const copyLastWeek = useCallback(async () => {
-    const lastWeekStart = addDays(weekStart, -7)
-    const lastWeekDates = weekDays(lastWeekStart).map((day) => toISODate(day))
-    const sourceMap = buildCellMap(schedules, workers, projectIds, lastWeekDates)
-    if (sourceMap.size === 0) {
-      toastError('Copy skipped', 'No schedules found in the previous week.')
-      return
-    }
     setCopying(true)
-    let created = 0
-    let failed = 0
-    for (const [key, cell] of sourceMap) {
-      if (cell.crew.length === 0) continue
-      const [projectId, sourceDate] = key.split('::')
-      if (!projectId || !sourceDate) continue
-      const offsetDate = addDays(new Date(`${sourceDate}T00:00:00`), 7)
-      const targetDate = toISODate(offsetDate)
-      const targetKey = buildCellKey(projectId, targetDate)
-      const targetExisting = localCells.get(targetKey)
-      if (targetExisting && targetExisting.crew.length > 0) continue
-      try {
-        await apiPost(
-          '/api/schedules',
-          {
-            project_id: projectId,
-            scheduled_for: targetDate,
-            status: 'draft',
-            crew: cell.crew.map((member) => ({
-              worker_id: member.worker_id,
-              name: member.name,
-              expected_hours: member.expected_hours,
-              ...(member.default_service_item_code
-                ? { default_service_item_code: member.default_service_item_code }
-                : {}),
-            })),
-          },
-          companySlug,
+    try {
+      // Server-side bulk copy: one tx, no N+1. Backend skips target days
+      // that already have a schedule for the same project.
+      const result = await apiPost<{ copied: number; skipped: number; total: number }>(
+        '/api/schedules/copy-week',
+        {
+          from_monday: toISODate(addDays(weekStart, -7)),
+          to_monday: toISODate(weekStart),
+        },
+        companySlug,
+      )
+      if (result.copied > 0) {
+        toastSuccess(
+          'Copied last week',
+          `${result.copied} schedule${result.copied === 1 ? '' : 's'} created${
+            result.skipped > 0 ? ` · ${result.skipped} skipped (already populated)` : ''
+          }`,
         )
-        setLocalCells((current) => {
-          const next = new Map(current)
-          next.set(targetKey, {
-            scheduleId: null,
-            status: 'draft',
-            version: 0,
-            crew: cell.crew.slice(),
-          })
-          return next
-        })
-        created += 1
-      } catch {
-        failed += 1
+      } else if (result.total === 0) {
+        toastError('Copy skipped', 'No schedules found in the previous week.')
+      } else {
+        toastError('Copy skipped', 'This week is already populated for those projects.')
       }
-    }
-    setCopying(false)
-    if (created > 0) {
-      toastSuccess('Copied last week', `${created} schedule${created === 1 ? '' : 's'} created`)
-    } else if (failed === 0) {
-      toastError('Copy skipped', 'Last week had no crew to copy or this week is already populated.')
-    }
-    if (failed > 0) {
-      toastError('Partial copy', `${failed} schedule${failed === 1 ? '' : 's'} failed to create`)
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : 'copy failed'
+      toastError('Copy failed', message)
+    } finally {
+      setCopying(false)
     }
     if (onMutated) await onMutated()
-  }, [companySlug, localCells, onMutated, projectIds, schedules, weekStart, workers])
+  }, [companySlug, onMutated, weekStart])
 
   if (!bootstrap || projects.length === 0) {
     return (
