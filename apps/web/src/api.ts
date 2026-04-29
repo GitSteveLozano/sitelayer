@@ -956,6 +956,32 @@ export async function dispatchRentalBillingEvent(
   )
 }
 
+export type RentalBillingRunListRow = {
+  id: string
+  contract_id: string
+  project_id: string
+  customer_id: string | null
+  period_start: string
+  period_end: string
+  status: RentalBillingWorkflowState
+  state_version: number
+  subtotal: string
+  qbo_invoice_id: string | null
+  posted_at: string | null
+  failed_at: string | null
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function listRentalBillingRuns(
+  companySlug: string,
+  state?: RentalBillingWorkflowState,
+): Promise<{ billingRuns: RentalBillingRunListRow[] }> {
+  const suffix = state ? `?state=${state}` : ''
+  return apiGet<{ billingRuns: RentalBillingRunListRow[] }>(`/api/rental-billing-runs${suffix}`, companySlug)
+}
+
 export async function startQboOAuth(companySlug: string) {
   if (FIXTURES_ENABLED) return
   const response = await fetch(`${API_URL}/api/integrations/qbo/auth`, {
