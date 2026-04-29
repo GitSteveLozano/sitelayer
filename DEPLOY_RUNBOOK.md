@@ -189,6 +189,59 @@ ssh sitelayer@165.245.230.3   # via DEPLOY_SSH_KEY
 The deploy user is in the docker group, so `docker` access is
 root-equivalent. Treat `DEPLOY_SSH_KEY` as a production-root credential.
 
+## QBO sandbox smoke
+
+Before turning on either of the QBO live flags in prod
+(`QBO_LIVE_RENTAL_INVOICE=1`, `QBO_LIVE_ESTIMATE_PUSH=1`), exercise
+`scripts/qbo-sandbox-smoke.sh` against a real Intuit sandbox.
+
+CI runs `apps/api/src/qbo-material-bill-sync.test.ts` against a
+localhost mock, which catches request-shape regressions but not
+authentication, rate-limiting, or schema-validation behaviours that
+real QBO enforces. Those only show up against a live sandbox.
+
+### Sandbox provisioning (one-time, per developer or per CI)
+
+1. Sign in at <https://developer.intuit.com>, go to "My Apps",
+   create an app or open the existing sitelayer dev app.
+2. Under "Sandboxes", create a "Sandbox Company" and note the
+   `Realm ID` (e.g. `9341454063892108`).
+3. Use OAuth Playground or the in-app Keys/OAuth tab to fetch a
+   short-lived `Access Token` for that realm. Tokens expire in ~60
+   minutes, so capture them right before running the smoke.
+
+### Running the smoke
+
+```sh
+QBO_REALM_ID=9341454063892108 \
+  QBO_ACCESS_TOKEN=<token> \
+  SITELAYER_API_URL=http://localhost:3001 \
+  SITELAYER_COMPANY_ID=<uuid-of-local-company> \
+  bash scripts/qbo-sandbox-smoke.sh
+```
+
+Exit codes: 0 OK, 1 missing config, 2 customer pull failed, 3 bill
+push failed.
+
+### Live-flag flip protocol
+
+After the smoke is green:
+
+1. Set `QBO_LIVE_RENTAL_INVOICE=1` (or `QBO_LIVE_ESTIMATE_PUSH=1`)
+   in `/app/sitelayer/.env` on prod.
+2. Restart the worker container only:
+   `docker compose -f docker-compose.prod.yml restart worker`.
+3. Watch worker logs for the next heartbeat tick to confirm the
+   stub→live switch (the boot log line "live QBO invoice push
+   enabled" replaces the stub line).
+4. Trigger one billing run with `state=approved` and dispatch
+   `POST_REQUESTED`; verify the QBO sandbox shows the invoice.
+5. Roll forward to the next customer-facing run.
+
+Until the smoke is run with real credentials, the live flags should
+stay unset. The first customer's first billing run is currently the
+first live test if you skip the smoke — don't.
+
 ## Pilot-readiness checklist
 
 Before the first paying customer is on prod:
@@ -201,11 +254,17 @@ Before the first paying customer is on prod:
 - [x] Migrations run inside transactions with `ON_ERROR_STOP`
 - [x] Migration ledger uses a checksum so silent edits are rejected
 - [x] Workflow event log + replay tool exist for the regression net
-- [ ] Periodic `scripts/replay-workflow.ts` cron against live customer
-      data (set up after first customer onboarded)
+- [x] Periodic `scripts/replay-workflow.ts` cron against live customer
+      data (sitelayer-replay-sweep.timer at 04:42 UTC, installed
+      2026-04-29 — silent until customer data exists)
+- [x] Rollback drill — exercised on prod 2026-04-29; canonical path is
+      `scripts/rollback-droplet.sh`. See "Rollback drill log" above.
 - [ ] On-call rotation defined (single-developer until pilot scales)
-- [x] Rollback drill — exercised on prod 2026-04-29 (see Rollback
-      drill log above). `scripts/rollback-droplet.sh` is now the
-      canonical rollback path.
+- [ ] QBO sandbox smoke run with real Intuit credentials before
+      flipping `QBO_LIVE_RENTAL_INVOICE=1` /
+      `QBO_LIVE_ESTIMATE_PUSH=1`. Provisioning steps in the QBO
+      sandbox smoke section above. Token expires in ~60 min, so this
+      gets re-run on every flip.
 
-The unchecked items are the work to wrap up before customer #1 lands.
+The unchecked items are the work to wrap up before customer #1 lands
+or before flipping QBO live.
