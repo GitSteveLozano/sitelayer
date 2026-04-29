@@ -1,12 +1,20 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import {
+  CREW_SCHEDULE_WORKFLOW_NAME,
+  CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
+  transitionCrewScheduleWorkflow,
+  type CrewScheduleWorkflowSnapshot,
+} from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput, parseExpectedVersion } from '../http-utils.js'
 
 export type ScheduleRouteCtx = {
   pool: Pool
   company: ActiveCompany
+  /** Currently-active Clerk user id (for the workflow event log actor). */
+  currentUserId: string
   requireRole: (allowed: readonly string[]) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
@@ -91,17 +99,85 @@ export async function handleScheduleRoutes(
     const entries = Array.isArray(body.entries) ? body.entries : []
     const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
     const confirmation = await withMutationTx(async (client: PoolClient) => {
-      const scheduleResult = await client.query(
-        `
-        update crew_schedules
-        set status = 'confirmed', version = version + 1
-        where company_id = $1 and id = $2 and ($3::int is null or version = $3)
-        returning id, project_id, scheduled_for, crew, status, version, created_at
-        `,
-        [ctx.company.id, scheduleId, expectedVersion],
+      // Load the row first so we can run the deterministic reducer
+      // against its current snapshot. The optimistic version check
+      // (expected_version) stays on `version` for back-compat with the
+      // SPA's existing PATCH plumbing; the workflow's `state_version`
+      // is bumped by the reducer.
+      const lockedResult = await client.query<{
+        id: string
+        project_id: string
+        scheduled_for: string
+        crew: unknown
+        status: 'draft' | 'confirmed'
+        state_version: number
+        confirmed_at: string | null
+        confirmed_by: string | null
+        version: number
+        created_at: string
+      }>(
+        `select id, project_id, scheduled_for, crew, status, state_version,
+                confirmed_at, confirmed_by, version, created_at
+         from crew_schedules
+         where company_id = $1 and id = $2 and deleted_at is null
+         for update`,
+        [ctx.company.id, scheduleId],
       )
-      const schedule = scheduleResult.rows[0]
-      if (!schedule) return null
+      const current = lockedResult.rows[0]
+      if (!current) return null
+      if (expectedVersion != null && current.version !== expectedVersion) {
+        // Surface as null so the route's not-found branch hits the
+        // version-conflict path that already exists below.
+        return null
+      }
+
+      const reducerEvent = {
+        type: 'CONFIRM' as const,
+        confirmed_at: new Date().toISOString(),
+        confirmed_by: ctx.currentUserId,
+      }
+      const beforeStateVersion = current.state_version
+      let nextSnapshot: CrewScheduleWorkflowSnapshot
+      try {
+        nextSnapshot = transitionCrewScheduleWorkflow(
+          {
+            state: current.status,
+            state_version: current.state_version,
+            confirmed_at: current.confirmed_at,
+            confirmed_by: current.confirmed_by,
+          },
+          reducerEvent,
+        )
+      } catch (err) {
+        // Already-confirmed row: treat as a no-op success rather than a
+        // 500. The SPA hits /confirm idempotently after offline replay,
+        // and we don't want a 4xx if the row already moved.
+        if (current.status === 'confirmed') {
+          return { schedule: current, laborEntries: [] }
+        }
+        throw err
+      }
+
+      const updateResult = await client.query(
+        `update crew_schedules
+           set status = $3,
+               state_version = $4,
+               confirmed_at = $5,
+               confirmed_by = $6,
+               version = version + 1
+         where company_id = $1 and id = $2
+         returning id, project_id, scheduled_for, crew, status, state_version,
+                   confirmed_at, confirmed_by, version, created_at`,
+        [
+          ctx.company.id,
+          scheduleId,
+          nextSnapshot.state,
+          nextSnapshot.state_version,
+          nextSnapshot.confirmed_at,
+          nextSnapshot.confirmed_by,
+        ],
+      )
+      const schedule = updateResult.rows[0]
       const createdLaborEntries: Record<string, unknown>[] = []
       for (const entry of entries) {
         if (!entry.service_item_code || entry.hours === undefined || !entry.occurred_on) continue
@@ -127,6 +203,23 @@ export async function handleScheduleRoutes(
         'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
         [ctx.company.id, schedule.project_id],
       )
+      // Workflow event log row in the same tx as the state update.
+      // Replay corpus for regression: feeding the log back through
+      // transitionCrewScheduleWorkflow must reproduce the persisted
+      // snapshot. Unique (entity_id, state_version) prevents duplicate
+      // writes if a retry replays this transition.
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: CREW_SCHEDULE_WORKFLOW_NAME,
+        schemaVersion: CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'crew_schedule',
+        entityId: scheduleId,
+        stateVersion: beforeStateVersion,
+        eventType: 'CONFIRM',
+        eventPayload: reducerEvent as unknown as Record<string, unknown>,
+        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        actorUserId: ctx.currentUserId,
+      })
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'crew_schedule',

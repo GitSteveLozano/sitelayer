@@ -38,10 +38,12 @@ import {
   // effects run so getWorkflow() can find them.
   rentalBillingWorkflow as _rentalBillingWorkflow,
   estimatePushWorkflow as _estimatePushWorkflow,
+  crewScheduleWorkflow as _crewScheduleWorkflow,
 } from '@sitelayer/workflows'
 
 void _rentalBillingWorkflow
 void _estimatePushWorkflow
+void _crewScheduleWorkflow
 
 const ENTITY_TABLE: Record<string, { table: string; columns: string[] }> = {
   rental_billing_run: {
@@ -71,6 +73,10 @@ const ENTITY_TABLE: Record<string, { table: string; columns: string[] }> = {
       'error',
       'qbo_estimate_id',
     ],
+  },
+  crew_schedule: {
+    table: 'crew_schedules',
+    columns: ['status', 'state_version', 'confirmed_at', 'confirmed_by'],
   },
 }
 
