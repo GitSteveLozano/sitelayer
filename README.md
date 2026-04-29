@@ -109,18 +109,18 @@ docker/
   postgres/init/  — SQL migration files (001-016)
 ```
 
-| Component | Technology |
-|-----------|-----------|
-| Backend | Node.js (plain http module) + PostgreSQL |
-| Frontend | React 19 + Vite SPA (no SSR) |
-| Worker | Node.js background processor |
-| Database | Postgres 18 (direct SQL, no ORM) |
-| Auth | Clerk (JWT + webhooks) |
-| Storage | DigitalOcean Spaces (S3-compatible) or local FS |
-| State | XState v5 machines (frontend) |
-| UI | Radix UI primitives (shadcn-style) |
-| Observability | Sentry v10 + Pino + Prometheus |
-| Deployment | Docker Compose + Caddy (prod), Traefik (preview) |
+| Component     | Technology                                       |
+| ------------- | ------------------------------------------------ |
+| Backend       | Node.js (plain http module) + PostgreSQL         |
+| Frontend      | React 19 + Vite SPA (no SSR)                     |
+| Worker        | Node.js background processor                     |
+| Database      | Postgres 18 (direct SQL, no ORM)                 |
+| Auth          | Clerk (JWT + webhooks)                           |
+| Storage       | DigitalOcean Spaces (S3-compatible) or local FS  |
+| State         | XState v5 machines (frontend)                    |
+| UI            | Radix UI primitives (shadcn-style)               |
+| Observability | Sentry v10 + Pino + Prometheus                   |
+| Deployment    | Docker Compose + Caddy (prod), Traefik (preview) |
 
 ## Quickstart
 
