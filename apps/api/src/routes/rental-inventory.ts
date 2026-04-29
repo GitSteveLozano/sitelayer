@@ -1373,10 +1373,34 @@ export async function handleRentalInventoryRoutes(
   // ---------------------------------------------------------------------------
   // Rental billing run workflow surface — see docs/DETERMINISTIC_WORKFLOWS.md.
   //
-  // GET  /api/rental-billing-runs/:id          → WorkflowSnapshot
-  // POST /api/rental-billing-runs/:id/events   → { event, stateVersion } applies
-  //                                              the pure reducer in one tx.
+  // GET  /api/rental-billing-runs                 → list (company-scoped),
+  //                                                 optional ?state=...
+  // GET  /api/rental-billing-runs/:id             → WorkflowSnapshot
+  // POST /api/rental-billing-runs/:id/events      → { event, stateVersion }
+  //                                                 applies the reducer in
+  //                                                 one tx.
   // ---------------------------------------------------------------------------
+
+  if (req.method === 'GET' && url.pathname === '/api/rental-billing-runs') {
+    const stateFilter = url.searchParams.get('state')
+    const allowedStates = ['generated', 'approved', 'posting', 'posted', 'failed', 'voided']
+    const params: unknown[] = [ctx.company.id]
+    let where = `company_id = $1 and deleted_at is null`
+    if (stateFilter && allowedStates.includes(stateFilter)) {
+      params.push(stateFilter)
+      where += ` and status = $${params.length}`
+    }
+    const runs = await ctx.pool.query<RentalBillingRunRow>(
+      `select ${RENTAL_BILLING_RUN_COLUMNS}
+       from rental_billing_runs
+       where ${where}
+       order by period_end desc, created_at desc
+       limit 200`,
+      params,
+    )
+    ctx.sendJson(200, { billingRuns: runs.rows })
+    return true
+  }
 
   const billingRunSnapshotMatch = url.pathname.match(/^\/api\/rental-billing-runs\/([^/]+)$/)
   if (req.method === 'GET' && billingRunSnapshotMatch) {
