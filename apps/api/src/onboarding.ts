@@ -60,6 +60,20 @@ export async function seedCompanyDefaults(
     [companyId],
   )
 
+  // Seed a default yard location so the inventory movement UI has something
+  // to deliver from / return to out of the box. The unique partial index
+  // inventory_locations_one_default_idx enforces "one default per company"
+  // so this is safe to re-run.
+  await client.query(
+    `insert into inventory_locations (company_id, name, location_type, is_default)
+     select $1, 'Yard', 'yard', true
+     where not exists (
+       select 1 from inventory_locations
+       where company_id = $1 and is_default = true and deleted_at is null
+     )`,
+    [companyId],
+  )
+
   if (options.includeSampleCustomers) {
     await client.query(
       `insert into customers (company_id, name, source)

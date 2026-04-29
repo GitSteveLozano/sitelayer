@@ -938,10 +938,67 @@ do update set
         })
       }
 
+      // Pull TimeActivity + Bill from QBO. We log counts + a sync_events
+      // breadcrumb but do NOT auto-write to labor_entries / material_bills
+      // — those mappings need explicit business rules (which TimeActivity
+      // employee maps to which sitelayer worker, which Bill goes to which
+      // project) that the office hasn't formalized yet. The pull is
+      // useful in itself: it surfaces counts so the office knows what's
+      // sitting in QBO and can decide how to ingest later.
+      let pulledTimeActivities = 0
+      try {
+        const timeResponse = await qboGet<{ QueryResponse?: { TimeActivity?: unknown[] } }>(
+          baseUrl,
+          `/query?query=${encodeURIComponent('SELECT * FROM TimeActivity')}`,
+          realmId,
+          accessToken,
+        )
+        const rows = timeResponse.QueryResponse?.TimeActivity ?? []
+        pulledTimeActivities = rows.length
+        if (rows.length > 0) {
+          await recordSyncEvent(
+            company.id,
+            'qbo_time_activity',
+            'pull',
+            { action: 'pull', count: rows.length, source: 'qbo' },
+            connection.id,
+          )
+        }
+      } catch (e) {
+        logger.error({ err: e, scope: 'qbo_time_activities' }, 'Failed to pull time activities from QBO')
+        Sentry.captureException(e, { tags: { scope: 'qbo_time_activities' } })
+      }
+
+      let pulledBills = 0
+      try {
+        const billResponse = await qboGet<{ QueryResponse?: { Bill?: unknown[] } }>(
+          baseUrl,
+          `/query?query=${encodeURIComponent('SELECT * FROM Bill')}`,
+          realmId,
+          accessToken,
+        )
+        const rows = billResponse.QueryResponse?.Bill ?? []
+        pulledBills = rows.length
+        if (rows.length > 0) {
+          await recordSyncEvent(
+            company.id,
+            'qbo_bill',
+            'pull',
+            { action: 'pull', count: rows.length, source: 'qbo' },
+            connection.id,
+          )
+        }
+      } catch (e) {
+        logger.error({ err: e, scope: 'qbo_bills' }, 'Failed to pull bills from QBO')
+        Sentry.captureException(e, { tags: { scope: 'qbo_bills' } })
+      }
+
       const qboSnapshot = {
         syncedCustomers: syncedCustomers.length,
         syncedItems: syncedItems.length,
         syncedDivisions: syncedDivisions.length,
+        pulledTimeActivities,
+        pulledBills,
       }
 
       const refreshed = await withMutationTx(async (client) => {

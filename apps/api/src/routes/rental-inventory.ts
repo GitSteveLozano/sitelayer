@@ -685,6 +685,128 @@ export async function handleRentalInventoryRoutes(
     return true
   }
 
+  // GET /api/inventory/items/availability — per-item rollups derived from
+  // active job_rental_lines (the lines that haven't been returned). Returns
+  // { availability: [{ inventory_item_id, on_rent_quantity, on_rent_lines,
+  //   on_rent_projects }] } so the catalog UI can show "X on rent" without
+  // round-tripping per item. We don't surface a synthetic "total stock"
+  // because there's no purchases table — operators get the on-rent signal
+  // and infer their own yard count.
+  if (req.method === 'GET' && url.pathname === '/api/inventory/items/availability') {
+    const result = await ctx.pool.query<{
+      inventory_item_id: string
+      on_rent_quantity: string
+      on_rent_lines: number
+      on_rent_projects: number
+    }>(
+      `
+      select
+        l.inventory_item_id,
+        coalesce(sum(l.quantity), 0)::numeric(12,2)::text as on_rent_quantity,
+        count(*)::int as on_rent_lines,
+        count(distinct c.project_id)::int as on_rent_projects
+      from job_rental_lines l
+      join job_rental_contracts c
+        on c.company_id = l.company_id and c.id = l.contract_id and c.deleted_at is null
+      where l.company_id = $1
+        and l.deleted_at is null
+        and l.off_rent_date is null
+        and l.status = 'active'
+      group by l.inventory_item_id
+      `,
+      [ctx.company.id],
+    )
+    ctx.sendJson(200, { availability: result.rows })
+    return true
+  }
+
+  // POST /api/inventory/items/import — bulk upsert by code. Accepts up to
+  // INVENTORY_IMPORT_LIMIT rows in one request; each row is upserted on
+  // (company_id, code). Used by the CSV import dialog in the inventory
+  // catalog UI. Returns counts so the UI can summarize the run.
+  if (req.method === 'POST' && url.pathname === '/api/inventory/items/import') {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const body = await ctx.readBody()
+    const items = Array.isArray(body.items) ? (body.items as Array<Record<string, unknown>>) : null
+    if (!items) {
+      ctx.sendJson(400, { error: 'items must be an array' })
+      return true
+    }
+    const INVENTORY_IMPORT_LIMIT = 1000
+    if (items.length === 0) {
+      ctx.sendJson(400, { error: 'items must not be empty' })
+      return true
+    }
+    if (items.length > INVENTORY_IMPORT_LIMIT) {
+      ctx.sendJson(400, { error: `items length must be <= ${INVENTORY_IMPORT_LIMIT}` })
+      return true
+    }
+    const result = await withMutationTx(async (client: PoolClient) => {
+      let inserted = 0
+      let updated = 0
+      const errors: Array<{ index: number; code: string | null; error: string }> = []
+      for (let i = 0; i < items.length; i += 1) {
+        const row = items[i]!
+        const code = String(row.code ?? '').trim()
+        const description = String(row.description ?? '').trim()
+        if (!code || !description) {
+          errors.push({ index: i, code: code || null, error: 'code and description are required' })
+          continue
+        }
+        const defaultRentalRate = parseNonNegativeNumber(row.default_rental_rate, 0)
+        const replacementValue =
+          row.replacement_value === undefined || row.replacement_value === null || row.replacement_value === ''
+            ? null
+            : parseNonNegativeNumber(row.replacement_value, 0)
+        if (!Number.isFinite(defaultRentalRate) || (replacementValue !== null && !Number.isFinite(replacementValue))) {
+          errors.push({ index: i, code, error: 'rates must be non-negative numbers' })
+          continue
+        }
+        const upsert = await client.query<{ id: string; xmax: string }>(
+          `
+          insert into inventory_items (
+            company_id, code, description, category, unit, default_rental_rate,
+            replacement_value, tracking_mode, active, notes
+          )
+          values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9, true), $10)
+          on conflict (company_id, code) do update set
+            description = excluded.description,
+            category = excluded.category,
+            unit = excluded.unit,
+            default_rental_rate = excluded.default_rental_rate,
+            replacement_value = excluded.replacement_value,
+            tracking_mode = excluded.tracking_mode,
+            notes = excluded.notes,
+            active = excluded.active,
+            deleted_at = null,
+            version = inventory_items.version + 1,
+            updated_at = now()
+          returning id, xmax::text
+          `,
+          [
+            ctx.company.id,
+            code,
+            description,
+            optionalString(row.category) ?? 'scaffold',
+            optionalString(row.unit) ?? 'ea',
+            defaultRentalRate,
+            replacementValue,
+            normalizeEnum(row.tracking_mode, TRACKING_MODES, 'quantity'),
+            row.active ?? true,
+            optionalString(row.notes),
+          ],
+        )
+        const upserted = upsert.rows[0]!
+        // xmax='0' on a fresh insert; non-zero on UPDATE conflict path.
+        if (upserted.xmax === '0') inserted += 1
+        else updated += 1
+      }
+      return { inserted, updated, errors }
+    })
+    ctx.sendJson(200, { ...result, total: items.length })
+    return true
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/inventory/locations') {
     const result = await ctx.pool.query<InventoryLocationRow>(
       `
@@ -746,23 +868,58 @@ export async function handleRentalInventoryRoutes(
 
   if (req.method === 'GET' && url.pathname === '/api/inventory/movements') {
     const values: unknown[] = [ctx.company.id]
-    const clauses = ['company_id = $1']
+    const clauses = ['m.company_id = $1']
     const itemId = url.searchParams.get('item_id')
     const projectId = url.searchParams.get('project_id')
+    const movementType = url.searchParams.get('type')
     if (itemId) {
       values.push(itemId)
-      clauses.push(`inventory_item_id = $${values.length}`)
+      clauses.push(`m.inventory_item_id = $${values.length}`)
     }
     if (projectId) {
       values.push(projectId)
-      clauses.push(`project_id = $${values.length}`)
+      clauses.push(`m.project_id = $${values.length}`)
     }
-    const result = await ctx.pool.query<InventoryMovementRow>(
+    if (movementType && MOVEMENT_TYPES.has(movementType)) {
+      values.push(movementType)
+      clauses.push(`m.movement_type = $${values.length}`)
+    }
+    const result = await ctx.pool.query<
+      InventoryMovementRow & {
+        item_code: string | null
+        item_description: string | null
+        from_location_name: string | null
+        to_location_name: string | null
+        project_name: string | null
+      }
+    >(
       `
-      select ${INVENTORY_MOVEMENT_COLUMNS}
-      from inventory_movements
+      select
+        m.id,
+        m.company_id,
+        m.inventory_item_id,
+        m.from_location_id,
+        m.to_location_id,
+        m.project_id,
+        m.movement_type,
+        m.quantity,
+        to_char(m.occurred_on, 'YYYY-MM-DD') as occurred_on,
+        m.ticket_number,
+        m.notes,
+        m.version,
+        m.created_at,
+        i.code as item_code,
+        i.description as item_description,
+        fl.name as from_location_name,
+        tl.name as to_location_name,
+        p.name as project_name
+      from inventory_movements m
+      left join inventory_items i on i.company_id = m.company_id and i.id = m.inventory_item_id
+      left join inventory_locations fl on fl.company_id = m.company_id and fl.id = m.from_location_id
+      left join inventory_locations tl on tl.company_id = m.company_id and tl.id = m.to_location_id
+      left join projects p on p.company_id = m.company_id and p.id = m.project_id
       where ${clauses.join(' and ')}
-      order by occurred_on desc, created_at desc
+      order by m.occurred_on desc, m.created_at desc
       limit 500
       `,
       values,

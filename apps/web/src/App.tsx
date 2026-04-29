@@ -37,8 +37,12 @@ const loadConfirmView = () => import('./views/confirm.js')
 const loadBillingReviewView = () => import('./views/billing-review.js')
 const loadBillingRunsView = () => import('./views/billing-runs.js')
 const loadEstimatesView = () => import('./views/estimates.js')
+const loadInventoryView = () => import('./views/inventory.js')
+const loadMovementsView = () => import('./views/movements.js')
+const loadRentalContractsView = () => import('./views/rental-contracts.js')
 const loadIntegrationsView = () => import('./views/integrations.js')
 const loadOnboardingView = () => import('./views/onboarding.js')
+const loadProjectDetailView = () => import('./views/project-detail.js')
 const loadProjectsView = () => import('./views/projects.js')
 const loadRentalsView = () => import('./views/rentals.js')
 const loadScheduleView = () => import('./views/schedule.js')
@@ -53,10 +57,18 @@ const BillingReviewView = lazy(() =>
 )
 const BillingRunsView = lazy(() => loadBillingRunsView().then(({ BillingRunsView }) => ({ default: BillingRunsView })))
 const EstimatesView = lazy(() => loadEstimatesView().then(({ EstimatesView }) => ({ default: EstimatesView })))
+const InventoryView = lazy(() => loadInventoryView().then(({ InventoryView }) => ({ default: InventoryView })))
+const MovementsView = lazy(() => loadMovementsView().then(({ MovementsView }) => ({ default: MovementsView })))
+const RentalContractsView = lazy(() =>
+  loadRentalContractsView().then(({ RentalContractsView }) => ({ default: RentalContractsView })),
+)
 const IntegrationsView = lazy(() =>
   loadIntegrationsView().then(({ IntegrationsView }) => ({ default: IntegrationsView })),
 )
 const OnboardingView = lazy(() => loadOnboardingView().then(({ OnboardingView }) => ({ default: OnboardingView })))
+const ProjectDetailView = lazy(() =>
+  loadProjectDetailView().then(({ ProjectDetailView }) => ({ default: ProjectDetailView })),
+)
 const ProjectsView = lazy(() => loadProjectsView().then(({ ProjectsView }) => ({ default: ProjectsView })))
 const RentalsView = lazy(() => loadRentalsView().then(({ RentalsView }) => ({ default: RentalsView })))
 const ScheduleView = lazy(() => loadScheduleView().then(({ ScheduleView }) => ({ default: ScheduleView })))
@@ -70,9 +82,13 @@ const ROUTE_PRELOADS: Record<string, () => Promise<unknown>> = {
   '/billing-review': loadBillingReviewView,
   '/billing-runs': loadBillingRunsView,
   '/estimates': loadEstimatesView,
+  '/inventory': loadInventoryView,
+  '/movements': loadMovementsView,
+  '/rental-contracts': loadRentalContractsView,
   '/integrations': loadIntegrationsView,
   '/onboarding': loadOnboardingView,
   '/projects': loadProjectsView,
+  '/project': loadProjectDetailView,
   '/rentals': loadRentalsView,
   '/schedule': loadScheduleView,
   '/takeoffs': loadTakeoffsView,
@@ -408,6 +424,10 @@ function AppShell() {
             }
           />
           <Route
+            path="/projects/:projectId"
+            element={<ProjectDetailView companySlug={companySlug} projects={bootstrap?.projects ?? []} />}
+          />
+          <Route
             path="/takeoffs"
             element={
               <RoutedTakeoffsView
@@ -532,6 +552,15 @@ function AppShell() {
               />
             }
           />
+          <Route path="/inventory" element={<InventoryView companySlug={companySlug} />} />
+          <Route
+            path="/movements"
+            element={<MovementsView companySlug={companySlug} projects={bootstrap?.projects ?? []} />}
+          />
+          <Route
+            path="/rental-contracts/:projectId"
+            element={<RentalContractsView companySlug={companySlug} projects={bootstrap?.projects ?? []} />}
+          />
           <Route path="/billing-runs" element={<BillingRunsView companySlug={companySlug} />} />
           <Route path="/billing-review/:runId" element={<BillingReviewRoute companySlug={companySlug} />} />
           <Route
@@ -653,6 +682,24 @@ function MobileNav({
       {rentalsNavVisible ? (
         <NavLink to="/rentals" onMouseEnter={() => preloadRoute('/rentals')} onFocus={() => preloadRoute('/rentals')}>
           Rentals
+        </NavLink>
+      ) : null}
+      {rentalsNavVisible ? (
+        <NavLink
+          to="/inventory"
+          onMouseEnter={() => preloadRoute('/inventory')}
+          onFocus={() => preloadRoute('/inventory')}
+        >
+          Inventory
+        </NavLink>
+      ) : null}
+      {rentalsNavVisible ? (
+        <NavLink
+          to="/movements"
+          onMouseEnter={() => preloadRoute('/movements')}
+          onFocus={() => preloadRoute('/movements')}
+        >
+          Movements
         </NavLink>
       ) : null}
       {rentalsNavVisible ? (
