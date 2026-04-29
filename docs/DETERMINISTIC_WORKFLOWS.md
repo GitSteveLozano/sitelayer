@@ -1,6 +1,6 @@
 # Deterministic Workflow Design
 
-Last updated: 2026-04-28
+Last updated: 2026-04-29
 
 ## Direction
 
@@ -268,3 +268,98 @@ Add it when at least one production workflow has all of these characteristics:
 - painful recovery if the API/worker process dies mid-flow
 
 The rental billing + QBO invoice flow is likely the first candidate once office approval and QBO posting are implemented.
+
+## Regression-Locking Infrastructure (2026-04-29)
+
+The pieces below let us freeze business behavior for stable customers without freezing the codebase. They ship before the second paying customer.
+
+### Workflow Registry — `packages/workflows/src/registry.ts`
+
+Every reducer self-registers via `registerWorkflow({ name, schemaVersion, initialState, terminalStates, allStates, allEventTypes, reduce, nextEvents, isHumanEvent, sideEffectTypes })`. Cross-cutting tooling (replay harness, event-log writers, golden tests, future Temporal worker) operates against this one surface, not per-reducer imports.
+
+The registry refuses double-registration with a different `schemaVersion`. Bumping `schemaVersion` is the explicit signal that the reducer's transition table has changed.
+
+Currently registered: `rental_billing_run` (v1), `estimate_push` (v1).
+
+### Append-Only Event Log — `workflow_event_log` table
+
+Migration `020_workflow_event_log.sql`. Every transition appends one row in the same tx as the state update:
+
+```text
+(workflow_name, schema_version, entity_id, state_version,
+ event_type, event_payload, snapshot_after, actor_user_id,
+ applied_at, request_id, sentry_trace)
+```
+
+`(entity_id, state_version)` is unique, so duplicate writes for the same transition are rejected at the DB layer rather than at the application layer. `state_version` is the version BEFORE the transition (the version the event was dispatched against).
+
+The rental-billing event handler in `apps/api/src/routes/rental-inventory.ts` calls `recordWorkflowEvent(client, ...)` (`apps/api/src/mutation-tx.ts`) inside `withMutationTx`. Estimate-push will follow the same pattern when its API route lands.
+
+### Replay Harness — `packages/workflows/src/replay.ts`
+
+`applyEventLog(initial, log)` feeds the `event_payload` values back through the registered reducer and asserts:
+
+1. all entries belong to the same `workflow_name`
+2. `schema_version` on every row matches the registered reducer
+3. `state_version` increments by exactly 1 per row, no gaps
+4. reducer output equals the persisted `snapshot_after` (canonicalized JSON compare)
+
+The harness is what turns the event log into a regression net. Test usage: synthesize a log, replay, assert the final snapshot. Production usage: pull a customer's row history out of `workflow_event_log`, replay, compare to live state — bit-for-bit divergence flags a bug.
+
+### Property-Based Tests — `*.property.test.ts` and integrated into per-workflow `*.test.ts`
+
+`fast-check` generators for every state and every event. Invariants asserted:
+
+- `state_version` strictly increments by 1
+- terminal states reject every event
+- reducer output state always within `allStates`
+- reducer is deterministic (same input → same output)
+- `nextEvents(state)` returns only events the reducer accepts from that state
+- approval/review metadata survives later transitions
+
+Catches drift the hand-written tests miss. ~50 lines per workflow.
+
+### Per-State `next_events` Golden Snapshots
+
+Inline `toMatchInlineSnapshot` for the full `nextEvents(state)` map. Drift in UI affordances (which buttons appear) becomes a visible diff in PR review — the PR author has to acknowledge "yes, I meant to remove the Approve button from `generated`".
+
+### Worker-Emitted Events Are Logged Too
+
+`POST_SUCCEEDED` and `POST_FAILED` are dispatched by the worker, not a human, so they never hit `recordWorkflowEvent` in `mutation-tx.ts`. The queue package's `appendWorkflowEvent` handles the worker side: every `applyWorkerEmittedEvent` (rental-billing) and `applyEstimatePushWorkerEvent` (estimate-push) appends one row to `workflow_event_log` in the same tx as the state update. `on conflict (entity_id, state_version) do nothing` makes worker retries safe — duplicate writes for the same transition are silently absorbed by the unique constraint.
+
+### CLI Replay Tool — `scripts/replay-workflow.ts`
+
+Ops-facing companion to the in-process replay harness. Reads `workflow_event_log` for one entity, runs `applyEventLog`, and compares the reducer output to the live row in `rental_billing_runs` or `estimate_pushes`:
+
+```sh
+DATABASE_URL=postgres://... npx tsx scripts/replay-workflow.ts \
+  rental_billing_run 11111111-1111-1111-1111-111111111111
+```
+
+Exit code `2` on divergence — wire this into a periodic cron once we want continuous replay verification.
+
+### Schema-Versioned Reducers (planned)
+
+When changing `transitionRentalBillingWorkflow` for live customers:
+
+1. Bump `RENTAL_BILLING_WORKFLOW_SCHEMA_VERSION` from 1 to 2.
+2. Keep the v1 reducer reachable for replay against existing event-log rows.
+3. Run v2 in shadow against the v1 event log; diff outputs reveal regressions.
+4. New transitions persist with `schema_version = 2`. Replay tooling reads `schema_version` per row and routes to the matching reducer.
+
+The `schema_version` column already exists on `workflow_event_log`; multi-version reducer dispatch is a follow-up for when we actually need to change v1.
+
+## Workflow Inventory
+
+| Workflow | Status | Schema | States | Side effects |
+|---|---|---|---|---|
+| `rental_billing_run` | Live in API + worker, event log enabled in both human and worker paths | v1 | generated, approved, posting, posted, failed, voided | `post_qbo_invoice` |
+| `estimate_push` | Live in API + worker (worker uses stub QBO push until `qbo-estimate-push.ts` ships and `QBO_LIVE_ESTIMATE_PUSH=1` is set) | v1 | drafted, reviewed, approved, posting, posted, failed, voided | `post_qbo_estimate` |
+
+Implicit state machines that are next on the workflow-ization list (today they live as `set status = '...'` in scattered handlers):
+
+- `crew_schedules` — `routes/schedules.ts:97`
+- `projects` closeout — `routes/projects.ts:270`
+- `rentals` — `routes/rentals.ts:32-40` (active / returned / invoiced_pending / closed)
+- `integration_connections` / QBO sync runs — implicit retry state
+- `blueprint_documents` revisions

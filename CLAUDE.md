@@ -14,8 +14,9 @@ This repo has historical planning docs that drift from the current deployment st
 
 1. Live code and checked-in deployment files.
 2. Mesh planning/runtime records for project `sitelayer`.
-3. `DEPLOYMENT.md` and `INFRASTRUCTURE_READY.md`.
-4. Historical docs in `docs/`, `PILOT_SETUP_PLAN.md`, `SERVICES_*`, and older planning notes.
+3. `DEPLOY_RUNBOOK.md` (deploy/migration contract, locked down 2026-04-29 ahead of pilot).
+4. `DEPLOYMENT.md` and `INFRASTRUCTURE_READY.md`.
+5. Historical docs in `docs/`, `PILOT_SETUP_PLAN.md`, `SERVICES_*`, and older planning notes.
 
 When an agent changes architecture, deployment, secrets layout, external services, or infrastructure:
 
