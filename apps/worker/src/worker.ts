@@ -1,10 +1,19 @@
 import { Sentry } from './instrument.js'
 import { loadAppConfig, postgresOptionsForTier, TierConfigError } from '@sitelayer/config'
 import { createLogger } from '@sitelayer/logger'
-import { fetchDueRentals, processQueueWithClient, processRentalInvoice, recordLedger } from '@sitelayer/queue'
+import {
+  fetchDueRentals,
+  processQueueWithClient,
+  processRentalBillingInvoicePush,
+  processRentalInvoice,
+  recordLedger,
+  type RentalBillingInvoicePushFn,
+  type RentalBillingInvoicePushSummary,
+} from '@sitelayer/queue'
 import { Pool, type PoolConfig } from 'pg'
 import { spanForAppliedRow } from './trace.js'
 import { loadEmailConfig, sendEmail } from './email.js'
+import { createQboRentalInvoicePush } from './qbo-invoice-push.js'
 
 const logger = createLogger('worker')
 
@@ -317,6 +326,47 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
   return { processed, sent, failed, shortCircuited }
 }
 
+// Rental billing invoice push fn selection.
+//
+// Stub mode (default): returns a synthetic invoice id so the deterministic
+// plumbing (route → outbox → worker → POST_SUCCEEDED → state=posted) can
+// be exercised end-to-end without QBO. Useful for dev/preview tiers and
+// for fixtures.
+//
+// Live mode (QBO_LIVE_RENTAL_INVOICE=1): builds the real push fn that
+// queries integration_connections + integration_mappings via the same tx
+// client, POSTs /invoice to QBO, and returns the new Invoice.Id. See
+// apps/worker/src/qbo-invoice-push.ts.
+const stubRentalBillingInvoicePush: RentalBillingInvoicePushFn = async ({ runId }) => {
+  return { qbo_invoice_id: `STUB-INV-${runId.slice(0, 8)}-${Date.now()}` }
+}
+
+const liveRentalBillingInvoicePushEnabled = process.env.QBO_LIVE_RENTAL_INVOICE === '1'
+const rentalBillingInvoicePush: RentalBillingInvoicePushFn = liveRentalBillingInvoicePushEnabled
+  ? createQboRentalInvoicePush()
+  : stubRentalBillingInvoicePush
+
+if (liveRentalBillingInvoicePushEnabled) {
+  logger.info('[rental-billing] live QBO invoice push enabled')
+} else {
+  logger.info('[rental-billing] stub QBO invoice push (set QBO_LIVE_RENTAL_INVOICE=1 to go live)')
+}
+
+async function drainRentalBillingInvoicePushes(companyId: string): Promise<RentalBillingInvoicePushSummary> {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const summary = await processRentalBillingInvoicePush(client, companyId, rentalBillingInvoicePush, 5)
+    await client.query('commit')
+    return summary
+  } catch (error) {
+    await client.query('rollback').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 async function heartbeat(): Promise<{ idle: boolean }> {
   const companyId = await getCompanyId()
   if (!companyId) {
@@ -352,6 +402,12 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     return { processed: 0, billed: 0, skipped: 0, amount: 0 }
   })
 
+  const rentalBillingPushSummary = await drainRentalBillingInvoicePushes(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] rental billing invoice push drain failed')
+    Sentry.captureException(error, { tags: { scope: 'rental_billing_invoice_push' } })
+    return { processed: 0, posted: 0, failed: 0, skipped: 0 }
+  })
+
   if (pendingOutbox || pendingSyncEvents) {
     const processed = await processQueue(companyId)
     logger.info(
@@ -368,13 +424,17 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         rentals_billed: rentalSummary.billed,
         rentals_skipped: rentalSummary.skipped,
         rentals_billed_amount: rentalSummary.amount,
+        rental_billing_push_processed: rentalBillingPushSummary.processed,
+        rental_billing_push_posted: rentalBillingPushSummary.posted,
+        rental_billing_push_failed: rentalBillingPushSummary.failed,
+        rental_billing_push_skipped: rentalBillingPushSummary.skipped,
       },
       '[worker] tick',
     )
     return { idle: false }
   }
 
-  if (notifications.processed > 0 || rentalSummary.processed > 0) {
+  if (notifications.processed > 0 || rentalSummary.processed > 0 || rentalBillingPushSummary.processed > 0) {
     logger.info(
       {
         company_slug: activeCompanySlug,
@@ -385,6 +445,10 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         rentals_billed: rentalSummary.billed,
         rentals_skipped: rentalSummary.skipped,
         rentals_billed_amount: rentalSummary.amount,
+        rental_billing_push_processed: rentalBillingPushSummary.processed,
+        rental_billing_push_posted: rentalBillingPushSummary.posted,
+        rental_billing_push_failed: rentalBillingPushSummary.failed,
+        rental_billing_push_skipped: rentalBillingPushSummary.skipped,
       },
       '[worker] background tick',
     )
