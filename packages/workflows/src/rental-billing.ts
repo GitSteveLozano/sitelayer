@@ -1,7 +1,28 @@
 import { z } from 'zod'
 import type { WorkflowNextEvent } from './index.js'
+import { registerWorkflow } from './registry.js'
 
 export type RentalBillingWorkflowState = 'generated' | 'approved' | 'posting' | 'posted' | 'failed' | 'voided'
+
+export const RENTAL_BILLING_WORKFLOW_NAME = 'rental_billing_run'
+export const RENTAL_BILLING_WORKFLOW_SCHEMA_VERSION = 1
+export const RENTAL_BILLING_ALL_STATES: readonly RentalBillingWorkflowState[] = [
+  'generated',
+  'approved',
+  'posting',
+  'posted',
+  'failed',
+  'voided',
+]
+export const RENTAL_BILLING_TERMINAL_STATES: readonly RentalBillingWorkflowState[] = ['posted', 'voided']
+export const RENTAL_BILLING_EVENT_TYPES = [
+  'APPROVE',
+  'POST_REQUESTED',
+  'POST_SUCCEEDED',
+  'POST_FAILED',
+  'RETRY_POST',
+  'VOID',
+] as const
 
 export type RentalBillingWorkflowEvent =
   | { type: 'APPROVE'; approved_at: string; approved_by: string }
@@ -162,6 +183,24 @@ export type RentalBillingEventParseResult =
  * paths can stringify) — Zod's coerce isn't used because we want to
  * reject non-numeric strings explicitly rather than silently coercing.
  */
+export const rentalBillingWorkflow = registerWorkflow<
+  RentalBillingWorkflowState,
+  RentalBillingWorkflowEvent,
+  RentalBillingHumanEventType,
+  RentalBillingWorkflowSnapshot
+>({
+  name: RENTAL_BILLING_WORKFLOW_NAME,
+  schemaVersion: RENTAL_BILLING_WORKFLOW_SCHEMA_VERSION,
+  initialState: 'generated',
+  terminalStates: RENTAL_BILLING_TERMINAL_STATES,
+  allStates: RENTAL_BILLING_ALL_STATES,
+  allEventTypes: RENTAL_BILLING_EVENT_TYPES,
+  reduce: transitionRentalBillingWorkflow,
+  nextEvents: nextRentalBillingEvents,
+  isHumanEvent: isHumanRentalBillingEvent,
+  sideEffectTypes: ['post_qbo_invoice'] as const,
+})
+
 export function parseRentalBillingEventRequest(body: unknown): RentalBillingEventParseResult {
   const normalized: Record<string, unknown> =
     body && typeof body === 'object' && !Array.isArray(body) ? { ...(body as Record<string, unknown>) } : {}
