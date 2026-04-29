@@ -33,6 +33,7 @@ import { handleWorkerRoutes } from './routes/workers.js'
 import { handleBlueprintRoutes } from './routes/blueprints.js'
 import { handleProjectRoutes } from './routes/projects.js'
 import { handleEstimateRoutes } from './routes/estimate.js'
+import { handleEstimatePushRoutes } from './routes/estimate-pushes.js'
 import { assertBlueprintDocumentsBelongToProject, handleTakeoffWriteRoutes } from './routes/takeoff-write.js'
 import { getMemberships, handleCompanyRoutes } from './routes/companies.js'
 import {
@@ -1406,6 +1407,22 @@ const server = http.createServer(async (req, res) => {
                   })
                   await renderEstimatePdf(input, res)
                 },
+              })
+            ) {
+              return
+            }
+
+            // Estimate-push workflow routes — captured estimate snapshots that
+            // walk drafted → reviewed → approved → posting → posted/failed.
+            // See routes/estimate-pushes.ts and packages/workflows/src/estimate-push.ts.
+            if (
+              await handleEstimatePushRoutes(req, url, {
+                pool,
+                company,
+                currentUserId: getCurrentUserId(req),
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
               })
             ) {
               return

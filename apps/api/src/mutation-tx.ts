@@ -277,3 +277,58 @@ export async function recordMutationLedger(executor: LedgerExecutor, args: Ledge
     executor,
   )
 }
+
+/**
+ * Append one row to workflow_event_log. Always called inside the same
+ * tx that mutates the workflow row, so a crash between state update and
+ * ledger insert is impossible. The caller passes the state_version that
+ * the event was dispatched against (i.e. the version BEFORE the
+ * transition); the unique (entity_id, state_version) constraint then
+ * naturally rejects duplicate writes for the same transition.
+ *
+ * Replay tooling reads these rows in state_version order and feeds the
+ * `event_payload` back through the registered reducer; `snapshot_after`
+ * is the assertion target.
+ */
+export async function recordWorkflowEvent(
+  executor: LedgerExecutor,
+  args: {
+    companyId: string
+    workflowName: string
+    schemaVersion: number
+    entityType: string
+    entityId: string
+    stateVersion: number
+    eventType: string
+    eventPayload: Record<string, unknown>
+    snapshotAfter: Record<string, unknown>
+    actorUserId?: string | null
+  },
+): Promise<void> {
+  const { sentryTrace } = currentTraceHeaders()
+  const requestId = getRequestContext()?.requestId ?? null
+  await executor.query(
+    `
+    insert into workflow_event_log (
+      company_id, workflow_name, schema_version, entity_type, entity_id,
+      state_version, event_type, event_payload, snapshot_after,
+      actor_user_id, request_id, sentry_trace
+    )
+    values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12)
+    `,
+    [
+      args.companyId,
+      args.workflowName,
+      args.schemaVersion,
+      args.entityType,
+      args.entityId,
+      args.stateVersion,
+      args.eventType,
+      JSON.stringify(args.eventPayload),
+      JSON.stringify(args.snapshotAfter),
+      args.actorUserId ?? null,
+      requestId,
+      sentryTrace,
+    ],
+  )
+}

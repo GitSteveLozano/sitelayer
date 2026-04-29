@@ -184,7 +184,7 @@ describe('queue processing', () => {
     expect(client.calls[0]?.values).toBeDefined()
     // Third bound param is the dedicated-handler exclusion list.
     const handlerList = client.calls[0]!.values![2]
-    expect(handlerList).toEqual(['post_qbo_invoice'])
+    expect(handlerList).toEqual(['post_qbo_invoice', 'post_qbo_estimate'])
   })
 })
 
@@ -247,9 +247,11 @@ describe('processRentalBillingInvoicePush', () => {
         ],
         rowCount: 1,
       },
-      // 5. insert sync_event
+      // 5. insert workflow_event_log (POST_SUCCEEDED)
       { rows: [], rowCount: 1 },
-      // 6. update mutation_outbox applied
+      // 6. insert sync_event
+      { rows: [], rowCount: 1 },
+      // 7. update mutation_outbox applied
       { rows: [], rowCount: 1 },
     ]
   }
@@ -268,8 +270,9 @@ describe('processRentalBillingInvoicePush', () => {
     const sql = sqlCalls(client)
     expect(sql[3]).toMatch(/update rental_billing_runs/)
     expect(sql[3]).toMatch(/'posted'/)
-    expect(sql[5]).toMatch(/update mutation_outbox/)
-    expect(sql[5]).toMatch(/applied/)
+    expect(sql[4]).toMatch(/insert into workflow_event_log/i)
+    expect(sql[6]).toMatch(/update mutation_outbox/)
+    expect(sql[6]).toMatch(/applied/)
   })
 
   it('idempotent replay: existing qbo_invoice_id skips the push function', async () => {
@@ -323,9 +326,11 @@ describe('processRentalBillingInvoicePush', () => {
         ],
         rowCount: 1,
       },
-      // 5. insert sync_event
+      // 5. insert workflow_event_log (POST_SUCCEEDED)
       { rows: [], rowCount: 1 },
-      // 6. update mutation_outbox applied
+      // 6. insert sync_event
+      { rows: [], rowCount: 1 },
+      // 7. update mutation_outbox applied
       { rows: [], rowCount: 1 },
     ])
     let pushed = 0
@@ -391,9 +396,11 @@ describe('processRentalBillingInvoicePush', () => {
         ],
         rowCount: 1,
       },
-      // 5. insert sync_event
+      // 5. insert workflow_event_log (POST_FAILED)
       { rows: [], rowCount: 1 },
-      // 6. update mutation_outbox failed
+      // 6. insert sync_event
+      { rows: [], rowCount: 1 },
+      // 7. update mutation_outbox failed
       { rows: [], rowCount: 1 },
     ])
     const push: RentalBillingInvoicePushFn = async () => {
@@ -404,7 +411,8 @@ describe('processRentalBillingInvoicePush', () => {
     expect(result.posted).toBe(0)
     const sql = sqlCalls(client)
     expect(sql[3]).toMatch(/'failed'/)
-    expect(sql[5]).toMatch(/update mutation_outbox/)
-    expect(sql[5]).toMatch(/'failed'/)
+    expect(sql[4]).toMatch(/insert into workflow_event_log/i)
+    expect(sql[6]).toMatch(/update mutation_outbox/)
+    expect(sql[6]).toMatch(/'failed'/)
   })
 })

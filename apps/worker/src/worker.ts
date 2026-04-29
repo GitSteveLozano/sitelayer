@@ -3,10 +3,13 @@ import { loadAppConfig, postgresOptionsForTier, TierConfigError } from '@sitelay
 import { createLogger } from '@sitelayer/logger'
 import {
   fetchDueRentals,
+  processEstimatePush,
   processQueueWithClient,
   processRentalBillingInvoicePush,
   processRentalInvoice,
   recordLedger,
+  type EstimatePushFn,
+  type EstimatePushSummary,
   type RentalBillingInvoicePushFn,
   type RentalBillingInvoicePushSummary,
 } from '@sitelayer/queue'
@@ -367,6 +370,37 @@ async function drainRentalBillingInvoicePushes(companyId: string): Promise<Renta
   }
 }
 
+const stubEstimatePush: EstimatePushFn = async ({ pushId }) => {
+  return { qbo_estimate_id: `STUB-EST-${pushId.slice(0, 8)}-${Date.now()}` }
+}
+
+const liveEstimatePushEnabled = process.env.QBO_LIVE_ESTIMATE_PUSH === '1'
+const estimatePush: EstimatePushFn = liveEstimatePushEnabled ? stubEstimatePush : stubEstimatePush
+// NOTE: live estimate push impl lives in qbo-estimate-push.ts when added.
+// Until then both branches use the stub; the env flag is plumbed so
+// flipping to live is a one-line wire-up.
+
+if (liveEstimatePushEnabled) {
+  logger.info('[estimate-push] live QBO estimate push flag set (still stubbed until qbo-estimate-push.ts ships)')
+} else {
+  logger.info('[estimate-push] stub QBO estimate push (set QBO_LIVE_ESTIMATE_PUSH=1 once live impl ships)')
+}
+
+async function drainEstimatePushes(companyId: string): Promise<EstimatePushSummary> {
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const summary = await processEstimatePush(client, companyId, estimatePush, 5)
+    await client.query('commit')
+    return summary
+  } catch (error) {
+    await client.query('rollback').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 async function heartbeat(): Promise<{ idle: boolean }> {
   const companyId = await getCompanyId()
   if (!companyId) {
@@ -408,6 +442,12 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     return { processed: 0, posted: 0, failed: 0, skipped: 0 }
   })
 
+  const estimatePushSummary = await drainEstimatePushes(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] estimate push drain failed')
+    Sentry.captureException(error, { tags: { scope: 'estimate_push' } })
+    return { processed: 0, posted: 0, failed: 0, skipped: 0 }
+  })
+
   if (pendingOutbox || pendingSyncEvents) {
     const processed = await processQueue(companyId)
     logger.info(
@@ -428,13 +468,22 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         rental_billing_push_posted: rentalBillingPushSummary.posted,
         rental_billing_push_failed: rentalBillingPushSummary.failed,
         rental_billing_push_skipped: rentalBillingPushSummary.skipped,
+        estimate_push_processed: estimatePushSummary.processed,
+        estimate_push_posted: estimatePushSummary.posted,
+        estimate_push_failed: estimatePushSummary.failed,
+        estimate_push_skipped: estimatePushSummary.skipped,
       },
       '[worker] tick',
     )
     return { idle: false }
   }
 
-  if (notifications.processed > 0 || rentalSummary.processed > 0 || rentalBillingPushSummary.processed > 0) {
+  if (
+    notifications.processed > 0 ||
+    rentalSummary.processed > 0 ||
+    rentalBillingPushSummary.processed > 0 ||
+    estimatePushSummary.processed > 0
+  ) {
     logger.info(
       {
         company_slug: activeCompanySlug,
@@ -449,6 +498,10 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         rental_billing_push_posted: rentalBillingPushSummary.posted,
         rental_billing_push_failed: rentalBillingPushSummary.failed,
         rental_billing_push_skipped: rentalBillingPushSummary.skipped,
+        estimate_push_processed: estimatePushSummary.processed,
+        estimate_push_posted: estimatePushSummary.posted,
+        estimate_push_failed: estimatePushSummary.failed,
+        estimate_push_skipped: estimatePushSummary.skipped,
       },
       '[worker] background tick',
     )

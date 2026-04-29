@@ -9,6 +9,8 @@ import {
 import {
   nextRentalBillingEvents,
   parseRentalBillingEventRequest,
+  RENTAL_BILLING_WORKFLOW_NAME,
+  RENTAL_BILLING_WORKFLOW_SCHEMA_VERSION,
   transitionRentalBillingWorkflow,
   type RentalBillingHumanEventType,
   type RentalBillingWorkflowEvent,
@@ -17,7 +19,7 @@ import {
   type WorkflowSnapshot,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit } from '../metrics.js'
 import { isValidDateInput, parseExpectedVersion } from '../http-utils.js'
@@ -1706,6 +1708,23 @@ export async function handleRentalInventoryRoutes(
            order by created_at asc`,
           [ctx.company.id, runId],
         )
+        // Append-only workflow event log row in the same tx as the state
+        // update. Replay corpus for regression testing — feeding the
+        // event log back through the reducer must reproduce the persisted
+        // snapshot. Unique (entity_id, state_version) prevents duplicate
+        // writes if a retry replays this transition.
+        await recordWorkflowEvent(client, {
+          companyId: ctx.company.id,
+          workflowName: RENTAL_BILLING_WORKFLOW_NAME,
+          schemaVersion: RENTAL_BILLING_WORKFLOW_SCHEMA_VERSION,
+          entityType: 'rental_billing_run',
+          entityId: updated.id,
+          stateVersion: stateVersion,
+          eventType,
+          eventPayload: reducerEvent as unknown as Record<string, unknown>,
+          snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+          actorUserId: ctx.currentUserId,
+        })
         // Audit/event ledger row keyed on state_version so each transition
         // produces a distinct row (history-friendly).
         await recordMutationLedger(client, {

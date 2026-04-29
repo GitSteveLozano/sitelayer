@@ -1453,6 +1453,110 @@ export async function listRentalBillingRuns(
   return apiGet<{ billingRuns: RentalBillingRunListRow[] }>(`/api/rental-billing-runs${suffix}`, companySlug)
 }
 
+// ---------------------------------------------------------------------------
+// Estimate-push workflow client.
+//
+// Mirrors the rental-billing surface — same WorkflowSnapshot envelope,
+// same { event, state_version } event body. Lives next to the
+// rental-billing helpers because the UI machine treatment is identical.
+// ---------------------------------------------------------------------------
+
+export type EstimatePushWorkflowState = 'drafted' | 'reviewed' | 'approved' | 'posting' | 'posted' | 'failed' | 'voided'
+
+export type EstimatePushHumanEvent = 'REVIEW' | 'APPROVE' | 'POST_REQUESTED' | 'RETRY_POST' | 'VOID'
+
+export type EstimatePushWorkflowNextEvent = {
+  type: EstimatePushHumanEvent
+  label: string
+  disabled_reason?: string
+}
+
+export type EstimatePushLine = {
+  id: string
+  source_estimate_line_id: string | null
+  description: string
+  service_item_code: string | null
+  division_code: string | null
+  quantity: string
+  unit_price: string
+  amount: string
+  taxable: boolean
+  sort_order: number
+}
+
+export type EstimatePushWorkflowSnapshotResponse = {
+  state: EstimatePushWorkflowState
+  state_version: number
+  context: {
+    id: string
+    project_id: string
+    customer_id: string | null
+    subtotal: string
+    qbo_estimate_id: string | null
+    reviewed_at: string | null
+    reviewed_by: string | null
+    approved_at: string | null
+    approved_by: string | null
+    posted_at: string | null
+    failed_at: string | null
+    error: string | null
+    workflow_engine: string
+    workflow_run_id: string | null
+    lines: EstimatePushLine[]
+  }
+  next_events: EstimatePushWorkflowNextEvent[]
+}
+
+export async function createEstimatePush(
+  projectId: string,
+  companySlug: string,
+): Promise<EstimatePushWorkflowSnapshotResponse> {
+  return apiPost<EstimatePushWorkflowSnapshotResponse>(`/api/projects/${projectId}/estimate-pushes`, {}, companySlug)
+}
+
+export async function getEstimatePushSnapshot(
+  pushId: string,
+  companySlug: string,
+): Promise<EstimatePushWorkflowSnapshotResponse> {
+  return apiGet<EstimatePushWorkflowSnapshotResponse>(`/api/estimate-pushes/${pushId}`, companySlug)
+}
+
+export async function dispatchEstimatePushEvent(
+  pushId: string,
+  event: EstimatePushHumanEvent,
+  stateVersion: number,
+  companySlug: string,
+): Promise<EstimatePushWorkflowSnapshotResponse> {
+  return apiPost<EstimatePushWorkflowSnapshotResponse>(
+    `/api/estimate-pushes/${pushId}/events`,
+    { event, state_version: stateVersion },
+    companySlug,
+  )
+}
+
+export type EstimatePushListRow = {
+  id: string
+  project_id: string
+  customer_id: string | null
+  status: EstimatePushWorkflowState
+  state_version: number
+  subtotal: string
+  qbo_estimate_id: string | null
+  posted_at: string | null
+  failed_at: string | null
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function listEstimatePushes(
+  companySlug: string,
+  state?: EstimatePushWorkflowState,
+): Promise<{ estimatePushes: EstimatePushListRow[] }> {
+  const suffix = state ? `?state=${state}` : ''
+  return apiGet<{ estimatePushes: EstimatePushListRow[] }>(`/api/estimate-pushes${suffix}`, companySlug)
+}
+
 export async function startQboOAuth(companySlug: string) {
   if (FIXTURES_ENABLED) return
   const path = '/api/integrations/qbo/auth'
