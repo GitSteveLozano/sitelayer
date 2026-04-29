@@ -57,7 +57,22 @@ if [ -f "$target_dir/.env" ] && grep -qE '^PREVIEW_DB_SCHEMA=' "$target_dir/.env
 fi
 
 if [ "${DELETE_PREVIEW_DIR:-1}" = "1" ]; then
-  rm -rf "$target_dir"
+  # Try a normal rm first, but don't trip errexit on perm-denied — docker
+  # creates root-owned files inside node_modules / storage that the runner
+  # user can't remove. Check the directory after rm; if anything is left,
+  # fall through to a docker-as-root cleanup.
+  rm -rf "$target_dir" 2>/dev/null || true
+  if [ -d "$target_dir" ]; then
+    echo "WARNING: normal preview directory removal failed; retrying through Docker as root" >&2
+    if docker image inspect node:20-alpine >/dev/null 2>&1; then
+      cleanup_image="node:20-alpine"
+    else
+      cleanup_image="alpine:3.20"
+    fi
+    docker run --rm -v "$target_dir:/target" "$cleanup_image" \
+      sh -c 'find /target -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +'
+    rmdir "$target_dir" || true
+  fi
 fi
 
 echo "Preview cleaned up: $preview_slug"
