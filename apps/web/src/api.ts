@@ -879,6 +879,109 @@ export async function deleteRental(
   )
 }
 
+// ---------------------------------------------------------------------------
+// Rental billing run workflow client. See docs/DETERMINISTIC_WORKFLOWS.md.
+// The UI consumes the WorkflowSnapshot returned by the API verbatim — it does
+// NOT compute next_events locally or invent its own state vocabulary.
+// ---------------------------------------------------------------------------
+
+export type RentalBillingWorkflowState = 'generated' | 'approved' | 'posting' | 'posted' | 'failed' | 'voided'
+
+export type RentalBillingHumanEvent = 'APPROVE' | 'POST_REQUESTED' | 'RETRY_POST' | 'VOID'
+
+export type RentalBillingWorkflowNextEvent = {
+  type: RentalBillingHumanEvent
+  label: string
+  disabled_reason?: string
+}
+
+export type RentalBillingRunLine = {
+  id: string
+  inventory_item_id: string
+  quantity: string
+  agreed_rate: string
+  rate_unit: string
+  billable_days: number
+  period_start: string
+  period_end: string
+  amount: string
+  taxable: boolean
+  description: string | null
+}
+
+export type RentalBillingWorkflowSnapshotResponse = {
+  state: RentalBillingWorkflowState
+  state_version: number
+  context: {
+    id: string
+    company_id: string
+    contract_id: string
+    project_id: string
+    customer_id: string | null
+    period_start: string
+    period_end: string
+    subtotal: string
+    qbo_invoice_id: string | null
+    approved_at: string | null
+    approved_by: string | null
+    posted_at: string | null
+    failed_at: string | null
+    error: string | null
+    workflow_engine: string
+    workflow_run_id: string | null
+    created_at: string
+    updated_at: string
+    lines: RentalBillingRunLine[]
+  }
+  next_events: RentalBillingWorkflowNextEvent[]
+}
+
+export async function getRentalBillingRunSnapshot(
+  runId: string,
+  companySlug: string,
+): Promise<RentalBillingWorkflowSnapshotResponse> {
+  return apiGet<RentalBillingWorkflowSnapshotResponse>(`/api/rental-billing-runs/${runId}`, companySlug)
+}
+
+export async function dispatchRentalBillingEvent(
+  runId: string,
+  event: RentalBillingHumanEvent,
+  stateVersion: number,
+  companySlug: string,
+): Promise<RentalBillingWorkflowSnapshotResponse> {
+  return apiPost<RentalBillingWorkflowSnapshotResponse>(
+    `/api/rental-billing-runs/${runId}/events`,
+    { event, state_version: stateVersion },
+    companySlug,
+  )
+}
+
+export type RentalBillingRunListRow = {
+  id: string
+  contract_id: string
+  project_id: string
+  customer_id: string | null
+  period_start: string
+  period_end: string
+  status: RentalBillingWorkflowState
+  state_version: number
+  subtotal: string
+  qbo_invoice_id: string | null
+  posted_at: string | null
+  failed_at: string | null
+  error: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function listRentalBillingRuns(
+  companySlug: string,
+  state?: RentalBillingWorkflowState,
+): Promise<{ billingRuns: RentalBillingRunListRow[] }> {
+  const suffix = state ? `?state=${state}` : ''
+  return apiGet<{ billingRuns: RentalBillingRunListRow[] }>(`/api/rental-billing-runs${suffix}`, companySlug)
+}
+
 export async function startQboOAuth(companySlug: string) {
   if (FIXTURES_ENABLED) return
   const response = await fetch(`${API_URL}/api/integrations/qbo/auth`, {
