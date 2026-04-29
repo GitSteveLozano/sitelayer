@@ -1234,6 +1234,7 @@ const server = http.createServer(async (req, res) => {
               await handleRentalInventoryRoutes(req, url, {
                 pool,
                 company,
+                currentUserId: getCurrentUserId(req),
                 requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
                 readBody: () => readBody(req),
                 sendJson: (status, body) => sendJson(res, status, body, req),

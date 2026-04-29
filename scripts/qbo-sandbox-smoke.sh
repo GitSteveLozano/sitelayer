@@ -79,4 +79,27 @@ if [[ "${errors}" != "0" ]]; then
   echo "${push_body}" | python3 -m json.tool >&2
   exit 3
 fi
+
+# ---------------------------------------------------------------------------
+# Rental billing invoice push smoke (Phase C — DETERMINISTIC_WORKFLOWS.md)
+#
+# This block is a placeholder for the rental billing invoice path. The route
+# enqueues a mutation_outbox row with mutation_type='post_qbo_invoice' on
+# POST_REQUESTED, and the worker drains it and calls the live QBO Invoice
+# REST endpoint. Wire the live integration first (replace the worker stub
+# `stubRentalBillingInvoicePush` with a real qboPost call), then enable this
+# block by setting RENTAL_BILLING_RUN_ID.
+#
+# Pseudocode:
+#   1. Approve the run via POST /api/rental-billing-runs/$RUN_ID/events {APPROVE,sv}
+#   2. POST_REQUESTED via the same route
+#   3. Wait for the worker to drain (poll GET /api/rental-billing-runs/$RUN_ID
+#      until state in ('posted','failed') or timeout)
+#   4. On 'posted', verify context.qbo_invoice_id exists and the matching QBO
+#      Invoice exists via the QBO REST API.
+# ---------------------------------------------------------------------------
+if [[ -n "${RENTAL_BILLING_RUN_ID:-}" ]]; then
+  echo "[qbo-smoke] rental billing invoice push smoke not yet implemented — see comment block." >&2
+fi
+
 echo "OK"

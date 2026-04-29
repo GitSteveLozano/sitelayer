@@ -25,6 +25,8 @@ import {
   initialJobRentalNextBillingDate,
   initialRentalNextInvoiceAt,
   transitionRentalBillingWorkflow,
+  nextRentalBillingEvents,
+  isHumanRentalBillingEvent,
   haversineDistanceMeters,
   isInsideGeofence,
 } from './index.js'
@@ -906,6 +908,46 @@ describe('domain functions', () => {
       expect(() =>
         transitionRentalBillingWorkflow({ state: 'posted', state_version: 4 }, { type: 'POST_REQUESTED' }),
       ).toThrow('not allowed')
+    })
+  })
+
+  describe('nextRentalBillingEvents', () => {
+    it('exposes APPROVE and VOID from generated', () => {
+      expect(
+        nextRentalBillingEvents('generated')
+          .map((e) => e.type)
+          .sort(),
+      ).toEqual(['APPROVE', 'VOID'])
+    })
+    it('exposes POST_REQUESTED and VOID from approved', () => {
+      expect(
+        nextRentalBillingEvents('approved')
+          .map((e) => e.type)
+          .sort(),
+      ).toEqual(['POST_REQUESTED', 'VOID'])
+    })
+    it('exposes RETRY_POST and VOID from failed', () => {
+      expect(
+        nextRentalBillingEvents('failed')
+          .map((e) => e.type)
+          .sort(),
+      ).toEqual(['RETRY_POST', 'VOID'])
+    })
+    it('exposes nothing from posting (worker is acting)', () => {
+      expect(nextRentalBillingEvents('posting')).toEqual([])
+    })
+    it('exposes nothing from posted/voided terminal states', () => {
+      expect(nextRentalBillingEvents('posted')).toEqual([])
+      expect(nextRentalBillingEvents('voided')).toEqual([])
+    })
+    it('isHumanRentalBillingEvent rejects worker-only events', () => {
+      expect(isHumanRentalBillingEvent('APPROVE')).toBe(true)
+      expect(isHumanRentalBillingEvent('POST_REQUESTED')).toBe(true)
+      expect(isHumanRentalBillingEvent('RETRY_POST')).toBe(true)
+      expect(isHumanRentalBillingEvent('VOID')).toBe(true)
+      expect(isHumanRentalBillingEvent('POST_SUCCEEDED')).toBe(false)
+      expect(isHumanRentalBillingEvent('POST_FAILED')).toBe(false)
+      expect(isHumanRentalBillingEvent('garbage')).toBe(false)
     })
   })
 

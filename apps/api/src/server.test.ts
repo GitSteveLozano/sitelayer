@@ -459,4 +459,170 @@ describeIntegration('API Integration Tests', () => {
     expect(punchResult.clockEvent?.project_id).toBeNull()
     expect(punchResult.clockEvent?.inside_geofence).toBe(false)
   })
+
+  // --- Rental billing workflow surface -------------------------------------
+  //
+  // Covers the headless WorkflowSnapshot/event API for rental_billing_runs.
+  // See docs/DETERMINISTIC_WORKFLOWS.md.
+
+  async function seedBillingRun(): Promise<string | null> {
+    if (!dbPool) return null
+    // Resolve company. We need a *fresh* project per seed call because the
+    // job_rental_contracts table has a unique partial index on
+    // (project_id, active) that prevents two active contracts on the same
+    // project — sharing one project across tests would collide.
+    const companyResult = await dbPool.query<{ id: string }>(
+      `select id from companies where slug = 'la-operations' limit 1`,
+    )
+    const companyId = companyResult.rows[0]?.id
+    if (!companyId) return null
+    const projectResult = await dbPool.query<{ id: string }>(
+      `insert into projects
+         (company_id, name, customer_name, division_code, bid_total, labor_rate, status)
+       values ($1, $2, 'BillingRunSeed', 'D1', 100, 50, 'active')
+       returning id`,
+      [companyId, `BillingRunSeed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`],
+    )
+    const projectId = projectResult.rows[0]!.id
+    const contractResult = await dbPool.query<{ id: string }>(
+      `insert into job_rental_contracts
+         (company_id, project_id, billing_cycle_days, billing_mode, billing_start_date, next_billing_date, status)
+       values ($1, $2, 25, 'arrears', current_date, current_date + 25, 'active')
+       returning id`,
+      [companyId, projectId],
+    )
+    const contractId = contractResult.rows[0]!.id
+    const runResult = await dbPool.query<{ id: string }>(
+      `insert into rental_billing_runs
+         (company_id, contract_id, project_id, period_start, period_end, status, state_version, subtotal)
+       values ($1, $2, $3, current_date - 25, current_date, 'generated', 1, 100.00)
+       returning id`,
+      [companyId, contractId, projectId],
+    )
+    return runResult.rows[0]!.id
+  }
+
+  it('GET /api/rental-billing-runs/:id returns WorkflowSnapshot with next_events', async () => {
+    const runId = await seedBillingRun()
+    if (!runId) return
+    const result = await apiCall<{
+      status: number
+      state?: string
+      state_version?: number
+      next_events?: Array<{ type: string }>
+      context?: { id: string; subtotal: string; lines: unknown[] }
+    }>('GET', `/api/rental-billing-runs/${runId}`)
+    expect(result.status).toBe(200)
+    expect(result.state).toBe('generated')
+    expect(result.state_version).toBe(1)
+    expect(result.context?.id).toBe(runId)
+    const eventTypes = (result.next_events ?? []).map((e) => e.type).sort()
+    expect(eventTypes).toEqual(['APPROVE', 'VOID'])
+  })
+
+  it('POST /api/rental-billing-runs/:id/events APPROVE transitions to approved', async () => {
+    const runId = await seedBillingRun()
+    if (!runId) return
+    const approve = await apiCall<{
+      status: number
+      state?: string
+      state_version?: number
+      next_events?: Array<{ type: string }>
+      context?: { approved_by: string | null }
+    }>('POST', `/api/rental-billing-runs/${runId}/events`, {
+      event: 'APPROVE',
+      state_version: 1,
+    })
+    expect(approve.status).toBe(200)
+    expect(approve.state).toBe('approved')
+    expect(approve.state_version).toBe(2)
+    expect(approve.context?.approved_by).toBe('demo-user')
+    const eventTypes = (approve.next_events ?? []).map((e) => e.type).sort()
+    expect(eventTypes).toEqual(['POST_REQUESTED', 'VOID'])
+  })
+
+  it('POST /api/rental-billing-runs/:id/events rejects stale state_version with 409', async () => {
+    const runId = await seedBillingRun()
+    if (!runId) return
+    // First APPROVE bumps to state_version=2.
+    await apiCall('POST', `/api/rental-billing-runs/${runId}/events`, {
+      event: 'APPROVE',
+      state_version: 1,
+    })
+    // Replay APPROVE at state_version=1 should 409.
+    const stale = await apiCall<{
+      status: number
+      error?: string
+      snapshot?: { state: string; state_version: number }
+    }>('POST', `/api/rental-billing-runs/${runId}/events`, {
+      event: 'APPROVE',
+      state_version: 1,
+    })
+    expect(stale.status).toBe(409)
+    expect(stale.error).toMatch(/state_version/)
+    expect(stale.snapshot?.state).toBe('approved')
+    expect(stale.snapshot?.state_version).toBe(2)
+  })
+
+  it('POST /api/rental-billing-runs/:id/events rejects illegal transitions', async () => {
+    const runId = await seedBillingRun()
+    if (!runId) return
+    // RETRY_POST is only valid from 'failed', not 'generated'.
+    const result = await apiCall<{ status: number; error?: string }>(
+      'POST',
+      `/api/rental-billing-runs/${runId}/events`,
+      { event: 'RETRY_POST', state_version: 1 },
+    )
+    expect(result.status).toBe(409)
+    expect(result.error).toMatch(/not allowed/)
+  })
+
+  it('POST /api/rental-billing-runs/:id/events rejects unknown event types', async () => {
+    const runId = await seedBillingRun()
+    if (!runId) return
+    const result = await apiCall<{ status: number; error?: string }>(
+      'POST',
+      `/api/rental-billing-runs/${runId}/events`,
+      { event: 'POST_SUCCEEDED', state_version: 1 },
+    )
+    // POST_SUCCEEDED is a worker-only event; the human endpoint must reject it.
+    expect(result.status).toBe(400)
+    expect(result.error).toMatch(/APPROVE/)
+  })
+
+  it('POST_REQUESTED enqueues a stable-keyed mutation_outbox row for the worker', async () => {
+    if (!dbPool) return
+    const runId = await seedBillingRun()
+    if (!runId) return
+    // APPROVE first.
+    const approve = await apiCall<{ status: number; state_version?: number }>(
+      'POST',
+      `/api/rental-billing-runs/${runId}/events`,
+      { event: 'APPROVE', state_version: 1 },
+    )
+    expect(approve.status).toBe(200)
+    expect(approve.state_version).toBe(2)
+    // POST_REQUESTED.
+    const post = await apiCall<{ status: number; state?: string }>('POST', `/api/rental-billing-runs/${runId}/events`, {
+      event: 'POST_REQUESTED',
+      state_version: 2,
+    })
+    expect(post.status).toBe(200)
+    expect(post.state).toBe('posting')
+    // Outbox row must exist with the stable per-run key and post_qbo_invoice
+    // mutation_type, regardless of state_version. RETRY_POST replays should
+    // upsert this same row, not duplicate it.
+    const outboxRows = await dbPool.query<{
+      mutation_type: string
+      idempotency_key: string
+      status: string
+    }>(
+      `select mutation_type, idempotency_key, status from mutation_outbox
+       where entity_type = 'rental_billing_run' and entity_id = $1 and mutation_type = 'post_qbo_invoice'`,
+      [runId],
+    )
+    expect(outboxRows.rowCount).toBe(1)
+    expect(outboxRows.rows[0]?.idempotency_key).toBe(`rental_billing_run:post:${runId}`)
+    expect(['pending', 'processing', 'applied']).toContain(outboxRows.rows[0]?.status ?? '')
+  })
 })
