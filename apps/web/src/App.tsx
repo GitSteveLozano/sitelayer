@@ -2,6 +2,25 @@ import { lazy, Suspense, useCallback, useEffect, useState, type ComponentProps }
 import { BrowserRouter, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import { SignedIn, SignedOut, SignIn, SignUp, UserButton, useAuth, useUser } from '@clerk/clerk-react'
 import {
+  ArrowLeftRight,
+  Boxes,
+  BriefcaseBusiness,
+  Calculator,
+  CalendarCheck,
+  CalendarDays,
+  CheckCircle2,
+  Clock3,
+  FileText,
+  Menu,
+  Package,
+  PlugZap,
+  ReceiptText,
+  Ruler,
+  ShieldCheck,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react'
+import {
   DEFAULT_COMPANY_SLUG,
   FIXTURES_ENABLED,
   getStoredCompanySlug,
@@ -444,18 +463,26 @@ function AppShell() {
         qboConnection={qboConnection}
         features={features}
       />
-      <div
-        className="appHeader"
-        style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 12, padding: '8px 16px' }}
-      >
-        <CompanySwitcher
-          companies={companies}
-          activeSlug={companySlug}
-          onSelect={(slug) => setCompanySlug(slug)}
-          onCreated={() => void refresh()}
-        />
-        <SupportReportButton companySlug={companySlug} />
-        {FIXTURES_ENABLED ? null : <UserButton afterSignOutUrl="/sign-in" />}
+      <div className="topChrome">
+        <div className="brandCluster" aria-label="Sitelayer">
+          <span className="brandMark" aria-hidden="true">
+            <span />
+          </span>
+          <div className="brandText">
+            <strong>Sitelayer</strong>
+            <span>Field operations</span>
+          </div>
+        </div>
+        <div className="appHeader">
+          <CompanySwitcher
+            companies={companies}
+            activeSlug={companySlug}
+            onSelect={(slug) => setCompanySlug(slug)}
+            onCreated={() => void refresh()}
+          />
+          <SupportReportButton companySlug={companySlug} />
+          {FIXTURES_ENABLED ? null : <UserButton afterSignOutUrl="/sign-in" />}
+        </div>
       </div>
       <MobileNav
         selectedProjectId={selectedProjectId}
@@ -718,6 +745,42 @@ function MobileNav({
     (devSurfaceEnabled ? 1 : 0)
   const showHamburger = isNarrow && linkCount > 4
   const collapsedAttr = showHamburger && collapsed ? 'true' : 'false'
+  const entries: Array<{
+    to: string
+    label: string
+    icon: LucideIcon
+    preload?: string
+    testId?: string
+    prefix?: string
+    visible?: boolean
+  }> = [
+    {
+      to: '/confirm',
+      label: 'Confirm Day',
+      icon: confirmDoneToday ? CheckCircle2 : CalendarCheck,
+      preload: '/confirm',
+      testId: 'nav-confirm',
+      prefix: confirmDoneToday ? '✓ ' : '',
+    },
+    { to: '/clock', label: 'Clock', icon: Clock3, preload: '/clock', testId: 'nav-clock' },
+    { to: '/schedule', label: 'Schedule', icon: CalendarDays, preload: '/schedule', testId: 'nav-schedule' },
+    { to: '/projects', label: 'Projects', icon: BriefcaseBusiness, preload: '/projects' },
+    {
+      to: selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs',
+      label: 'Takeoffs',
+      icon: Ruler,
+      preload: '/takeoffs',
+    },
+    { to: '/estimates', label: 'Estimates', icon: FileText, preload: '/estimates' },
+    { to: '/rentals', label: 'Rentals', icon: Package, preload: '/rentals', visible: rentalsNavVisible },
+    { to: '/inventory', label: 'Inventory', icon: Boxes, preload: '/inventory', visible: rentalsNavVisible },
+    { to: '/movements', label: 'Movements', icon: ArrowLeftRight, preload: '/movements', visible: rentalsNavVisible },
+    { to: '/billing-runs', label: 'Billing', icon: ReceiptText, preload: '/billing-runs', visible: rentalsNavVisible },
+    { to: '/integrations', label: 'Integrations', icon: PlugZap, preload: '/integrations' },
+    { to: '/bonus-sim', label: 'Bonus Sim', icon: Calculator, preload: '/bonus-sim', visible: bonusSimNavVisible },
+    { to: '/audit', label: 'Audit', icon: ShieldCheck, preload: '/audit', visible: auditNavVisible },
+    { to: '/dev/scratch', label: 'Dev', icon: Wrench, visible: devSurfaceEnabled },
+  ]
 
   return (
     <nav className="appNav" aria-label="Primary" data-collapsed={collapsedAttr}>
@@ -732,105 +795,29 @@ function MobileNav({
           data-testid="mobile-nav-toggle"
           onClick={() => setCollapsed((current) => !current)}
         >
-          ☰
+          <Menu aria-hidden="true" />
         </Button>
       ) : null}
-      <NavLink
-        to="/confirm"
-        data-testid="nav-confirm"
-        onMouseEnter={() => preloadRoute('/confirm')}
-        onFocus={() => preloadRoute('/confirm')}
-      >
-        {confirmDoneToday ? '✓ ' : ''}
-        Confirm Day
-      </NavLink>
-      <NavLink
-        to="/clock"
-        data-testid="nav-clock"
-        onMouseEnter={() => preloadRoute('/clock')}
-        onFocus={() => preloadRoute('/clock')}
-      >
-        Clock
-      </NavLink>
-      <NavLink
-        to="/schedule"
-        data-testid="nav-schedule"
-        onMouseEnter={() => preloadRoute('/schedule')}
-        onFocus={() => preloadRoute('/schedule')}
-      >
-        Schedule
-      </NavLink>
-      <NavLink to="/projects" onMouseEnter={() => preloadRoute('/projects')} onFocus={() => preloadRoute('/projects')}>
-        Projects
-      </NavLink>
-      <NavLink
-        to={selectedProjectId ? `/takeoffs/${selectedProjectId}` : '/takeoffs'}
-        onMouseEnter={() => preloadRoute('/takeoffs')}
-        onFocus={() => preloadRoute('/takeoffs')}
-      >
-        Takeoffs
-      </NavLink>
-      <NavLink
-        to="/estimates"
-        onMouseEnter={() => preloadRoute('/estimates')}
-        onFocus={() => preloadRoute('/estimates')}
-      >
-        Estimates
-      </NavLink>
-      {rentalsNavVisible ? (
-        <NavLink to="/rentals" onMouseEnter={() => preloadRoute('/rentals')} onFocus={() => preloadRoute('/rentals')}>
-          Rentals
-        </NavLink>
-      ) : null}
-      {rentalsNavVisible ? (
-        <NavLink
-          to="/inventory"
-          onMouseEnter={() => preloadRoute('/inventory')}
-          onFocus={() => preloadRoute('/inventory')}
-        >
-          Inventory
-        </NavLink>
-      ) : null}
-      {rentalsNavVisible ? (
-        <NavLink
-          to="/movements"
-          onMouseEnter={() => preloadRoute('/movements')}
-          onFocus={() => preloadRoute('/movements')}
-        >
-          Movements
-        </NavLink>
-      ) : null}
-      {rentalsNavVisible ? (
-        <NavLink
-          to="/billing-runs"
-          onMouseEnter={() => preloadRoute('/billing-runs')}
-          onFocus={() => preloadRoute('/billing-runs')}
-        >
-          Billing
-        </NavLink>
-      ) : null}
-      <NavLink
-        to="/integrations"
-        onMouseEnter={() => preloadRoute('/integrations')}
-        onFocus={() => preloadRoute('/integrations')}
-      >
-        Integrations
-      </NavLink>
-      {bonusSimNavVisible ? (
-        <NavLink
-          to="/bonus-sim"
-          onMouseEnter={() => preloadRoute('/bonus-sim')}
-          onFocus={() => preloadRoute('/bonus-sim')}
-        >
-          Bonus Sim
-        </NavLink>
-      ) : null}
-      {auditNavVisible ? (
-        <NavLink to="/audit" onMouseEnter={() => preloadRoute('/audit')} onFocus={() => preloadRoute('/audit')}>
-          Audit
-        </NavLink>
-      ) : null}
-      {devSurfaceEnabled ? <NavLink to="/dev/scratch">Dev</NavLink> : null}
+      {entries
+        .filter((entry) => entry.visible !== false)
+        .map((entry) => {
+          const Icon = entry.icon
+          return (
+            <NavLink
+              key={entry.to}
+              to={entry.to}
+              data-testid={entry.testId}
+              onMouseEnter={() => (entry.preload ? preloadRoute(entry.preload) : undefined)}
+              onFocus={() => (entry.preload ? preloadRoute(entry.preload) : undefined)}
+            >
+              <Icon aria-hidden="true" />
+              <span>
+                {entry.prefix}
+                {entry.label}
+              </span>
+            </NavLink>
+          )
+        })}
     </nav>
   )
 }

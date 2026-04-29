@@ -79,10 +79,10 @@ export function SyncStatusBadge({ syncStatus, offlineQueue }: Props) {
     label = lastSyncedRel ? `synced · ${lastSyncedRel}` : 'synced'
   }
 
-  const palette: Record<Tone, { bg: string; fg: string; dot: string }> = {
-    ok: { bg: '#064e3b', fg: '#ecfdf5', dot: '#34d399' },
-    pending: { bg: '#78350f', fg: '#fff7ed', dot: '#fbbf24' },
-    offline: { bg: '#7f1d1d', fg: '#fef2f2', dot: '#f87171' },
+  const palette: Record<Tone, { bg: string; fg: string; dot: string; border: string }> = {
+    ok: { bg: '#e8f6ee', fg: '#246244', dot: '#2f8f5b', border: '#b7dfc8' },
+    pending: { bg: '#fff1e6', fg: '#8d4d17', dot: '#d9782d', border: '#f0c9a7' },
+    offline: { bg: '#fff0ee', fg: '#a82f28', dot: '#c73b32', border: '#efbeb9' },
   }
   const colors = palette[tone]
 
@@ -95,6 +95,7 @@ export function SyncStatusBadge({ syncStatus, offlineQueue }: Props) {
 
   return (
     <div
+      className="syncStatusBadge"
       role="status"
       aria-live="polite"
       title={tooltip}
@@ -109,11 +110,12 @@ export function SyncStatusBadge({ syncStatus, offlineQueue }: Props) {
         padding: '8px 12px',
         minHeight: 36,
         borderRadius: 999,
+        border: `1px solid ${colors.border}`,
         background: colors.bg,
         color: colors.fg,
         fontSize: 13,
         fontWeight: 600,
-        boxShadow: '0 4px 16px rgba(0,0,0,0.35)',
+        boxShadow: '0 8px 24px rgba(31,42,55,0.12)',
         pointerEvents: 'auto',
         userSelect: 'none',
       }}
@@ -129,12 +131,23 @@ export function SyncStatusBadge({ syncStatus, offlineQueue }: Props) {
           animation: tone === 'pending' ? 'sitelayer-sync-pulse 1.6s ease-out infinite' : 'none',
         }}
       />
-      <span>{label}</span>
+      <span className="syncStatusBadgeLabel">{label}</span>
       <style>{`
         @keyframes sitelayer-sync-pulse {
-          0% { box-shadow: 0 0 0 0 rgba(251,191,36,0.6); }
-          70% { box-shadow: 0 0 0 8px rgba(251,191,36,0); }
-          100% { box-shadow: 0 0 0 0 rgba(251,191,36,0); }
+          0% { box-shadow: 0 0 0 0 rgba(217,120,45,0.5); }
+          70% { box-shadow: 0 0 0 8px rgba(217,120,45,0); }
+          100% { box-shadow: 0 0 0 0 rgba(217,120,45,0); }
+        }
+        @media (max-width: 639px) {
+          .syncStatusBadge {
+            right: 8px !important;
+            bottom: 8px !important;
+            padding: 8px !important;
+            pointer-events: none !important;
+          }
+          .syncStatusBadgeLabel {
+            display: none;
+          }
         }
       `}</style>
     </div>

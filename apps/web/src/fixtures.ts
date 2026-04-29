@@ -4,6 +4,8 @@ import type {
   BlueprintRow,
   CompaniesResponse,
   FeaturesResponse,
+  InventoryAvailabilityRow,
+  InventoryItemRow,
   ListRentalsResponse,
   MaterialBillRow,
   MeasurementRow,
@@ -230,6 +232,72 @@ const rentals: RentalRow[] = [
     deleted_at: null,
     created_at: '2026-04-18T14:00:00.000Z',
     updated_at: '2026-04-18T14:00:00.000Z',
+  },
+]
+
+const inventoryItems: InventoryItemRow[] = [
+  {
+    id: 'inventory-scaffold-tower',
+    code: 'SCAF-6M',
+    description: 'Scaffolding tower 6m',
+    category: 'scaffold',
+    unit: 'ea',
+    default_rental_rate: '35.00',
+    replacement_value: '1850.00',
+    tracking_mode: 'serialized',
+    active: true,
+    notes: 'Aluminum tower kit with guardrails',
+    version: 2,
+    deleted_at: null,
+    created_at: '2026-04-10T15:00:00.000Z',
+    updated_at: '2026-04-17T00:00:00.000Z',
+  },
+  {
+    id: 'inventory-cement-mixer',
+    code: 'MIX-3.5',
+    description: 'Cement mixer',
+    category: 'concrete',
+    unit: 'ea',
+    default_rental_rate: '18.00',
+    replacement_value: '720.00',
+    tracking_mode: 'quantity',
+    active: true,
+    notes: '3.5 cu ft electric mixer',
+    version: 1,
+    deleted_at: null,
+    created_at: '2026-04-18T14:00:00.000Z',
+    updated_at: '2026-04-18T14:00:00.000Z',
+  },
+  {
+    id: 'inventory-plate-compactor',
+    code: 'COMP-2000',
+    description: 'Plate compactor',
+    category: 'site prep',
+    unit: 'ea',
+    default_rental_rate: '42.00',
+    replacement_value: '2300.00',
+    tracking_mode: 'serialized',
+    active: true,
+    notes: 'Heavy plate for base prep',
+    version: 1,
+    deleted_at: null,
+    created_at: '2026-04-19T12:00:00.000Z',
+    updated_at: '2026-04-19T12:00:00.000Z',
+  },
+]
+
+const inventoryAvailability: InventoryAvailabilityRow[] = [
+  {
+    inventory_item_id: 'inventory-scaffold-tower',
+    on_rent_quantity: '1',
+    on_rent_lines: 1,
+    on_rent_projects: 1,
+  },
+  {
+    inventory_item_id: 'inventory-cement-mixer',
+    on_rent_quantity: '1',
+    on_rent_lines: 1,
+    on_rent_projects: 1,
   },
 ]
 
@@ -527,6 +595,14 @@ export function getFixtureResponse<T>(path: string, companySlug: string): T {
     return clone({ rentals: filtered } satisfies ListRentalsResponse) as T
   }
 
+  if (path === '/api/inventory/items') {
+    return clone({ inventoryItems }) as T
+  }
+
+  if (path === '/api/inventory/items/availability') {
+    return clone({ availability: inventoryAvailability }) as T
+  }
+
   if (path.startsWith('/api/audit-events')) {
     return clone({
       events: [
@@ -625,6 +701,47 @@ export function mutateFixtureResponse<T>(
         role: typeof input.role === 'string' ? input.role : 'member',
         created_at: new Date().toISOString(),
       },
+    }) as T
+  }
+
+  if (method === 'POST' && path === '/api/inventory/items') {
+    const input = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
+    return clone({
+      ...inventoryItems[0]!,
+      id: `inventory-fixture-${Date.now()}`,
+      code: typeof input.code === 'string' ? input.code : 'FIXTURE-SKU',
+      description: typeof input.description === 'string' ? input.description : 'Fixture item',
+      category: typeof input.category === 'string' ? input.category : 'general',
+      unit: typeof input.unit === 'string' ? input.unit : 'ea',
+      default_rental_rate: String(input.default_rental_rate ?? '0.00'),
+      replacement_value: input.replacement_value == null ? null : String(input.replacement_value),
+      tracking_mode: input.tracking_mode === 'serialized' ? 'serialized' : 'quantity',
+      active: input.active !== false,
+      notes: typeof input.notes === 'string' ? input.notes : null,
+      version: 1,
+      deleted_at: null,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    } satisfies InventoryItemRow) as T
+  }
+
+  if (method === 'POST' && path === '/api/inventory/items/import') {
+    const input = (typeof body === 'object' && body !== null ? body : {}) as { items?: unknown[] }
+    return clone({
+      total: input.items?.length ?? 0,
+      inserted: input.items?.length ?? 0,
+      updated: 0,
+      errors: [],
+    }) as T
+  }
+
+  if ((method === 'PATCH' || method === 'DELETE') && path.startsWith('/api/inventory/items/')) {
+    return clone({
+      ...inventoryItems[0]!,
+      ...(typeof body === 'object' && body !== null ? body : {}),
+      updated_at: new Date().toISOString(),
+      deleted_at: method === 'DELETE' ? new Date().toISOString() : null,
+      version: inventoryItems[0]!.version + 1,
     }) as T
   }
 

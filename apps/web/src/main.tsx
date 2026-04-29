@@ -79,12 +79,12 @@ const clerkAppearance = {
     logoPlacement: 'inside' as const,
   },
   variables: {
-    colorPrimary: 'hsl(204, 94%, 67%)',
-    colorBackground: 'hsl(222, 47%, 5%)',
-    colorText: 'hsl(226, 100%, 97%)',
-    colorInputBackground: 'hsl(218, 25%, 17%)',
-    colorInputText: 'hsl(226, 100%, 97%)',
-    borderRadius: '6px',
+    colorPrimary: 'hsl(25, 78%, 46%)',
+    colorBackground: 'hsl(0, 0%, 100%)',
+    colorText: 'hsl(210, 18%, 14%)',
+    colorInputBackground: 'hsl(210, 24%, 97%)',
+    colorInputText: 'hsl(210, 18%, 14%)',
+    borderRadius: '8px',
     fontFamily: 'inherit',
   },
   elements: {

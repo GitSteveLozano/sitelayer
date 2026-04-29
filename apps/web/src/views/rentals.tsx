@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { CircleDollarSign, Clock3, PackageCheck, Plus, ReceiptText, Store, Trash2 } from 'lucide-react'
 import {
   createRental,
   deleteRental,
@@ -117,6 +118,12 @@ export function RentalsView({ companySlug, session, customers, projects }: Renta
     }
     return map
   }, [rentals])
+  const rentalStats = useMemo(() => {
+    const accrued = Array.from(totalAccruedByRental.values()).reduce((sum, value) => sum + value, 0)
+    const dueNow = rentals.filter((rental) => nextInvoiceCountdown(rental) === 'due now').length
+    const active = rentals.filter((rental) => rental.status === 'active').length
+    return { accrued, dueNow, active }
+  }, [rentals, totalAccruedByRental])
 
   async function handleMarkReturned(rental: RentalRow) {
     setBusyRentalId(rental.id)
@@ -213,13 +220,43 @@ export function RentalsView({ companySlug, session, customers, projects }: Renta
         <p className="eyebrow">Equipment billing</p>
         <h1>Rentals</h1>
         <p className="lede compact">
-          Track equipment out on rent, roll up accrued cost per project, and trigger weekly invoices. Active rentals
-          auto-bill on cadence.
+          Track equipment out on rent, roll up accrued cost per project, and trigger invoices from one working queue.
         </p>
       </section>
 
+      <section className="rentalMetrics" aria-label="Rental summary">
+        <article>
+          <PackageCheck aria-hidden="true" />
+          <div>
+            <span>Active rentals</span>
+            <strong>{rentalStats.active}</strong>
+          </div>
+        </article>
+        <article>
+          <CircleDollarSign aria-hidden="true" />
+          <div>
+            <span>Accrued</span>
+            <strong>{formatCurrency(rentalStats.accrued)}</strong>
+          </div>
+        </article>
+        <article>
+          <Clock3 aria-hidden="true" />
+          <div>
+            <span>Due now</span>
+            <strong>{rentalStats.dueNow}</strong>
+          </div>
+        </article>
+        <article>
+          <Store aria-hidden="true" />
+          <div>
+            <span>Storefront path</span>
+            <strong>Catalog ready</strong>
+          </div>
+        </article>
+      </section>
+
       <section className="panel">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <div className="rentalToolbar">
           <div>
             <label>
               <span className="muted compact">Filter</span>
@@ -239,7 +276,8 @@ export function RentalsView({ companySlug, session, customers, projects }: Renta
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
               <Button type="button" data-testid="rentals-new-button">
-                + New rental
+                <Plus aria-hidden="true" />
+                New rental
               </Button>
             </DialogTrigger>
             <DialogContent>
@@ -373,28 +411,30 @@ export function RentalsView({ companySlug, session, customers, projects }: Renta
                   const accrued = totalAccruedByRental.get(rental.id) ?? 0
                   const busy = busyRentalId === rental.id
                   return (
-                    <tr key={rental.id}>
-                      <td>
+                    <tr key={rental.id} className="auditRow">
+                      <td data-mobile-label="Item">
                         <div>{rental.item_description}</div>
                         <div className="muted compact">delivered {rental.delivered_on}</div>
                       </td>
-                      <td>{customer?.name ?? <span className="muted">—</span>}</td>
-                      <td>{project?.name ?? <span className="muted">—</span>}</td>
-                      <td>{formatCurrency(Number(rental.daily_rate))}</td>
-                      <td>{daysOut}</td>
-                      <td>{formatCurrency(accrued)}</td>
-                      <td>
+                      <td data-mobile-label="Customer">{customer?.name ?? <span className="muted">—</span>}</td>
+                      <td data-mobile-label="Project">{project?.name ?? <span className="muted">—</span>}</td>
+                      <td data-mobile-label="Daily rate">{formatCurrency(Number(rental.daily_rate))}</td>
+                      <td data-mobile-label="Days out">{daysOut}</td>
+                      <td data-mobile-label="Accrued">{formatCurrency(accrued)}</td>
+                      <td data-mobile-label="Status">
                         <span className="badge">{rental.status}</span>
                       </td>
-                      <td>
-                        {rental.status === 'active' || rental.status === 'returned' ? (
-                          <span>Next invoice in {nextInvoiceCountdown(rental)}</span>
-                        ) : (
-                          <span className="muted">—</span>
-                        )}
+                      <td data-mobile-label="Next invoice">
+                        {(() => {
+                          const countdown = nextInvoiceCountdown(rental)
+                          if (rental.status !== 'active' && rental.status !== 'returned') {
+                            return <span className="muted">—</span>
+                          }
+                          return <span>{countdown === 'due now' ? 'Due now' : `In ${countdown}`}</span>
+                        })()}
                       </td>
-                      <td>
-                        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <td data-mobile-label="Actions">
+                        <div className="rentalActions">
                           {rental.status === 'active' ? (
                             <Button
                               type="button"
@@ -403,6 +443,7 @@ export function RentalsView({ companySlug, session, customers, projects }: Renta
                               onClick={() => void handleMarkReturned(rental)}
                               data-testid={`rentals-mark-returned-${rental.id}`}
                             >
+                              <PackageCheck aria-hidden="true" />
                               Mark returned
                             </Button>
                           ) : null}
@@ -414,6 +455,7 @@ export function RentalsView({ companySlug, session, customers, projects }: Renta
                               onClick={() => void handleTriggerInvoice(rental)}
                               data-testid={`rentals-invoice-${rental.id}`}
                             >
+                              <ReceiptText aria-hidden="true" />
                               Invoice now
                             </Button>
                           ) : null}
@@ -423,6 +465,7 @@ export function RentalsView({ companySlug, session, customers, projects }: Renta
                             disabled={busy}
                             onClick={() => void handleDelete(rental)}
                           >
+                            <Trash2 aria-hidden="true" />
                             Delete
                           </Button>
                         </div>

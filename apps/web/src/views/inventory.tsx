@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Boxes, CircleDollarSign, PackageCheck, Plus, RefreshCw, Upload } from 'lucide-react'
 import {
   createInventoryItem,
   deleteInventoryItem,
@@ -173,6 +174,12 @@ export function InventoryView({ companySlug }: InventoryViewProps) {
       )
     })
   }, [items, search, categoryFilter, showInactive])
+  const inventoryStats = useMemo(() => {
+    const active = items.filter((item) => item.active).length
+    const onRent = Array.from(availability.values()).reduce((sum, row) => sum + Number(row.on_rent_quantity || 0), 0)
+    const dailyRate = items.reduce((sum, item) => sum + Number(item.default_rental_rate || 0), 0)
+    return { active, onRent, dailyRate }
+  }, [availability, items])
 
   async function handleDelete(item: InventoryItemRow) {
     if (typeof window !== 'undefined' && !window.confirm(`Delete inventory item ${item.code}?`)) return
@@ -190,24 +197,64 @@ export function InventoryView({ companySlug }: InventoryViewProps) {
   }
 
   return (
-    <section className="space-y-4">
-      <header className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between">
-        <h2 className="text-2xl font-semibold">Inventory catalog</h2>
-        <div className="flex items-center gap-2">
-          <ImportDialog companySlug={companySlug} onImported={refresh} />
-          <ItemDialog
-            companySlug={companySlug}
-            onSaved={refresh}
-            triggerLabel="Add item"
-            initialValue={emptyInput()}
-            existing={null}
-          />
+    <section className="inventoryPage">
+      <section className="hero">
+        <p className="eyebrow">Equipment catalog</p>
+        <div className="inventoryHero">
+          <div>
+            <h1>Inventory</h1>
+            <p className="lede compact">
+              Maintain the rental catalog, pricing, replacement value, and availability that power internal billing and
+              future storefront listings.
+            </p>
+          </div>
+          <div className="inventoryHeroActions">
+            <ImportDialog companySlug={companySlug} onImported={refresh} />
+            <ItemDialog
+              companySlug={companySlug}
+              onSaved={refresh}
+              triggerLabel="Add item"
+              initialValue={emptyInput()}
+              existing={null}
+            />
+          </div>
         </div>
-      </header>
+      </section>
 
-      <div className="flex flex-wrap items-center gap-2">
+      <section className="rentalMetrics" aria-label="Inventory summary">
+        <article>
+          <Boxes aria-hidden="true" />
+          <div>
+            <span>Catalog items</span>
+            <strong>{items.length}</strong>
+          </div>
+        </article>
+        <article>
+          <PackageCheck aria-hidden="true" />
+          <div>
+            <span>Active</span>
+            <strong>{inventoryStats.active}</strong>
+          </div>
+        </article>
+        <article>
+          <PackageCheck aria-hidden="true" />
+          <div>
+            <span>On rent</span>
+            <strong>{inventoryStats.onRent}</strong>
+          </div>
+        </article>
+        <article>
+          <CircleDollarSign aria-hidden="true" />
+          <div>
+            <span>Daily rate book</span>
+            <strong>{formatCurrency(inventoryStats.dailyRate)}</strong>
+          </div>
+        </article>
+      </section>
+
+      <section className="panel inventoryControls">
         <Input
-          placeholder="Search code, description, notes…"
+          placeholder="Search code, description, notes..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-sm"
@@ -225,9 +272,10 @@ export function InventoryView({ companySlug }: InventoryViewProps) {
           Show inactive
         </label>
         <Button variant="outline" size="sm" onClick={refresh} disabled={loading}>
-          {loading ? 'Refreshing…' : 'Refresh'}
+          <RefreshCw aria-hidden="true" />
+          {loading ? 'Refreshing...' : 'Refresh'}
         </Button>
-      </div>
+      </section>
 
       {error && (
         <div className="rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">{error}</div>
@@ -401,7 +449,10 @@ function ItemDialog({
     <Dialog open={open} onOpenChange={setOpen}>
       {triggerLabel && (
         <DialogTrigger asChild>
-          <Button variant="default">{triggerLabel}</Button>
+          <Button variant="default">
+            <Plus aria-hidden="true" />
+            {triggerLabel}
+          </Button>
         </DialogTrigger>
       )}
       <DialogContent>
@@ -570,7 +621,10 @@ function ImportDialog({ companySlug, onImported }: ImportDialogProps) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button variant="outline">Import CSV</Button>
+        <Button variant="outline">
+          <Upload aria-hidden="true" />
+          Import CSV
+        </Button>
       </DialogTrigger>
       <DialogContent className="max-w-3xl">
         <DialogHeader>
