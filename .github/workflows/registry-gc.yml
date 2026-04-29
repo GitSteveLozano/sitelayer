@@ -1,0 +1,61 @@
+name: Registry GC
+
+# Scheduled garbage collection of untagged manifests in the DigitalOcean
+# Container Registry. The deploy-droplet workflow deletes old SHA tags after
+# every prod push but deliberately does NOT trigger GC there — GC blocks
+# subsequent --read-write docker configs for up to an hour, which would lock
+# out the next deploy.
+#
+# The Starter tier caps storage at 500 MB. Every prod build pushes one
+# ~100 MB compressed manifest; without a GC sweep the registry fills up in
+# 4–5 deploys and `docker push` returns "error from registry: quota
+# exceeded" on the next merge.
+#
+# Runs nightly at 03:11 UTC (after the preview-gc cron at 03:17, so we don't
+# pile two doctl-heavy jobs on the same minute) and on demand via
+# workflow_dispatch.
+
+on:
+  schedule:
+    - cron: '11 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: registry-gc
+  cancel-in-progress: false
+
+jobs:
+  gc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Install doctl
+        uses: digitalocean/action-doctl@135ac0aa0eed4437d547c6f12c364d3006b42824 # v2.5.1
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Start garbage collection
+        run: |
+          set -euo pipefail
+          # Best-effort: if a GC is already running, the API rejects with
+          # "garbage collection already in progress" — treat that as success
+          # because someone else (likely a manual run) is doing the work.
+          set +e
+          out="$(doctl registry garbage-collection start sitelayer --include-untagged-manifests --force 2>&1)"
+          rc=$?
+          set -e
+          echo "$out"
+          if [ $rc -ne 0 ]; then
+            if echo "$out" | grep -qi "already.*progress\|already running"; then
+              echo "GC already in progress — treating as success"
+              exit 0
+            fi
+            exit $rc
+          fi
+
+      - name: Report current registry tags
+        run: |
+          doctl registry repository list-tags sitelayer 2>/dev/null || true
