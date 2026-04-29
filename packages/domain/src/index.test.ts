@@ -26,6 +26,7 @@ import {
   initialRentalNextInvoiceAt,
   haversineDistanceMeters,
   isInsideGeofence,
+  sumMoney,
 } from './index.js'
 
 describe('domain functions', () => {
@@ -44,6 +45,53 @@ describe('domain functions', () => {
 
     it('formats large amounts correctly', () => {
       expect(formatMoney(1000000)).toBe('$1,000,000.00')
+    })
+  })
+
+  describe('sumMoney', () => {
+    it('returns 0.00 for an empty list', () => {
+      expect(sumMoney([])).toBe('0.00')
+    })
+
+    it('sums numeric strings exactly (the bug we are fixing)', () => {
+      // Plain JS: [0.1, 0.2, 0.3].reduce((s, v) => s + v, 0) === 0.6000000000000001
+      expect(sumMoney(['0.10', '0.20', '0.30'])).toBe('0.60')
+    })
+
+    it('sums JS numbers exactly', () => {
+      expect(sumMoney([0.1, 0.2, 0.3])).toBe('0.60')
+    })
+
+    it('handles mixed strings and numbers', () => {
+      expect(sumMoney(['1.05', 2.5, '0.95'])).toBe('4.50')
+    })
+
+    it('handles negative values', () => {
+      expect(sumMoney(['10.00', '-2.50', '-0.25'])).toBe('7.25')
+      expect(sumMoney(['-5.00', '-5.00'])).toBe('-10.00')
+    })
+
+    it('truncates beyond two decimal places (matches Postgres numeric(12,2) cast)', () => {
+      expect(sumMoney(['0.999'])).toBe('0.99')
+      expect(sumMoney(['1.005', '1.005'])).toBe('2.00')
+    })
+
+    it('treats null, undefined, NaN, infinity, and bad strings as zero', () => {
+      expect(sumMoney([null, undefined, '10.00'])).toBe('10.00')
+      expect(sumMoney([Number.NaN, '5.00'])).toBe('5.00')
+      expect(sumMoney([Number.POSITIVE_INFINITY, '5.00'])).toBe('5.00')
+      expect(sumMoney(['not-a-number', '5.00'])).toBe('5.00')
+    })
+
+    it('handles a long sum without drift (regression: the running-sum bug)', () => {
+      const cents = Array.from({ length: 1000 }, () => '0.01')
+      expect(sumMoney(cents)).toBe('10.00')
+    })
+
+    it('returns a string suitable for Postgres numeric(12,2) writes', () => {
+      const result = sumMoney(['1234.56', '7.89'])
+      expect(result).toBe('1242.45')
+      expect(typeof result).toBe('string')
     })
   })
 

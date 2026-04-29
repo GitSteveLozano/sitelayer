@@ -228,6 +228,57 @@ export function formatMoney(value: number): string {
   }).format(value)
 }
 
+/**
+ * Sum a list of money-like values (numeric strings from Postgres, or
+ * already-numeric JS values) with no floating-point drift. Internally
+ * accumulates integer cents — safe up to ~$90 trillion. Returns the
+ * sum as a fixed-decimal string suitable for writing back to a
+ * Postgres `numeric(12,2)` column or wire JSON.
+ *
+ * Why this exists: `[0.1, 0.2, 0.3].reduce((s, v) => s + Number(v), 0)`
+ * is `0.6000000000000001` in JS. Sums of estimate lines, billing run
+ * lines, and rental amounts hit this every time. Per-value reads are
+ * fine (any 2-decimal value < 2^45 round-trips exactly through
+ * IEEE-754); only the running sum drifts.
+ *
+ * Inputs that are NaN, infinite, undefined, or non-numeric strings are
+ * treated as zero — the caller's responsibility to pre-validate if
+ * those should be rejected. Returns '0.00' for an empty list.
+ */
+export function sumMoney(values: ReadonlyArray<number | string | null | undefined>): string {
+  let cents = 0n
+  for (const value of values) {
+    if (value === null || value === undefined) continue
+    cents += moneyToCents(value)
+  }
+  const sign = cents < 0n ? '-' : ''
+  const abs = cents < 0n ? -cents : cents
+  const dollars = abs / 100n
+  const remainder = abs % 100n
+  return `${sign}${dollars.toString()}.${remainder.toString().padStart(2, '0')}`
+}
+
+/**
+ * Parse a single money-like value to integer cents. Handles the
+ * Postgres numeric(12,2) string shape (e.g. "1234.56", "-7.89") and
+ * JS numbers. Anything that doesn't parse cleanly returns 0n.
+ */
+function moneyToCents(value: number | string): bigint {
+  const text = typeof value === 'number' ? (Number.isFinite(value) ? value.toFixed(2) : '0') : value.trim()
+  // Match optional sign + integer + optional fractional part. Reject
+  // exponent notation since Postgres numeric never emits it for the
+  // column types we use here.
+  const match = /^(-?)(\d+)(?:\.(\d+))?$/.exec(text)
+  if (!match) return 0n
+  const [, sign, intPart, fracPart = ''] = match
+  // Round to 2 decimal places via banker-ish floor toward zero of the
+  // 3rd digit. Using truncation here (not rounding) matches Postgres
+  // numeric(12,2) implicit cast behaviour for trailing precision.
+  const cents2 = (fracPart + '00').slice(0, 2)
+  const n = BigInt(intPart!) * 100n + BigInt(cents2)
+  return sign === '-' ? -n : n
+}
+
 export function calculateProjectCost(inputs: CostInputs): number {
   return roundMoney(inputs.laborCost + inputs.materialCost + inputs.subCost)
 }

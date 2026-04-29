@@ -1,6 +1,6 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
-import { DEFAULT_BONUS_RULE, calculateBonusPayout, computeProductivity } from '@sitelayer/domain'
+import { DEFAULT_BONUS_RULE, calculateBonusPayout, computeProductivity, sumMoney } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import { listLaborByItem, listLaborByWeek, listLaborByWorker, parseLaborReportFilters } from '../labor-reports.js'
 
@@ -68,14 +68,12 @@ async function listAnalytics(pool: Pool, companyId: string) {
 
     const totalHours = projectLabor.reduce((sum, l) => sum + Number(l.hours ?? 0), 0)
     const totalSqft = projectLabor.reduce((sum, l) => sum + Number(l.sqft_done ?? 0), 0)
-    const laborCost = totalHours * Number(project.labor_rate ?? 0)
-    const materialCost = projectMaterial
-      .filter((m) => m.bill_type !== 'sub')
-      .reduce((sum, m) => sum + Number(m.amount ?? 0), 0)
-    const subCost = projectMaterial
-      .filter((m) => m.bill_type === 'sub')
-      .reduce((sum, m) => sum + Number(m.amount ?? 0), 0)
-    const totalCost = laborCost + materialCost + subCost
+    const laborCost = Number(sumMoney([totalHours * Number(project.labor_rate ?? 0)]))
+    const materialCost = Number(
+      sumMoney(projectMaterial.filter((m) => m.bill_type !== 'sub').map((m) => m.amount ?? 0)),
+    )
+    const subCost = Number(sumMoney(projectMaterial.filter((m) => m.bill_type === 'sub').map((m) => m.amount ?? 0)))
+    const totalCost = Number(sumMoney([laborCost, materialCost, subCost]))
     const revenue = Number(project.bid_total ?? 0)
     const profit = revenue - totalCost
     const margin = revenue > 0 ? profit / revenue : 0
