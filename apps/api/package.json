@@ -23,6 +23,7 @@
     "@sitelayer/domain": "file:../../packages/domain",
     "@sitelayer/logger": "file:../../packages/logger",
     "@sitelayer/queue": "file:../../packages/queue",
+    "@sitelayer/workflows": "file:../../packages/workflows",
     "@types/pdfkit": "^0.17.6",
     "busboy": "^1.6.0",
     "pdfkit": "^0.18.0",

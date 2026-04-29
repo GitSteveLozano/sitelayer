@@ -3,17 +3,19 @@ import type { Pool, PoolClient } from 'pg'
 import {
   calculateJobRentalBillingRun,
   initialJobRentalNextBillingDate,
-  isHumanRentalBillingEvent,
-  nextRentalBillingEvents,
-  transitionRentalBillingWorkflow,
   type JobRentalContractForBilling,
   type JobRentalLineForBilling,
+} from '@sitelayer/domain'
+import {
+  nextRentalBillingEvents,
+  parseRentalBillingEventRequest,
+  transitionRentalBillingWorkflow,
   type RentalBillingHumanEventType,
   type RentalBillingWorkflowEvent,
   type RentalBillingWorkflowSnapshot,
   type RentalBillingWorkflowState,
   type WorkflowSnapshot,
-} from '@sitelayer/domain'
+} from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
@@ -1433,24 +1435,12 @@ export async function handleRentalInventoryRoutes(
     if (!ctx.requireRole(['admin', 'office'])) return true
     const runId = billingRunEventMatch[1]!
     const body = await ctx.readBody()
-    const eventType = optionalString(body.event)
-    if (!eventType || !isHumanRentalBillingEvent(eventType)) {
-      ctx.sendJson(400, {
-        error: 'event must be one of APPROVE, POST_REQUESTED, RETRY_POST, VOID',
-      })
+    const parsed = parseRentalBillingEventRequest(body)
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
       return true
     }
-    const stateVersionRaw = body.state_version
-    const stateVersion =
-      typeof stateVersionRaw === 'number'
-        ? stateVersionRaw
-        : typeof stateVersionRaw === 'string'
-          ? Number(stateVersionRaw)
-          : Number.NaN
-    if (!Number.isInteger(stateVersion) || stateVersion < 1) {
-      ctx.sendJson(400, { error: 'state_version is required and must be a positive integer' })
-      return true
-    }
+    const { event: eventType, state_version: stateVersion } = parsed.value
 
     try {
       const result = await withMutationTx(async (client: PoolClient) => {

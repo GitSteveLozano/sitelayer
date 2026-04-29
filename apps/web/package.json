@@ -19,6 +19,7 @@
     "@radix-ui/react-slot": "^1.2.4",
     "@sentry/react": "^10.50.0",
     "@sitelayer/domain": "file:../../packages/domain",
+    "@sitelayer/workflows": "file:../../packages/workflows",
     "@xstate/react": "^6.1.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
