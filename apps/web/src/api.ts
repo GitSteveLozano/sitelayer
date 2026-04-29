@@ -1253,6 +1253,9 @@ export async function generateBillingRun(
 
 export type InventoryAvailabilityRow = {
   inventory_item_id: string
+  total_stock_quantity: string
+  available_quantity: string
+  yard_quantity: string
   on_rent_quantity: string
   on_rent_lines: number
   on_rent_projects: number

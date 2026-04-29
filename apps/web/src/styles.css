@@ -340,7 +340,7 @@ a {
 
 .rentalMetrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
 }
 
@@ -881,6 +881,11 @@ a {
 .measurementPolygon {
   fill: rgb(47 143 91 / 0.18);
   stroke: rgb(72 188 117 / 0.86);
+}
+
+.measurementLine {
+  stroke: rgb(72 188 117 / 0.9);
+  stroke-width: 0.8;
 }
 
 .draftPolygon {

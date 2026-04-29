@@ -1,6 +1,6 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
-import { calculateTakeoffQuantity, normalizePolygonGeometry } from '@sitelayer/domain'
+import { calculateGeometryQuantity, normalizeGeometry } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import { evaluateLww } from '../lww.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
@@ -74,18 +74,18 @@ export async function handleTakeoffMeasurementRoutes(
     let geometryJson: string | null = null
     let quantity: unknown = body.quantity ?? null
     if (body.geometry !== undefined && body.geometry !== null && body.geometry !== '') {
-      const geometry = normalizePolygonGeometry(body.geometry)
+      const geometry = normalizeGeometry(body.geometry)
       if (!geometry) {
-        ctx.sendJson(400, { error: 'geometry must be a polygon with at least 3 points inside the board' })
+        ctx.sendJson(400, {
+          error: 'geometry must be a polygon, lineal path, or volume box with positive dimensions',
+        })
         return true
       }
       geometryJson = JSON.stringify(geometry)
-      if (quantity === null || quantity === undefined || quantity === '') {
-        quantity = calculateTakeoffQuantity(geometry.points, geometry.sheet_scale ?? 1)
-      }
+      quantity = calculateGeometryQuantity(geometry)
       const numericQuantity = Number(quantity)
       if (!Number.isFinite(numericQuantity) || numericQuantity <= 0) {
-        ctx.sendJson(400, { error: 'geometry must produce a positive, finite area' })
+        ctx.sendJson(400, { error: 'geometry must produce a positive, finite quantity' })
         return true
       }
     }

@@ -6,7 +6,7 @@ Last updated: 2026-04-29
 
 ## Why
 
-Steve's README claims "Multiple measurement drafts per project. Create, rename, duplicate, switch between drafts. Each draft has its own canvas state and estimate. Auto-saves polygons and calibration. Extensible `type` column supports future tools (scaffolding design)." None of that exists in code today — `takeoff_measurements` rows hang directly off `project_id` with a `status` text column that has values like `draft` but no real grouping. Estimating off two competing scopes for the same project means deleting the first set first.
+Steve's original README/prototype notes claimed "Multiple measurement drafts per project. Create, rename, duplicate, switch between drafts. Each draft has its own canvas state and estimate. Auto-saves polygons and calibration. Extensible `type` column supports future tools (scaffolding design)." None of that exists in code today — `takeoff_measurements` rows hang directly off `project_id` with a `status` text column that has values like `draft` but no real grouping. Estimating off two competing scopes for the same project means deleting the first set first.
 
 ## Target shape
 

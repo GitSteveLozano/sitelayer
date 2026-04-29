@@ -90,6 +90,14 @@ const serviceItems: BootstrapResponse['serviceItems'] = [
   },
   { code: 'TRIM', name: 'Trim package', category: 'measurable', unit: 'lf', default_rate: '5.20', source: 'manual' },
   {
+    code: 'CONC',
+    name: 'Concrete volume',
+    category: 'measurable',
+    unit: 'cuft',
+    default_rate: '18.00',
+    source: 'manual',
+  },
+  {
     code: 'qbo-112',
     name: 'Sealant allowance',
     category: 'material',
@@ -163,17 +171,35 @@ const measurements: MeasurementRow[] = [
     unit: 'lf',
     notes: 'front trim',
     geometry: {
-      kind: 'polygon',
+      kind: 'lineal',
       points: [
         { x: 24, y: 62 },
         { x: 62, y: 62 },
-        { x: 62, y: 68 },
-        { x: 24, y: 68 },
+        { x: 68, y: 70 },
       ],
     },
     version: 1,
     deleted_at: null,
     created_at: '2026-04-22T16:20:00.000Z',
+  },
+  {
+    id: 'measurement-pier-volume',
+    project_id: 'project-hillcrest',
+    blueprint_document_id: 'blueprint-hillcrest-a2',
+    service_item_code: 'CONC',
+    quantity: '96.00',
+    unit: 'cuft',
+    notes: 'equipment pad',
+    geometry: {
+      kind: 'volume',
+      length: 12,
+      width: 8,
+      height: 1,
+      unit: 'cuft',
+    },
+    version: 1,
+    deleted_at: null,
+    created_at: '2026-04-22T16:35:00.000Z',
   },
 ]
 
@@ -289,15 +315,30 @@ const inventoryItems: InventoryItemRow[] = [
 const inventoryAvailability: InventoryAvailabilityRow[] = [
   {
     inventory_item_id: 'inventory-scaffold-tower',
+    total_stock_quantity: '4.00',
+    available_quantity: '3.00',
+    yard_quantity: '3.00',
     on_rent_quantity: '1',
     on_rent_lines: 1,
     on_rent_projects: 1,
   },
   {
     inventory_item_id: 'inventory-cement-mixer',
+    total_stock_quantity: '6.00',
+    available_quantity: '5.00',
+    yard_quantity: '5.00',
     on_rent_quantity: '1',
     on_rent_lines: 1,
     on_rent_projects: 1,
+  },
+  {
+    inventory_item_id: 'inventory-plate-compactor',
+    total_stock_quantity: '2.00',
+    available_quantity: '2.00',
+    yard_quantity: '2.00',
+    on_rent_quantity: '0.00',
+    on_rent_lines: 0,
+    on_rent_projects: 0,
   },
 ]
 
@@ -701,6 +742,33 @@ export function mutateFixtureResponse<T>(
         role: typeof input.role === 'string' ? input.role : 'member',
         created_at: new Date().toISOString(),
       },
+    }) as T
+  }
+
+  if (method === 'POST' && /^\/api\/projects\/[^/]+\/takeoff\/measurement$/.test(path)) {
+    const input = (typeof body === 'object' && body !== null ? body : {}) as Record<string, unknown>
+    const projectId = projectIdFromPath(path)
+    const measurement: MeasurementRow = {
+      id: `measurement-fixture-${Date.now()}`,
+      project_id: projectId,
+      blueprint_document_id: typeof input.blueprint_document_id === 'string' ? input.blueprint_document_id : null,
+      service_item_code: typeof input.service_item_code === 'string' ? input.service_item_code : serviceItems[0]!.code,
+      quantity: String(input.quantity ?? '0'),
+      unit: typeof input.unit === 'string' ? input.unit : 'sqft',
+      notes: typeof input.notes === 'string' ? input.notes : null,
+      geometry:
+        typeof input.geometry === 'object' && input.geometry !== null
+          ? (input.geometry as Record<string, unknown>)
+          : { kind: 'manual' },
+      version: 1,
+      deleted_at: null,
+      created_at: new Date().toISOString(),
+    }
+    measurements.unshift(measurement)
+    return clone({
+      measurement,
+      estimate: null,
+      scope_vs_bid: null,
     }) as T
   }
 

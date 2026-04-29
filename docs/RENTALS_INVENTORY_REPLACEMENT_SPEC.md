@@ -272,7 +272,18 @@ The existing `rentals` table can remain as a legacy/prototype ledger until the r
   - backend workflow state remains authoritative
   - XState can interpret the same state/event vocabulary on the frontend
   - future Temporal workflows should coordinate the same deterministic process
-- QBO invoice push and polished UI are still pending.
+- QBO invoice push remains environment-gated; the catalog/rentals UI has been polished for the current internal workflow.
+
+2026-04-29:
+
+- Expanded inventory availability from active-rental rollups only to movement-ledger stock totals plus active rentals:
+  - `total_stock_quantity`
+  - `available_quantity`
+  - `yard_quantity`
+  - existing `on_rent_*` rollups
+- Added `019_inventory_availability_totals.sql` to replace `get_inventory_availability(company_uuid)` with the expanded return shape.
+- Updated the inventory catalog UI to show tracked stock, available quantity, and on-rent quantity.
+- Expanded import UX to handle CSV/TSV uploads and rows copied from Excel/Sheets.
 
 ## Open Questions
 
