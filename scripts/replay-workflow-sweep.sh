@@ -46,11 +46,14 @@ psql_query() {
     psql "$DATABASE_URL" -t -A -c "$sql"
 }
 
-# Two workflows known to the registry. If we add a third, list it
-# here. The replay script enforces the registry membership anyway.
+# Workflows known to the registry. The replay script enforces registry
+# membership; this list controls which tables we sweep.
 WORKFLOWS=(
   "rental_billing_run|select id from rental_billing_runs where deleted_at is null and status not in ('posted', 'voided') order by updated_at desc limit $SWEEP_LIMIT"
   "estimate_push|select id from estimate_pushes where deleted_at is null and status not in ('posted', 'voided') order by updated_at desc limit $SWEEP_LIMIT"
+  "crew_schedule|select id from crew_schedules where deleted_at is null order by updated_at desc limit $SWEEP_LIMIT"
+  "rental|select id from rentals where deleted_at is null and status <> 'closed' order by updated_at desc limit $SWEEP_LIMIT"
+  "project_closeout|select id from projects where deleted_at is null and status <> 'completed' order by updated_at desc limit $SWEEP_LIMIT"
 )
 
 total_ok=0
