@@ -17,6 +17,7 @@ import { Pool, type PoolConfig } from 'pg'
 import { spanForAppliedRow } from './trace.js'
 import { loadEmailConfig, sendEmail } from './email.js'
 import { createQboRentalInvoicePush } from './qbo-invoice-push.js'
+import { createQboEstimatePush } from './qbo-estimate-push.js'
 
 const logger = createLogger('worker')
 
@@ -373,15 +374,12 @@ const stubEstimatePush: EstimatePushFn = async ({ pushId }) => {
 }
 
 const liveEstimatePushEnabled = process.env.QBO_LIVE_ESTIMATE_PUSH === '1'
-const estimatePush: EstimatePushFn = liveEstimatePushEnabled ? stubEstimatePush : stubEstimatePush
-// NOTE: live estimate push impl lives in qbo-estimate-push.ts when added.
-// Until then both branches use the stub; the env flag is plumbed so
-// flipping to live is a one-line wire-up.
+const estimatePush: EstimatePushFn = liveEstimatePushEnabled ? createQboEstimatePush() : stubEstimatePush
 
 if (liveEstimatePushEnabled) {
-  logger.info('[estimate-push] live QBO estimate push flag set (still stubbed until qbo-estimate-push.ts ships)')
+  logger.info('[estimate-push] live QBO estimate push enabled')
 } else {
-  logger.info('[estimate-push] stub QBO estimate push (set QBO_LIVE_ESTIMATE_PUSH=1 once live impl ships)')
+  logger.info('[estimate-push] stub QBO estimate push (set QBO_LIVE_ESTIMATE_PUSH=1 to go live)')
 }
 
 async function drainEstimatePushes(companyId: string): Promise<EstimatePushSummary> {
