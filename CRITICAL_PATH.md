@@ -14,9 +14,6 @@
 
 - [x] Architecture documentation (CLAUDE.md)
 - [x] Tech stack evaluation (Node.js plain HTTP, React SPA, Postgres, Clerk, DO Spaces)
-- [x] Pilot setup plan (PILOT_SETUP_PLAN.md)
-- [x] Service checklist (SERVICES_CHECKLIST.md)
-- [x] Quick-start guide (SERVICES_QUICK_START.md)
 - [x] Codebase structure (monorepo with api, web, worker, domain)
 - [x] Database schema (`docker/postgres/init/001_schema.sql`)
 - [x] DigitalOcean production droplet provisioned (`sitelayer`, Toronto, 4 vCPU/8GB)
@@ -268,8 +265,7 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 - [x] **Deploy:** run the GitHub Actions droplet workflow once.
 - [x] **Tighten:** remove public firewall port 3000 if no temporary service needs it.
 - [ ] **Decide:** same droplet dev deploy vs separate small dev droplet before exposing `sitelayer_dev`.
-- [ ] **Implement:** streaming blueprint upload / presigned download before large pilot PDFs.
-- [ ] **Validate:** live QBO sandbox sync and production token refresh path.
+- [ ] **Validate:** live QBO sandbox sync and production token refresh path (streaming upload + presigned download already shipped; presigned 302 still gated on `BLUEPRINT_DOWNLOAD_PRESIGNED=1`).
 
 ---
 
@@ -278,9 +274,9 @@ PHASE 4: PILOT LAUNCH (Week 3+)
 | Document                    | Purpose                                           | Audience          |
 | --------------------------- | ------------------------------------------------- | ----------------- |
 | **CLAUDE.md**               | Architecture, tech decisions, migration roadmap   | You + future team |
-| **PILOT_SETUP_PLAN.md**     | Detailed 9-phase plan with exact commands         | Deployment guide  |
-| **SERVICES_CHECKLIST.md**   | Comprehensive checklist for all services + config | Verification      |
-| **SERVICES_QUICK_START.md** | TL;DR for setup (7 services, 5 code changes)      | Quick reference   |
+| **INFRASTRUCTURE_READY.md** | Provisioned infrastructure snapshot               | Deployment guide  |
+| **DEPLOYMENT.md**           | Deployment topology + tier isolation              | Verification      |
+| **DEPLOY_RUNBOOK.md**       | Deploy/migration contract + post-pilot follow-ups | Operations        |
 | **CRITICAL_PATH.md**        | This document — timeline, decisions, gates        | Project planning  |
 
 ---

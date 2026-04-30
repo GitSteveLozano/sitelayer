@@ -32,7 +32,7 @@ This repo has historical planning docs that drift from the current deployment st
 2. Mesh planning/runtime records for project `sitelayer`.
 3. `DEPLOY_RUNBOOK.md` (deploy/migration contract, locked down 2026-04-29 ahead of pilot).
 4. `DEPLOYMENT.md` and `INFRASTRUCTURE_READY.md`.
-5. Historical docs in `docs/`, `PILOT_SETUP_PLAN.md`, `SERVICES_*`, and older planning notes.
+5. Historical docs in `docs/` and older planning notes.
 
 When an agent changes architecture, deployment, secrets layout, external services, or infrastructure:
 
@@ -143,8 +143,7 @@ sitelayer/
 │   └── workflows/           # Deterministic workflow reducers + Zod schemas (see docs/DETERMINISTIC_WORKFLOWS.md)
 ├── docker/
 │   └── postgres/init/       # Schema initialization
-├── docs/                    # Architecture, requirements, findings
-└── PILOT_SETUP_PLAN.md      # 9-phase deployment checklist (4-6 week pilot)
+└── docs/                    # Architecture, requirements, findings
 ```
 
 ## Core Components
@@ -647,6 +646,6 @@ Background job processor:
 
 - **Domain Model**: See `packages/domain/src/index.ts`
 - **Requirements**: See `docs/REQUIREMENTS_SPEC.md`
-- **Deployment Plan**: See `PILOT_SETUP_PLAN.md`
+- **Deployment**: See `DEPLOYMENT.md`, `INFRASTRUCTURE_READY.md`, `DEPLOY_RUNBOOK.md`
 - **QBO Integration**: See `docs/QBO_EXTRACTION_CANONICAL_REFERENCE.md`
 - **Greenfield Architecture**: See `docs/GREENFIELD_ARCHITECTURE_PLAN.md`
