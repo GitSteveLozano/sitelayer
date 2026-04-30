@@ -232,8 +232,9 @@ After the smoke is green:
 2. Restart the worker container only:
    `docker compose -f docker-compose.prod.yml restart worker`.
 3. Watch worker logs for the next heartbeat tick to confirm the
-   stub→live switch (the boot log line "live QBO invoice push
-   enabled" replaces the stub line).
+   stub→live switch (boot log line "live QBO invoice push enabled"
+   for rentals or "live QBO estimate push enabled" for estimates
+   replaces the corresponding stub line).
 4. Trigger one billing run with `state=approved` and dispatch
    `POST_REQUESTED`; verify the QBO sandbox shows the invoice.
 5. Roll forward to the next customer-facing run.
@@ -292,11 +293,10 @@ post-pilot work — none would burn the first customer:
   sweep ~1 day. Pattern: define `<Op><Entity>BodySchema` at module
   top, swap `await ctx.readBody()` with
   `const parsed = parseJsonBody(Schema, await ctx.readBody())`.
-- **Workflowize `projects` closeout** (`routes/projects.ts:270`,
-  status='completed' flip + margin alert) and **blueprint revisions**
-  (revision lineage today via copied-from notes). Both small lifts,
-  low regression risk. The pattern is set by crew_schedules — copy +
-  paste + adjust column names.
+- **Workflowize blueprint revisions** (revision lineage today via
+  copied-from notes). Small lift, low regression risk. The pattern
+  is set by crew_schedules — copy + paste + adjust column names.
+  (`projects` closeout shipped via PR #130.)
 
 ### Phase-2 of partially-shipped work
 
