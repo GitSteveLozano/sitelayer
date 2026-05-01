@@ -182,9 +182,11 @@ describe('queue processing', () => {
     const client = new FakeQueueClient([{ rows: [], rowCount: 0 }])
     await processOutboxBatch(client, 'company-1', 5)
     expect(client.calls[0]?.values).toBeDefined()
-    // Third bound param is the dedicated-handler exclusion list.
+    // Third bound param is the dedicated-handler exclusion list. We compare
+    // against the exported constant rather than a hard-coded literal so a
+    // new dedicated handler being added doesn't silently break this gate.
     const handlerList = client.calls[0]!.values![2]
-    expect(handlerList).toEqual(['post_qbo_invoice', 'post_qbo_estimate'])
+    expect(handlerList).toEqual([...DEDICATED_HANDLER_MUTATION_TYPES])
   })
 })
 

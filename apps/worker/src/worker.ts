@@ -4,12 +4,14 @@ import { createLogger } from '@sitelayer/logger'
 import {
   fetchDueRentals,
   processEstimatePush,
+  processLockLaborEntries,
   processQueueWithClient,
   processRentalBillingInvoicePush,
   processRentalInvoice,
   recordLedger,
   type EstimatePushFn,
   type EstimatePushSummary,
+  type LockLaborEntriesSummary,
   type RentalBillingInvoicePushFn,
   type RentalBillingInvoicePushSummary,
 } from '@sitelayer/queue'
@@ -333,6 +335,18 @@ async function drainEstimatePushes(companyId: string): Promise<EstimatePushSumma
   }
 }
 
+async function drainLockLaborEntries(companyId: string): Promise<LockLaborEntriesSummary> {
+  // The lock_labor_entries handler manages its own per-row transactions
+  // internally so a stuck row can't strand earlier work. We just hand it
+  // a connection. See packages/queue/src/lock-labor-entries.ts.
+  const client = await pool.connect()
+  try {
+    return await processLockLaborEntries(client, companyId, 25)
+  } finally {
+    client.release()
+  }
+}
+
 /**
  * Stuck-workflow alerting. A row in 'posting' state for too long means
  * either the worker crashed mid-push (recovery should have caught it,
@@ -494,6 +508,12 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     return { processed: 0, posted: 0, failed: 0, skipped: 0 }
   })
 
+  const lockLaborSummary = await drainLockLaborEntries(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] lock_labor_entries drain failed')
+    Sentry.captureException(error, { tags: { scope: 'lock_labor_entries' } })
+    return { processed: 0, locked: 0, unlocked: 0, failed: 0 } as LockLaborEntriesSummary
+  })
+
   // Defense-in-depth alert: any workflow row stuck in 'posting' beyond
   // the threshold means the worker crashed mid-push or QBO succeeded
   // silently and the worker missed the response. Surface to Sentry so
@@ -528,6 +548,10 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         estimate_push_posted: estimatePushSummary.posted,
         estimate_push_failed: estimatePushSummary.failed,
         estimate_push_skipped: estimatePushSummary.skipped,
+        lock_labor_entries_processed: lockLaborSummary.processed,
+        lock_labor_entries_locked: lockLaborSummary.locked,
+        lock_labor_entries_unlocked: lockLaborSummary.unlocked,
+        lock_labor_entries_failed: lockLaborSummary.failed,
         rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
         estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
       },
@@ -540,7 +564,8 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     notifications.processed > 0 ||
     rentalSummary.processed > 0 ||
     rentalBillingPushSummary.processed > 0 ||
-    estimatePushSummary.processed > 0
+    estimatePushSummary.processed > 0 ||
+    lockLaborSummary.processed > 0
   ) {
     logger.info(
       {
@@ -560,6 +585,10 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         estimate_push_posted: estimatePushSummary.posted,
         estimate_push_failed: estimatePushSummary.failed,
         estimate_push_skipped: estimatePushSummary.skipped,
+        lock_labor_entries_processed: lockLaborSummary.processed,
+        lock_labor_entries_locked: lockLaborSummary.locked,
+        lock_labor_entries_unlocked: lockLaborSummary.unlocked,
+        lock_labor_entries_failed: lockLaborSummary.failed,
         rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
         estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
       },
