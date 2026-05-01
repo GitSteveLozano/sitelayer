@@ -96,6 +96,9 @@ export async function processVoiceToLogRun(
   // Verify the daily log belongs to this company. The route check is
   // there but the worker re-validates: outbox rows can outlive their
   // referenced row if the foreman deleted the draft mid-flight.
+  // Throw rather than silently succeed — the drain treats a thrown
+  // error as 'failed' (with backoff up to 5 attempts) which keeps the
+  // visibility into broken runs that "no insights produced" would lose.
   const log = await client.query<DailyLogRow>(
     `select id, project_id, occurred_on, status
      from daily_logs
@@ -103,7 +106,7 @@ export async function processVoiceToLogRun(
     [companyId, payload.daily_log_id],
   )
   if (!log.rows[0]) {
-    return { insightsCreated: 0, proposal: null }
+    throw new Error(`voice_to_log: daily_log ${payload.daily_log_id} not found for company`)
   }
 
   const proposal = await proposeNarrative(payload.transcript)
