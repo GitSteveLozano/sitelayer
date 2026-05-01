@@ -102,7 +102,6 @@ export function OnboardingWizardScreen() {
 
         {step === 'seed' && company ? (
           <SeedStep
-            company={company}
             onDone={() => {
               setStep('done')
               setTimeout(() => navigate('/'), 800)
@@ -202,8 +201,10 @@ function TeamStep({ company, onNext }: { company: Company; onNext: () => void })
   )
 }
 
-function SeedStep({ company, onDone }: { company: Company; onDone: () => void }) {
-  const _ = company
+function SeedStep({ onDone }: { onDone: () => void }) {
+  // The seed inserts ride on the auth context's active company id
+  // (set via setActiveCompanySlug right after company creation), so
+  // the seed step doesn't need the company row passed down.
   const createCustomer = useCreateCustomer()
   const createWorker = useCreateWorker()
   const createLocation = useCreateInventoryLocation()
@@ -217,34 +218,52 @@ function SeedStep({ company, onDone }: { company: Company; onDone: () => void })
   const submit = async () => {
     setError(null)
     setSubmitting(true)
-    try {
-      const seeds: Array<Promise<unknown>> = []
-      if (customerName.trim()) seeds.push(createCustomer.mutateAsync({ name: customerName.trim() }))
-      if (workerName.trim()) seeds.push(createWorker.mutateAsync({ name: workerName.trim(), role: 'foreman' }))
-      if (yardName.trim())
-        seeds.push(
+    // Run each seed independently so a single failure (e.g. duplicate
+    // service-item code on retry) doesn't roll back the others. The
+    // step is optional anyway — partial success is still useful.
+    type SeedTask = { label: string; run: () => Promise<unknown> }
+    const tasks: SeedTask[] = []
+    if (customerName.trim())
+      tasks.push({ label: 'customer', run: () => createCustomer.mutateAsync({ name: customerName.trim() }) })
+    if (workerName.trim())
+      tasks.push({
+        label: 'worker',
+        run: () => createWorker.mutateAsync({ name: workerName.trim(), role: 'foreman' }),
+      })
+    if (yardName.trim())
+      tasks.push({
+        label: 'yard',
+        run: () =>
           createLocation.mutateAsync({
             name: yardName.trim(),
             location_type: 'yard',
             is_default: true,
           }),
-        )
-      // Always seed one service item so the takeoff hub has a row
-      // for the user to estimate against.
-      seeds.push(
+      })
+    tasks.push({
+      label: 'service item',
+      run: () =>
         createServiceItem.mutateAsync({
           code: 'LBR-FRMR',
           name: 'Foreman labor',
           category: 'labor',
           unit: 'hr',
         }),
-      )
-      await Promise.all(seeds)
+    })
+
+    const results = await Promise.allSettled(tasks.map((t) => t.run()))
+    const failed = results
+      .map((r, i) => (r.status === 'rejected' ? tasks[i]?.label : null))
+      .filter((l): l is string => l !== null)
+    if (failed.length === 0) {
       onDone()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Seed failed')
-      setSubmitting(false)
+      return
     }
+    // Partial success: surface what failed so the user can finish in
+    // the relevant catalog screen instead of retrying the whole step
+    // (which would create duplicates of the rows that did succeed).
+    setError(`Seeded everything except: ${failed.join(', ')}. Finish in More → Catalog.`)
+    setSubmitting(false)
   }
 
   return (
