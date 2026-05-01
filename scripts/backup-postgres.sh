@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKUP_DIR="${BACKUP_DIR:-/app/backups/postgres}"
 RETENTION_DAYS="${RETENTION_DAYS:-30}"
 DATABASE_URL="${DATABASE_URL:-}"
@@ -8,8 +9,10 @@ DATABASE_URL_FILE="${DATABASE_URL_FILE:-}"
 PG_DUMP_EXTRA_ARGS="${PG_DUMP_EXTRA_ARGS:-}"
 PG_DUMP_DOCKER_IMAGE="${PG_DUMP_DOCKER_IMAGE:-}"
 
+source "$SCRIPT_DIR/db-common.sh"
+
 if [ -z "$DATABASE_URL" ] && [ -n "$DATABASE_URL_FILE" ] && [ -f "$DATABASE_URL_FILE" ]; then
-  DATABASE_URL="$(grep -E '^DATABASE_URL=' "$DATABASE_URL_FILE" | tail -n 1 | cut -d= -f2-)"
+  DATABASE_URL="$(read_env_value "$DATABASE_URL_FILE" DATABASE_URL)"
 fi
 
 if [ -z "$DATABASE_URL" ]; then
