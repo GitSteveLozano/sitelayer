@@ -119,14 +119,18 @@ export async function handleTakeoffImportRoutes(
     const created: { measurement_id: string; tag_id: string }[] = []
     for (const row of rows) {
       const importedNote = `[imported:${sourceLabel}]${row.notes ? ' ' + row.notes : ''}`
+      // takeoff_measurements doesn't carry a rate — that lives on the
+      // tag (Phase 3A). The single-scope columns here mirror the
+      // tag's service_item_code / quantity / unit so v1 readers still
+      // see the row sensibly.
       const measurement = await client.query<{ id: string }>(
         `insert into takeoff_measurements (
            company_id, project_id, page_id, service_item_code, geometry_kind,
-           geometry, quantity, unit, rate, notes
+           geometry, quantity, unit, notes
          )
-         values ($1, $2, $3, $4, 'count', '{}'::jsonb, $5, $6, $7, $8)
+         values ($1, $2, $3, $4, 'count', '{}'::jsonb, $5, $6, $7)
          returning id`,
-        [ctx.company.id, projectId, pageId, row.service_item_code, row.quantity, row.unit, row.rate ?? 0, importedNote],
+        [ctx.company.id, projectId, pageId, row.service_item_code, row.quantity, row.unit, importedNote],
       )
       const measurementId = measurement.rows[0]!.id
       const tag = await client.query<{ id: string }>(

@@ -47,9 +47,14 @@ CREATE INDEX IF NOT EXISTS takeoff_measurement_tags_service_item_idx
   ON takeoff_measurement_tags (company_id, service_item_code);
 
 -- Backfill: every existing measurement gets one tag row mirroring
--- its current single-scope shape. Idempotent because of the index
--- below — if a tag already exists (re-running the migration during
--- testing) we skip the insert.
+-- its current single-scope shape. Idempotent because the WHERE
+-- skips rows that already have a tag — re-running the migration
+-- during testing is safe.
+--
+-- The legacy `takeoff_measurements` row carries service_item_code,
+-- quantity, and unit but not a rate (the rate has always lived on
+-- `service_items`). The new tag carries its own rate default of 0;
+-- callers writing through the Phase 3 routes set the real rate.
 INSERT INTO takeoff_measurement_tags (
   company_id, measurement_id, service_item_code, quantity, unit, rate, sort_order
 )
@@ -59,7 +64,7 @@ SELECT
   m.service_item_code,
   m.quantity,
   m.unit,
-  m.rate,
+  0,
   0
 FROM takeoff_measurements m
 WHERE NOT EXISTS (
