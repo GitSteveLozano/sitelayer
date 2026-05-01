@@ -102,6 +102,18 @@ export async function handleTakeoffImportRoutes(
     ctx.sendJson(404, { error: 'project not found' })
     return true
   }
+  // Page ownership check — without this, a caller could associate
+  // imported measurements with a blueprint page from another company.
+  if (pageId) {
+    const pageCheck = await ctx.pool.query<{ exists: boolean }>(
+      `select exists(select 1 from blueprint_pages where company_id = $1 and id = $2) as exists`,
+      [ctx.company.id, pageId],
+    )
+    if (!pageCheck.rows[0]?.exists) {
+      ctx.sendJson(404, { error: 'page not found' })
+      return true
+    }
+  }
 
   const result = await withMutationTx(async (client: PoolClient) => {
     const created: { measurement_id: string; tag_id: string }[] = []

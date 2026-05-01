@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
-import { Link, useParams, useSearchParams, NavLink } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
-import { Attribution, Spark } from '@/components/ai'
+import { Attribution } from '@/components/ai'
 import {
   useClockTimeline,
   useDailyLogs,
@@ -187,21 +187,6 @@ function OverviewTab({ project }: { project: ProjectDetail }) {
         </Link>
       </div>
     </div>
-  )
-}
-
-function TakeoffPlaceholder() {
-  return (
-    <Card>
-      <div className="flex items-center gap-2 mb-2">
-        <Spark state="muted" size={12} aria-label="" />
-        <div className="text-[13px] font-semibold">Takeoff canvas</div>
-      </div>
-      <div className="text-[12px] text-ink-2 leading-relaxed">
-        Phase 3 lands the polygon canvas, multi-condition takeoff, scale calibration, and the takeoff →
-        QBO sqft bridge. The Overview totals here reflect submitted measurements once Phase 3 ships.
-      </div>
-    </Card>
   )
 }
 

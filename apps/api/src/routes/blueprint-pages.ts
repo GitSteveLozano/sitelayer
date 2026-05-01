@@ -149,6 +149,13 @@ export async function handleBlueprintPageRoutes(
       ctx.sendJson(400, { error: 'world_distance must be > 0' })
       return true
     }
+    // Two-point calibration with both ends at the same pixel is a
+    // zero-length segment — pixels-per-unit would be infinite. Reject
+    // before persisting so downstream callers don't divide by zero.
+    if (x1 === x2 && y1 === y2) {
+      ctx.sendJson(400, { error: 'calibration points must be distinct' })
+      return true
+    }
 
     const updated = await withMutationTx(async (client: PoolClient) => {
       const result = await client.query<PageRow>(

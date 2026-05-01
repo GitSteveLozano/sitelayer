@@ -185,7 +185,13 @@ export function useImportTakeoff(projectId: string) {
   >({
     mutationFn: (input) =>
       request(`/api/projects/${encodeURIComponent(projectId)}/takeoff/import`, { method: 'POST', json: input }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['takeoff'] }),
+    onSuccess: () => {
+      // Imports add takeoff measurements (tags + measurements) and may
+      // bump per-page measurement_count via DB trigger, so the
+      // blueprints/pages cache also goes stale.
+      qc.invalidateQueries({ queryKey: ['takeoff'] })
+      qc.invalidateQueries({ queryKey: ['blueprints'] })
+    },
   })
 }
 
