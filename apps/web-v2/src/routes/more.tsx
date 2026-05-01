@@ -10,6 +10,12 @@ import {
   SettingsScreen,
 } from '@/screens/settings'
 import { IntegrationsHubScreen, QboConnectionScreen, QboMappingsScreen } from '@/screens/integrations'
+import {
+  InventoryAdminHubScreen,
+  InventoryItemsAdminScreen,
+  InventoryLocationsAdminScreen,
+  InventoryMovementsAdminScreen,
+} from '@/screens/inventory-admin'
 
 export default function MoreRoute() {
   return (
@@ -25,6 +31,10 @@ export default function MoreRoute() {
       <Route path="integrations" element={<IntegrationsHubScreen />} />
       <Route path="integrations/qbo" element={<QboConnectionScreen />} />
       <Route path="integrations/qbo/mappings" element={<QboMappingsScreen />} />
+      <Route path="inventory" element={<InventoryAdminHubScreen />} />
+      <Route path="inventory/items" element={<InventoryItemsAdminScreen />} />
+      <Route path="inventory/locations" element={<InventoryLocationsAdminScreen />} />
+      <Route path="inventory/movements" element={<InventoryMovementsAdminScreen />} />
     </Routes>
   )
 }
