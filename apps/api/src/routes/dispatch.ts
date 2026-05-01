@@ -407,7 +407,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     return true
   }
 
-  // Daily logs (Sitemap.html § fm-log)
+  // Daily logs (Sitemap.html § fm-log) — incl. photo upload + fetch
   if (
     await handleDailyLogRoutes(req, url, {
       pool,
@@ -417,6 +417,11 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       readBody,
       sendJson,
       checkVersion,
+      storage: ctx.storage,
+      maxPhotoBytes: Number(process.env.MAX_DAILY_LOG_PHOTO_BYTES ?? 15 * 1024 * 1024),
+      photoDownloadPresigned: ctx.blueprintDownloadPresigned,
+      sendFileContent: ctx.sendFileContent,
+      sendFileRedirect: ctx.sendFileRedirect,
     })
   ) {
     return true

@@ -46,6 +46,20 @@ export function buildBlueprintStorageKey(companyId: string, blueprintId: string,
   return `${companyId}/${blueprintId}/${sanitizeFileName(fileName)}`
 }
 
+/**
+ * Storage key for daily-log photos. Lives under a `/daily-logs/` prefix
+ * inside the same bucket so a single bucket policy covers everything;
+ * the `companyId` first segment is what assertKeyInCompany still
+ * checks, so cross-tenant access is impossible via path manipulation.
+ */
+export function buildDailyLogPhotoStorageKey(
+  companyId: string,
+  dailyLogId: string,
+  fileName: string,
+): string {
+  return `${companyId}/daily-logs/${dailyLogId}/${sanitizeFileName(fileName)}`
+}
+
 export function formatS3CopySource(bucket: string, key: string): string {
   return `${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`
 }

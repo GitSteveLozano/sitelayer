@@ -2,7 +2,7 @@
 // Wraps apps/api/src/routes/daily-logs.ts.
 
 import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query'
-import { request } from './client'
+import { ApiError, API_URL, buildAuthHeaders, request } from './client'
 import { queryKeys } from './keys'
 
 export type DailyLogStatus = 'draft' | 'submitted'
@@ -153,3 +153,79 @@ export function useSubmitDailyLog(id: string) {
     },
   })
 }
+
+// ---------------------------------------------------------------------------
+// Photo upload / delete / fetch
+// ---------------------------------------------------------------------------
+
+export interface DailyLogPhotoUploadResponse {
+  dailyLog: DailyLog
+  photo: { key: string; fileName: string; mimeType: string; bytes: number }
+}
+
+/**
+ * Upload one photo. Mirrors the multipart blueprint upload — FormData
+ * for the file, the standard auth headers from buildAuthHeaders.
+ * Browser sets the multipart boundary on content-type; we don't.
+ */
+export async function uploadDailyLogPhoto(id: string, file: File): Promise<DailyLogPhotoUploadResponse> {
+  const formData = new FormData()
+  formData.append('photo_file', file, file.name || 'photo.jpg')
+  const headers = await buildAuthHeaders()
+  const path = `/api/daily-logs/${encodeURIComponent(id)}/photos`
+
+  const response = await fetch(`${API_URL}${path}`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+  if (!response.ok) {
+    const requestId = response.headers.get('x-request-id')
+    let body: unknown = null
+    try {
+      const ct = response.headers.get('content-type') ?? ''
+      body = ct.includes('application/json') ? await response.json() : await response.text()
+    } catch {
+      body = null
+    }
+    throw new ApiError({ status: response.status, path, method: 'POST', requestId, body })
+  }
+  return (await response.json()) as DailyLogPhotoUploadResponse
+}
+
+/** Delete a photo by storage key. */
+export async function deleteDailyLogPhoto(id: string, key: string): Promise<DailyLogDetailResponse> {
+  return request<DailyLogDetailResponse>(`/api/daily-logs/${encodeURIComponent(id)}/photos`, {
+    method: 'DELETE',
+    json: { key },
+  })
+}
+
+/** Build the GET URL for a daily-log photo. The endpoint either streams
+ * bytes back or 302s to a presigned URL — `<img src>` follows both. */
+export function dailyLogPhotoUrl(id: string, key: string): string {
+  return `${API_URL}/api/daily-logs/${encodeURIComponent(id)}/photos/file?key=${encodeURIComponent(key)}`
+}
+
+export function useUploadDailyLogPhoto(id: string) {
+  const qc = useQueryClient()
+  return useMutation<DailyLogPhotoUploadResponse, Error, File>({
+    mutationFn: (file) => uploadDailyLogPhoto(id, file),
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.dailyLogs.all() })
+      qc.setQueryData(queryKeys.dailyLogs.detail(id), { dailyLog: data.dailyLog })
+    },
+  })
+}
+
+export function useDeleteDailyLogPhoto(id: string) {
+  const qc = useQueryClient()
+  return useMutation<DailyLogDetailResponse, Error, string>({
+    mutationFn: (key) => deleteDailyLogPhoto(id, key),
+    onSuccess: (data) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.dailyLogs.all() })
+      qc.setQueryData(queryKeys.dailyLogs.detail(id), data)
+    },
+  })
+}
+

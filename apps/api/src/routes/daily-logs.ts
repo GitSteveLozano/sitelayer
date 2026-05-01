@@ -3,6 +3,11 @@ import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput, isValidUuid } from '../http-utils.js'
+import {
+  parseDailyLogPhotoMultipart,
+  DailyLogPhotoUploadError,
+} from '../daily-log-photo-upload.js'
+import { type BlueprintStorage, assertKeyInCompany } from '../storage.js'
 
 export type DailyLogRouteCtx = {
   pool: Pool
@@ -12,6 +17,15 @@ export type DailyLogRouteCtx = {
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
+  /** Storage + photo upload limit; supplied from the dispatch layer. */
+  storage: BlueprintStorage
+  /** Per-photo cap (bytes). Not the JSON body limit. */
+  maxPhotoBytes: number
+  /** Whether the daily-log photo download path returns presigned URLs. */
+  photoDownloadPresigned: boolean
+  /** Stream-back response shaping for photo downloads. */
+  sendFileContent: (mimeType: string, fileName: string, content: Buffer | string) => void
+  sendFileRedirect: (location: string) => void
 }
 
 const DAILY_LOG_COLUMNS = `
@@ -320,5 +334,211 @@ export async function handleDailyLogRoutes(
     return true
   }
 
+  // ----- Photo upload / delete / fetch -----------------------------------
+  // POST   /api/daily-logs/:id/photos              multipart upload, append key
+  // DELETE /api/daily-logs/:id/photos              { key } JSON body, remove from
+  //                                                photo_keys + storage
+  // GET    /api/daily-logs/:id/photos/file?key=    return presigned URL or stream
+
+  const photoUploadMatch = url.pathname.match(/^\/api\/daily-logs\/([^/]+)\/photos$/)
+  if (req.method === 'POST' && photoUploadMatch) {
+    if (!ctx.requireRole(['foreman', 'admin', 'office'])) return true
+    const id = photoUploadMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+
+    // Owner check + status check rolled into one read so we don't upload
+    // bytes for a row that's submitted (locked) or not visible.
+    const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
+    const existing = await ctx.pool.query<{ id: string; status: string; foreman_user_id: string }>(
+      `select id, status, foreman_user_id
+       from daily_logs
+       where company_id = $1 and id = $2
+         and ($3 = '' or foreman_user_id = $3)
+       limit 1`,
+      [ctx.company.id, id, ownerFilter],
+    )
+    const row = existing.rows[0]
+    if (!row) {
+      ctx.sendJson(404, { error: 'daily log not found or not yours' })
+      return true
+    }
+    if (row.status !== 'draft') {
+      ctx.sendJson(409, { error: 'daily log already submitted; photos are locked' })
+      return true
+    }
+
+    let upload
+    try {
+      upload = await parseDailyLogPhotoMultipart(req, ctx.storage, ctx.company.id, id, 'photo.jpg', {
+        maxFileBytes: ctx.maxPhotoBytes,
+      })
+    } catch (err) {
+      if (err instanceof DailyLogPhotoUploadError) {
+        ctx.sendJson(err.status, { error: err.message })
+        return true
+      }
+      throw err
+    }
+
+    // Append the key to photo_keys, bump version + updated_at.
+    const updated = await withMutationTx(async (client: PoolClient) => {
+      const result = await client.query<DailyLogRow>(
+        `update daily_logs
+           set photo_keys = array_append(photo_keys, $3),
+               version = version + 1,
+               updated_at = now()
+         where company_id = $1 and id = $2 and status = 'draft'
+         returning ${DAILY_LOG_COLUMNS}`,
+        [ctx.company.id, id, upload.storagePath],
+      )
+      const updatedRow = result.rows[0]
+      if (!updatedRow) return null
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'daily_log',
+        entityId: updatedRow.id,
+        action: 'photo_add',
+        row: updatedRow as unknown as Record<string, unknown>,
+        actorUserId: ctx.currentUserId,
+      })
+      return updatedRow
+    })
+
+    if (!updated) {
+      ctx.sendJson(409, { error: 'daily log changed during upload — refresh and retry' })
+      return true
+    }
+    ctx.sendJson(201, {
+      dailyLog: updated,
+      photo: { key: upload.storagePath, fileName: upload.fileName, mimeType: upload.mimeType, bytes: upload.bytes },
+    })
+    return true
+  }
+
+  if (req.method === 'DELETE' && photoUploadMatch) {
+    if (!ctx.requireRole(['foreman', 'admin', 'office'])) return true
+    const id = photoUploadMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const body = await ctx.readBody()
+    const key = typeof body.key === 'string' ? body.key.trim() : ''
+    if (!key) {
+      ctx.sendJson(400, { error: 'key is required' })
+      return true
+    }
+    // Defense-in-depth: refuse keys that don't belong to this company.
+    try {
+      assertKeyInCompany(ctx.company.id, key)
+    } catch (err) {
+      ctx.sendJson(400, { error: err instanceof Error ? err.message : 'invalid key' })
+      return true
+    }
+
+    const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
+    const updated = await withMutationTx(async (client: PoolClient) => {
+      const result = await client.query<DailyLogRow>(
+        `update daily_logs
+           set photo_keys = array_remove(photo_keys, $3),
+               version = version + 1,
+               updated_at = now()
+         where company_id = $1 and id = $2 and status = 'draft'
+           and ($4 = '' or foreman_user_id = $4)
+           and $3 = any(photo_keys)
+         returning ${DAILY_LOG_COLUMNS}`,
+        [ctx.company.id, id, key, ownerFilter],
+      )
+      const updatedRow = result.rows[0]
+      if (!updatedRow) return null
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'daily_log',
+        entityId: updatedRow.id,
+        action: 'photo_remove',
+        row: updatedRow as unknown as Record<string, unknown>,
+        actorUserId: ctx.currentUserId,
+      })
+      return updatedRow
+    })
+
+    if (!updated) {
+      ctx.sendJson(404, { error: 'photo not found on this daily log' })
+      return true
+    }
+    // Best-effort blob delete — orphaned objects are tolerable; failing
+    // the request after we've already rotated the row would leave the UI
+    // in a confusing state.
+    // (Storage abstraction doesn't currently expose a delete; the blob
+    // becomes orphaned. Phase 2 nightly GC sweeps `daily-logs/<id>/`
+    // keys not referenced by any row. Recording the action above gives
+    // that sweeper its input.)
+    ctx.sendJson(200, { dailyLog: updated })
+    return true
+  }
+
+  const photoFetchMatch = url.pathname.match(/^\/api\/daily-logs\/([^/]+)\/photos\/file$/)
+  if (req.method === 'GET' && photoFetchMatch) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const id = photoFetchMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const key = String(url.searchParams.get('key') ?? '').trim()
+    if (!key) {
+      ctx.sendJson(400, { error: 'key is required' })
+      return true
+    }
+    try {
+      assertKeyInCompany(ctx.company.id, key)
+    } catch (err) {
+      ctx.sendJson(400, { error: err instanceof Error ? err.message : 'invalid key' })
+      return true
+    }
+
+    // Confirm the key belongs to this row before exposing the bytes.
+    const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
+    const ownership = await ctx.pool.query<{ exists: boolean }>(
+      `select exists(
+         select 1 from daily_logs
+         where company_id = $1 and id = $2
+           and $3 = any(photo_keys)
+           and ($4 = '' or foreman_user_id = $4)
+       ) as exists`,
+      [ctx.company.id, id, key, ownerFilter],
+    )
+    if (!ownership.rows[0]?.exists) {
+      ctx.sendJson(404, { error: 'photo not found on this daily log' })
+      return true
+    }
+
+    if (ctx.photoDownloadPresigned) {
+      const url = await ctx.storage.getDownloadUrl(key)
+      if (url) {
+        ctx.sendFileRedirect(url)
+        return true
+      }
+    }
+    const buf = await ctx.storage.get(key)
+    const fileName = key.split('/').pop() || 'photo.jpg'
+    const mime = inferMimeFromName(fileName)
+    ctx.sendFileContent(mime, fileName, buf)
+    return true
+  }
+
   return false
+}
+
+function inferMimeFromName(name: string): string {
+  const ext = name.toLowerCase().split('.').pop() ?? ''
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg'
+  if (ext === 'png') return 'image/png'
+  if (ext === 'webp') return 'image/webp'
+  if (ext === 'heic') return 'image/heic'
+  if (ext === 'heif') return 'image/heif'
+  return 'application/octet-stream'
 }

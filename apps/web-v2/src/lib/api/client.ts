@@ -81,11 +81,32 @@ export function getActiveCompanySlug(): string {
   return activeCompanySlug
 }
 
-function nextRequestId(): string {
+export function nextRequestId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return `web-${crypto.randomUUID()}`
   }
   return `web-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
+/**
+ * Build the auth headers (company slug + Bearer token + request id)
+ * that every authenticated call needs. Exposed so the multipart upload
+ * helpers can reuse the same plumbing without going through `request()`.
+ */
+export async function buildAuthHeaders(opts: { companySlug?: string; requestId?: string } = {}): Promise<Headers> {
+  const headers = new Headers()
+  const slug = opts.companySlug ?? activeCompanySlug
+  headers.set('x-sitelayer-company-slug', slug)
+  headers.set('x-request-id', opts.requestId ?? nextRequestId())
+  try {
+    const token = await tokenProvider()
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+  } catch {
+    // The same swallow-and-log behaviour as request() — the API will
+    // 401 if it actually needed the token; the registered provider
+    // surface in clerk-token-bridge.tsx already reports to Sentry.
+  }
+  return headers
 }
 
 export interface RequestOptions extends Omit<RequestInit, 'body'> {
