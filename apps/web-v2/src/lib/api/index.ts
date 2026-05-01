@@ -233,6 +233,24 @@ export {
 } from './qbo'
 
 export {
+  auditEventQueryKeys,
+  fetchAuditEvents,
+  useAuditEvents,
+  type AuditEvent,
+  type AuditEventListParams,
+  type AuditEventListResponse,
+} from './audit'
+
+export {
+  useCreateCompany,
+  useInviteMember,
+  type Company,
+  type CreateCompanyRequest,
+  type CreateCompanyResponse,
+  type CreateMembershipRequest,
+} from './companies'
+
+export {
   fetchSchedules,
   scheduleQueryKeys,
   useSchedules,

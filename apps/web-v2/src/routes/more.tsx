@@ -1,5 +1,7 @@
 import { Route, Routes } from 'react-router-dom'
 import {
+  AuditLogScreen,
+  BonusSimulatorScreen,
   CatalogBonusRulesScreen,
   CatalogCustomersScreen,
   CatalogDivisionsScreen,
@@ -35,6 +37,8 @@ export default function MoreRoute() {
       <Route path="inventory/items" element={<InventoryItemsAdminScreen />} />
       <Route path="inventory/locations" element={<InventoryLocationsAdminScreen />} />
       <Route path="inventory/movements" element={<InventoryMovementsAdminScreen />} />
+      <Route path="bonus-sim" element={<BonusSimulatorScreen />} />
+      <Route path="audit" element={<AuditLogScreen />} />
     </Routes>
   )
 }

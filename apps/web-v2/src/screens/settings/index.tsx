@@ -12,6 +12,8 @@ export { CatalogServiceItemsScreen } from './catalog-service-items'
 export { CatalogPricingProfilesScreen } from './catalog-pricing-profiles'
 export { CatalogBonusRulesScreen } from './catalog-bonus-rules'
 export { CatalogDivisionsScreen } from './catalog-divisions'
+export { BonusSimulatorScreen } from './bonus-sim'
+export { AuditLogScreen } from './audit-log'
 
 /**
  * Settings hub — what the More tab points at.
@@ -103,6 +105,36 @@ export function SettingsScreen() {
                 <div className="text-[14px] font-semibold">Inventory admin</div>
                 <div className="text-[12px] text-ink-3 mt-0.5">
                   Items, locations, movement ledger. Rental dispatch lives in the Rentals tab.
+                </div>
+              </div>
+              <span className="text-ink-4" aria-hidden="true">
+                ›
+              </span>
+            </div>
+          </Card>
+        </Link>
+
+        <Link to="/more/bonus-sim" className="block">
+          <Card>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[14px] font-semibold">Bonus simulator</div>
+                <div className="text-[12px] text-ink-3 mt-0.5">What-if modeling against an active bonus rule.</div>
+              </div>
+              <span className="text-ink-4" aria-hidden="true">
+                ›
+              </span>
+            </div>
+          </Card>
+        </Link>
+
+        <Link to="/more/audit" className="block">
+          <Card>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[14px] font-semibold">Audit log</div>
+                <div className="text-[12px] text-ink-3 mt-0.5">
+                  Append-only ledger of state-changing API calls. Admin only.
                 </div>
               </div>
               <span className="text-ink-4" aria-hidden="true">
