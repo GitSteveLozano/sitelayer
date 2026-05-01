@@ -287,9 +287,10 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     return true
   }
 
-  // Service-item mutations (code-keyed)
+  // Service-item mutations (code-keyed) and list
   if (
     await handleServiceItemRoutes(req, url, {
+      pool,
       company,
       requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
       readBody,

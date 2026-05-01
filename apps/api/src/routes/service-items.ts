@@ -1,10 +1,11 @@
 import type http from 'node:http'
-import type { PoolClient } from 'pg'
+import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
 import { parseExpectedVersion } from '../http-utils.js'
 
 export type ServiceItemRouteCtx = {
+  pool: Pool
   company: ActiveCompany
   requireRole: (allowed: readonly string[]) => boolean
   readBody: () => Promise<Record<string, unknown>>
@@ -22,6 +23,18 @@ export async function handleServiceItemRoutes(
   url: URL,
   ctx: ServiceItemRouteCtx,
 ): Promise<boolean> {
+  if (req.method === 'GET' && url.pathname === '/api/service-items') {
+    const result = await ctx.pool.query(
+      `select code, name, category, unit, default_rate, source, version
+       from service_items
+       where company_id = $1 and deleted_at is null
+       order by name asc`,
+      [ctx.company.id],
+    )
+    ctx.sendJson(200, { serviceItems: result.rows })
+    return true
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/service-items') {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const body = await ctx.readBody()
