@@ -18,6 +18,9 @@ import { spanForAppliedRow } from './trace.js'
 import { loadEmailConfig, sendEmail } from './email.js'
 import { createQboRentalInvoicePush } from './qbo-invoice-push.js'
 import { createQboEstimatePush } from './qbo-estimate-push.js'
+import { createClerkClient } from '@clerk/backend'
+import { clerkUserFetcherFromClient, createClerkResolver, type ClerkResolver } from './clerk-hydrate.js'
+import { drainNotifications as drainNotificationsBatch } from './notifications.js'
 
 const logger = createLogger('worker')
 
@@ -188,18 +191,6 @@ const NOTIFICATION_MAX_ATTEMPTS = Number.isFinite(notificationMaxAttemptsRaw)
 const notificationBatchLimit = Number(process.env.NOTIFICATION_BATCH_LIMIT ?? 10)
 const emailConfig = loadEmailConfig()
 
-type PendingNotificationRow = {
-  id: string
-  company_id: string
-  recipient_clerk_user_id: string | null
-  recipient_email: string | null
-  kind: string
-  subject: string
-  body_text: string
-  body_html: string | null
-  attempt_count: number
-}
-
 // If this many sends fail back-to-back in one batch, treat the email provider
 // as down and stop processing the rest of the batch. The unprocessed rows
 // stay locked under `FOR UPDATE SKIP LOCKED`, so on COMMIT they release with
@@ -211,123 +202,72 @@ const NOTIFICATION_PROVIDER_FAILURE_THRESHOLD = (() => {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 3
 })()
 
+// Clerk wiring. The notifications drain hydrates `recipient_email` from the
+// Clerk user id when the row was queued without an address. We fail loud at
+// startup when CLERK_SECRET_KEY is missing AND the worker is supposed to
+// drain notifications: silently marking those rows sent (the prior TODO
+// behavior) means real users miss real emails. CLAUDE.md operating rule:
+// don't fall back to silent localhost-style defaults.
+const NOTIFICATIONS_ENABLED = (process.env.NOTIFICATIONS_ENABLED ?? '1') !== '0'
+const clerkSecretKey = (process.env.CLERK_SECRET_KEY ?? '').trim()
+
+let clerkResolver: ClerkResolver | null = null
+if (NOTIFICATIONS_ENABLED) {
+  if (!clerkSecretKey) {
+    logger.fatal(
+      { hint: 'set CLERK_SECRET_KEY or NOTIFICATIONS_ENABLED=0' },
+      '[notifications] refusing to start: CLERK_SECRET_KEY required for clerk_user_id → email hydration',
+    )
+    process.exit(1)
+  }
+  const clerkClient = createClerkClient({ secretKey: clerkSecretKey })
+  const cacheTtlRaw = Number(process.env.CLERK_EMAIL_CACHE_TTL_MS ?? 5 * 60 * 1000)
+  const resolverOpts: Parameters<typeof createClerkResolver>[0] = {
+    getUser: clerkUserFetcherFromClient(clerkClient),
+  }
+  if (Number.isFinite(cacheTtlRaw) && cacheTtlRaw > 0) {
+    resolverOpts.cacheTtlMs = cacheTtlRaw
+  }
+  clerkResolver = createClerkResolver(resolverOpts)
+  logger.info('[notifications] clerk hydration enabled')
+} else {
+  logger.warn('[notifications] NOTIFICATIONS_ENABLED=0; clerk hydration skipped (rows requiring it will defer)')
+}
+
 /**
- * Claim up to `limit` pending notifications with `FOR UPDATE SKIP LOCKED` and
- * send them. On failure we increment `attempt_count`, back off exponentially
- * (5 minutes * 2^attempt_count), and mark `failed` after `NOTIFICATION_MAX_ATTEMPTS`.
- *
- * Includes a tiny per-batch circuit breaker: after
- * `NOTIFICATION_PROVIDER_FAILURE_THRESHOLD` consecutive send failures we stop
- * processing the batch and let the surviving rows go back into the pool with
- * their original next_attempt_at intact.
+ * Wrapper that opens a tx, calls into the extracted batch drainer, and commits.
+ * The batch drainer holds the per-row logic (claim / hydrate / send / DLQ); see
+ * `notifications.ts`.
  */
 async function drainNotifications(limit = notificationBatchLimit): Promise<{
   processed: number
   sent: number
   failed: number
   shortCircuited: boolean
+  deferred: number
+  hydrated: number
 }> {
   const client = await pool.connect()
-  let processed = 0
-  let sent = 0
-  let failed = 0
-  let consecutiveFailures = 0
-  let shortCircuited = false
   try {
     await client.query('begin')
-    const claimed = await client.query<PendingNotificationRow>(
-      `
-      select id, company_id, recipient_clerk_user_id, recipient_email, kind, subject, body_text, body_html, attempt_count
-      from notifications
-      where status = 'pending' and next_attempt_at <= now()
-      order by next_attempt_at asc, created_at asc
-      limit $1
-      for update skip locked
-      `,
-      [limit],
+    const result = await drainNotificationsBatch(
+      { client, sendEmail, logger },
+      {
+        limit,
+        providerFailureThreshold: NOTIFICATION_PROVIDER_FAILURE_THRESHOLD,
+        maxAttempts: NOTIFICATION_MAX_ATTEMPTS,
+        emailConfig,
+        clerkResolver,
+      },
     )
-    for (const row of claimed.rows) {
-      if (consecutiveFailures >= NOTIFICATION_PROVIDER_FAILURE_THRESHOLD) {
-        shortCircuited = true
-        break
-      }
-      processed += 1
-      const recipient = row.recipient_email ?? row.recipient_clerk_user_id
-      // Broadcast rows with no email: log via console provider and mark sent
-      // so they don't loop. Real email lookup (Clerk → email) is TODO.
-      if (!recipient) {
-        await client.query(`update notifications set status = 'sent', sent_at = now() where id = $1`, [row.id])
-        sent += 1
-        consecutiveFailures = 0
-        logger.info({ id: row.id, kind: row.kind, recipient: 'broadcast' }, '[notifications] logged broadcast')
-        continue
-      }
-      try {
-        const message: { to: string; subject: string; text: string; html?: string } = {
-          to: recipient,
-          subject: row.subject,
-          text: row.body_text,
-        }
-        if (row.body_html) message.html = row.body_html
-        await sendEmail(message, { config: emailConfig })
-        await client.query(`update notifications set status = 'sent', sent_at = now(), error = null where id = $1`, [
-          row.id,
-        ])
-        sent += 1
-        consecutiveFailures = 0
-      } catch (err) {
-        const nextAttemptCount = row.attempt_count + 1
-        const message = err instanceof Error ? err.message : String(err)
-        const exceededMax = nextAttemptCount >= NOTIFICATION_MAX_ATTEMPTS
-        const nextStatus = exceededMax ? 'failed' : 'pending'
-        // Exponential backoff: 5m * 2^attempt_count, clamped by Postgres interval math.
-        // After attempt 1 -> 10m, attempt 2 -> 20m, attempt 3 -> 40m, attempt 4 -> 80m.
-        const backoffSeconds = Math.min(60 * 60 * 24, 300 * Math.pow(2, nextAttemptCount))
-        await client.query(
-          `
-          update notifications
-          set status = $2,
-              attempt_count = $3,
-              next_attempt_at = now() + ($4 || ' seconds')::interval,
-              error = $5
-          where id = $1
-          `,
-          [row.id, nextStatus, nextAttemptCount, backoffSeconds, message.slice(0, 2000)],
-        )
-        failed += 1
-        consecutiveFailures += 1
-        logger.warn(
-          {
-            id: row.id,
-            kind: row.kind,
-            attempt_count: nextAttemptCount,
-            next_status: nextStatus,
-            err: message,
-          },
-          '[notifications] send failed',
-        )
-      }
-    }
-    if (shortCircuited) {
-      logger.warn(
-        {
-          consecutive_failures: consecutiveFailures,
-          processed,
-          sent,
-          failed,
-          remaining: claimed.rows.length - processed,
-        },
-        '[notifications] short-circuited batch (suspected provider outage)',
-      )
-    }
     await client.query('commit')
+    return result
   } catch (error) {
     await client.query('rollback').catch(() => {})
     throw error
   } finally {
     client.release()
   }
-  return { processed, sent, failed, shortCircuited }
 }
 
 // Rental billing invoice push fn selection.
@@ -529,7 +469,7 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     drainNotifications().catch((error) => {
       logger.error({ err: error }, '[worker] notification drain failed')
       Sentry.captureException(error)
-      return { processed: 0, sent: 0, failed: 0, shortCircuited: false }
+      return { processed: 0, sent: 0, failed: 0, shortCircuited: false, deferred: 0, hydrated: 0 }
     }),
   ])
 
