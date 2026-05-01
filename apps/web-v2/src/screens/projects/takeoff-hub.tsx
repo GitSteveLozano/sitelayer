@@ -1,11 +1,16 @@
 import { useState } from 'react'
 import { Card, MobileButton, Pill } from '@/components/mobile'
-import { Attribution, Spark, StripeCard } from '@/components/ai'
+import { AgentSurface, Attribution, Spark, StripeCard } from '@/components/ai'
 import {
+  useAiInsights,
+  useApplyInsight,
   useAssemblies,
+  useDismissInsight,
   useImportTakeoff,
   useQboCustomFields,
+  useTriggerTakeoffToBid,
   type ImportRow,
+  type TakeoffToBidPayload,
 } from '@/lib/api'
 
 /**
@@ -27,9 +32,28 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
   const assemblies = useAssemblies()
   const customFields = useQboCustomFields()
   const importRows = useImportTakeoff(projectId)
+  const triggerAgent = useTriggerTakeoffToBid()
+  const insights = useAiInsights<TakeoffToBidPayload>({
+    kind: 'takeoff_to_bid',
+    entityId: projectId,
+    open: true,
+  })
+  const dismissInsight = useDismissInsight()
+  const applyInsight = useApplyInsight()
   const [csvText, setCsvText] = useState('')
   const [importMsg, setImportMsg] = useState<string | null>(null)
   const [importError, setImportError] = useState<string | null>(null)
+  const [agentMsg, setAgentMsg] = useState<string | null>(null)
+
+  const onTriggerAgent = async () => {
+    setAgentMsg(null)
+    try {
+      await triggerAgent.mutateAsync({ project_id: projectId })
+      setAgentMsg('Agent run enqueued. Refresh in a few seconds for proposals.')
+    } catch (err) {
+      setAgentMsg(err instanceof Error ? err.message : 'Failed to trigger agent')
+    }
+  }
 
   const onImport = async () => {
     setImportError(null)
@@ -61,6 +85,41 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
           they all read/write is live below.
         </div>
       </Card>
+
+      {/* Phase 5: takeoff → bid agent */}
+      <AgentSurface banner={`Agent draft · ${insights.data?.insights[0]?.confidence ?? 'pending'} confidence`}>
+        <div className="text-[13px] font-semibold mb-2">Takeoff → bid suggestion</div>
+        {insights.data?.insights[0] ? (
+          <TakeoffToBidProposalBlock
+            insightId={insights.data.insights[0].id}
+            payload={insights.data.insights[0].payload}
+            onApply={async (id) => {
+              await applyInsight.mutateAsync({ id })
+            }}
+            onDismiss={async (id, reason) => {
+              await dismissInsight.mutateAsync(reason ? { id, reason } : { id })
+            }}
+          />
+        ) : (
+          <div className="text-[12px] text-ink-2">
+            No agent run yet. Trigger one to propose bid lines from the project's takeoff measurements.
+            The agent uses your service-item catalog as the rate book; lines without a catalog match
+            land at low confidence so you know to review.
+          </div>
+        )}
+        <div className="mt-3 pt-2 border-t border-dashed border-line-2 flex items-center justify-between">
+          <Attribution source="POST /api/ai/agents/takeoff-to-bid → ai_insights" />
+          <button
+            type="button"
+            onClick={onTriggerAgent}
+            disabled={triggerAgent.isPending}
+            className="text-[12px] text-accent font-medium"
+          >
+            {triggerAgent.isPending ? 'Enqueuing…' : 'Run agent'}
+          </button>
+        </div>
+        {agentMsg ? <div className="text-[11px] text-ink-3 mt-1">{agentMsg}</div> : null}
+      </AgentSurface>
 
       {/* Phase 3A: multi-condition tags */}
       <StripeCard tone="accent">
@@ -237,6 +296,70 @@ function parseCsv(text: string): ImportRow[] {
     rows.push(row)
   }
   return rows
+}
+
+function TakeoffToBidProposalBlock({
+  insightId,
+  payload,
+  onApply,
+  onDismiss,
+}: {
+  insightId: string
+  payload: TakeoffToBidPayload
+  onApply: (id: string) => Promise<void>
+  onDismiss: (id: string, reason?: string) => Promise<void>
+}) {
+  return (
+    <div>
+      <div className="num text-[20px] font-bold tracking-tight">
+        ${payload.total_amount.toLocaleString()}
+      </div>
+      <div className="text-[11px] text-ink-3 mt-0.5">
+        {payload.lines.length} line{payload.lines.length === 1 ? '' : 's'} from{' '}
+        {payload.measurement_count} measurement{payload.measurement_count === 1 ? '' : 's'}
+      </div>
+      <div className="mt-2 space-y-1">
+        {payload.lines.slice(0, 5).map((line, i) => (
+          <div key={i} className="flex items-center justify-between text-[12px]">
+            <div className="truncate flex-1 mr-2">
+              <span className="font-medium">{line.service_item_code}</span>
+              <span className="text-ink-3">
+                {' '}
+                · {line.quantity}
+                {line.unit}
+              </span>
+            </div>
+            <Pill
+              tone={
+                line.confidence === 'high' ? 'good' : line.confidence === 'med' ? 'default' : 'warn'
+              }
+            >
+              ${line.amount.toFixed(2)}
+            </Pill>
+          </div>
+        ))}
+        {payload.lines.length > 5 ? (
+          <div className="text-[11px] text-ink-3 italic">
+            +{payload.lines.length - 5} more line{payload.lines.length - 5 === 1 ? '' : 's'}
+          </div>
+        ) : null}
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        <MobileButton variant="primary" onClick={() => void onApply(insightId)}>
+          Apply to estimate
+        </MobileButton>
+        <MobileButton
+          variant="ghost"
+          onClick={() => {
+            const reason = window.prompt('Why are you dismissing this proposal?') ?? undefined
+            void onDismiss(insightId, reason)
+          }}
+        >
+          Dismiss
+        </MobileButton>
+      </div>
+    </div>
+  )
 }
 
 function splitCsvRow(line: string): string[] {

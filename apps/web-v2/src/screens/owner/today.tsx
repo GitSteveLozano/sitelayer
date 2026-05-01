@@ -90,6 +90,12 @@ export function OwnerTodayScreen() {
         <Chip active={view === 'attention'} onClick={() => setView('attention')} dotTone={attentionCount > 0 ? 'warn' : 'default'}>
           What needs me? {attentionCount > 0 ? <span className="opacity-70 ml-1">{attentionCount}</span> : null}
         </Chip>
+        <Link
+          to="/bid-accuracy"
+          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[13px] font-medium border bg-card-soft text-ink-2 border-line shrink-0"
+        >
+          Bid accuracy
+        </Link>
       </div>
 
       <div className="flex-1 px-4 pb-8 pt-2">
