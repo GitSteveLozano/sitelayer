@@ -1,11 +1,12 @@
 import { useRole } from '@/lib/role'
 import { PlaceholderScreen } from '@/components/shell/PlaceholderScreen'
 import { WorkerTodayScreen } from '@/screens/worker'
+import { ForemanTodayScreen } from '@/screens/foreman'
 
 /**
  * Role-aware Home tab. Three Homes, three design IDs from `Sitemap.html`:
  *   - owner   → db-calm-default (Phase 2)
- *   - foreman → fm-today-v2     (Phase 1D.3)
+ *   - foreman → fm-today-v2     (1D.3 — wired below)
  *   - worker  → wk-today        (1D.2 — wired below)
  */
 export default function HomeRoute() {
@@ -16,16 +17,7 @@ export default function HomeRoute() {
   }
 
   if (role === 'foreman') {
-    return (
-      <PlaceholderScreen
-        eyebrow="Foreman · Home"
-        title="Crew today"
-        designId="fm-today-v2"
-      >
-        Phase 1D.3 lands here: live geofence card, today's crew assignments, WTD
-        burden, end-of-day daily log entry.
-      </PlaceholderScreen>
-    )
+    return <ForemanTodayScreen />
   }
 
   return (

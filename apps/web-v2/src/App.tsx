@@ -10,6 +10,7 @@ const ProjectsRoute = lazy(() => import('@/routes/projects'))
 const TimeRoute = lazy(() => import('@/routes/time'))
 const RentalsRoute = lazy(() => import('@/routes/rentals'))
 const MoreRoute = lazy(() => import('@/routes/more'))
+const LogRoute = lazy(() => import('@/routes/log'))
 
 // Single client for the whole app. v2 uses TanStack Query for fetching
 // and caching; offline-aware mutations land in Phase 1.
@@ -49,6 +50,7 @@ export default function App() {
                 <Route path="/time/*" element={<TimeRoute />} />
                 <Route path="/rentals/*" element={<RentalsRoute />} />
                 <Route path="/more/*" element={<MoreRoute />} />
+                <Route path="/log" element={<LogRoute />} />
                 <Route path="*" element={<NotFound />} />
               </Route>
             </Routes>
