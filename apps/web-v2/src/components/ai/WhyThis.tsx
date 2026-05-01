@@ -18,12 +18,7 @@ export interface WhyThisProps {
 
 export function WhyThis({ title, attribution, className, children }: WhyThisProps) {
   return (
-    <div
-      className={cn(
-        'bg-paper border border-line rounded-[14px] px-6 py-5 flex flex-col gap-3',
-        className,
-      )}
-    >
+    <div className={cn('bg-paper border border-line rounded-[14px] px-6 py-5 flex flex-col gap-3', className)}>
       <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-accent-ink flex items-center gap-1.5">
         <Spark state="strong" size={12} aria-label="" />
         Why this?

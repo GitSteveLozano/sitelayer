@@ -177,9 +177,7 @@ export const TimeReviewEventRequestSchema = z
 
 export type TimeReviewEventRequest = z.infer<typeof TimeReviewEventRequestSchema>
 
-export type TimeReviewEventParseResult =
-  | { ok: true; value: TimeReviewEventRequest }
-  | { ok: false; error: string }
+export type TimeReviewEventParseResult = { ok: true; value: TimeReviewEventRequest } | { ok: false; error: string }
 
 export function parseTimeReviewEventRequest(body: unknown): TimeReviewEventParseResult {
   const normalized: Record<string, unknown> =

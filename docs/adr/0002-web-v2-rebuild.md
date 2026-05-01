@@ -79,19 +79,19 @@ for zero user-visible value.
 
 ## Phasing
 
-| Phase | Scope                                            | Weeks   | Parallel? |
-|-------|--------------------------------------------------|---------|-----------|
-| 0     | Tokens, AI primitives, PWA shell, ADR            | 1       | —         |
-| 1     | Worker + Foreman field shells (geofence, daily   | 4–5     | with 3    |
-|       | log, time approval, push, SMS)                   |         |           |
-| 2     | Owner home + Projects/Estimate/Schedule rebuild  | 3–4     | —         |
-| 3     | Takeoff overhaul (multi-condition, calibration,  | 4–5     | with 1    |
-|       | multi-page, linear/count, Compare, assemblies,   |         |           |
-|       | CSV import, QBO sqft bridge)                     |         |           |
-| 4     | Rentals rebuild (scan dispatch + utilization)    | 2–3     | with 1/3  |
-| 5     | AI Layer (bid accuracy, takeoff-to-bid agent,    | 3–4     | —         |
-|       | inline atoms across screens)                     |         |           |
-| 6     | Cutover (route 100% to v2; retire `apps/web/`)   | 1–2     | —         |
+| Phase | Scope                                           | Weeks | Parallel? |
+| ----- | ----------------------------------------------- | ----- | --------- |
+| 0     | Tokens, AI primitives, PWA shell, ADR           | 1     | —         |
+| 1     | Worker + Foreman field shells (geofence, daily  | 4–5   | with 3    |
+|       | log, time approval, push, SMS)                  |       |           |
+| 2     | Owner home + Projects/Estimate/Schedule rebuild | 3–4   | —         |
+| 3     | Takeoff overhaul (multi-condition, calibration, | 4–5   | with 1    |
+|       | multi-page, linear/count, Compare, assemblies,  |       |           |
+|       | CSV import, QBO sqft bridge)                    |       |           |
+| 4     | Rentals rebuild (scan dispatch + utilization)   | 2–3   | with 1/3  |
+| 5     | AI Layer (bid accuracy, takeoff-to-bid agent,   | 3–4   | —         |
+|       | inline atoms across screens)                    |       |           |
+| 6     | Cutover (route 100% to v2; retire `apps/web/`)  | 1–2   | —         |
 
 Phase 1 and Phase 3 are independent (different DB tables, different API
 surfaces, no shared screens) and can run as two streams. Phase 4 is also
@@ -106,7 +106,7 @@ produced by Phase 1, so it sequences after.
   role-aware shells justify the upgrade)
 - Tailwind 3.4 driven by CSS custom properties — design tokens are the
   source of truth, Tailwind reads them via `theme.extend.colors:
-  'var(--m-…)'` so engineers can write `bg-paper text-ink border-line`
+'var(--m-…)'` so engineers can write `bg-paper text-ink border-line`
 - Tokens and AI primitives stay local to `apps/web-v2/` until Phase 1
   or 3 needs to share them with `apps/web/`. No premature `packages/`
   promotion.

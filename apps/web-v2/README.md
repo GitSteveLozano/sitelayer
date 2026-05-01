@@ -28,12 +28,12 @@ npm run dev:web-v2                   # vite dev on :3100
 Configured in the repo's root `.env*` (see `envDir` in `vite.config.ts`).
 All optional in Phase 0 — the shell boots without any of them.
 
-| Var                          | When needed                            |
-| ---------------------------- | -------------------------------------- |
-| `VITE_CLERK_PUBLISHABLE_KEY` | When you want auth flows wired         |
-| `VITE_SENTRY_DSN`            | Production / preview error reporting   |
-| `VITE_SENTRY_ENVIRONMENT`    | Tier label in Sentry                   |
-| `VITE_SENTRY_RELEASE`        | Set by deploy workflow                 |
+| Var                          | When needed                          |
+| ---------------------------- | ------------------------------------ |
+| `VITE_CLERK_PUBLISHABLE_KEY` | When you want auth flows wired       |
+| `VITE_SENTRY_DSN`            | Production / preview error reporting |
+| `VITE_SENTRY_ENVIRONMENT`    | Tier label in Sentry                 |
+| `VITE_SENTRY_RELEASE`        | Set by deploy workflow               |
 
 ### Persona preview
 

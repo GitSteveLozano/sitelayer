@@ -12,37 +12,24 @@ export default function TimeRoute() {
 
   if (role === 'foreman') {
     return (
-      <PlaceholderScreen
-        eyebrow="Foreman · Time"
-        title="Crew entry"
-        designId="t-foreman"
-      >
-        Phase 1: foreman-view time entry — crew list, batch clock-in for the
-        day, geofence override.
+      <PlaceholderScreen eyebrow="Foreman · Time" title="Crew entry" designId="t-foreman">
+        Phase 1: foreman-view time entry — crew list, batch clock-in for the day, geofence override.
       </PlaceholderScreen>
     )
   }
 
   if (role === 'worker') {
     return (
-      <PlaceholderScreen
-        eyebrow="Worker · Time"
-        title="My week"
-        designId="wk-hours"
-      >
+      <PlaceholderScreen eyebrow="Worker · Time" title="My week" designId="wk-hours">
         Phase 1: read-only personal hours, week summary, dispute deep-link.
       </PlaceholderScreen>
     )
   }
 
   return (
-    <PlaceholderScreen
-      eyebrow="Owner / PM · Time"
-      title="Approval queue"
-      designId="t-approve"
-    >
-      Phase 1: approval queue with anomaly flags (overtime, geofence breach,
-      no-clock-out). Sub-tabs for burden and live-vs-budget.
+    <PlaceholderScreen eyebrow="Owner / PM · Time" title="Approval queue" designId="t-approve">
+      Phase 1: approval queue with anomaly flags (overtime, geofence breach, no-clock-out). Sub-tabs for burden and
+      live-vs-budget.
     </PlaceholderScreen>
   )
 }
