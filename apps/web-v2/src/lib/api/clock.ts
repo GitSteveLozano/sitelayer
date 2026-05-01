@@ -122,19 +122,52 @@ export function useClockTimeline(
   })
 }
 
+import { NetworkError } from './client'
+
+export type ClockMutationResult<T> = T | { queued: true }
+
+async function liveOrQueueClockIn(input: ClockInRequest): Promise<ClockMutationResult<ClockInResponse>> {
+  try {
+    return await clockIn(input)
+  } catch (err) {
+    if (err instanceof NetworkError) {
+      const { enqueueOfflineMutation } = await import('@/lib/offline/queue')
+      await enqueueOfflineMutation('clock_in', input as unknown as Record<string, unknown>)
+      return { queued: true }
+    }
+    throw err
+  }
+}
+
+async function liveOrQueueClockOut(input: ClockOutRequest): Promise<ClockMutationResult<ClockOutResponse>> {
+  try {
+    return await clockOut(input)
+  } catch (err) {
+    if (err instanceof NetworkError) {
+      const { enqueueOfflineMutation } = await import('@/lib/offline/queue')
+      await enqueueOfflineMutation('clock_out', input as unknown as Record<string, unknown>)
+      return { queued: true }
+    }
+    throw err
+  }
+}
+
 /**
  * Mutation hook for clock-in. The geofence hook composes this with
  * `source='auto_geofence'` to fire passive events; the manual UI path
  * leaves source default ('manual').
  *
- * On success: invalidates the clock timeline so any open `useClockTimeline`
- * refetches. The Foreman crew-status / Worker today screens read from
- * that query.
+ * Offline behaviour: a NetworkError (no response — caller is offline
+ * or the API is unreachable) enqueues the call into IndexedDB; the
+ * mutation resolves with `{ queued: true }` so the UI stays
+ * responsive. The replay engine drains the queue on `online` event +
+ * 15s heartbeat. 4xx responses (e.g. 'no_geofence_match') still
+ * surface to the caller — only network failure triggers the queue.
  */
 export function useClockIn() {
   const qc = useQueryClient()
-  return useMutation<ClockInResponse, Error, ClockInRequest>({
-    mutationFn: (input) => clockIn(input),
+  return useMutation<ClockMutationResult<ClockInResponse>, Error, ClockInRequest>({
+    mutationFn: liveOrQueueClockIn,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.clock.all() })
     },
@@ -143,8 +176,8 @@ export function useClockIn() {
 
 export function useClockOut() {
   const qc = useQueryClient()
-  return useMutation<ClockOutResponse, Error, ClockOutRequest>({
-    mutationFn: (input) => clockOut(input),
+  return useMutation<ClockMutationResult<ClockOutResponse>, Error, ClockOutRequest>({
+    mutationFn: liveOrQueueClockOut,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.clock.all() })
     },

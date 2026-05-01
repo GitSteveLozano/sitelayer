@@ -85,6 +85,9 @@ export function WorkerTodayScreen() {
         source: 'auto_geofence',
       })
       .then((response) => {
+        // Offline path returns { queued: true }; we just leave the
+        // OfflineBanner to show pending count and skip the takeover.
+        if ('queued' in response) return
         if (response.clockEvent.source === 'auto_geofence') {
           setAutoClockInEvent(response.clockEvent)
         }
