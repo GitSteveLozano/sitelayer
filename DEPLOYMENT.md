@@ -90,7 +90,20 @@ git clone https://github.com/GitSteveLozano/sitelayer.git .
 
 ### 6. Environment Configuration
 
-Create `/app/sitelayer/.env` owned by the `sitelayer` user. `DATABASE_URL`, production auth, `API_METRICS_TOKEN`, and Spaces credentials are required for the current production profile.
+Production runtime env is sourced from the GitHub Actions `production` environment, rendered by `scripts/render-production-env.mjs` using `ops/env/production.env.json`, uploaded during deploy, backed up on the droplet, and promoted to `/app/sitelayer/.env`.
+
+Do not hand-edit `/app/sitelayer/.env` for normal operations. Update GitHub environment secrets/variables instead, then rerun the production deploy. Keep `/app/sitelayer/.env` as the generated artifact and break-glass inspection point only.
+
+Current production env contract:
+
+- Runtime source of truth: GitHub repository → Settings → Environments → `production` → secrets and variables.
+- Contract and defaults: `ops/env/production.env.json`.
+- Renderer: `node scripts/render-production-env.mjs --output <file>`.
+- Deploy artifact: `/app/sitelayer/.env`, mode `600`, backed up as `.env.bak.<timestamp>` before each deploy.
+- Phase-2 render enforcement: set GitHub environment variable `PRODUCTION_ENV_RENDER_ENFORCE=1` after all render warnings are clean.
+- API boot enforcement: set GitHub environment variable `SITELAYER_ENV_ENFORCE=1` after the API validator logs are clean.
+
+For bootstrap or break-glass only, `/app/sitelayer/.env` has this shape. `DATABASE_URL`, production auth, `API_METRICS_TOKEN`, and Spaces credentials are required for the current production profile.
 
 ```bash
 cat > /app/sitelayer/.env << 'EOF'

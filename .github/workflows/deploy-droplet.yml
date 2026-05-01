@@ -80,6 +80,18 @@ jobs:
         env:
           DIGITALOCEAN_ACCESS_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
           SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG || 'sandolabs' }}
+          SENTRY_WEB_PROJECT: ${{ vars.SENTRY_WEB_PROJECT || 'sitelayer-web' }}
+          VITE_API_URL: ${{ vars.VITE_API_URL || '' }}
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ vars.VITE_CLERK_PUBLISHABLE_KEY || secrets.VITE_CLERK_PUBLISHABLE_KEY || 'pk_live_Y2xlcmsuc2FuZG9sYWIueHl6JA' }}
+          VITE_COMPANY_SLUG: ${{ vars.VITE_COMPANY_SLUG || vars.ACTIVE_COMPANY_SLUG || 'la-operations' }}
+          VITE_USER_ID: ${{ vars.VITE_USER_ID || vars.ACTIVE_USER_ID || 'demo-user' }}
+          VITE_APP_TIER: ${{ vars.VITE_APP_TIER || 'prod' }}
+          VITE_SENTRY_DSN: ${{ secrets.VITE_SENTRY_DSN || vars.VITE_SENTRY_DSN || '' }}
+          VITE_SENTRY_ENVIRONMENT: ${{ vars.VITE_SENTRY_ENVIRONMENT || 'production' }}
+          VITE_SENTRY_TRACES_SAMPLE_RATE: ${{ vars.VITE_SENTRY_TRACES_SAMPLE_RATE || '0.1' }}
+          VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE: ${{ vars.VITE_SENTRY_REPLAYS_SESSION_SAMPLE_RATE || '0.1' }}
+          VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE: ${{ vars.VITE_SENTRY_REPLAYS_ON_ERROR_SAMPLE_RATE || '1.0' }}
         run: |
           set -euo pipefail
 
@@ -168,6 +180,64 @@ jobs:
           push_image "$APP_IMAGE"
           push_image "$APP_IMAGE_MAIN"
 
+      - name: Render production runtime env
+        env:
+          PRODUCTION_ENV_RENDER_ENFORCE: ${{ vars.PRODUCTION_ENV_RENDER_ENFORCE || '0' }}
+          APP_IMAGE: ${{ env.APP_IMAGE }}
+          APP_TIER: ${{ vars.APP_TIER || 'prod' }}
+          NODE_ENV: ${{ vars.NODE_ENV || 'production' }}
+          FEATURE_FLAGS: ${{ vars.FEATURE_FLAGS || '' }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DATABASE_URL_PROD_RO: ${{ secrets.DATABASE_URL_PROD_RO }}
+          DATABASE_SSL_REJECT_UNAUTHORIZED: ${{ vars.DATABASE_SSL_REJECT_UNAUTHORIZED || 'false' }}
+          ACTIVE_COMPANY_SLUG: ${{ vars.ACTIVE_COMPANY_SLUG || 'la-operations' }}
+          ACTIVE_USER_ID: ${{ vars.ACTIVE_USER_ID || 'demo-user' }}
+          ALLOWED_ORIGINS: ${{ vars.ALLOWED_ORIGINS }}
+          QBO_CLIENT_ID: ${{ vars.QBO_CLIENT_ID || '' }}
+          QBO_CLIENT_SECRET: ${{ secrets.QBO_CLIENT_SECRET }}
+          QBO_REDIRECT_URI: ${{ vars.QBO_REDIRECT_URI || 'https://sitelayer.sandolab.xyz/api/integrations/qbo/callback' }}
+          QBO_SUCCESS_REDIRECT_URI: ${{ vars.QBO_SUCCESS_REDIRECT_URI || 'https://sitelayer.sandolab.xyz/?qbo=connected' }}
+          QBO_ENVIRONMENT: ${{ vars.QBO_ENVIRONMENT || 'sandbox' }}
+          QBO_STATE_SECRET: ${{ secrets.QBO_STATE_SECRET }}
+          QBO_WEBHOOK_VERIFIER: ${{ secrets.QBO_WEBHOOK_VERIFIER }}
+          CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
+          CLERK_JWT_KEY: ${{ secrets.CLERK_JWT_KEY }}
+          CLERK_ISSUER: ${{ vars.CLERK_ISSUER }}
+          CLERK_WEBHOOK_SECRET: ${{ secrets.CLERK_WEBHOOK_SECRET }}
+          INTERNAL_AUTH_TOKEN: ${{ secrets.INTERNAL_AUTH_TOKEN }}
+          AUTH_ALLOW_HEADER_FALLBACK: ${{ vars.AUTH_ALLOW_HEADER_FALLBACK || '' }}
+          AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS: ${{ vars.AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS || '' }}
+          DO_SPACES_KEY: ${{ secrets.DO_SPACES_KEY }}
+          DO_SPACES_SECRET: ${{ secrets.DO_SPACES_SECRET }}
+          DO_SPACES_REGION: ${{ vars.DO_SPACES_REGION || 'tor1' }}
+          DO_SPACES_ENDPOINT: ${{ vars.DO_SPACES_ENDPOINT || 'https://tor1.digitaloceanspaces.com' }}
+          DO_SPACES_BUCKET: ${{ vars.DO_SPACES_BUCKET || 'sitelayer-blueprints-prod' }}
+          ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD: ${{ vars.ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD || '' }}
+          BLUEPRINT_STORAGE_ROOT: ${{ vars.BLUEPRINT_STORAGE_ROOT || '/app/storage/blueprints' }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_WORKER_DSN: ${{ secrets.SENTRY_WORKER_DSN }}
+          SENTRY_ENVIRONMENT: ${{ vars.SENTRY_ENVIRONMENT || 'production' }}
+          SENTRY_TRACES_SAMPLE_RATE: ${{ vars.SENTRY_TRACES_SAMPLE_RATE || '0.1' }}
+          SENTRY_ORG: ${{ vars.SENTRY_ORG || 'sandolabs' }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          DEBUG_TRACE_TOKEN: ${{ secrets.DEBUG_TRACE_TOKEN }}
+          DEBUG_ALLOW_PROD: ${{ vars.DEBUG_ALLOW_PROD || '' }}
+          API_METRICS_TOKEN: ${{ secrets.API_METRICS_TOKEN }}
+          EMAIL_PROVIDER: ${{ vars.EMAIL_PROVIDER || 'console' }}
+          EMAIL_FROM: ${{ vars.EMAIL_FROM || 'noreply@sitelayer.sandolab.xyz' }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          SHUTDOWN_TIMEOUT_MS: ${{ vars.SHUTDOWN_TIMEOUT_MS || '15000' }}
+          SITELAYER_ENV_ENFORCE: ${{ vars.SITELAYER_ENV_ENFORCE || '' }}
+        run: |
+          set -euo pipefail
+          umask 077
+          production_env_file="${RUNNER_TEMP:-/tmp}/sitelayer-production.env"
+          node scripts/render-production-env.mjs --output "$production_env_file"
+          {
+            echo "PRODUCTION_ENV_FILE=$production_env_file"
+          } >> "$GITHUB_ENV"
+
       - name: Deploy via SSH
         env:
           DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -175,11 +245,13 @@ jobs:
           DEPLOY_USER: sitelayer
           APP_IMAGE: ${{ env.APP_IMAGE }}
           GIT_SHA: ${{ env.GIT_SHA }}
+          PRODUCTION_ENV_FILE: ${{ env.PRODUCTION_ENV_FILE }}
         run: |
           test -n "$DEPLOY_KEY" || { echo "DEPLOY_SSH_KEY is not configured"; exit 1; }
           test -n "$DEPLOY_HOST" || { echo "DEPLOY_HOST is not configured"; exit 1; }
           test -n "$APP_IMAGE" || { echo "APP_IMAGE is not configured"; exit 1; }
           test -n "$GIT_SHA" || { echo "GIT_SHA is not configured"; exit 1; }
+          test -f "$PRODUCTION_ENV_FILE" || { echo "PRODUCTION_ENV_FILE is not configured"; exit 1; }
 
           mkdir -p ~/.ssh
           echo "$DEPLOY_KEY" > ~/.ssh/deploy_key
@@ -192,6 +264,7 @@ jobs:
           scp -i ~/.ssh/deploy_key /tmp/sitelayer-registry-docker-config.json "$DEPLOY_USER@$DEPLOY_HOST:/home/$DEPLOY_USER/.docker/config.json.tmp"
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "mv ~/.docker/config.json.tmp ~/.docker/config.json && chmod 600 ~/.docker/config.json"
           shred -u /tmp/sitelayer-registry-docker-config.json
+          scp -i ~/.ssh/deploy_key "$PRODUCTION_ENV_FILE" "$DEPLOY_USER@$DEPLOY_HOST:/home/$DEPLOY_USER/.env.production.next"
 
           ssh -i ~/.ssh/deploy_key "$DEPLOY_USER@$DEPLOY_HOST" "APP_IMAGE='$APP_IMAGE' EXPECTED_GIT_SHA='$GIT_SHA' bash -s" << 'EOF'
             set -euo pipefail
@@ -250,32 +323,21 @@ jobs:
             export APP_IMAGE
             export SENTRY_WEB_PROJECT="${SENTRY_WEB_PROJECT:-sitelayer-web}"
 
-            # docker compose reads this automatically from the working directory.
-            if [ ! -f .env ]; then
-              echo "ERROR: .env file not found in /app/sitelayer"
+            # docker compose reads .env automatically from this working directory.
+            # The file is rendered by GitHub Actions from the production
+            # environment's explicit allowlist; the droplet copy is an artifact.
+            if [ ! -f /home/sitelayer/.env.production.next ]; then
+              echo "ERROR: rendered production env file was not uploaded"
               exit 1
             fi
-
-            APP_IMAGE="$APP_IMAGE" python3 - <<'PY'
-          from pathlib import Path
-          import os
-
-          path = Path("/app/sitelayer/.env")
-          key = "APP_IMAGE"
-          value = os.environ["APP_IMAGE"]
-          lines = path.read_text().splitlines()
-          written = False
-          out = []
-          for line in lines:
-              if line.startswith(f"{key}="):
-                  out.append(f"{key}={value}")
-                  written = True
-              else:
-                  out.append(line)
-          if not written:
-              out.append(f"{key}={value}")
-          path.write_text("\n".join(out) + "\n")
-          PY
+            deploy_stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+            if [ -f .env ]; then
+              cp -p .env ".env.bak.$deploy_stamp"
+            fi
+            install -m 600 /home/sitelayer/.env.production.next .env.next
+            rm -f /home/sitelayer/.env.production.next
+            mv .env.next .env
+            chmod 600 .env
 
             # Pull before touching the database so a missing image cannot leave
             # the old app running against a newly migrated schema.

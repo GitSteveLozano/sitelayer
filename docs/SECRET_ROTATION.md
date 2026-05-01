@@ -4,10 +4,13 @@
 **Operator:** Taylor (single-maintainer).
 **Scope:** every credential below in the order listed. Each section: what it grants → where it lives → rotation commands → verification.
 
-Production env file: `/app/sitelayer/.env` on droplet `sitelayer` (`566798325`, reserved IP `159.203.51.158`, MagicDNS-equivalent `sitelayer.sandolab.xyz`).
+Production source of truth: GitHub Actions environment `production` in repo `GitSteveLozano/sitelayer`.
+Production rendered env artifact: `/app/sitelayer/.env` on droplet `sitelayer` (`566798325`, reserved IP `159.203.51.158`, MagicDNS-equivalent `sitelayer.sandolab.xyz`).
 Preview env file: `/app/previews/.env.shared` on droplet `sitelayer-preview` (`566806040`, reserved IP `159.203.53.218`).
 Local dev secrets: `~/.env.local`.
 GitHub repo: `GitSteveLozano/sitelayer`.
+
+The production contract is `ops/env/production.env.json`; the deploy workflow renders it with `scripts/render-production-env.mjs`, uploads it to the droplet, backs up the previous artifact, and promotes the new file atomically. Rotate production secrets in GitHub first, then deploy. Only hand-edit `/app/sitelayer/.env` for break-glass rollback, and copy that fix back into GitHub immediately.
 
 A successful deploy after rotation must end with `curl -fsS https://sitelayer.sandolab.xyz/health` returning 200 and `docker compose -f /app/sitelayer/docker-compose.prod.yml ps` showing `api`, `worker`, `web`, `caddy` all healthy.
 
@@ -24,21 +27,21 @@ For incident-time triage (revoke first, rotate second) see `docs/INCIDENT_RESPON
 | `DEPLOY_HOST`                | GitHub repo secret (hostname/IP, not really a secret)               | n/a — private VPC IP / DO reserved IP / hostname           | § 8             |
 | `DIGITALOCEAN_ACCESS_TOKEN`  | GitHub repo secret                                                  | DO Console → API → Tokens                                  | § 10            |
 | `CLERK_SECRET_KEY`           | Reserved; not used by current API auth path                         | Clerk dashboard → Configure → API Keys                     | § 1             |
-| `CLERK_JWT_KEY`              | `/app/sitelayer/.env`                                               | Clerk dashboard → API Keys → JWT public key (rotates rare) | § 1             |
-| `CLERK_WEBHOOK_SECRET`       | `/app/sitelayer/.env`                                               | Clerk dashboard → Webhooks                                 | § 1             |
-| `VITE_CLERK_PUBLISHABLE_KEY` | GitHub Actions build env/default baked into web image               | Clerk dashboard → Frontend API                             | § 1             |
-| `QBO_CLIENT_ID`              | `/app/sitelayer/.env`                                               | Intuit dev portal → app → Keys & OAuth                     | § 3             |
-| `QBO_CLIENT_SECRET`          | `/app/sitelayer/.env` (currently empty in prod)                     | Intuit dev portal → Regenerate Client Secret               | § 3             |
-| `QBO_STATE_SECRET`           | `/app/sitelayer/.env`                                               | `openssl rand -base64 32`                                  | § 3             |
+| `CLERK_JWT_KEY`              | GitHub production secret → rendered `/app/sitelayer/.env`           | Clerk dashboard → API Keys → JWT public key (rotates rare) | § 1             |
+| `CLERK_WEBHOOK_SECRET`       | GitHub production secret → rendered `/app/sitelayer/.env`           | Clerk dashboard → Webhooks                                 | § 1             |
+| `VITE_CLERK_PUBLISHABLE_KEY` | GitHub production variable/secret baked into web image              | Clerk dashboard → Frontend API                             | § 1             |
+| `QBO_CLIENT_ID`              | GitHub production variable → rendered `/app/sitelayer/.env`         | Intuit dev portal → app → Keys & OAuth                     | § 3             |
+| `QBO_CLIENT_SECRET`          | GitHub production secret → rendered `/app/sitelayer/.env`           | Intuit dev portal → Regenerate Client Secret               | § 3             |
+| `QBO_STATE_SECRET`           | GitHub production secret → rendered `/app/sitelayer/.env`           | `openssl rand -base64 32`                                  | § 3             |
 | `SENTRY_AUTH_TOKEN`          | `~/.env.local` + GitHub Actions secret                              | `sandolabs.sentry.io/settings/auth-tokens/`                | § 2             |
-| `SENTRY_DSN`                 | `/app/sitelayer/.env`                                               | Sentry project → Client Keys (Public DSN)                  | § 2             |
-| `SENTRY_WORKER_DSN`          | `/app/sitelayer/.env` (optional; falls back to `SENTRY_DSN`)        | Sentry project → Client Keys (Public DSN)                  | § 2             |
-| `VITE_SENTRY_DSN`            | GitHub Actions build env/secret baked into web image                | Same DSN as `SENTRY_DSN` (web project)                     | § 2             |
-| `DATABASE_URL`               | `/app/sitelayer/.env`                                               | DO managed Postgres → Connection Details → Reset password  | § 9             |
-| `DEBUG_TRACE_TOKEN`          | `/app/sitelayer/.env`                                               | `openssl rand -base64 32`                                  | § 5             |
-| `API_METRICS_TOKEN`          | `/app/sitelayer/.env` + Grafana scrape config                       | `openssl rand -base64 32`                                  | § 5             |
-| `DO_SPACES_KEY` / `_SECRET`  | `/app/sitelayer/.env`                                               | DO Console → API → Spaces Keys                             | § 4             |
-| `DO_SPACES_BUCKET`           | `/app/sitelayer/.env` (hostname-only, not a secret)                 | DO Console → Spaces                                        | § 4             |
+| `SENTRY_DSN`                 | GitHub production secret → rendered `/app/sitelayer/.env`           | Sentry project → Client Keys (Public DSN)                  | § 2             |
+| `SENTRY_WORKER_DSN`          | GitHub production secret → rendered `/app/sitelayer/.env`           | Sentry project → Client Keys (Public DSN)                  | § 2             |
+| `VITE_SENTRY_DSN`            | GitHub production variable/secret baked into web image              | Same DSN as `SENTRY_DSN` (web project)                     | § 2             |
+| `DATABASE_URL`               | GitHub production secret → rendered `/app/sitelayer/.env`           | DO managed Postgres → Connection Details → Reset password  | § 9             |
+| `DEBUG_TRACE_TOKEN`          | GitHub production secret → rendered `/app/sitelayer/.env`           | `openssl rand -base64 32`                                  | § 5             |
+| `API_METRICS_TOKEN`          | GitHub production secret → rendered `/app/sitelayer/.env` + Grafana | `openssl rand -base64 32`                                  | § 5             |
+| `DO_SPACES_KEY` / `_SECRET`  | GitHub production secret → rendered `/app/sitelayer/.env`           | DO Console → API → Spaces Keys                             | § 4             |
+| `DO_SPACES_BUCKET`           | GitHub production variable → rendered `/app/sitelayer/.env`         | DO Console → Spaces                                        | § 4             |
 
 ---
 
