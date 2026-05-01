@@ -12,9 +12,7 @@
 import * as Sentry from '@sentry/react'
 
 const DSN = import.meta.env.VITE_SENTRY_DSN?.trim()
-const ENV = (import.meta.env.VITE_SENTRY_ENVIRONMENT?.trim() ||
-  import.meta.env.MODE ||
-  'development') as string
+const ENV = (import.meta.env.VITE_SENTRY_ENVIRONMENT?.trim() || import.meta.env.MODE || 'development') as string
 const RELEASE = import.meta.env.VITE_SENTRY_RELEASE?.trim() || undefined
 
 if (DSN) {

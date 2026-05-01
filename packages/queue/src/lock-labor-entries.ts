@@ -73,7 +73,7 @@ export async function processLockLaborEntries(
   // multiple worker replicas safe). The 5-minute lease matches the
   // generic drain so a crashed worker recovers quickly.
   await client.query('begin')
-  let claimed: ClaimedLockRow[] = []
+  let claimed: ClaimedLockRow[]
   try {
     const claimResult = await client.query<{
       id: string

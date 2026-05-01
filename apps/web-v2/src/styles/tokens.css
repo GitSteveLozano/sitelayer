@@ -31,20 +31,20 @@
    * Hard rule from the AI Layer doc: AI signal is warm orange, never red. */
   --m-accent: #d9904a;
   --m-accent-ink: #b46e2c;
-  --m-accent-soft: rgba(217, 144, 74, 0.10);
+  --m-accent-soft: rgba(217, 144, 74, 0.1);
   --m-accent-soft-2: rgba(217, 144, 74, 0.16);
 
   /* Semantic */
   --m-green: #2c8a55;
-  --m-green-soft: rgba(44, 138, 85, 0.10);
+  --m-green-soft: rgba(44, 138, 85, 0.1);
   --m-red: #c0463d;
-  --m-red-soft: rgba(192, 70, 61, 0.10);
+  --m-red-soft: rgba(192, 70, 61, 0.1);
   --m-amber: #c98a2e;
   --m-amber-soft: rgba(201, 138, 46, 0.12);
   --m-blue: #2f6fb5;
-  --m-blue-soft: rgba(47, 111, 181, 0.10);
+  --m-blue-soft: rgba(47, 111, 181, 0.1);
   --m-purple: #7553a8;
-  --m-purple-soft: rgba(117, 83, 168, 0.10);
+  --m-purple-soft: rgba(117, 83, 168, 0.1);
 
   /* Radii */
   --m-r-sm: 8px;

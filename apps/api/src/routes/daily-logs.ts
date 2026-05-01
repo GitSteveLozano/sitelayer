@@ -226,8 +226,7 @@ export async function handleDailyLogRoutes(
     }
     if (body.scope_progress !== undefined) pushSet('scope_progress', body.scope_progress, 'jsonb')
     if (body.weather !== undefined) pushSet('weather', body.weather, 'jsonb')
-    if (body.notes !== undefined)
-      pushSet('notes', typeof body.notes === 'string' ? body.notes.slice(0, 16_000) : null)
+    if (body.notes !== undefined) pushSet('notes', typeof body.notes === 'string' ? body.notes.slice(0, 16_000) : null)
     if (body.schedule_deviations !== undefined) pushSet('schedule_deviations', body.schedule_deviations, 'jsonb')
     if (body.crew_summary !== undefined) pushSet('crew_summary', body.crew_summary, 'jsonb')
     if (Array.isArray(body.photo_keys)) {

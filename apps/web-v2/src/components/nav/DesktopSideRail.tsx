@@ -13,11 +13,7 @@ export function DesktopSideRail() {
   return (
     <nav
       aria-label="Primary"
-      className={cn(
-        'hidden lg:flex flex-col w-[212px] shrink-0',
-        'bg-bg border-r border-line',
-        'pt-6 px-3 pb-4',
-      )}
+      className={cn('hidden lg:flex flex-col w-[212px] shrink-0', 'bg-bg border-r border-line', 'pt-6 px-3 pb-4')}
     >
       <div className="px-3 pb-4 flex items-center gap-2">
         <div
@@ -38,9 +34,7 @@ export function DesktopSideRail() {
                 cn(
                   'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium',
                   'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent',
-                  isActive
-                    ? 'bg-accent-soft text-accent-ink'
-                    : 'text-ink-2 hover:text-ink hover:bg-card-soft',
+                  isActive ? 'bg-accent-soft text-accent-ink' : 'text-ink-2 hover:text-ink hover:bg-card-soft',
                 )
               }
             >

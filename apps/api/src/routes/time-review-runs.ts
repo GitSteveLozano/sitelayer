@@ -258,9 +258,7 @@ export async function handleTimeReviewRunRoutes(
 
     const coveredEntryIds = entryRows.rows.map((r) => r.id)
     const totalEntries = entryRows.rows.length
-    const totalHours = entryRows.rows
-      .reduce((sum, r) => sum + Number(r.hours || 0), 0)
-      .toFixed(2)
+    const totalHours = entryRows.rows.reduce((sum, r) => sum + Number(r.hours || 0), 0).toFixed(2)
     const anomalyCount = entryRows.rows.filter((r) => r.over_eight).length
 
     const created = await withMutationTx(async (client: PoolClient) => {
@@ -271,16 +269,7 @@ export async function handleTimeReviewRunRoutes(
          )
          values ($1, $2, $3, $4, $5::uuid[], $6, $7, $8)
          returning ${TIME_REVIEW_RUN_COLUMNS}`,
-        [
-          ctx.company.id,
-          projectId,
-          periodStart,
-          periodEnd,
-          coveredEntryIds,
-          totalHours,
-          totalEntries,
-          anomalyCount,
-        ],
+        [ctx.company.id, projectId, periodStart, periodEnd, coveredEntryIds, totalHours, totalEntries, anomalyCount],
       )
       const row = insert.rows[0]!
       await recordMutationLedger(client, {
