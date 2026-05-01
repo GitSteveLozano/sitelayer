@@ -95,13 +95,19 @@ export async function processTakeoffToBidRun(
   companyId: string,
   payload: TakeoffToBidPayload,
 ): Promise<{ insightsCreated: number; lines: ProposedBidLine[] }> {
-  // 1. pull non-deleted measurements for the project. Today this reads
-  // the legacy single-scope columns; multi-condition tags from Phase 3A
-  // are summarized in a follow-on once the agent prompt is finalized.
+  // 1. pull non-deleted measurement tags for the project. Each
+  // physical polygon (takeoff_measurements row) carries 1..N tags
+  // from Phase 3A — one bid line per tag is the simplest correct
+  // mapping. The legacy single-scope rate lives on service_items, not
+  // on takeoff_measurements, so we read the rate from the tag here.
   const measurements = await client.query<MeasurementRow>(
-    `select id, service_item_code, quantity, unit, rate, notes
-     from takeoff_measurements
-     where company_id = $1 and project_id = $2 and deleted_at is null`,
+    `select t.id, t.service_item_code, t.quantity, t.unit, t.rate::text as rate, t.notes
+     from takeoff_measurement_tags t
+     join takeoff_measurements m on m.id = t.measurement_id
+     where t.company_id = $1
+       and m.project_id = $2
+       and m.deleted_at is null
+     order by t.measurement_id, t.sort_order`,
     [companyId, payload.project_id],
   )
   if (measurements.rows.length === 0) {
