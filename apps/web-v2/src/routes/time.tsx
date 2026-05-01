@@ -1,16 +1,16 @@
 import { useRole } from '@/lib/role'
-import { PlaceholderScreen } from '@/components/shell/PlaceholderScreen'
 import { WorkerHoursScreen } from '@/screens/worker'
-import { ApprovalQueueScreen } from '@/screens/foreman'
+import { ApprovalQueueScreen, ForemanBatchEntryScreen } from '@/screens/foreman'
 
 /**
  * Time tab — role-aware default per `Sitemap.html` § 03:
- *   - owner   → t-approve  (approval queue)         — 1D.3 (wired below)
- *   - foreman → t-foreman  (batch entry)            — Phase 1D.4 needs new endpoint
- *   - worker  → wk-hours   (read-only personal)     — 1D.2 (wired below)
+ *   - owner   → t-approve  (approval queue)        — 1D.3
+ *   - foreman → t-foreman  (batch entry)           — 1E.2 (wired below)
+ *   - worker  → wk-hours   (read-only personal)    — 1D.2
  *
- * Foreman sees the approval queue too — they REOPEN runs they need to
- * correct. Owner sees it as their primary surface.
+ * Foreman lands on the batch-entry surface. The approval queue is
+ * owner-only by default; foremen reach REOPEN actions when their
+ * REJECT push a run back through the workflow event endpoint.
  */
 export default function TimeRoute() {
   const role = useRole()
@@ -19,18 +19,9 @@ export default function TimeRoute() {
     return <WorkerHoursScreen />
   }
 
-  if (role === 'foreman' || role === 'owner') {
-    return <ApprovalQueueScreen />
+  if (role === 'foreman') {
+    return <ForemanBatchEntryScreen />
   }
 
-  return (
-    <PlaceholderScreen
-      eyebrow="Time"
-      title="Approval queue"
-      designId="t-approve"
-    >
-      Phase 1D.4 wires the foreman batch entry surface (t-foreman) once the
-      foreman batch-clock endpoint lands.
-    </PlaceholderScreen>
-  )
+  return <ApprovalQueueScreen />
 }

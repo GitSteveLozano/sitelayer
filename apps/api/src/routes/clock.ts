@@ -85,17 +85,50 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     const source = parseClockSource(body.source)
     const currentUserId = ctx.currentUserId
 
-    const workerLookup = await ctx.pool.query<{ id: string }>(
-      `
-      select w.id
-      from workers w
-      where w.company_id = $1 and w.deleted_at is null
-      order by w.created_at asc
-      limit 1
-      `,
-      [ctx.company.id],
-    )
-    const workerId = workerLookup.rows[0]?.id ?? null
+    // Foreman override path: an admin / foreman / office actor can clock
+    // a specific worker in by passing source='foreman_override' +
+    // worker_id. The clerk_user_id on the row stays the actor's id so
+    // the audit trail attributes the trigger correctly; worker_id points
+    // at the rostered worker the time is for. Used by t-foreman.
+    const explicitWorkerIdRaw =
+      body.worker_id === undefined || body.worker_id === null || body.worker_id === ''
+        ? null
+        : String(body.worker_id).trim()
+    let workerId: string | null = null
+    if (source === 'foreman_override') {
+      if (!explicitWorkerIdRaw) {
+        ctx.sendJson(400, { error: 'worker_id is required when source=foreman_override' })
+        return true
+      }
+      if (!isValidUuid(explicitWorkerIdRaw)) {
+        ctx.sendJson(400, { error: 'worker_id must be a valid uuid' })
+        return true
+      }
+      if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+      const workerCheck = await ctx.pool.query<{ id: string }>(
+        `select id from workers where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+        [ctx.company.id, explicitWorkerIdRaw],
+      )
+      if (!workerCheck.rows[0]) {
+        ctx.sendJson(404, { error: 'worker not found' })
+        return true
+      }
+      workerId = workerCheck.rows[0].id
+    } else {
+      // Self path — the heuristic worker lookup remains the v1 placeholder
+      // until Phase 1D.4 wires Clerk user → worker mapping.
+      const workerLookup = await ctx.pool.query<{ id: string }>(
+        `
+        select w.id
+        from workers w
+        where w.company_id = $1 and w.deleted_at is null
+        order by w.created_at asc
+        limit 1
+        `,
+        [ctx.company.id],
+      )
+      workerId = workerLookup.rows[0]?.id ?? null
+    }
 
     let projectId: string | null = null
     let insideGeofence = false
@@ -255,17 +288,45 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     const source = parseClockSource(body.source)
     const currentUserId = ctx.currentUserId
 
-    const workerLookup = await ctx.pool.query<{ id: string }>(
-      `
-      select w.id
-      from workers w
-      where w.company_id = $1 and w.deleted_at is null
-      order by w.created_at asc
-      limit 1
-      `,
-      [ctx.company.id],
-    )
-    const workerId = workerLookup.rows[0]?.id ?? null
+    // Same foreman_override path as /in — admin/foreman/office can clock
+    // a specific worker out by passing source='foreman_override' + worker_id.
+    const explicitWorkerIdRaw =
+      body.worker_id === undefined || body.worker_id === null || body.worker_id === ''
+        ? null
+        : String(body.worker_id).trim()
+    let workerId: string | null = null
+    if (source === 'foreman_override') {
+      if (!explicitWorkerIdRaw) {
+        ctx.sendJson(400, { error: 'worker_id is required when source=foreman_override' })
+        return true
+      }
+      if (!isValidUuid(explicitWorkerIdRaw)) {
+        ctx.sendJson(400, { error: 'worker_id must be a valid uuid' })
+        return true
+      }
+      if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+      const workerCheck = await ctx.pool.query<{ id: string }>(
+        `select id from workers where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+        [ctx.company.id, explicitWorkerIdRaw],
+      )
+      if (!workerCheck.rows[0]) {
+        ctx.sendJson(404, { error: 'worker not found' })
+        return true
+      }
+      workerId = workerCheck.rows[0].id
+    } else {
+      const workerLookup = await ctx.pool.query<{ id: string }>(
+        `
+        select w.id
+        from workers w
+        where w.company_id = $1 and w.deleted_at is null
+        order by w.created_at asc
+        limit 1
+        `,
+        [ctx.company.id],
+      )
+      workerId = workerLookup.rows[0]?.id ?? null
+    }
 
     const openInLookup = await ctx.pool.query<{
       id: string

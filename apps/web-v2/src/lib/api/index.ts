@@ -102,3 +102,14 @@ export {
   type NotificationPreferencesResponse,
   type UpdateNotificationPreferencesRequest,
 } from './prefs'
+
+export {
+  createWorker,
+  fetchWorkers,
+  useCreateWorker,
+  useWorkers,
+  workerQueryKeys,
+  type Worker,
+  type WorkerCreateRequest,
+  type WorkerListResponse,
+} from './workers'
