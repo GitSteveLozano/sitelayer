@@ -13,6 +13,7 @@ import { handleBlueprintRoutes } from './blueprints.js'
 import { handleClockRoutes } from './clock.js'
 import { handleCustomerRoutes } from './customers.js'
 import { handleDailyLogRoutes } from './daily-logs.js'
+import { handleLaborBurdenRoutes } from './labor-burden.js'
 import { handleEstimateRoutes } from './estimate.js'
 import { handleEstimatePushRoutes } from './estimate-pushes.js'
 import { handleLaborEntryRoutes } from './labor-entries.js'
@@ -422,6 +423,18 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       photoDownloadPresigned: ctx.blueprintDownloadPresigned,
       sendFileContent: ctx.sendFileContent,
       sendFileRedirect: ctx.sendFileRedirect,
+    })
+  ) {
+    return true
+  }
+
+  // Labor burden rollup (fm-today-v2 dark card)
+  if (
+    await handleLaborBurdenRoutes(req, url, {
+      pool,
+      company,
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      sendJson,
     })
   ) {
     return true
