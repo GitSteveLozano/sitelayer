@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 3100",
     "build": "vite build",
-    "start": "serve -l 3100 dist",
+    "start": "serve -l 3000 dist",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "npm run typecheck",
     "format": "npm run typecheck",
