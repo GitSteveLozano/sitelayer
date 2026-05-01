@@ -57,9 +57,8 @@ export interface ClockInRequest {
   worker_id?: string | null
 }
 
-export interface ClockOutRequest extends Omit<ClockInRequest, 'project_id'> {
-  /** project_id is intentionally absent — out pairs with the open in. */
-}
+/** project_id is intentionally absent — out pairs with the open in. */
+export type ClockOutRequest = Omit<ClockInRequest, 'project_id'>
 
 export interface ClockInResponse {
   clockEvent: ClockEvent

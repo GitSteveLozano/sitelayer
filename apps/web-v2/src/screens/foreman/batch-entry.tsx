@@ -1,14 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
-import {
-  ApiError,
-  useClockIn,
-  useClockOut,
-  useClockTimeline,
-  useWorkers,
-  type Worker,
-} from '@/lib/api'
+import { ApiError, useClockIn, useClockOut, useClockTimeline, useWorkers, type Worker } from '@/lib/api'
 import { findOpenSpan, formatHms, pairClockSpans } from '@/lib/clock-derive'
 import { useGeofence } from '@/lib/geofence'
 
@@ -38,12 +31,9 @@ export function ForemanBatchEntryScreen() {
   // Group spans by worker_id; pick the most-recent open if any.
   const stateByWorker = useMemo(() => {
     const map = new Map<string, { openIn: ReturnType<typeof findOpenSpan>; totalHours: number }>()
-    for (const span of allSpans) {
-      // The span carries project_id (not worker_id directly). For accurate
-      // per-worker rollups we'd need worker_id on the span — for now
-      // the API timeline returns event rows with worker_id, so we walk
-      // events directly for grouping.
-    }
+    // allSpans carries project_id but not worker_id, so we re-derive
+    // per-worker rollups from the raw event rows below.
+    void allSpans
     // Re-derive per worker by walking the raw event rows instead.
     const eventsByWorker = new Map<string, typeof events>()
     for (const e of events) {
@@ -122,8 +112,8 @@ export function ForemanBatchEntryScreen() {
         <div className="px-4 pb-3">
           <Card tight>
             <div className="text-[12px] text-warn">
-              Location {geofence.error.kind === 'permission_denied' ? 'denied' : 'unavailable'}. Override events
-              will be recorded without coordinates.
+              Location {geofence.error.kind === 'permission_denied' ? 'denied' : 'unavailable'}. Override events will be
+              recorded without coordinates.
             </div>
           </Card>
         </div>
@@ -143,9 +133,7 @@ export function ForemanBatchEntryScreen() {
         ) : workers.length === 0 ? (
           <Card tight>
             <div className="text-[12px] text-ink-3">No workers on the roster.</div>
-            <div className="text-[11px] text-ink-3 mt-1">
-              Add workers under Settings → Team in Phase 2.
-            </div>
+            <div className="text-[11px] text-ink-3 mt-1">Add workers under Settings → Team in Phase 2.</div>
           </Card>
         ) : (
           <div className="space-y-2">
@@ -168,32 +156,24 @@ export function ForemanBatchEntryScreen() {
                       {isOpen ? (
                         <div className="num text-[14px] font-semibold">{formatHms(state!.openIn!.hours)}</div>
                       ) : state && state.totalHours > 0 ? (
-                        <div className="num text-[14px] font-medium text-ink-2">
-                          {state.totalHours.toFixed(1)}h
-                        </div>
+                        <div className="num text-[14px] font-medium text-ink-2">{state.totalHours.toFixed(1)}h</div>
                       ) : (
                         <div className="text-[11px] text-ink-3">no activity</div>
                       )}
-                      {isOpen ? <Pill tone="good" withDot>on</Pill> : null}
+                      {isOpen ? (
+                        <Pill tone="good" withDot>
+                          on
+                        </Pill>
+                      ) : null}
                     </div>
                   </div>
                   <div className="mt-3 flex gap-2">
                     {isOpen ? (
-                      <MobileButton
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => onClockOut(worker)}
-                        disabled={isBusy}
-                      >
+                      <MobileButton variant="ghost" size="sm" onClick={() => onClockOut(worker)} disabled={isBusy}>
                         {isBusy ? '…' : 'Clock out'}
                       </MobileButton>
                     ) : (
-                      <MobileButton
-                        variant="primary"
-                        size="sm"
-                        onClick={() => onClockIn(worker)}
-                        disabled={isBusy}
-                      >
+                      <MobileButton variant="primary" size="sm" onClick={() => onClockIn(worker)} disabled={isBusy}>
                         {isBusy ? '…' : 'Clock in'}
                       </MobileButton>
                     )}

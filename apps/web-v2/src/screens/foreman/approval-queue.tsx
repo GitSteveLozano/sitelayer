@@ -62,14 +62,10 @@ export function ApprovalQueueScreen() {
               key={t}
               type="button"
               onClick={() => setTab(t)}
-              className={`relative flex-1 py-3 text-[13px] font-medium ${
-                tab === t ? 'text-ink' : 'text-ink-3'
-              }`}
+              className={`relative flex-1 py-3 text-[13px] font-medium ${tab === t ? 'text-ink' : 'text-ink-3'}`}
             >
               {labelFor(t)}
-              {tab === t ? (
-                <span className="absolute inset-x-0 bottom-0 h-[2px] bg-accent" aria-hidden="true" />
-              ) : null}
+              {tab === t ? <span className="absolute inset-x-0 bottom-0 h-[2px] bg-accent" aria-hidden="true" /> : null}
             </button>
           ))}
         </div>
@@ -185,7 +181,12 @@ function RunRow({ row }: RunRowProps) {
           <MobileButton variant="primary" size="sm" onClick={onApprove} disabled={dispatchEvent.isPending}>
             Approve
           </MobileButton>
-          <MobileButton variant="ghost" size="sm" onClick={() => setShowReject(true)} disabled={dispatchEvent.isPending}>
+          <MobileButton
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowReject(true)}
+            disabled={dispatchEvent.isPending}
+          >
             Reject
           </MobileButton>
         </div>
@@ -219,7 +220,7 @@ function RunRow({ row }: RunRowProps) {
         </div>
       ) : null}
 
-      {(row.state === 'approved' || row.state === 'rejected') ? (
+      {row.state === 'approved' || row.state === 'rejected' ? (
         <div className="flex gap-2 mt-3">
           <MobileButton variant="ghost" size="sm" onClick={onReopen} disabled={dispatchEvent.isPending}>
             Reopen for correction

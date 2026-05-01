@@ -66,7 +66,6 @@ export function WorkerTodayScreen() {
     return Math.max(0, (Date.now() - Date.parse(openSpan.in_at)) / (1000 * 60 * 60))
     // tick is read so the dep tracker considers the value live; the
     // value itself is unused.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openSpan, tick])
 
   // Try the auto clock-in once per geofence reading. The server is the
@@ -97,19 +96,16 @@ export function WorkerTodayScreen() {
         // surface it to the user. The presence of a clock event row
         // (next refetch) is the user-visible signal.
       })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clockedIn, geofence.position?.capturedAtMs])
 
   const voidClock = useVoidClockEvent()
   const handleVoid = async () => {
     if (!autoClockInEvent) return
-    await voidClock
-      .mutateAsync({ id: autoClockInEvent.id, input: { reason: 'voided from wk-clockin' } })
-      .catch(() => {
-        // The 409 paths (window expired / already voided) are surfaced
-        // by the server. We swallow here; the next refetch re-renders
-        // the canonical state.
-      })
+    await voidClock.mutateAsync({ id: autoClockInEvent.id, input: { reason: 'voided from wk-clockin' } }).catch(() => {
+      // The 409 paths (window expired / already voided) are surfaced
+      // by the server. We swallow here; the next refetch re-renders
+      // the canonical state.
+    })
     setAutoClockInEvent(null)
   }
 
@@ -117,8 +113,14 @@ export function WorkerTodayScreen() {
   const nowMs = Date.now()
   const todayMs = startOfDay(nowMs)
   const weekMs = startOfWeek(nowMs)
-  const todayHours = useMemo(() => sumHoursInRange(spans, todayMs, todayMs + 24 * 3600 * 1000, nowMs), [spans, todayMs, nowMs])
-  const weekHours = useMemo(() => sumHoursInRange(spans, weekMs, nowMs + 24 * 3600 * 1000, nowMs), [spans, weekMs, nowMs])
+  const todayHours = useMemo(
+    () => sumHoursInRange(spans, todayMs, todayMs + 24 * 3600 * 1000, nowMs),
+    [spans, todayMs, nowMs],
+  )
+  const weekHours = useMemo(
+    () => sumHoursInRange(spans, weekMs, nowMs + 24 * 3600 * 1000, nowMs),
+    [spans, weekMs, nowMs],
+  )
 
   const activeProjectLabel = openSpan?.project_name ?? (openSpan?.project_id ? 'On site' : null)
 
@@ -173,9 +175,7 @@ export function WorkerTodayScreen() {
             <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">
               {clockedIn ? 'Clocked in' : 'Off-clock'}
             </span>
-            {openSpan ? (
-              <span className="num text-[12px] text-ink-3">since {formatTime(openSpan.in_at)}</span>
-            ) : null}
+            {openSpan ? <span className="num text-[12px] text-ink-3">since {formatTime(openSpan.in_at)}</span> : null}
           </div>
           <div className="num font-display text-[40px] font-bold tracking-tight leading-none mt-2">
             {clockedIn ? formatHms(runtimeHours) : '0:00:00'}
@@ -199,7 +199,13 @@ export function WorkerTodayScreen() {
               )}
             </span>
             {clockedIn ? (
-              <MobileButton variant="ghost" size="sm" fullWidth={false} onClick={onClockOut} disabled={clockOut.isPending}>
+              <MobileButton
+                variant="ghost"
+                size="sm"
+                fullWidth={false}
+                onClick={onClockOut}
+                disabled={clockOut.isPending}
+              >
                 Clock out
               </MobileButton>
             ) : (

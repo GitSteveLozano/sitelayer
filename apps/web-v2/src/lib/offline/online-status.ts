@@ -10,9 +10,7 @@ import { useEffect, useState } from 'react'
  * of truth; this hook is a UX prompt, not a gate.
  */
 export function useOnlineStatus(): boolean {
-  const [online, setOnline] = useState<boolean>(() =>
-    typeof navigator === 'undefined' ? true : navigator.onLine,
-  )
+  const [online, setOnline] = useState<boolean>(() => (typeof navigator === 'undefined' ? true : navigator.onLine))
 
   useEffect(() => {
     if (typeof window === 'undefined') return

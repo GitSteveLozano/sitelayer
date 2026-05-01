@@ -145,10 +145,7 @@ export function useGeofence(options: UseGeofenceOptions = {}): UseGeofenceResult
  * haversine formula. Mirrors `haversineDistanceMeters` in
  * @sitelayer/domain so client-side geofence checks match the server's
  * arithmetic exactly. */
-export function haversineDistanceMeters(
-  a: { lat: number; lng: number },
-  b: { lat: number; lng: number },
-): number {
+export function haversineDistanceMeters(a: { lat: number; lng: number }, b: { lat: number; lng: number }): number {
   const R = 6_371_000 // earth radius in meters
   const toRad = (deg: number) => (deg * Math.PI) / 180
   const dLat = toRad(b.lat - a.lat)

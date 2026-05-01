@@ -113,9 +113,7 @@ export function ForemanTodayScreen() {
 
       {/* Crew check-in — real clock state + worker names. */}
       <div className="px-4">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">
-          Crew check-in
-        </div>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">Crew check-in</div>
         <Card className="!p-0 overflow-hidden">
           <div className="px-4 py-3 flex items-center justify-between border-b border-line">
             <span className="text-[13px] font-semibold">Today's roster</span>
@@ -124,9 +122,7 @@ export function ForemanTodayScreen() {
             </Pill>
           </div>
           {crewRows.length === 0 ? (
-            <div className="px-4 py-6 text-[12px] text-ink-3 text-center">
-              No crew activity yet today.
-            </div>
+            <div className="px-4 py-6 text-[12px] text-ink-3 text-center">No crew activity yet today.</div>
           ) : (
             <ul className="divide-y divide-line">
               {crewRows.slice(0, 8).map((row) => (
@@ -147,9 +143,7 @@ export function ForemanTodayScreen() {
                         </Pill>
                       </>
                     ) : row.totalHours > 0 ? (
-                      <span className="num text-[13px] font-medium text-ink-2">
-                        {row.totalHours.toFixed(1)}h
-                      </span>
+                      <span className="num text-[13px] font-medium text-ink-2">{row.totalHours.toFixed(1)}h</span>
                     ) : (
                       <span className="text-[11px] text-ink-3">scheduled</span>
                     )}
@@ -183,9 +177,7 @@ export function ForemanTodayScreen() {
         {todaySchedules.length === 0 ? (
           <Card tight>
             <div className="text-[12px] text-ink-3">No schedules for today.</div>
-            <div className="text-[11px] text-ink-3 mt-1">
-              Office adds entries via the Projects → Schedule sub-tab.
-            </div>
+            <div className="text-[11px] text-ink-3 mt-1">Office adds entries via the Projects → Schedule sub-tab.</div>
           </Card>
         ) : (
           <div className="space-y-2">
@@ -215,7 +207,9 @@ interface ScheduleRowProps {
 }
 
 function ScheduleRow({ schedule, workerById }: ScheduleRowProps) {
-  const crewIds = Array.isArray(schedule.crew) ? (schedule.crew as unknown[]).filter((x): x is string => typeof x === 'string') : []
+  const crewIds = Array.isArray(schedule.crew)
+    ? (schedule.crew as unknown[]).filter((x): x is string => typeof x === 'string')
+    : []
   const crewNames = crewIds.map((id) => workerById.get(id)?.name ?? 'Unknown').slice(0, 4)
   return (
     <StripeCard tone={schedule.status === 'confirmed' ? 'good' : 'accent'}>
@@ -242,10 +236,7 @@ interface ActionTileProps {
 
 function ActionTile({ to, label, detail, highlight, disabled }: ActionTileProps) {
   const inner = (
-    <Card
-      tight
-      className={`!flex !flex-col !items-start !gap-1.5 ${disabled ? 'opacity-60' : 'active:bg-card-soft'}`}
-    >
+    <Card tight className={`!flex !flex-col !items-start !gap-1.5 ${disabled ? 'opacity-60' : 'active:bg-card-soft'}`}>
       <div className={`text-[13px] font-semibold ${highlight ? 'text-accent' : ''}`}>{label}</div>
       <div className="text-[11px] text-ink-3">{detail}</div>
     </Card>
@@ -318,7 +309,11 @@ function BurdenCard({ burden }: BurdenCardProps) {
                     underPlan ? 'text-[#7adba0]' : overPlan ? 'text-[#e89e7d]' : 'text-[#f3ecdf]'
                   }`}
                 >
-                  {underPlan ? `↓ ${formatPctDelta(planDelta)} under` : overPlan ? `↑ ${formatPctDelta(-planDelta)} over` : 'on pace'}
+                  {underPlan
+                    ? `↓ ${formatPctDelta(planDelta)} under`
+                    : overPlan
+                      ? `↑ ${formatPctDelta(-planDelta)} over`
+                      : 'on pace'}
                 </div>
                 <div className="num text-[10px] text-[#aea69a] mt-0.5">
                   {(pct * 100).toFixed(0)}% of {formatDollars(budgetCents)}

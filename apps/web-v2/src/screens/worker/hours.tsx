@@ -2,13 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, Pill } from '@/components/mobile'
 import { useClockTimeline } from '@/lib/api'
-import {
-  formatDecimalHours,
-  pairClockSpans,
-  startOfDay,
-  startOfWeek,
-  sumHoursInRange,
-} from '@/lib/clock-derive'
+import { formatDecimalHours, pairClockSpans, startOfDay, startOfWeek, sumHoursInRange } from '@/lib/clock-derive'
 
 /**
  * `wk-hours` — read-only personal pay-period summary.
@@ -71,8 +65,14 @@ function HoursView() {
   const nowMs = Date.now()
   const todayMs = startOfDay(nowMs)
   const weekMs = startOfWeek(nowMs)
-  const todayHours = useMemo(() => sumHoursInRange(spans, todayMs, todayMs + 24 * 3600 * 1000, nowMs), [spans, todayMs, nowMs])
-  const weekHours = useMemo(() => sumHoursInRange(spans, weekMs, nowMs + 24 * 3600 * 1000, nowMs), [spans, weekMs, nowMs])
+  const todayHours = useMemo(
+    () => sumHoursInRange(spans, todayMs, todayMs + 24 * 3600 * 1000, nowMs),
+    [spans, todayMs, nowMs],
+  )
+  const weekHours = useMemo(
+    () => sumHoursInRange(spans, weekMs, nowMs + 24 * 3600 * 1000, nowMs),
+    [spans, weekMs, nowMs],
+  )
 
   return (
     <div className="space-y-3">

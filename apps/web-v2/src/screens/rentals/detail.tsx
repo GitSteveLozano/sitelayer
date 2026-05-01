@@ -1,12 +1,7 @@
 import { Link, useParams } from 'react-router-dom'
 import { Card, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
-import {
-  useInventoryItems,
-  useInventoryMovements,
-  useInventoryUtilization,
-  type InventoryMovement,
-} from '@/lib/api'
+import { useInventoryItems, useInventoryMovements, useInventoryUtilization, type InventoryMovement } from '@/lib/api'
 
 /**
  * `rnt-detail` — per-item detail view.
@@ -57,12 +52,8 @@ export function RentalsItemDetailScreen() {
         <Link to="/rentals" className="text-[12px] text-ink-3">
           ← Rentals
         </Link>
-        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mt-2">
-          {item.code}
-        </div>
-        <h1 className="mt-1 font-display text-[24px] font-bold tracking-tight leading-tight">
-          {item.description}
-        </h1>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mt-2">{item.code}</div>
+        <h1 className="mt-1 font-display text-[24px] font-bold tracking-tight leading-tight">{item.description}</h1>
         <div className="mt-2 flex items-center gap-2">
           <Pill tone={Number(util?.on_rent_quantity ?? 0) > 0 ? 'good' : 'default'}>
             {Number(util?.on_rent_quantity ?? 0).toFixed(0)} on rent
@@ -75,9 +66,7 @@ export function RentalsItemDetailScreen() {
       </div>
 
       <div className="px-4 pb-8 space-y-2">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">
-          Recent movements
-        </div>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Recent movements</div>
         {movements.isPending ? (
           <Card tight>
             <div className="text-[12px] text-ink-3">Loading…</div>
@@ -131,7 +120,8 @@ function MovementRow({ movement }: { movement: InventoryMovement }) {
       </div>
       {movement.scanned_at ? (
         <div className="text-[11px] text-ink-3 mt-1">
-          Scanned at {new Date(movement.scanned_at).toLocaleString(undefined, {
+          Scanned at{' '}
+          {new Date(movement.scanned_at).toLocaleString(undefined, {
             month: 'short',
             day: 'numeric',
             hour: 'numeric',

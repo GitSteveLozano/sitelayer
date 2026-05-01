@@ -4,7 +4,7 @@
 // page nav, calibration form, assembly editor, CSV importer, custom
 // field settings).
 
-import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { request } from './client'
 
 // ---------------------------------------------------------------------------
@@ -36,8 +36,13 @@ export function useTakeoffTags(measurementId: string | null | undefined) {
 
 export function useAddTakeoffTag(measurementId: string) {
   const qc = useQueryClient()
-  return useMutation<{ tag: TakeoffTag }, Error, { service_item_code: string; quantity: number; unit?: string; rate?: number; notes?: string }>({
-    mutationFn: (input) => request(`/api/takeoff/measurements/${encodeURIComponent(measurementId)}/tags`, { method: 'POST', json: input }),
+  return useMutation<
+    { tag: TakeoffTag },
+    Error,
+    { service_item_code: string; quantity: number; unit?: string; rate?: number; notes?: string }
+  >({
+    mutationFn: (input) =>
+      request(`/api/takeoff/measurements/${encodeURIComponent(measurementId)}/tags`, { method: 'POST', json: input }),
     onSuccess: () => qc.invalidateQueries({ queryKey: tagKey(measurementId) }),
   })
 }
@@ -156,7 +161,14 @@ export function useAddAssemblyComponent(assemblyId: string) {
   return useMutation<
     { component: AssemblyComponent },
     Error,
-    { kind: 'material' | 'labor' | 'sub' | 'freight'; name: string; quantity_per_unit: number; unit: string; unit_cost: number; waste_pct?: number }
+    {
+      kind: 'material' | 'labor' | 'sub' | 'freight'
+      name: string
+      quantity_per_unit: number
+      unit: string
+      unit_cost: number
+      waste_pct?: number
+    }
   >({
     mutationFn: (input) =>
       request(`/api/assemblies/${encodeURIComponent(assemblyId)}/components`, { method: 'POST', json: input }),
@@ -219,7 +231,13 @@ export function useUpsertQboCustomField() {
   return useMutation<
     { mapping: QboCustomFieldMapping },
     Error,
-    { entity_type: 'Estimate' | 'Invoice' | 'Bill' | 'PurchaseOrder'; field_name: string; qbo_definition_id: string; qbo_label?: string; notes?: string }
+    {
+      entity_type: 'Estimate' | 'Invoice' | 'Bill' | 'PurchaseOrder'
+      field_name: string
+      qbo_definition_id: string
+      qbo_label?: string
+      notes?: string
+    }
   >({
     mutationFn: (input) => request('/api/qbo/custom-fields', { method: 'PUT', json: input }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['qbo', 'custom-fields'] }),

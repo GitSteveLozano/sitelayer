@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { estimatePdfUrl, useScopeVsBid, type BidVsScopeStatus, type EstimateLine } from '@/lib/api'
@@ -22,7 +22,11 @@ export function EstimateSummaryScreen({ projectId }: { projectId: string }) {
   const [shareOpen, setShareOpen] = useState(false)
 
   if (scope.isPending) {
-    return <Card tight><div className="text-[12px] text-ink-3">Loading estimate…</div></Card>
+    return (
+      <Card tight>
+        <div className="text-[12px] text-ink-3">Loading estimate…</div>
+      </Card>
+    )
   }
   if (!scope.data) {
     return (
@@ -126,24 +130,20 @@ function ShareSheet({ open, onClose, projectId }: { open: boolean; onClose: () =
   return (
     <Sheet open={open} onClose={onClose} title="Send estimate">
       <div className="text-[12px] text-ink-3 mb-4">
-        Pick how the customer gets it. The PDF link is auth-required and only resolves for users on this
-        company; share it via your usual channel for now (Phase 5 sends via the QBO estimate-push workflow).
+        Pick how the customer gets it. The PDF link is auth-required and only resolves for users on this company; share
+        it via your usual channel for now (Phase 5 sends via the QBO estimate-push workflow).
       </div>
       <div className="space-y-2.5">
-        <a
-          href={pdfUrl}
-          target="_blank"
-          rel="noopener"
-          className="block"
-          onClick={() => onClose()}
-        >
+        <a href={pdfUrl} target="_blank" rel="noopener" className="block" onClick={() => onClose()}>
           <Card>
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-[13px] font-semibold">Open / Download PDF</div>
                 <div className="text-[11px] text-ink-3 mt-0.5">Streamed from /api/projects/:id/estimate.pdf</div>
               </div>
-              <span className="text-ink-4" aria-hidden="true">↗</span>
+              <span className="text-ink-4" aria-hidden="true">
+                ↗
+              </span>
             </div>
           </Card>
         </a>
@@ -155,7 +155,9 @@ function ShareSheet({ open, onClose, projectId }: { open: boolean; onClose: () =
                 <div className="text-[13px] font-semibold">{copied ? 'Copied!' : 'Copy PDF link'}</div>
                 <div className="text-[11px] text-ink-3 mt-0.5 truncate">{pdfUrl}</div>
               </div>
-              <span className="text-ink-4" aria-hidden="true">⎘</span>
+              <span className="text-ink-4" aria-hidden="true">
+                ⎘
+              </span>
             </div>
           </Card>
         </button>

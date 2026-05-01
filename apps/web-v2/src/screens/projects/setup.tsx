@@ -77,8 +77,10 @@ export function ProjectSetupScreen() {
     }
     const lat = siteLat ? Number(siteLat) : null
     const lng = siteLng ? Number(siteLng) : null
-    if ((lat !== null && (!Number.isFinite(lat) || Math.abs(lat) > 90)) ||
-        (lng !== null && (!Number.isFinite(lng) || Math.abs(lng) > 180))) {
+    if (
+      (lat !== null && (!Number.isFinite(lat) || Math.abs(lat) > 90)) ||
+      (lng !== null && (!Number.isFinite(lng) || Math.abs(lng) > 180))
+    ) {
       setError('Lat / lng out of range')
       return
     }
@@ -142,8 +144,8 @@ export function ProjectSetupScreen() {
         <Card>
           <div className="text-[13px] font-semibold mb-2">Geofence</div>
           <div className="text-[11px] text-ink-3 mb-3">
-            Workers entering this radius auto-clock in (when enabled). Drag the geofence on a map
-            comes in Phase 5; for now drop the lat/lng from the project address.
+            Workers entering this radius auto-clock in (when enabled). Drag the geofence on a map comes in Phase 5; for
+            now drop the lat/lng from the project address.
           </div>
           <div className="grid grid-cols-2 gap-2.5">
             <Field label="Lat">
@@ -318,7 +320,7 @@ function MapPreview({ lat, lng, radius }: MapPreviewProps) {
         <circle
           cx="100"
           cy="50"
-          r={Math.min(48, Math.max(8, radius * 48 / 300))}
+          r={Math.min(48, Math.max(8, (radius * 48) / 300))}
           fill="rgba(217,144,74,0.18)"
           stroke="#d9904a"
           strokeWidth="1"

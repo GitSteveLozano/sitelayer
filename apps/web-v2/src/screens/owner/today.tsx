@@ -54,24 +54,28 @@ export function OwnerTodayScreen() {
   const onSiteCount = spans.filter((s) => s.out_at === null).length
   const totalHoursToday = spans.reduce((sum, s) => sum + s.hours, 0)
 
-  const attention = useMemo(() => buildAttentionItems({
-    reviewsPending: reviews.data?.timeReviewRuns ?? [],
-    burden: burden.data,
-    drafts: drafts.data?.dailyLogs ?? [],
-  }), [reviews.data, burden.data, drafts.data])
+  const attention = useMemo(
+    () =>
+      buildAttentionItems({
+        reviewsPending: reviews.data?.timeReviewRuns ?? [],
+        burden: burden.data,
+        drafts: drafts.data?.dailyLogs ?? [],
+      }),
+    [reviews.data, burden.data, drafts.data],
+  )
   const followUpInsights = followUps.data?.insights ?? []
   const attentionCount = attention.length + followUpInsights.length
 
   return (
     <div className="flex flex-col bg-sand">
       <div className="px-5 pt-6">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-          {formatDateLabel()}
-        </div>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">{formatDateLabel()}</div>
         {view === 'today' ? (
           <>
             <h1 className="mt-1 font-display text-[34px] font-bold tracking-tight leading-[1] max-w-xs">
-              You're<br />caught up.
+              You're
+              <br />
+              caught up.
             </h1>
             <p className="text-[13px] text-ink-2 mt-2.5 max-w-md leading-relaxed">
               {projectsToday.length === 0
@@ -98,7 +102,11 @@ export function OwnerTodayScreen() {
         <Chip active={view === 'today'} onClick={() => setView('today')}>
           Today
         </Chip>
-        <Chip active={view === 'attention'} onClick={() => setView('attention')} dotTone={attentionCount > 0 ? 'warn' : 'default'}>
+        <Chip
+          active={view === 'attention'}
+          onClick={() => setView('attention')}
+          dotTone={attentionCount > 0 ? 'warn' : 'default'}
+        >
           What needs me? {attentionCount > 0 ? <span className="opacity-70 ml-1">{attentionCount}</span> : null}
         </Chip>
         <Link
@@ -125,11 +133,8 @@ export function OwnerTodayScreen() {
                 await apply.mutateAsync({ id }).catch(() => {})
               }}
               onDismiss={async (id) => {
-                const reason =
-                  typeof window !== 'undefined' ? window.prompt('Why dismiss?') ?? undefined : undefined
-                await dismiss
-                  .mutateAsync(reason ? { id, reason } : { id })
-                  .catch(() => {})
+                const reason = typeof window !== 'undefined' ? (window.prompt('Why dismiss?') ?? undefined) : undefined
+                await dismiss.mutateAsync(reason ? { id, reason } : { id }).catch(() => {})
               }}
             />
           </>
@@ -214,9 +219,7 @@ function TodayList({ projects, totalHoursToday }: TodayListProps) {
           {totalHoursToday.toFixed(1)} crew-hrs logged so far today.
         </div>
       ) : null}
-      <div className="pt-3 text-center text-[12px] text-ink-4">
-        Tap a project for detail. Pull down to refresh.
-      </div>
+      <div className="pt-3 text-center text-[12px] text-ink-4">Tap a project for detail. Pull down to refresh.</div>
     </div>
   )
 }
@@ -240,7 +243,15 @@ interface AttentionItem {
 }
 
 interface BuildAttentionInputs {
-  reviewsPending: { id: string; period_start: string; period_end: string; total_hours: string; total_entries: number; anomaly_count: number; created_at: string }[]
+  reviewsPending: {
+    id: string
+    period_start: string
+    period_end: string
+    total_hours: string
+    total_entries: number
+    anomaly_count: number
+    created_at: string
+  }[]
   burden: import('@/lib/api').LaborBurdenSummaryResponse | undefined
   drafts: { id: string; project_id: string; updated_at: string }[]
 }
@@ -280,7 +291,8 @@ function buildAttentionItems(inputs: BuildAttentionInputs): AttentionItem[] {
       tone: 'warn',
       eyebrow: `${stale.length} run${stale.length === 1 ? '' : 's'} waiting · ${totalEntries} entries`,
       title: 'Time entries waiting for approval',
-      detail: anomalies > 0 ? `${anomalies} anomal${anomalies === 1 ? 'y' : 'ies'}.` : 'All clean — single tap to approve.',
+      detail:
+        anomalies > 0 ? `${anomalies} anomal${anomalies === 1 ? 'y' : 'ies'}.` : 'All clean — single tap to approve.',
       attribution: 'Pending > 24h or has anomalies surface here.',
       action_label: 'Review',
       action_to: '/time',
@@ -370,18 +382,11 @@ function BidFollowUpList({ insights, onScan, scanning, onApply, onDismiss }: Bid
   }
   return (
     <div className="mt-4 space-y-3">
-      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">
-        Bid follow-ups
-      </div>
+      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Bid follow-ups</div>
       {insights.map((insight) => (
-        <AgentSurface
-          key={insight.id}
-          banner={`Agent draft · ${insight.confidence} confidence`}
-        >
+        <AgentSurface key={insight.id} banner={`Agent draft · ${insight.confidence} confidence`}>
           <div className="text-[13px] font-semibold mb-1">{insight.payload.subject}</div>
-          <div className="text-[12px] text-ink-2 leading-relaxed whitespace-pre-wrap">
-            {insight.payload.body}
-          </div>
+          <div className="text-[12px] text-ink-2 leading-relaxed whitespace-pre-wrap">{insight.payload.body}</div>
           <div className="mt-2 pt-2 border-t border-dashed border-line-2 flex items-center justify-between">
             <Attribution source={insight.attribution} />
             <span className="text-[11px] text-ink-3">{insight.payload.days_outstanding}d out</span>

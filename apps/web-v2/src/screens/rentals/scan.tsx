@@ -49,9 +49,7 @@ export function RentalsScanScreen() {
   const resolved: InventoryItem | null = useMemo(() => {
     if (!scanCode.trim()) return null
     const code = scanCode.trim().toLowerCase()
-    return (
-      items.data?.inventoryItems.find((i) => i.code.toLowerCase() === code) ?? null
-    )
+    return items.data?.inventoryItems.find((i) => i.code.toLowerCase() === code) ?? null
   }, [scanCode, items.data])
 
   // Fire-and-forget geolocation. The audit trail is "best effort" — if
@@ -79,16 +77,12 @@ export function RentalsScanScreen() {
   )
 
   const canSubmit =
-    Boolean(resolved) &&
-    Boolean(workerId) &&
-    Boolean(projectId) &&
-    Number(quantity) > 0 &&
-    !dispatch.isPending
+    Boolean(resolved) && Boolean(workerId) && Boolean(projectId) && Number(quantity) > 0 && !dispatch.isPending
 
   const onSubmit = async () => {
     if (!resolved || !canSubmit) return
-    const fromLocation = movementType === 'deliver' ? defaultYard?.id ?? null : projectLocation?.id ?? null
-    const toLocation = movementType === 'deliver' ? projectLocation?.id ?? null : defaultYard?.id ?? null
+    const fromLocation = movementType === 'deliver' ? (defaultYard?.id ?? null) : (projectLocation?.id ?? null)
+    const toLocation = movementType === 'deliver' ? (projectLocation?.id ?? null) : (defaultYard?.id ?? null)
     await dispatch.mutateAsync({
       inventory_item_id: resolved.id,
       quantity: Number(quantity),
@@ -109,12 +103,8 @@ export function RentalsScanScreen() {
   return (
     <div className="flex flex-col">
       <div className="px-5 pt-6 pb-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-          Rentals · scan dispatch
-        </div>
-        <h1 className="mt-1 font-display text-[24px] font-bold tracking-tight leading-tight">
-          Scan to dispatch
-        </h1>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Rentals · scan dispatch</div>
+        <h1 className="mt-1 font-display text-[24px] font-bold tracking-tight leading-tight">Scan to dispatch</h1>
         <p className="text-[12px] text-ink-3 mt-1">
           Scan the QR or type the asset code, then confirm where it's going.
         </p>
@@ -122,9 +112,7 @@ export function RentalsScanScreen() {
 
       <div className="px-4 pb-8 space-y-3">
         <Card>
-          <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-            Asset code
-          </label>
+          <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Asset code</label>
           <input
             type="text"
             inputMode="text"
@@ -170,9 +158,7 @@ export function RentalsScanScreen() {
         </Card>
 
         <Card>
-          <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-            Project
-          </label>
+          <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Project</label>
           <select
             value={projectId}
             onChange={(e) => setProjectId(e.target.value)}
@@ -186,9 +172,7 @@ export function RentalsScanScreen() {
             ))}
           </select>
 
-          <label className="block mt-3 text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-            Worker
-          </label>
+          <label className="block mt-3 text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Worker</label>
           <select
             value={workerId}
             onChange={(e) => setWorkerId(e.target.value)}
@@ -237,9 +221,7 @@ export function RentalsScanScreen() {
         </MobileButton>
 
         {dispatch.isError ? (
-          <div className="text-[12px] text-status-warn">
-            {dispatch.error?.message ?? 'Failed to post movement'}
-          </div>
+          <div className="text-[12px] text-status-warn">{dispatch.error?.message ?? 'Failed to post movement'}</div>
         ) : null}
       </div>
     </div>

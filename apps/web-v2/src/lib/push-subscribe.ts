@@ -50,10 +50,7 @@ function arrayBufferToBase64(buffer: ArrayBuffer | null | undefined): string {
 /** Verify that the browser environment can actually subscribe. */
 export function isPushSupported(): boolean {
   return (
-    typeof window !== 'undefined' &&
-    'serviceWorker' in navigator &&
-    'PushManager' in window &&
-    'Notification' in window
+    typeof window !== 'undefined' && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window
   )
 }
 

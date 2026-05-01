@@ -26,20 +26,18 @@ export function OwnerTimeAnomaliesScreen() {
         <Link to="/time" className="text-[12px] text-ink-3">
           ← Time
         </Link>
-        <h1 className="mt-2 font-display text-[24px] font-bold tracking-tight leading-tight">
-          Anomalies
-        </h1>
-        <p className="text-[12px] text-ink-3 mt-1">
-          Pending runs that flagged at least one entry.
-        </p>
+        <h1 className="mt-2 font-display text-[24px] font-bold tracking-tight leading-tight">Anomalies</h1>
+        <p className="text-[12px] text-ink-3 mt-1">Pending runs that flagged at least one entry.</p>
       </div>
 
       <div className="px-4 pb-4">
-        <WhyThis title="What counts as an anomaly?" attribution="From server-side hour heuristics — see /api/time-review-runs">
-          The time-review reducer flags rows where the recorded hours fall outside the expected
-          window for that worker / project / day combination — gaps, overlaps, hours over a soft cap,
-          or entries posted after the geofence cutoff. Each anomaly is a hint, not a verdict; you
-          decide whether to approve or reopen.
+        <WhyThis
+          title="What counts as an anomaly?"
+          attribution="From server-side hour heuristics — see /api/time-review-runs"
+        >
+          The time-review reducer flags rows where the recorded hours fall outside the expected window for that worker /
+          project / day combination — gaps, overlaps, hours over a soft cap, or entries posted after the geofence
+          cutoff. Each anomaly is a hint, not a verdict; you decide whether to approve or reopen.
         </WhyThis>
       </div>
 
@@ -74,8 +72,7 @@ function RunRow({ run }: { run: TimeReviewRunRow }) {
               {run.period_start} → {run.period_end}
             </div>
             <div className="text-[11px] text-ink-3 mt-0.5">
-              {run.total_entries} entries · {Number(run.total_hours).toFixed(1)}h ·{' '}
-              v{run.state_version}
+              {run.total_entries} entries · {Number(run.total_hours).toFixed(1)}h · v{run.state_version}
             </div>
           </div>
           <Pill tone={tone}>

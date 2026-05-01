@@ -113,8 +113,7 @@ export interface ScanDispatchInput {
 export function useDispatchMovement() {
   const qc = useQueryClient()
   return useMutation<InventoryMovement, Error, ScanDispatchInput>({
-    mutationFn: (input) =>
-      request('/api/inventory/movements', { method: 'POST', json: input }),
+    mutationFn: (input) => request('/api/inventory/movements', { method: 'POST', json: input }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['inventory'] })
     },
@@ -141,8 +140,7 @@ export interface JobRentalContract {
 export function useProjectRentalContracts(projectId: string | null | undefined) {
   return useQuery<{ contracts: JobRentalContract[] }>({
     queryKey: ['rental-contracts', 'by-project', projectId ?? ''],
-    queryFn: () =>
-      request(`/api/projects/${encodeURIComponent(projectId!)}/rental-contracts`),
+    queryFn: () => request(`/api/projects/${encodeURIComponent(projectId!)}/rental-contracts`),
     enabled: Boolean(projectId),
   })
 }

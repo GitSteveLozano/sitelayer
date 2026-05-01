@@ -130,7 +130,12 @@ function OverviewTab({ project }: { project: ProjectDetail }) {
   const events = (timeline.data?.events ?? []).filter((e) => e.project_id === project.id)
   const spans = pairClockSpans(events)
   const open = findOpenSpan(spans)
-  const totalHoursToday = sumHoursInRange(spans, startOfDay(Date.now()), startOfDay(Date.now()) + 24 * 3600 * 1000, Date.now())
+  const totalHoursToday = sumHoursInRange(
+    spans,
+    startOfDay(Date.now()),
+    startOfDay(Date.now()) + 24 * 3600 * 1000,
+    Date.now(),
+  )
 
   const drafts = useDailyLogs({ projectId: project.id, status: 'draft' })
 
@@ -242,8 +247,7 @@ function TimePreview({ projectId }: { projectId: string }) {
       </div>
       {data.total_budget_cents > 0 ? (
         <div className="text-[11px] text-ink-3 mt-1">
-          {(data.burden_pct_of_budget * 100).toFixed(0)}% of $
-          {(data.total_budget_cents / 100).toLocaleString()} budget
+          {(data.burden_pct_of_budget * 100).toFixed(0)}% of ${(data.total_budget_cents / 100).toLocaleString()} budget
         </div>
       ) : (
         <div className="text-[11px] text-ink-3 mt-1">No daily budget set on this project.</div>

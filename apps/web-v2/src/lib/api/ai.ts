@@ -98,8 +98,7 @@ export function useDismissInsight() {
 export function useApplyInsight() {
   const qc = useQueryClient()
   return useMutation<{ insight: AiInsight }, Error, { id: string }>({
-    mutationFn: ({ id }) =>
-      request(`/api/ai/insights/${encodeURIComponent(id)}/apply`, { method: 'POST' }),
+    mutationFn: ({ id }) => request(`/api/ai/insights/${encodeURIComponent(id)}/apply`, { method: 'POST' }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ai'] }),
   })
 }
@@ -127,11 +126,7 @@ export interface TakeoffToBidPayload {
 
 export function useTriggerTakeoffToBid() {
   const qc = useQueryClient()
-  return useMutation<
-    { run_id: string; project_id: string; status: string },
-    Error,
-    { project_id: string }
-  >({
+  return useMutation<{ run_id: string; project_id: string; status: string }, Error, { project_id: string }>({
     mutationFn: (input) => request('/api/ai/agents/takeoff-to-bid', { method: 'POST', json: input }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ai'] }),
   })
@@ -176,13 +171,8 @@ export interface BidFollowUpDraft {
 
 export function useTriggerBidFollowUp() {
   const qc = useQueryClient()
-  return useMutation<
-    { proposals_created: number; scanned: number; age_days?: number },
-    Error,
-    { age_days?: number }
-  >({
-    mutationFn: (input) =>
-      request('/api/ai/agents/bid-follow-up', { method: 'POST', json: input ?? {} }),
+  return useMutation<{ proposals_created: number; scanned: number; age_days?: number }, Error, { age_days?: number }>({
+    mutationFn: (input) => request('/api/ai/agents/bid-follow-up', { method: 'POST', json: input ?? {} }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ai'] }),
   })
 }

@@ -88,8 +88,8 @@ export function NotificationPreferencesScreen() {
     setHydrated(true)
   }, [query.data, hydrated])
 
-  const usesSms = (Object.values(draft).some((v) => v === 'sms')) || false
-  const usesEmail = (Object.values(draft).some((v) => v === 'email')) || false
+  const usesSms = Object.values(draft).some((v) => v === 'sms') || false
+  const usesEmail = Object.values(draft).some((v) => v === 'email') || false
 
   const validate = (): string | null => {
     if (usesSms && !(draft.sms_phone ?? '').trim()) {
@@ -125,9 +125,7 @@ export function NotificationPreferencesScreen() {
   return (
     <div className="px-5 pt-6 pb-12 max-w-2xl">
       <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Settings</div>
-      <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">
-        Notifications
-      </h1>
+      <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">Notifications</h1>
       <p className="text-[14px] text-ink-2 mt-2">
         Pick how each event reaches you. Setting a channel to <strong>Off</strong> silences that event entirely.
       </p>
@@ -164,9 +162,7 @@ export function NotificationPreferencesScreen() {
 
           <Card>
             <div className="text-[14px] font-semibold">Contacts</div>
-            <div className="text-[12px] text-ink-3 mt-1 mb-3">
-              Required when you've selected SMS or Email above.
-            </div>
+            <div className="text-[12px] text-ink-3 mt-1 mb-3">Required when you've selected SMS or Email above.</div>
             <label className="block text-[12px] font-medium text-ink-3 mb-1">SMS phone</label>
             <input
               type="tel"
@@ -185,9 +181,7 @@ export function NotificationPreferencesScreen() {
             />
           </Card>
 
-          {error ? (
-            <div className="px-1 text-[13px] text-bad">{error}</div>
-          ) : null}
+          {error ? <div className="px-1 text-[13px] text-bad">{error}</div> : null}
           {saved ? (
             <div className="px-1 text-[13px] text-good inline-flex items-center gap-2">
               <Pill tone="good" withDot>

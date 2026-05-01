@@ -2,11 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, Pill } from '@/components/mobile'
 import { Attribution, Spark, StripeCard, WhyThis } from '@/components/ai'
-import {
-  useBidAccuracy,
-  type AccuracyConfidence,
-  type BidAccuracyProject,
-} from '@/lib/api'
+import { useBidAccuracy, type AccuracyConfidence, type BidAccuracyProject } from '@/lib/api'
 
 /**
  * Owner bid accuracy cohort view (Phase 5).
@@ -32,8 +28,6 @@ export function OwnerBidAccuracyScreen() {
   const summary = accuracy.data?.summary
   const projects = accuracy.data?.projects ?? []
   const closedDelta = summary?.mean_closed_delta_pct ?? 0
-  const closedTone: 'good' | 'warn' | 'default' =
-    Math.abs(closedDelta) < 5 ? 'good' : Math.abs(closedDelta) < 15 ? 'warn' : 'warn'
   const sparkState = Math.abs(closedDelta) < 5 ? 'accent' : 'muted'
 
   return (
@@ -42,12 +36,8 @@ export function OwnerBidAccuracyScreen() {
         <Link to="/" className="text-[12px] text-ink-3">
           ← Home
         </Link>
-        <h1 className="mt-2 font-display text-[24px] font-bold tracking-tight leading-tight">
-          Bid accuracy
-        </h1>
-        <p className="text-[12px] text-ink-3 mt-1">
-          How close your bids landed against realized cost.
-        </p>
+        <h1 className="mt-2 font-display text-[24px] font-bold tracking-tight leading-tight">Bid accuracy</h1>
+        <p className="text-[12px] text-ink-3 mt-1">How close your bids landed against realized cost.</p>
       </div>
 
       <div className="px-4 pb-8 space-y-3">
@@ -67,35 +57,23 @@ export function OwnerBidAccuracyScreen() {
             {summary?.over_count ?? 0} over · {summary?.under_count ?? 0} under
           </div>
           <div className="mt-3 flex items-center justify-between gap-2">
-            <Attribution
-              source={summary?.attribution ?? 'Computed from projects + actuals'}
-            />
-            <button
-              type="button"
-              onClick={() => setShowWhy((s) => !s)}
-              className="text-[11px] text-accent font-medium"
-            >
+            <Attribution source={summary?.attribution ?? 'Computed from projects + actuals'} />
+            <button type="button" onClick={() => setShowWhy((s) => !s)} className="text-[11px] text-accent font-medium">
               {showWhy ? 'Hide why' : 'Why this?'}
             </button>
           </div>
         </StripeCard>
 
         {showWhy ? (
-          <WhyThis
-            title="How the delta is computed"
-            attribution="Cohort SQL — no LLM in this path"
-          >
-            For every project with a bid &gt; 0, we sum material_bills.amount and
-            labor_entries.hours × project labor rate, compare against bid_total, and bucket the
-            absolute delta percent into ordinal pills (high &lt; 5%, medium &lt; 15%, low ≥ 15%).
-            Closed projects drive the headline mean; in-flight projects show their running
+          <WhyThis title="How the delta is computed" attribution="Cohort SQL — no LLM in this path">
+            For every project with a bid &gt; 0, we sum material_bills.amount and labor_entries.hours × project labor
+            rate, compare against bid_total, and bucket the absolute delta percent into ordinal pills (high &lt; 5%,
+            medium &lt; 15%, low ≥ 15%). Closed projects drive the headline mean; in-flight projects show their running
             delta so you spot drift before the bid lands.
           </WhyThis>
         ) : null}
 
-        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pt-2">
-          Per project
-        </div>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pt-2">Per project</div>
         {projects.length === 0 ? (
           <Card tight>
             <div className="text-[12px] text-ink-3">No bids with realized cost yet.</div>
@@ -120,12 +98,10 @@ function ProjectRow({ project }: { project: BidAccuracyProject }) {
           <div>
             <div className="text-[13px] font-semibold">{project.project_name}</div>
             <div className="text-[11px] text-ink-3 mt-0.5">
-              {project.customer_name ?? 'No customer'} · bid $
-              {Number(project.bid_total).toLocaleString()}
+              {project.customer_name ?? 'No customer'} · bid ${Number(project.bid_total).toLocaleString()}
             </div>
             <div className="text-[11px] text-ink-3 mt-0.5">
-              actual ${(project.actual_total_cents / 100).toLocaleString()} · {sign}$
-              {absDelta.toLocaleString()} ({sign}
+              actual ${(project.actual_total_cents / 100).toLocaleString()} · {sign}${absDelta.toLocaleString()} ({sign}
               {Math.abs(project.delta_pct).toFixed(1)}%)
             </div>
           </div>

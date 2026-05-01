@@ -90,7 +90,12 @@ export function findOpenSpan(spans: ClockSpan[]): ClockSpan | null {
 }
 
 /** Sum hours for spans whose in_at falls within [startMs, endMs). */
-export function sumHoursInRange(spans: ClockSpan[], startMs: number, endMs: number, nowMs: number = Date.now()): number {
+export function sumHoursInRange(
+  spans: ClockSpan[],
+  startMs: number,
+  endMs: number,
+  nowMs: number = Date.now(),
+): number {
   return spans.reduce((sum, span) => {
     const inMs = asMs(span.in_at)
     const outMs = span.out_at ? asMs(span.out_at) : nowMs

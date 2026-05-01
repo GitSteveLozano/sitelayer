@@ -179,7 +179,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   }
 
   const contentType = response.headers.get('content-type') ?? ''
-  let body: unknown = null
+  let body: unknown
   if (contentType.includes('application/json')) {
     try {
       body = await response.json()

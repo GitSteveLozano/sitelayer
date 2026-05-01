@@ -97,10 +97,7 @@ export function parseDailyLogPhotoMultipart(
       earlyError =
         err instanceof DailyLogPhotoUploadError
           ? err
-          : new DailyLogPhotoUploadError(
-              500,
-              `daily-log photo upload failed: ${(err as Error).message ?? 'unknown'}`,
-            )
+          : new DailyLogPhotoUploadError(500, `daily-log photo upload failed: ${(err as Error).message ?? 'unknown'}`)
     }
 
     busboy.on('field', (name, value) => {

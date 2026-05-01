@@ -37,9 +37,7 @@ export function RentalsUtilizationScreen() {
         <Link to="/rentals" className="text-[12px] text-ink-3">
           ← Rentals
         </Link>
-        <h1 className="mt-2 font-display text-[24px] font-bold tracking-tight leading-tight">
-          Utilization
-        </h1>
+        <h1 className="mt-2 font-display text-[24px] font-bold tracking-tight leading-tight">Utilization</h1>
         <p className="text-[12px] text-ink-3 mt-1">30-day rollup, ranked by idle dollars.</p>
       </div>
 
@@ -47,17 +45,14 @@ export function RentalsUtilizationScreen() {
         <Card>
           <div className="flex items-center gap-2 mb-1">
             <Spark state="accent" size={12} aria-label="" />
-            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-              Idle revenue per day
-            </div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Idle revenue per day</div>
           </div>
           <div className="num text-[28px] font-bold tracking-tight">
             ${((totals?.total_idle_revenue_per_day_cents ?? 0) / 100).toLocaleString()}
           </div>
           <div className="text-[12px] text-ink-3 mt-1">
-            {Number(totals?.total_on_rent ?? 0).toFixed(0)} on rent ·{' '}
-            {Number(totals?.total_available ?? 0).toFixed(0)} available across{' '}
-            {items.length} item{items.length === 1 ? '' : 's'}
+            {Number(totals?.total_on_rent ?? 0).toFixed(0)} on rent · {Number(totals?.total_available ?? 0).toFixed(0)}{' '}
+            available across {items.length} item{items.length === 1 ? '' : 's'}
           </div>
         </Card>
 
@@ -72,9 +67,7 @@ export function RentalsUtilizationScreen() {
           topIdle.map((row) => <CompactRow key={row.inventory_item_id} row={row} mode="idle" />)
         )}
 
-        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pt-2">
-          Stalest assets
-        </div>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pt-2">Stalest assets</div>
         {topStale.length === 0 ? (
           <Card tight>
             <div className="text-[12px] text-ink-3">No movement history yet.</div>
@@ -102,9 +95,7 @@ function CompactRow({ row, mode }: { row: UtilizationRow; mode: 'idle' | 'stale'
           {mode === 'idle' ? (
             <Pill tone={idle > 5000 ? 'warn' : 'default'}>${(idle / 100).toFixed(2)}/day</Pill>
           ) : (
-            <Pill tone={(row.days_since_activity ?? 0) > 30 ? 'warn' : 'default'}>
-              {row.days_since_activity}d idle
-            </Pill>
+            <Pill tone={(row.days_since_activity ?? 0) > 30 ? 'warn' : 'default'}>{row.days_since_activity}d idle</Pill>
           )}
         </div>
       </Card>

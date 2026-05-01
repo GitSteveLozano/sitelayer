@@ -23,12 +23,8 @@ export const queryKeys = {
   },
   timeReviewRuns: {
     all: () => ['time-review-runs'] as const,
-    list: (params?: {
-      state?: 'pending' | 'approved' | 'rejected'
-      projectId?: string
-      from?: string
-      to?: string
-    }) => [...queryKeys.timeReviewRuns.all(), 'list', params ?? {}] as const,
+    list: (params?: { state?: 'pending' | 'approved' | 'rejected'; projectId?: string; from?: string; to?: string }) =>
+      [...queryKeys.timeReviewRuns.all(), 'list', params ?? {}] as const,
     detail: (id: string) => [...queryKeys.timeReviewRuns.all(), 'detail', id] as const,
   },
   push: {
