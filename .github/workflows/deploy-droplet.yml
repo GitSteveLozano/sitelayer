@@ -233,7 +233,69 @@ jobs:
           set -euo pipefail
           umask 077
           production_env_file="${RUNNER_TEMP:-/tmp}/sitelayer-production.env"
-          node scripts/render-production-env.mjs --output "$production_env_file"
+          production_env_dir="$(dirname "$production_env_file")"
+          production_env_name="$(basename "$production_env_file")"
+          render_env_names=(
+            PRODUCTION_ENV_RENDER_ENFORCE
+            APP_IMAGE
+            APP_TIER
+            NODE_ENV
+            FEATURE_FLAGS
+            DATABASE_URL
+            DATABASE_URL_PROD_RO
+            DATABASE_SSL_REJECT_UNAUTHORIZED
+            ACTIVE_COMPANY_SLUG
+            ACTIVE_USER_ID
+            ALLOWED_ORIGINS
+            QBO_CLIENT_ID
+            QBO_CLIENT_SECRET
+            QBO_REDIRECT_URI
+            QBO_SUCCESS_REDIRECT_URI
+            QBO_ENVIRONMENT
+            QBO_STATE_SECRET
+            QBO_WEBHOOK_VERIFIER
+            CLERK_SECRET_KEY
+            CLERK_JWT_KEY
+            CLERK_ISSUER
+            CLERK_WEBHOOK_SECRET
+            INTERNAL_AUTH_TOKEN
+            AUTH_ALLOW_HEADER_FALLBACK
+            AUTH_ALLOW_HEADER_FALLBACK_BREAK_GLASS
+            DO_SPACES_KEY
+            DO_SPACES_SECRET
+            DO_SPACES_REGION
+            DO_SPACES_ENDPOINT
+            DO_SPACES_BUCKET
+            ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD
+            BLUEPRINT_STORAGE_ROOT
+            SENTRY_DSN
+            SENTRY_WORKER_DSN
+            SENTRY_ENVIRONMENT
+            SENTRY_TRACES_SAMPLE_RATE
+            SENTRY_ORG
+            SENTRY_AUTH_TOKEN
+            DEBUG_TRACE_TOKEN
+            DEBUG_ALLOW_PROD
+            API_METRICS_TOKEN
+            EMAIL_PROVIDER
+            EMAIL_FROM
+            RESEND_API_KEY
+            SENDGRID_API_KEY
+            SHUTDOWN_TIMEOUT_MS
+            SITELAYER_ENV_ENFORCE
+          )
+          docker_env_args=()
+          for name in "${render_env_names[@]}"; do
+            docker_env_args+=(--env "$name")
+          done
+          docker run --rm \
+            --user "$(id -u):$(id -g)" \
+            --workdir /work \
+            --volume "$PWD:/work:ro" \
+            --volume "$production_env_dir:/out" \
+            "${docker_env_args[@]}" \
+            node:20-alpine \
+            node scripts/render-production-env.mjs --output "/out/$production_env_name"
           {
             echo "PRODUCTION_ENV_FILE=$production_env_file"
           } >> "$GITHUB_ENV"
