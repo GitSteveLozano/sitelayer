@@ -126,10 +126,12 @@ docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
    operational lever for a leaked key; if the secret was ever in
    `.env.prod` on disk, rotation requires a droplet wipe-and-redeploy
    instead of a workflow re-run. _How to apply:_ new secret → add to the
-   `production` environment in GitHub Settings, reference via
-   `${{ secrets.NAME }}` in `deploy-droplet.yml`. `.env.example` documents
-   _names only_. Preview env lives at `/app/previews/.env.shared` on the
-   preview droplet (shared schema per PR), not a copy of prod values.
+   `production` environment in GitHub Settings, add it to
+   `ops/env/production.env.json`, and map it in `deploy-droplet.yml`.
+   `/app/sitelayer/.env` is a rendered artifact, not the source of truth.
+   `.env.example` documents _names only_. Preview env lives at
+   `/app/previews/.env.shared` on the preview droplet (shared schema per PR),
+   not a copy of prod values.
 
 3. **Any `QBO_LIVE_*` flag flip needs a worker restart and a sandbox
    smoke first — not a full deploy.** _Why:_ `QBO_LIVE_RENTAL_INVOICE=1`
@@ -212,21 +214,21 @@ docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
 
 **Verified with `doctl` and production smoke checks on 2026-04-25.**
 
-| Resource                         | Current State                                                                                                                                                                                                                           |
-| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Production droplet               | `sitelayer`, ID `566798325`, Ubuntu 22.04, Toronto `tor1`, 4 vCPU, 8GB RAM, public IPv4 `165.245.230.3`                                                                                                                                 |
-| Reserved production IP           | `159.203.51.158`, assigned to droplet `566798325`                                                                                                                                                                                       |
-| Preview droplet                  | `sitelayer-preview`, ID `566806040`, Ubuntu 22.04, Toronto `tor1`, 2 vCPU, 4GB RAM, reserved IPv4 `159.203.53.218`                                                                                                                      |
-| Managed Postgres                 | `sitelayer-db`, ID `9948c96b-b6b6-45ad-adf7-d20e4c206c66`, Postgres 18, `db-s-1vcpu-1gb`, Toronto `tor1`, online                                                                                                                        |
-| Managed Postgres databases       | `defaultdb`, `sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev`                                                                                                                                                                     |
-| Managed Postgres trusted sources | Droplet `566798325` (`sitelayer`) and droplet `566806040` (`sitelayer-preview`)                                                                                                                                                         |
-| Production deploy path           | GitHub Actions runs on the self-hosted `sitelayer-preview` runner, SSHs to `sitelayer@10.118.0.4`, deploys `/app/sitelayer` with Docker Compose, `.env` at `/app/sitelayer/.env`                                                        |
-| Preview deploy path              | `docker-compose.preview.yml` behind Traefik on `sitelayer-preview`; shared env at `/app/previews/.env.shared`; smoke stack at `main.preview.sitelayer.sandolab.xyz`                                                                     |
-| Public edge                      | Containerized Caddy on ports 80/443; automatic Let's Encrypt TLS for `sitelayer.sandolab.xyz`; HTTP redirects to HTTPS                                                                                                                  |
-| Backups                          | DO managed Postgres automatic backups exist; logical Postgres backup, Postgres off-host copy, blueprint-volume fallback copy, restore-drill, and timer-monitor timers are active                                                        |
-| Object storage                   | DO Spaces bucket `sitelayer-blueprints-prod` in `tor1`, versioning enabled, scoped prod read/write key in `/app/sitelayer/.env`                                                                                                         |
-| Container registry               | DO Container Registry `sitelayer` in `tor1`; production deploy promotes `registry.digitalocean.com/sitelayer/sitelayer:<git-sha>`                                                                                                       |
-| Optional integrations            | QBO credentials can stay blank until live sync validation; Sentry can stay blank but is wired for api/worker/web when DSNs are present. Prod API boot requires auth config, `API_METRICS_TOKEN`, Spaces credentials, and `DATABASE_URL` |
+| Resource                         | Current State                                                                                                                                                                                                                                             |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Production droplet               | `sitelayer`, ID `566798325`, Ubuntu 22.04, Toronto `tor1`, 4 vCPU, 8GB RAM, public IPv4 `165.245.230.3`                                                                                                                                                   |
+| Reserved production IP           | `159.203.51.158`, assigned to droplet `566798325`                                                                                                                                                                                                         |
+| Preview droplet                  | `sitelayer-preview`, ID `566806040`, Ubuntu 22.04, Toronto `tor1`, 2 vCPU, 4GB RAM, reserved IPv4 `159.203.53.218`                                                                                                                                        |
+| Managed Postgres                 | `sitelayer-db`, ID `9948c96b-b6b6-45ad-adf7-d20e4c206c66`, Postgres 18, `db-s-1vcpu-1gb`, Toronto `tor1`, online                                                                                                                                          |
+| Managed Postgres databases       | `defaultdb`, `sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev`                                                                                                                                                                                       |
+| Managed Postgres trusted sources | Droplet `566798325` (`sitelayer`) and droplet `566806040` (`sitelayer-preview`)                                                                                                                                                                           |
+| Production deploy path           | GitHub Actions runs on the self-hosted `sitelayer-preview` runner, renders `ops/env/production.env.json` from the `production` environment, SSHs to `sitelayer@10.118.0.4`, deploys `/app/sitelayer` with Docker Compose, `.env` at `/app/sitelayer/.env` |
+| Preview deploy path              | `docker-compose.preview.yml` behind Traefik on `sitelayer-preview`; shared env at `/app/previews/.env.shared`; smoke stack at `main.preview.sitelayer.sandolab.xyz`                                                                                       |
+| Public edge                      | Containerized Caddy on ports 80/443; automatic Let's Encrypt TLS for `sitelayer.sandolab.xyz`; HTTP redirects to HTTPS                                                                                                                                    |
+| Backups                          | DO managed Postgres automatic backups exist; logical Postgres backup, Postgres off-host copy, blueprint-volume fallback copy, restore-drill, and timer-monitor timers are active                                                                          |
+| Object storage                   | DO Spaces bucket `sitelayer-blueprints-prod` in `tor1`, versioning enabled, scoped prod read/write key in GitHub production secrets and rendered to `/app/sitelayer/.env`                                                                                 |
+| Container registry               | DO Container Registry `sitelayer` in `tor1`; production deploy promotes `registry.digitalocean.com/sitelayer/sitelayer:<git-sha>`                                                                                                                         |
+| Optional integrations            | QBO credentials can stay blank until live sync validation; Sentry can stay blank but is wired for api/worker/web when DSNs are present. Prod API boot requires auth config, `API_METRICS_TOKEN`, Spaces credentials, and `DATABASE_URL`                   |
 
 Security note: the deploy user is in the Docker group. That avoids root SSH but Docker access is root-equivalent. Treat `DEPLOY_SSH_KEY` as production-root-equivalent.
 
@@ -664,7 +666,7 @@ Background job processor:
 - [x] DigitalOcean Container Registry — `sitelayer` Starter registry in `tor1` for immutable runtime images
 - [x] DigitalOcean managed Postgres 18 (`sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev`)
 - [x] Clerk app + OAuth credentials (env vars wired; enforcement gated on `CLERK_JWT_KEY` + `AUTH_ALLOW_HEADER_FALLBACK`)
-- [x] `.env.example` scaffold; production `.env` lives at `/app/sitelayer/.env` (mode `600`); GitHub Actions injects build-time secrets at deploy
+- [x] `.env.example` scaffold; production source of truth is GitHub Actions `production`; deploy renders `/app/sitelayer/.env` (mode `600`)
 - [x] Docker Compose: api + web + postgres + worker + MinIO (local), prod and preview variants
 
 ### Phase 2 — Initial Deployment (DONE)

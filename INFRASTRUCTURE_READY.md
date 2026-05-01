@@ -131,7 +131,9 @@ dig sitelayer.sandolab.xyz  # Should resolve to 159.203.51.158
 
 ## Environment Variables
 
-Save this to `/app/sitelayer/.env` on the Droplet, owned by the `sitelayer` deployment user with mode `600`:
+Production values live in the GitHub Actions `production` environment and are rendered from `ops/env/production.env.json` during deploy. `/app/sitelayer/.env` on the droplet is the generated artifact, owned by the `sitelayer` deployment user with mode `600`.
+
+Bootstrap/break-glass shape:
 
 ```bash
 # Database
