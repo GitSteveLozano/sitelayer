@@ -188,14 +188,18 @@ export {
   useApplyInsight,
   useBidAccuracy,
   useDismissInsight,
+  useTriggerBidFollowUp,
   useTriggerTakeoffToBid,
+  useTriggerVoiceToLog,
   type AccuracyConfidence,
   type AiInsight,
   type BidAccuracyProject,
   type BidAccuracySummary,
+  type BidFollowUpDraft,
   type InsightListParams,
   type TakeoffToBidPayload,
   type TakeoffToBidProposal,
+  type VoiceToLogProposal,
 } from './ai'
 
 export {

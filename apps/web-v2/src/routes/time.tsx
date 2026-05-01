@@ -1,18 +1,19 @@
+import { Route, Routes } from 'react-router-dom'
 import { useRole } from '@/lib/role'
 import { WorkerHoursScreen } from '@/screens/worker'
 import { ApprovalQueueScreen, ForemanBatchEntryScreen } from '@/screens/foreman'
+import { OwnerTimeAnomaliesScreen } from '@/screens/owner'
 
 /**
  * Time tab — role-aware default per `Sitemap.html` § 03:
  *   - owner   → t-approve  (approval queue)        — 1D.3
- *   - foreman → t-foreman  (batch entry)           — 1E.2 (wired below)
+ *   - foreman → t-foreman  (batch entry)           — 1E.2
  *   - worker  → wk-hours   (read-only personal)    — 1D.2
  *
- * Foreman lands on the batch-entry surface. The approval queue is
- * owner-only by default; foremen reach REOPEN actions when their
- * REJECT push a run back through the workflow event endpoint.
+ * `/time/anomalies` is a sub-route the owner reaches from the
+ * approval queue when the badge is non-zero.
  */
-export default function TimeRoute() {
+function TimeIndex() {
   const role = useRole()
 
   if (role === 'worker') {
@@ -24,4 +25,13 @@ export default function TimeRoute() {
   }
 
   return <ApprovalQueueScreen />
+}
+
+export default function TimeRoute() {
+  return (
+    <Routes>
+      <Route index element={<TimeIndex />} />
+      <Route path="anomalies" element={<OwnerTimeAnomaliesScreen />} />
+    </Routes>
+  )
 }

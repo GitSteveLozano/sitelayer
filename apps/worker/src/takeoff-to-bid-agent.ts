@@ -96,11 +96,13 @@ export async function processTakeoffToBidRun(
   companyId: string,
   payload: TakeoffToBidPayload,
 ): Promise<{ insightsCreated: number; lines: ProposedBidLine[] }> {
-  // 1. pull tagged measurements for the project
+  // 1. pull non-deleted measurements for the project. Today this reads
+  // the legacy single-scope columns; multi-condition tags from Phase 3A
+  // are summarized in a follow-on once the agent prompt is finalized.
   const measurements = await client.query<MeasurementRow>(
     `select id, service_item_code, quantity, unit, rate, notes
      from takeoff_measurements
-     where company_id = $1 and project_id = $2`,
+     where company_id = $1 and project_id = $2 and deleted_at is null`,
     [companyId, payload.project_id],
   )
   if (measurements.rows.length === 0) {

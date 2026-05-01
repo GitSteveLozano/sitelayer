@@ -24,6 +24,7 @@ import { createClerkClient } from '@clerk/backend'
 import { clerkUserFetcherFromClient, createClerkResolver, type ClerkResolver } from './clerk-hydrate.js'
 import { drainNotifications as drainNotificationsBatch } from './notifications.js'
 import { processTakeoffToBidRun, type TakeoffToBidPayload } from './takeoff-to-bid-agent.js'
+import { processVoiceToLogRun, type VoiceToLogPayload } from './voice-to-log-agent.js'
 import {
   ConsoleChannel,
   DefaultNotificationDispatcher,
@@ -451,25 +452,35 @@ async function drainLockLaborEntries(companyId: string): Promise<LockLaborEntrie
   }
 }
 
-interface TakeoffToBidSummary {
+interface AgentDrainSummary {
   processed: number
   insightsCreated: number
   failed: number
 }
 
 /**
- * Drain mutation_outbox rows for the takeoff-to-bid agent (Phase 5).
- * Each row claims a project, runs the agent (LLM stub today), and
- * lands one ai_insights row containing the proposed bid lines. Rows
- * are processed in their own transactions so a failed run doesn't
- * strand sibling work.
+ * Generic ai-insight outbox drain. Claims rows of the given mutation
+ * type, runs the per-row processor, marks 'applied' on success or
+ * reschedules with backoff on failure (parking at status='failed'
+ * after 5 attempts so a structurally-broken row stops looping). Each
+ * row runs in its own transaction so a stuck row can't strand the
+ * rest of the batch.
  */
-async function drainTakeoffToBid(companyId: string): Promise<TakeoffToBidSummary> {
-  const summary: TakeoffToBidSummary = { processed: 0, insightsCreated: 0, failed: 0 }
+async function drainAgentMutations<TPayload>(
+  mutationType: string,
+  companyId: string,
+  scope: string,
+  process: (
+    client: PoolClient,
+    companyId: string,
+    payload: TPayload,
+  ) => Promise<{ insightsCreated: number }>,
+): Promise<AgentDrainSummary> {
+  const summary: AgentDrainSummary = { processed: 0, insightsCreated: 0, failed: 0 }
   const client = await pool.connect()
   try {
     await client.query('begin')
-    const claimed = await client.query<{ id: string; payload: TakeoffToBidPayload }>(
+    const claimed = await client.query<{ id: string; payload: TPayload }>(
       `update mutation_outbox
          set status = 'processing',
              attempt_count = attempt_count + 1,
@@ -478,7 +489,7 @@ async function drainTakeoffToBid(companyId: string): Promise<TakeoffToBidSummary
        where id in (
          select id from mutation_outbox
          where company_id = $1
-           and mutation_type = 'takeoff_to_bid'
+           and mutation_type = $2
            and (
              (status = 'pending' and next_attempt_at <= now())
              or (status = 'processing' and next_attempt_at <= now())
@@ -488,7 +499,7 @@ async function drainTakeoffToBid(companyId: string): Promise<TakeoffToBidSummary
          for update skip locked
        )
        returning id, payload`,
-      [companyId],
+      [companyId, mutationType],
     )
     await client.query('commit')
 
@@ -496,7 +507,7 @@ async function drainTakeoffToBid(companyId: string): Promise<TakeoffToBidSummary
       summary.processed++
       await client.query('begin')
       try {
-        const result = await processTakeoffToBidRun(client, companyId, row.payload)
+        const result = await process(client, companyId, row.payload)
         summary.insightsCreated += result.insightsCreated
         await client.query(
           `update mutation_outbox
@@ -520,13 +531,31 @@ async function drainTakeoffToBid(companyId: string): Promise<TakeoffToBidSummary
             [row.id, message],
           )
           .catch(() => {})
-        Sentry.captureException(err, { tags: { scope: 'takeoff_to_bid', outbox_id: row.id } })
+        Sentry.captureException(err, { tags: { scope, outbox_id: row.id } })
       }
     }
   } finally {
     client.release()
   }
   return summary
+}
+
+async function drainTakeoffToBid(companyId: string): Promise<AgentDrainSummary> {
+  return drainAgentMutations<TakeoffToBidPayload>(
+    'takeoff_to_bid',
+    companyId,
+    'takeoff_to_bid',
+    processTakeoffToBidRun,
+  )
+}
+
+async function drainVoiceToLog(companyId: string): Promise<AgentDrainSummary> {
+  return drainAgentMutations<VoiceToLogPayload>(
+    'voice_to_log',
+    companyId,
+    'voice_to_log',
+    processVoiceToLogRun,
+  )
 }
 
 /**
@@ -699,7 +728,13 @@ async function heartbeat(): Promise<{ idle: boolean }> {
   const takeoffToBidSummary = await drainTakeoffToBid(companyId).catch((error) => {
     logger.error({ err: error }, '[worker] takeoff_to_bid drain failed')
     Sentry.captureException(error, { tags: { scope: 'takeoff_to_bid' } })
-    return { processed: 0, insightsCreated: 0, failed: 0 } as TakeoffToBidSummary
+    return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
+  })
+
+  const voiceToLogSummary = await drainVoiceToLog(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] voice_to_log drain failed')
+    Sentry.captureException(error, { tags: { scope: 'voice_to_log' } })
+    return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
   })
 
   // Defense-in-depth alert: any workflow row stuck in 'posting' beyond
@@ -743,6 +778,9 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         takeoff_to_bid_processed: takeoffToBidSummary.processed,
         takeoff_to_bid_insights_created: takeoffToBidSummary.insightsCreated,
         takeoff_to_bid_failed: takeoffToBidSummary.failed,
+        voice_to_log_processed: voiceToLogSummary.processed,
+        voice_to_log_insights_created: voiceToLogSummary.insightsCreated,
+        voice_to_log_failed: voiceToLogSummary.failed,
         rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
         estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
       },
@@ -757,7 +795,8 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     rentalBillingPushSummary.processed > 0 ||
     estimatePushSummary.processed > 0 ||
     lockLaborSummary.processed > 0 ||
-    takeoffToBidSummary.processed > 0
+    takeoffToBidSummary.processed > 0 ||
+    voiceToLogSummary.processed > 0
   ) {
     logger.info(
       {
@@ -784,6 +823,9 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         takeoff_to_bid_processed: takeoffToBidSummary.processed,
         takeoff_to_bid_insights_created: takeoffToBidSummary.insightsCreated,
         takeoff_to_bid_failed: takeoffToBidSummary.failed,
+        voice_to_log_processed: voiceToLogSummary.processed,
+        voice_to_log_insights_created: voiceToLogSummary.insightsCreated,
+        voice_to_log_failed: voiceToLogSummary.failed,
         rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
         estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
       },
