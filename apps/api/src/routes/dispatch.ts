@@ -34,6 +34,8 @@ import { handleAssemblyRoutes } from './assemblies.js'
 import { handleBlueprintPageRoutes } from './blueprint-pages.js'
 import { handleQboCustomFieldRoutes } from './qbo-custom-fields.js'
 import { handleInventoryUtilizationRoutes } from './inventory-utilization.js'
+import { handleBidAccuracyRoutes } from './bid-accuracy.js'
+import { handleAiInsightRoutes } from './ai-insights.js'
 import { handleTakeoffImportRoutes } from './takeoff-import.js'
 import { handleTakeoffMeasurementRoutes } from './takeoff-measurements.js'
 import { handleTakeoffTagRoutes } from './takeoff-tags.js'
@@ -418,6 +420,32 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       pool,
       company,
       requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // AI Layer — bid accuracy cohort stats (Phase 5).
+  if (
+    await handleBidAccuracyRoutes(req, url, {
+      pool,
+      company,
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // AI Layer — insights CRUD + agent triggers (Phase 5).
+  if (
+    await handleAiInsightRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
       sendJson,
     })
   ) {

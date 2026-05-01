@@ -184,6 +184,21 @@ export {
 } from './takeoff'
 
 export {
+  useAiInsights,
+  useApplyInsight,
+  useBidAccuracy,
+  useDismissInsight,
+  useTriggerTakeoffToBid,
+  type AccuracyConfidence,
+  type AiInsight,
+  type BidAccuracyProject,
+  type BidAccuracySummary,
+  type InsightListParams,
+  type TakeoffToBidPayload,
+  type TakeoffToBidProposal,
+} from './ai'
+
+export {
   useDispatchMovement,
   useInventoryItems,
   useInventoryLocations,

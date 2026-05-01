@@ -23,6 +23,7 @@ import { createQboEstimatePush } from './qbo-estimate-push.js'
 import { createClerkClient } from '@clerk/backend'
 import { clerkUserFetcherFromClient, createClerkResolver, type ClerkResolver } from './clerk-hydrate.js'
 import { drainNotifications as drainNotificationsBatch } from './notifications.js'
+import { processTakeoffToBidRun, type TakeoffToBidPayload } from './takeoff-to-bid-agent.js'
 import {
   ConsoleChannel,
   DefaultNotificationDispatcher,
@@ -450,6 +451,84 @@ async function drainLockLaborEntries(companyId: string): Promise<LockLaborEntrie
   }
 }
 
+interface TakeoffToBidSummary {
+  processed: number
+  insightsCreated: number
+  failed: number
+}
+
+/**
+ * Drain mutation_outbox rows for the takeoff-to-bid agent (Phase 5).
+ * Each row claims a project, runs the agent (LLM stub today), and
+ * lands one ai_insights row containing the proposed bid lines. Rows
+ * are processed in their own transactions so a failed run doesn't
+ * strand sibling work.
+ */
+async function drainTakeoffToBid(companyId: string): Promise<TakeoffToBidSummary> {
+  const summary: TakeoffToBidSummary = { processed: 0, insightsCreated: 0, failed: 0 }
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const claimed = await client.query<{ id: string; payload: TakeoffToBidPayload }>(
+      `update mutation_outbox
+         set status = 'processing',
+             attempt_count = attempt_count + 1,
+             next_attempt_at = now() + interval '5 minutes',
+             error = null
+       where id in (
+         select id from mutation_outbox
+         where company_id = $1
+           and mutation_type = 'takeoff_to_bid'
+           and (
+             (status = 'pending' and next_attempt_at <= now())
+             or (status = 'processing' and next_attempt_at <= now())
+           )
+         order by next_attempt_at asc, created_at asc
+         limit 5
+         for update skip locked
+       )
+       returning id, payload`,
+      [companyId],
+    )
+    await client.query('commit')
+
+    for (const row of claimed.rows) {
+      summary.processed++
+      await client.query('begin')
+      try {
+        const result = await processTakeoffToBidRun(client, companyId, row.payload)
+        summary.insightsCreated += result.insightsCreated
+        await client.query(
+          `update mutation_outbox
+             set status = 'applied', applied_at = now(), updated_at = now()
+           where id = $1`,
+          [row.id],
+        )
+        await client.query('commit')
+      } catch (err) {
+        summary.failed++
+        await client.query('rollback').catch(() => {})
+        const message = err instanceof Error ? err.message : String(err)
+        await pool
+          .query(
+            `update mutation_outbox
+               set status = case when attempt_count >= 5 then 'failed' else 'pending' end,
+                   error = $2,
+                   next_attempt_at = now() + interval '2 minutes',
+                   updated_at = now()
+             where id = $1`,
+            [row.id, message],
+          )
+          .catch(() => {})
+        Sentry.captureException(err, { tags: { scope: 'takeoff_to_bid', outbox_id: row.id } })
+      }
+    }
+  } finally {
+    client.release()
+  }
+  return summary
+}
+
 /**
  * Stuck-workflow alerting. A row in 'posting' state for too long means
  * either the worker crashed mid-push (recovery should have caught it,
@@ -617,6 +696,12 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     return { processed: 0, locked: 0, unlocked: 0, failed: 0 } as LockLaborEntriesSummary
   })
 
+  const takeoffToBidSummary = await drainTakeoffToBid(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] takeoff_to_bid drain failed')
+    Sentry.captureException(error, { tags: { scope: 'takeoff_to_bid' } })
+    return { processed: 0, insightsCreated: 0, failed: 0 } as TakeoffToBidSummary
+  })
+
   // Defense-in-depth alert: any workflow row stuck in 'posting' beyond
   // the threshold means the worker crashed mid-push or QBO succeeded
   // silently and the worker missed the response. Surface to Sentry so
@@ -655,6 +740,9 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         lock_labor_entries_locked: lockLaborSummary.locked,
         lock_labor_entries_unlocked: lockLaborSummary.unlocked,
         lock_labor_entries_failed: lockLaborSummary.failed,
+        takeoff_to_bid_processed: takeoffToBidSummary.processed,
+        takeoff_to_bid_insights_created: takeoffToBidSummary.insightsCreated,
+        takeoff_to_bid_failed: takeoffToBidSummary.failed,
         rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
         estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
       },
@@ -668,7 +756,8 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     rentalSummary.processed > 0 ||
     rentalBillingPushSummary.processed > 0 ||
     estimatePushSummary.processed > 0 ||
-    lockLaborSummary.processed > 0
+    lockLaborSummary.processed > 0 ||
+    takeoffToBidSummary.processed > 0
   ) {
     logger.info(
       {
@@ -692,6 +781,9 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         lock_labor_entries_locked: lockLaborSummary.locked,
         lock_labor_entries_unlocked: lockLaborSummary.unlocked,
         lock_labor_entries_failed: lockLaborSummary.failed,
+        takeoff_to_bid_processed: takeoffToBidSummary.processed,
+        takeoff_to_bid_insights_created: takeoffToBidSummary.insightsCreated,
+        takeoff_to_bid_failed: takeoffToBidSummary.failed,
         rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
         estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
       },
