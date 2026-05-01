@@ -76,67 +76,67 @@ Runner package state: `/home/sitelayer/actions-runner` exists on `sitelayer-prev
 
 ## Operating Rules (post-MVP, operate mode)
 
-Sitelayer has shipped MVP. The agent's job in this repo is now to *keep it
-running* and add narrow features without breaking the live customer paths
+Sitelayer has shipped MVP. The agent's job in this repo is now to _keep it
+running_ and add narrow features without breaking the live customer paths
 (rental invoicing, blueprint takeoffs, QBO sync). Read these before
 deploying, touching env, or extending the QBO integration. Each rule is
-paired with *why* it exists (often a real footgun) and *how to apply* it.
+paired with _why_ it exists (often a real footgun) and _how to apply_ it.
 
 ### Deploy procedure
 
 1. **The only deploy path is `.github/workflows/deploy-droplet.yml`. No
-   manual SSH deploys.** *Why:* the workflow is what exports
+   manual SSH deploys.** _Why:_ the workflow is what exports
    `APP_BUILD_SHA`, runs migrations against an ephemeral Postgres 18 first,
    and writes `.last_successful_deployed_sha` on the droplet — which
    `scripts/rollback-droplet.sh` reads. A manual `docker compose up -d` on
    the droplet skips the build-sha export and breaks the rollback drill.
-   *How to apply:* push to `main` and let the workflow run. For rollback,
+   _How to apply:_ push to `main` and let the workflow run. For rollback,
    `scripts/rollback-droplet.sh TARGET_SHA=...` — never edit a migration to
    "fix forward in place".
 
 2. **Migrations in `docker/postgres/init/*.sql` are immutable once
-   committed.** *Why:* they're checksummed and tracked in
+   committed.** _Why:_ they're checksummed and tracked in
    `schema_migrations`; editing an already-applied file makes the next
-   deploy fail the checksum gate. *How to apply:* schema corrections always
+   deploy fail the checksum gate. _How to apply:_ schema corrections always
    land as a new file (next sequential prefix). `002_tier_origin.sql` is
    the precedent — additive, never destructive.
 
 3. **When restarting a single container, re-export `GIT_SHA` /
-   `APP_BUILD_SHA` first; otherwise use the deploy workflow.** *Why:*
+   `APP_BUILD_SHA` first; otherwise use the deploy workflow.** _Why:_
    `docker compose -f docker-compose.prod.yml restart api` loses the
    build-sha env var, so the next health check sees a mismatched commit
-   and rollback can't tell which image is actually running. *How to
-   apply:* `GIT_SHA=$(cat .last_successful_deployed_sha) docker compose -f
-   docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
+   and rollback can't tell which image is actually running. _How to
+   apply:_ `GIT_SHA=$(cat .last_successful_deployed_sha) docker compose -f
+docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
    are private only — never expose them publicly.
 
 ### Env management
 
 1. **The `APP_TIER` startup guard is load-bearing — never bypass it.**
-   *Why:* `APP_TIER=prod` rejects boot if `DATABASE_URL` or
+   _Why:_ `APP_TIER=prod` rejects boot if `DATABASE_URL` or
    `DO_SPACES_BUCKET` don't match the prod-tier name. A single copy-pasted
    `.env.dev` line into prod would otherwise silently corrupt customer
-   data; the guard is what turns that into a noisy startup failure. *How
-   to apply:* set `APP_TIER` *first* when provisioning, and match every
+   data; the guard is what turns that into a noisy startup failure. _How
+   to apply:_ set `APP_TIER` _first_ when provisioning, and match every
    `*_URL` / `*_BUCKET` to the tier name. The `tier_origin` column on new
    tables is the row-level analog — keep tagging writes.
 
 2. **Secrets live in the GitHub Actions `production` environment, never
-   in any committed file or shell history.** *Why:* rotation is the only
+   in any committed file or shell history.** _Why:_ rotation is the only
    operational lever for a leaked key; if the secret was ever in
    `.env.prod` on disk, rotation requires a droplet wipe-and-redeploy
-   instead of a workflow re-run. *How to apply:* new secret → add to the
+   instead of a workflow re-run. _How to apply:_ new secret → add to the
    `production` environment in GitHub Settings, reference via
    `${{ secrets.NAME }}` in `deploy-droplet.yml`. `.env.example` documents
-   *names only*. Preview env lives at `/app/previews/.env.shared` on the
+   _names only_. Preview env lives at `/app/previews/.env.shared` on the
    preview droplet (shared schema per PR), not a copy of prod values.
 
 3. **Any `QBO_LIVE_*` flag flip needs a worker restart and a sandbox
-   smoke first — not a full deploy.** *Why:* `QBO_LIVE_RENTAL_INVOICE=1`
+   smoke first — not a full deploy.** _Why:_ `QBO_LIVE_RENTAL_INVOICE=1`
    and `QBO_LIVE_ESTIMATE_PUSH=1` only take effect when the worker
    re-reads its env. The worker drains `mutation_outbox` and
    `sync_events`; flipping the flag on a stale process queues writes that
-   never reach Intuit until the bounce. *How to apply:* run
+   never reach Intuit until the bounce. _How to apply:_ run
    `scripts/qbo-sandbox-smoke.sh` first (Intuit sandbox tokens expire
    ~60min, provision fresh). Then update the env via the workflow and
    `docker compose -f docker-compose.prod.yml up -d worker` to recreate
@@ -145,53 +145,53 @@ paired with *why* it exists (often a real footgun) and *how to apply* it.
 ### QBO sync conventions
 
 1. **Mutations go through `mutation_outbox` with stable idempotency
-   keys — don't write your own retry loop.** *Why:* the worker claims rows
+   keys — don't write your own retry loop.** _Why:_ the worker claims rows
    with `FOR UPDATE SKIP LOCKED`, increments `attempt_count`, and
    reschedules via `next_attempt_at`. Adding caller-side retries
-   duplicates pushes to QBO and miscounts attempts. *How to apply:*
+   duplicates pushes to QBO and miscounts attempts. _How to apply:_
    enqueue with a deterministic key like `rental_billing_run:post:<id>`.
    Inspect queue health via `/api/system/mutation-outbox` and
    `/api/system/sync-events`. Never call the QBO API directly from a
    request handler.
 
 2. **Webhook entity types pass through unknown handlers — the row is the
-   audit trail, not the dispatch.** *Why:* `mapQboEntityType()` normalizes
+   audit trail, not the dispatch.** _Why:_ `mapQboEntityType()` normalizes
    Invoice / Estimate / etc. into the sitelayer taxonomy. Unrecognized
    types still create `sync_events` rows (so we don't drop signal) but no
    handler runs until code is added. A stalled sync usually means a
-   missing handler, not a dropped webhook. *How to apply:*
+   missing handler, not a dropped webhook. _How to apply:_
    `/api/webhooks/qbo` is rate-limit-exempt and verifies the
    `intuit-signature` HMAC against `QBO_WEBHOOK_VERIFIER`. Triage starts
    at `/api/system/sync-events?status=pending` — look at `entity_type`
    distribution.
 
 3. **`QBO_STATE_SECRET` and `QBO_WEBHOOK_VERIFIER` are operational, not
-   developer-convenience values.** *Why:* one signs the OAuth round-trip
+   developer-convenience values.** _Why:_ one signs the OAuth round-trip
    nonce, the other authenticates inbound notifications. Rotating either
    without coordinating with the Intuit Developer dashboard breaks new
-   connects or drops webhook acks. *How to apply:* rotate via the GitHub
+   connects or drops webhook acks. _How to apply:_ rotate via the GitHub
    Actions production environment, then update the verifier in the Intuit
-   dashboard *before* the worker restart picks up the new value. Webhooks
+   dashboard _before_ the worker restart picks up the new value. Webhooks
    queued during the gap replay safely thanks to idempotency keys.
 
 ### Blueprint storage hygiene
 
 1. **DO Spaces is the source of truth; local FS fallback requires the
-   `sitelayer-blueprint-backup.timer` to be live.** *Why:*
+   `sitelayer-blueprint-backup.timer` to be live.** _Why:_
    `ALLOW_LOCAL_BLUEPRINT_STORAGE_IN_PROD=1` exists for the
    degraded-Spaces case but routes uploads to host disk, where a droplet
    loss equals data loss without the off-host timer copying to the
-   preview droplet. *How to apply:* default to Spaces. Before enabling
+   preview droplet. _How to apply:_ default to Spaces. Before enabling
    local fallback, verify `systemctl list-timers | grep blueprint` shows
    the unit active. Spaces versioning is on; there's no manual GC and no
    retention policy — blueprints are kept indefinitely.
 
 2. **Uploads stream through the multipart path with a hard cap; never
-   widen the JSON body limit to "fix" a large blueprint.** *Why:*
+   widen the JSON body limit to "fix" a large blueprint.** _Why:_
    `MAX_BLUEPRINT_UPLOAD_BYTES` (default 200MB) gates the streaming
    multipart endpoint. The 20MB JSON body cap is for API payloads and
    must stay where it is — raising it opens a memory-exhaustion path.
-   *How to apply:* PDFs go via `POST /api/blueprints` multipart with the
+   _How to apply:_ PDFs go via `POST /api/blueprints` multipart with the
    `blueprint_file` part. Soft-delete via `deleted_at`; lineage of
    replacements via `replaces_blueprint_document_id`. The DB
    `storage_path` is opaque (`<companyId>/<blueprintId>/<filename>`), not
@@ -199,9 +199,9 @@ paired with *why* it exists (often a real footgun) and *how to apply* it.
 
 3. **Blueprint contents are user-supplied PDFs — sitelayer does not
    scan, redact, or scrub. Treat them as untrusted blobs containing
-   PII.** *Why:* construction takeoff PDFs legitimately contain customer
+   PII.** _Why:_ construction takeoff PDFs legitimately contain customer
    addresses and contract terms; there's no server-side PII detection.
-   Access control is the only protection. *How to apply:* Clerk JWT auth
+   Access control is the only protection. _How to apply:_ Clerk JWT auth
    and row-level company-id filtering are load-bearing — never log
    blueprint contents, never include them in error reports, never
    broaden the presigned-URL TTL beyond Spaces' 15-minute default.
