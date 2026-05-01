@@ -121,6 +121,12 @@ export function useDispatchBillingRunEvent(id: string) {
         method: 'POST',
         json: input,
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
+    onSuccess: (data) => {
+      // Write the new snapshot directly so the detail screen renders
+      // the post-event state on the next tick instead of waiting for
+      // the invalidate-driven refetch round-trip.
+      qc.setQueryData(KEYS.detail(id), data)
+      qc.invalidateQueries({ queryKey: KEYS.all() })
+    },
   })
 }

@@ -191,6 +191,11 @@ function OverviewTab({ project }: { project: ProjectDetail }) {
           <MobileButton variant="ghost">Project setup</MobileButton>
         </Link>
       </div>
+      <div className="pt-1">
+        <Link to={`/projects/${project.id}/rental-contract`} className="block">
+          <MobileButton variant="ghost">Rental contract</MobileButton>
+        </Link>
+      </div>
     </div>
   )
 }
