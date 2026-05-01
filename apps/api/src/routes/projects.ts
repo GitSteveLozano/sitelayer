@@ -203,6 +203,18 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     const patchSiteLat = body.site_lat === undefined ? null : parseOptionalNumber(body.site_lat)
     const patchSiteLng = body.site_lng === undefined ? null : parseOptionalNumber(body.site_lng)
     const patchSiteRadius = body.site_radius_m === undefined ? null : parseOptionalNumber(body.site_radius_m)
+    const patchAutoClockEnabled =
+      body.auto_clock_in_enabled === undefined ? null : Boolean(body.auto_clock_in_enabled)
+    const patchAutoClockGrace =
+      body.auto_clock_out_grace_seconds === undefined
+        ? null
+        : parseOptionalNumber(body.auto_clock_out_grace_seconds)
+    const patchAutoClockCorrection =
+      body.auto_clock_correction_window_seconds === undefined
+        ? null
+        : parseOptionalNumber(body.auto_clock_correction_window_seconds)
+    const patchDailyBudget =
+      body.daily_budget_cents === undefined ? null : parseOptionalNumber(body.daily_budget_cents)
     const updated = await withMutationTx(async (client) => {
       const result = await client.query(
         `
@@ -219,10 +231,14 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
           site_lat = case when $12::boolean then $13::numeric else site_lat end,
           site_lng = case when $14::boolean then $15::numeric else site_lng end,
           site_radius_m = case when $16::boolean then $17::int else site_radius_m end,
+          auto_clock_in_enabled = case when $18::boolean then $19::boolean else auto_clock_in_enabled end,
+          auto_clock_out_grace_seconds = case when $20::boolean then $21::int else auto_clock_out_grace_seconds end,
+          auto_clock_correction_window_seconds = case when $22::boolean then $23::int else auto_clock_correction_window_seconds end,
+          daily_budget_cents = case when $24::boolean then $25::int else daily_budget_cents end,
           updated_at = now(),
           version = version + 1
         where company_id = $1 and id = $2 and ($11::int is null or version = $11)
-        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, version, created_at, updated_at
+        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, auto_clock_in_enabled, auto_clock_out_grace_seconds, auto_clock_correction_window_seconds, daily_budget_cents, version, created_at, updated_at
         `,
         [
           ctx.company.id,
@@ -242,6 +258,14 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
           patchSiteLng,
           body.site_radius_m !== undefined,
           patchSiteRadius,
+          body.auto_clock_in_enabled !== undefined,
+          patchAutoClockEnabled,
+          body.auto_clock_out_grace_seconds !== undefined,
+          patchAutoClockGrace,
+          body.auto_clock_correction_window_seconds !== undefined,
+          patchAutoClockCorrection,
+          body.daily_budget_cents !== undefined,
+          patchDailyBudget,
         ],
       )
       const row = result.rows[0]

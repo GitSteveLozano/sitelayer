@@ -177,9 +177,14 @@ function OverviewTab({ project }: { project: ProjectDetail }) {
 
       <Attribution source="Live from /api/clock/timeline + /api/daily-logs" />
 
-      <Link to={`/log`} className="block pt-2">
-        <MobileButton variant="primary">Open daily log</MobileButton>
-      </Link>
+      <div className="grid grid-cols-2 gap-2.5 pt-2">
+        <Link to="/log" className="block">
+          <MobileButton variant="primary">Open daily log</MobileButton>
+        </Link>
+        <Link to={`/projects/${project.id}/setup`} className="block">
+          <MobileButton variant="ghost">Project setup</MobileButton>
+        </Link>
+      </div>
     </div>
   )
 }
