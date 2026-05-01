@@ -420,6 +420,14 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLog
   const [recognizing, setRecognizing] = useState(false)
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
 
+  // Stop the recognition session if the user navigates away mid-record
+  // — without this the mic keeps capturing audio after unmount.
+  useEffect(() => {
+    return () => {
+      recognitionRef.current?.stop()
+    }
+  }, [])
+
   // Web Speech API where available (Chrome / Android, also iOS Safari
   // 14.5+). Falls back gracefully to typed transcript when the API
   // isn't present — UX rule: never block the foreman.

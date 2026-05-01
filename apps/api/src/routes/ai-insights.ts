@@ -299,25 +299,22 @@ export async function handleAiInsightRoutes(
     }
 
     let created = 0
-    // Week-bucket dedupe: one follow-up insight per (project, ISO
-    // week) so a re-triggered scan inside the same week is a no-op.
-    // ai_insights doesn't carry a unique constraint on source_run_id
-    // so we check explicitly before the insert.
-    const weekBucket = isoWeekBucket(new Date())
+    // Month-bucket dedupe: one follow-up insight per (project, UTC
+    // year-month) so a re-triggered scan inside the same month is a
+    // no-op. The partial unique index on (company_id, source_run_id)
+    // (migration 041) makes the upsert race-safe — two concurrent
+    // triggers will both succeed, but only one row lands.
+    const bucket = monthBucketUtc(new Date())
     for (const project of stale.rows) {
-      const key = `bid_follow_up:${project.id}:${weekBucket}`
-      const exists = await ctx.pool.query<{ id: string }>(
-        `select id from ai_insights
-         where company_id = $1 and source_run_id = $2 limit 1`,
-        [ctx.company.id, key],
-      )
-      if (exists.rows[0]) continue
+      const key = `bid_follow_up:${project.id}:${bucket}`
       const draft = composeFollowUpDraft(project)
-      await ctx.pool.query(
+      const result = await ctx.pool.query<{ id: string }>(
         `insert into ai_insights
            (company_id, kind, entity_type, entity_id, payload, confidence,
             attribution, source_run_id, produced_by)
-         values ($1, 'bid_follow_up', 'project', $2, $3::jsonb, $4, $5, $6, 'agent:bid_follow_up')`,
+         values ($1, 'bid_follow_up', 'project', $2, $3::jsonb, $4, $5, $6, 'agent:bid_follow_up')
+         on conflict (company_id, source_run_id) where source_run_id is not null do nothing
+         returning id`,
         [
           ctx.company.id,
           project.id,
@@ -327,7 +324,7 @@ export async function handleAiInsightRoutes(
           key,
         ],
       )
-      created++
+      if ((result.rowCount ?? 0) > 0) created++
     }
     ctx.sendJson(200, { proposals_created: created, scanned: stale.rows.length, age_days: ageDays })
     return true
@@ -345,14 +342,13 @@ interface FollowUpDraft {
   confidence: 'low' | 'med' | 'high'
 }
 
-function isoWeekBucket(d: Date): string {
+function monthBucketUtc(d: Date): string {
+  // YYYY-MM in UTC — coarser than ISO week but immune to the year-
+  // boundary edge cases in a hand-rolled week function. Two follow-up
+  // triggers in the same calendar month coalesce.
   const year = d.getUTCFullYear()
-  // Cheap week-of-year: day-of-year / 7. Avoids pulling a date library
-  // for a dedupe key.
-  const start = Date.UTC(year, 0, 1)
-  const day = Math.floor((d.getTime() - start) / (1000 * 60 * 60 * 24))
-  const week = Math.floor(day / 7) + 1
-  return `${year}W${String(week).padStart(2, '0')}`
+  const month = d.getUTCMonth() + 1
+  return `${year}-${String(month).padStart(2, '0')}`
 }
 
 function composeFollowUpDraft(project: {
