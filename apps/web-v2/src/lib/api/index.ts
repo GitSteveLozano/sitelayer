@@ -151,3 +151,13 @@ export {
   type ProjectListRow,
   type ProjectStatus,
 } from './projects'
+
+export {
+  estimatePdfUrl,
+  estimateQueryKeys,
+  fetchScopeVsBid,
+  useScopeVsBid,
+  type BidVsScopeStatus,
+  type EstimateLine,
+  type ScopeVsBidResponse,
+} from './estimate'

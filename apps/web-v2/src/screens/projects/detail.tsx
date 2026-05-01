@@ -11,6 +11,7 @@ import {
   type ProjectDetail,
 } from '@/lib/api'
 import { findOpenSpan, pairClockSpans, sumHoursInRange, startOfDay } from '@/lib/clock-derive'
+import { EstimateSummaryScreen } from './estimate-summary'
 
 /**
  * `prj-detail` shell — header + sub-tab nav + per-sub-tab content.
@@ -27,11 +28,12 @@ import { findOpenSpan, pairClockSpans, sumHoursInRange, startOfDay } from '@/lib
  * works the way users expect (browser history captures each tab
  * change).
  */
-type SubTab = 'overview' | 'takeoff' | 'schedule' | 'time'
+type SubTab = 'overview' | 'takeoff' | 'estimate' | 'schedule' | 'time'
 
 const SUB_TABS: ReadonlyArray<{ key: SubTab; label: string }> = [
   { key: 'overview', label: 'Overview' },
   { key: 'takeoff', label: 'Takeoff' },
+  { key: 'estimate', label: 'Estimate' },
   { key: 'schedule', label: 'Schedule' },
   { key: 'time', label: 'Time' },
 ]
@@ -113,6 +115,7 @@ export function ProjectDetailScreen() {
       <div className="px-4 py-4 pb-8">
         {tab === 'overview' ? <OverviewTab project={data} /> : null}
         {tab === 'takeoff' ? <TakeoffPlaceholder /> : null}
+        {tab === 'estimate' ? <EstimateSummaryScreen projectId={data.id} /> : null}
         {tab === 'schedule' ? <SchedulePreview projectId={data.id} /> : null}
         {tab === 'time' ? <TimePreview projectId={data.id} /> : null}
       </div>
