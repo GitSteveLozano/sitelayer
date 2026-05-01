@@ -20,6 +20,7 @@ function runRenderer(envOverrides = {}, extraArgs = []) {
       QBO_CLIENT_ID: 'qbo-client-id',
       QBO_CLIENT_SECRET: 'qbo-client-secret',
       QBO_STATE_SECRET: 'qbo-state-secret',
+      CLERK_SECRET_KEY: 'clerk-secret-key',
       CLERK_JWT_KEY: '-----BEGIN PUBLIC KEY-----\\nabc\\n-----END PUBLIC KEY-----',
       CLERK_ISSUER: 'https://clerk.sandolab.xyz',
       CLERK_WEBHOOK_SECRET: 'whsec_test',
@@ -43,6 +44,9 @@ test('renders a quoted production dotenv file without printing values', () => {
   assert.equal(result.status, 0, result.stderr)
   assert.match(result.body, /DATABASE_URL='postgres:\/\/user:pass@example.com:5432\/sitelayer_prod'/)
   assert.match(result.body, /APP_IMAGE='registry.digitalocean.com\/sitelayer\/sitelayer:test'/)
+  assert.match(result.body, /QBO_LIVE_ESTIMATE_PUSH='0'/)
+  assert.match(result.body, /QBO_LIVE_RENTAL_INVOICE='0'/)
+  assert.match(result.body, /NOTIFICATIONS_ENABLED='1'/)
   assert.doesNotMatch(result.stdout, /postgres:\/\/user/)
   assert.doesNotMatch(result.stdout, /metrics-token/)
 })

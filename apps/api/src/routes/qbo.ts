@@ -556,6 +556,19 @@ export async function handleQboRoutes(req: http.IncomingMessage, url: URL, ctx: 
         },
         client,
       )
+      // Persist access-token expiry so the worker push paths can refresh
+      // proactively. Intuit returns expires_in in seconds; we store the
+      // absolute deadline. Done as a separate UPDATE because
+      // upsertIntegrationConnection's signature is intentionally narrow.
+      const expiresInSec = Number(tokenData.expires_in)
+      if (Number.isFinite(expiresInSec) && expiresInSec > 0) {
+        await client.query(
+          `update integration_connections
+             set access_token_expires_at = now() + ($2::int * interval '1 second')
+           where id = $1`,
+          [row.id, Math.floor(expiresInSec)],
+        )
+      }
       await recordSyncEvent(
         stateData.companyId,
         'integration_connection',

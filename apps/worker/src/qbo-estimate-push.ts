@@ -1,4 +1,5 @@
 import type { EstimatePushFn } from '@sitelayer/queue'
+import { withFreshToken, type IntegrationConnectionTokens, type RefreshDeps } from './qbo-token-refresh.js'
 
 // QBO REST integration for estimate-push (project estimate → QBO Estimate).
 // Twin of qbo-invoice-push.ts; same connection lookup, same mapping
@@ -21,13 +22,6 @@ import type { EstimatePushFn } from '@sitelayer/queue'
 //   - integration_mappings row exists for every line's service_item_code
 //     (entity_type='service_item', local_ref=<line.service_item_code>);
 //     QBO Estimate Line[] requires SalesItemLineDetail.ItemRef
-
-type QboConnectionRow = {
-  id: string
-  provider_account_id: string | null
-  access_token: string | null
-  status: string
-}
 
 type QboEstimateLinePayload = {
   Amount: number
@@ -65,25 +59,28 @@ function n(value: unknown): number {
   return Number.isFinite(num) ? num : 0
 }
 
-export function createQboEstimatePush(): EstimatePushFn {
+export function createQboEstimatePush(refreshDeps: RefreshDeps = {}): EstimatePushFn {
   const baseUrl = process.env.QBO_BASE_URL ?? 'https://sandbox-quickbooks.api.intuit.com'
 
   return async ({ client, companyId, pushId, payload }) => {
     const push = payload as PushPayload
 
-    const conn = await client.query<QboConnectionRow>(
-      `select id, provider_account_id, access_token, status
+    const conn = await client.query<IntegrationConnectionTokens>(
+      `select id, provider_account_id, access_token, refresh_token, status, access_token_expires_at
        from integration_connections
        where company_id = $1 and provider = 'qbo' and deleted_at is null
        limit 1`,
       [companyId],
     )
     const connection = conn.rows[0]
-    if (!connection?.access_token || !connection.provider_account_id) {
-      throw new Error('qbo connection missing access_token or realm id')
+    if (!connection?.provider_account_id) {
+      throw new Error('qbo connection missing realm id')
     }
     if (connection.status !== 'connected') {
       throw new Error(`qbo connection status is ${connection.status}, refusing to push`)
+    }
+    if (!connection.access_token && !connection.refresh_token) {
+      throw new Error('qbo connection has neither access_token nor refresh_token; operator must reconnect')
     }
 
     if (!push.customer_id) {
@@ -147,20 +144,32 @@ export function createQboEstimatePush(): EstimatePushFn {
     }
 
     const url = `${baseUrl}/v3/company/${connection.provider_account_id}/estimate`
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${connection.access_token}`,
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
+    const fetchImpl = refreshDeps.fetchImpl ?? fetch
+    const parsed = await withFreshToken<QboEstimateCreateResponse>(
+      connection,
+      client,
+      async (token) => {
+        const response = await fetchImpl(url, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(estimatePayload),
+        })
+        if (response.status === 401) {
+          await response.text().catch(() => '')
+          return { unauthorized: true }
+        }
+        if (!response.ok) {
+          const errBody = await response.text()
+          throw new Error(`qbo estimate POST returned ${response.status}: ${errBody.slice(0, 500)}`)
+        }
+        return { unauthorized: false, value: (await response.json()) as QboEstimateCreateResponse }
       },
-      body: JSON.stringify(estimatePayload),
-    })
-    if (!response.ok) {
-      const errBody = await response.text()
-      throw new Error(`qbo estimate POST returned ${response.status}: ${errBody.slice(0, 500)}`)
-    }
-    const parsed = (await response.json()) as QboEstimateCreateResponse
+      refreshDeps,
+    )
     const estimateId = parsed.Estimate?.Id
     if (!estimateId) {
       throw new Error('qbo estimate POST succeeded but Estimate.Id missing in response')

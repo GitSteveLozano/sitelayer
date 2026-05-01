@@ -198,6 +198,10 @@ jobs:
           QBO_REDIRECT_URI: ${{ vars.QBO_REDIRECT_URI || 'https://sitelayer.sandolab.xyz/api/integrations/qbo/callback' }}
           QBO_SUCCESS_REDIRECT_URI: ${{ vars.QBO_SUCCESS_REDIRECT_URI || 'https://sitelayer.sandolab.xyz/?qbo=connected' }}
           QBO_ENVIRONMENT: ${{ vars.QBO_ENVIRONMENT || 'sandbox' }}
+          QBO_BASE_URL: ${{ vars.QBO_BASE_URL || 'https://sandbox-quickbooks.api.intuit.com' }}
+          QBO_LIVE_ESTIMATE_PUSH: ${{ vars.QBO_LIVE_ESTIMATE_PUSH || '0' }}
+          QBO_LIVE_RENTAL_INVOICE: ${{ vars.QBO_LIVE_RENTAL_INVOICE || '0' }}
+          QBO_RENTAL_INCOME_ACCOUNT_ID: ${{ vars.QBO_RENTAL_INCOME_ACCOUNT_ID || '' }}
           QBO_STATE_SECRET: ${{ secrets.QBO_STATE_SECRET }}
           QBO_WEBHOOK_VERIFIER: ${{ secrets.QBO_WEBHOOK_VERIFIER }}
           CLERK_SECRET_KEY: ${{ secrets.CLERK_SECRET_KEY }}
@@ -227,6 +231,11 @@ jobs:
           EMAIL_FROM: ${{ vars.EMAIL_FROM || 'noreply@sitelayer.sandolab.xyz' }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          NOTIFICATIONS_ENABLED: ${{ vars.NOTIFICATIONS_ENABLED || '1' }}
+          NOTIFICATION_BATCH_LIMIT: ${{ vars.NOTIFICATION_BATCH_LIMIT || '50' }}
+          NOTIFICATION_MAX_ATTEMPTS: ${{ vars.NOTIFICATION_MAX_ATTEMPTS || '5' }}
+          NOTIFICATION_PROVIDER_FAILURE_THRESHOLD: ${{ vars.NOTIFICATION_PROVIDER_FAILURE_THRESHOLD || '3' }}
+          CLERK_EMAIL_CACHE_TTL_MS: ${{ vars.CLERK_EMAIL_CACHE_TTL_MS || '300000' }}
           SHUTDOWN_TIMEOUT_MS: ${{ vars.SHUTDOWN_TIMEOUT_MS || '15000' }}
           SITELAYER_ENV_ENFORCE: ${{ vars.SITELAYER_ENV_ENFORCE || '' }}
         run: |
@@ -252,6 +261,10 @@ jobs:
             QBO_REDIRECT_URI
             QBO_SUCCESS_REDIRECT_URI
             QBO_ENVIRONMENT
+            QBO_BASE_URL
+            QBO_LIVE_ESTIMATE_PUSH
+            QBO_LIVE_RENTAL_INVOICE
+            QBO_RENTAL_INCOME_ACCOUNT_ID
             QBO_STATE_SECRET
             QBO_WEBHOOK_VERIFIER
             CLERK_SECRET_KEY
@@ -281,6 +294,11 @@ jobs:
             EMAIL_FROM
             RESEND_API_KEY
             SENDGRID_API_KEY
+            NOTIFICATIONS_ENABLED
+            NOTIFICATION_BATCH_LIMIT
+            NOTIFICATION_MAX_ATTEMPTS
+            NOTIFICATION_PROVIDER_FAILURE_THRESHOLD
+            CLERK_EMAIL_CACHE_TTL_MS
             SHUTDOWN_TIMEOUT_MS
             SITELAYER_ENV_ENFORCE
           )
