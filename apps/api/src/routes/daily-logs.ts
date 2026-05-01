@@ -83,6 +83,11 @@ export async function handleDailyLogRoutes(
       return true
     }
 
+    // Foreman role only sees their own logs (the design's wk-log
+    // surface is per-foreman). Admin/office see every log on the
+    // company so they can audit submissions.
+    const foremanFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
+
     const result = await ctx.pool.query<DailyLogRow>(
       `select ${DAILY_LOG_COLUMNS}
        from daily_logs
@@ -91,9 +96,10 @@ export async function handleDailyLogRoutes(
          and ($3 = '' or occurred_on >= $3::date)
          and ($4 = '' or occurred_on <= $4::date)
          and ($5 = '' or status = $5)
+         and ($6 = '' or foreman_user_id = $6)
        order by occurred_on desc, created_at desc
        limit 200`,
-      [ctx.company.id, projectId, from, to, status],
+      [ctx.company.id, projectId, from, to, status, foremanFilter],
     )
     ctx.sendJson(200, { dailyLogs: result.rows })
     return true
@@ -215,13 +221,24 @@ export async function handleDailyLogRoutes(
       return true
     }
 
+    // Foreman ownership: a foreman can only PATCH their own draft.
+    // Admin / office may PATCH any draft (e.g. correcting a foreman's
+    // entry before submission). We add the ownership predicate to the
+    // WHERE rather than running a separate ownership SELECT so the
+    // check is atomic with the update.
+    const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
+    params.push(ownerFilter)
+
     const updated = await withMutationTx(async (client: PoolClient) => {
       const updateResult = await client.query<DailyLogRow>(
         `update daily_logs
            set ${setClauses.join(', ')},
                version = version + 1,
                updated_at = now()
-         where company_id = $1 and id = $2 and status = 'draft'
+         where company_id = $1
+           and id = $2
+           and status = 'draft'
+           and ($${params.length} = '' or foreman_user_id = $${params.length})
          returning ${DAILY_LOG_COLUMNS}`,
         params,
       )
@@ -239,7 +256,7 @@ export async function handleDailyLogRoutes(
     })
 
     if (!updated) {
-      ctx.sendJson(409, { error: 'daily log not found or already submitted' })
+      ctx.sendJson(409, { error: 'daily log not found, already submitted, or not yours to edit' })
       return true
     }
     ctx.sendJson(200, { dailyLog: updated })
@@ -264,6 +281,9 @@ export async function handleDailyLogRoutes(
     )
     if (!versionOk) return true
 
+    // Foreman can only submit their own draft. Admin/office unrestricted.
+    const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
+
     const submitted = await withMutationTx(async (client: PoolClient) => {
       const updateResult = await client.query<DailyLogRow>(
         `update daily_logs
@@ -271,9 +291,12 @@ export async function handleDailyLogRoutes(
                submitted_at = now(),
                version = version + 1,
                updated_at = now()
-         where company_id = $1 and id = $2 and status = 'draft'
+         where company_id = $1
+           and id = $2
+           and status = 'draft'
+           and ($3 = '' or foreman_user_id = $3)
          returning ${DAILY_LOG_COLUMNS}`,
-        [ctx.company.id, id],
+        [ctx.company.id, id, ownerFilter],
       )
       const row = updateResult.rows[0]
       if (!row) return null
@@ -290,7 +313,7 @@ export async function handleDailyLogRoutes(
     })
 
     if (!submitted) {
-      ctx.sendJson(409, { error: 'daily log not found or already submitted' })
+      ctx.sendJson(409, { error: 'daily log not found, already submitted, or not yours to submit' })
       return true
     }
     ctx.sendJson(200, { dailyLog: submitted })

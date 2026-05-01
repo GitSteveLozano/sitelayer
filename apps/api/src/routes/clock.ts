@@ -186,6 +186,19 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       }
     }
 
+    // Auto-geofence semantics: the PWA only fires source='auto_geofence'
+    // when the device crossed a geofence the server configured. If we
+    // can't reproduce that match server-side (no project resolved from
+    // the lat/lng), the event is suspect — could be stale client
+    // policies, GPS drift outside any geofence, or a forged request.
+    // Reject rather than write an orphan auto-event with project_id=null.
+    if (source === 'auto_geofence' && projectId === null) {
+      ctx.sendJson(409, {
+        error: 'no_geofence_match',
+        message: 'no project geofence matched the supplied location — refusing auto clock-in',
+      })
+      return true
+    }
     // Honour the per-project policy: if this event was triggered by the
     // PWA crossing the geofence (source='auto_geofence') and the project
     // is configured to run as reminder-only, refuse the auto-event so the
