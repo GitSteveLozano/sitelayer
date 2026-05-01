@@ -82,6 +82,20 @@ export function SettingsScreen() {
           </Card>
         </Link>
 
+        <Link to="/more/integrations" className="block">
+          <Card>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[14px] font-semibold">Integrations</div>
+                <div className="text-[12px] text-ink-3 mt-0.5">QuickBooks Online connection + entity mappings.</div>
+              </div>
+              <span className="text-ink-4" aria-hidden="true">
+                ›
+              </span>
+            </div>
+          </Card>
+        </Link>
+
         <RoleOverrideCard currentRole={role} />
       </div>
     </div>

@@ -210,6 +210,29 @@ export {
 } from './billing-runs'
 
 export {
+  fetchQboAuthUrl,
+  fetchQboConnection,
+  fetchQboMappings,
+  qboQueryKeys,
+  useDeleteQboMapping,
+  usePatchQboMapping,
+  useQboConnection,
+  useQboMappings,
+  useTriggerQboSync,
+  useUpsertQboMapping,
+  type QboAuthUrlResponse,
+  type QboConnection,
+  type QboConnectionResponse,
+  type QboEntityType,
+  type QboMapping,
+  type QboMappingListParams,
+  type QboMappingListResponse,
+  type QboMappingPatchRequest,
+  type QboMappingUpsertRequest,
+  type QboSyncStatus,
+} from './qbo'
+
+export {
   fetchSchedules,
   scheduleQueryKeys,
   useSchedules,

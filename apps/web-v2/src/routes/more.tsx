@@ -9,12 +9,8 @@ import {
   CatalogWorkersScreen,
   SettingsScreen,
 } from '@/screens/settings'
+import { IntegrationsHubScreen, QboConnectionScreen, QboMappingsScreen } from '@/screens/integrations'
 
-/**
- * More tab. The home is the existing Settings hub (push, notifications,
- * persona override). Phase 6 Batch 2 nests the Catalog hub + 6 reference-
- * data screens under /more/catalog/*.
- */
 export default function MoreRoute() {
   return (
     <Routes>
@@ -26,6 +22,9 @@ export default function MoreRoute() {
       <Route path="catalog/pricing-profiles" element={<CatalogPricingProfilesScreen />} />
       <Route path="catalog/bonus-rules" element={<CatalogBonusRulesScreen />} />
       <Route path="catalog/divisions" element={<CatalogDivisionsScreen />} />
+      <Route path="integrations" element={<IntegrationsHubScreen />} />
+      <Route path="integrations/qbo" element={<QboConnectionScreen />} />
+      <Route path="integrations/qbo/mappings" element={<QboMappingsScreen />} />
     </Routes>
   )
 }
