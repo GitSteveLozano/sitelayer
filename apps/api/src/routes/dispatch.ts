@@ -30,7 +30,12 @@ import { handleScheduleRoutes } from './schedules.js'
 import { handleServiceItemRoutes } from './service-items.js'
 import { handleSupportPacketRoutes } from './support-packets.js'
 import { handleSyncRoutes } from './sync.js'
+import { handleAssemblyRoutes } from './assemblies.js'
+import { handleBlueprintPageRoutes } from './blueprint-pages.js'
+import { handleQboCustomFieldRoutes } from './qbo-custom-fields.js'
+import { handleTakeoffImportRoutes } from './takeoff-import.js'
 import { handleTakeoffMeasurementRoutes } from './takeoff-measurements.js'
+import { handleTakeoffTagRoutes } from './takeoff-tags.js'
 import { handleTakeoffWriteRoutes } from './takeoff-write.js'
 import { handleTimeReviewRunRoutes } from './time-review-runs.js'
 import { handleWorkerRoutes } from './workers.js'
@@ -331,6 +336,75 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       sendJson,
       checkVersion,
       assertBlueprintDocumentsBelongToProject: ctx.assertBlueprintDocumentsBelongToProject,
+    })
+  ) {
+    return true
+  }
+
+  // Multi-condition takeoff tags (Phase 3A) — 1:N scope tags per polygon
+  if (
+    await handleTakeoffTagRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Blueprint pages + per-page calibration (Phase 3B/C)
+  if (
+    await handleBlueprintPageRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Takeoff CSV import (Phase 3G)
+  if (
+    await handleTakeoffImportRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Assemblies (Phase 3F)
+  if (
+    await handleAssemblyRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // QBO custom field mappings (Phase 3H — sqft on QBO entities)
+  if (
+    await handleQboCustomFieldRoutes(req, url, {
+      pool,
+      company,
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
     })
   ) {
     return true
