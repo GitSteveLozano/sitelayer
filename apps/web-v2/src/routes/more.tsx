@@ -1,16 +1,11 @@
-import { PlaceholderScreen } from '@/components/shell/PlaceholderScreen'
+import { SettingsScreen } from '@/screens/settings'
 
+/**
+ * More tab content. Phase 1D.4 wires the settings hub: push onboarding,
+ * notification preferences, and the dev persona override. Other More
+ * sections (Pricing, Integrations, Help) land alongside the surfaces
+ * they configure.
+ */
 export default function MoreRoute() {
-  return (
-    <PlaceholderScreen
-      eyebrow="Tab · More"
-      title="More"
-      designId="nav-more"
-    >
-      Workspace and personal settings live here on both mobile and desktop —
-      no surface drift between devices. Settings, pricing book, integrations,
-      profile, privacy, help. Lands incrementally as each phase introduces
-      its config.
-    </PlaceholderScreen>
-  )
+  return <SettingsScreen />
 }
