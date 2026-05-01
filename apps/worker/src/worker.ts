@@ -23,6 +23,23 @@ import { createQboEstimatePush } from './qbo-estimate-push.js'
 import { createClerkClient } from '@clerk/backend'
 import { clerkUserFetcherFromClient, createClerkResolver, type ClerkResolver } from './clerk-hydrate.js'
 import { drainNotifications as drainNotificationsBatch } from './notifications.js'
+import {
+  ConsoleChannel,
+  DefaultNotificationDispatcher,
+  EmailChannel,
+  TwilioSMSChannel,
+  WebPushChannel,
+  loadTwilioConfig,
+  loadVapidConfig,
+  type NotificationChannel,
+  type NotificationDispatcher,
+  type PushSubscriptionRow,
+  type WebPushClient,
+} from './notification-channels.js'
+// `web-push` is loaded lazily so the worker boots even when the
+// dependency is missing (older deploys), matching the email-provider
+// fallback pattern.
+import webpush from 'web-push'
 
 const logger = createLogger('worker')
 
@@ -236,6 +253,91 @@ if (NOTIFICATIONS_ENABLED) {
   logger.warn('[notifications] NOTIFICATIONS_ENABLED=0; clerk hydration skipped (rows requiring it will defer)')
 }
 
+// ---------------------------------------------------------------------------
+// Notification channel system (Phase 1C)
+//
+// Build the dispatcher once at boot from env. Channels self-disable when
+// their config is missing; the dispatcher's router falls back to email,
+// then defers, so the system gracefully degrades without dropping rows.
+// ---------------------------------------------------------------------------
+const vapidConfig = loadVapidConfig()
+const twilioConfig = loadTwilioConfig()
+
+const consoleChannel: NotificationChannel = new ConsoleChannel({ logger })
+const emailChannel: NotificationChannel = new EmailChannel({ emailConfig, sendEmail })
+const smsChannel: NotificationChannel | null = twilioConfig
+  ? new TwilioSMSChannel({ config: twilioConfig, logger })
+  : null
+
+// The static push channel only declares availability; per-(company, user)
+// instances handle actual sends so the subscription loader/pruner have
+// the right context. The static instance is reused for the
+// availability check inside the dispatcher.
+const staticPushChannel: NotificationChannel | null = vapidConfig
+  ? new WebPushChannel(
+      {
+        vapid: vapidConfig,
+        webpush: webpush as unknown as WebPushClient,
+        loadSubscriptions: async () => [],
+        pruneSubscription: async () => {},
+        logger,
+      },
+      'static',
+      'static',
+    )
+  : null
+
+function buildPushChannel(companyId: string, clerkUserId: string): NotificationChannel {
+  return new WebPushChannel(
+    {
+      vapid: vapidConfig,
+      webpush: vapidConfig ? (webpush as unknown as WebPushClient) : null,
+      loadSubscriptions: async (cId, uId) => {
+        const result = await pool.query<PushSubscriptionRow>(
+          `select id, endpoint, p256dh, auth
+             from push_subscriptions
+            where company_id = $1 and clerk_user_id = $2
+            order by last_seen_at desc`,
+          [cId, uId],
+        )
+        return result.rows
+      },
+      pruneSubscription: async (subscriptionId) => {
+        await pool.query(`delete from push_subscriptions where id = $1`, [subscriptionId])
+      },
+      logger,
+    },
+    companyId,
+    clerkUserId,
+  )
+}
+
+const dispatcher: NotificationDispatcher = new DefaultNotificationDispatcher({
+  channels: {
+    push: staticPushChannel,
+    sms: smsChannel,
+    email: emailChannel,
+    console: consoleChannel,
+  },
+  buildPushChannel: vapidConfig ? buildPushChannel : null,
+  hydrateEmail: NOTIFICATIONS_ENABLED && clerkResolver
+    ? async (clerkUserId) => {
+        const resolution = await clerkResolver!.resolveEmailForClerkUser(clerkUserId)
+        return resolution.kind === 'email' ? resolution.email : null
+      }
+    : null,
+  logger,
+})
+
+logger.info(
+  {
+    push: vapidConfig ? 'configured' : 'disabled',
+    sms: twilioConfig ? 'configured' : 'disabled',
+    email: emailConfig.provider,
+  },
+  '[notification-channels] dispatcher ready',
+)
+
 /**
  * Wrapper that opens a tx, calls into the extracted batch drainer, and commits.
  * The batch drainer holds the per-row logic (claim / hydrate / send / DLQ); see
@@ -260,6 +362,7 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
         maxAttempts: NOTIFICATION_MAX_ATTEMPTS,
         emailConfig,
         clerkResolver,
+        dispatcher,
       },
     )
     await client.query('commit')
