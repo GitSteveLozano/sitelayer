@@ -44,7 +44,15 @@ type ClaimedLockRow = {
   id: string
   entity_id: string
   payload: LockLaborEntriesPayload
+  attempt_count: number
 }
+
+/**
+ * Max attempts before a structurally-broken row gets parked at
+ * status='failed' so it stops looping. Exposed so the worker can override
+ * it via env if a deploy needs more headroom for transient flakes.
+ */
+export const LOCK_LABOR_ENTRIES_MAX_ATTEMPTS = 5
 
 /**
  * Claim and apply up to `limit` lock_labor_entries outbox rows for the
@@ -67,7 +75,12 @@ export async function processLockLaborEntries(
   await client.query('begin')
   let claimed: ClaimedLockRow[] = []
   try {
-    const claimResult = await client.query<{ id: string; entity_id: string; payload: LockLaborEntriesPayload }>(
+    const claimResult = await client.query<{
+      id: string
+      entity_id: string
+      payload: LockLaborEntriesPayload
+      attempt_count: number
+    }>(
       `update mutation_outbox
          set status = 'processing',
              attempt_count = attempt_count + 1,
@@ -86,7 +99,7 @@ export async function processLockLaborEntries(
          limit $2
          for update skip locked
        )
-       returning id, entity_id, payload`,
+       returning id, entity_id, payload, attempt_count`,
       [companyId, limit],
     )
     claimed = claimResult.rows
@@ -153,16 +166,21 @@ export async function processLockLaborEntries(
       await client.query('rollback').catch(() => {})
       failed++
       const message = err instanceof Error ? err.message : String(err)
-      // Best-effort: surface the failure on the outbox row so the
-      // generic stuck-posting alert (worker.ts) catches stalled rows.
+      // After LOCK_LABOR_ENTRIES_MAX_ATTEMPTS the row gets parked at
+      // status='failed' so a structurally broken payload (bad action,
+      // unparseable ids, ...) doesn't loop forever bumping
+      // attempt_count and spamming the DB. Earlier attempts get a
+      // 1-minute backoff and stay 'pending' so transient flakes
+      // (connection reset, lock contention) recover on their own.
+      const exhausted = row.attempt_count >= LOCK_LABOR_ENTRIES_MAX_ATTEMPTS
       try {
         await client.query(
           `update mutation_outbox
-             set status = 'pending',
+             set status = $4,
                  next_attempt_at = now() + interval '1 minute',
                  error = $3
            where company_id = $1 and id = $2`,
-          [companyId, row.id, message.slice(0, 500)],
+          [companyId, row.id, message.slice(0, 500), exhausted ? 'failed' : 'pending'],
         )
       } catch {
         // ignore

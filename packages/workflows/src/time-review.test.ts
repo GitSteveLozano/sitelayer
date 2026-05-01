@@ -66,26 +66,41 @@ describe('transitionTimeReviewWorkflow — happy paths', () => {
     })
   })
 
-  it('approved → REOPEN moves back to pending with reopened_at recorded', () => {
+  it('approved → REOPEN moves back to pending with reopened_at recorded and approved_at cleared', () => {
     const approved = transitionTimeReviewWorkflow(
       { state: 'pending', state_version: 1 },
       APPROVE,
     )
+    expect(approved.approved_at).toBe(APPROVE.approved_at)
+
     const reopened = transitionTimeReviewWorkflow(approved, REOPEN)
     expect(reopened.state).toBe('pending')
     expect(reopened.state_version).toBe(approved.state_version + 1)
     expect(reopened.reopened_at).toBe(REOPEN.reopened_at)
     expect(reopened.reviewer_user_id).toBe(REOPEN.reviewer_user_id)
+    // Migration 027's time_review_runs_decision_chk requires approved_at /
+    // rejected_at / rejection_reason all NULL when state='pending'.
+    // Without these clears the persisted UPDATE would violate the
+    // constraint on the very next REOPEN that lands in production.
+    expect(reopened.approved_at).toBeNull()
+    expect(reopened.rejected_at).toBeNull()
+    expect(reopened.rejection_reason).toBeNull()
   })
 
-  it('rejected → REOPEN moves back to pending', () => {
+  it('rejected → REOPEN moves back to pending and clears the rejection trail', () => {
     const rejected = transitionTimeReviewWorkflow(
       { state: 'pending', state_version: 1 },
       REJECT,
     )
+    expect(rejected.rejected_at).toBe(REJECT.rejected_at)
+    expect(rejected.rejection_reason).toBe(REJECT.reason)
+
     const reopened = transitionTimeReviewWorkflow(rejected, REOPEN)
     expect(reopened.state).toBe('pending')
     expect(reopened.state_version).toBe(rejected.state_version + 1)
+    expect(reopened.approved_at).toBeNull()
+    expect(reopened.rejected_at).toBeNull()
+    expect(reopened.rejection_reason).toBeNull()
   })
 })
 

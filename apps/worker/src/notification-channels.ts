@@ -541,7 +541,15 @@ export class WebPushChannel implements NotificationChannel {
             ? ((err as { statusCode?: number }).statusCode as number)
             : undefined
         if (statusCode === 404 || statusCode === 410) {
-          await this.deps.pruneSubscription(sub.id).catch(() => {})
+          await this.deps.pruneSubscription(sub.id).catch((pruneErr) => {
+            // Don't swallow silently: the message will be retried so a
+            // failed prune isn't fatal, but we want the breadcrumb if a
+            // pattern emerges (e.g. the worker can't talk to the DB).
+            this.deps.logger.debug(
+              { err: pruneErr, subscription_id: sub.id, original_status: statusCode },
+              '[push] failed to prune stale subscription',
+            )
+          })
           continue
         }
         lastError = err instanceof Error ? err.message : String(err)
