@@ -23,6 +23,7 @@ export interface InventoryItem {
   tracking_mode: string
   active: boolean
   notes: string | null
+  version: number
 }
 
 export function useInventoryItems() {
@@ -38,6 +39,7 @@ export interface InventoryLocation {
   name: string
   location_type: string
   is_default: boolean
+  version: number
 }
 
 export function useInventoryLocations() {
@@ -135,6 +137,7 @@ export interface JobRentalContract {
   last_billed_through: string | null
   status: 'draft' | 'active' | 'paused' | 'closed'
   notes: string | null
+  version: number
 }
 
 export function useProjectRentalContracts(projectId: string | null | undefined) {
@@ -173,5 +176,292 @@ export function useInventoryUtilization() {
   return useQuery<{ items: UtilizationRow[]; totals: UtilizationTotals }>({
     queryKey: ['inventory', 'utilization'],
     queryFn: () => request('/api/inventory/utilization'),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Inventory items — admin CRUD (Phase 6 Batch 4)
+// ---------------------------------------------------------------------------
+
+export interface InventoryItemCreateRequest {
+  code: string
+  description: string
+  category?: string
+  unit?: string
+  default_rental_rate?: number | string
+  replacement_value?: number | string | null
+  tracking_mode?: string
+  active?: boolean
+  notes?: string | null
+}
+
+export interface InventoryItemPatchRequest {
+  code?: string
+  description?: string
+  category?: string
+  unit?: string
+  default_rental_rate?: number | string
+  replacement_value?: number | string | null
+  tracking_mode?: string
+  active?: boolean
+  notes?: string | null
+  expected_version?: number
+}
+
+export function useCreateInventoryItem() {
+  const qc = useQueryClient()
+  return useMutation<InventoryItem, Error, InventoryItemCreateRequest>({
+    mutationFn: (input) => request<InventoryItem>('/api/inventory/items', { method: 'POST', json: input }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['inventory'] }),
+  })
+}
+
+export function usePatchInventoryItem(id: string) {
+  const qc = useQueryClient()
+  return useMutation<InventoryItem, Error, InventoryItemPatchRequest>({
+    mutationFn: (input) =>
+      request<InventoryItem>(`/api/inventory/items/${encodeURIComponent(id)}`, { method: 'PATCH', json: input }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['inventory'] }),
+  })
+}
+
+export function useDeleteInventoryItem() {
+  const qc = useQueryClient()
+  return useMutation<unknown, Error, { id: string; expected_version?: number }>({
+    mutationFn: ({ id, expected_version }) =>
+      request(`/api/inventory/items/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        json: expected_version !== undefined ? { expected_version } : undefined,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['inventory'] }),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Inventory locations — admin CRUD
+// ---------------------------------------------------------------------------
+
+export interface InventoryLocationCreateRequest {
+  name: string
+  location_type?: string
+  project_id?: string | null
+  is_default?: boolean
+}
+
+export interface InventoryLocationPatchRequest {
+  name?: string
+  location_type?: string
+  project_id?: string | null
+  is_default?: boolean
+  expected_version?: number
+}
+
+export function useCreateInventoryLocation() {
+  const qc = useQueryClient()
+  return useMutation<InventoryLocation, Error, InventoryLocationCreateRequest>({
+    mutationFn: (input) => request<InventoryLocation>('/api/inventory/locations', { method: 'POST', json: input }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['inventory'] }),
+  })
+}
+
+export function usePatchInventoryLocation(id: string) {
+  const qc = useQueryClient()
+  return useMutation<InventoryLocation, Error, InventoryLocationPatchRequest>({
+    mutationFn: (input) =>
+      request<InventoryLocation>(`/api/inventory/locations/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        json: input,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['inventory'] }),
+  })
+}
+
+export function useDeleteInventoryLocation() {
+  const qc = useQueryClient()
+  return useMutation<unknown, Error, { id: string; expected_version?: number }>({
+    mutationFn: ({ id, expected_version }) =>
+      request(`/api/inventory/locations/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        json: expected_version !== undefined ? { expected_version } : undefined,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['inventory'] }),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Rental contracts + lines — per-project editor + billing-run trigger
+// ---------------------------------------------------------------------------
+
+export interface RentalContractLine {
+  id: string
+  contract_id: string
+  inventory_item_id: string
+  quantity: string
+  agreed_rate: string
+  rate_unit: string
+  on_rent_date: string
+  off_rent_date: string | null
+  last_billed_through: string | null
+  billable: boolean
+  taxable: boolean
+  status: string
+  notes: string | null
+  version: number
+}
+
+export interface ContractListResponse {
+  contracts: JobRentalContract[]
+}
+
+export interface ContractLineListResponse {
+  lines: RentalContractLine[]
+}
+
+export interface ContractCreateRequest {
+  customer_id?: string | null
+  billing_cycle_days?: number
+  billing_mode?: string
+  billing_start_date: string
+  notes?: string | null
+}
+
+export interface ContractPatchRequest {
+  customer_id?: string | null
+  billing_cycle_days?: number
+  billing_mode?: string
+  billing_start_date?: string
+  next_billing_date?: string
+  status?: string
+  notes?: string | null
+  expected_version?: number
+}
+
+export interface ContractLineCreateRequest {
+  inventory_item_id: string
+  quantity: number | string
+  agreed_rate: number | string
+  rate_unit?: string
+  on_rent_date: string
+  off_rent_date?: string | null
+  billable?: boolean
+  taxable?: boolean
+  notes?: string | null
+}
+
+export interface ContractLinePatchRequest {
+  quantity?: number | string
+  agreed_rate?: number | string
+  rate_unit?: string
+  on_rent_date?: string
+  off_rent_date?: string | null
+  billable?: boolean
+  taxable?: boolean
+  status?: string
+  notes?: string | null
+  expected_version?: number
+}
+
+export interface BillingRunPreview {
+  contract_id: string
+  period_start: string
+  period_end: string
+  subtotal: number
+  lines: Array<{
+    contract_line_id: string
+    inventory_item_id: string
+    quantity: string
+    agreed_rate: string
+    billable_days: number
+    amount: number
+  }>
+}
+
+export function useCreateRentalContract(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation<JobRentalContract, Error, ContractCreateRequest>({
+    mutationFn: (input) =>
+      request<JobRentalContract>(`/api/projects/${encodeURIComponent(projectId)}/rental-contracts`, {
+        method: 'POST',
+        json: input,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['rental-contracts'] }),
+  })
+}
+
+export function usePatchRentalContract(id: string) {
+  const qc = useQueryClient()
+  return useMutation<JobRentalContract, Error, ContractPatchRequest>({
+    mutationFn: (input) =>
+      request<JobRentalContract>(`/api/rental-contracts/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        json: input,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['rental-contracts'] }),
+  })
+}
+
+export function useRentalContractLines(contractId: string | null | undefined) {
+  return useQuery<ContractLineListResponse>({
+    queryKey: ['rental-contracts', 'lines', contractId ?? ''],
+    queryFn: () => request<ContractLineListResponse>(`/api/rental-contracts/${encodeURIComponent(contractId!)}/lines`),
+    enabled: Boolean(contractId),
+  })
+}
+
+export function useCreateContractLine(contractId: string) {
+  const qc = useQueryClient()
+  return useMutation<RentalContractLine, Error, ContractLineCreateRequest>({
+    mutationFn: (input) =>
+      request<RentalContractLine>(`/api/rental-contracts/${encodeURIComponent(contractId)}/lines`, {
+        method: 'POST',
+        json: input,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['rental-contracts'] }),
+  })
+}
+
+export function usePatchContractLine(id: string) {
+  const qc = useQueryClient()
+  return useMutation<RentalContractLine, Error, ContractLinePatchRequest>({
+    mutationFn: (input) =>
+      request<RentalContractLine>(`/api/rental-contract-lines/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        json: input,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['rental-contracts'] }),
+  })
+}
+
+export function useDeleteContractLine() {
+  const qc = useQueryClient()
+  return useMutation<unknown, Error, { id: string; expected_version?: number }>({
+    mutationFn: ({ id, expected_version }) =>
+      request(`/api/rental-contract-lines/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        json: expected_version !== undefined ? { expected_version } : undefined,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['rental-contracts'] }),
+  })
+}
+
+export function usePreviewBillingRun(contractId: string) {
+  return useMutation<BillingRunPreview, Error, { period_end?: string }>({
+    mutationFn: (input) =>
+      request<BillingRunPreview>(`/api/rental-contracts/${encodeURIComponent(contractId)}/billing-runs/preview`, {
+        method: 'POST',
+        json: input,
+      }),
+  })
+}
+
+export function useGenerateBillingRun(contractId: string) {
+  const qc = useQueryClient()
+  return useMutation<unknown, Error, { period_end?: string }>({
+    mutationFn: (input) =>
+      request(`/api/rental-contracts/${encodeURIComponent(contractId)}/billing-runs`, {
+        method: 'POST',
+        json: input,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['billing-runs'] }),
   })
 }
