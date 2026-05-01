@@ -1,0 +1,44 @@
+@import './tokens.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--m-sand);
+    color: var(--m-ink);
+    font-family: var(--m-font);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    /* Prevent the body from rubber-banding on iOS PWA installs. The shell
+     * owns its own scroll container. */
+    overscroll-behavior: none;
+  }
+
+  /* Tabular numerics by default for any element flagged .num.
+   * The design treats Sitelayer as a numbers-driven app; lining numbers
+   * are how blueprint quantities, hours, dollars all stay readable. */
+  .num,
+  .mono {
+    font-family: var(--m-num);
+    font-feature-settings: 'tnum';
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Honour the iOS notch / home indicator. Tab bars and FABs read these. */
+  :root {
+    --safe-top: env(safe-area-inset-top, 0);
+    --safe-bottom: env(safe-area-inset-bottom, 0);
+  }
+}

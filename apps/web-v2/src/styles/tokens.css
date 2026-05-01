@@ -1,0 +1,82 @@
+/* Sitelayer design tokens — source of truth.
+ *
+ * Lifted byte-exact from the design handoff bundle's mobile-tokens.css and
+ * AI Layer.html. The Tailwind config in tailwind.config.cjs reads these
+ * via CSS custom properties so a token change here propagates without
+ * touching component code.
+ *
+ * Naming convention: --m-* (mobile) is the canonical prefix because the
+ * design is mobile-first; the same tokens drive desktop. Don't add
+ * --d-* / --desktop variants — desktop is the same product, wider.
+ */
+
+:root {
+  /* Surfaces */
+  --m-sand: #f5f1ec;
+  --m-sand-2: #ebe6df;
+  --m-bg: #ffffff;
+  --m-card: #ffffff;
+  --m-card-soft: #f7f4ef;
+  --m-line: #e8e3db;
+  --m-line-2: #d8d2c7;
+  --m-paper: #fbf8f3;
+
+  /* Ink */
+  --m-ink: #1c1816;
+  --m-ink-2: #5b544c;
+  --m-ink-3: #8a8278;
+  --m-ink-4: #aea69a;
+
+  /* Sitelayer amber — the brand accent and the AI mark.
+   * Hard rule from the AI Layer doc: AI signal is warm orange, never red. */
+  --m-accent: #d9904a;
+  --m-accent-ink: #b46e2c;
+  --m-accent-soft: rgba(217, 144, 74, 0.10);
+  --m-accent-soft-2: rgba(217, 144, 74, 0.16);
+
+  /* Semantic */
+  --m-green: #2c8a55;
+  --m-green-soft: rgba(44, 138, 85, 0.10);
+  --m-red: #c0463d;
+  --m-red-soft: rgba(192, 70, 61, 0.10);
+  --m-amber: #c98a2e;
+  --m-amber-soft: rgba(201, 138, 46, 0.12);
+  --m-blue: #2f6fb5;
+  --m-blue-soft: rgba(47, 111, 181, 0.10);
+  --m-purple: #7553a8;
+  --m-purple-soft: rgba(117, 83, 168, 0.10);
+
+  /* Radii */
+  --m-r-sm: 8px;
+  --m-r: 12px;
+  --m-r-lg: 18px;
+  --m-r-xl: 24px;
+
+  /* Shadows */
+  --m-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --m-shadow-2: 0 6px 16px rgba(0, 0, 0, 0.06);
+  --m-shadow-card: 0 1px 0 rgba(0, 0, 0, 0.03), 0 4px 12px rgba(0, 0, 0, 0.04);
+
+  /* Type stacks. Geist is loaded from Google Fonts in index.html;
+   * the system fallback chain matches v1 so installs without network
+   * still render in the right metric. */
+  --m-font: 'Geist', -apple-system, 'SF Pro Text', BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --m-font-display: 'Geist', -apple-system, 'SF Pro Display', BlinkMacSystemFont, system-ui, sans-serif;
+  --m-num: 'Geist Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+}
+
+/* Dark variant — applied to <html> via Tailwind's class-based dark mode
+ * (.m-dark in tailwind.config.cjs). Token names stay identical so
+ * components don't branch on theme. */
+.m-dark {
+  --m-bg: #0e0c0a;
+  --m-card: #18140f;
+  --m-card-soft: #1f1a13;
+  --m-line: #2a241c;
+  --m-line-2: #3a3329;
+  --m-paper: #16110b;
+  --m-ink: #f3ecdf;
+  --m-ink-2: #c0b8a8;
+  --m-ink-3: #8e8676;
+  --m-ink-4: #5a5346;
+}

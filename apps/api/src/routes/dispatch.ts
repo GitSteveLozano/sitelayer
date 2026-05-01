@@ -12,12 +12,15 @@ import { handleBonusRuleRoutes } from './bonus-rules.js'
 import { handleBlueprintRoutes } from './blueprints.js'
 import { handleClockRoutes } from './clock.js'
 import { handleCustomerRoutes } from './customers.js'
+import { handleDailyLogRoutes } from './daily-logs.js'
 import { handleEstimateRoutes } from './estimate.js'
 import { handleEstimatePushRoutes } from './estimate-pushes.js'
 import { handleLaborEntryRoutes } from './labor-entries.js'
 import { handleMaterialBillRoutes } from './material-bills.js'
+import { handleNotificationPreferenceRoutes } from './notification-preferences.js'
 import { handlePricingProfileRoutes } from './pricing-profiles.js'
 import { handleProjectRoutes } from './projects.js'
+import { handlePushSubscriptionRoutes } from './push-subscriptions.js'
 import { handleQboMappingRoutes } from './qbo-mappings.js'
 import { handleQboRoutes, type IntegrationMappingRow } from './qbo.js'
 import { handleRentalInventoryRoutes } from './rental-inventory.js'
@@ -28,6 +31,7 @@ import { handleSupportPacketRoutes } from './support-packets.js'
 import { handleSyncRoutes } from './sync.js'
 import { handleTakeoffMeasurementRoutes } from './takeoff-measurements.js'
 import { handleTakeoffWriteRoutes } from './takeoff-write.js'
+import { handleTimeReviewRunRoutes } from './time-review-runs.js'
 import { handleWorkerRoutes } from './workers.js'
 import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
 
@@ -395,6 +399,64 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       pool,
       company,
       currentUserId: identity.userId,
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Daily logs (Sitemap.html § fm-log)
+  if (
+    await handleDailyLogRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+      checkVersion,
+    })
+  ) {
+    return true
+  }
+
+  // Time review runs (Sitemap.html § t-approve) — workflow snapshot + events
+  if (
+    await handleTimeReviewRunRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Web Push subscription registration (read VAPID key, upsert/delete subs)
+  if (
+    await handlePushSubscriptionRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+      vapidPublicKey: process.env.VAPID_PUBLIC_KEY?.trim() || null,
+    })
+  ) {
+    return true
+  }
+
+  // Per-user notification channel preferences
+  if (
+    await handleNotificationPreferenceRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
       requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
       readBody,
       sendJson,
