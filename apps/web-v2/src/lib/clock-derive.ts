@@ -12,6 +12,8 @@ export interface ClockSpan {
   in_at: string
   out_at: string | null
   project_id: string | null
+  /** Joined from the timeline endpoint when present. */
+  project_name?: string | null
   /** Hours; computed as (now ?? out_at) − in_at. */
   hours: number
 }
@@ -47,6 +49,7 @@ export function pairClockSpans(events: ClockEvent[], nowMs: number = Date.now())
           in_at: openIn.occurred_at,
           out_at: event.occurred_at,
           project_id: openIn.project_id,
+          project_name: openIn.project_name ?? null,
           hours: Math.max(0, (outMs - inMs) / MS_PER_HOUR),
         })
       }
@@ -60,6 +63,7 @@ export function pairClockSpans(events: ClockEvent[], nowMs: number = Date.now())
         in_at: openIn.occurred_at,
         out_at: event.occurred_at,
         project_id: openIn.project_id,
+        project_name: openIn.project_name ?? null,
         hours: Math.max(0, (outMs - inMs) / MS_PER_HOUR),
       })
       openIn = null
@@ -73,6 +77,7 @@ export function pairClockSpans(events: ClockEvent[], nowMs: number = Date.now())
       in_at: openIn.occurred_at,
       out_at: null,
       project_id: openIn.project_id,
+      project_name: openIn.project_name ?? null,
       hours: Math.max(0, (nowMs - inMs) / MS_PER_HOUR),
     })
   }

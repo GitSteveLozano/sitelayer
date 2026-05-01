@@ -2,59 +2,111 @@ import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, MobileButton, PhoneTopBar, Pill } from '@/components/mobile'
 import { Attribution, Spark, StripeCard } from '@/components/ai'
-import { useClockTimeline } from '@/lib/api'
+import {
+  useClockTimeline,
+  useSchedules,
+  useWorkers,
+  type ClockEvent,
+  type CrewScheduleRow,
+  type Worker,
+} from '@/lib/api'
 import { findOpenSpan, formatHms, pairClockSpans, startOfDay, sumHoursInRange } from '@/lib/clock-derive'
 
 /**
  * `fm-today-v2` — Foreman home with the WTD-burden card variant.
  *
  * Real wiring:
- *   - Today's clock events drive crew-status totals (on-site count,
- *     crew-hours so far). Refetches every 30s so the screen stays
- *     in sync as workers clock in/out.
+ *   - Today's clock events drive the running roster (open spans = on
+ *     site right now). Refetches every 30s.
+ *   - Workers join: per-event worker_id is resolved against /api/workers
+ *     so each crew row shows the actual name + role.
+ *   - Today's crew_schedules: pulls company-wide schedules via
+ *     GET /api/schedules?from=today&to=today; renders confirmed +
+ *     drafted scoped to the day.
  *
- * Placeholders (lands in Phase 2 / 1D.4 / Phase 5):
- *   - Project name, day-number, plan-budget — needs bootstrap data.
- *   - Per-crew avatars + names — needs the workers endpoint joined to
- *     clock_events. Phase 1D.4 wires this.
- *   - Burden $-figure + "% under plan" — needs labor_burden rollup
- *     (Phase 2). Shown with `<AgentSurface>` + dim spark to set
- *     expectation that the figure will get real later.
+ * Still placeholders:
+ *   - Burden $-figure on the dark card (lands with 1E.5 labor_burden
+ *     rollup).
  */
 export function ForemanTodayScreen() {
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const timeline = useClockTimeline({ date: todayIso }, { refetchInterval: 30_000 })
-  const events = timeline.data?.events ?? []
-  const spans = useMemo(() => pairClockSpans(events), [events])
+  const workersQuery = useWorkers()
+  const schedules = useSchedules({ from: todayIso, to: todayIso })
 
+  const events = timeline.data?.events ?? []
+  const workers = workersQuery.data?.workers ?? []
+  const todaySchedules = schedules.data?.schedules ?? []
+
+  // Worker name lookup — O(1) name resolution for the crew rows.
+  const workerById = useMemo(() => {
+    const m = new Map<string, Worker>()
+    for (const w of workers) m.set(w.id, w)
+    return m
+  }, [workers])
+
+  // Group events by worker so each crew row is a person, not a span.
+  const perWorker = useMemo(() => {
+    const m = new Map<string, ClockEvent[]>()
+    for (const e of events) {
+      if (!e.worker_id) continue
+      const list = m.get(e.worker_id) ?? []
+      list.push(e)
+      m.set(e.worker_id, list)
+    }
+    return m
+  }, [events])
+
+  // Build the crew rows: every worker with activity today, plus the
+  // workers scheduled for today's project even if they haven't clocked
+  // in yet.
+  type CrewRow = { worker: Worker; openIn: ReturnType<typeof findOpenSpan>; totalHours: number }
+  const crewRows: CrewRow[] = useMemo(() => {
+    const ids = new Set<string>(perWorker.keys())
+    for (const sched of todaySchedules) {
+      if (Array.isArray(sched.crew)) {
+        for (const id of sched.crew as unknown[]) {
+          if (typeof id === 'string') ids.add(id)
+        }
+      }
+    }
+    const rows: CrewRow[] = []
+    for (const id of ids) {
+      const worker = workerById.get(id)
+      if (!worker) continue
+      const wEvents = perWorker.get(id) ?? []
+      const spans = pairClockSpans(wEvents)
+      const open = findOpenSpan(spans)
+      const total = spans.reduce((sum, s) => sum + s.hours, 0)
+      rows.push({ worker, openIn: open, totalHours: total })
+    }
+    // Sort: on-site first, then highest hours.
+    rows.sort((a, b) => {
+      if ((a.openIn !== null) !== (b.openIn !== null)) return a.openIn ? -1 : 1
+      return b.totalHours - a.totalHours
+    })
+    return rows
+  }, [workerById, perWorker, todaySchedules])
+
+  const onSiteCount = crewRows.filter((r) => r.openIn !== null).length
   const nowMs = Date.now()
   const todayMs = startOfDay(nowMs)
-  const todayHours = useMemo(() => sumHoursInRange(spans, todayMs, todayMs + 24 * 3600 * 1000, nowMs), [spans, todayMs, nowMs])
-
-  // Distinct workers represented in today's events. Each (worker, in)
-  // event is one body on site at some point today. Open spans = on-site
-  // right now.
-  const onSiteWorkerIds = new Set(spans.filter((s) => s.out_at === null).map((s) => s.project_id ?? 'unknown'))
-  const totalCrewHours = todayHours
-  const onSiteCount = onSiteWorkerIds.size
+  const allSpans = useMemo(() => pairClockSpans(events), [events])
+  const totalCrewHours = sumHoursInRange(allSpans, todayMs, todayMs + 24 * 3600 * 1000, nowMs)
 
   return (
     <div className="flex flex-col">
-      <PhoneTopBar activeProject="On site" />
+      <PhoneTopBar activeProject={onSiteCount > 0 ? 'On site' : null} />
 
       <div className="px-5 pt-2 pb-4">
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Foreman</div>
-        <h1 className="mt-1 font-display text-[26px] font-bold tracking-tight leading-tight">
-          Today
-        </h1>
+        <h1 className="mt-1 font-display text-[26px] font-bold tracking-tight leading-tight">Today</h1>
         <div className="text-[13px] text-ink-2 mt-1">
           {formatTodayLabel(nowMs)} · {onSiteCount} on site
         </div>
       </div>
 
-      {/* Today's burden — dark card matching the design's headline element.
-          Real numbers land in Phase 2; for now we render with the live
-          crew-hours figure so the structure is honest. */}
+      {/* Today's burden — dark card. $-figure lands with 1E.5. */}
       <div className="px-4 pb-3">
         <div className="rounded-[14px] bg-ink text-[#f3ecdf] p-4">
           <div className="flex items-baseline justify-between mb-2.5">
@@ -67,7 +119,7 @@ export function ForemanTodayScreen() {
             <div>
               <div className="num text-[28px] font-bold tracking-tight leading-none">$—</div>
               <div className="num text-[11px] text-[#aea69a] mt-1">
-                {totalCrewHours.toFixed(1)} crew-hrs · loaded $/hr in Phase 2
+                {totalCrewHours.toFixed(1)} crew-hrs · loaded $/hr lands in 1E.5
               </div>
             </div>
             <div className="text-right">
@@ -82,7 +134,7 @@ export function ForemanTodayScreen() {
         </div>
       </div>
 
-      {/* Crew check-in — real clock state. */}
+      {/* Crew check-in — real clock state + worker names. */}
       <div className="px-4">
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">
           Crew check-in
@@ -94,73 +146,112 @@ export function ForemanTodayScreen() {
               {onSiteCount} on site
             </Pill>
           </div>
-          {events.length === 0 ? (
+          {crewRows.length === 0 ? (
             <div className="px-4 py-6 text-[12px] text-ink-3 text-center">
-              No clock events yet today.
+              No crew activity yet today.
             </div>
           ) : (
             <ul className="divide-y divide-line">
-              {spans.slice(0, 8).map((span, i) => (
-                <li key={span.in_at + i} className="px-4 py-3 flex items-center justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[13px] font-medium truncate">
-                      Worker {span.project_id ? `· ${span.project_id.slice(0, 6)}…` : ''}
-                    </div>
-                    <div className="text-[11px] text-ink-3 num">
-                      In at {formatTime(span.in_at)}
-                      {span.out_at ? ` · out ${formatTime(span.out_at)}` : ' · still on site'}
+              {crewRows.slice(0, 8).map((row) => (
+                <li key={row.worker.id} className="px-4 py-3 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <Avatar name={row.worker.name} />
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-medium truncate">{row.worker.name}</div>
+                      <div className="text-[11px] text-ink-3">{row.worker.role}</div>
                     </div>
                   </div>
-                  <span className="num text-[13px] font-medium text-ink-2">
-                    {span.out_at ? `${span.hours.toFixed(1)}h` : formatHms(span.hours)}
-                  </span>
+                  <div className="text-right">
+                    {row.openIn ? (
+                      <>
+                        <div className="num text-[13px] font-medium">{formatHms(row.openIn.hours)}</div>
+                        <Pill tone="good" withDot>
+                          on
+                        </Pill>
+                      </>
+                    ) : row.totalHours > 0 ? (
+                      <span className="num text-[13px] font-medium text-ink-2">
+                        {row.totalHours.toFixed(1)}h
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-ink-3">scheduled</span>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>
           )}
         </Card>
         <div className="mt-2 px-1">
-          <Attribution source="Live from /api/clock/timeline" />
+          <Attribution source="Live from /api/clock/timeline + /api/workers" />
         </div>
       </div>
 
-      {/* Quick actions — link to the other foreman surfaces. */}
+      {/* Quick actions. */}
       <div className="px-4 mt-4">
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">Quick</div>
         <div className="grid grid-cols-2 gap-2.5">
-          <ActionTile to="/time" label="Crew time" detail={`${spans.length} entries`} />
+          <ActionTile to="/time" label="Crew time" detail={`${crewRows.length} entries`} />
           <ActionTile to="/" label="Crew map" detail="live pins · soon" disabled />
           <ActionTile to="/log" label="Daily log" detail="photos + notes" highlight />
           <ActionTile to="/" label="Materials" detail="request" disabled />
         </div>
       </div>
 
-      {/* Today's schedule placeholder — needs crew_schedules wiring (Phase 1D.4). */}
+      {/* Today's schedule — real crew_schedules. */}
       <div className="px-4 mt-5 pb-6">
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">
           Today's schedule
         </div>
-        <StripeCard tone="accent">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-[13px] font-semibold">EPS — East elevation</div>
-              <div className="text-[11px] text-ink-3 mt-0.5">3 crew · 7:00 AM – 3:30 PM · 980 sqft</div>
+        {todaySchedules.length === 0 ? (
+          <Card tight>
+            <div className="text-[12px] text-ink-3">No schedules for today.</div>
+            <div className="text-[11px] text-ink-3 mt-1">
+              Office adds entries via the Projects → Schedule sub-tab.
             </div>
-            <Pill tone="good">active</Pill>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {todaySchedules.map((sched) => (
+              <ScheduleRow key={sched.id} schedule={sched} workerById={workerById} />
+            ))}
+            <div className="px-1 pt-1">
+              <Attribution source="Live from /api/schedules" />
+            </div>
           </div>
-          <div className="mt-2 pt-2 border-t border-dashed border-line-2">
-            <Attribution source="Sample data — wires to crew_schedules in Phase 1D.4" />
-          </div>
-        </StripeCard>
+        )}
       </div>
 
-      {/* End-of-day daily log entry — wires to the daily-log composer. */}
+      {/* End-of-day daily log entry. */}
       <div className="px-4 pb-8">
         <Link to="/log" className="block">
           <MobileButton variant="primary">End of day → Daily log</MobileButton>
         </Link>
       </div>
     </div>
+  )
+}
+
+interface ScheduleRowProps {
+  schedule: CrewScheduleRow
+  workerById: Map<string, Worker>
+}
+
+function ScheduleRow({ schedule, workerById }: ScheduleRowProps) {
+  const crewIds = Array.isArray(schedule.crew) ? (schedule.crew as unknown[]).filter((x): x is string => typeof x === 'string') : []
+  const crewNames = crewIds.map((id) => workerById.get(id)?.name ?? 'Unknown').slice(0, 4)
+  return (
+    <StripeCard tone={schedule.status === 'confirmed' ? 'good' : 'accent'}>
+      <div className="flex items-center justify-between">
+        <div className="min-w-0">
+          <div className="text-[13px] font-semibold truncate">{schedule.project_name ?? 'Project'}</div>
+          <div className="text-[11px] text-ink-3 mt-0.5 truncate">
+            {crewIds.length} crew · {crewNames.join(', ') || 'unassigned'}
+          </div>
+        </div>
+        <Pill tone={schedule.status === 'confirmed' ? 'good' : 'warn'}>{schedule.status}</Pill>
+      </div>
+    </StripeCard>
   )
 }
 
@@ -188,8 +279,19 @@ function ActionTile({ to, label, detail, highlight, disabled }: ActionTileProps)
   return <Link to={to}>{inner}</Link>
 }
 
-function formatTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+function Avatar({ name }: { name: string }) {
+  const initials = name
+    .split(' ')
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase()
+  return (
+    <div className="w-9 h-9 rounded-full bg-accent-soft text-accent-ink text-[12px] font-semibold inline-flex items-center justify-center shrink-0">
+      {initials}
+    </div>
+  )
 }
 
 function formatTodayLabel(ms: number): string {

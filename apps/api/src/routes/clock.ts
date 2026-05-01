@@ -472,19 +472,21 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     const includeVoided = url.searchParams.get('include_voided') === '1'
     const result = await ctx.pool.query(
       `
-      select id, company_id, worker_id, project_id, clerk_user_id,
-             event_type, occurred_at, lat, lng, accuracy_m,
-             inside_geofence, notes, source, correctible_until,
-             voided_at, voided_by, created_at
-      from clock_events
-      where company_id = $1
-        and ($4::boolean or voided_at is null)
-        and ($2 = '' or worker_id = $2::uuid)
+      select e.id, e.company_id, e.worker_id, e.project_id, e.clerk_user_id,
+             e.event_type, e.occurred_at, e.lat, e.lng, e.accuracy_m,
+             e.inside_geofence, e.notes, e.source, e.correctible_until,
+             e.voided_at, e.voided_by, e.created_at,
+             p.name as project_name
+      from clock_events e
+      left join projects p on p.id = e.project_id and p.company_id = e.company_id
+      where e.company_id = $1
+        and ($4::boolean or e.voided_at is null)
+        and ($2 = '' or e.worker_id = $2::uuid)
         and (
           $3 = ''
-          or (occurred_at >= ($3::date) and occurred_at < ($3::date + interval '1 day'))
+          or (e.occurred_at >= ($3::date) and e.occurred_at < ($3::date + interval '1 day'))
         )
-      order by occurred_at asc
+      order by e.occurred_at asc
       limit 500
       `,
       [ctx.company.id, workerIdParam, dateParam, includeVoided],

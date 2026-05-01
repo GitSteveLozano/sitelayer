@@ -27,6 +27,8 @@ export interface ClockEvent {
   /** Set by POST /api/clock/events/:id/void; null otherwise. */
   voided_at?: string | null
   voided_by?: string | null
+  /** Joined from projects.name in the timeline endpoint. */
+  project_name?: string | null
   created_at: string
 }
 

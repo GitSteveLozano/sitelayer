@@ -117,7 +117,7 @@ export function WorkerTodayScreen() {
   const todayHours = useMemo(() => sumHoursInRange(spans, todayMs, todayMs + 24 * 3600 * 1000, nowMs), [spans, todayMs, nowMs])
   const weekHours = useMemo(() => sumHoursInRange(spans, weekMs, nowMs + 24 * 3600 * 1000, nowMs), [spans, weekMs, nowMs])
 
-  const activeProjectLabel = openSpan?.project_id ? 'On site' : null
+  const activeProjectLabel = openSpan?.project_name ?? (openSpan?.project_id ? 'On site' : null)
 
   const onManualClockIn = async () => {
     if (!geofence.position) return
@@ -143,7 +143,7 @@ export function WorkerTodayScreen() {
   if (autoClockInEvent) {
     return (
       <ClockInSuccess
-        projectName={autoClockInEvent.project_id ? 'On site' : null}
+        projectName={autoClockInEvent.project_name ?? (autoClockInEvent.project_id ? 'On site' : null)}
         occurredAt={autoClockInEvent.occurred_at}
         correctibleUntil={autoClockInEvent.correctible_until}
         onDismiss={() => setAutoClockInEvent(null)}
