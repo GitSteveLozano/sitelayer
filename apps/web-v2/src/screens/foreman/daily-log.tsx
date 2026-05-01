@@ -2,25 +2,31 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution, AgentSurface, Spark } from '@/components/ai'
 import {
+  ApiError,
+  dailyLogPhotoUrl,
   useCreateDailyLog,
   useDailyLogs,
+  useDeleteDailyLogPhoto,
   usePatchDailyLog,
   useSubmitDailyLog,
+  useUploadDailyLogPhoto,
   type DailyLog,
 } from '@/lib/api'
 
 /**
  * `fm-log` — Daily log composer.
  *
- * Real wiring:
+ * Real wiring (1D.3 + 1E.4):
  *   - Looks up today's draft for the current foreman + project (or
  *     creates one). Auto-saves notes via PATCH after a short debounce.
+ *   - Photo upload via POST /api/daily-logs/:id/photos (multipart);
+ *     thumbnails render straight from GET /photos/file?key=… which
+ *     either streams bytes or 302s to a presigned Spaces URL.
+ *   - Per-photo delete via DELETE /api/daily-logs/:id/photos.
  *   - Submit button → POST /api/daily-logs/:id/submit (status →
  *     'submitted', server stamps submitted_at).
  *
- * Placeholders (Phase 1D.4 / Phase 5):
- *   - Photos are blueprint_documents on the API; the upload UI lands
- *     when the storage path is wired into v2 (Phase 1D.4).
+ * Placeholders (Phase 5):
  *   - The AI-drafted narrative shown as a `<AgentSurface>` placeholder
  *     is the Phase 5 takeoff-to-bid agent's sibling: drafts the day's
  *     narrative from photos + clock-in data + voice memos.
@@ -191,23 +197,9 @@ function DailyLogEditor({ log }: DailyLogEditorProps) {
         </Card>
       </div>
 
-      {/* Photo grid placeholder. */}
-      <div className="px-4 mt-4">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">Photos</div>
-        <div className="grid grid-cols-3 gap-1.5">
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div
-              key={i}
-              className="aspect-square rounded-md bg-card-soft border border-dashed border-line flex items-center justify-center text-[11px] text-ink-3"
-            >
-              —
-            </div>
-          ))}
-        </div>
-        <div className="mt-2 px-1 text-[11px] text-ink-3">
-          Photo upload wires to Spaces in Phase 1D.4.
-        </div>
-      </div>
+      {/* Photo grid — real upload + render. */}
+      <PhotoGrid log={log} />
+
 
       {/* Notes — real, debounced auto-save. */}
       <div className="px-4 mt-4">
@@ -287,4 +279,120 @@ function formatLogDate(occurredOn: string): string {
 
 function formatTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
+
+interface PhotoGridProps {
+  log: DailyLog
+}
+
+function PhotoGrid({ log }: PhotoGridProps) {
+  const upload = useUploadDailyLogPhoto(log.id)
+  const remove = useDeleteDailyLogPhoto(log.id)
+  const isSubmitted = log.status === 'submitted'
+  const inputRef = useRef<HTMLInputElement>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null)
+
+  const onPickFiles = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setError(null)
+    const files = Array.from(event.target.files ?? [])
+    // Reset the input so the same file can be re-picked after a delete.
+    event.target.value = ''
+    if (files.length === 0) return
+    void uploadAll(files)
+  }
+
+  const uploadAll = async (files: File[]) => {
+    for (const file of files) {
+      try {
+        await upload.mutateAsync(file)
+      } catch (err) {
+        setError(err instanceof ApiError ? err.message_for_user() : `Upload failed: ${file.name}`)
+        // Stop on first error so the user sees what happened.
+        break
+      }
+    }
+  }
+
+  const onDelete = async (key: string) => {
+    setError(null)
+    setPendingDelete(key)
+    try {
+      await remove.mutateAsync(key)
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message_for_user() : 'Delete failed')
+    } finally {
+      setPendingDelete(null)
+    }
+  }
+
+  return (
+    <div className="px-4 mt-4">
+      <div className="flex items-center justify-between px-1 pb-2">
+        <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">
+          Photos {log.photo_keys.length > 0 ? `(${log.photo_keys.length})` : ''}
+        </span>
+        {!isSubmitted ? (
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            className="text-[12px] text-accent font-medium"
+            disabled={upload.isPending}
+          >
+            {upload.isPending ? 'Uploading…' : '+ Add'}
+          </button>
+        ) : null}
+      </div>
+
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/heic,image/heif"
+        multiple
+        capture="environment"
+        onChange={onPickFiles}
+        className="hidden"
+      />
+
+      <div className="grid grid-cols-3 gap-1.5">
+        {log.photo_keys.length === 0 ? (
+          Array.from({ length: 3 }).map((_, i) => (
+            <div
+              key={i}
+              className="aspect-square rounded-md bg-card-soft border border-dashed border-line flex items-center justify-center text-[11px] text-ink-3"
+            >
+              —
+            </div>
+          ))
+        ) : (
+          log.photo_keys.map((key) => (
+            <div key={key} className="relative aspect-square rounded-md overflow-hidden bg-card-soft">
+              <img
+                src={dailyLogPhotoUrl(log.id, key)}
+                alt="daily log"
+                className="w-full h-full object-cover"
+                loading="lazy"
+              />
+              {!isSubmitted ? (
+                <button
+                  type="button"
+                  onClick={() => void onDelete(key)}
+                  disabled={pendingDelete === key}
+                  aria-label="Remove photo"
+                  className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/55 text-white text-[12px] font-semibold flex items-center justify-center disabled:opacity-50"
+                >
+                  ×
+                </button>
+              ) : null}
+            </div>
+          ))
+        )}
+      </div>
+
+      {error ? <div className="mt-2 px-1 text-[12px] text-bad">{error}</div> : null}
+      {!isSubmitted && log.photo_keys.length === 0 ? (
+        <div className="mt-2 px-1 text-[11px] text-ink-3">Tap + Add to capture or upload (max 15 MB each).</div>
+      ) : null}
+    </div>
+  )
 }
