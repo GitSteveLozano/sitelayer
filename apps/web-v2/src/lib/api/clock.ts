@@ -47,6 +47,12 @@ export interface ClockInRequest {
   source?: ClockEventSource
   /** When set, server resolves the project explicitly instead of auto-matching the geofence. */
   project_id?: string | null
+  /**
+   * Required when source='foreman_override'. The worker the event is
+   * FOR; the row's clerk_user_id stays the actor's id so the audit
+   * trail attributes the trigger to the foreman.
+   */
+  worker_id?: string | null
 }
 
 export interface ClockOutRequest extends Omit<ClockInRequest, 'project_id'> {
