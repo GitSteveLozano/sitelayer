@@ -451,5 +451,38 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     return true
   }
 
+  // GET /api/projects/:id — project detail metadata. Used by the Phase 2B
+  // prj-detail shell. The /summary endpoint above is the cost-rollup;
+  // this is the bare project row + customer name + geofence policy +
+  // daily_budget. List + detail kept in different surfaces so screens
+  // can fetch only what they render.
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+$/)) {
+    const projectId = url.pathname.split('/')[2] ?? ''
+    if (!projectId) {
+      ctx.sendJson(400, { error: 'project id is required' })
+      return true
+    }
+    const result = await ctx.pool.query(
+      `select p.id, p.name, p.status, p.division_code, p.customer_id, p.bid_total,
+              p.labor_rate, p.target_sqft_per_hr, p.bonus_pool, p.closed_at,
+              p.summary_locked_at, p.site_lat, p.site_lng, p.site_radius_m,
+              p.auto_clock_in_enabled, p.auto_clock_out_grace_seconds,
+              p.auto_clock_correction_window_seconds, p.daily_budget_cents,
+              p.version, p.created_at, p.updated_at,
+              c.name as customer_name
+         from projects p
+         left join customers c on c.id = p.customer_id and c.company_id = p.company_id
+         where p.company_id = $1 and p.id = $2 and p.deleted_at is null
+         limit 1`,
+      [ctx.company.id, projectId],
+    )
+    if (!result.rows[0]) {
+      ctx.sendJson(404, { error: 'project not found' })
+      return true
+    }
+    ctx.sendJson(200, { project: result.rows[0] })
+    return true
+  }
+
   return false
 }
