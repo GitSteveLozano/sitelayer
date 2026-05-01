@@ -277,6 +277,7 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       select id, project_id, occurred_at, event_type
       from clock_events
       where company_id = $1
+        and voided_at is null
         and (
           ($2::uuid is not null and worker_id = $2::uuid)
           or ($2::uuid is null and clerk_user_id = $3)
@@ -407,13 +408,16 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
     const workerIdParam = String(url.searchParams.get('worker_id') ?? '').trim()
     const dateParam = String(url.searchParams.get('date') ?? '').trim()
+    const includeVoided = url.searchParams.get('include_voided') === '1'
     const result = await ctx.pool.query(
       `
       select id, company_id, worker_id, project_id, clerk_user_id,
              event_type, occurred_at, lat, lng, accuracy_m,
-             inside_geofence, notes, created_at
+             inside_geofence, notes, source, correctible_until,
+             voided_at, voided_by, created_at
       from clock_events
       where company_id = $1
+        and ($4::boolean or voided_at is null)
         and ($2 = '' or worker_id = $2::uuid)
         and (
           $3 = ''
@@ -422,9 +426,96 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       order by occurred_at asc
       limit 500
       `,
-      [ctx.company.id, workerIdParam, dateParam],
+      [ctx.company.id, workerIdParam, dateParam, includeVoided],
     )
     ctx.sendJson(200, { events: result.rows })
+    return true
+  }
+
+  // POST /api/clock/events/:id/void — wk-clockin's "wait, that wasn't me"
+  // affordance. Permitted while now() <= correctible_until, and only by
+  // the worker who owns the event (or admin/foreman/office for the
+  // override path). Sets voided_at + voided_by; clock_events stays
+  // append-only (no DELETE), so the audit trail of the bad event remains.
+  const voidMatch = url.pathname.match(/^\/api\/clock\/events\/([^/]+)\/void$/)
+  if (req.method === 'POST' && voidMatch) {
+    const id = voidMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const reason = typeof body.reason === 'string' ? body.reason.slice(0, 500) : null
+
+    const existing = await ctx.pool.query<{
+      id: string
+      clerk_user_id: string | null
+      worker_id: string | null
+      correctible_until: string | null
+      voided_at: string | null
+      source: ClockSource
+      event_type: string
+      occurred_at: string
+    }>(
+      `select id, clerk_user_id, worker_id, correctible_until, voided_at,
+              source, event_type, occurred_at
+       from clock_events
+       where company_id = $1 and id = $2
+       limit 1`,
+      [ctx.company.id, id],
+    )
+    const row = existing.rows[0]
+    if (!row) {
+      ctx.sendJson(404, { error: 'clock event not found' })
+      return true
+    }
+    if (row.voided_at) {
+      ctx.sendJson(409, { error: 'clock event already voided', voided_at: row.voided_at })
+      return true
+    }
+
+    // Ownership: workers can void their own; admin/foreman/office can void
+    // anyone's (with the foreman_override semantic on the audit trail).
+    const isOwner = row.clerk_user_id !== null && row.clerk_user_id === ctx.currentUserId
+    if (!isOwner && !ctx.requireRole(['admin', 'foreman', 'office'])) {
+      // requireRole already sent the 403 if the role check failed.
+      return true
+    }
+
+    // Time-window check: workers can only void within correctible_until.
+    // Admin/foreman/office can void any time (they're the override path).
+    if (isOwner) {
+      const deadline = row.correctible_until ? Date.parse(row.correctible_until) : 0
+      if (!deadline || Date.now() > deadline) {
+        ctx.sendJson(409, {
+          error: 'correction window expired',
+          correctible_until: row.correctible_until,
+        })
+        return true
+      }
+    }
+
+    const updated = await ctx.pool.query(
+      `update clock_events
+         set voided_at = now(),
+             voided_by = $3,
+             notes = case
+               when $4::text is null then notes
+               when notes is null or notes = '' then $4::text
+               else notes || E'\n\n[void] ' || $4::text
+             end
+       where company_id = $1 and id = $2 and voided_at is null
+       returning id, company_id, worker_id, project_id, clerk_user_id,
+                 event_type, occurred_at, lat, lng, accuracy_m,
+                 inside_geofence, notes, source, correctible_until,
+                 voided_at, voided_by, created_at`,
+      [ctx.company.id, id, ctx.currentUserId, reason],
+    )
+    if (!updated.rows[0]) {
+      ctx.sendJson(409, { error: 'clock event already voided' })
+      return true
+    }
+    ctx.sendJson(200, { clockEvent: updated.rows[0] })
     return true
   }
 

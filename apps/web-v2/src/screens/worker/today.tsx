@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, MobileButton, PhoneTopBar, Pill } from '@/components/mobile'
 import { Spark } from '@/components/ai'
-import { useClockIn, useClockOut, useClockTimeline } from '@/lib/api'
+import { useClockIn, useClockOut, useClockTimeline, useVoidClockEvent, type ClockEvent } from '@/lib/api'
 import { useGeofence } from '@/lib/geofence'
 import {
   findOpenSpan,
@@ -13,6 +13,7 @@ import {
   sumHoursInRange,
   formatDecimalHours,
 } from '@/lib/clock-derive'
+import { ClockInSuccess } from './clockin-success'
 
 /**
  * Worker home — `wk-today` from `Sitemap.html` § 01.
@@ -70,20 +71,44 @@ export function WorkerTodayScreen() {
 
   // Try the auto clock-in once per geofence reading. The server is the
   // arbiter of whether a project actually matches; we only sense.
+  // On success we capture the resulting clock event so the wk-clockin
+  // surface can render the 2-min correction window with the right
+  // correctible_until.
+  const [autoClockInEvent, setAutoClockInEvent] = useState<ClockEvent | null>(null)
   useEffect(() => {
     if (clockedIn || !geofence.position || clockIn.isPending) return
-    void clockIn.mutateAsync({
-      lat: geofence.position.lat,
-      lng: geofence.position.lng,
-      accuracy_m: geofence.position.accuracyMeters,
-      source: 'auto_geofence',
-    }).catch(() => {
-      // 409 'no_geofence_match' is expected most of the time; we don't
-      // surface it to the user. The presence of a clock event row
-      // (next refetch) is the user-visible signal.
-    })
+    void clockIn
+      .mutateAsync({
+        lat: geofence.position.lat,
+        lng: geofence.position.lng,
+        accuracy_m: geofence.position.accuracyMeters,
+        source: 'auto_geofence',
+      })
+      .then((response) => {
+        if (response.clockEvent.source === 'auto_geofence') {
+          setAutoClockInEvent(response.clockEvent)
+        }
+      })
+      .catch(() => {
+        // 409 'no_geofence_match' is expected most of the time; we don't
+        // surface it to the user. The presence of a clock event row
+        // (next refetch) is the user-visible signal.
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clockedIn, geofence.position?.capturedAtMs])
+
+  const voidClock = useVoidClockEvent()
+  const handleVoid = async () => {
+    if (!autoClockInEvent) return
+    await voidClock
+      .mutateAsync({ id: autoClockInEvent.id, input: { reason: 'voided from wk-clockin' } })
+      .catch(() => {
+        // The 409 paths (window expired / already voided) are surfaced
+        // by the server. We swallow here; the next refetch re-renders
+        // the canonical state.
+      })
+    setAutoClockInEvent(null)
+  }
 
   // Today's totals.
   const nowMs = Date.now()
@@ -110,6 +135,21 @@ export function WorkerTodayScreen() {
       accuracy_m: geofence.position?.accuracyMeters ?? null,
       source: 'manual',
     })
+  }
+
+  // Auto-clock takeover: when an auto_geofence event lands, render the
+  // wk-clockin success surface inline (covers the screen) until either
+  // the user dismisses it or it auto-fades.
+  if (autoClockInEvent) {
+    return (
+      <ClockInSuccess
+        projectName={autoClockInEvent.project_id ? 'On site' : null}
+        occurredAt={autoClockInEvent.occurred_at}
+        correctibleUntil={autoClockInEvent.correctible_until}
+        onDismiss={() => setAutoClockInEvent(null)}
+        onVoid={handleVoid}
+      />
+    )
   }
 
   return (

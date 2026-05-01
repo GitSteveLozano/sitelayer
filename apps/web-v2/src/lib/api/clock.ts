@@ -24,7 +24,19 @@ export interface ClockEvent {
   source: ClockEventSource
   /** ISO timestamp; null when source='manual' or no project resolved. */
   correctible_until: string | null
+  /** Set by POST /api/clock/events/:id/void; null otherwise. */
+  voided_at?: string | null
+  voided_by?: string | null
   created_at: string
+}
+
+export interface ClockEventVoidRequest {
+  /** Optional explanation, appended to notes for the audit trail. */
+  reason?: string | null
+}
+
+export interface ClockEventVoidResponse {
+  clockEvent: ClockEvent
 }
 
 export interface ClockInRequest {
@@ -80,6 +92,13 @@ export function fetchClockTimeline(params: ClockTimelineParams = {}): Promise<Cl
   return request<ClockTimelineResponse>(`/api/clock/timeline${qs ? `?${qs}` : ''}`)
 }
 
+export function voidClockEvent(id: string, input: ClockEventVoidRequest = {}): Promise<ClockEventVoidResponse> {
+  return request<ClockEventVoidResponse>(`/api/clock/events/${encodeURIComponent(id)}/void`, {
+    method: 'POST',
+    json: input,
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Hooks
 // ---------------------------------------------------------------------------
@@ -118,6 +137,22 @@ export function useClockOut() {
   const qc = useQueryClient()
   return useMutation<ClockOutResponse, Error, ClockOutRequest>({
     mutationFn: (input) => clockOut(input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.clock.all() })
+    },
+  })
+}
+
+/**
+ * Mutation hook for `POST /api/clock/events/:id/void`. Used by
+ * wk-clockin's "wait, that wasn't me" affordance and the foreman
+ * override path. The API enforces the correctible_until window for
+ * worker self-corrections; admin/foreman/office can void any time.
+ */
+export function useVoidClockEvent() {
+  const qc = useQueryClient()
+  return useMutation<ClockEventVoidResponse, Error, { id: string; input?: ClockEventVoidRequest }>({
+    mutationFn: ({ id, input }) => voidClockEvent(id, input),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.clock.all() })
     },
