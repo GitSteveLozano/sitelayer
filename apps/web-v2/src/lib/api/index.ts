@@ -182,3 +182,20 @@ export {
   type QboCustomFieldMapping,
   type TakeoffTag,
 } from './takeoff'
+
+export {
+  useDispatchMovement,
+  useInventoryItems,
+  useInventoryLocations,
+  useInventoryMovements,
+  useInventoryUtilization,
+  useProjectRentalContracts,
+  type InventoryItem,
+  type InventoryLocation,
+  type InventoryMovement,
+  type JobRentalContract,
+  type MovementListParams,
+  type ScanDispatchInput,
+  type UtilizationRow,
+  type UtilizationTotals,
+} from './rentals'

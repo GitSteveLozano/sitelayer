@@ -1,15 +1,18 @@
-import { PlaceholderScreen } from '@/components/shell/PlaceholderScreen'
+import { Route, Routes } from 'react-router-dom'
+import {
+  RentalsItemDetailScreen,
+  RentalsListScreen,
+  RentalsScanScreen,
+  RentalsUtilizationScreen,
+} from '@/screens/rentals'
 
 export default function RentalsRoute() {
   return (
-    <PlaceholderScreen
-      eyebrow="Tab · Rentals"
-      title="Catalog"
-      designId="rent-cat"
-    >
-      Phase 4 lands here: idle-revenue KPI hero, asset list with status
-      filters, FAB-launched scan-driven dispatch and return flows, 30d
-      utilization view.
-    </PlaceholderScreen>
+    <Routes>
+      <Route index element={<RentalsListScreen />} />
+      <Route path="scan" element={<RentalsScanScreen />} />
+      <Route path="utilization" element={<RentalsUtilizationScreen />} />
+      <Route path="items/:id" element={<RentalsItemDetailScreen />} />
+    </Routes>
   )
 }

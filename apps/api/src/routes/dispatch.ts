@@ -33,6 +33,7 @@ import { handleSyncRoutes } from './sync.js'
 import { handleAssemblyRoutes } from './assemblies.js'
 import { handleBlueprintPageRoutes } from './blueprint-pages.js'
 import { handleQboCustomFieldRoutes } from './qbo-custom-fields.js'
+import { handleInventoryUtilizationRoutes } from './inventory-utilization.js'
 import { handleTakeoffImportRoutes } from './takeoff-import.js'
 import { handleTakeoffMeasurementRoutes } from './takeoff-measurements.js'
 import { handleTakeoffTagRoutes } from './takeoff-tags.js'
@@ -404,6 +405,19 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       company,
       requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
       readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Inventory utilization rollup (Phase 4 — must precede the catalog
+  // CRUD handler so the more-specific path matches first).
+  if (
+    await handleInventoryUtilizationRoutes(req, url, {
+      pool,
+      company,
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
       sendJson,
     })
   ) {
