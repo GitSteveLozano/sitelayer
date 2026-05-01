@@ -111,8 +111,7 @@ export async function handleNotificationPreferenceRoutes(
     }
     const smsPhone =
       typeof body.sms_phone === 'string' && body.sms_phone.trim() ? body.sms_phone.trim().slice(0, 32) : null
-    const email =
-      typeof body.email === 'string' && body.email.trim() ? body.email.trim().slice(0, 320) : null
+    const email = typeof body.email === 'string' && body.email.trim() ? body.email.trim().slice(0, 320) : null
 
     // Reject channel selection that requires a contact field that's not set.
     // Better to 400 here than have the worker silently downgrade to push.

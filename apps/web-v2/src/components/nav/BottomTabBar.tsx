@@ -37,12 +37,7 @@ export function BottomTabBar() {
         >
           {({ isActive }) => (
             <>
-              <tab.icon
-                width={22}
-                height={22}
-                strokeWidth={isActive ? 2 : 1.8}
-                aria-hidden="true"
-              />
+              <tab.icon width={22} height={22} strokeWidth={isActive ? 2 : 1.8} aria-hidden="true" />
               <span>{tab.label}</span>
             </>
           )}

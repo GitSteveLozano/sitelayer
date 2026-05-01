@@ -34,10 +34,7 @@ export function Spark({ state = 'accent', size = 14, className, ...rest }: Spark
       style={{ width: size, height: size }}
     >
       <svg viewBox="-50 -50 100 100" width={size} height={size} aria-hidden="true">
-        <path
-          d="M0 -40 L10 -10 L40 0 L10 10 L0 40 L-10 10 L-40 0 L-10 -10 Z"
-          fill="currentColor"
-        />
+        <path d="M0 -40 L10 -10 L40 0 L10 10 L0 40 L-10 10 L-40 0 L-10 -10 Z" fill="currentColor" />
       </svg>
     </span>
   )

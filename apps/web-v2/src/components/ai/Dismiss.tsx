@@ -30,13 +30,7 @@ export function Dismiss({ onDismiss, className, label = 'Dismiss suggestion' }: 
       )}
     >
       <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">
-        <path
-          d="M2 2 L10 10 M10 2 L2 10"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-          fill="none"
-        />
+        <path d="M2 2 L10 10 M10 2 L2 10" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
       </svg>
     </button>
   )

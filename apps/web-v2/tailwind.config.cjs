@@ -41,8 +41,8 @@ module.exports = {
         xl: 'var(--m-r-xl)',
       },
       boxShadow: {
-        '1': 'var(--m-shadow-1)',
-        '2': 'var(--m-shadow-2)',
+        1: 'var(--m-shadow-1)',
+        2: 'var(--m-shadow-2)',
         card: 'var(--m-shadow-card)',
       },
       fontFamily: {
