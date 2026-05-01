@@ -69,8 +69,10 @@ import { attachPool, observeRequest, renderMetrics } from './metrics.js'
 import { loadEmailConfig } from './email.js'
 import { applyRateLimit, createRateLimiter, isRateLimitExempt, loadRateLimitConfig } from './rate-limit.js'
 import { assertVersion } from './version-guard.js'
+import { validateRequiredEnvVars } from './lib/env-validate.js'
 
 const logger = createLogger('api')
+validateRequiredEnvVars(logger)
 
 const debugRateBuckets = new Map<string, { tokens: number; updatedAt: number }>()
 function debugRateLimit(key: string, capacity = 10, refillPerMs = 10 / 60_000): boolean {
