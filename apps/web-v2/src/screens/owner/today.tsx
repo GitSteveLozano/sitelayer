@@ -115,6 +115,12 @@ export function OwnerTodayScreen() {
         >
           Bid accuracy
         </Link>
+        <Link
+          to="/financial"
+          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full text-[13px] font-medium border bg-card-soft text-ink-2 border-line shrink-0"
+        >
+          Financial
+        </Link>
       </div>
 
       <div className="flex-1 px-4 pb-8 pt-2">
