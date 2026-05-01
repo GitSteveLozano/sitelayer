@@ -127,12 +127,18 @@ export async function handleDailyLogRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
+    // Foreman can only read their own log; admin/office unrestricted.
+    // Without this filter a foreman could read another foreman's log
+    // by guessing the uuid (the list endpoint already isolates by
+    // foreman_user_id; the detail path must match).
+    const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
     const result = await ctx.pool.query<DailyLogRow>(
       `select ${DAILY_LOG_COLUMNS}
        from daily_logs
        where company_id = $1 and id = $2
+         and ($3 = '' or foreman_user_id = $3)
        limit 1`,
-      [ctx.company.id, id],
+      [ctx.company.id, id, ownerFilter],
     )
     if (!result.rows[0]) {
       ctx.sendJson(404, { error: 'daily log not found' })

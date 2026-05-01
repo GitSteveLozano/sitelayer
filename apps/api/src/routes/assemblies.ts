@@ -186,8 +186,16 @@ export async function handleAssemblyRoutes(
     }
     const unit = typeof body.unit === 'string' && body.unit.trim() ? body.unit.trim() : 'ea'
 
-    // Recompute total_rate after insert.
+    // Recompute total_rate after insert. Lock the parent assembly so
+    // two concurrent inserts can't read the same max(sort_order) and
+    // collide. Same pattern as takeoff-tags.
     const result = await withMutationTx(async (client: PoolClient) => {
+      const owner = await client.query(
+        `select 1 from service_item_assemblies
+         where company_id = $1 and id = $2 and deleted_at is null for update`,
+        [ctx.company.id, assemblyId],
+      )
+      if (owner.rowCount === 0) return null
       const max = await client.query<{ max_sort: number | null }>(
         `select coalesce(max(sort_order), -1) as max_sort
          from service_item_assembly_components where company_id = $1 and assembly_id = $2`,
@@ -225,6 +233,10 @@ export async function handleAssemblyRoutes(
       })
       return componentRow
     })
+    if (!result) {
+      ctx.sendJson(404, { error: 'assembly not found' })
+      return true
+    }
     ctx.sendJson(201, { component: result })
     return true
   }

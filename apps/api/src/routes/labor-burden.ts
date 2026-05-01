@@ -99,6 +99,12 @@ export async function handleLaborBurdenRoutes(
   }
 
   const nowMs = Date.now()
+  // Cap open spans at end-of-day for historical dates so a never-closed
+  // clock-in from a past day doesn't accrue against today's clock. For
+  // today, we cap at now() so a currently-clocked-in worker sees their
+  // span tick up live.
+  const dayEndMs = Date.parse(`${targetDate}T23:59:59.999Z`)
+  const openCloseMs = nowMs < dayEndMs ? nowMs : dayEndMs
   const results: LaborBurdenWorkerResult[] = []
   for (const [workerId, rows] of byWorker) {
     let totalHours = 0
@@ -118,9 +124,9 @@ export async function handleLaborBurdenRoutes(
         }
       }
     }
-    // Open span — count up to now.
+    // Open span — count up to now (today) or end-of-day (past dates).
     if (openInMs !== null) {
-      totalHours += Math.max(0, (nowMs - openInMs) / (1000 * 60 * 60))
+      totalHours += Math.max(0, (openCloseMs - openInMs) / (1000 * 60 * 60))
     }
     const split = splitStraightAndOt(totalHours)
     const first = rows[0]

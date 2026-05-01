@@ -116,8 +116,17 @@ export async function handleTakeoffTagRoutes(
       return true
     }
 
-    // sort_order = max + 1 so new tags append.
+    // sort_order = max + 1 so new tags append. Lock the parent
+    // measurement row so two concurrent appends don't observe the same
+    // max(sort_order) and assign duplicate values. (Default isolation
+    // is READ COMMITTED — without the lock, both txns can see the
+    // pre-write max.)
     const created = await withMutationTx(async (client: PoolClient) => {
+      await client.query(
+        `select 1 from takeoff_measurements
+         where company_id = $1 and id = $2 for update`,
+        [ctx.company.id, measurementId],
+      )
       const max = await client.query<{ max_sort: number | null }>(
         `select coalesce(max(sort_order), -1) as max_sort
          from takeoff_measurement_tags where company_id = $1 and measurement_id = $2`,
