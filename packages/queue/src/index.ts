@@ -11,6 +11,13 @@ export {
 
 export { recordLedger, type RecordLedgerArgs, type LedgerTraceContext } from './ledger.js'
 
+export {
+  processLockLaborEntries,
+  type LockLaborEntriesAction,
+  type LockLaborEntriesPayload,
+  type LockLaborEntriesSummary,
+} from './lock-labor-entries.js'
+
 export interface QueueClient {
   query<T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<T>>
 }
@@ -57,7 +64,11 @@ export type QueueProcessResult = {
 // mutation_types claimed by dedicated handlers, NOT by the generic drain.
 // Adding a new dedicated handler? Add its mutation_type here so the generic
 // drain doesn't race the dedicated worker.
-export const DEDICATED_HANDLER_MUTATION_TYPES = ['post_qbo_invoice', 'post_qbo_estimate'] as const
+export const DEDICATED_HANDLER_MUTATION_TYPES = [
+  'post_qbo_invoice',
+  'post_qbo_estimate',
+  'lock_labor_entries',
+] as const
 
 /**
  * Append one row to workflow_event_log from inside a worker tx. Used by
