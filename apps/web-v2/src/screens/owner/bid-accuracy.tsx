@@ -1,6 +1,7 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, Pill } from '@/components/mobile'
-import { Attribution, Spark, StripeCard } from '@/components/ai'
+import { Attribution, Spark, StripeCard, WhyThis } from '@/components/ai'
 import {
   useBidAccuracy,
   type AccuracyConfidence,
@@ -22,6 +23,7 @@ import {
  */
 export function OwnerBidAccuracyScreen() {
   const accuracy = useBidAccuracy()
+  const [showWhy, setShowWhy] = useState(false)
 
   if (accuracy.isPending) {
     return <div className="px-5 pt-8 text-[13px] text-ink-3">Loading bid accuracy…</div>
@@ -64,12 +66,32 @@ export function OwnerBidAccuracyScreen() {
             {summary?.closed_project_count ?? 0} closed of {summary?.project_count ?? 0} total ·{' '}
             {summary?.over_count ?? 0} over · {summary?.under_count ?? 0} under
           </div>
-          <div className="mt-3">
+          <div className="mt-3 flex items-center justify-between gap-2">
             <Attribution
               source={summary?.attribution ?? 'Computed from projects + actuals'}
             />
+            <button
+              type="button"
+              onClick={() => setShowWhy((s) => !s)}
+              className="text-[11px] text-accent font-medium"
+            >
+              {showWhy ? 'Hide why' : 'Why this?'}
+            </button>
           </div>
         </StripeCard>
+
+        {showWhy ? (
+          <WhyThis
+            title="How the delta is computed"
+            attribution="Cohort SQL — no LLM in this path"
+          >
+            For every project with a bid &gt; 0, we sum material_bills.amount and
+            labor_entries.hours × project labor rate, compare against bid_total, and bucket the
+            absolute delta percent into ordinal pills (high &lt; 5%, medium &lt; 15%, low ≥ 15%).
+            Closed projects drive the headline mean; in-flight projects show their running
+            delta so you spot drift before the bid lands.
+          </WhyThis>
+        ) : null}
 
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pt-2">
           Per project

@@ -1,13 +1,19 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
-import { Attribution, Dismiss, StripeCard } from '@/components/ai'
+import { AgentSurface, Attribution, Dismiss, StripeCard } from '@/components/ai'
 import {
+  useAiInsights,
+  useApplyInsight,
   useClockTimeline,
   useDailyLogs,
+  useDismissInsight,
   useLaborBurdenToday,
   useSchedules,
   useTimeReviewRuns,
+  useTriggerBidFollowUp,
+  type AiInsight,
+  type BidFollowUpDraft,
   type CrewScheduleRow,
 } from '@/lib/api'
 import { pairClockSpans } from '@/lib/clock-derive'
@@ -37,6 +43,10 @@ export function OwnerTodayScreen() {
   const burden = useLaborBurdenToday()
   const reviews = useTimeReviewRuns({ state: 'pending' })
   const drafts = useDailyLogs({ status: 'draft' })
+  const followUps = useAiInsights<BidFollowUpDraft>({ kind: 'bid_follow_up', open: true })
+  const triggerFollowUp = useTriggerBidFollowUp()
+  const apply = useApplyInsight()
+  const dismiss = useDismissInsight()
 
   const projectsToday = schedules.data?.schedules ?? []
   const events = timeline.data?.events ?? []
@@ -49,7 +59,8 @@ export function OwnerTodayScreen() {
     burden: burden.data,
     drafts: drafts.data?.dailyLogs ?? [],
   }), [reviews.data, burden.data, drafts.data])
-  const attentionCount = attention.length
+  const followUpInsights = followUps.data?.insights ?? []
+  const attentionCount = attention.length + followUpInsights.length
 
   return (
     <div className="flex flex-col bg-sand">
@@ -102,7 +113,26 @@ export function OwnerTodayScreen() {
         {view === 'today' ? (
           <TodayList projects={projectsToday} totalHoursToday={totalHoursToday} />
         ) : (
-          <AttentionList items={attention} />
+          <>
+            <AttentionList items={attention} />
+            <BidFollowUpList
+              insights={followUpInsights}
+              onScan={async () => {
+                await triggerFollowUp.mutateAsync({}).catch(() => {})
+              }}
+              scanning={triggerFollowUp.isPending}
+              onApply={async (id) => {
+                await apply.mutateAsync({ id }).catch(() => {})
+              }}
+              onDismiss={async (id) => {
+                const reason =
+                  typeof window !== 'undefined' ? window.prompt('Why dismiss?') ?? undefined : undefined
+                await dismiss
+                  .mutateAsync(reason ? { id, reason } : { id })
+                  .catch(() => {})
+              }}
+            />
+          </>
         )}
       </div>
     </div>
@@ -310,6 +340,69 @@ function AttentionList({ items }: { items: AttentionItem[] }) {
             </Link>
           </div>
         </StripeCard>
+      ))}
+    </div>
+  )
+}
+
+interface BidFollowUpListProps {
+  insights: AiInsight<BidFollowUpDraft>[]
+  onScan: () => void
+  scanning: boolean
+  onApply: (id: string) => Promise<void>
+  onDismiss: (id: string) => Promise<void>
+}
+
+function BidFollowUpList({ insights, onScan, scanning, onApply, onDismiss }: BidFollowUpListProps) {
+  if (insights.length === 0) {
+    return (
+      <div className="mt-4">
+        <button
+          type="button"
+          onClick={onScan}
+          disabled={scanning}
+          className="w-full py-3 rounded-md border border-line text-[13px] font-medium text-ink-2 disabled:opacity-50"
+        >
+          {scanning ? 'Scanning…' : 'Scan for stale bids'}
+        </button>
+      </div>
+    )
+  }
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">
+        Bid follow-ups
+      </div>
+      {insights.map((insight) => (
+        <AgentSurface
+          key={insight.id}
+          banner={`Agent draft · ${insight.confidence} confidence`}
+        >
+          <div className="text-[13px] font-semibold mb-1">{insight.payload.subject}</div>
+          <div className="text-[12px] text-ink-2 leading-relaxed whitespace-pre-wrap">
+            {insight.payload.body}
+          </div>
+          <div className="mt-2 pt-2 border-t border-dashed border-line-2 flex items-center justify-between">
+            <Attribution source={insight.attribution} />
+            <span className="text-[11px] text-ink-3">{insight.payload.days_outstanding}d out</span>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => void onApply(insight.id)}
+              className="py-2 rounded-md bg-accent text-white text-[12px] font-medium"
+            >
+              Mark sent
+            </button>
+            <button
+              type="button"
+              onClick={() => void onDismiss(insight.id)}
+              className="py-2 rounded-md border border-line text-ink-2 text-[12px] font-medium"
+            >
+              Dismiss
+            </button>
+          </div>
+        </AgentSurface>
       ))}
     </div>
   )

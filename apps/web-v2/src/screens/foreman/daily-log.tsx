@@ -4,13 +4,18 @@ import { Attribution, AgentSurface, Spark } from '@/components/ai'
 import {
   ApiError,
   dailyLogPhotoUrl,
+  useAiInsights,
+  useApplyInsight,
   useCreateDailyLog,
   useDailyLogs,
   useDeleteDailyLogPhoto,
+  useDismissInsight,
   usePatchDailyLog,
   useSubmitDailyLog,
+  useTriggerVoiceToLog,
   useUploadDailyLogPhoto,
   type DailyLog,
+  type VoiceToLogProposal,
 } from '@/lib/api'
 
 /**
@@ -214,21 +219,20 @@ function DailyLogEditor({ log }: DailyLogEditorProps) {
         />
       </div>
 
-      {/* AI-drafted narrative slot — placeholder until Phase 5. */}
+      {/* AI-drafted narrative — Phase 5 voice-to-log agent. */}
       <div className="px-4 mt-4">
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">
           Narrative
         </div>
-        <AgentSurface>
-          <div className="text-[13px] text-ink-2 leading-relaxed">
-            The Phase 5 agent will draft this section from photos, voice memos, and clock-in data — you
-            edit before submitting.
-          </div>
-          <div className="mt-2.5 pt-2.5 border-t border-dashed border-line-2 flex items-center justify-between gap-2">
-            <Attribution source="Drafts from photos + voice memos + clock-in data" />
-            <span className="text-[11px] text-ink-3">Phase 5</span>
-          </div>
-        </AgentSurface>
+        <VoiceToLogBlock
+          dailyLogId={log.id}
+          isSubmitted={isSubmitted}
+          onApplyToNotes={(narrative) => {
+            const next = notes.trim() ? `${notes.trim()}\n\n${narrative}` : narrative
+            setNotes(next)
+            void patch.mutateAsync({ notes: next, expected_version: log.version }).catch(() => {})
+          }}
+        />
       </div>
 
       {/* Submit. */}
@@ -396,3 +400,190 @@ function PhotoGrid({ log }: PhotoGridProps) {
     </div>
   )
 }
+
+interface VoiceToLogBlockProps {
+  dailyLogId: string
+  isSubmitted: boolean
+  onApplyToNotes: (narrative: string) => void
+}
+
+function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLogBlockProps) {
+  const trigger = useTriggerVoiceToLog()
+  const insights = useAiInsights<VoiceToLogProposal>({
+    kind: 'voice_to_log',
+    entityId: dailyLogId,
+    open: true,
+  })
+  const apply = useApplyInsight()
+  const dismiss = useDismissInsight()
+  const [transcript, setTranscript] = useState('')
+  const [recognizing, setRecognizing] = useState(false)
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null)
+
+  // Web Speech API where available (Chrome / Android, also iOS Safari
+  // 14.5+). Falls back gracefully to typed transcript when the API
+  // isn't present — UX rule: never block the foreman.
+  const supportsVoice =
+    typeof window !== 'undefined' &&
+    Boolean(
+      (window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown })
+        .SpeechRecognition ||
+        (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition,
+    )
+
+  const startVoice = () => {
+    if (!supportsVoice || recognizing) return
+    const Ctor =
+      (window as unknown as { SpeechRecognition?: SpeechRecognitionConstructor })
+        .SpeechRecognition ??
+      (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionConstructor })
+        .webkitSpeechRecognition
+    if (!Ctor) return
+    const rec = new Ctor()
+    rec.lang = 'en-US'
+    rec.interimResults = true
+    rec.continuous = true
+    rec.onresult = (event: SpeechRecognitionResultEvent) => {
+      let text = ''
+      for (let i = 0; i < event.results.length; i++) {
+        text += event.results[i]?.[0]?.transcript ?? ''
+      }
+      setTranscript(text)
+    }
+    rec.onend = () => setRecognizing(false)
+    rec.onerror = () => setRecognizing(false)
+    rec.start()
+    recognitionRef.current = rec
+    setRecognizing(true)
+  }
+
+  const stopVoice = () => {
+    recognitionRef.current?.stop()
+    setRecognizing(false)
+  }
+
+  const onRunAgent = async () => {
+    if (!transcript.trim()) return
+    await trigger
+      .mutateAsync({
+        daily_log_id: dailyLogId,
+        transcript,
+        source: supportsVoice ? 'voice' : 'text',
+      })
+      .catch(() => {})
+  }
+
+  const latest = insights.data?.insights[0]
+
+  return (
+    <AgentSurface
+      banner={
+        latest ? `Agent draft · ${latest.confidence} confidence` : 'Agent draft · review before sending'
+      }
+    >
+      <div className="text-[13px] font-semibold mb-2">Voice-to-log</div>
+
+      {!isSubmitted ? (
+        <div className="space-y-2">
+          <textarea
+            value={transcript}
+            onChange={(e) => setTranscript(e.target.value)}
+            placeholder={
+              supportsVoice
+                ? 'Tap mic and dictate, or type the day’s narrative.'
+                : 'Type the day’s narrative; voice capture lands when your browser supports it.'
+            }
+            rows={3}
+            className="w-full p-2 text-[13px] rounded border border-line-2 bg-card focus:outline-none focus:border-accent resize-none"
+          />
+          <div className="grid grid-cols-2 gap-2">
+            {supportsVoice ? (
+              <MobileButton
+                variant={recognizing ? 'primary' : 'ghost'}
+                onClick={recognizing ? stopVoice : startVoice}
+              >
+                {recognizing ? 'Stop' : 'Start mic'}
+              </MobileButton>
+            ) : (
+              <div />
+            )}
+            <MobileButton
+              variant="primary"
+              disabled={!transcript.trim() || trigger.isPending}
+              onClick={onRunAgent}
+            >
+              {trigger.isPending ? 'Drafting…' : 'Draft narrative'}
+            </MobileButton>
+          </div>
+        </div>
+      ) : (
+        <div className="text-[12px] text-ink-3">Submitted logs are locked.</div>
+      )}
+
+      {latest ? (
+        <div className="mt-3 pt-2 border-t border-dashed border-line-2 space-y-2">
+          <div className="text-[12px] text-ink-2 leading-relaxed whitespace-pre-wrap">
+            {latest.payload.narrative}
+          </div>
+          {latest.payload.weather_summary ? (
+            <div className="text-[11px] text-ink-3 italic">{latest.payload.weather_summary}</div>
+          ) : null}
+          {latest.payload.schedule_deviations.length ? (
+            <ul className="text-[11px] text-ink-3 list-disc pl-4 space-y-0.5">
+              {latest.payload.schedule_deviations.map((d, i) => (
+                <li key={i}>{d}</li>
+              ))}
+            </ul>
+          ) : null}
+          {!isSubmitted ? (
+            <div className="grid grid-cols-2 gap-2 pt-1">
+              <MobileButton
+                variant="primary"
+                onClick={async () => {
+                  onApplyToNotes(latest.payload.narrative)
+                  await apply.mutateAsync({ id: latest.id }).catch(() => {})
+                }}
+              >
+                Paste into notes
+              </MobileButton>
+              <MobileButton
+                variant="ghost"
+                onClick={async () => {
+                  const reason =
+                    typeof window !== 'undefined' ? window.prompt('Why dismiss?') ?? undefined : undefined
+                  await dismiss
+                    .mutateAsync(reason ? { id: latest.id, reason } : { id: latest.id })
+                    .catch(() => {})
+                }}
+              >
+                Dismiss
+              </MobileButton>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="mt-3 pt-2 border-t border-dashed border-line-2">
+        <Attribution source="Drafted from foreman dictation by agent:voice_to_log" />
+      </div>
+    </AgentSurface>
+  )
+}
+
+// Minimal Web Speech API surface — TypeScript's lib doesn't ship the
+// type for it. Keeping this local avoids pulling extra ambient types.
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike
+interface SpeechRecognitionLike {
+  lang: string
+  interimResults: boolean
+  continuous: boolean
+  start(): void
+  stop(): void
+  onresult: ((event: SpeechRecognitionResultEvent) => void) | null
+  onend: (() => void) | null
+  onerror: (() => void) | null
+}
+interface SpeechRecognitionResultEvent {
+  results: ArrayLike<{ [index: number]: { transcript: string } }>
+}
+

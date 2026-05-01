@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import {
@@ -25,6 +26,7 @@ export function ApprovalQueueScreen() {
   const [tab, setTab] = useState<TimeReviewState>('pending')
   const runs = useTimeReviewRuns({ state: tab })
   const rows = runs.data?.timeReviewRuns ?? []
+  const anomalyTotal = rows.reduce((sum, r) => sum + (r.anomaly_count || 0), 0)
 
   const counts = useMemo(() => {
     const all = runs.data?.timeReviewRuns ?? []
@@ -40,8 +42,15 @@ export function ApprovalQueueScreen() {
       <div className="px-5 pt-6 pb-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Owner / PM · Time</div>
         <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">Approvals</h1>
-        <div className="text-[12px] text-ink-3 mt-1">
-          {rows.length} {tab} run{rows.length === 1 ? '' : 's'}
+        <div className="text-[12px] text-ink-3 mt-1 flex items-center justify-between">
+          <span>
+            {rows.length} {tab} run{rows.length === 1 ? '' : 's'}
+          </span>
+          {anomalyTotal > 0 ? (
+            <Link to="/time/anomalies" className="text-accent font-medium">
+              {anomalyTotal} anomal{anomalyTotal === 1 ? 'y' : 'ies'} →
+            </Link>
+          ) : null}
         </div>
       </div>
 

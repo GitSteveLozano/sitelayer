@@ -136,3 +136,53 @@ export function useTriggerTakeoffToBid() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['ai'] }),
   })
 }
+
+// ---------------------------------------------------------------------------
+// Voice-to-log agent
+// ---------------------------------------------------------------------------
+
+export interface VoiceToLogProposal {
+  narrative: string
+  weather_summary: string | null
+  schedule_deviations: string[]
+  confidence: AccuracyConfidence
+  rationale: string
+}
+
+export function useTriggerVoiceToLog() {
+  const qc = useQueryClient()
+  return useMutation<
+    { run_id: string; daily_log_id: string; status: string },
+    Error,
+    { daily_log_id: string; transcript: string; source?: 'voice' | 'text' }
+  >({
+    mutationFn: (input) => request('/api/ai/agents/voice-to-log', { method: 'POST', json: input }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ai'] }),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Bid follow-up agent
+// ---------------------------------------------------------------------------
+
+export interface BidFollowUpDraft {
+  subject: string
+  body: string
+  days_outstanding: number
+  bid_total: string
+  customer_name: string | null
+  confidence: AccuracyConfidence
+}
+
+export function useTriggerBidFollowUp() {
+  const qc = useQueryClient()
+  return useMutation<
+    { proposals_created: number; scanned: number; age_days?: number },
+    Error,
+    { age_days?: number }
+  >({
+    mutationFn: (input) =>
+      request('/api/ai/agents/bid-follow-up', { method: 'POST', json: input ?? {} }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['ai'] }),
+  })
+}

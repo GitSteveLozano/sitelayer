@@ -200,5 +200,188 @@ export async function handleAiInsightRoutes(
     return true
   }
 
+  if (req.method === 'POST' && url.pathname === '/api/ai/agents/voice-to-log') {
+    // Foreman dictates the day's narrative; the agent drafts the
+    // structured fields. Foreman role can trigger; admin/office too.
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const body = await ctx.readBody()
+    const dailyLogId = typeof body.daily_log_id === 'string' ? body.daily_log_id.trim() : ''
+    const transcript = typeof body.transcript === 'string' ? body.transcript : ''
+    const source = body.source === 'voice' ? 'voice' : 'text'
+    if (!isValidUuid(dailyLogId)) {
+      ctx.sendJson(400, { error: 'daily_log_id is required and must be a valid uuid' })
+      return true
+    }
+    if (!transcript.trim()) {
+      ctx.sendJson(400, { error: 'transcript is required' })
+      return true
+    }
+    if (transcript.length > 16_000) {
+      ctx.sendJson(413, { error: 'transcript capped at 16000 characters' })
+      return true
+    }
+
+    // Foreman ownership: a foreman can only trigger the agent on their
+    // own draft. Admin/office can trigger anywhere.
+    const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
+    const exists = await ctx.pool.query<{ id: string }>(
+      `select id from daily_logs
+       where company_id = $1 and id = $2 and status = 'draft'
+         and ($3 = '' or foreman_user_id = $3)
+       limit 1`,
+      [ctx.company.id, dailyLogId, ownerFilter],
+    )
+    if (!exists.rows[0]) {
+      ctx.sendJson(404, { error: 'daily log not found, already submitted, or not yours' })
+      return true
+    }
+
+    const outbox = await withMutationTx(async (client: PoolClient) => {
+      const result = await client.query<{ id: string }>(
+        `insert into mutation_outbox
+           (company_id, mutation_type, payload, idempotency_key)
+         values ($1, 'voice_to_log', $2::jsonb, $3)
+         on conflict (idempotency_key) do update
+           set payload = excluded.payload,
+               updated_at = now()
+         returning id`,
+        [
+          ctx.company.id,
+          JSON.stringify({
+            daily_log_id: dailyLogId,
+            transcript,
+            source,
+            requested_by: ctx.currentUserId,
+          }),
+          // Per-log key so re-triggering coalesces (the latest
+          // transcript wins).
+          `voice_to_log:${dailyLogId}`,
+        ],
+      )
+      return result.rows[0]
+    })
+    ctx.sendJson(202, { run_id: outbox?.id, daily_log_id: dailyLogId, status: 'enqueued' })
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname === '/api/ai/agents/bid-follow-up') {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const ageDaysRaw = Number(body.age_days)
+    const ageDays =
+      Number.isFinite(ageDaysRaw) && ageDaysRaw > 0 && ageDaysRaw < 365 ? Math.floor(ageDaysRaw) : 14
+
+    // Find active projects whose bid has been on the wall for at least
+    // age_days without going to 'completed' or 'closed'. One ai_insight
+    // per stale project; idempotency key per (project, week-bucket) so
+    // reruns within the same week don't pile up.
+    const stale = await ctx.pool.query<{
+      id: string
+      name: string
+      customer_name: string | null
+      bid_total: string
+      created_at: string
+    }>(
+      `select id, name, customer_name, bid_total, created_at
+       from projects
+       where company_id = $1
+         and deleted_at is null
+         and bid_total > 0
+         and status in ('active', 'draft', 'pending')
+         and created_at < now() - ($2 || ' days')::interval
+       order by created_at asc
+       limit 50`,
+      [ctx.company.id, String(ageDays)],
+    )
+    if (stale.rows.length === 0) {
+      ctx.sendJson(200, { proposals_created: 0, scanned: 0 })
+      return true
+    }
+
+    let created = 0
+    // Week-bucket dedupe: one follow-up insight per (project, ISO
+    // week) so a re-triggered scan inside the same week is a no-op.
+    // ai_insights doesn't carry a unique constraint on source_run_id
+    // so we check explicitly before the insert.
+    const weekBucket = isoWeekBucket(new Date())
+    for (const project of stale.rows) {
+      const key = `bid_follow_up:${project.id}:${weekBucket}`
+      const exists = await ctx.pool.query<{ id: string }>(
+        `select id from ai_insights
+         where company_id = $1 and source_run_id = $2 limit 1`,
+        [ctx.company.id, key],
+      )
+      if (exists.rows[0]) continue
+      const draft = composeFollowUpDraft(project)
+      await ctx.pool.query(
+        `insert into ai_insights
+           (company_id, kind, entity_type, entity_id, payload, confidence,
+            attribution, source_run_id, produced_by)
+         values ($1, 'bid_follow_up', 'project', $2, $3::jsonb, $4, $5, $6, 'agent:bid_follow_up')`,
+        [
+          ctx.company.id,
+          project.id,
+          JSON.stringify(draft),
+          draft.confidence,
+          `Bid issued ${draft.days_outstanding}d ago, no status change recorded`,
+          key,
+        ],
+      )
+      created++
+    }
+    ctx.sendJson(200, { proposals_created: created, scanned: stale.rows.length, age_days: ageDays })
+    return true
+  }
+
   return false
+}
+
+interface FollowUpDraft {
+  subject: string
+  body: string
+  days_outstanding: number
+  bid_total: string
+  customer_name: string | null
+  confidence: 'low' | 'med' | 'high'
+}
+
+function isoWeekBucket(d: Date): string {
+  const year = d.getUTCFullYear()
+  // Cheap week-of-year: day-of-year / 7. Avoids pulling a date library
+  // for a dedupe key.
+  const start = Date.UTC(year, 0, 1)
+  const day = Math.floor((d.getTime() - start) / (1000 * 60 * 60 * 24))
+  const week = Math.floor(day / 7) + 1
+  return `${year}W${String(week).padStart(2, '0')}`
+}
+
+function composeFollowUpDraft(project: {
+  id: string
+  name: string
+  customer_name: string | null
+  bid_total: string
+  created_at: string
+}): FollowUpDraft {
+  const days = Math.max(
+    1,
+    Math.floor((Date.now() - Date.parse(project.created_at)) / (1000 * 60 * 60 * 24)),
+  )
+  const customer = project.customer_name ?? 'there'
+  const subject = `Following up on ${project.name}`
+  const body = `Hi ${customer},
+
+Just checking in on the bid for ${project.name} (${days} days out). Happy to walk through the line items, adjust the scope, or sharpen the number — let me know what would be most useful.
+
+Thanks,
+The crew at Sitelayer`
+  // Confidence stays medium — this is a heuristic, not a model output.
+  // Call sites can tune as the pattern matures.
+  return {
+    subject,
+    body,
+    days_outstanding: days,
+    bid_total: project.bid_total,
+    customer_name: project.customer_name,
+    confidence: 'med',
+  }
 }

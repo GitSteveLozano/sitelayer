@@ -58,7 +58,11 @@ export async function handleInventoryUtilizationRoutes(
         i.default_rental_rate,
         coalesce((
           select sum(case
-            when m.movement_type in ('deliver', 'transfer', 'damage', 'loss', 'adjustment') and m.from_location_id is null then m.quantity
+            -- New receipt into the yard (no from_location): + stock
+            when m.movement_type in ('deliver', 'transfer', 'adjustment') and m.from_location_id is null then m.quantity
+            -- Damage / loss removes from owned stock regardless of locations
+            when m.movement_type in ('damage', 'loss') then -m.quantity
+            -- Return-to-supplier (no to_location): - stock
             when m.movement_type = 'return' and m.to_location_id is null then -m.quantity
             else 0
           end)
