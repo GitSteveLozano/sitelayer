@@ -14,6 +14,7 @@ const LogRoute = lazy(() => import('@/routes/log'))
 const ScheduleRoute = lazy(() => import('@/routes/schedule'))
 const BidAccuracyRoute = lazy(() => import('@/routes/bid-accuracy'))
 const FinancialRoute = lazy(() => import('@/routes/financial'))
+const OnboardingRoute = lazy(() => import('@/routes/onboarding'))
 
 // Single client for the whole app. v2 uses TanStack Query for fetching
 // and caching; offline-aware mutations land in Phase 1.
@@ -57,6 +58,7 @@ export default function App() {
                 <Route path="/schedule" element={<ScheduleRoute />} />
                 <Route path="/bid-accuracy" element={<BidAccuracyRoute />} />
                 <Route path="/financial/*" element={<FinancialRoute />} />
+                <Route path="/onboarding" element={<OnboardingRoute />} />
                 <Route path="*" element={<NotFound />} />
               </Route>
             </Routes>
