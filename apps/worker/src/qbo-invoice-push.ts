@@ -1,4 +1,5 @@
 import type { RentalBillingInvoicePushFn } from '@sitelayer/queue'
+import { withFreshToken, type IntegrationConnectionTokens, type RefreshDeps } from './qbo-token-refresh.js'
 
 // QBO REST integration for rental-billing invoice push. Mirrors the existing
 // /api/integrations/qbo/sync/material-bills logic in apps/api/src/routes/qbo.ts
@@ -16,13 +17,6 @@ import type { RentalBillingInvoicePushFn } from '@sitelayer/queue'
 // id is set we never hit QBO. So this fn is allowed to throw on any failure;
 // the handler converts the throw into POST_FAILED and the outbox row is
 // retried on the next worker tick.
-
-type QboConnectionRow = {
-  id: string
-  provider_account_id: string | null
-  access_token: string | null
-  status: string
-}
 
 type QboInvoiceLinePayload = {
   Amount: number
@@ -63,8 +57,10 @@ function n(value: unknown): number {
 /**
  * Build the live QBO Invoice push fn for the rental billing workflow.
  * Returned fn is suitable to pass to processRentalBillingInvoicePush.
+ *
+ * `refreshDeps` exists for testing — production callers omit it.
  */
-export function createQboRentalInvoicePush(): RentalBillingInvoicePushFn {
+export function createQboRentalInvoicePush(refreshDeps: RefreshDeps = {}): RentalBillingInvoicePushFn {
   const baseUrl = process.env.QBO_BASE_URL ?? 'https://sandbox-quickbooks.api.intuit.com'
   const incomeAccountId = process.env.QBO_RENTAL_INCOME_ACCOUNT_ID ?? ''
 
@@ -74,19 +70,22 @@ export function createQboRentalInvoicePush(): RentalBillingInvoicePushFn {
     // Connection lookup. The client argument here is the same tx the caller
     // is using to lock the run row + insert the sync_event audit row, so
     // this select sees a consistent connection state.
-    const conn = await client.query<QboConnectionRow>(
-      `select id, provider_account_id, access_token, status
+    const conn = await client.query<IntegrationConnectionTokens>(
+      `select id, provider_account_id, access_token, refresh_token, status, access_token_expires_at
        from integration_connections
        where company_id = $1 and provider = 'qbo' and deleted_at is null
        limit 1`,
       [companyId],
     )
     const connection = conn.rows[0]
-    if (!connection?.access_token || !connection.provider_account_id) {
-      throw new Error('qbo connection missing access_token or realm id')
+    if (!connection?.provider_account_id) {
+      throw new Error('qbo connection missing realm id')
     }
     if (connection.status !== 'connected') {
       throw new Error(`qbo connection status is ${connection.status}, refusing to push`)
+    }
+    if (!connection.access_token && !connection.refresh_token) {
+      throw new Error('qbo connection has neither access_token nor refresh_token; operator must reconnect')
     }
 
     // Customer ref. Required by QBO Invoice. We look it up in
@@ -172,20 +171,33 @@ export function createQboRentalInvoicePush(): RentalBillingInvoicePushFn {
     }
 
     const url = `${baseUrl}/v3/company/${connection.provider_account_id}/invoice`
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${connection.access_token}`,
-        Accept: 'application/json',
-        'Content-Type': 'application/json',
+    const fetchImpl = refreshDeps.fetchImpl ?? fetch
+    const parsed = await withFreshToken<QboInvoiceCreateResponse>(
+      connection,
+      client,
+      async (token) => {
+        const response = await fetchImpl(url, {
+          method: 'POST',
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(invoicePayload),
+        })
+        if (response.status === 401) {
+          // Drain the body so the caller can decide whether to retry.
+          await response.text().catch(() => '')
+          return { unauthorized: true }
+        }
+        if (!response.ok) {
+          const errBody = await response.text()
+          throw new Error(`qbo invoice POST returned ${response.status}: ${errBody.slice(0, 500)}`)
+        }
+        return { unauthorized: false, value: (await response.json()) as QboInvoiceCreateResponse }
       },
-      body: JSON.stringify(invoicePayload),
-    })
-    if (!response.ok) {
-      const errBody = await response.text()
-      throw new Error(`qbo invoice POST returned ${response.status}: ${errBody.slice(0, 500)}`)
-    }
-    const parsed = (await response.json()) as QboInvoiceCreateResponse
+      refreshDeps,
+    )
     const invoiceId = parsed.Invoice?.Id
     if (!invoiceId) {
       throw new Error('qbo invoice POST succeeded but Invoice.Id missing in response')
