@@ -137,3 +137,17 @@ export {
   type LaborBurdenSummaryResponse,
   type LaborBurdenWorkerResult,
 } from './labor-burden'
+
+export {
+  fetchProject,
+  fetchProjects,
+  projectQueryKeys,
+  useProject,
+  useProjects,
+  type ProjectDetail,
+  type ProjectDetailResponse,
+  type ProjectListParams,
+  type ProjectListResponse,
+  type ProjectListRow,
+  type ProjectStatus,
+} from './projects'
