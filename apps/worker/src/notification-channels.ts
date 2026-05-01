@@ -525,10 +525,7 @@ export class WebPushChannel implements NotificationChannel {
         if (res.statusCode === 404 || res.statusCode === 410) {
           // Subscription gone — prune, treat as a non-error.
           await this.deps.pruneSubscription(sub.id).catch((err) => {
-            this.deps.logger.warn(
-              { err, subscription_id: sub.id },
-              '[push] failed to prune stale subscription',
-            )
+            this.deps.logger.warn({ err, subscription_id: sub.id }, '[push] failed to prune stale subscription')
           })
           continue
         }

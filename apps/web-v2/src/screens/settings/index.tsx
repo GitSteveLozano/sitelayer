@@ -43,18 +43,12 @@ export function SettingsScreen() {
       <div className="mt-6 space-y-3">
         <PushOnboardingCard />
 
-        <button
-          type="button"
-          onClick={() => setSection('notifications')}
-          className="block w-full text-left"
-        >
+        <button type="button" onClick={() => setSection('notifications')} className="block w-full text-left">
           <Card>
             <div className="flex items-center justify-between">
               <div>
                 <div className="text-[14px] font-semibold">Notification preferences</div>
-                <div className="text-[12px] text-ink-3 mt-0.5">
-                  Pick push / SMS / email per event type.
-                </div>
+                <div className="text-[12px] text-ink-3 mt-0.5">Pick push / SMS / email per event type.</div>
               </div>
               <span className="text-ink-4" aria-hidden="true">
                 ›
@@ -92,8 +86,8 @@ function RoleOverrideCard({ currentRole }: { currentRole: Role }) {
     <Card>
       <div className="text-[14px] font-semibold">Persona override (dev)</div>
       <div className="text-[12px] text-ink-3 mt-1 mb-3">
-        Until Clerk org-membership wiring lands, pick the persona you want to preview. Stored locally;
-        cleared by signing out.
+        Until Clerk org-membership wiring lands, pick the persona you want to preview. Stored locally; cleared by
+        signing out.
       </div>
       <div className="flex flex-wrap gap-2">
         {ROLES.map((r) => (

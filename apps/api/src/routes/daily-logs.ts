@@ -3,10 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput, isValidUuid } from '../http-utils.js'
-import {
-  parseDailyLogPhotoMultipart,
-  DailyLogPhotoUploadError,
-} from '../daily-log-photo-upload.js'
+import { parseDailyLogPhotoMultipart, DailyLogPhotoUploadError } from '../daily-log-photo-upload.js'
 import { type BlueprintStorage, assertKeyInCompany } from '../storage.js'
 
 export type DailyLogRouteCtx = {

@@ -54,7 +54,13 @@ export async function replayOfflineQueue(): Promise<{ replayed: number; dropped:
         await removeOfflineMutation(row.id)
         replayed++
       } catch (err) {
-        if (err instanceof ApiError && err.status >= 400 && err.status < 500 && err.status !== 408 && err.status !== 429) {
+        if (
+          err instanceof ApiError &&
+          err.status >= 400 &&
+          err.status < 500 &&
+          err.status !== 408 &&
+          err.status !== 429
+        ) {
           // Permanent — bad input; drop and log.
           await removeOfflineMutation(row.id)
           dropped++

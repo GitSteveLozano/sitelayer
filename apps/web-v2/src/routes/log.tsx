@@ -28,10 +28,7 @@ export default function LogRoute() {
 
   if (role !== 'foreman') {
     return (
-      <PlaceholderScreen
-        eyebrow="Daily log"
-        title="Foreman only"
-      >
+      <PlaceholderScreen eyebrow="Daily log" title="Foreman only">
         Daily logs are authored by the foreman on shift. Switch to the foreman role to compose one.
       </PlaceholderScreen>
     )

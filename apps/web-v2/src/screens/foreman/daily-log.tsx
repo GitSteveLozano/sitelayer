@@ -69,7 +69,6 @@ export function ForemanDailyLogScreen({ projectId }: ForemanDailyLogProps) {
   useEffect(() => {
     if (!projectId || !ready || existing || create.isPending) return
     void create.mutateAsync({ project_id: projectId, occurred_on: todayIso }).catch(() => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, ready, existing])
 
   if (!projectId) {
@@ -139,7 +138,6 @@ function DailyLogEditor({ log }: DailyLogEditorProps) {
         })
     }, 1200)
     return () => window.clearTimeout(id)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notes])
 
   const isSubmitted = log.status === 'submitted'
@@ -176,11 +174,7 @@ function DailyLogEditor({ log }: DailyLogEditorProps) {
       <div className="px-4 pt-2">
         <div className="grid grid-cols-3 gap-2.5">
           <StatTile label="Photos" value={log.photo_keys.length.toString()} />
-          <StatTile
-            label="Hours"
-            value="—"
-            note="from clock"
-          />
+          <StatTile label="Hours" value="—" note="from clock" />
           <StatTile
             label="Issues"
             value={Array.isArray(log.schedule_deviations) ? log.schedule_deviations.length.toString() : '0'}
@@ -205,7 +199,6 @@ function DailyLogEditor({ log }: DailyLogEditorProps) {
       {/* Photo grid — real upload + render. */}
       <PhotoGrid log={log} />
 
-
       {/* Notes — real, debounced auto-save. */}
       <div className="px-4 mt-4">
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">Notes</div>
@@ -221,9 +214,7 @@ function DailyLogEditor({ log }: DailyLogEditorProps) {
 
       {/* AI-drafted narrative — Phase 5 voice-to-log agent. */}
       <div className="px-4 mt-4">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">
-          Narrative
-        </div>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">Narrative</div>
         <VoiceToLogBlock
           dailyLogId={log.id}
           isSubmitted={isSubmitted}
@@ -359,38 +350,36 @@ function PhotoGrid({ log }: PhotoGridProps) {
       />
 
       <div className="grid grid-cols-3 gap-1.5">
-        {log.photo_keys.length === 0 ? (
-          Array.from({ length: 3 }).map((_, i) => (
-            <div
-              key={i}
-              className="aspect-square rounded-md bg-card-soft border border-dashed border-line flex items-center justify-center text-[11px] text-ink-3"
-            >
-              —
-            </div>
-          ))
-        ) : (
-          log.photo_keys.map((key) => (
-            <div key={key} className="relative aspect-square rounded-md overflow-hidden bg-card-soft">
-              <img
-                src={dailyLogPhotoUrl(log.id, key)}
-                alt="daily log"
-                className="w-full h-full object-cover"
-                loading="lazy"
-              />
-              {!isSubmitted ? (
-                <button
-                  type="button"
-                  onClick={() => void onDelete(key)}
-                  disabled={pendingDelete === key}
-                  aria-label="Remove photo"
-                  className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/55 text-white text-[12px] font-semibold flex items-center justify-center disabled:opacity-50"
-                >
-                  ×
-                </button>
-              ) : null}
-            </div>
-          ))
-        )}
+        {log.photo_keys.length === 0
+          ? Array.from({ length: 3 }).map((_, i) => (
+              <div
+                key={i}
+                className="aspect-square rounded-md bg-card-soft border border-dashed border-line flex items-center justify-center text-[11px] text-ink-3"
+              >
+                —
+              </div>
+            ))
+          : log.photo_keys.map((key) => (
+              <div key={key} className="relative aspect-square rounded-md overflow-hidden bg-card-soft">
+                <img
+                  src={dailyLogPhotoUrl(log.id, key)}
+                  alt="daily log"
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                />
+                {!isSubmitted ? (
+                  <button
+                    type="button"
+                    onClick={() => void onDelete(key)}
+                    disabled={pendingDelete === key}
+                    aria-label="Remove photo"
+                    className="absolute top-1 right-1 w-6 h-6 rounded-full bg-black/55 text-white text-[12px] font-semibold flex items-center justify-center disabled:opacity-50"
+                  >
+                    ×
+                  </button>
+                ) : null}
+              </div>
+            ))}
       </div>
 
       {error ? <div className="mt-2 px-1 text-[12px] text-bad">{error}</div> : null}
@@ -434,18 +423,15 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLog
   const supportsVoice =
     typeof window !== 'undefined' &&
     Boolean(
-      (window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown })
-        .SpeechRecognition ||
-        (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition,
+      (window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown }).SpeechRecognition ||
+      (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition,
     )
 
   const startVoice = () => {
     if (!supportsVoice || recognizing) return
     const Ctor =
-      (window as unknown as { SpeechRecognition?: SpeechRecognitionConstructor })
-        .SpeechRecognition ??
-      (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionConstructor })
-        .webkitSpeechRecognition
+      (window as unknown as { SpeechRecognition?: SpeechRecognitionConstructor }).SpeechRecognition ??
+      (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionConstructor }).webkitSpeechRecognition
     if (!Ctor) return
     const rec = new Ctor()
     rec.lang = 'en-US'
@@ -485,9 +471,7 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLog
 
   return (
     <AgentSurface
-      banner={
-        latest ? `Agent draft · ${latest.confidence} confidence` : 'Agent draft · review before sending'
-      }
+      banner={latest ? `Agent draft · ${latest.confidence} confidence` : 'Agent draft · review before sending'}
     >
       <div className="text-[13px] font-semibold mb-2">Voice-to-log</div>
 
@@ -506,20 +490,13 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLog
           />
           <div className="grid grid-cols-2 gap-2">
             {supportsVoice ? (
-              <MobileButton
-                variant={recognizing ? 'primary' : 'ghost'}
-                onClick={recognizing ? stopVoice : startVoice}
-              >
+              <MobileButton variant={recognizing ? 'primary' : 'ghost'} onClick={recognizing ? stopVoice : startVoice}>
                 {recognizing ? 'Stop' : 'Start mic'}
               </MobileButton>
             ) : (
               <div />
             )}
-            <MobileButton
-              variant="primary"
-              disabled={!transcript.trim() || trigger.isPending}
-              onClick={onRunAgent}
-            >
+            <MobileButton variant="primary" disabled={!transcript.trim() || trigger.isPending} onClick={onRunAgent}>
               {trigger.isPending ? 'Drafting…' : 'Draft narrative'}
             </MobileButton>
           </div>
@@ -530,9 +507,7 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLog
 
       {latest ? (
         <div className="mt-3 pt-2 border-t border-dashed border-line-2 space-y-2">
-          <div className="text-[12px] text-ink-2 leading-relaxed whitespace-pre-wrap">
-            {latest.payload.narrative}
-          </div>
+          <div className="text-[12px] text-ink-2 leading-relaxed whitespace-pre-wrap">{latest.payload.narrative}</div>
           {latest.payload.weather_summary ? (
             <div className="text-[11px] text-ink-3 italic">{latest.payload.weather_summary}</div>
           ) : null}
@@ -558,10 +533,8 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLog
                 variant="ghost"
                 onClick={async () => {
                   const reason =
-                    typeof window !== 'undefined' ? window.prompt('Why dismiss?') ?? undefined : undefined
-                  await dismiss
-                    .mutateAsync(reason ? { id: latest.id, reason } : { id: latest.id })
-                    .catch(() => {})
+                    typeof window !== 'undefined' ? (window.prompt('Why dismiss?') ?? undefined) : undefined
+                  await dismiss.mutateAsync(reason ? { id: latest.id, reason } : { id: latest.id }).catch(() => {})
                 }}
               >
                 Dismiss
@@ -594,4 +567,3 @@ interface SpeechRecognitionLike {
 interface SpeechRecognitionResultEvent {
   results: ArrayLike<{ [index: number]: { transcript: string } }>
 }
-

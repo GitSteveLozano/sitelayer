@@ -156,7 +156,9 @@ export async function handleLaborBurdenRoutes(
     )
     totalBudgetCents = Number(single.rows[0]?.daily_budget_cents ?? 0) || 0
   } else {
-    const projectIds = Array.from(new Set(events.rows.map((r) => r.project_id).filter((id): id is string => Boolean(id))))
+    const projectIds = Array.from(
+      new Set(events.rows.map((r) => r.project_id).filter((id): id is string => Boolean(id))),
+    )
     if (projectIds.length > 0) {
       const budgets = await ctx.pool.query<{ daily_budget_cents: number }>(
         `select daily_budget_cents from projects where company_id = $1 and id = any($2::uuid[])`,

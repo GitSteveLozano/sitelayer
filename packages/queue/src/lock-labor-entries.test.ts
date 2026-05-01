@@ -177,10 +177,7 @@ describe('processLockLaborEntries', () => {
     // to it (the claim uses "5 minutes" + literal status='processing'; the
     // 'applied' update doesn't run on the failure path at all).
     const errorUpdate = client.calls.find(
-      (c) =>
-        typeof c.text === 'string' &&
-        c.text.includes('set status = $') &&
-        c.text.includes("interval '1 minute'"),
+      (c) => typeof c.text === 'string' && c.text.includes('set status = $') && c.text.includes("interval '1 minute'"),
     )
     expect(errorUpdate).toBeDefined()
     expect(errorUpdate?.values?.[3]).toBe('pending')
@@ -221,10 +218,7 @@ describe('processLockLaborEntries', () => {
     // to it (the claim uses "5 minutes" + literal status='processing'; the
     // 'applied' update doesn't run on the failure path at all).
     const errorUpdate = client.calls.find(
-      (c) =>
-        typeof c.text === 'string' &&
-        c.text.includes('set status = $') &&
-        c.text.includes("interval '1 minute'"),
+      (c) => typeof c.text === 'string' && c.text.includes('set status = $') && c.text.includes("interval '1 minute'"),
     )
     expect(errorUpdate).toBeDefined()
     expect(errorUpdate?.values?.[3]).toBe('failed')

@@ -15,7 +15,7 @@ import {
   type RentalBillingInvoicePushFn,
   type RentalBillingInvoicePushSummary,
 } from '@sitelayer/queue'
-import { Pool, type PoolConfig } from 'pg'
+import { Pool, type PoolClient, type PoolConfig } from 'pg'
 import { spanForAppliedRow } from './trace.js'
 import { loadEmailConfig, sendEmail } from './email.js'
 import { createQboRentalInvoicePush } from './qbo-invoice-push.js'
@@ -322,12 +322,13 @@ const dispatcher: NotificationDispatcher = new DefaultNotificationDispatcher({
     console: consoleChannel,
   },
   buildPushChannel: vapidConfig ? buildPushChannel : null,
-  hydrateEmail: NOTIFICATIONS_ENABLED && clerkResolver
-    ? async (clerkUserId) => {
-        const resolution = await clerkResolver!.resolveEmailForClerkUser(clerkUserId)
-        return resolution.kind === 'email' ? resolution.email : null
-      }
-    : null,
+  hydrateEmail:
+    NOTIFICATIONS_ENABLED && clerkResolver
+      ? async (clerkUserId) => {
+          const resolution = await clerkResolver!.resolveEmailForClerkUser(clerkUserId)
+          return resolution.kind === 'email' ? resolution.email : null
+        }
+      : null,
   logger,
 })
 
@@ -470,11 +471,7 @@ async function drainAgentMutations<TPayload>(
   mutationType: string,
   companyId: string,
   scope: string,
-  process: (
-    client: PoolClient,
-    companyId: string,
-    payload: TPayload,
-  ) => Promise<{ insightsCreated: number }>,
+  process: (client: PoolClient, companyId: string, payload: TPayload) => Promise<{ insightsCreated: number }>,
 ): Promise<AgentDrainSummary> {
   const summary: AgentDrainSummary = { processed: 0, insightsCreated: 0, failed: 0 }
   const client = await pool.connect()
@@ -541,21 +538,11 @@ async function drainAgentMutations<TPayload>(
 }
 
 async function drainTakeoffToBid(companyId: string): Promise<AgentDrainSummary> {
-  return drainAgentMutations<TakeoffToBidPayload>(
-    'takeoff_to_bid',
-    companyId,
-    'takeoff_to_bid',
-    processTakeoffToBidRun,
-  )
+  return drainAgentMutations<TakeoffToBidPayload>('takeoff_to_bid', companyId, 'takeoff_to_bid', processTakeoffToBidRun)
 }
 
 async function drainVoiceToLog(companyId: string): Promise<AgentDrainSummary> {
-  return drainAgentMutations<VoiceToLogPayload>(
-    'voice_to_log',
-    companyId,
-    'voice_to_log',
-    processVoiceToLogRun,
-  )
+  return drainAgentMutations<VoiceToLogPayload>('voice_to_log', companyId, 'voice_to_log', processVoiceToLogRun)
 }
 
 /**

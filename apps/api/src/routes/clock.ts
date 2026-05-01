@@ -94,7 +94,7 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       body.worker_id === undefined || body.worker_id === null || body.worker_id === ''
         ? null
         : String(body.worker_id).trim()
-    let workerId: string | null = null
+    let workerId: string | null
     if (source === 'foreman_override') {
       if (!explicitWorkerIdRaw) {
         ctx.sendJson(400, { error: 'worker_id is required when source=foreman_override' })
@@ -294,7 +294,7 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       body.worker_id === undefined || body.worker_id === null || body.worker_id === ''
         ? null
         : String(body.worker_id).trim()
-    let workerId: string | null = null
+    let workerId: string | null
     if (source === 'foreman_override') {
       if (!explicitWorkerIdRaw) {
         ctx.sendJson(400, { error: 'worker_id is required when source=foreman_override' })

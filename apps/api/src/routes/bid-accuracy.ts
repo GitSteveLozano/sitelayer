@@ -95,8 +95,7 @@ export async function handleBidAccuracyRoutes(
     const delta = total - bidCents
     const deltaPct = bidCents > 0 ? (delta / bidCents) * 100 : 0
     const absPct = Math.abs(deltaPct)
-    const confidence: 'low' | 'med' | 'high' =
-      absPct < 5 ? 'high' : absPct < 15 ? 'med' : 'low'
+    const confidence: 'low' | 'med' | 'high' = absPct < 5 ? 'high' : absPct < 15 ? 'med' : 'low'
     return {
       project_id: r.project_id,
       project_name: r.project_name,
@@ -115,10 +114,7 @@ export async function handleBidAccuracyRoutes(
   // Cohort summary — owner home pulls these headline numbers.
   const closed = rows.filter((r) => r.status === 'completed' || r.status === 'closed')
   const closedDeltas = closed.map((r) => r.delta_pct)
-  const meanClosedPct =
-    closedDeltas.length > 0
-      ? closedDeltas.reduce((a, b) => a + b, 0) / closedDeltas.length
-      : 0
+  const meanClosedPct = closedDeltas.length > 0 ? closedDeltas.reduce((a, b) => a + b, 0) / closedDeltas.length : 0
 
   const overUnder = rows.reduce(
     (acc, r) => {

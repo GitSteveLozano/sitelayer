@@ -114,12 +114,7 @@ export function PushOnboardingCard() {
         Get instant pings for assignments, time-review approvals, and clock anomalies.
       </div>
       {error ? <div className="text-[12px] text-bad mb-2">{error}</div> : null}
-      <MobileButton
-        variant="primary"
-        size="sm"
-        onClick={onEnable}
-        disabled={working || permState === 'denied'}
-      >
+      <MobileButton variant="primary" size="sm" onClick={onEnable} disabled={working || permState === 'denied'}>
         {working ? 'Working…' : permState === 'denied' ? 'Permission blocked' : 'Enable push'}
       </MobileButton>
     </Card>

@@ -51,9 +51,7 @@ export function ClockInSuccess({ projectName, occurredAt, correctibleUntil, onDi
 
       <div className="px-5 pt-6 pb-4 flex-1 flex flex-col">
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-good">Clocked in</div>
-        <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">
-          You're checked in
-        </h1>
+        <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">You're checked in</h1>
         <p className="text-[14px] text-ink-2 mt-1">
           {formatTime(occurredAt)} at {projectName ?? 'this project'}
         </p>

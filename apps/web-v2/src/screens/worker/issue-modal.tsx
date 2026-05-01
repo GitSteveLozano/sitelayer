@@ -60,9 +60,7 @@ export function IssueModal({ open, onClose, onSubmit }: IssueModalProps) {
             type="button"
             onClick={() => setKind(k)}
             className={`px-3.5 py-1.5 rounded-full text-[13px] font-medium border transition-colors ${
-              kind === k
-                ? 'bg-accent text-white border-transparent'
-                : 'bg-card-soft text-ink-2 border-line'
+              kind === k ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
             }`}
           >
             {KIND_LABELS[k]}

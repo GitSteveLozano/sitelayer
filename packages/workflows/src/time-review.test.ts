@@ -67,10 +67,7 @@ describe('transitionTimeReviewWorkflow — happy paths', () => {
   })
 
   it('approved → REOPEN moves back to pending with reopened_at recorded and approved_at cleared', () => {
-    const approved = transitionTimeReviewWorkflow(
-      { state: 'pending', state_version: 1 },
-      APPROVE,
-    )
+    const approved = transitionTimeReviewWorkflow({ state: 'pending', state_version: 1 }, APPROVE)
     expect(approved.approved_at).toBe(APPROVE.approved_at)
 
     const reopened = transitionTimeReviewWorkflow(approved, REOPEN)
@@ -88,10 +85,7 @@ describe('transitionTimeReviewWorkflow — happy paths', () => {
   })
 
   it('rejected → REOPEN moves back to pending and clears the rejection trail', () => {
-    const rejected = transitionTimeReviewWorkflow(
-      { state: 'pending', state_version: 1 },
-      REJECT,
-    )
+    const rejected = transitionTimeReviewWorkflow({ state: 'pending', state_version: 1 }, REJECT)
     expect(rejected.rejected_at).toBe(REJECT.rejected_at)
     expect(rejected.rejection_reason).toBe(REJECT.reason)
 
@@ -125,17 +119,12 @@ describe('transitionTimeReviewWorkflow — illegal transitions', () => {
   })
 
   it('rejects REOPEN from pending', () => {
-    expect(() =>
-      transitionTimeReviewWorkflow({ state: 'pending', state_version: 1 }, REOPEN),
-    ).toThrow(/not allowed/)
+    expect(() => transitionTimeReviewWorkflow({ state: 'pending', state_version: 1 }, REOPEN)).toThrow(/not allowed/)
   })
 
   it('rejects REJECT from approved', () => {
     expect(() =>
-      transitionTimeReviewWorkflow(
-        { state: 'approved', state_version: 2, approved_at: APPROVE.approved_at },
-        REJECT,
-      ),
+      transitionTimeReviewWorkflow({ state: 'approved', state_version: 2, approved_at: APPROVE.approved_at }, REJECT),
     ).toThrow(/not allowed/)
   })
 })
@@ -194,11 +183,7 @@ describe('time review reducer — property invariants', () => {
       const events = nextTimeReviewEvents(state)
       for (const next of events) {
         const event: TimeReviewWorkflowEvent =
-          next.type === 'APPROVE'
-            ? APPROVE
-            : next.type === 'REJECT'
-              ? REJECT
-              : REOPEN
+          next.type === 'APPROVE' ? APPROVE : next.type === 'REJECT' ? REJECT : REOPEN
         expect(() => transitionTimeReviewWorkflow({ state, state_version: 1 }, event)).not.toThrow()
       }
     }
@@ -233,15 +218,11 @@ describe('parseTimeReviewEventRequest', () => {
   })
   it('requires reason for REJECT', () => {
     expect(parseTimeReviewEventRequest({ event: 'REJECT', state_version: 1 }).ok).toBe(false)
-    expect(
-      parseTimeReviewEventRequest({ event: 'REJECT', state_version: 1, reason: 'see notes' }).ok,
-    ).toBe(true)
+    expect(parseTimeReviewEventRequest({ event: 'REJECT', state_version: 1, reason: 'see notes' }).ok).toBe(true)
   })
   it('requires reason for REOPEN', () => {
     expect(parseTimeReviewEventRequest({ event: 'REOPEN', state_version: 1 }).ok).toBe(false)
-    expect(
-      parseTimeReviewEventRequest({ event: 'REOPEN', state_version: 1, reason: 'payroll fix' }).ok,
-    ).toBe(true)
+    expect(parseTimeReviewEventRequest({ event: 'REOPEN', state_version: 1, reason: 'payroll fix' }).ok).toBe(true)
   })
   it('coerces stringified state_version (offline-replay path)', () => {
     const r = parseTimeReviewEventRequest({ event: 'APPROVE', state_version: '7' })

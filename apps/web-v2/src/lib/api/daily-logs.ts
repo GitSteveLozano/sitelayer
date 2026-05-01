@@ -104,7 +104,10 @@ export function submitDailyLog(id: string, input: DailyLogSubmitRequest = {}): P
 // Hooks
 // ---------------------------------------------------------------------------
 
-export function useDailyLogs(params: DailyLogListParams = {}, options?: Partial<UseQueryOptions<DailyLogListResponse>>) {
+export function useDailyLogs(
+  params: DailyLogListParams = {},
+  options?: Partial<UseQueryOptions<DailyLogListResponse>>,
+) {
   return useQuery<DailyLogListResponse>({
     queryKey: queryKeys.dailyLogs.list(params),
     queryFn: () => fetchDailyLogs(params),
@@ -181,7 +184,7 @@ export async function uploadDailyLogPhoto(id: string, file: File): Promise<Daily
   })
   if (!response.ok) {
     const requestId = response.headers.get('x-request-id')
-    let body: unknown = null
+    let body: unknown
     try {
       const ct = response.headers.get('content-type') ?? ''
       body = ct.includes('application/json') ? await response.json() : await response.text()
@@ -228,4 +231,3 @@ export function useDeleteDailyLogPhoto(id: string) {
     },
   })
 }
-

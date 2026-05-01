@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
@@ -34,9 +34,7 @@ export function ProjectsListScreen() {
       <div className="px-5 pt-6 pb-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Tab · Projects</div>
         <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">Projects</h1>
-        <div className="text-[12px] text-ink-3 mt-1">
-          {projects.isPending ? 'Loading…' : `${rows.length} ${chip}`}
-        </div>
+        <div className="text-[12px] text-ink-3 mt-1">{projects.isPending ? 'Loading…' : `${rows.length} ${chip}`}</div>
       </div>
 
       <div className="px-4 pb-2 flex gap-1.5 overflow-x-auto scrollbar-hide">
@@ -46,9 +44,7 @@ export function ProjectsListScreen() {
             type="button"
             onClick={() => setChip(f.key)}
             className={`shrink-0 px-3.5 py-1.5 rounded-full text-[13px] font-medium border transition-colors ${
-              chip === f.key
-                ? 'bg-accent text-white border-transparent'
-                : 'bg-card-soft text-ink-2 border-line'
+              chip === f.key ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
             }`}
           >
             {f.label}

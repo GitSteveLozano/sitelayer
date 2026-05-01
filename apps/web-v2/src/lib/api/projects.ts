@@ -72,10 +72,7 @@ export function fetchProject(id: string): Promise<ProjectDetailResponse> {
   return request<ProjectDetailResponse>(`/api/projects/${encodeURIComponent(id)}`)
 }
 
-export function useProjects(
-  params: ProjectListParams = {},
-  options?: Partial<UseQueryOptions<ProjectListResponse>>,
-) {
+export function useProjects(params: ProjectListParams = {}, options?: Partial<UseQueryOptions<ProjectListResponse>>) {
   return useQuery<ProjectListResponse>({
     queryKey: KEYS.list(params),
     queryFn: () => fetchProjects(params),
@@ -84,10 +81,7 @@ export function useProjects(
   })
 }
 
-export function useProject(
-  id: string | null | undefined,
-  options?: Partial<UseQueryOptions<ProjectDetailResponse>>,
-) {
+export function useProject(id: string | null | undefined, options?: Partial<UseQueryOptions<ProjectDetailResponse>>) {
   return useQuery<ProjectDetailResponse>({
     queryKey: KEYS.detail(id ?? ''),
     queryFn: () => fetchProject(id!),

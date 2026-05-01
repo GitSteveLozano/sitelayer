@@ -80,9 +80,9 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
           <div className="text-[13px] font-semibold">Takeoff canvas</div>
         </div>
         <div className="text-[12px] text-ink-2 leading-relaxed">
-          The polygon-drawing canvas, multi-condition tagging UI, per-page calibration overlay, and
-          plan-revision Compare visualizer ship next as a focused canvas port from v1. The data layer
-          they all read/write is live below.
+          The polygon-drawing canvas, multi-condition tagging UI, per-page calibration overlay, and plan-revision
+          Compare visualizer ship next as a focused canvas port from v1. The data layer they all read/write is live
+          below.
         </div>
       </Card>
 
@@ -102,9 +102,9 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
           />
         ) : (
           <div className="text-[12px] text-ink-2">
-            No agent run yet. Trigger one to propose bid lines from the project's takeoff measurements.
-            The agent uses your service-item catalog as the rate book; lines without a catalog match
-            land at low confidence so you know to review.
+            No agent run yet. Trigger one to propose bid lines from the project's takeoff measurements. The agent uses
+            your service-item catalog as the rate book; lines without a catalog match land at low confidence so you know
+            to review.
           </div>
         )}
         <div className="mt-3 pt-2 border-t border-dashed border-line-2 flex items-center justify-between">
@@ -131,8 +131,8 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
         </div>
         <div className="text-[13px] font-semibold">One polygon · many scope tags</div>
         <div className="text-[11px] text-ink-2 mt-1">
-          EIFS wall = EPS + basecoat + finish coat + air barrier as separate billable lines on the same
-          shape. Backed by takeoff_measurement_tags (1:N).
+          EIFS wall = EPS + basecoat + finish coat + air barrier as separate billable lines on the same shape. Backed by
+          takeoff_measurement_tags (1:N).
         </div>
         <div className="mt-2 pt-2 border-t border-dashed border-line-2">
           <Attribution source="API: GET/POST /api/takeoff/measurements/:id/tags" />
@@ -149,8 +149,8 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
         </div>
         <div className="text-[13px] font-semibold">Per-page scale + page strip</div>
         <div className="text-[11px] text-ink-2 mt-1">
-          30–200 page plans. Each page carries its own two-point calibration (click two points of known
-          distance) so mixed scales across sheets work correctly.
+          30–200 page plans. Each page carries its own two-point calibration (click two points of known distance) so
+          mixed scales across sheets work correctly.
         </div>
         <div className="mt-2 pt-2 border-t border-dashed border-line-2">
           <Attribution source="API: /api/blueprints/:docId/pages, /api/blueprint-pages/:id/calibrate" />
@@ -167,8 +167,8 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
         </div>
         <div className="text-[13px] font-semibold">geometry_kind discriminator</div>
         <div className="text-[11px] text-ink-2 mt-1">
-          polygon / lineal / count / volume. Caulk runs along window frames, vents drop as markers,
-          domain helpers already compute area + length + volume.
+          polygon / lineal / count / volume. Caulk runs along window frames, vents drop as markers, domain helpers
+          already compute area + length + volume.
         </div>
       </StripeCard>
 
@@ -182,9 +182,8 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
         </div>
         <div className="text-[13px] font-semibold">"3 measurements live on areas that changed"</div>
         <div className="text-[11px] text-ink-2 mt-1">
-          blueprint_page_diffs records bounding boxes of changed regions per replaced page +
-          affected_measurement_ids snapshot. Image-diff worker + side-by-side overlay land with the
-          canvas port.
+          blueprint_page_diffs records bounding boxes of changed regions per replaced page + affected_measurement_ids
+          snapshot. Image-diff worker + side-by-side overlay land with the canvas port.
         </div>
       </StripeCard>
 
@@ -202,8 +201,8 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
           </Pill>
         </div>
         <div className="text-[11px] text-ink-2 mt-1">
-          PlanSwift-style scope item composites. Take "EPS @ $4.85/sqft" and crack it open into the
-          actual material + labor breakdown.
+          PlanSwift-style scope item composites. Take "EPS @ $4.85/sqft" and crack it open into the actual material +
+          labor breakdown.
         </div>
         <div className="mt-2 pt-2 border-t border-dashed border-line-2">
           <Attribution source="API: GET/POST /api/assemblies + /api/assemblies/:id/components" />
@@ -231,7 +230,12 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
         {importError ? <div className="mt-2 text-[12px] text-bad">{importError}</div> : null}
         {importMsg ? <div className="mt-2 text-[12px] text-good">{importMsg}</div> : null}
         <div className="mt-3 flex gap-2">
-          <MobileButton variant="primary" size="sm" onClick={onImport} disabled={importRows.isPending || !csvText.trim()}>
+          <MobileButton
+            variant="primary"
+            size="sm"
+            onClick={onImport}
+            disabled={importRows.isPending || !csvText.trim()}
+          >
             {importRows.isPending ? 'Importing…' : 'Import rows'}
           </MobileButton>
         </div>
@@ -252,9 +256,9 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
           </Pill>
         </div>
         <div className="text-[11px] text-ink-2 mt-1">
-          Configure once: which QBO custom field id receives the sqft total on Estimate / Invoice / Bill.
-          The worker writes structured numeric data on every push instead of narrative description —
-          cost-per-sqft becomes a real metric for the first time.
+          Configure once: which QBO custom field id receives the sqft total on Estimate / Invoice / Bill. The worker
+          writes structured numeric data on every push instead of narrative description — cost-per-sqft becomes a real
+          metric for the first time.
         </div>
         <div className="mt-2 pt-2 border-t border-dashed border-line-2">
           <Attribution source="API: GET/PUT /api/qbo/custom-fields" />
@@ -268,7 +272,10 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
  *  specific dialect handling — we only need code/quantity/unit/rate/notes
  *  columns and the brief explicitly chooses column-mapping over auto-detect. */
 function parseCsv(text: string): ImportRow[] {
-  const lines = text.trim().split(/\r?\n/).filter((l) => l.trim().length > 0)
+  const lines = text
+    .trim()
+    .split(/\r?\n/)
+    .filter((l) => l.trim().length > 0)
   if (lines.length < 2) return []
   const header = splitCsvRow(lines[0]!).map((s) => s.trim().toLowerCase())
   const codeIdx = header.findIndex((c) => c === 'code' || c === 'service_item_code')
@@ -311,12 +318,10 @@ function TakeoffToBidProposalBlock({
 }) {
   return (
     <div>
-      <div className="num text-[20px] font-bold tracking-tight">
-        ${payload.total_amount.toLocaleString()}
-      </div>
+      <div className="num text-[20px] font-bold tracking-tight">${payload.total_amount.toLocaleString()}</div>
       <div className="text-[11px] text-ink-3 mt-0.5">
-        {payload.lines.length} line{payload.lines.length === 1 ? '' : 's'} from{' '}
-        {payload.measurement_count} measurement{payload.measurement_count === 1 ? '' : 's'}
+        {payload.lines.length} line{payload.lines.length === 1 ? '' : 's'} from {payload.measurement_count} measurement
+        {payload.measurement_count === 1 ? '' : 's'}
       </div>
       <div className="mt-2 space-y-1">
         {payload.lines.slice(0, 5).map((line, i) => (
@@ -329,11 +334,7 @@ function TakeoffToBidProposalBlock({
                 {line.unit}
               </span>
             </div>
-            <Pill
-              tone={
-                line.confidence === 'high' ? 'good' : line.confidence === 'med' ? 'default' : 'warn'
-              }
-            >
+            <Pill tone={line.confidence === 'high' ? 'good' : line.confidence === 'med' ? 'default' : 'warn'}>
               ${line.amount.toFixed(2)}
             </Pill>
           </div>

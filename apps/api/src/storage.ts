@@ -52,11 +52,7 @@ export function buildBlueprintStorageKey(companyId: string, blueprintId: string,
  * the `companyId` first segment is what assertKeyInCompany still
  * checks, so cross-tenant access is impossible via path manipulation.
  */
-export function buildDailyLogPhotoStorageKey(
-  companyId: string,
-  dailyLogId: string,
-  fileName: string,
-): string {
+export function buildDailyLogPhotoStorageKey(companyId: string, dailyLogId: string, fileName: string): string {
   return `${companyId}/daily-logs/${dailyLogId}/${sanitizeFileName(fileName)}`
 }
 

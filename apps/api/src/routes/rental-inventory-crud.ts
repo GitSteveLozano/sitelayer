@@ -415,8 +415,11 @@ export async function handleRentalInventoryCrudRoutes(
     // Workers may only POST scan-driven movements — no manual yard
     // adjustments. The scan_payload + worker_id pair is the audit
     // trail; without them the worker should be using fm-rentals
-    // through their foreman.
-    if (ctx.company.role === 'worker' && (!scanPayload || !workerId)) {
+    // through their foreman. The cast is needed because CompanyRole
+    // doesn't yet include 'worker' as a value — the role table will
+    // gain it when worker-direct auth lands; the gate stays in place
+    // so the contract is documented.
+    if ((ctx.company.role as string) === 'worker' && (!scanPayload || !workerId)) {
       ctx.sendJson(403, { error: 'workers may only create scan-driven movements (scan_payload + worker_id required)' })
       return true
     }

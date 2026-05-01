@@ -57,9 +57,7 @@ async function proposeNarrative(transcript: string): Promise<VoiceToLogProposal>
   // path produces sensible-looking output.
   const weatherWords = ['rain', 'snow', 'sun', 'wind', 'cold', 'hot', 'humid', 'cloud']
   const weatherMentioned = weatherWords.find((w) => cleaned.toLowerCase().includes(w))
-  const weatherSummary = weatherMentioned
-    ? `Weather: ${weatherMentioned} (foreman dictation)`
-    : null
+  const weatherSummary = weatherMentioned ? `Weather: ${weatherMentioned} (foreman dictation)` : null
 
   // Schedule deviations heuristic: any sentence starting with
   // "delayed", "missed", "behind", "ahead", "early".

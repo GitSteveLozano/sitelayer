@@ -16,7 +16,6 @@ import {
   type ChannelTarget,
   type DispatchableRow,
   type DispatcherDbClient,
-  type NotificationChannel,
   type NotificationPreferences,
   type PushSubscriptionRow,
   type WebPushClient,
@@ -164,7 +163,7 @@ describe('decideChannel — pure router', () => {
     if (decision.kind === 'send') expect(decision.channel).toBe('email')
   })
 
-  it('preference=email but email unconfigured → defer (don\'t silently downgrade)', () => {
+  it("preference=email but email unconfigured → defer (don't silently downgrade)", () => {
     const decision = decideChannel(
       'assignment_change',
       true,
@@ -337,7 +336,10 @@ describe('TwilioSMSChannel', () => {
 
   it('POSTs to Twilio with form-encoded body and basic auth on success', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ sid: 'SM123' }), { status: 201, headers: { 'content-type': 'application/json' } }),
+      new Response(JSON.stringify({ sid: 'SM123' }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      }),
     )
     const channel = new TwilioSMSChannel({
       config: { accountSid: 'AC123', authToken: 'tok', fromNumber: '+15555550100' },
@@ -557,7 +559,10 @@ describe('DefaultNotificationDispatcher — integration of decision + send', () 
       { n: '0' },
     ])
     const sendEmail = vi.fn().mockResolvedValue({ ok: true, provider: 'console' })
-    const email = new EmailChannel({ emailConfig: { provider: 'console', from: 'x@y.z' }, sendEmail: sendEmail as never })
+    const email = new EmailChannel({
+      emailConfig: { provider: 'console', from: 'x@y.z' },
+      sendEmail: sendEmail as never,
+    })
     const dispatcher = new DefaultNotificationDispatcher({
       channels: { push: null, sms: null, email, console: new ConsoleChannel({ logger }) },
       buildPushChannel: null,
@@ -570,10 +575,7 @@ describe('DefaultNotificationDispatcher — integration of decision + send', () 
   })
 
   it('off preference → silent (no send call)', async () => {
-    const client = fakeClient([
-      { ...DEFAULT_PREFERENCES, channel_assignment_change: 'off' },
-      { n: '0' },
-    ])
+    const client = fakeClient([{ ...DEFAULT_PREFERENCES, channel_assignment_change: 'off' }, { n: '0' }])
     const sendEmail = vi.fn()
     const dispatcher = new DefaultNotificationDispatcher({
       channels: {
@@ -611,10 +613,7 @@ describe('DefaultNotificationDispatcher — integration of decision + send', () 
   })
 
   it('hydrates email via Clerk when chosen channel is email but target has none', async () => {
-    const client = fakeClient([
-      { ...DEFAULT_PREFERENCES, channel_assignment_change: 'email' },
-      { n: '0' },
-    ])
+    const client = fakeClient([{ ...DEFAULT_PREFERENCES, channel_assignment_change: 'email' }, { n: '0' }])
     const hydrateEmail = vi.fn().mockResolvedValue('hydrated@example.com')
     const sendEmail = vi.fn().mockResolvedValue({ ok: true, provider: 'console' })
     const email = new EmailChannel({

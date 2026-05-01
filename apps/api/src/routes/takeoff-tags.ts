@@ -190,8 +190,7 @@ export async function handleTakeoffTagRoutes(
       push('rate', r)
     }
     if (typeof body.unit === 'string') push('unit', body.unit.trim() || 'sqft')
-    if (body.notes !== undefined)
-      push('notes', typeof body.notes === 'string' ? body.notes.slice(0, 1024) : null)
+    if (body.notes !== undefined) push('notes', typeof body.notes === 'string' ? body.notes.slice(0, 1024) : null)
     if (typeof body.sort_order === 'number') push('sort_order', body.sort_order)
 
     if (sets.length === 0) {

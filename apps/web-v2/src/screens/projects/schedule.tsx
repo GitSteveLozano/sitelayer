@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import {
@@ -64,10 +64,7 @@ export function ScheduleScreen() {
           onSelectDate={setSelectedDate}
         />
       ) : (
-        <WeekView
-          schedules={schedules.data?.schedules ?? []}
-          weekStartMs={weekStart}
-        />
+        <WeekView schedules={schedules.data?.schedules ?? []} weekStartMs={weekStart} />
       )}
 
       <button
@@ -122,11 +119,7 @@ function DayView({ schedules, workers, weekStartMs, selectedDate, onSelectDate }
             type="button"
             onClick={() => onSelectDate(d.iso)}
             className={`shrink-0 min-w-[46px] py-2 px-1 rounded-[10px] text-center ${
-              selectedDate === d.iso
-                ? 'bg-ink text-white'
-                : d.isWeekend
-                  ? 'text-ink-4'
-                  : 'text-ink'
+              selectedDate === d.iso ? 'bg-ink text-white' : d.isWeekend ? 'text-ink-4' : 'text-ink'
             }`}
           >
             <div className="text-[10px] font-medium opacity-70">{d.dow}</div>
@@ -393,9 +386,7 @@ function CreateAssignmentSheet({ open, onClose, projects, workers, defaultDate }
         </div>
 
         <div>
-          <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">
-            Date
-          </label>
+          <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">Date</label>
           <input
             type="date"
             value={scheduledFor}
@@ -418,9 +409,7 @@ function CreateAssignmentSheet({ open, onClose, projects, workers, defaultDate }
                   type="button"
                   onClick={() => toggleCrew(w.id)}
                   className={`w-full p-2.5 rounded border text-left flex items-center gap-2.5 ${
-                    pickedCrew.has(w.id)
-                      ? 'bg-accent-soft border-accent text-ink'
-                      : 'bg-card border-line text-ink-2'
+                    pickedCrew.has(w.id) ? 'bg-accent-soft border-accent text-ink' : 'bg-card border-line text-ink-2'
                   }`}
                 >
                   <div className="w-7 h-7 rounded-full bg-bg border border-line text-[10px] font-semibold flex items-center justify-center shrink-0">

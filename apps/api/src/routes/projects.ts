@@ -203,18 +203,14 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     const patchSiteLat = body.site_lat === undefined ? null : parseOptionalNumber(body.site_lat)
     const patchSiteLng = body.site_lng === undefined ? null : parseOptionalNumber(body.site_lng)
     const patchSiteRadius = body.site_radius_m === undefined ? null : parseOptionalNumber(body.site_radius_m)
-    const patchAutoClockEnabled =
-      body.auto_clock_in_enabled === undefined ? null : Boolean(body.auto_clock_in_enabled)
+    const patchAutoClockEnabled = body.auto_clock_in_enabled === undefined ? null : Boolean(body.auto_clock_in_enabled)
     const patchAutoClockGrace =
-      body.auto_clock_out_grace_seconds === undefined
-        ? null
-        : parseOptionalNumber(body.auto_clock_out_grace_seconds)
+      body.auto_clock_out_grace_seconds === undefined ? null : parseOptionalNumber(body.auto_clock_out_grace_seconds)
     const patchAutoClockCorrection =
       body.auto_clock_correction_window_seconds === undefined
         ? null
         : parseOptionalNumber(body.auto_clock_correction_window_seconds)
-    const patchDailyBudget =
-      body.daily_budget_cents === undefined ? null : parseOptionalNumber(body.daily_budget_cents)
+    const patchDailyBudget = body.daily_budget_cents === undefined ? null : parseOptionalNumber(body.daily_budget_cents)
     const updated = await withMutationTx(async (client) => {
       const result = await client.query(
         `

@@ -18,9 +18,7 @@ export function RentalsListScreen() {
   const items = useInventoryItems()
 
   if (utilization.isPending || items.isPending) {
-    return (
-      <div className="px-5 pt-8 text-[13px] text-ink-3">Loading rentals…</div>
-    )
+    return <div className="px-5 pt-8 text-[13px] text-ink-3">Loading rentals…</div>
   }
 
   const totals = utilization.data?.totals
@@ -30,26 +28,19 @@ export function RentalsListScreen() {
   return (
     <div className="flex flex-col">
       <div className="px-5 pt-6 pb-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-          Rentals
-        </div>
-        <h1 className="mt-1 font-display text-[26px] font-bold tracking-tight leading-tight">
-          Catalog
-        </h1>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Rentals</div>
+        <h1 className="mt-1 font-display text-[26px] font-bold tracking-tight leading-tight">Catalog</h1>
       </div>
 
       <div className="px-4">
         <Card>
-          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-            Idle revenue per day
-          </div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Idle revenue per day</div>
           <div className="num text-[28px] font-bold tracking-tight mt-1">
             ${((totals?.total_idle_revenue_per_day_cents ?? 0) / 100).toLocaleString()}
           </div>
           <div className="text-[12px] text-ink-3 mt-1">
-            {Number(totals?.total_on_rent ?? 0).toFixed(0)} on rent ·{' '}
-            {Number(totals?.total_available ?? 0).toFixed(0)} available · {totalsCount}{' '}
-            item{totalsCount === 1 ? '' : 's'}
+            {Number(totals?.total_on_rent ?? 0).toFixed(0)} on rent · {Number(totals?.total_available ?? 0).toFixed(0)}{' '}
+            available · {totalsCount} item{totalsCount === 1 ? '' : 's'}
           </div>
           <div className="mt-3">
             <Attribution source="From inventory_movements + active rental lines (no AI inference)" />
@@ -91,8 +82,7 @@ function UtilizationRowCard({ row }: { row: UtilizationRow }) {
             <div className="text-[13px] font-semibold">{row.code}</div>
             <div className="text-[12px] text-ink-2 truncate">{row.description}</div>
             <div className="text-[11px] text-ink-3 mt-0.5">
-              {Number(row.on_rent_quantity).toFixed(0)} on rent ·{' '}
-              {Number(row.available_quantity).toFixed(0)} avail
+              {Number(row.on_rent_quantity).toFixed(0)} on rent · {Number(row.available_quantity).toFixed(0)} avail
               {idleDays !== null ? ` · ${idleDays}d idle` : ''}
             </div>
           </div>

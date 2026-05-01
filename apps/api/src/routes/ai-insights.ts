@@ -268,8 +268,7 @@ export async function handleAiInsightRoutes(
     if (!ctx.requireRole(['admin', 'office'])) return true
     const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
     const ageDaysRaw = Number(body.age_days)
-    const ageDays =
-      Number.isFinite(ageDaysRaw) && ageDaysRaw > 0 && ageDaysRaw < 365 ? Math.floor(ageDaysRaw) : 14
+    const ageDays = Number.isFinite(ageDaysRaw) && ageDaysRaw > 0 && ageDaysRaw < 365 ? Math.floor(ageDaysRaw) : 14
 
     // Find active projects whose bid has been on the wall for at least
     // age_days without going to 'completed' or 'closed'. One ai_insight
@@ -358,10 +357,7 @@ function composeFollowUpDraft(project: {
   bid_total: string
   created_at: string
 }): FollowUpDraft {
-  const days = Math.max(
-    1,
-    Math.floor((Date.now() - Date.parse(project.created_at)) / (1000 * 60 * 60 * 24)),
-  )
+  const days = Math.max(1, Math.floor((Date.now() - Date.parse(project.created_at)) / (1000 * 60 * 60 * 24)))
   const customer = project.customer_name ?? 'there'
   const subject = `Following up on ${project.name}`
   const body = `Hi ${customer},

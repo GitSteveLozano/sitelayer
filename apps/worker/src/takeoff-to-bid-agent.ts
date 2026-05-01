@@ -77,8 +77,7 @@ async function proposeBidLines(
     else if (quantity < 1) confidence = 'med'
     return {
       service_item_code: m.service_item_code,
-      description:
-        catalogRow?.description ?? `Imported takeoff: ${m.service_item_code}`,
+      description: catalogRow?.description ?? `Imported takeoff: ${m.service_item_code}`,
       quantity,
       unit: m.unit || catalogRow?.default_unit || 'sqft',
       rate,
