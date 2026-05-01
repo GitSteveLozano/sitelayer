@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { QueryResult, QueryResultRow } from 'pg'
-import { processLockLaborEntries, type LockLaborEntriesPayload } from './lock-labor-entries.js'
+import {
+  LOCK_LABOR_ENTRIES_MAX_ATTEMPTS,
+  processLockLaborEntries,
+  type LockLaborEntriesPayload,
+} from './lock-labor-entries.js'
 import type { QueueClient } from './index.js'
 
 type QueuedResponse<T extends QueryResultRow = QueryResultRow> = Pick<QueryResult<T>, 'rows' | 'rowCount'> | Error
@@ -71,7 +75,7 @@ describe('processLockLaborEntries', () => {
     const client = new FakeQueueClient([
       { rows: [], rowCount: 0 }, // begin (claim tx)
       {
-        rows: [{ id: 'outbox-1', entity_id: RUN_ID, payload: lockPayload() }],
+        rows: [{ id: 'outbox-1', entity_id: RUN_ID, payload: lockPayload(), attempt_count: 0 }],
         rowCount: 1,
       },
       { rows: [], rowCount: 0 }, // commit (claim tx)
@@ -98,7 +102,7 @@ describe('processLockLaborEntries', () => {
     const client = new FakeQueueClient([
       { rows: [], rowCount: 0 }, // begin (claim tx)
       {
-        rows: [{ id: 'outbox-2', entity_id: RUN_ID, payload: unlockPayload() }],
+        rows: [{ id: 'outbox-2', entity_id: RUN_ID, payload: unlockPayload(), attempt_count: 0 }],
         rowCount: 1,
       },
       { rows: [], rowCount: 0 }, // commit (claim tx)
@@ -123,8 +127,8 @@ describe('processLockLaborEntries', () => {
       { rows: [], rowCount: 0 }, // begin (claim tx)
       {
         rows: [
-          { id: 'outbox-1', entity_id: RUN_ID, payload: lockPayload() },
-          { id: 'outbox-2', entity_id: RUN_ID, payload: unlockPayload() },
+          { id: 'outbox-1', entity_id: RUN_ID, payload: lockPayload(), attempt_count: 0 },
+          { id: 'outbox-2', entity_id: RUN_ID, payload: unlockPayload(), attempt_count: 0 },
         ],
         rowCount: 2,
       },
@@ -144,7 +148,7 @@ describe('processLockLaborEntries', () => {
     expect(summary).toEqual({ processed: 2, locked: 1, unlocked: 1, failed: 0 })
   })
 
-  it('invalid payload (unknown action): rollback + reset to pending with error', async () => {
+  it('invalid payload below the attempt cap: rollback + reset to pending with error', async () => {
     const badPayload = {
       action: 'evict',
       run_id: RUN_ID,
@@ -155,7 +159,7 @@ describe('processLockLaborEntries', () => {
     const client = new FakeQueueClient([
       { rows: [], rowCount: 0 }, // begin (claim tx)
       {
-        rows: [{ id: 'outbox-bad', entity_id: RUN_ID, payload: badPayload }],
+        rows: [{ id: 'outbox-bad', entity_id: RUN_ID, payload: badPayload, attempt_count: 0 }],
         rowCount: 1,
       },
       { rows: [], rowCount: 0 }, // commit (claim tx)
@@ -168,8 +172,56 @@ describe('processLockLaborEntries', () => {
 
     const queries = sqlCalls(client)
     expect(queries).toContain('rollback')
-    const errorUpdate = queries.find((q) => q.includes("set status = 'pending'") && q.includes('error = $3'))
+    // Below the cap → status stays 'pending' so the row gets another shot.
+    // Match the error-path update specifically: "1 minute" backoff is unique
+    // to it (the claim uses "5 minutes" + literal status='processing'; the
+    // 'applied' update doesn't run on the failure path at all).
+    const errorUpdate = client.calls.find(
+      (c) => typeof c.text === 'string' && c.text.includes('set status = $') && c.text.includes("interval '1 minute'"),
+    )
     expect(errorUpdate).toBeDefined()
+    expect(errorUpdate?.values?.[3]).toBe('pending')
+  })
+
+  it('invalid payload AT the attempt cap: marks the row failed permanently', async () => {
+    const badPayload = {
+      action: 'evict',
+      run_id: RUN_ID,
+      covered_entry_ids: [ENTRY_A],
+      approved_at: null,
+      state_version: 1,
+    } as unknown as LockLaborEntriesPayload
+    const client = new FakeQueueClient([
+      { rows: [], rowCount: 0 }, // begin (claim tx)
+      {
+        rows: [
+          {
+            id: 'outbox-cap',
+            entity_id: RUN_ID,
+            payload: badPayload,
+            // attempt_count is what the row had BEFORE this claim incremented
+            // it. At MAX the next failure should park the row.
+            attempt_count: LOCK_LABOR_ENTRIES_MAX_ATTEMPTS,
+          },
+        ],
+        rowCount: 1,
+      },
+      { rows: [], rowCount: 0 }, // commit (claim tx)
+      { rows: [], rowCount: 0 }, // begin (apply tx)
+      { rows: [], rowCount: 0 }, // rollback
+      { rows: [], rowCount: 1 }, // error update — should now park as 'failed'
+    ])
+    const summary = await processLockLaborEntries(client, COMPANY, 25)
+    expect(summary).toEqual({ processed: 1, locked: 0, unlocked: 0, failed: 1 })
+
+    // Match the error-path update specifically: "1 minute" backoff is unique
+    // to it (the claim uses "5 minutes" + literal status='processing'; the
+    // 'applied' update doesn't run on the failure path at all).
+    const errorUpdate = client.calls.find(
+      (c) => typeof c.text === 'string' && c.text.includes('set status = $') && c.text.includes("interval '1 minute'"),
+    )
+    expect(errorUpdate).toBeDefined()
+    expect(errorUpdate?.values?.[3]).toBe('failed')
   })
 
   it('lock with empty covered_entry_ids: no labor_entries update issued, outbox still applied', async () => {
@@ -183,7 +235,7 @@ describe('processLockLaborEntries', () => {
     const client = new FakeQueueClient([
       { rows: [], rowCount: 0 }, // begin (claim tx)
       {
-        rows: [{ id: 'outbox-empty', entity_id: RUN_ID, payload: emptyPayload }],
+        rows: [{ id: 'outbox-empty', entity_id: RUN_ID, payload: emptyPayload, attempt_count: 0 }],
         rowCount: 1,
       },
       { rows: [], rowCount: 0 }, // commit (claim tx)

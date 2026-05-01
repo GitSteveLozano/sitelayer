@@ -111,9 +111,15 @@ export function transitionTimeReviewWorkflow(
     state_version: nextVersion,
     reopened_at: event.reopened_at,
     reviewer_user_id: event.reviewer_user_id,
-    // Reopen captures `reason` in workflow_event_log via event_payload;
-    // we don't surface it on the snapshot to keep the visible state
-    // narrowly tied to the current decision.
+    // Clear the prior decision fields. Migration 027's
+    // time_review_runs_decision_chk requires approved_at, rejected_at,
+    // and rejection_reason all be NULL when state='pending'; without
+    // this clear the persisted UPDATE would violate the constraint.
+    // The full audit trail of the prior approval/rejection lives in
+    // workflow_event_log keyed on (entity_id, state_version).
+    approved_at: null,
+    rejected_at: null,
+    rejection_reason: null,
   }
 }
 

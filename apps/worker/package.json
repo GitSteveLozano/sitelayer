@@ -19,10 +19,12 @@
     "@sitelayer/config": "file:../../packages/config",
     "@sitelayer/logger": "file:../../packages/logger",
     "@sitelayer/queue": "file:../../packages/queue",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "@types/pg": "^8.11.11",
+    "@types/web-push": "^3.6.4",
     "vitest": "^4.1.5"
   }
 }

@@ -13,6 +13,7 @@ import { handleBlueprintRoutes } from './blueprints.js'
 import { handleClockRoutes } from './clock.js'
 import { handleCustomerRoutes } from './customers.js'
 import { handleDailyLogRoutes } from './daily-logs.js'
+import { handleLaborBurdenRoutes } from './labor-burden.js'
 import { handleEstimateRoutes } from './estimate.js'
 import { handleEstimatePushRoutes } from './estimate-pushes.js'
 import { handleLaborEntryRoutes } from './labor-entries.js'
@@ -29,7 +30,15 @@ import { handleScheduleRoutes } from './schedules.js'
 import { handleServiceItemRoutes } from './service-items.js'
 import { handleSupportPacketRoutes } from './support-packets.js'
 import { handleSyncRoutes } from './sync.js'
+import { handleAssemblyRoutes } from './assemblies.js'
+import { handleBlueprintPageRoutes } from './blueprint-pages.js'
+import { handleQboCustomFieldRoutes } from './qbo-custom-fields.js'
+import { handleInventoryUtilizationRoutes } from './inventory-utilization.js'
+import { handleBidAccuracyRoutes } from './bid-accuracy.js'
+import { handleAiInsightRoutes } from './ai-insights.js'
+import { handleTakeoffImportRoutes } from './takeoff-import.js'
 import { handleTakeoffMeasurementRoutes } from './takeoff-measurements.js'
+import { handleTakeoffTagRoutes } from './takeoff-tags.js'
 import { handleTakeoffWriteRoutes } from './takeoff-write.js'
 import { handleTimeReviewRunRoutes } from './time-review-runs.js'
 import { handleWorkerRoutes } from './workers.js'
@@ -335,6 +344,114 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     return true
   }
 
+  // Multi-condition takeoff tags (Phase 3A) — 1:N scope tags per polygon
+  if (
+    await handleTakeoffTagRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Blueprint pages + per-page calibration (Phase 3B/C)
+  if (
+    await handleBlueprintPageRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Takeoff CSV import (Phase 3G)
+  if (
+    await handleTakeoffImportRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Assemblies (Phase 3F)
+  if (
+    await handleAssemblyRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // QBO custom field mappings (Phase 3H — sqft on QBO entities)
+  if (
+    await handleQboCustomFieldRoutes(req, url, {
+      pool,
+      company,
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Inventory utilization rollup (Phase 4 — must precede the catalog
+  // CRUD handler so the more-specific path matches first).
+  if (
+    await handleInventoryUtilizationRoutes(req, url, {
+      pool,
+      company,
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // AI Layer — bid accuracy cohort stats (Phase 5).
+  if (
+    await handleBidAccuracyRoutes(req, url, {
+      pool,
+      company,
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // AI Layer — insights CRUD + agent triggers (Phase 5).
+  if (
+    await handleAiInsightRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
   // Rental inventory + billing workflow
   if (
     await handleRentalInventoryRoutes(req, url, {
@@ -407,7 +524,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     return true
   }
 
-  // Daily logs (Sitemap.html § fm-log)
+  // Daily logs (Sitemap.html § fm-log) — incl. photo upload + fetch
   if (
     await handleDailyLogRoutes(req, url, {
       pool,
@@ -417,6 +534,23 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       readBody,
       sendJson,
       checkVersion,
+      storage: ctx.storage,
+      maxPhotoBytes: Number(process.env.MAX_DAILY_LOG_PHOTO_BYTES ?? 15 * 1024 * 1024),
+      photoDownloadPresigned: ctx.blueprintDownloadPresigned,
+      sendFileContent: ctx.sendFileContent,
+      sendFileRedirect: ctx.sendFileRedirect,
+    })
+  ) {
+    return true
+  }
+
+  // Labor burden rollup (fm-today-v2 dark card)
+  if (
+    await handleLaborBurdenRoutes(req, url, {
+      pool,
+      company,
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      sendJson,
     })
   ) {
     return true

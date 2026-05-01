@@ -4,6 +4,7 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { registerServiceWorker } from './pwa/register'
+import { startOfflineReplayLoop } from './lib/offline/replay'
 import './styles/globals.css'
 
 const container = document.getElementById('root')
@@ -20,12 +21,16 @@ root.render(
 )
 
 // Phase 0 registers the SW passively — no toast, no auto-reload. UI for
-// "new version available" lands in Phase 1 with the offline mutation queue.
+// "new version available" lands when the SW prompt UX is finalized.
 if (import.meta.env.PROD) {
   registerServiceWorker({
     onRegisterError: (err) => Sentry.captureException(err),
   })
 }
+
+// Offline mutation queue + replay loop (1E.6). Boots regardless of SW
+// availability so the queue still works in dev / Safari private mode.
+startOfflineReplayLoop()
 
 function RootError() {
   return (

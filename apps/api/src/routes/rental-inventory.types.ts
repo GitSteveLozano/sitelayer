@@ -71,6 +71,14 @@ export type InventoryMovementRow = {
   notes: string | null
   version: number
   created_at: string
+  // Phase 4: scan-driven dispatch context. Nullable for legacy
+  // movements created before the rental scan flow shipped.
+  worker_id: string | null
+  clerk_user_id: string | null
+  scan_payload: string | null
+  scanned_at: string | null
+  lat: string | null
+  lng: string | null
 }
 
 export type JobRentalContractRow = {
@@ -229,7 +237,13 @@ export const INVENTORY_MOVEMENT_COLUMNS = `
   ticket_number,
   notes,
   version,
-  created_at
+  created_at,
+  worker_id,
+  clerk_user_id,
+  scan_payload,
+  scanned_at,
+  lat,
+  lng
 `
 
 export const JOB_RENTAL_CONTRACT_COLUMNS = `

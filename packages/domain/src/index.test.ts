@@ -27,6 +27,10 @@ import {
   haversineDistanceMeters,
   isInsideGeofence,
   sumMoney,
+  calculateWorkerBurden,
+  splitStraightAndOt,
+  summarizeLaborBurden,
+  DEFAULT_OVERTIME_HOUR_THRESHOLD,
 } from './index.js'
 
 describe('domain functions', () => {
@@ -1004,6 +1008,111 @@ describe('domain functions', () => {
           point: site,
         }),
       ).toBe(true)
+    })
+  })
+
+  describe('labor burden', () => {
+    it('splitStraightAndOt: zero hours → zero straight + zero ot', () => {
+      expect(splitStraightAndOt(0)).toEqual({ straight_hours: 0, ot_hours: 0 })
+    })
+    it('splitStraightAndOt: under threshold → all straight', () => {
+      expect(splitStraightAndOt(7.5)).toEqual({ straight_hours: 7.5, ot_hours: 0 })
+    })
+    it('splitStraightAndOt: at threshold → all straight (boundary)', () => {
+      expect(splitStraightAndOt(DEFAULT_OVERTIME_HOUR_THRESHOLD)).toEqual({ straight_hours: 8, ot_hours: 0 })
+    })
+    it('splitStraightAndOt: over threshold → straight=threshold, ot=remainder', () => {
+      expect(splitStraightAndOt(10.5)).toEqual({ straight_hours: 8, ot_hours: 2.5 })
+    })
+    it('splitStraightAndOt: custom threshold', () => {
+      expect(splitStraightAndOt(11, 9)).toEqual({ straight_hours: 9, ot_hours: 2 })
+    })
+
+    it('calculateWorkerBurden: straight only with default 28% burden', () => {
+      const result = calculateWorkerBurden({
+        worker_id: 'w-1',
+        straight_hours: 8,
+        ot_hours: 0,
+        base_hourly_cents: 4000, // $40/hr
+        insurance_pct: 20,
+        benefits_pct: 8,
+        ot_premium_pct: 50,
+      })
+      // loaded = 4000 * 1.28 = 5120 cents/hr
+      // straight = 5120 * 8 = 40_960 cents = $409.60
+      expect(result.loaded_hourly_cents).toBe(5120)
+      expect(result.straight_cents).toBe(40960)
+      expect(result.ot_cents).toBe(0)
+      expect(result.total_cents).toBe(40960)
+    })
+
+    it('calculateWorkerBurden: OT loaded with 50% premium', () => {
+      const result = calculateWorkerBurden({
+        worker_id: 'w-2',
+        straight_hours: 8,
+        ot_hours: 2,
+        base_hourly_cents: 4000,
+        insurance_pct: 20,
+        benefits_pct: 8,
+        ot_premium_pct: 50,
+      })
+      // straight = 5120 * 8 = 40_960
+      // ot loaded = 5120 * 1.5 = 7680, ot_cents = 7680 * 2 = 15_360
+      // total = 56_320
+      expect(result.straight_cents).toBe(40960)
+      expect(result.ot_cents).toBe(15360)
+      expect(result.total_cents).toBe(56320)
+      expect(result.ot_loaded_hourly_cents).toBe(7680)
+    })
+
+    it('calculateWorkerBurden: zero base rate → zero dollars', () => {
+      const result = calculateWorkerBurden({
+        worker_id: 'w-3',
+        straight_hours: 8,
+        ot_hours: 4,
+        base_hourly_cents: 0,
+        insurance_pct: 20,
+        benefits_pct: 8,
+        ot_premium_pct: 50,
+      })
+      expect(result.total_cents).toBe(0)
+    })
+
+    it('summarizeLaborBurden: blended hourly = total / total_hours', () => {
+      const r1 = calculateWorkerBurden({
+        worker_id: 'a',
+        straight_hours: 8,
+        ot_hours: 0,
+        base_hourly_cents: 4000,
+        insurance_pct: 20,
+        benefits_pct: 8,
+        ot_premium_pct: 50,
+      })
+      const r2 = calculateWorkerBurden({
+        worker_id: 'b',
+        straight_hours: 6,
+        ot_hours: 0,
+        base_hourly_cents: 3000,
+        insurance_pct: 20,
+        benefits_pct: 8,
+        ot_premium_pct: 50,
+      })
+      const summary = summarizeLaborBurden([r1, r2])
+      expect(summary.total_hours).toBeCloseTo(14)
+      expect(summary.total_cents).toBe(r1.total_cents + r2.total_cents)
+      expect(summary.blended_loaded_hourly_cents).toBe(Math.round(summary.total_cents / 14))
+    })
+
+    it('summarizeLaborBurden: empty list → zeros', () => {
+      const summary = summarizeLaborBurden([])
+      expect(summary).toEqual({
+        total_cents: 0,
+        total_straight_hours: 0,
+        total_ot_hours: 0,
+        total_hours: 0,
+        blended_loaded_hourly_cents: 0,
+        per_worker: [],
+      })
     })
   })
 })
