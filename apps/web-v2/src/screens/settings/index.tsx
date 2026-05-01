@@ -1,8 +1,17 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Card } from '@/components/mobile'
 import { useRole, writeRoleOverride, type Role } from '@/lib/role'
 import { NotificationPreferencesScreen } from './notifications'
 import { PushOnboardingCard } from './push-onboarding'
+
+export { CatalogHubScreen } from './catalog-hub'
+export { CatalogCustomersScreen } from './catalog-customers'
+export { CatalogWorkersScreen } from './catalog-workers'
+export { CatalogServiceItemsScreen } from './catalog-service-items'
+export { CatalogPricingProfilesScreen } from './catalog-pricing-profiles'
+export { CatalogBonusRulesScreen } from './catalog-bonus-rules'
+export { CatalogDivisionsScreen } from './catalog-divisions'
 
 /**
  * Settings hub — what the More tab points at.
@@ -56,6 +65,22 @@ export function SettingsScreen() {
             </div>
           </Card>
         </button>
+
+        <Link to="/more/catalog" className="block">
+          <Card>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[14px] font-semibold">Catalog</div>
+                <div className="text-[12px] text-ink-3 mt-0.5">
+                  Customers, workers, service items, pricing, bonus rules, divisions.
+                </div>
+              </div>
+              <span className="text-ink-4" aria-hidden="true">
+                ›
+              </span>
+            </div>
+          </Card>
+        </Link>
 
         <RoleOverrideCard currentRole={role} />
       </div>

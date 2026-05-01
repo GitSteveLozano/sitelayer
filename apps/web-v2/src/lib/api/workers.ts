@@ -22,6 +22,12 @@ export interface WorkerCreateRequest {
   role?: string
 }
 
+export interface WorkerPatchRequest {
+  name?: string
+  role?: string
+  expected_version?: number
+}
+
 const KEYS = {
   all: () => ['workers'] as const,
   list: () => [...KEYS.all(), 'list'] as const,
@@ -53,5 +59,25 @@ export function useCreateWorker() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: KEYS.all() })
     },
+  })
+}
+
+export function usePatchWorker(id: string) {
+  const qc = useQueryClient()
+  return useMutation<Worker, Error, WorkerPatchRequest>({
+    mutationFn: (input) => request<Worker>(`/api/workers/${encodeURIComponent(id)}`, { method: 'PATCH', json: input }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
+  })
+}
+
+export function useDeleteWorker() {
+  const qc = useQueryClient()
+  return useMutation<unknown, Error, { id: string; expected_version?: number }>({
+    mutationFn: ({ id, expected_version }) =>
+      request(`/api/workers/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        json: expected_version !== undefined ? { expected_version } : undefined,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
   })
 }
