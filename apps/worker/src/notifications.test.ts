@@ -26,6 +26,7 @@ function makeRow(overrides: Partial<PendingNotificationRow> = {}): PendingNotifi
     subject: 'Hello',
     body_text: 'plain',
     body_html: null,
+    payload: null,
     attempt_count: 0,
     ...overrides,
   }

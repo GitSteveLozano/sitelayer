@@ -19,6 +19,7 @@
 import type { Logger } from '@sitelayer/logger'
 import type { EmailConfig, EmailMessage, sendEmail as sendEmailFn } from './email.js'
 import type { ClerkResolver, EmailResolution } from './clerk-hydrate.js'
+import type { NotificationDispatcher, DispatchableRow } from './notification-channels.js'
 
 export type PendingNotificationRow = {
   id: string
@@ -29,6 +30,7 @@ export type PendingNotificationRow = {
   subject: string
   body_text: string
   body_html: string | null
+  payload: Record<string, unknown> | null
   attempt_count: number
 }
 
@@ -49,6 +51,14 @@ export interface DrainNotificationsConfig {
   emailConfig: EmailConfig
   /** Clerk resolver — null disables hydration (tests / no-Clerk tiers). */
   clerkResolver: ClerkResolver | null
+  /**
+   * Optional channel dispatcher. When set, the drain routes each row
+   * through the dispatcher (push/sms/email/console per the recipient's
+   * notification_preferences). When null, the drain falls back to the
+   * email-only path that predates Phase 1C — safe default for tests
+   * and deployments that haven't configured any non-email channels.
+   */
+  dispatcher?: NotificationDispatcher | null
 }
 
 export interface DrainNotificationsDeps {
@@ -295,7 +305,7 @@ export async function drainNotifications(
 
   const claimed = await client.query<PendingNotificationRow>(
     `
-      select id, company_id, recipient_clerk_user_id, recipient_email, kind, subject, body_text, body_html, attempt_count
+      select id, company_id, recipient_clerk_user_id, recipient_email, kind, subject, body_text, body_html, payload, attempt_count
       from notifications
       where status = 'pending' and next_attempt_at <= now()
       order by next_attempt_at asc, created_at asc
@@ -311,6 +321,101 @@ export async function drainNotifications(
       break
     }
     processed += 1
+
+    // Phase 1C: when a dispatcher is wired, route through the channel
+    // system. The legacy email-only path below remains the fallback so
+    // deployments without push/sms config behave unchanged.
+    if (config.dispatcher) {
+      const dispatchable: DispatchableRow = {
+        id: row.id,
+        company_id: row.company_id,
+        kind: row.kind,
+        subject: row.subject,
+        body_text: row.body_text,
+        body_html: row.body_html,
+        payload: row.payload ?? {},
+        recipient_email: row.recipient_email,
+        recipient_clerk_user_id: row.recipient_clerk_user_id,
+      }
+      let outcome
+      try {
+        outcome = await config.dispatcher.dispatch(dispatchable, client)
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : String(err)
+        const result = await applySendFailure(client, row, errorMessage, config.maxAttempts)
+        failed += 1
+        consecutiveFailures += 1
+        logger.error(
+          { id: row.id, kind: row.kind, err: errorMessage, next_status: result.status },
+          '[notifications] dispatcher threw',
+        )
+        continue
+      }
+
+      if (outcome.kind === 'sent') {
+        await markSent(client, row.id)
+        sent += 1
+        consecutiveFailures = 0
+        logger.info(
+          { id: row.id, kind: row.kind, channel: outcome.channel, delivered: outcome.delivered ?? 1 },
+          '[notifications] sent',
+        )
+        continue
+      }
+      if (outcome.kind === 'silent') {
+        // User picked 'off' for this event type — mark sent so the row
+        // doesn't loop, but don't count it against the failure budget.
+        await markSent(client, row.id)
+        sent += 1
+        consecutiveFailures = 0
+        logger.info({ id: row.id, kind: row.kind, reason: outcome.reason }, '[notifications] silenced by preference')
+        continue
+      }
+      if (outcome.kind === 'broadcast') {
+        await markSent(client, row.id)
+        sent += 1
+        consecutiveFailures = 0
+        logger.info({ id: row.id, kind: row.kind, recipient: 'broadcast' }, '[notifications] logged broadcast')
+        continue
+      }
+      if (outcome.kind === 'deferred') {
+        const nextAttempt = row.attempt_count + 1
+        await deferRow(client, row.id, nextAttempt, backoffSecondsFor(nextAttempt), outcome.reason.slice(0, 2000))
+        deferred += 1
+        // Defer is not a provider failure — don't tick the breaker.
+        logger.info(
+          { id: row.id, kind: row.kind, attempt_count: nextAttempt, reason: outcome.reason },
+          '[notifications] deferred',
+        )
+        continue
+      }
+      // outcome.kind === 'failed'
+      if (outcome.permanent) {
+        await markFailedWithReason(client, row.id, row.attempt_count + 1, outcome.error.slice(0, 2000))
+        failed += 1
+        consecutiveFailures += 1
+        logger.warn(
+          { id: row.id, kind: row.kind, channel: outcome.channel, err: outcome.error },
+          '[notifications] permanent failure',
+        )
+        continue
+      }
+      const result = await applySendFailure(client, row, outcome.error, config.maxAttempts)
+      failed += 1
+      consecutiveFailures += 1
+      logger.warn(
+        {
+          id: row.id,
+          kind: row.kind,
+          channel: outcome.channel,
+          attempt_count: row.attempt_count + 1,
+          next_status: result.status,
+          err: outcome.error,
+        },
+        '[notifications] send failed',
+      )
+      continue
+    }
 
     // Hydrate (or short-circuit) the recipient email.
     const ensured = await ensureRecipientEmail(deps, config, row)
