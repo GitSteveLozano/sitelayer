@@ -1,35 +1,37 @@
+import { Route, Routes } from 'react-router-dom'
 import { useRole } from '@/lib/role'
-import { PlaceholderScreen } from '@/components/shell/PlaceholderScreen'
+import { WorkerHoursScreen } from '@/screens/worker'
+import { ApprovalQueueScreen, ForemanBatchEntryScreen } from '@/screens/foreman'
+import { OwnerTimeAnomaliesScreen } from '@/screens/owner'
 
 /**
  * Time tab — role-aware default per `Sitemap.html` § 03:
- *   - owner   → t-approve  (approval queue)
- *   - foreman → t-foreman  (batch entry)
- *   - worker  → wk-hours   (read-only personal)
+ *   - owner   → t-approve  (approval queue)        — 1D.3
+ *   - foreman → t-foreman  (batch entry)           — 1E.2
+ *   - worker  → wk-hours   (read-only personal)    — 1D.2
+ *
+ * `/time/anomalies` is a sub-route the owner reaches from the
+ * approval queue when the badge is non-zero.
  */
-export default function TimeRoute() {
+function TimeIndex() {
   const role = useRole()
 
-  if (role === 'foreman') {
-    return (
-      <PlaceholderScreen eyebrow="Foreman · Time" title="Crew entry" designId="t-foreman">
-        Phase 1: foreman-view time entry — crew list, batch clock-in for the day, geofence override.
-      </PlaceholderScreen>
-    )
-  }
-
   if (role === 'worker') {
-    return (
-      <PlaceholderScreen eyebrow="Worker · Time" title="My week" designId="wk-hours">
-        Phase 1: read-only personal hours, week summary, dispute deep-link.
-      </PlaceholderScreen>
-    )
+    return <WorkerHoursScreen />
   }
 
+  if (role === 'foreman') {
+    return <ForemanBatchEntryScreen />
+  }
+
+  return <ApprovalQueueScreen />
+}
+
+export default function TimeRoute() {
   return (
-    <PlaceholderScreen eyebrow="Owner / PM · Time" title="Approval queue" designId="t-approve">
-      Phase 1: approval queue with anomaly flags (overtime, geofence breach, no-clock-out). Sub-tabs for burden and
-      live-vs-budget.
-    </PlaceholderScreen>
+    <Routes>
+      <Route index element={<TimeIndex />} />
+      <Route path="anomalies" element={<OwnerTimeAnomaliesScreen />} />
+    </Routes>
   )
 }

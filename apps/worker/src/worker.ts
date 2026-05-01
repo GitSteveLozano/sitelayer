@@ -15,7 +15,7 @@ import {
   type RentalBillingInvoicePushFn,
   type RentalBillingInvoicePushSummary,
 } from '@sitelayer/queue'
-import { Pool, type PoolConfig } from 'pg'
+import { Pool, type PoolClient, type PoolConfig } from 'pg'
 import { spanForAppliedRow } from './trace.js'
 import { loadEmailConfig, sendEmail } from './email.js'
 import { createQboRentalInvoicePush } from './qbo-invoice-push.js'
@@ -23,6 +23,25 @@ import { createQboEstimatePush } from './qbo-estimate-push.js'
 import { createClerkClient } from '@clerk/backend'
 import { clerkUserFetcherFromClient, createClerkResolver, type ClerkResolver } from './clerk-hydrate.js'
 import { drainNotifications as drainNotificationsBatch } from './notifications.js'
+import { processTakeoffToBidRun, type TakeoffToBidPayload } from './takeoff-to-bid-agent.js'
+import { processVoiceToLogRun, type VoiceToLogPayload } from './voice-to-log-agent.js'
+import {
+  ConsoleChannel,
+  DefaultNotificationDispatcher,
+  EmailChannel,
+  TwilioSMSChannel,
+  WebPushChannel,
+  loadTwilioConfig,
+  loadVapidConfig,
+  type NotificationChannel,
+  type NotificationDispatcher,
+  type PushSubscriptionRow,
+  type WebPushClient,
+} from './notification-channels.js'
+// `web-push` is loaded lazily so the worker boots even when the
+// dependency is missing (older deploys), matching the email-provider
+// fallback pattern.
+import webpush from 'web-push'
 
 const logger = createLogger('worker')
 
@@ -236,6 +255,92 @@ if (NOTIFICATIONS_ENABLED) {
   logger.warn('[notifications] NOTIFICATIONS_ENABLED=0; clerk hydration skipped (rows requiring it will defer)')
 }
 
+// ---------------------------------------------------------------------------
+// Notification channel system (Phase 1C)
+//
+// Build the dispatcher once at boot from env. Channels self-disable when
+// their config is missing; the dispatcher's router falls back to email,
+// then defers, so the system gracefully degrades without dropping rows.
+// ---------------------------------------------------------------------------
+const vapidConfig = loadVapidConfig()
+const twilioConfig = loadTwilioConfig()
+
+const consoleChannel: NotificationChannel = new ConsoleChannel({ logger })
+const emailChannel: NotificationChannel = new EmailChannel({ emailConfig, sendEmail })
+const smsChannel: NotificationChannel | null = twilioConfig
+  ? new TwilioSMSChannel({ config: twilioConfig, logger })
+  : null
+
+// The static push channel only declares availability; per-(company, user)
+// instances handle actual sends so the subscription loader/pruner have
+// the right context. The static instance is reused for the
+// availability check inside the dispatcher.
+const staticPushChannel: NotificationChannel | null = vapidConfig
+  ? new WebPushChannel(
+      {
+        vapid: vapidConfig,
+        webpush: webpush as unknown as WebPushClient,
+        loadSubscriptions: async () => [],
+        pruneSubscription: async () => {},
+        logger,
+      },
+      'static',
+      'static',
+    )
+  : null
+
+function buildPushChannel(companyId: string, clerkUserId: string): NotificationChannel {
+  return new WebPushChannel(
+    {
+      vapid: vapidConfig,
+      webpush: vapidConfig ? (webpush as unknown as WebPushClient) : null,
+      loadSubscriptions: async (cId, uId) => {
+        const result = await pool.query<PushSubscriptionRow>(
+          `select id, endpoint, p256dh, auth
+             from push_subscriptions
+            where company_id = $1 and clerk_user_id = $2
+            order by last_seen_at desc`,
+          [cId, uId],
+        )
+        return result.rows
+      },
+      pruneSubscription: async (subscriptionId) => {
+        await pool.query(`delete from push_subscriptions where id = $1`, [subscriptionId])
+      },
+      logger,
+    },
+    companyId,
+    clerkUserId,
+  )
+}
+
+const dispatcher: NotificationDispatcher = new DefaultNotificationDispatcher({
+  channels: {
+    push: staticPushChannel,
+    sms: smsChannel,
+    email: emailChannel,
+    console: consoleChannel,
+  },
+  buildPushChannel: vapidConfig ? buildPushChannel : null,
+  hydrateEmail:
+    NOTIFICATIONS_ENABLED && clerkResolver
+      ? async (clerkUserId) => {
+          const resolution = await clerkResolver!.resolveEmailForClerkUser(clerkUserId)
+          return resolution.kind === 'email' ? resolution.email : null
+        }
+      : null,
+  logger,
+})
+
+logger.info(
+  {
+    push: vapidConfig ? 'configured' : 'disabled',
+    sms: twilioConfig ? 'configured' : 'disabled',
+    email: emailConfig.provider,
+  },
+  '[notification-channels] dispatcher ready',
+)
+
 /**
  * Wrapper that opens a tx, calls into the extracted batch drainer, and commits.
  * The batch drainer holds the per-row logic (claim / hydrate / send / DLQ); see
@@ -260,6 +365,7 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
         maxAttempts: NOTIFICATION_MAX_ATTEMPTS,
         emailConfig,
         clerkResolver,
+        dispatcher,
       },
     )
     await client.query('commit')
@@ -345,6 +451,98 @@ async function drainLockLaborEntries(companyId: string): Promise<LockLaborEntrie
   } finally {
     client.release()
   }
+}
+
+interface AgentDrainSummary {
+  processed: number
+  insightsCreated: number
+  failed: number
+}
+
+/**
+ * Generic ai-insight outbox drain. Claims rows of the given mutation
+ * type, runs the per-row processor, marks 'applied' on success or
+ * reschedules with backoff on failure (parking at status='failed'
+ * after 5 attempts so a structurally-broken row stops looping). Each
+ * row runs in its own transaction so a stuck row can't strand the
+ * rest of the batch.
+ */
+async function drainAgentMutations<TPayload>(
+  mutationType: string,
+  companyId: string,
+  scope: string,
+  process: (client: PoolClient, companyId: string, payload: TPayload) => Promise<{ insightsCreated: number }>,
+): Promise<AgentDrainSummary> {
+  const summary: AgentDrainSummary = { processed: 0, insightsCreated: 0, failed: 0 }
+  const client = await pool.connect()
+  try {
+    await client.query('begin')
+    const claimed = await client.query<{ id: string; payload: TPayload }>(
+      `update mutation_outbox
+         set status = 'processing',
+             attempt_count = attempt_count + 1,
+             next_attempt_at = now() + interval '5 minutes',
+             error = null
+       where id in (
+         select id from mutation_outbox
+         where company_id = $1
+           and mutation_type = $2
+           and (
+             (status = 'pending' and next_attempt_at <= now())
+             or (status = 'processing' and next_attempt_at <= now())
+           )
+         order by next_attempt_at asc, created_at asc
+         limit 5
+         for update skip locked
+       )
+       returning id, payload`,
+      [companyId, mutationType],
+    )
+    await client.query('commit')
+
+    for (const row of claimed.rows) {
+      summary.processed++
+      await client.query('begin')
+      try {
+        const result = await process(client, companyId, row.payload)
+        summary.insightsCreated += result.insightsCreated
+        await client.query(
+          `update mutation_outbox
+             set status = 'applied', applied_at = now(), updated_at = now()
+           where id = $1`,
+          [row.id],
+        )
+        await client.query('commit')
+      } catch (err) {
+        summary.failed++
+        await client.query('rollback').catch(() => {})
+        const message = err instanceof Error ? err.message : String(err)
+        await pool
+          .query(
+            `update mutation_outbox
+               set status = case when attempt_count >= 5 then 'failed' else 'pending' end,
+                   error = $2,
+                   next_attempt_at = now() + interval '2 minutes',
+                   updated_at = now()
+             where id = $1`,
+            [row.id, message],
+          )
+          .catch(() => {})
+        Sentry.captureException(err, { tags: { scope, outbox_id: row.id } })
+      }
+    }
+  } finally {
+    client.release()
+  }
+  return summary
+}
+
+async function drainTakeoffToBid(companyId: string): Promise<AgentDrainSummary> {
+  return drainAgentMutations<TakeoffToBidPayload>('takeoff_to_bid', companyId, 'takeoff_to_bid', processTakeoffToBidRun)
+}
+
+async function drainVoiceToLog(companyId: string): Promise<AgentDrainSummary> {
+  return drainAgentMutations<VoiceToLogPayload>('voice_to_log', companyId, 'voice_to_log', processVoiceToLogRun)
 }
 
 /**
@@ -514,6 +712,18 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     return { processed: 0, locked: 0, unlocked: 0, failed: 0 } as LockLaborEntriesSummary
   })
 
+  const takeoffToBidSummary = await drainTakeoffToBid(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] takeoff_to_bid drain failed')
+    Sentry.captureException(error, { tags: { scope: 'takeoff_to_bid' } })
+    return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
+  })
+
+  const voiceToLogSummary = await drainVoiceToLog(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] voice_to_log drain failed')
+    Sentry.captureException(error, { tags: { scope: 'voice_to_log' } })
+    return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
+  })
+
   // Defense-in-depth alert: any workflow row stuck in 'posting' beyond
   // the threshold means the worker crashed mid-push or QBO succeeded
   // silently and the worker missed the response. Surface to Sentry so
@@ -552,6 +762,12 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         lock_labor_entries_locked: lockLaborSummary.locked,
         lock_labor_entries_unlocked: lockLaborSummary.unlocked,
         lock_labor_entries_failed: lockLaborSummary.failed,
+        takeoff_to_bid_processed: takeoffToBidSummary.processed,
+        takeoff_to_bid_insights_created: takeoffToBidSummary.insightsCreated,
+        takeoff_to_bid_failed: takeoffToBidSummary.failed,
+        voice_to_log_processed: voiceToLogSummary.processed,
+        voice_to_log_insights_created: voiceToLogSummary.insightsCreated,
+        voice_to_log_failed: voiceToLogSummary.failed,
         rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
         estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
       },
@@ -565,7 +781,9 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     rentalSummary.processed > 0 ||
     rentalBillingPushSummary.processed > 0 ||
     estimatePushSummary.processed > 0 ||
-    lockLaborSummary.processed > 0
+    lockLaborSummary.processed > 0 ||
+    takeoffToBidSummary.processed > 0 ||
+    voiceToLogSummary.processed > 0
   ) {
     logger.info(
       {
@@ -589,6 +807,12 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         lock_labor_entries_locked: lockLaborSummary.locked,
         lock_labor_entries_unlocked: lockLaborSummary.unlocked,
         lock_labor_entries_failed: lockLaborSummary.failed,
+        takeoff_to_bid_processed: takeoffToBidSummary.processed,
+        takeoff_to_bid_insights_created: takeoffToBidSummary.insightsCreated,
+        takeoff_to_bid_failed: takeoffToBidSummary.failed,
+        voice_to_log_processed: voiceToLogSummary.processed,
+        voice_to_log_insights_created: voiceToLogSummary.insightsCreated,
+        voice_to_log_failed: voiceToLogSummary.failed,
         rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
         estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
       },

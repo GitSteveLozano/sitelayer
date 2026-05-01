@@ -105,6 +105,41 @@ export async function handleScheduleRoutes(
     return true
   }
 
+  // Company-wide schedule list with optional date filters. Used by
+  // fm-today to render the "Today's schedule" card without needing a
+  // project_id upfront. The hot-path index from migration 013
+  // (crew_schedules_company_scheduled_idx) covers this query.
+  if (req.method === 'GET' && url.pathname === '/api/schedules') {
+    const from = String(url.searchParams.get('from') ?? '').trim()
+    const to = String(url.searchParams.get('to') ?? '').trim()
+    if (from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) {
+      ctx.sendJson(400, { error: 'from must be YYYY-MM-DD' })
+      return true
+    }
+    if (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) {
+      ctx.sendJson(400, { error: 'to must be YYYY-MM-DD' })
+      return true
+    }
+    const result = await ctx.pool.query(
+      `
+      select s.id, s.project_id, s.scheduled_for, s.crew, s.status, s.version,
+             s.deleted_at, s.created_at,
+             p.name as project_name
+      from crew_schedules s
+      left join projects p on p.id = s.project_id and p.company_id = s.company_id
+      where s.company_id = $1
+        and s.deleted_at is null
+        and ($2 = '' or s.scheduled_for >= $2::date)
+        and ($3 = '' or s.scheduled_for <= $3::date)
+      order by s.scheduled_for asc, s.created_at asc
+      limit 200
+      `,
+      [ctx.company.id, from, to],
+    )
+    ctx.sendJson(200, { schedules: result.rows })
+    return true
+  }
+
   if (req.method === 'POST' && url.pathname.match(/^\/api\/schedules\/[^/]+\/confirm$/)) {
     if (!ctx.requireRole(['admin', 'foreman'])) return true
     const scheduleId = url.pathname.split('/')[3] ?? ''

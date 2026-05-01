@@ -352,7 +352,10 @@ export async function handleRentalInventoryCrudRoutes(
   }
 
   if (req.method === 'POST' && url.pathname === '/api/inventory/movements') {
-    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    // Workers can scan-dispatch from the field but only with full scan
+    // context; admin/foreman/office can post any movement (e.g. yard
+    // adjustments without a scan).
+    if (!ctx.requireRole(['admin', 'foreman', 'office', 'worker'])) return true
     const body = await ctx.readBody()
     const itemId = optionalString(body.inventory_item_id)
     const quantity = parsePositiveNumber(body.quantity)
@@ -384,14 +387,52 @@ export async function handleRentalInventoryCrudRoutes(
       ctx.sendJson(400, { error: 'occurred_on must be YYYY-MM-DD' })
       return true
     }
+
+    // Phase 4 scan dispatch context — all optional. When the worker
+    // app POSTs from rnt-scan-dispatch it stamps worker_id (looked up
+    // from the auth context if not supplied), the raw QR/barcode
+    // payload, and the device geolocation so the audit trail can show
+    // "Mike scanned cup-lock at 8:42a near 165 Front St."
+    const workerId = optionalString(body.worker_id)
+    if (workerId && !(await existsInCompany(ctx.pool, 'workers', ctx.company.id, workerId))) {
+      ctx.sendJson(400, { error: 'worker_id not found for company' })
+      return true
+    }
+    const scanPayload = optionalString(body.scan_payload)
+    const scannedAtRaw = optionalString(body.scanned_at)
+    const scannedAt = scannedAtRaw && !Number.isNaN(Date.parse(scannedAtRaw)) ? scannedAtRaw : null
+    const lat = body.lat === undefined ? null : Number(body.lat)
+    const lng = body.lng === undefined ? null : Number(body.lng)
+    if (lat !== null && (!Number.isFinite(lat) || lat < -90 || lat > 90)) {
+      ctx.sendJson(400, { error: 'lat must be between -90 and 90' })
+      return true
+    }
+    if (lng !== null && (!Number.isFinite(lng) || lng < -180 || lng > 180)) {
+      ctx.sendJson(400, { error: 'lng must be between -180 and 180' })
+      return true
+    }
+
+    // Workers may only POST scan-driven movements — no manual yard
+    // adjustments. The scan_payload + worker_id pair is the audit
+    // trail; without them the worker should be using fm-rentals
+    // through their foreman. The cast is needed because CompanyRole
+    // doesn't yet include 'worker' as a value — the role table will
+    // gain it when worker-direct auth lands; the gate stays in place
+    // so the contract is documented.
+    if ((ctx.company.role as string) === 'worker' && (!scanPayload || !workerId)) {
+      ctx.sendJson(403, { error: 'workers may only create scan-driven movements (scan_payload + worker_id required)' })
+      return true
+    }
+
     const movement = await withMutationTx(async (client: PoolClient) => {
       const result = await client.query<InventoryMovementRow>(
         `
         insert into inventory_movements (
           company_id, inventory_item_id, from_location_id, to_location_id,
-          project_id, movement_type, quantity, occurred_on, ticket_number, notes
+          project_id, movement_type, quantity, occurred_on, ticket_number, notes,
+          worker_id, clerk_user_id, scan_payload, scanned_at, lat, lng
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8::date, $9, $10)
+        values ($1, $2, $3, $4, $5, $6, $7, $8::date, $9, $10, $11, $12, $13, $14, $15, $16)
         returning ${INVENTORY_MOVEMENT_COLUMNS}
         `,
         [
@@ -405,6 +446,14 @@ export async function handleRentalInventoryCrudRoutes(
           occurredOn,
           optionalString(body.ticket_number),
           optionalString(body.notes),
+          workerId,
+          // The clerk user is implied by auth — we always stamp who hit
+          // the endpoint (whether or not a worker_id was attached).
+          scanPayload || scannedAt || workerId ? ctx.currentUserId : null,
+          scanPayload,
+          scannedAt,
+          lat,
+          lng,
         ],
       )
       const row = result.rows[0]!

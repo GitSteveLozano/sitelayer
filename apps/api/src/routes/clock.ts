@@ -85,17 +85,50 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     const source = parseClockSource(body.source)
     const currentUserId = ctx.currentUserId
 
-    const workerLookup = await ctx.pool.query<{ id: string }>(
-      `
-      select w.id
-      from workers w
-      where w.company_id = $1 and w.deleted_at is null
-      order by w.created_at asc
-      limit 1
-      `,
-      [ctx.company.id],
-    )
-    const workerId = workerLookup.rows[0]?.id ?? null
+    // Foreman override path: an admin / foreman / office actor can clock
+    // a specific worker in by passing source='foreman_override' +
+    // worker_id. The clerk_user_id on the row stays the actor's id so
+    // the audit trail attributes the trigger correctly; worker_id points
+    // at the rostered worker the time is for. Used by t-foreman.
+    const explicitWorkerIdRaw =
+      body.worker_id === undefined || body.worker_id === null || body.worker_id === ''
+        ? null
+        : String(body.worker_id).trim()
+    let workerId: string | null
+    if (source === 'foreman_override') {
+      if (!explicitWorkerIdRaw) {
+        ctx.sendJson(400, { error: 'worker_id is required when source=foreman_override' })
+        return true
+      }
+      if (!isValidUuid(explicitWorkerIdRaw)) {
+        ctx.sendJson(400, { error: 'worker_id must be a valid uuid' })
+        return true
+      }
+      if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+      const workerCheck = await ctx.pool.query<{ id: string }>(
+        `select id from workers where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+        [ctx.company.id, explicitWorkerIdRaw],
+      )
+      if (!workerCheck.rows[0]) {
+        ctx.sendJson(404, { error: 'worker not found' })
+        return true
+      }
+      workerId = workerCheck.rows[0].id
+    } else {
+      // Self path — the heuristic worker lookup remains the v1 placeholder
+      // until Phase 1D.4 wires Clerk user → worker mapping.
+      const workerLookup = await ctx.pool.query<{ id: string }>(
+        `
+        select w.id
+        from workers w
+        where w.company_id = $1 and w.deleted_at is null
+        order by w.created_at asc
+        limit 1
+        `,
+        [ctx.company.id],
+      )
+      workerId = workerLookup.rows[0]?.id ?? null
+    }
 
     let projectId: string | null = null
     let insideGeofence = false
@@ -186,6 +219,19 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       }
     }
 
+    // Auto-geofence semantics: the PWA only fires source='auto_geofence'
+    // when the device crossed a geofence the server configured. If we
+    // can't reproduce that match server-side (no project resolved from
+    // the lat/lng), the event is suspect — could be stale client
+    // policies, GPS drift outside any geofence, or a forged request.
+    // Reject rather than write an orphan auto-event with project_id=null.
+    if (source === 'auto_geofence' && projectId === null) {
+      ctx.sendJson(409, {
+        error: 'no_geofence_match',
+        message: 'no project geofence matched the supplied location — refusing auto clock-in',
+      })
+      return true
+    }
     // Honour the per-project policy: if this event was triggered by the
     // PWA crossing the geofence (source='auto_geofence') and the project
     // is configured to run as reminder-only, refuse the auto-event so the
@@ -242,17 +288,45 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     const source = parseClockSource(body.source)
     const currentUserId = ctx.currentUserId
 
-    const workerLookup = await ctx.pool.query<{ id: string }>(
-      `
-      select w.id
-      from workers w
-      where w.company_id = $1 and w.deleted_at is null
-      order by w.created_at asc
-      limit 1
-      `,
-      [ctx.company.id],
-    )
-    const workerId = workerLookup.rows[0]?.id ?? null
+    // Same foreman_override path as /in — admin/foreman/office can clock
+    // a specific worker out by passing source='foreman_override' + worker_id.
+    const explicitWorkerIdRaw =
+      body.worker_id === undefined || body.worker_id === null || body.worker_id === ''
+        ? null
+        : String(body.worker_id).trim()
+    let workerId: string | null
+    if (source === 'foreman_override') {
+      if (!explicitWorkerIdRaw) {
+        ctx.sendJson(400, { error: 'worker_id is required when source=foreman_override' })
+        return true
+      }
+      if (!isValidUuid(explicitWorkerIdRaw)) {
+        ctx.sendJson(400, { error: 'worker_id must be a valid uuid' })
+        return true
+      }
+      if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+      const workerCheck = await ctx.pool.query<{ id: string }>(
+        `select id from workers where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+        [ctx.company.id, explicitWorkerIdRaw],
+      )
+      if (!workerCheck.rows[0]) {
+        ctx.sendJson(404, { error: 'worker not found' })
+        return true
+      }
+      workerId = workerCheck.rows[0].id
+    } else {
+      const workerLookup = await ctx.pool.query<{ id: string }>(
+        `
+        select w.id
+        from workers w
+        where w.company_id = $1 and w.deleted_at is null
+        order by w.created_at asc
+        limit 1
+        `,
+        [ctx.company.id],
+      )
+      workerId = workerLookup.rows[0]?.id ?? null
+    }
 
     const openInLookup = await ctx.pool.query<{
       id: string
@@ -264,6 +338,7 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       select id, project_id, occurred_at, event_type
       from clock_events
       where company_id = $1
+        and voided_at is null
         and (
           ($2::uuid is not null and worker_id = $2::uuid)
           or ($2::uuid is null and clerk_user_id = $3)
@@ -394,24 +469,116 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
     const workerIdParam = String(url.searchParams.get('worker_id') ?? '').trim()
     const dateParam = String(url.searchParams.get('date') ?? '').trim()
+    const includeVoided = url.searchParams.get('include_voided') === '1'
     const result = await ctx.pool.query(
       `
-      select id, company_id, worker_id, project_id, clerk_user_id,
-             event_type, occurred_at, lat, lng, accuracy_m,
-             inside_geofence, notes, created_at
-      from clock_events
-      where company_id = $1
-        and ($2 = '' or worker_id = $2::uuid)
+      select e.id, e.company_id, e.worker_id, e.project_id, e.clerk_user_id,
+             e.event_type, e.occurred_at, e.lat, e.lng, e.accuracy_m,
+             e.inside_geofence, e.notes, e.source, e.correctible_until,
+             e.voided_at, e.voided_by, e.created_at,
+             p.name as project_name
+      from clock_events e
+      left join projects p on p.id = e.project_id and p.company_id = e.company_id
+      where e.company_id = $1
+        and ($4::boolean or e.voided_at is null)
+        and ($2 = '' or e.worker_id = $2::uuid)
         and (
           $3 = ''
-          or (occurred_at >= ($3::date) and occurred_at < ($3::date + interval '1 day'))
+          or (e.occurred_at >= ($3::date) and e.occurred_at < ($3::date + interval '1 day'))
         )
-      order by occurred_at asc
+      order by e.occurred_at asc
       limit 500
       `,
-      [ctx.company.id, workerIdParam, dateParam],
+      [ctx.company.id, workerIdParam, dateParam, includeVoided],
     )
     ctx.sendJson(200, { events: result.rows })
+    return true
+  }
+
+  // POST /api/clock/events/:id/void — wk-clockin's "wait, that wasn't me"
+  // affordance. Permitted while now() <= correctible_until, and only by
+  // the worker who owns the event (or admin/foreman/office for the
+  // override path). Sets voided_at + voided_by; clock_events stays
+  // append-only (no DELETE), so the audit trail of the bad event remains.
+  const voidMatch = url.pathname.match(/^\/api\/clock\/events\/([^/]+)\/void$/)
+  if (req.method === 'POST' && voidMatch) {
+    const id = voidMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const reason = typeof body.reason === 'string' ? body.reason.slice(0, 500) : null
+
+    const existing = await ctx.pool.query<{
+      id: string
+      clerk_user_id: string | null
+      worker_id: string | null
+      correctible_until: string | null
+      voided_at: string | null
+      source: ClockSource
+      event_type: string
+      occurred_at: string
+    }>(
+      `select id, clerk_user_id, worker_id, correctible_until, voided_at,
+              source, event_type, occurred_at
+       from clock_events
+       where company_id = $1 and id = $2
+       limit 1`,
+      [ctx.company.id, id],
+    )
+    const row = existing.rows[0]
+    if (!row) {
+      ctx.sendJson(404, { error: 'clock event not found' })
+      return true
+    }
+    if (row.voided_at) {
+      ctx.sendJson(409, { error: 'clock event already voided', voided_at: row.voided_at })
+      return true
+    }
+
+    // Ownership: workers can void their own; admin/foreman/office can void
+    // anyone's (with the foreman_override semantic on the audit trail).
+    const isOwner = row.clerk_user_id !== null && row.clerk_user_id === ctx.currentUserId
+    if (!isOwner && !ctx.requireRole(['admin', 'foreman', 'office'])) {
+      // requireRole already sent the 403 if the role check failed.
+      return true
+    }
+
+    // Time-window check: workers can only void within correctible_until.
+    // Admin/foreman/office can void any time (they're the override path).
+    if (isOwner) {
+      const deadline = row.correctible_until ? Date.parse(row.correctible_until) : 0
+      if (!deadline || Date.now() > deadline) {
+        ctx.sendJson(409, {
+          error: 'correction window expired',
+          correctible_until: row.correctible_until,
+        })
+        return true
+      }
+    }
+
+    const updated = await ctx.pool.query(
+      `update clock_events
+         set voided_at = now(),
+             voided_by = $3,
+             notes = case
+               when $4::text is null then notes
+               when notes is null or notes = '' then $4::text
+               else notes || E'\n\n[void] ' || $4::text
+             end
+       where company_id = $1 and id = $2 and voided_at is null
+       returning id, company_id, worker_id, project_id, clerk_user_id,
+                 event_type, occurred_at, lat, lng, accuracy_m,
+                 inside_geofence, notes, source, correctible_until,
+                 voided_at, voided_by, created_at`,
+      [ctx.company.id, id, ctx.currentUserId, reason],
+    )
+    if (!updated.rows[0]) {
+      ctx.sendJson(409, { error: 'clock event already voided' })
+      return true
+    }
+    ctx.sendJson(200, { clockEvent: updated.rows[0] })
     return true
   }
 

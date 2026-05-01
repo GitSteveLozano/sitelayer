@@ -1082,3 +1082,122 @@ export function calculateJobRentalBillingRun(
 // @sitelayer/workflows. This file kept the *math* (calculateJobRentalBillingRun
 // etc.) — reducer, snapshot, and event types belong with other deterministic
 // workflows. See docs/DETERMINISTIC_WORKFLOWS.md and packages/workflows/.
+
+// ===========================================================================
+// LABOR BURDEN
+// ===========================================================================
+//
+// Pure burden math shared by the API endpoint and any future worker
+// rollup. Migration 032 carries the per-worker burden columns and the
+// per-project daily budget.
+//
+// Conventions:
+//   - `cents` is integer cents to avoid float drift through the
+//     hours × rate × multipliers chain. UI converts to dollars at
+//     render time.
+//   - Overtime threshold defaults to 8 hours in a single span. Phase 5
+//     can refine to weekly OT or shop-configurable rules.
+
+export const DEFAULT_OVERTIME_HOUR_THRESHOLD = 8
+
+export interface LaborBurdenWorkerInput {
+  worker_id: string
+  /** Sum of straight-time hours (within the OT threshold). */
+  straight_hours: number
+  /** Sum of OT hours (over the threshold). */
+  ot_hours: number
+  /** Worker's base hourly rate, in integer cents. */
+  base_hourly_cents: number
+  /** Burden multipliers as percentages (e.g. 20 = 20%). */
+  insurance_pct: number
+  benefits_pct: number
+  ot_premium_pct: number
+}
+
+export interface LaborBurdenWorkerResult {
+  worker_id: string
+  straight_hours: number
+  ot_hours: number
+  /** Loaded straight-time rate (cents/hr). */
+  loaded_hourly_cents: number
+  /** Loaded OT rate (cents/hr). */
+  ot_loaded_hourly_cents: number
+  /** Burdened dollars for straight time, in cents. */
+  straight_cents: number
+  /** Burdened dollars for OT, in cents. */
+  ot_cents: number
+  /** straight_cents + ot_cents */
+  total_cents: number
+}
+
+/**
+ * Per-worker burden. Pure; no clamping or rounding beyond what the
+ * eventual `Math.round` for cents requires. Hours are accepted as
+ * floats (decimal hours).
+ */
+export function calculateWorkerBurden(input: LaborBurdenWorkerInput): LaborBurdenWorkerResult {
+  const { worker_id, straight_hours, ot_hours, base_hourly_cents, insurance_pct, benefits_pct, ot_premium_pct } = input
+  const burdenMultiplier = 1 + insurance_pct / 100 + benefits_pct / 100
+  const otMultiplier = 1 + ot_premium_pct / 100
+  const loadedHourly = base_hourly_cents * burdenMultiplier
+  const otLoadedHourly = loadedHourly * otMultiplier
+  const straightCents = Math.round(loadedHourly * straight_hours)
+  const otCents = Math.round(otLoadedHourly * ot_hours)
+  return {
+    worker_id,
+    straight_hours,
+    ot_hours,
+    loaded_hourly_cents: Math.round(loadedHourly),
+    ot_loaded_hourly_cents: Math.round(otLoadedHourly),
+    straight_cents: straightCents,
+    ot_cents: otCents,
+    total_cents: straightCents + otCents,
+  }
+}
+
+export interface LaborBurdenSummary {
+  total_cents: number
+  total_straight_hours: number
+  total_ot_hours: number
+  /** Sum of straight + OT across all workers. */
+  total_hours: number
+  /** Loaded $ per hour averaged across the totals (0 when total_hours=0). */
+  blended_loaded_hourly_cents: number
+  per_worker: LaborBurdenWorkerResult[]
+}
+
+/** Sum a list of per-worker results into the day-level rollup. */
+export function summarizeLaborBurden(rows: LaborBurdenWorkerResult[]): LaborBurdenSummary {
+  let totalCents = 0
+  let totalStraight = 0
+  let totalOt = 0
+  for (const row of rows) {
+    totalCents += row.total_cents
+    totalStraight += row.straight_hours
+    totalOt += row.ot_hours
+  }
+  const totalHours = totalStraight + totalOt
+  const blended = totalHours > 0 ? Math.round(totalCents / totalHours) : 0
+  return {
+    total_cents: totalCents,
+    total_straight_hours: totalStraight,
+    total_ot_hours: totalOt,
+    total_hours: totalHours,
+    blended_loaded_hourly_cents: blended,
+    per_worker: rows,
+  }
+}
+
+/**
+ * Split a worker's total hours into straight + OT against the
+ * configured threshold (default 8h/day). Hours below the threshold are
+ * straight; hours above are OT.
+ */
+export function splitStraightAndOt(
+  totalHours: number,
+  threshold: number = DEFAULT_OVERTIME_HOUR_THRESHOLD,
+): { straight_hours: number; ot_hours: number } {
+  if (totalHours <= 0) return { straight_hours: 0, ot_hours: 0 }
+  if (totalHours <= threshold) return { straight_hours: totalHours, ot_hours: 0 }
+  return { straight_hours: threshold, ot_hours: totalHours - threshold }
+}
