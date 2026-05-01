@@ -45,9 +45,9 @@ RUN --mount=type=secret,id=sentry_auth_token \
     SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token 2>/dev/null || true)" && \
     if [ -n "$SENTRY_AUTH_TOKEN" ] && [ -n "$SENTRY_RELEASE" ]; then \
       SENTRY_AUTH_TOKEN="$SENTRY_AUTH_TOKEN" SENTRY_ORG="$SENTRY_ORG" SENTRY_WEB_PROJECT="$SENTRY_WEB_PROJECT" SENTRY_RELEASE="$SENTRY_RELEASE" \
-        sh scripts/sentry-upload-sourcemaps.sh apps/web/dist; \
+        sh scripts/sentry-upload-sourcemaps.sh apps/web-v2/dist; \
     fi
-RUN find apps/web/dist -name '*.map' -type f -delete
+RUN find apps/web-v2/dist -name '*.map' -type f -delete
 RUN npm prune --omit=dev
 
 FROM node:20-alpine AS runtime
@@ -62,8 +62,8 @@ COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/api/package.json /app/apps/api/package.json
 COPY --from=builder /app/apps/api/dist /app/apps/api/dist
-COPY --from=builder /app/apps/web/package.json /app/apps/web/package.json
-COPY --from=builder /app/apps/web/dist /app/apps/web/dist
+COPY --from=builder /app/apps/web-v2/package.json /app/apps/web-v2/package.json
+COPY --from=builder /app/apps/web-v2/dist /app/apps/web-v2/dist
 COPY --from=builder /app/apps/worker/package.json /app/apps/worker/package.json
 COPY --from=builder /app/apps/worker/dist /app/apps/worker/dist
 COPY --from=builder /app/packages/config/package.json /app/packages/config/package.json
