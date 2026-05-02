@@ -1,4 +1,5 @@
 export { WorkerTodayScreen } from './today'
 export { WorkerHoursScreen } from './hours'
+export { WorkerPhotoLogScreen } from './photo-log'
 export { ClockInSuccess, type ClockInSuccessProps } from './clockin-success'
 export { IssueModal, type IssueModalProps, type IssueKind } from './issue-modal'

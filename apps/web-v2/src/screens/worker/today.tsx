@@ -296,6 +296,29 @@ export function WorkerTodayScreen() {
           </MobileButton>
         </div>
       </div>
+
+      {/* Site-photo FAB (Sitemap §11 panel 6 wk-log). Camera glyph,
+          accent fill, sits above the bottom tab bar. */}
+      <Link
+        to="/photo"
+        aria-label="Capture a site photo"
+        className="fixed right-4 bottom-[calc(env(safe-area-inset-bottom,0px)+88px)] lg:bottom-6 w-14 h-14 rounded-2xl bg-accent text-white shadow-[0_4px_12px_rgba(217,144,74,0.4)] flex items-center justify-center z-30"
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          width="24"
+          height="24"
+          aria-hidden="true"
+        >
+          <path d="M3 7h4l2-3h6l2 3h4v13H3V7z" />
+          <circle cx="12" cy="13" r="4" />
+        </svg>
+      </Link>
+
       <IssueModal
         open={issueOpen}
         onClose={() => setIssueOpen(false)}
