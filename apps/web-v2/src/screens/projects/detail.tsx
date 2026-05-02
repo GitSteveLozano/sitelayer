@@ -232,6 +232,14 @@ function SchedulePreview({ projectId }: { projectId: string }) {
   )
 }
 
+/**
+ * Project Time-tab burden card — Sitemap §8 panel 3 ("Labor burden").
+ * Big total, stacked-segment bar showing each worker's contribution,
+ * then a per-worker list with hours + amount.
+ *
+ * Each worker gets a deterministic accent shade so the segment in the
+ * bar lines up with the row underneath without legend gymnastics.
+ */
 function TimePreview({ projectId }: { projectId: string }) {
   const burden = useLaborBurdenToday({ projectId })
   const data = burden.data
@@ -242,27 +250,79 @@ function TimePreview({ projectId }: { projectId: string }) {
       </Card>
     )
   }
+  const total = data.total_cents
+  const sortedWorkers = [...data.per_worker].sort((a, b) => b.total_cents - a.total_cents)
+  const segmentColor = (i: number): string => BURDEN_PALETTE[i % BURDEN_PALETTE.length] ?? BURDEN_PALETTE[0]!
   return (
     <Card>
       <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Burden today</div>
-      <div className="num text-[26px] font-bold tracking-tight mt-1">${(data.total_cents / 100).toFixed(2)}</div>
-      <div className="text-[11px] text-ink-3 mt-1">
-        {data.total_hours.toFixed(1)} crew-hrs · {data.per_worker.length} worker
-        {data.per_worker.length === 1 ? '' : 's'}
+      <div className="font-mono tabular-nums text-[28px] font-bold tracking-tight leading-none mt-1">
+        ${(total / 100).toFixed(2)}
       </div>
+      <div className="text-[11px] text-ink-3 mt-1">
+        {data.total_hours.toFixed(1)} crew-hrs · {sortedWorkers.length} worker
+        {sortedWorkers.length === 1 ? '' : 's'}
+        {data.total_ot_hours > 0 ? ` · ${data.total_ot_hours.toFixed(1)} OT` : ''}
+      </div>
+      {sortedWorkers.length > 0 ? (
+        <div className="mt-3 flex h-2 rounded-full overflow-hidden" aria-hidden="true">
+          {sortedWorkers.map((w, i) => {
+            const pct = total > 0 ? (w.total_cents / total) * 100 : 0
+            return <span key={w.worker_id} style={{ width: `${pct}%`, background: segmentColor(i) }} />
+          })}
+        </div>
+      ) : null}
       {data.total_budget_cents > 0 ? (
-        <div className="text-[11px] text-ink-3 mt-1">
+        <div className="font-mono tabular-nums text-[11px] text-ink-3 mt-2">
           {(data.burden_pct_of_budget * 100).toFixed(0)}% of ${(data.total_budget_cents / 100).toLocaleString()} budget
         </div>
       ) : (
-        <div className="text-[11px] text-ink-3 mt-1">No daily budget set on this project.</div>
+        <div className="text-[11px] text-ink-3 mt-2">No daily budget set on this project.</div>
       )}
+      {sortedWorkers.length > 0 ? (
+        <ul className="mt-3 divide-y divide-line">
+          {sortedWorkers.map((w, i) => (
+            <li key={w.worker_id} className="py-2 first:pt-0 last:pb-0 flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  aria-hidden="true"
+                  className="w-2 h-2 rounded-sm shrink-0"
+                  style={{ background: segmentColor(i) }}
+                />
+                <span className="text-[12px] text-ink-2 font-mono tabular-nums">
+                  {(w.straight_hours + w.ot_hours).toFixed(1)}h
+                </span>
+                <span className="text-[12px] text-ink-3 truncate">
+                  {w.ot_hours > 0 ? `incl ${w.ot_hours.toFixed(1)} OT` : 'straight'}
+                </span>
+              </div>
+              <span className="font-mono tabular-nums text-[12px] font-medium shrink-0">
+                ${(w.total_cents / 100).toFixed(2)}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
       <div className="mt-3">
         <Attribution source="Live from /api/labor-burden/today?project_id=…" />
       </div>
     </Card>
   )
 }
+
+/**
+ * Six-stop accent ramp so the stacked-bar segments stay visually
+ * distinct without falling out of the warm-sand palette. Sourced from
+ * the design's accent + semantic ramp.
+ */
+const BURDEN_PALETTE = [
+  'var(--m-accent)',
+  'var(--m-accent-ink)',
+  'var(--m-blue)',
+  'var(--m-green)',
+  'var(--m-amber)',
+  'var(--m-red)',
+] as const
 
 function formatScheduleDate(iso: string): string {
   const d = new Date(iso + 'T00:00:00')
