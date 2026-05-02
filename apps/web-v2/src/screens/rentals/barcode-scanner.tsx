@@ -50,6 +50,15 @@ export function BarcodeScannerSheet({ open, onClose, onDetected }: BarcodeScanne
   const [scanning, setScanning] = useState(false)
   const [supported] = useState(() => Boolean(getBarcodeDetector()))
 
+  // Latest-callback ref so the camera lifecycle effect doesn't tear
+  // down + re-acquire each time the parent re-renders with a fresh
+  // inline `onDetected` arrow (e.g. when the user types in the
+  // asset-code input on the parent screen).
+  const onDetectedRef = useRef(onDetected)
+  useEffect(() => {
+    onDetectedRef.current = onDetected
+  }, [onDetected])
+
   useEffect(() => {
     if (!open || !supported) return
     let cancelled = false
@@ -102,7 +111,7 @@ export function BarcodeScannerSheet({ open, onClose, onDetected }: BarcodeScanne
           if (results.length > 0) {
             const first = results[0]
             if (first?.rawValue) {
-              onDetected(first.rawValue)
+              onDetectedRef.current(first.rawValue)
               return
             }
           }
@@ -128,7 +137,7 @@ export function BarcodeScannerSheet({ open, onClose, onDetected }: BarcodeScanne
       if (stream) stream.getTracks().forEach((t) => t.stop())
       setScanning(false)
     }
-  }, [open, supported, onDetected])
+  }, [open, supported])
 
   if (!open) return null
 
@@ -163,7 +172,7 @@ export function BarcodeScannerSheet({ open, onClose, onDetected }: BarcodeScanne
             </div>
           </div>
         )}
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <MobileButton variant="ghost" onClick={onClose}>
           Cancel
         </MobileButton>

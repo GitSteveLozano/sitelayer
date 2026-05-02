@@ -87,20 +87,21 @@ export function TakeoffCanvasScreen() {
   )
 
   const onCanvasTap = (e: ReactPointerEvent<SVGSVGElement>) => {
-    if (!svgRef.current) return
+    const svg = svgRef.current
+    if (!svg) return
     if (tool === 'polygon' && draftPoints.length >= 64) return
-    const rect = svgRef.current.getBoundingClientRect()
-    const xRaw = ((e.clientX - rect.left) / rect.width) * 100
-    const yRaw = ((e.clientY - rect.top) / rect.height) * 100
-    const x = clamp(xRaw, 0, 100)
-    const y = clamp(yRaw, 0, 100)
-    if (tool === 'count') {
-      // Each tap commits one point — the visible "count" is the
-      // length of draftPoints; "Save" wraps the run into a single
-      // measurement with quantity = draftPoints.length.
-      setDraftPoints((prev) => [...prev, { x, y }])
-      return
-    }
+    // Use the SVG screen-CTM so the tap respects the current viewBox
+    // (i.e. zoom). A naive client-rect map would always project to the
+    // full 0–100 board space and drop points in the wrong place at any
+    // zoom != 1.
+    const ctm = svg.getScreenCTM()
+    if (!ctm) return
+    const pt = svg.createSVGPoint()
+    pt.x = e.clientX
+    pt.y = e.clientY
+    const local = pt.matrixTransform(ctm.inverse())
+    const x = clamp(local.x, 0, 100)
+    const y = clamp(local.y, 0, 100)
     setDraftPoints((prev) => [...prev, { x, y }])
   }
 
@@ -280,7 +281,7 @@ export function TakeoffCanvasScreen() {
               </MobileButton>
             </div>
 
-            {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+            {error ? <div className="text-[12px] text-warn">{error}</div> : null}
 
             <div className="flex items-center justify-between text-[11px] text-ink-3 pt-1">
               <span>{blueprintMeasurements.length} saved on this blueprint</span>
