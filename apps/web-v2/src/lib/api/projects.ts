@@ -100,3 +100,38 @@ export function useProject(id: string | null | undefined, options?: Partial<UseQ
     ...options,
   })
 }
+
+/**
+ * Project-scoped audit timeline. Returns recent project lifecycle events
+ * (entity_type='project', entity_id=projectId). Unlike /api/audit-events
+ * (admin-only) this surface is open to anyone with project access — the
+ * per-project filter scopes data tightly enough that a foreman seeing
+ * their own project's history is fine.
+ */
+export interface ProjectTimelineEvent {
+  id: string
+  actor_user_id: string | null
+  actor_role: string | null
+  entity_type: string
+  entity_id: string | null
+  action: string
+  before: unknown
+  after: unknown
+  created_at: string
+}
+
+export interface ProjectTimelineResponse {
+  events: ProjectTimelineEvent[]
+}
+
+export function useProjectTimeline(
+  projectId: string | null | undefined,
+  options?: Partial<UseQueryOptions<ProjectTimelineResponse>>,
+) {
+  return useQuery<ProjectTimelineResponse>({
+    queryKey: ['projects', 'timeline', projectId ?? ''],
+    queryFn: () => request<ProjectTimelineResponse>(`/api/projects/${encodeURIComponent(projectId!)}/timeline`),
+    enabled: Boolean(projectId),
+    ...options,
+  })
+}
