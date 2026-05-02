@@ -28,7 +28,12 @@ type PreparedTakeoffMeasurementInput = {
   geometryJson: string | null
   blueprintDocumentId: string | null
   divisionCode: string | null
+  // Sitemap §5 panel 1 — first-class elevation tag (East / South /
+  // West / North / Roof / Other / null = untagged).
+  elevation: string | null
 }
+
+const ELEVATION_VOCAB = new Set(['east', 'south', 'west', 'north', 'roof', 'other'])
 
 function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'): PreparedTakeoffMeasurementInput {
   if (typeof rawInput !== 'object' || rawInput === null || Array.isArray(rawInput)) {
@@ -50,6 +55,14 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     input.division_code === undefined || input.division_code === null || String(input.division_code).trim() === ''
       ? null
       : String(input.division_code).trim()
+  const rawElevation =
+    input.elevation === undefined || input.elevation === null || String(input.elevation).trim() === ''
+      ? null
+      : String(input.elevation).trim().toLowerCase()
+  if (rawElevation !== null && !ELEVATION_VOCAB.has(rawElevation)) {
+    throw new HttpError(400, `${label}.elevation must be one of: east, south, west, north, roof, other`)
+  }
+  const elevation = rawElevation
 
   if (!serviceItemCode) {
     throw new HttpError(400, `${label}.service_item_code is required`)
@@ -86,7 +99,7 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     throw new HttpError(400, `${label}.quantity must be a non-negative number`)
   }
 
-  return { serviceItemCode, quantity, unit, notes, geometryJson, blueprintDocumentId, divisionCode }
+  return { serviceItemCode, quantity, unit, notes, geometryJson, blueprintDocumentId, divisionCode, elevation }
 }
 
 export async function assertBlueprintDocumentsBelongToProject(
@@ -195,10 +208,10 @@ export async function handleTakeoffWriteRoutes(
       const insertResult = await client.query(
         `
         insert into takeoff_measurements (
-          company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code
+          company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation
         )
-        values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, version, deleted_at, created_at
+        values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9, $10)
+        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, version, deleted_at, created_at
         `,
         [
           ctx.company.id,
@@ -210,6 +223,7 @@ export async function handleTakeoffWriteRoutes(
           measurementInput.notes,
           measurementInput.geometryJson,
           measurementInput.divisionCode,
+          measurementInput.elevation,
         ],
       )
       const row = insertResult.rows[0]
@@ -312,10 +326,10 @@ export async function handleTakeoffWriteRoutes(
         const insertResult = await client.query(
           `
           insert into takeoff_measurements (
-            company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code
+            company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation
           )
-          values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9)
-          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, version, deleted_at, created_at
+          values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9, $10)
+          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, version, deleted_at, created_at
           `,
           [
             ctx.company.id,
@@ -327,6 +341,7 @@ export async function handleTakeoffWriteRoutes(
             measurement.notes,
             measurement.geometryJson,
             measurement.divisionCode,
+            measurement.elevation,
           ],
         )
         createdRows.push(insertResult.rows[0])

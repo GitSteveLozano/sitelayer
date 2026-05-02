@@ -40,6 +40,8 @@ export interface TakeoffMeasurement {
   quantity: string
   unit: string
   notes: string | null
+  /** First-class elevation tag (Sitemap §5 panel 1). Replaces the `elev:<tag>` notes prefix. */
+  elevation: string | null
   geometry: MeasurementGeometry | Record<string, never>
   version: number
   created_at: string
@@ -67,6 +69,7 @@ export interface CreateMeasurementInput {
   quantity?: number
   unit?: string
   notes?: string | null
+  elevation?: string | null
   geometry: MeasurementGeometry
 }
 
