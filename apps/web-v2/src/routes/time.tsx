@@ -2,7 +2,7 @@ import { Route, Routes } from 'react-router-dom'
 import { useRole } from '@/lib/role'
 import { WorkerHoursScreen } from '@/screens/worker'
 import { ApprovalQueueScreen, ForemanBatchEntryScreen } from '@/screens/foreman'
-import { OwnerTimeAnomaliesScreen } from '@/screens/owner'
+import { OwnerLaborBurdenScreen, OwnerTimeAnomaliesScreen } from '@/screens/owner'
 
 /**
  * Time tab — role-aware default per `Sitemap.html` § 03:
@@ -32,6 +32,7 @@ export default function TimeRoute() {
     <Routes>
       <Route index element={<TimeIndex />} />
       <Route path="anomalies" element={<OwnerTimeAnomaliesScreen />} />
+      <Route path="burden" element={<OwnerLaborBurdenScreen />} />
     </Routes>
   )
 }
