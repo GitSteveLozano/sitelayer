@@ -1,0 +1,1 @@
+import{j as d}from"./vendor-react-CL8t7ISi.js";import{c as e}from"./index-CIN1-5lL.js";const c={accent:"border-l-accent",warn:"border-l-warn",good:"border-l-good"};function s({tone:r="accent",className:o,children:a}){return d.jsx("div",{"data-tone":r,className:e("bg-card border border-line border-l-[3px] rounded shadow-card px-4 py-3.5",c[r],o),children:a})}export{s as S};
