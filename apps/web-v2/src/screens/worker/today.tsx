@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, MobileButton, PhoneTopBar, Pill } from '@/components/mobile'
 import { Spark } from '@/components/ai'
-import { useClockIn, useClockOut, useClockTimeline, useVoidClockEvent, type ClockEvent } from '@/lib/api'
+import { useClockIn, useClockOut, useClockTimeline, useSchedules, useVoidClockEvent, type ClockEvent } from '@/lib/api'
 import { useGeofence } from '@/lib/geofence'
 import {
   findOpenSpan,
@@ -40,6 +40,7 @@ import { IssueModal, type IssueKind } from './issue-modal'
 export function WorkerTodayScreen() {
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const timeline = useClockTimeline({ date: todayIso }, { refetchInterval: 30_000 })
+  const todaySchedules = useSchedules({ from: todayIso, to: todayIso })
   const events = timeline.data?.events ?? []
   const spans = useMemo(() => pairClockSpans(events), [events])
   const openSpan = findOpenSpan(spans)
@@ -239,23 +240,34 @@ export function WorkerTodayScreen() {
           </div>
         </Card>
 
-        {/* Today's scope — placeholder copy until bootstrap data lands. */}
-        <div className="pt-2">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">Today</div>
-          <Card>
-            <div className="flex items-center justify-between mb-1.5">
-              <strong className="text-[15px]">Project scope</strong>
-              <Pill tone="good">scheduled</Pill>
-            </div>
-            <p className="text-[12px] text-ink-3 mb-2">
-              Project, scope, and progress land when bootstrap is wired (Phase 1D.4).
-            </p>
-            <div className="flex items-center gap-2 text-[11px] text-ink-3">
-              <Spark state="muted" size={12} aria-label="" />
-              Based on today's clock-in
-            </div>
-          </Card>
-        </div>
+        {/* Today's scope — first scheduled project today, if any. AI
+            Rules 'calm by default': hide entirely when nothing
+            meaningful, instead of rendering an empty placeholder. */}
+        {todaySchedules.data?.schedules?.[0] ? (
+          <div className="pt-2">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">Today</div>
+            <Card>
+              <div className="flex items-center justify-between mb-1.5">
+                <strong className="text-[15px]">{todaySchedules.data.schedules[0].project_name ?? 'Today'}</strong>
+                <Pill tone={todaySchedules.data.schedules[0].status === 'confirmed' ? 'good' : 'warn'}>
+                  {todaySchedules.data.schedules[0].status}
+                </Pill>
+              </div>
+              <p className="text-[12px] text-ink-2 mb-2">
+                {(() => {
+                  const sched = todaySchedules.data.schedules[0]
+                  const crewN = Array.isArray(sched.crew) ? (sched.crew as unknown[]).length : 0
+                  const others = todaySchedules.data.schedules.length - 1
+                  return `${crewN} crew on plan${others > 0 ? ` · ${others} more project${others === 1 ? '' : 's'} today` : ''}.`
+                })()}
+              </p>
+              <div className="flex items-center gap-2 text-[11px] text-ink-3">
+                <Spark state="muted" size={12} aria-label="" />
+                From the foreman's plan
+              </div>
+            </Card>
+          </div>
+        ) : null}
 
         {/* Hours summary — links to wk-week / wk-hours. */}
         <div className="pt-2">
