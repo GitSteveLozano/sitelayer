@@ -18,3 +18,4 @@ export {
   type AvatarSize,
   type AvatarTone,
 } from './Avatar'
+export { BurdenHeroCard, type BurdenHeroCardProps } from './BurdenHeroCard'

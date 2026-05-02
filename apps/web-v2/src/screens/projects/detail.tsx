@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { BurdenHeroCard, Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import {
   useClockTimeline,
@@ -137,9 +137,13 @@ function OverviewTab({ project }: { project: ProjectDetail }) {
   )
 
   const drafts = useDailyLogs({ projectId: project.id, status: 'draft' })
+  // Project-scoped burden — same hero card as fm-today, scoped via
+  // project_id so it only sums clock spans for this site.
+  const burden = useLaborBurdenToday({ projectId: project.id })
 
   return (
     <div className="space-y-3">
+      <BurdenHeroCard burden={burden.data} label="Project burden today" />
       <div className="grid grid-cols-2 gap-2.5">
         <Card tight>
           <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">On site now</div>
