@@ -14,7 +14,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@clerk/backend": "^3.4.3",
+    "@clerk/backend": "^3.4.4",
     "@sentry/node": "^10.51.0",
     "@sitelayer/config": "file:../../packages/config",
     "@sitelayer/logger": "file:../../packages/logger",
