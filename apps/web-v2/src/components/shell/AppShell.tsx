@@ -2,6 +2,7 @@ import { Outlet } from 'react-router-dom'
 import { BottomTabBar } from '@/components/nav/BottomTabBar'
 import { DesktopSideRail } from '@/components/nav/DesktopSideRail'
 import { InstallPromptBanner } from './InstallPromptBanner'
+import { IosInstallHint } from './IosInstallHint'
 import { OfflineBanner } from './OfflineBanner'
 import { PushDeniedBanner } from './PushDeniedBanner'
 import { UpdateBanner } from './UpdateBanner'
@@ -22,6 +23,7 @@ export function AppShell() {
           <OfflineBanner />
           <UpdateBanner />
           <InstallPromptBanner />
+          <IosInstallHint />
           <PushDeniedBanner />
           <Outlet />
         </div>
