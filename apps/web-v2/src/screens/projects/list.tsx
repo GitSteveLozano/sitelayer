@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
@@ -27,8 +27,19 @@ const FILTERS: ReadonlyArray<{ key: FilterChip; label: string; status: ProjectSt
 
 export function ProjectsListScreen() {
   const [chip, setChip] = useState<FilterChip>('active')
+  const [searchInput, setSearchInput] = useState('')
+  const [debouncedQ, setDebouncedQ] = useState('')
+  // Debounce the search box so we don't fire a request per keystroke.
+  // 200ms is below the 'sluggish' threshold but lets bursts of typing
+  // collapse into a single fetch.
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedQ(searchInput.trim()), 200)
+    return () => window.clearTimeout(id)
+  }, [searchInput])
   const filter = FILTERS.find((f) => f.key === chip)!
-  const params = filter.status ? { status: filter.status } : {}
+  const params: { status?: ProjectStatus; q?: string } = {}
+  if (filter.status) params.status = filter.status
+  if (debouncedQ) params.q = debouncedQ
   const projects = useProjects(params)
   const rows = projects.data?.projects ?? []
 
@@ -38,6 +49,33 @@ export function ProjectsListScreen() {
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Tab · Projects</div>
         <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">Projects</h1>
         <div className="text-[12px] text-ink-3 mt-1">{projects.isPending ? 'Loading…' : `${rows.length} ${chip}`}</div>
+      </div>
+
+      <div className="px-4 pb-2">
+        <label className="relative block">
+          <span className="sr-only">Search projects</span>
+          <span aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-3">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              width="16"
+              height="16"
+            >
+              <circle cx="11" cy="11" r="7" />
+              <path d="M20 20l-3.5-3.5" />
+            </svg>
+          </span>
+          <input
+            type="search"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search by name or customer"
+            className="w-full h-10 pl-9 pr-3 rounded-[12px] bg-card-soft border border-line text-[14px] focus:outline-none focus:border-accent"
+          />
+        </label>
       </div>
 
       <div className="px-4 pb-2 flex gap-1.5 overflow-x-auto scrollbar-hide">
