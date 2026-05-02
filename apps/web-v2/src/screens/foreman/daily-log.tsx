@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Card, MobileButton, Pill } from '@/components/mobile'
-import { Attribution, AgentSurface, Spark } from '@/components/ai'
+import { Attribution, AgentSurface, Spark, useRejectSheet } from '@/components/ai'
 import {
   ApiError,
   dailyLogPhotoUrl,
@@ -397,6 +397,7 @@ interface VoiceToLogBlockProps {
 }
 
 function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLogBlockProps) {
+  const [rejectNode, askReject] = useRejectSheet()
   const trigger = useTriggerVoiceToLog()
   const insights = useAiInsights<VoiceToLogProposal>({
     kind: 'voice_to_log',
@@ -532,9 +533,13 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLog
               <MobileButton
                 variant="ghost"
                 onClick={async () => {
-                  const reason =
-                    typeof window !== 'undefined' ? (window.prompt('Why dismiss?') ?? undefined) : undefined
-                  await dismiss.mutateAsync(reason ? { id: latest.id, reason } : { id: latest.id }).catch(() => {})
+                  const reason = await askReject({
+                    title: 'Dismiss agent draft?',
+                    body: 'Pick the closest match — this trains the model.',
+                  })
+                  if (reason !== null) {
+                    await dismiss.mutateAsync({ id: latest.id, reason }).catch(() => {})
+                  }
                 }}
               >
                 Dismiss
@@ -547,6 +552,7 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLog
       <div className="mt-3 pt-2 border-t border-dashed border-line-2">
         <Attribution source="Drafted from foreman dictation by agent:voice_to_log" />
       </div>
+      {rejectNode}
     </AgentSurface>
   )
 }

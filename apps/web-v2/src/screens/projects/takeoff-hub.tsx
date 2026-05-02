@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
-import { AgentSurface, Attribution, Spark, StripeCard } from '@/components/ai'
+import { AgentSurface, Attribution, Spark, StripeCard, useRejectSheet } from '@/components/ai'
 import {
   useAiInsights,
   useApplyInsight,
@@ -181,6 +181,9 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
           polygon / lineal / count / volume. Caulk runs along window frames, vents drop as markers, domain helpers
           already compute area + length + volume.
         </div>
+        <div className="mt-2 pt-2 border-t border-dashed border-line-2">
+          <Attribution source="@sitelayer/domain · normalizePolygonGeometry + calculateTakeoffQuantity" />
+        </div>
       </StripeCard>
 
       {/* Phase 3E: compare */}
@@ -327,6 +330,7 @@ function TakeoffToBidProposalBlock({
   onApply: (id: string) => Promise<void>
   onDismiss: (id: string, reason?: string) => Promise<void>
 }) {
+  const [rejectNode, askReject] = useRejectSheet()
   return (
     <div>
       <div className="num text-[20px] font-bold tracking-tight">${payload.total_amount.toLocaleString()}</div>
@@ -362,14 +366,18 @@ function TakeoffToBidProposalBlock({
         </MobileButton>
         <MobileButton
           variant="ghost"
-          onClick={() => {
-            const reason = window.prompt('Why are you dismissing this proposal?') ?? undefined
-            void onDismiss(insightId, reason)
+          onClick={async () => {
+            const reason = await askReject({
+              title: 'Dismiss agent proposal?',
+              body: 'Pick the closest match — this trains the model.',
+            })
+            if (reason !== null) await onDismiss(insightId, reason)
           }}
         >
           Dismiss
         </MobileButton>
       </div>
+      {rejectNode}
     </div>
   )
 }
