@@ -456,6 +456,30 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     return true
   }
 
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/timeline$/)) {
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!projectId) {
+      ctx.sendJson(400, { error: 'project id is required' })
+      return true
+    }
+    // Open to anyone with project access (admin/office/foreman/member);
+    // unlike /api/audit-events the per-project filter scopes the data
+    // tightly enough that a foreman seeing their own project lifecycle
+    // is fine. Cross-tenant leakage is blocked by company_id.
+    const result = await ctx.pool.query(
+      `select id, actor_user_id, actor_role, entity_type, entity_id, action, before, after, created_at
+         from audit_events
+        where company_id = $1
+          and entity_type = 'project'
+          and entity_id = $2
+        order by created_at desc
+        limit 200`,
+      [ctx.company.id, projectId],
+    )
+    ctx.sendJson(200, { events: result.rows })
+    return true
+  }
+
   if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/summary$/)) {
     const projectId = url.pathname.split('/')[3] ?? ''
     if (!projectId) {
