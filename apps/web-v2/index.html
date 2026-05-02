@@ -16,6 +16,34 @@
       rel="stylesheet"
     />
     <title>Sitelayer</title>
+    <style>
+      /* Cold-start splash from Sitemap §1 panel 5. Renders before any
+         JS evaluates so the user sees the brand mark + tagline instead
+         of a flash of blank canvas. The .m-splash class is stripped
+         from the body once React mounts and replaces #root content. */
+      html, body { margin: 0; background: #f5f1ec; }
+      body { font-family: 'Geist', -apple-system, BlinkMacSystemFont, system-ui, sans-serif; color: #1c1816; }
+      #root:empty {
+        position: fixed; inset: 0;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 14px;
+        background: #f5f1ec;
+        color: #1c1816;
+      }
+      #root:empty::before {
+        content: 'SL';
+        display: inline-flex; align-items: center; justify-content: center;
+        width: 64px; height: 64px;
+        border-radius: 16px;
+        background: #d9904a;
+        color: white;
+        font-weight: 700; font-size: 24px; letter-spacing: -0.02em;
+      }
+      #root:empty::after {
+        content: 'Sitelayer';
+        font-size: 17px; font-weight: 600; letter-spacing: -0.01em;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>
