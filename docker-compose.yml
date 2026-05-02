@@ -64,13 +64,18 @@ services:
   web:
     image: node:20-alpine
     working_dir: /app
-    command: sh -c "npm install --no-audit --no-fund --prefer-offline && npm run dev:web"
+    # v2 has been the live web app since PR #139 (2026-05-01). This stack
+    # used to run `npm run dev:web` (v1) which let agents trying to spin
+    # up a local dev environment work in v1 for hours without realising
+    # nothing they did would reach prod. v2's vite dev listens on 3100;
+    # the host port is mapped to match.
+    command: sh -c "npm install --no-audit --no-fund --prefer-offline && npm run dev:web-v2"
     environment:
       NODE_ENV: development
       VITE_API_URL: http://localhost:3001
       VITE_APP_TIER: local
     ports:
-      - '3000:3000'
+      - '3000:3100'
     depends_on:
       - api
     volumes:
