@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
 import { useCreateCustomer, useCustomers, useDeleteCustomer, usePatchCustomer, type Customer } from '@/lib/api'
 
 export function CatalogCustomersScreen() {
@@ -77,6 +77,7 @@ function CustomerSheet({
 }) {
   const patch = usePatchCustomer(customer?.id ?? '')
   const del = useDeleteCustomer()
+  const [confirmNode, askConfirm] = useConfirmSheet()
   const [name, setName] = useState(customer?.name ?? '')
   const [externalId, setExternalId] = useState(customer?.external_id ?? '')
   const [error, setError] = useState<string | null>(null)
@@ -102,7 +103,13 @@ function CustomerSheet({
 
   const remove = async () => {
     if (!customer) return
-    if (typeof window !== 'undefined' && !window.confirm(`Delete "${customer.name}"?`)) return
+    const ok = await askConfirm({
+      title: 'Delete customer?',
+      body: `Permanently remove "${customer.name}".`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (!ok) return
     try {
       await del.mutateAsync({ id: customer.id, expected_version: customer.version })
       onClose()
@@ -128,6 +135,7 @@ function CustomerSheet({
           ) : null}
         </div>
       </div>
+      {confirmNode}
     </Sheet>
   )
 }

@@ -3,7 +3,6 @@ import { Sentry } from './instrument'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
-import { registerServiceWorker } from './pwa/register'
 import { startOfflineReplayLoop } from './lib/offline/replay'
 import './styles/globals.css'
 
@@ -20,13 +19,10 @@ root.render(
   </StrictMode>,
 )
 
-// Phase 0 registers the SW passively — no toast, no auto-reload. UI for
-// "new version available" lands when the SW prompt UX is finalized.
-if (import.meta.env.PROD) {
-  registerServiceWorker({
-    onRegisterError: (err) => Sentry.captureException(err),
-  })
-}
+// SW registration moved into <UpdateBanner /> in the AppShell so the
+// "new version available" UI ships alongside the registration call.
+// The banner mounts in PROD and surfaces the update prompt; in DEV we
+// skip the SW entirely and rely on Vite's HMR.
 
 // Offline mutation queue + replay loop (1E.6). Boots regardless of SW
 // availability so the queue still works in dev / Safari private mode.
