@@ -1,6 +1,9 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card } from '@/components/mobile'
+import { Avatar, Card, Row } from '@/components/mobile'
+import { ProjectSwitcherSheet } from '@/components/nav/ProjectSwitcherSheet'
+import { WORKFLOW_NAV, WORKSPACE_NAV } from '@/components/nav/nav-items'
+import { useOnlineStatus } from '@/lib/offline/online-status'
 import { useRole, writeRoleOverride, type Role } from '@/lib/role'
 import { NotificationPreferencesScreen } from './notifications'
 import { PushOnboardingCard } from './push-onboarding'
@@ -15,21 +18,31 @@ export { CatalogDivisionsScreen } from './catalog-divisions'
 export { BonusSimulatorScreen } from './bonus-sim'
 export { AuditLogScreen } from './audit-log'
 
+const ROLE_LABEL: Record<Role, string> = {
+  owner: 'Owner / PM',
+  foreman: 'Foreman',
+  worker: 'Worker',
+}
+
 /**
- * Settings hub — what the More tab points at.
+ * More tab — Sitemap.html § 02 panel 5 ("More · 5th slot").
  *
- * Sitemap.html § 05 lays out three groups: Workflow / Workspace / You.
- * Phase 1D.4 lands the You + Workspace surfaces wired to real APIs:
- *   - Push notifications onboarding
- *   - Notification channel preferences
- *   - Persona override (dev-only convenience until Clerk org wiring lands)
+ * Layout from the design:
+ *   - Page title "More · Everything else"
+ *   - User identity card (avatar / name / role · org / synced)
+ *   - WORKFLOW group: Takeoff, Estimates, Schedule, Crews — fast jumps
+ *     into operational surfaces that don't have a dedicated tab.
+ *   - WORKSPACE group: Catalog, Integrations, Inventory, Bonus sim, Audit.
+ *   - YOU group: Notifications + Persona override (dev).
  *
- * Workflow shortcuts (jump-into-takeoff, jump-into-estimates, etc.)
- * land alongside the screens they jump into in Phase 2.
+ * Workflow + workspace rows read from `nav-items.ts`; the same
+ * registry powers `NavDrawer` so the two surfaces stay aligned.
  */
 export function SettingsScreen() {
   const role = useRole()
+  const online = useOnlineStatus()
   const [section, setSection] = useState<'home' | 'notifications'>('home')
+  const [switcherOpen, setSwitcherOpen] = useState(false)
 
   if (section === 'notifications') {
     return (
@@ -49,103 +62,88 @@ export function SettingsScreen() {
   return (
     <div className="px-5 pt-6 pb-12 max-w-2xl">
       <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">More</div>
-      <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">Settings</h1>
+      <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">
+        Everything else
+      </h1>
 
-      <div className="mt-6 space-y-3">
-        <PushOnboardingCard />
+      {/* User identity card — taps open the project switcher per panel 4 */}
+      <button
+        type="button"
+        onClick={() => setSwitcherOpen(true)}
+        className="mt-5 w-full text-left rounded-[16px] bg-card-soft px-4 py-4 flex items-center gap-3 active:bg-line/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      >
+        <Avatar size="lg" tone="amber" initials="ME" />
+        <div className="flex-1 min-w-0">
+          <div className="text-[15px] font-semibold tracking-tight truncate">Signed-in user</div>
+          <div className="text-[11px] text-ink-3 truncate mt-0.5">{ROLE_LABEL[role]} · Sitelayer</div>
+          <div className="mt-1.5 inline-flex items-center gap-1.5 text-[11px]">
+            <span
+              aria-hidden="true"
+              className={`inline-block w-1.5 h-1.5 rounded-full ${online ? 'bg-good' : 'bg-warn'}`}
+            />
+            <span className={online ? 'text-good' : 'text-warn'}>
+              {online ? 'Synced' : 'Offline · queued'}
+            </span>
+          </div>
+        </div>
+        <span aria-hidden="true" className="text-ink-4 text-[18px]">›</span>
+      </button>
 
-        <button type="button" onClick={() => setSection('notifications')} className="block w-full text-left">
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[14px] font-semibold">Notification preferences</div>
-                <div className="text-[12px] text-ink-3 mt-0.5">Pick push / SMS / email per event type.</div>
-              </div>
-              <span className="text-ink-4" aria-hidden="true">
-                ›
-              </span>
-            </div>
-          </Card>
-        </button>
+      {/* WORKFLOW group */}
+      <NavGroup title="Workflow" rows={WORKFLOW_NAV} />
 
-        <Link to="/more/catalog" className="block">
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[14px] font-semibold">Catalog</div>
-                <div className="text-[12px] text-ink-3 mt-0.5">
-                  Customers, workers, service items, pricing, bonus rules, divisions.
-                </div>
-              </div>
-              <span className="text-ink-4" aria-hidden="true">
-                ›
-              </span>
-            </div>
-          </Card>
-        </Link>
+      {/* WORKSPACE group */}
+      <NavGroup title="Workspace" rows={WORKSPACE_NAV} />
 
-        <Link to="/more/integrations" className="block">
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[14px] font-semibold">Integrations</div>
-                <div className="text-[12px] text-ink-3 mt-0.5">QuickBooks Online connection + entity mappings.</div>
-              </div>
-              <span className="text-ink-4" aria-hidden="true">
-                ›
-              </span>
-            </div>
-          </Card>
-        </Link>
-
-        <Link to="/more/inventory" className="block">
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[14px] font-semibold">Inventory admin</div>
-                <div className="text-[12px] text-ink-3 mt-0.5">
-                  Items, locations, movement ledger. Rental dispatch lives in the Rentals tab.
-                </div>
-              </div>
-              <span className="text-ink-4" aria-hidden="true">
-                ›
-              </span>
-            </div>
-          </Card>
-        </Link>
-
-        <Link to="/more/bonus-sim" className="block">
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[14px] font-semibold">Bonus simulator</div>
-                <div className="text-[12px] text-ink-3 mt-0.5">What-if modeling against an active bonus rule.</div>
-              </div>
-              <span className="text-ink-4" aria-hidden="true">
-                ›
-              </span>
-            </div>
-          </Card>
-        </Link>
-
-        <Link to="/more/audit" className="block">
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[14px] font-semibold">Audit log</div>
-                <div className="text-[12px] text-ink-3 mt-0.5">
-                  Append-only ledger of state-changing API calls. Admin only.
-                </div>
-              </div>
-              <span className="text-ink-4" aria-hidden="true">
-                ›
-              </span>
-            </div>
-          </Card>
-        </Link>
-
-        <RoleOverrideCard currentRole={role} />
+      {/* YOU group */}
+      <div className="mt-6">
+        <div className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-3">You</div>
+        <Card>
+          <PushOnboardingCard />
+          <button type="button" onClick={() => setSection('notifications')} className="block w-full text-left mt-3">
+            <Row
+              headline="Notification preferences"
+              supporting="Pick push / SMS / email per event type."
+              chev
+              noBorder
+            />
+          </button>
+          <RoleOverrideCard currentRole={role} />
+        </Card>
       </div>
+
+      <ProjectSwitcherSheet open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
+    </div>
+  )
+}
+
+function NavGroup({
+  title,
+  rows,
+}: {
+  title: string
+  rows: ReadonlyArray<{ key: string; to: string; label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>> }>
+}) {
+  return (
+    <div className="mt-6">
+      <div className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-3">{title}</div>
+      <Card tight>
+        <ul className="-mx-3 -my-2">
+          {rows.map((r, i) => (
+            <li key={r.key}>
+              <Link to={r.to} className="block">
+                <Row
+                  leading={<r.icon width={18} height={18} strokeWidth={1.8} />}
+                  leadingTone="accent"
+                  headline={r.label}
+                  chev
+                  noBorder={i === rows.length - 1}
+                />
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </Card>
     </div>
   )
 }
@@ -160,7 +158,6 @@ export function SettingsScreen() {
 function RoleOverrideCard({ currentRole }: { currentRole: Role }) {
   const apply = (role: Role | null) => {
     writeRoleOverride(role)
-    // Hard reload so all role-aware queries re-mount with the new value.
     window.location.reload()
   }
   const ROLES: ReadonlyArray<{ value: Role; label: string; detail: string }> = [
@@ -170,7 +167,7 @@ function RoleOverrideCard({ currentRole }: { currentRole: Role }) {
   ]
 
   return (
-    <Card>
+    <div className="mt-3 pt-3 border-t border-line">
       <div className="text-[14px] font-semibold">Persona override (dev)</div>
       <div className="text-[12px] text-ink-3 mt-1 mb-3">
         Until Clerk org-membership wiring lands, pick the persona you want to preview. Stored locally; cleared by
@@ -199,6 +196,6 @@ function RoleOverrideCard({ currentRole }: { currentRole: Role }) {
           Clear
         </button>
       </div>
-    </Card>
+    </div>
   )
 }
