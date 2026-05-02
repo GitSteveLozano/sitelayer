@@ -58,6 +58,11 @@ export function TakeoffCanvasScreen() {
   const [tool, setTool] = useState<'polygon' | 'lineal' | 'count'>('polygon')
   const [draftPoints, setDraftPoints] = useState<Array<{ x: number; y: number }>>([])
   const [serviceItemCode, setServiceItemCode] = useState<string>('')
+  // Elevation tag (Sitemap §5 panel 1, "Items by location"). Stored as a
+  // prefix on notes (`elev:east`, `elev:south`, …) so we don't require a
+  // schema change today; the takeoff-summary screen parses it back out
+  // for the per-elevation breakdown. `none` skips the tag entirely.
+  const [elevation, setElevation] = useState<ElevationTag>('none')
   const [zoom, setZoom] = useState(1)
   const [error, setError] = useState<string | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
@@ -139,6 +144,7 @@ export function TakeoffCanvasScreen() {
         service_item_code: serviceItemCode,
         unit: selectedItem?.unit ?? (tool === 'polygon' ? 'sqft' : tool === 'lineal' ? 'lf' : 'ea'),
         geometry,
+        notes: elevation === 'none' ? null : `elev:${elevation}`,
       })
       setDraftPoints([])
     } catch (e) {
@@ -272,6 +278,26 @@ export function TakeoffCanvasScreen() {
                   </option>
                 ))}
               </select>
+            </Card>
+
+            <Card tight>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">Elevation</div>
+              <div className="flex gap-1.5 overflow-x-auto scrollbar-hide">
+                {ELEVATION_TAGS.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setElevation(t)}
+                    className={
+                      elevation === t
+                        ? 'shrink-0 px-3 py-1.5 rounded-full text-[12px] font-medium bg-accent text-white'
+                        : 'shrink-0 px-3 py-1.5 rounded-full text-[12px] font-medium bg-card-soft text-ink-2 border border-line'
+                    }
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
             </Card>
 
             <div className="grid grid-cols-3 gap-2">
@@ -440,4 +466,21 @@ function lineLength(points: ReadonlyArray<{ x: number; y: number }>): number {
     total += Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2)
   }
   return total
+}
+
+/**
+ * Elevation tags from Sitemap §5 panel 1 ("Items by location").
+ * Encoded as a `elev:<tag>` prefix on the measurement's notes field
+ * so the backend doesn't require a schema change today; the takeoff
+ * summary parses it back out for the per-elevation breakdown.
+ */
+export const ELEVATION_TAGS = ['none', 'east', 'south', 'west', 'north', 'roof', 'other'] as const
+export type ElevationTag = (typeof ELEVATION_TAGS)[number]
+
+export function parseElevationFromNotes(notes: string | null): ElevationTag {
+  if (!notes) return 'none'
+  const match = /^elev:(\w+)/i.exec(notes.trim())
+  if (!match) return 'none'
+  const t = match[1]?.toLowerCase()
+  return ELEVATION_TAGS.includes(t as ElevationTag) ? (t as ElevationTag) : 'other'
 }

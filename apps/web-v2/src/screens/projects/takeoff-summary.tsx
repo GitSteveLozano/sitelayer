@@ -1,10 +1,11 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Card, MobileButton } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { EmptyState } from '@/components/shell/EmptyState'
 import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
 import { useProjectMeasurements, useServiceItems, type MeasurementGeometry, type TakeoffMeasurement } from '@/lib/api'
+import { parseElevationFromNotes, type ElevationTag } from './takeoff-canvas'
 
 /**
  * `prj-takeoff-summary` — Sitemap §5 panel 4 ("Summary · sizes").
@@ -22,6 +23,7 @@ export function TakeoffSummaryScreen() {
   const { id: projectId } = useParams<{ id: string }>()
   const measurements = useProjectMeasurements(projectId)
   const serviceItems = useServiceItems()
+  const [groupBy, setGroupBy] = useState<'item' | 'elevation'>('item')
 
   const items = serviceItems.data?.serviceItems ?? []
   const itemByCode = useMemo(() => new Map(items.map((i) => [i.code, i])), [items])
@@ -37,23 +39,47 @@ export function TakeoffSummaryScreen() {
   const groups = useMemo<Group[]>(() => {
     const rows = measurements.data?.measurements ?? []
     const m = new Map<string, Group>()
-    for (const r of rows) {
-      const code = r.service_item_code
-      const item = itemByCode.get(code)
-      const qty = quantityFor(r)
-      const existing = m.get(code) ?? {
-        code,
-        name: item?.name ?? code,
-        unit: r.unit,
-        totalQty: 0,
-        measurementCount: 0,
+    if (groupBy === 'item') {
+      for (const r of rows) {
+        const code = r.service_item_code
+        const item = itemByCode.get(code)
+        const qty = quantityFor(r)
+        const existing = m.get(code) ?? {
+          code,
+          name: item?.name ?? code,
+          unit: r.unit,
+          totalQty: 0,
+          measurementCount: 0,
+        }
+        existing.totalQty += qty
+        existing.measurementCount += 1
+        m.set(code, existing)
       }
-      existing.totalQty += qty
-      existing.measurementCount += 1
-      m.set(code, existing)
+    } else {
+      // Group by elevation tag — measurements without an `elev:*` prefix
+      // on notes land under "untagged" so they're surfaced (not hidden).
+      for (const r of rows) {
+        const tag: ElevationTag = parseElevationFromNotes(r.notes)
+        const code = tag === 'none' ? 'untagged' : tag
+        const qty = quantityFor(r)
+        const existing = m.get(code) ?? {
+          code,
+          name: code === 'untagged' ? 'Untagged' : prettyElevation(code as ElevationTag),
+          unit: r.unit,
+          totalQty: 0,
+          measurementCount: 0,
+        }
+        existing.totalQty += qty
+        existing.measurementCount += 1
+        // Mixed-unit rollups happen when a single elevation has both
+        // sqft polygons and lf lineal — we surface the dominant unit
+        // (first row's unit "wins") rather than switching to a vague
+        // 'mixed' label that obscures the metric.
+        m.set(code, existing)
+      }
     }
     return Array.from(m.values()).sort((a, b) => b.totalQty - a.totalQty)
-  }, [measurements.data, itemByCode])
+  }, [measurements.data, itemByCode, groupBy])
 
   const grandTotal = groups.reduce((sum, g) => sum + g.totalQty, 0)
   const maxQty = groups.reduce((max, g) => Math.max(max, g.totalQty), 0)
@@ -79,12 +105,36 @@ export function TakeoffSummaryScreen() {
           {grandTotal > 0 ? (
             <>
               <span className="font-mono tabular-nums font-semibold">{grandTotal.toFixed(0)}</span> total quantity
-              across {groups.length} {groups.length === 1 ? 'item' : 'items'}
+              across {groups.length}{' '}
+              {groupBy === 'item'
+                ? groups.length === 1
+                  ? 'item'
+                  : 'items'
+                : groups.length === 1
+                  ? 'elevation'
+                  : 'elevations'}
             </>
           ) : (
             'No measurements saved yet.'
           )}
         </div>
+      </div>
+
+      <div className="px-4 pb-2 flex gap-1.5">
+        {(['item', 'elevation'] as const).map((g) => (
+          <button
+            key={g}
+            type="button"
+            onClick={() => setGroupBy(g)}
+            className={
+              groupBy === g
+                ? 'shrink-0 px-3.5 py-1.5 rounded-full text-[13px] font-medium bg-accent text-white'
+                : 'shrink-0 px-3.5 py-1.5 rounded-full text-[13px] font-medium bg-card-soft text-ink-2 border border-line'
+            }
+          >
+            {g === 'item' ? 'By item' : 'By elevation'}
+          </button>
+        ))}
       </div>
 
       <div className="px-4 pb-8 space-y-2">
@@ -198,4 +248,14 @@ function quantityFor(m: TakeoffMeasurement): number {
     return geo.length * geo.width * geo.height
   }
   return 0
+}
+
+function prettyElevation(t: ElevationTag): string {
+  if (t === 'east') return 'East elevation'
+  if (t === 'south') return 'South elevation'
+  if (t === 'west') return 'West elevation'
+  if (t === 'north') return 'North elevation'
+  if (t === 'roof') return 'Roof'
+  if (t === 'other') return 'Other'
+  return 'Untagged'
 }
