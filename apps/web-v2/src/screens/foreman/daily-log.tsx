@@ -6,6 +6,7 @@ import {
   dailyLogPhotoUrl,
   useAiInsights,
   useApplyInsight,
+  useClockTimeline,
   useCreateDailyLog,
   useDailyLogs,
   useDeleteDailyLogPhoto,
@@ -17,6 +18,7 @@ import {
   type DailyLog,
   type VoiceToLogProposal,
 } from '@/lib/api'
+import { pairClockSpans, sumHoursInRange } from '@/lib/clock-derive'
 
 /**
  * `fm-log` — Daily log composer.
@@ -109,6 +111,20 @@ function DailyLogEditor({ log }: DailyLogEditorProps) {
   const patch = usePatchDailyLog(log.id)
   const submit = useSubmitDailyLog(log.id)
 
+  // Pull the day's clock timeline so the Hours stat tile shows the
+  // crew-hours actually logged on this project on this date — not a
+  // 'Phase 5' placeholder.
+  const timeline = useClockTimeline({ date: log.occurred_on })
+  const projectHours = useMemo(() => {
+    const events = timeline.data?.events ?? []
+    const projectEvents = events.filter((e) => e.project_id === log.project_id)
+    if (projectEvents.length === 0) return 0
+    const spans = pairClockSpans(projectEvents)
+    const dayStart = Date.parse(`${log.occurred_on}T00:00:00`)
+    const dayEnd = dayStart + 24 * 3600 * 1000
+    return sumHoursInRange(spans, dayStart, dayEnd, Date.now())
+  }, [timeline.data, log.occurred_on, log.project_id])
+
   const [notes, setNotes] = useState(log.notes ?? '')
   const dirtyRef = useRef(false)
   const versionRef = useRef(log.version)
@@ -174,7 +190,11 @@ function DailyLogEditor({ log }: DailyLogEditorProps) {
       <div className="px-4 pt-2">
         <div className="grid grid-cols-3 gap-2.5">
           <StatTile label="Photos" value={log.photo_keys.length.toString()} />
-          <StatTile label="Hours" value="—" note="from clock" />
+          <StatTile
+            label="Hours"
+            value={projectHours > 0 ? projectHours.toFixed(1) : '—'}
+            note={projectHours > 0 ? 'crew on site' : 'from clock'}
+          />
           <StatTile
             label="Issues"
             value={Array.isArray(log.schedule_deviations) ? log.schedule_deviations.length.toString() : '0'}
