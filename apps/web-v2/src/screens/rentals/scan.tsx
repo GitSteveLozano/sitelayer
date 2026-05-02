@@ -46,6 +46,12 @@ export function RentalsScanScreen() {
   const [posted, setPosted] = useState<boolean>(false)
   const [cameraOpen, setCameraOpen] = useState(false)
   const cameraSupported = useMemo(() => isBarcodeScanSupported(), [])
+  // Return-condition check state — only meaningful when movementType ===
+  // 'return'. Persisted into scan_payload as `{ scan: ..., condition:
+  // { frame: 'ok' | 'flag' | 'na', ... } }` so the audit row carries
+  // the foreman's read on the asset's state when it came back to the
+  // yard. Sitemap §9 panel 4.
+  const [condition, setCondition] = useState<Record<string, 'ok' | 'flag' | 'na'>>({})
 
   // Resolve item from scanned code. Catalog code is the source of truth;
   // anything else is a typo or wrong sticker.
@@ -86,6 +92,13 @@ export function RentalsScanScreen() {
     if (!resolved || !canSubmit) return
     const fromLocation = movementType === 'deliver' ? (defaultYard?.id ?? null) : (projectLocation?.id ?? null)
     const toLocation = movementType === 'deliver' ? (projectLocation?.id ?? null) : (defaultYard?.id ?? null)
+    // For return movements, embed the condition checks into scan_payload
+    // as a structured note alongside the raw scanned code so the audit
+    // row carries the foreman's read.
+    const payload =
+      movementType === 'return' && Object.keys(condition).length > 0
+        ? `${scanCode}\ncondition:${JSON.stringify(condition)}`
+        : scanCode
     await dispatch.mutateAsync({
       inventory_item_id: resolved.id,
       quantity: Number(quantity),
@@ -94,7 +107,7 @@ export function RentalsScanScreen() {
       to_location_id: toLocation,
       project_id: projectId,
       worker_id: workerId,
-      scan_payload: scanCode,
+      scan_payload: payload,
       scanned_at: new Date().toISOString(),
       lat: coords?.lat ?? null,
       lng: coords?.lng ?? null,
@@ -214,6 +227,8 @@ export function RentalsScanScreen() {
           />
         </Card>
 
+        {movementType === 'return' ? <ConditionPanel value={condition} onChange={setCondition} /> : null}
+
         <Card tight>
           <div className="flex items-center justify-between">
             <div className="text-[12px] text-ink-3">Location stamp</div>
@@ -250,4 +265,73 @@ export function RentalsScanScreen() {
       />
     </div>
   )
+}
+
+/**
+ * Condition checklist for the rental return flow (Sitemap §9 panel 4).
+ * Four canonical checks; each toggles between three states with a
+ * tone-aware row pill so the foreman can flag anything off without
+ * leaving the screen.
+ *
+ * State is persisted to the parent so the submit handler can embed
+ * the result in scan_payload — backend keeps the raw movement row,
+ * we'll layer a richer return_inspections table later if the volume
+ * justifies it.
+ */
+const CONDITION_CHECKS: ReadonlyArray<{ id: string; label: string }> = [
+  { id: 'frame', label: 'Frame intact' },
+  { id: 'planks', label: 'Planks accounted for' },
+  { id: 'cleaned', label: 'Cleaned' },
+  { id: 'damage', label: 'Damage / wear noted' },
+]
+
+type ConditionStatus = 'ok' | 'flag' | 'na'
+
+function ConditionPanel({
+  value,
+  onChange,
+}: {
+  value: Record<string, ConditionStatus>
+  onChange: (next: Record<string, ConditionStatus>) => void
+}) {
+  return (
+    <Card>
+      <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-2">Condition check</div>
+      <div className="space-y-2">
+        {CONDITION_CHECKS.map((c) => (
+          <div key={c.id} className="flex items-center justify-between gap-3">
+            <span className="text-[13px] text-ink truncate">{c.label}</span>
+            <div className="flex gap-1 shrink-0">
+              {(['ok', 'flag', 'na'] as const).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  aria-pressed={value[c.id] === s}
+                  onClick={() => onChange({ ...value, [c.id]: s })}
+                  className={
+                    value[c.id] === s
+                      ? toneActiveClass(s)
+                      : 'inline-flex items-center justify-center w-9 h-7 rounded-md text-[11px] font-semibold border bg-card-soft text-ink-3 border-line'
+                  }
+                >
+                  {s === 'ok' ? '✓' : s === 'flag' ? '⚠' : '—'}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="text-[11px] text-ink-3 mt-3 leading-relaxed">
+        Tap ✓ if it came back clean, ⚠ to flag for repair, — if not applicable.
+      </div>
+    </Card>
+  )
+}
+
+function toneActiveClass(s: ConditionStatus): string {
+  if (s === 'ok')
+    return 'inline-flex items-center justify-center w-9 h-7 rounded-md text-[11px] font-semibold border bg-good-soft text-good border-good/30'
+  if (s === 'flag')
+    return 'inline-flex items-center justify-center w-9 h-7 rounded-md text-[11px] font-semibold border bg-warn-soft text-warn border-warn/30'
+  return 'inline-flex items-center justify-center w-9 h-7 rounded-md text-[11px] font-semibold border bg-card text-ink-2 border-line-2'
 }
