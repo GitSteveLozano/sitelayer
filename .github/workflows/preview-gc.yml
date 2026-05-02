@@ -10,6 +10,16 @@ on:
   schedule:
     - cron: '17 3 * * *'
   workflow_dispatch:
+    inputs:
+      allow_empty_open_prs:
+        description: >-
+          Bypass the empty-open-PR safety belt. Only set true on a manual
+          run when you have independently verified that zero open PRs is
+          legitimate (not a GitHub API hiccup), e.g. a post-batch-merge
+          cleanup. The scheduled run never sets this.
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: read
@@ -68,6 +78,11 @@ jobs:
       - name: Reap stale preview stacks (local)
         env:
           OPEN_PRS_CSV: ${{ steps.open_prs.outputs.csv }}
+          # Forwarded only when an operator explicitly toggles the
+          # workflow_dispatch input. Scheduled runs leave this unset so
+          # the safety belt in scripts/preview-gc-remote.sh still fires
+          # if the upstream PR-list query hiccups.
+          OPEN_PRS_ALLOW_EMPTY: ${{ (github.event_name == 'workflow_dispatch' && inputs.allow_empty_open_prs) && '1' || '' }}
         run: |
           set -euo pipefail
           # The runner already lives on the preview droplet, so the reaper
