@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { Card, Kpi, MobileButton, Pill } from '@/components/mobile'
 import { AgentSurface, Attribution, Dismiss, StripeCard, useRejectSheet } from '@/components/ai'
 import {
   useAiInsights,
@@ -123,6 +123,19 @@ export function OwnerTodayScreen() {
           Financial
         </Link>
       </div>
+
+      {view === 'today' && projectsToday.length > 0 ? (
+        <div className="px-4 pb-1 pt-1 grid grid-cols-3 gap-2">
+          <Kpi label="Active" value={projectsToday.length.toString()} meta="today" />
+          <Kpi
+            label="On site"
+            value={onSiteCount.toString()}
+            meta={onSiteCount > 0 ? 'live' : 'none'}
+            metaTone={onSiteCount > 0 ? 'green' : 'default'}
+          />
+          <Kpi label="Crew-hrs" value={totalHoursToday.toFixed(1)} unit="h" />
+        </div>
+      ) : null}
 
       <div className="flex-1 px-4 pb-8 pt-2">
         {view === 'today' ? (
