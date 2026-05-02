@@ -53,7 +53,13 @@ jobs:
         env:
           VITE_BASE: /sitelayer/
           VITE_API_URL: ${{ secrets.PAGES_VITE_API_URL || 'https://sitelayer.sandolab.xyz' }}
-          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.PAGES_VITE_CLERK_PUBLISHABLE_KEY }}
+          # Clerk publishable keys are public by design (they identify the
+          # Clerk tenant, not a credential — the secret key is what matters).
+          # Default to the test tenant from .env.example so the demo at
+          # least loads + sign-in works; override via the secret to point at
+          # a prod-tier Clerk app (with the matching CLERK_JWT_KEY on the
+          # API droplet so JWT verification accepts the token).
+          VITE_CLERK_PUBLISHABLE_KEY: ${{ secrets.PAGES_VITE_CLERK_PUBLISHABLE_KEY || 'pk_test_aW1wcm92ZWQtYmVkYnVnLTMwLmNsZXJrLmFjY291bnRzLmRldiQ' }}
           VITE_APP_TIER: prod
         run: npm run build --workspace @sitelayer/web-v2
 
