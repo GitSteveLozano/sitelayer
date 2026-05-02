@@ -42,6 +42,12 @@ export interface TakeoffMeasurement {
   notes: string | null
   /** First-class elevation tag (Sitemap §5 panel 1). Replaces the `elev:<tag>` notes prefix. */
   elevation: string | null
+  /**
+   * Inline data-URL thumbnail for photo-measure (Sitemap §5 panel 3).
+   * 200KB cap enforced server-side; null for non-photo measurements.
+   * Spaces-backed full-resolution upload lands as a follow-on.
+   */
+  image_thumbnail: string | null
   geometry: MeasurementGeometry | Record<string, never>
   version: number
   created_at: string
@@ -70,6 +76,7 @@ export interface CreateMeasurementInput {
   unit?: string
   notes?: string | null
   elevation?: string | null
+  image_thumbnail?: string | null
   geometry: MeasurementGeometry
 }
 
