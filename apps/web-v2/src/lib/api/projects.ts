@@ -135,3 +135,56 @@ export function useProjectTimeline(
     ...options,
   })
 }
+
+/**
+ * Project cost-rollup summary from /api/projects/:id/summary. Shape
+ * matches `summarizeProject` in the API: returns estimate lines, labor
+ * entries, and a metrics block with margin/bonus/totalCost. Per-scope
+ * progress on the Overview tab joins estimate_lines × labor_entries
+ * client-side (both fields are flat arrays here).
+ */
+export interface ProjectSummaryEstimateLine {
+  service_item_code: string
+  quantity: string
+  unit: string
+  rate: string
+  amount: string
+  created_at: string
+}
+
+export interface ProjectSummaryLaborEntry {
+  service_item_code: string | null
+  hours: string
+  sqft_done: string | null
+  status: string
+  occurred_on: string
+}
+
+export interface ProjectSummaryResponse {
+  project: { id: string; name: string; bid_total: string; status: string }
+  metrics: {
+    totalMeasurementQuantity: number
+    estimateTotal: number
+    laborCost: number
+    materialCost: number
+    subCost: number
+    totalCost: number
+    margin: { revenue: number; cost: number; profit: number; margin: number }
+    bonus: { eligible: boolean; tier: number | null; payout: number }
+  }
+  measurements: Array<Record<string, unknown>>
+  estimateLines: ProjectSummaryEstimateLine[]
+  laborEntries: ProjectSummaryLaborEntry[]
+}
+
+export function useProjectSummary(
+  id: string | null | undefined,
+  options?: Partial<UseQueryOptions<ProjectSummaryResponse>>,
+) {
+  return useQuery<ProjectSummaryResponse>({
+    queryKey: ['projects', 'summary', id ?? ''],
+    queryFn: () => request<ProjectSummaryResponse>(`/api/projects/${encodeURIComponent(id!)}/summary`),
+    enabled: Boolean(id),
+    ...options,
+  })
+}
