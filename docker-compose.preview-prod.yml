@@ -68,7 +68,10 @@ services:
         SENTRY_RELEASE: ${SENTRY_RELEASE:-}
       secrets:
         - sentry_auth_token
-    command: npm start -w @sitelayer/web
+    # The Dockerfile only ships apps/web-v2/dist (post-cutover, see
+    # PR #139). The previous `-w @sitelayer/web` here would fail at boot
+    # because there's no v1 dist in the runtime image to serve.
+    command: npm start -w @sitelayer/web-v2
     environment:
       NODE_ENV: production
     restart: unless-stopped
