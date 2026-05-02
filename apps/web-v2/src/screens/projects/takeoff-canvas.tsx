@@ -152,9 +152,14 @@ export function TakeoffCanvasScreen() {
         <Link to={`/projects/${projectId}?tab=takeoff`} className="text-[12px] text-ink-3">
           ← Takeoff hub
         </Link>
-        <h1 className="mt-2 font-display text-[22px] font-bold tracking-tight leading-tight">
-          {activeBlueprint?.file_name ?? 'No blueprint'}
-        </h1>
+        <div className="mt-2 flex items-baseline justify-between gap-3">
+          <h1 className="font-display text-[22px] font-bold tracking-tight leading-tight truncate">
+            {activeBlueprint?.file_name ?? 'No blueprint'}
+          </h1>
+          <Link to={`/projects/${projectId}/takeoff-summary`} className="text-[12px] font-medium text-accent shrink-0">
+            Summary →
+          </Link>
+        </div>
       </div>
 
       {blueprintList.length === 0 ? (
