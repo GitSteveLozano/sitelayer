@@ -61,3 +61,18 @@ export async function listCompanyAdminIds(client: NotificationQueryClient, compa
   )
   return result.rows.map((row: { clerk_user_id: string }) => row.clerk_user_id)
 }
+
+/**
+ * Recipients for a worker-flagged problem (`wk-issue` ping). The crew-side
+ * intent is "send a push to whoever needs to act" — that's the foremen
+ * first, with admin/office as a safety net so the ping isn't dropped if a
+ * company has no foreman seat assigned yet.
+ */
+export async function listIssueRecipientUserIds(client: NotificationQueryClient, companyId: string): Promise<string[]> {
+  const result = await client.query<{ clerk_user_id: string }>(
+    `select cm.clerk_user_id from company_memberships cm
+     where cm.company_id = $1 and cm.role in ('foreman', 'admin', 'office')`,
+    [companyId],
+  )
+  return result.rows.map((row) => row.clerk_user_id)
+}

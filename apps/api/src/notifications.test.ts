@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { QueryResult, QueryResultRow } from 'pg'
-import { enqueueNotificationRow, listCompanyAdminIds, type NotificationQueryClient } from './notifications.js'
+import {
+  enqueueNotificationRow,
+  listCompanyAdminIds,
+  listIssueRecipientUserIds,
+  type NotificationQueryClient,
+} from './notifications.js'
 
 function makeResult<T extends QueryResultRow>(rows: T[]): QueryResult<T> {
   return {
@@ -87,5 +92,20 @@ describe('listCompanyAdminIds', () => {
     const client = stubClient<{ clerk_user_id: string }>([])
     const ids = await listCompanyAdminIds(client, 'company-1')
     expect(ids).toEqual([])
+  })
+})
+
+describe('listIssueRecipientUserIds', () => {
+  it('returns clerk_user_ids for foreman/admin/office roles', async () => {
+    const client = stubClient([
+      { clerk_user_id: 'user_foreman' },
+      { clerk_user_id: 'user_admin' },
+      { clerk_user_id: 'user_office' },
+    ])
+    const querySpy = client.query as unknown as ReturnType<typeof vi.fn>
+    const ids = await listIssueRecipientUserIds(client, 'company-1')
+    expect(ids).toEqual(['user_foreman', 'user_admin', 'user_office'])
+    const [sqlArg] = querySpy.mock.calls[0]!
+    expect(sqlArg).toMatch(/role in \('foreman', 'admin', 'office'\)/)
   })
 })

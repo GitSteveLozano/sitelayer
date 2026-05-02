@@ -41,6 +41,7 @@ import { handleTakeoffMeasurementRoutes } from './takeoff-measurements.js'
 import { handleTakeoffTagRoutes } from './takeoff-tags.js'
 import { handleTakeoffWriteRoutes } from './takeoff-write.js'
 import { handleTimeReviewRunRoutes } from './time-review-runs.js'
+import { handleWorkerIssueRoutes } from './worker-issues.js'
 import { handleWorkerRoutes } from './workers.js'
 import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
 
@@ -220,6 +221,20 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       pool,
       company,
       requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Worker issues — wk-issue ping (any role POSTs; admin/foreman/office GET)
+  if (
+    await handleWorkerIssueRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
       sendJson,
     })
   ) {

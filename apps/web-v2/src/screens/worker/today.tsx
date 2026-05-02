@@ -2,7 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, MobileButton, PhoneTopBar, Pill } from '@/components/mobile'
 import { Spark } from '@/components/ai'
-import { useClockIn, useClockOut, useClockTimeline, useSchedules, useVoidClockEvent, type ClockEvent } from '@/lib/api'
+import {
+  useClockIn,
+  useClockOut,
+  useClockTimeline,
+  useCreateWorkerIssue,
+  useSchedules,
+  useVoidClockEvent,
+  type ClockEvent,
+} from '@/lib/api'
 import { useGeofence } from '@/lib/geofence'
 import {
   findOpenSpan,
@@ -102,6 +110,7 @@ export function WorkerTodayScreen() {
   }, [clockedIn, geofence.position?.capturedAtMs])
 
   const voidClock = useVoidClockEvent()
+  const createIssue = useCreateWorkerIssue()
   const handleVoid = async () => {
     if (!autoClockInEvent) return
     await voidClock.mutateAsync({ id: autoClockInEvent.id, input: { reason: 'voided from wk-clockin' } }).catch(() => {
@@ -323,10 +332,15 @@ export function WorkerTodayScreen() {
         open={issueOpen}
         onClose={() => setIssueOpen(false)}
         onSubmit={async (input: { kind: IssueKind; message: string }) => {
-          // Backend issue endpoint lands later — for now log so the
-          // submit gesture is observable in dev tools / Sentry, then
-          // close. The wk-issue UX flow stays testable end to end.
-          if (typeof console !== 'undefined') console.info('[wk-issue]', input)
+          // POST /api/worker-issues persists the ping and fans out
+          // notifications to the company's foreman/admin/office members.
+          // The off-clock IssueModal mount has no active project context;
+          // the wk-today clocked-in surface (in clocked-in-view) is where
+          // a project_id can be threaded through later.
+          await createIssue.mutateAsync({
+            kind: input.kind,
+            message: input.message,
+          })
           setIssueOpen(false)
         }}
       />
