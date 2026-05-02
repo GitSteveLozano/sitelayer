@@ -43,6 +43,9 @@ export interface ProjectDetail extends ProjectListRow {
 
 export interface ProjectListParams {
   status?: ProjectStatus
+  /** Search match against name + customer_name (server-side ILIKE). */
+  q?: string
+  customer_id?: string
   /** Cursor pagination — server returns `nextCursor` from this field. */
   cursor?: string
   limit?: number
@@ -68,6 +71,8 @@ export const projectQueryKeys = KEYS
 export function fetchProjects(params: ProjectListParams = {}): Promise<ProjectListResponse> {
   const search = new URLSearchParams()
   if (params.status) search.set('status', params.status)
+  if (params.q) search.set('q', params.q)
+  if (params.customer_id) search.set('customer_id', params.customer_id)
   if (params.cursor) search.set('cursor', params.cursor)
   if (params.limit) search.set('limit', String(params.limit))
   const qs = search.toString()
