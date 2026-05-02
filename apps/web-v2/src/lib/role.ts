@@ -1,4 +1,5 @@
 import { useUser } from '@clerk/clerk-react'
+import { isClerkConfigured } from './auth'
 
 /**
  * The three personas Sitelayer's design is built around.
@@ -51,11 +52,29 @@ function membershipRoleToPersona(role: string | null | undefined): Role {
  * Resolve the active persona. The localStorage override always wins
  * (lets a dev flip personas without re-auth); otherwise we read the
  * primary org membership role from Clerk; otherwise default to worker.
+ *
+ * Note: `useUser()` is always called (rules of hooks) but only when
+ * Clerk is configured — `isClerkConfigured()` is a build-time constant
+ * resolved from `import.meta.env.VITE_CLERK_PUBLISHABLE_KEY`, so the
+ * branch is stable across the app lifetime.
  */
 export function useRole(): Role {
+  if (isClerkConfigured()) {
+    return useRoleWithClerk()
+  }
+  return useRoleWithoutClerk()
+}
+
+function useRoleWithClerk(): Role {
   const { user } = useUser()
   const override = readRoleOverride()
   if (override) return override
   const primary = user?.organizationMemberships?.[0]?.role
   return membershipRoleToPersona(primary)
+}
+
+function useRoleWithoutClerk(): Role {
+  const override = readRoleOverride()
+  if (override) return override
+  return 'worker'
 }
