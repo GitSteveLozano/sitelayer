@@ -3,21 +3,21 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig, mergeConfig } from 'vitest/config'
 import viteConfig from './vite.config'
 
-// Smoke-test config for apps/web-v2.
+// Test config for apps/web-v2.
 //
-// The goal at this stage is narrow: catch broken imports, missing exports,
-// and accidental top-level-throw regressions across the lazy route bundle.
-// We deliberately don't pull in jsdom or @testing-library here — the
-// route modules are pure ESM, and module-load tests already trip on the
-// regressions we've actually been seeing in post-cutover polish PRs (e.g.
-// undefined token references through eager imports). When a future PR
-// needs to render trees, switch `environment` to `jsdom` and add the
-// testing-library deps.
+// Default environment is jsdom so component render tests (mounting
+// primitives, asserting on the resulting DOM) work without per-file
+// pragmas. The original route-load smoke tests run cleanly in jsdom
+// too — they just don't touch the document.
+//
+// When a future test needs node env (e.g. server-side rendering, no
+// DOM globals), add `// @vitest-environment node` at the top of that
+// file rather than splitting the config.
 export default mergeConfig(
   viteConfig,
   defineConfig({
     test: {
-      environment: 'node',
+      environment: 'jsdom',
       include: ['src/**/*.test.{ts,tsx}'],
       globals: false,
       // Vitest defaults to running in the workspace root. Pinning the
