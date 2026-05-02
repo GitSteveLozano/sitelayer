@@ -64,6 +64,13 @@ COPY --from=builder /app/apps/api/package.json /app/apps/api/package.json
 COPY --from=builder /app/apps/api/dist /app/apps/api/dist
 COPY --from=builder /app/apps/web-v2/package.json /app/apps/web-v2/package.json
 COPY --from=builder /app/apps/web-v2/dist /app/apps/web-v2/dist
+# apps/web (v1) ships in the runtime image too — it is the rollback target
+# during the post-cutover release window per ADR 0002 cutover criterion #6.
+# `docker-compose.prod.yml --profile rollback` brings up a `web-legacy`
+# service that serves this dist; Caddy's WEB_BACKEND env flips traffic
+# without a Caddyfile edit. Drop these two lines once v1 is fully retired.
+COPY --from=builder /app/apps/web/package.json /app/apps/web/package.json
+COPY --from=builder /app/apps/web/dist /app/apps/web/dist
 COPY --from=builder /app/apps/worker/package.json /app/apps/worker/package.json
 COPY --from=builder /app/apps/worker/dist /app/apps/worker/dist
 COPY --from=builder /app/packages/config/package.json /app/packages/config/package.json
