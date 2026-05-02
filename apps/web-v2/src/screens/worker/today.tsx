@@ -6,7 +6,6 @@ import { useClockIn, useClockOut, useClockTimeline, useVoidClockEvent, type Cloc
 import { useGeofence } from '@/lib/geofence'
 import {
   findOpenSpan,
-  formatHms,
   pairClockSpans,
   startOfDay,
   startOfWeek,
@@ -14,6 +13,7 @@ import {
   formatDecimalHours,
 } from '@/lib/clock-derive'
 import { ClockInSuccess } from './clockin-success'
+import { WorkerClockedInView } from './clocked-in-view'
 import { IssueModal, type IssueKind } from './issue-modal'
 
 /**
@@ -159,6 +159,26 @@ export function WorkerTodayScreen() {
     )
   }
 
+  // Focus mode: while clocked in we render the dark timer-first surface
+  // (wk-today · clocked in from Sitemap §11). Off-clock keeps the
+  // standard light shell with hours summary + flag-a-problem.
+  if (clockedIn && openSpan) {
+    // Find the matching clock_in event so we can label the timer with
+    // 'auto' vs 'manual' — ClockSpan strips the source field.
+    const matchingIn = events.find((e) => e.event_type === 'in' && e.occurred_at === openSpan.in_at)
+    const source = matchingIn?.source === 'auto_geofence' ? 'auto_geofence' : 'manual'
+    return (
+      <WorkerClockedInView
+        projectName={openSpan.project_name ?? activeProjectLabel ?? 'On site'}
+        startedAtIso={openSpan.in_at}
+        runtimeHours={runtimeHours}
+        source={source}
+        onClockOut={onClockOut}
+        isClockingOut={clockOut.isPending}
+      />
+    )
+  }
+
   return (
     <div className="flex flex-col">
       <PhoneTopBar activeProject={activeProjectLabel} />
@@ -174,14 +194,9 @@ export function WorkerTodayScreen() {
         {/* The clock card — biggest thing on the screen, always visible. */}
         <Card active={clockedIn}>
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-              {clockedIn ? 'Clocked in' : 'Off-clock'}
-            </span>
-            {openSpan ? <span className="num text-[12px] text-ink-3">since {formatTime(openSpan.in_at)}</span> : null}
+            <span className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Off-clock</span>
           </div>
-          <div className="num font-display text-[40px] font-bold tracking-tight leading-none mt-2">
-            {clockedIn ? formatHms(runtimeHours) : '0:00:00'}
-          </div>
+          <div className="num font-display text-[40px] font-bold tracking-tight leading-none mt-2">0:00:00</div>
           <div className="flex items-center justify-between mt-3">
             <span className="text-[12px] text-ink-3 inline-flex items-center gap-1.5">
               {clockedIn ? (
@@ -282,11 +297,6 @@ export function WorkerTodayScreen() {
       />
     </div>
   )
-}
-
-function formatTime(iso: string): string {
-  const d = new Date(iso)
-  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
 }
 
 function formatTodayLabel(ms: number): string {
