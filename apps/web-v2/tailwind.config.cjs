@@ -17,7 +17,6 @@ module.exports = {
         'card-soft': 'var(--m-card-soft)',
         line: 'var(--m-line)',
         'line-2': 'var(--m-line-2)',
-        paper: 'var(--m-paper)',
         ink: 'var(--m-ink)',
         'ink-2': 'var(--m-ink-2)',
         'ink-3': 'var(--m-ink-3)',
