@@ -5,7 +5,7 @@ import { Attribution } from '@/components/ai'
 import { EmptyState } from '@/components/shell/EmptyState'
 import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
 import { useProjectMeasurements, useServiceItems, type MeasurementGeometry, type TakeoffMeasurement } from '@/lib/api'
-import { parseElevationFromNotes, type ElevationTag } from './takeoff-canvas'
+import { readElevation, type ElevationTag } from './takeoff-canvas'
 
 /**
  * `prj-takeoff-summary` — Sitemap §5 panel 4 ("Summary · sizes").
@@ -56,10 +56,11 @@ export function TakeoffSummaryScreen() {
         m.set(code, existing)
       }
     } else {
-      // Group by elevation tag — measurements without an `elev:*` prefix
-      // on notes land under "untagged" so they're surfaced (not hidden).
+      // Group by elevation tag (first-class column since migration
+      // 042). Measurements with neither an `elevation` value nor a
+      // legacy notes-prefix land under "untagged" so they're surfaced.
       for (const r of rows) {
-        const tag: ElevationTag = parseElevationFromNotes(r.notes)
+        const tag: ElevationTag = readElevation(r)
         const code = tag === 'none' ? 'untagged' : tag
         const qty = quantityFor(r)
         const existing = m.get(code) ?? {
