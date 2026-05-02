@@ -1,7 +1,10 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, Pill } from '@/components/mobile'
+import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
+import { EmptyState } from '@/components/shell/EmptyState'
+import { ErrorState } from '@/components/shell/ErrorState'
+import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
 import { useProjects, type ProjectListRow, type ProjectStatus } from '@/lib/api'
 
 /**
@@ -54,20 +57,53 @@ export function ProjectsListScreen() {
 
       <div className="px-4 pt-2 pb-8">
         {projects.isPending ? (
-          <Card>
-            <div className="text-[13px] text-ink-3">Loading projects…</div>
-          </Card>
+          <SkeletonRows count={4} className="px-0" />
+        ) : projects.isError ? (
+          <ErrorState
+            title={`Couldn't load ${chip} projects`}
+            body="Something on our side hiccuped. Try again or come back in a minute."
+            retry={
+              <MobileButton variant="primary" onClick={() => void projects.refetch()}>
+                Try again
+              </MobileButton>
+            }
+            tertiary={
+              <Link to="/more" className="text-[12px] text-ink-3 underline-offset-2 hover:underline">
+                Get help
+              </Link>
+            }
+          />
         ) : rows.length === 0 ? (
-          <Card>
-            <div className="text-[13px] font-semibold">No {chip} projects</div>
-            <div className="text-[11px] text-ink-3 mt-1">
-              {chip === 'bids'
+          <EmptyState
+            title={`No ${chip} projects yet`}
+            body={
+              chip === 'bids'
                 ? 'Bids land here when a project is created with status=lead.'
                 : chip === 'closeout'
-                  ? 'Projects move here after POST /api/projects/:id/closeout.'
-                  : 'Add a project via Phase 2E project setup.'}
-            </div>
-          </Card>
+                  ? 'Projects move here once you close them out.'
+                  : 'Add your first project to start estimating, scheduling, and billing.'
+            }
+            primaryAction={
+              chip === 'active' ? (
+                <Link
+                  to="/onboarding"
+                  className="w-full h-[50px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
+                >
+                  + New project
+                </Link>
+              ) : null
+            }
+            secondaryAction={
+              chip === 'active' ? (
+                <Link
+                  to="/more/integrations/qbo"
+                  className="w-full h-9 rounded-[10px] bg-card-soft text-ink text-[14px] font-medium inline-flex items-center justify-center"
+                >
+                  Import from QuickBooks
+                </Link>
+              ) : null
+            }
+          />
         ) : (
           <div className="space-y-2">
             <Attribution source={`Live from /api/projects?status=${filter.status ?? 'any'}`} />
