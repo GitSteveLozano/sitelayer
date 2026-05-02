@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
 import { useBonusRules, useCreateBonusRule, useDeleteBonusRule, usePatchBonusRule, type BonusRule } from '@/lib/api'
 
 /**
@@ -80,6 +80,7 @@ function BonusRuleForm({
 }) {
   const patch = usePatchBonusRule(rule?.id ?? '')
   const del = useDeleteBonusRule()
+  const [confirmNode, askConfirm] = useConfirmSheet()
   const [name, setName] = useState(rule?.name ?? '')
   const [isActive, setIsActive] = useState(rule?.is_active ?? true)
   const [configText, setConfigText] = useState(
@@ -117,7 +118,13 @@ function BonusRuleForm({
 
   const remove = async () => {
     if (!rule) return
-    if (typeof window !== 'undefined' && !window.confirm(`Delete "${rule.name}"?`)) return
+    const ok = await askConfirm({
+      title: 'Delete bonus rule?',
+      body: `Permanently remove "${rule.name}".`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (!ok) return
     try {
       await del.mutateAsync({ id: rule.id, expected_version: rule.version })
       onClose()
@@ -168,6 +175,7 @@ function BonusRuleForm({
           ) : null}
         </div>
       </div>
+      {confirmNode}
     </Sheet>
   )
 }

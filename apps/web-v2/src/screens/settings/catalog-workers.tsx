@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
 import { useCreateWorker, useDeleteWorker, usePatchWorker, useWorkers, type Worker } from '@/lib/api'
 
 const ROLES = ['crew', 'foreman', 'lead', 'operator', 'subcontractor']
@@ -90,6 +90,7 @@ function WorkerForm({
 }) {
   const patch = usePatchWorker(worker?.id ?? '')
   const del = useDeleteWorker()
+  const [confirmNode, askConfirm] = useConfirmSheet()
   const [name, setName] = useState(worker?.name ?? '')
   const [role, setRole] = useState(worker?.role ?? 'crew')
   const [error, setError] = useState<string | null>(null)
@@ -110,7 +111,13 @@ function WorkerForm({
 
   const remove = async () => {
     if (!worker) return
-    if (typeof window !== 'undefined' && !window.confirm(`Delete "${worker.name}"?`)) return
+    const ok = await askConfirm({
+      title: 'Delete worker?',
+      body: `Permanently remove "${worker.name}".`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (!ok) return
     try {
       await del.mutateAsync({ id: worker.id, expected_version: worker.version })
       onClose()
@@ -157,6 +164,7 @@ function WorkerForm({
           ) : null}
         </div>
       </div>
+      {confirmNode}
     </Sheet>
   )
 }
