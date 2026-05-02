@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { AgentSurface, Attribution, Spark, StripeCard } from '@/components/ai'
 import {
@@ -75,14 +76,24 @@ export function TakeoffHubScreen({ projectId }: { projectId: string }) {
   return (
     <div className="space-y-3">
       <Card>
-        <div className="flex items-center gap-2 mb-2">
-          <Spark state="muted" size={12} aria-label="" />
-          <div className="text-[13px] font-semibold">Takeoff canvas</div>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="flex items-center gap-2">
+            <Spark state="accent" size={12} aria-label="" />
+            <div className="text-[13px] font-semibold">Takeoff canvas</div>
+          </div>
+          <Pill tone="good">live</Pill>
         </div>
         <div className="text-[12px] text-ink-2 leading-relaxed">
-          The polygon-drawing canvas, multi-condition tagging UI, per-page calibration overlay, and plan-revision
-          Compare visualizer ship next as a focused canvas port from v1. The data layer they all read/write is live
-          below.
+          Tap to drop polygon vertices, run lineal segments, or drop count markers. Saved measurements feed the estimate
+          recompute and the takeoff → bid agent below.
+        </div>
+        <div className="mt-3">
+          <Link
+            to={`/projects/${projectId}/takeoff-canvas`}
+            className="inline-flex items-center justify-center w-full py-2 rounded-md bg-accent text-white text-[13px] font-semibold"
+          >
+            Open canvas
+          </Link>
         </div>
       </Card>
 
