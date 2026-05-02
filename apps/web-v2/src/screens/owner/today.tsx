@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
-import { AgentSurface, Attribution, Dismiss, StripeCard } from '@/components/ai'
+import { AgentSurface, Attribution, Dismiss, StripeCard, useRejectSheet } from '@/components/ai'
 import {
   useAiInsights,
   useApplyInsight,
@@ -36,6 +36,7 @@ type View = 'today' | 'attention'
 
 export function OwnerTodayScreen() {
   const [view, setView] = useState<View>('today')
+  const [rejectNode, askReject] = useRejectSheet()
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), [])
 
   const schedules = useSchedules({ from: todayIso, to: todayIso })
@@ -139,13 +140,19 @@ export function OwnerTodayScreen() {
                 await apply.mutateAsync({ id }).catch(() => {})
               }}
               onDismiss={async (id) => {
-                const reason = typeof window !== 'undefined' ? (window.prompt('Why dismiss?') ?? undefined) : undefined
-                await dismiss.mutateAsync(reason ? { id, reason } : { id }).catch(() => {})
+                const reason = await askReject({
+                  title: 'Dismiss bid follow-up?',
+                  body: 'Pick the closest match — this trains the model.',
+                })
+                if (reason !== null) {
+                  await dismiss.mutateAsync({ id, reason }).catch(() => {})
+                }
               }}
             />
           </>
         )}
       </div>
+      {rejectNode}
     </div>
   )
 }
