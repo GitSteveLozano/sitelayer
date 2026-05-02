@@ -7,6 +7,7 @@ import {
   useDailyLogs,
   useLaborBurdenToday,
   useProject,
+  useProjectSummary,
   useSchedules,
   type ProjectDetail,
 } from '@/lib/api'
@@ -179,6 +180,8 @@ function OverviewTab({ project }: { project: ProjectDetail }) {
         </div>
       </Card>
 
+      <ScopeProgressCard projectId={project.id} />
+
       <Attribution source="Live from /api/clock/timeline + /api/daily-logs" />
 
       <div className="grid grid-cols-2 gap-2.5 pt-2">
@@ -330,4 +333,71 @@ const BURDEN_PALETTE = [
 function formatScheduleDate(iso: string): string {
   const d = new Date(iso + 'T00:00:00')
   return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+}
+
+/**
+ * `prj-overview-by-scope` from Sitemap §4 panel 4 ("Overview by scope").
+ *
+ * Per-scope progress bars: for each estimate line, % complete is the
+ * sum of labor_entries.sqft_done where the service_item_code matches,
+ * divided by the line's quantity. Labor without a sqft_done value
+ * doesn't contribute (some scopes are billed by hours, not by area).
+ *
+ * Hides entirely when there are no scope items or no labor entries
+ * (calm-by-default per AI Rules Law 03).
+ */
+function ScopeProgressCard({ projectId }: { projectId: string }) {
+  const summary = useProjectSummary(projectId)
+  const data = summary.data
+  if (!data || data.estimateLines.length === 0) return null
+  const laborByCode = new Map<string, number>()
+  for (const e of data.laborEntries) {
+    const code = e.service_item_code
+    if (!code) continue
+    const sqft = Number(e.sqft_done ?? 0)
+    if (!Number.isFinite(sqft) || sqft <= 0) continue
+    laborByCode.set(code, (laborByCode.get(code) ?? 0) + sqft)
+  }
+  // If nothing has sqft_done, the labor lookup is empty and every row
+  // would render at 0% — calmer to hide the card.
+  if (laborByCode.size === 0) return null
+  return (
+    <Card className="!p-0 overflow-hidden">
+      <div className="px-4 py-3 border-b border-line text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">
+        By scope
+      </div>
+      <ul className="divide-y divide-line">
+        {data.estimateLines.map((line) => {
+          const planned = Number(line.quantity)
+          const done = laborByCode.get(line.service_item_code) ?? 0
+          const pct = planned > 0 ? Math.min(1, done / planned) : 0
+          const onTrack = pct >= 0.95 ? 'good' : 'accent'
+          return (
+            <li key={`${line.service_item_code}-${line.created_at}`} className="px-4 py-3">
+              <div className="flex items-baseline justify-between gap-2 mb-1.5">
+                <div className="text-[13px] font-semibold truncate">{line.service_item_code}</div>
+                <div className="font-mono tabular-nums text-[12px] text-ink-2 shrink-0">
+                  {done.toFixed(0)} / {planned.toFixed(0)} {line.unit}
+                </div>
+              </div>
+              <div className="h-1.5 bg-card-soft rounded-full overflow-hidden">
+                <div
+                  className={onTrack === 'good' ? 'h-full bg-good' : 'h-full bg-accent'}
+                  style={{ width: `${Math.max(2, pct * 100)}%` }}
+                  aria-hidden="true"
+                />
+              </div>
+              <div className="flex items-center justify-between mt-1 text-[11px] text-ink-3">
+                <span className="font-mono tabular-nums">{(pct * 100).toFixed(0)}%</span>
+                <span>{onTrack === 'good' ? 'complete' : 'in progress'}</span>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+      <div className="px-4 py-2 border-t border-line">
+        <Attribution source="Computed from estimate_lines × labor_entries.sqft_done" />
+      </div>
+    </Card>
+  )
 }
