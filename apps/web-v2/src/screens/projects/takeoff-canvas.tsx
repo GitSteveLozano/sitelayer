@@ -144,7 +144,7 @@ export function TakeoffCanvasScreen() {
         service_item_code: serviceItemCode,
         unit: selectedItem?.unit ?? (tool === 'polygon' ? 'sqft' : tool === 'lineal' ? 'lf' : 'ea'),
         geometry,
-        notes: elevation === 'none' ? null : `elev:${elevation}`,
+        elevation: elevation === 'none' ? null : elevation,
       })
       setDraftPoints([])
     } catch (e) {
@@ -474,17 +474,24 @@ function lineLength(points: ReadonlyArray<{ x: number; y: number }>): number {
 }
 
 /**
- * Elevation tags from Sitemap §5 panel 1 ("Items by location").
- * Encoded as a `elev:<tag>` prefix on the measurement's notes field
- * so the backend doesn't require a schema change today; the takeoff
- * summary parses it back out for the per-elevation breakdown.
+ * Elevation tags from Sitemap §5 panel 1 ("Items by location"). Stored
+ * as a first-class column (`elevation`) on `takeoff_measurements` since
+ * migration 042. The legacy `elev:<tag>` notes prefix is migrated in
+ * place by 042's UPDATE; this helper still exists for any pre-migrated
+ * data the API might return null `elevation` on.
  */
 export const ELEVATION_TAGS = ['none', 'east', 'south', 'west', 'north', 'roof', 'other'] as const
 export type ElevationTag = (typeof ELEVATION_TAGS)[number]
 
-export function parseElevationFromNotes(notes: string | null): ElevationTag {
-  if (!notes) return 'none'
-  const match = /^elev:(\w+)/i.exec(notes.trim())
+export function readElevation(measurement: { elevation: string | null; notes: string | null }): ElevationTag {
+  if (measurement.elevation) {
+    const t = measurement.elevation.toLowerCase()
+    return ELEVATION_TAGS.includes(t as ElevationTag) ? (t as ElevationTag) : 'other'
+  }
+  // Fallback: parse legacy notes-prefix for any rows that escaped the
+  // 042 backfill (e.g. queued offline mutations from an older client).
+  if (!measurement.notes) return 'none'
+  const match = /^elev:(\w+)/i.exec(measurement.notes.trim())
   if (!match) return 'none'
   const t = match[1]?.toLowerCase()
   return ELEVATION_TAGS.includes(t as ElevationTag) ? (t as ElevationTag) : 'other'
