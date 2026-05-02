@@ -75,7 +75,7 @@ export function BillingRunDetailScreen() {
 
       {ctx.error ? (
         <Card tight className="mt-4">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-status-warn">Error</div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Error</div>
           <div className="text-[12px] text-ink-2 mt-1">{ctx.error}</div>
         </Card>
       ) : null}
@@ -133,7 +133,7 @@ export function BillingRunDetailScreen() {
             ))}
           </div>
         )}
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
       </div>
 
       <div className="mt-4">

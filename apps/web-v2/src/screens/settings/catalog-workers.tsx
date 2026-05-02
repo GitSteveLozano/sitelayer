@@ -152,7 +152,7 @@ function WorkerForm({
             ))}
           </select>
         </label>
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <div className={worker ? 'grid grid-cols-2 gap-2' : ''}>
           <MobileButton variant="primary" onClick={submit} disabled={!name.trim() || patch.isPending}>
             {worker ? 'Save' : 'Create'}

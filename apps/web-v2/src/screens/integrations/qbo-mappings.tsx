@@ -183,7 +183,7 @@ function MappingForm({
         <Field label="QBO external id" value={externalId} onChange={setExternalId} placeholder="123" />
         <Field label="Label (optional)" value={label} onChange={setLabel} placeholder="ACME Inc" />
         <Select label="Status" value={status} onChange={setStatus} options={['active', 'inactive']} />
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <div className={mapping ? 'grid grid-cols-2 gap-2' : ''}>
           <MobileButton
             variant="primary"

@@ -163,7 +163,7 @@ function BonusRuleForm({
             className="mt-1 w-full font-mono text-[12px] p-2 rounded border border-line bg-card focus:outline-none focus:border-accent resize-y"
           />
         </label>
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <div className={rule ? 'grid grid-cols-2 gap-2' : ''}>
           <MobileButton variant="primary" onClick={submit} disabled={!name.trim() || patch.isPending}>
             {rule ? 'Save' : 'Create'}

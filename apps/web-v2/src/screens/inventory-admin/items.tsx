@@ -181,7 +181,7 @@ function ItemForm({
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} className="rounded" />
           <span className="text-[13px]">Active (eligible for rental)</span>
         </label>
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <div className={item ? 'grid grid-cols-2 gap-2' : ''}>
           <MobileButton
             variant="primary"

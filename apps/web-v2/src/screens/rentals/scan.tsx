@@ -138,7 +138,7 @@ export function RentalsScanScreen() {
             ) : null}
           </div>
           {scanCode && !resolved ? (
-            <div className="text-[11px] text-status-warn mt-1">
+            <div className="text-[11px] text-warn mt-1">
               No catalog match for “{scanCode}”. Check the sticker or try the catalog.
             </div>
           ) : resolved ? (
@@ -236,7 +236,7 @@ export function RentalsScanScreen() {
         </MobileButton>
 
         {dispatch.isError ? (
-          <div className="text-[12px] text-status-warn">{dispatch.error?.message ?? 'Failed to post movement'}</div>
+          <div className="text-[12px] text-warn">{dispatch.error?.message ?? 'Failed to post movement'}</div>
         ) : null}
       </div>
 

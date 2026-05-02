@@ -85,7 +85,7 @@ export function OnboardingWizardScreen() {
               />
               <span className="text-[13px]">Seed default divisions + service items</span>
             </label>
-            {error ? <div className="text-[12px] text-status-warn mt-2">{error}</div> : null}
+            {error ? <div className="text-[12px] text-warn mt-2">{error}</div> : null}
             <div className="mt-3">
               <MobileButton
                 variant="primary"
@@ -182,7 +182,7 @@ function TeamStep({ company, onNext }: { company: Company; onNext: () => void })
           ))}
         </div>
       ) : null}
-      {error ? <div className="text-[12px] text-status-warn mt-2">{error}</div> : null}
+      {error ? <div className="text-[12px] text-warn mt-2">{error}</div> : null}
       <div className="mt-3 grid grid-cols-2 gap-2">
         <MobileButton
           variant="ghost"
@@ -273,7 +273,7 @@ function SeedStep({ onDone }: { onDone: () => void }) {
       <Field label="First customer (e.g. ACME Inc)" value={customerName} onChange={setCustomerName} placeholder="" />
       <Field label="First worker (e.g. Mike Foreman)" value={workerName} onChange={setWorkerName} placeholder="" />
       <Field label="Default yard name" value={yardName} onChange={setYardName} placeholder="Main yard" />
-      {error ? <div className="text-[12px] text-status-warn mt-2">{error}</div> : null}
+      {error ? <div className="text-[12px] text-warn mt-2">{error}</div> : null}
       <div className="mt-3 grid grid-cols-2 gap-2">
         <MobileButton variant="ghost" onClick={onDone}>
           Skip
