@@ -19,7 +19,6 @@
   --m-card-soft: #f7f4ef;
   --m-line: #e8e3db;
   --m-line-2: #d8d2c7;
-  --m-paper: #fbf8f3;
 
   /* Ink */
   --m-ink: #1c1816;
@@ -43,8 +42,6 @@
   --m-amber-soft: rgba(201, 138, 46, 0.12);
   --m-blue: #2f6fb5;
   --m-blue-soft: rgba(47, 111, 181, 0.1);
-  --m-purple: #7553a8;
-  --m-purple-soft: rgba(117, 83, 168, 0.1);
 
   /* Radii */
   --m-r-sm: 8px;
@@ -74,7 +71,6 @@
   --m-card-soft: #1f1a13;
   --m-line: #2a241c;
   --m-line-2: #3a3329;
-  --m-paper: #16110b;
   --m-ink: #f3ecdf;
   --m-ink-2: #c0b8a8;
   --m-ink-3: #8e8676;
