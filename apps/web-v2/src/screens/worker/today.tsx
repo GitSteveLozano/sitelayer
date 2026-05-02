@@ -14,6 +14,7 @@ import {
   formatDecimalHours,
 } from '@/lib/clock-derive'
 import { ClockInSuccess } from './clockin-success'
+import { IssueModal, type IssueKind } from './issue-modal'
 
 /**
  * Worker home — `wk-today` from `Sitemap.html` § 01.
@@ -74,6 +75,7 @@ export function WorkerTodayScreen() {
   // surface can render the 2-min correction window with the right
   // correctible_until.
   const [autoClockInEvent, setAutoClockInEvent] = useState<ClockEvent | null>(null)
+  const [issueOpen, setIssueOpen] = useState(false)
   useEffect(() => {
     if (clockedIn || !geofence.position || clockIn.isPending) return
     void clockIn
@@ -260,7 +262,24 @@ export function WorkerTodayScreen() {
             </Link>
           </div>
         </div>
+
+        <div className="px-4 pt-2 pb-6">
+          <MobileButton variant="ghost" onClick={() => setIssueOpen(true)}>
+            Flag a problem
+          </MobileButton>
+        </div>
       </div>
+      <IssueModal
+        open={issueOpen}
+        onClose={() => setIssueOpen(false)}
+        onSubmit={async (input: { kind: IssueKind; message: string }) => {
+          // Backend issue endpoint lands later — for now log so the
+          // submit gesture is observable in dev tools / Sentry, then
+          // close. The wk-issue UX flow stays testable end to end.
+          if (typeof console !== 'undefined') console.info('[wk-issue]', input)
+          setIssueOpen(false)
+        }}
+      />
     </div>
   )
 }

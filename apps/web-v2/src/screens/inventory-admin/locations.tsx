@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
 import {
   useCreateInventoryLocation,
   useDeleteInventoryLocation,
@@ -94,6 +94,7 @@ function LocationForm({
   const projects = useProjects()
   const patch = usePatchInventoryLocation(location?.id ?? '')
   const del = useDeleteInventoryLocation()
+  const [confirmNode, askConfirm] = useConfirmSheet()
   const [name, setName] = useState(location?.name ?? '')
   const [type, setType] = useState(location?.location_type ?? 'yard')
   const [projectId, setProjectId] = useState<string>(location?.project_id ?? '')
@@ -122,7 +123,13 @@ function LocationForm({
 
   const remove = async () => {
     if (!location) return
-    if (typeof window !== 'undefined' && !window.confirm(`Delete "${location.name}"?`)) return
+    const ok = await askConfirm({
+      title: 'Delete location?',
+      body: `Permanently remove "${location.name}".`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (!ok) return
     try {
       await del.mutateAsync({ id: location.id, expected_version: location.version })
       onClose()
@@ -194,6 +201,7 @@ function LocationForm({
           ) : null}
         </div>
       </div>
+      {confirmNode}
     </Sheet>
   )
 }

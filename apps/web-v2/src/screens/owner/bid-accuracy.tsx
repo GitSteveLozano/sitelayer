@@ -27,8 +27,14 @@ export function OwnerBidAccuracyScreen() {
 
   const summary = accuracy.data?.summary
   const projects = accuracy.data?.projects ?? []
+  // Convert the numeric mean delta to an ordinal headline per the
+  // AI Layer rule ("ordinal confidence, never numeric"). The full
+  // numeric pct is still available in WhyThis for power users.
   const closedDelta = summary?.mean_closed_delta_pct ?? 0
-  const sparkState = Math.abs(closedDelta) < 5 ? 'accent' : 'muted'
+  const absClosed = Math.abs(closedDelta)
+  const sparkState = absClosed < 5 ? 'accent' : 'muted'
+  const headlineLabel = absClosed < 5 ? 'On' : absClosed < 15 ? 'Near' : closedDelta > 0 ? 'Over' : 'Under'
+  const headlineDetail = absClosed < 5 ? 'within 5%' : absClosed < 15 ? '5–15% off' : 'more than 15% off'
 
   return (
     <div className="flex flex-col">
@@ -48,12 +54,9 @@ export function OwnerBidAccuracyScreen() {
               Mean delta on closed jobs
             </div>
           </div>
-          <div className="num text-[28px] font-bold tracking-tight">
-            {closedDelta > 0 ? '+' : ''}
-            {closedDelta.toFixed(1)}%
-          </div>
+          <div className="font-display text-[28px] font-bold tracking-tight">{headlineLabel}</div>
           <div className="text-[12px] text-ink-3 mt-1">
-            {summary?.closed_project_count ?? 0} closed of {summary?.project_count ?? 0} total ·{' '}
+            {headlineDetail} · {summary?.closed_project_count ?? 0} closed of {summary?.project_count ?? 0} total ·{' '}
             {summary?.over_count ?? 0} over · {summary?.under_count ?? 0} under
           </div>
           <div className="mt-3 flex items-center justify-between gap-2">
@@ -101,8 +104,7 @@ function ProjectRow({ project }: { project: BidAccuracyProject }) {
               {project.customer_name ?? 'No customer'} · bid ${Number(project.bid_total).toLocaleString()}
             </div>
             <div className="text-[11px] text-ink-3 mt-0.5">
-              actual ${(project.actual_total_cents / 100).toLocaleString()} · {sign}${absDelta.toLocaleString()} ({sign}
-              {Math.abs(project.delta_pct).toFixed(1)}%)
+              actual ${(project.actual_total_cents / 100).toLocaleString()} · {sign}${absDelta.toLocaleString()}
             </div>
           </div>
           <Pill tone={tone}>{labelFor(project.confidence)}</Pill>

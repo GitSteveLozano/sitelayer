@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
 import {
   useDeleteQboMapping,
   usePatchQboMapping,
@@ -118,6 +118,7 @@ function MappingForm({
 }) {
   const patch = usePatchQboMapping(mapping?.id ?? '')
   const del = useDeleteQboMapping()
+  const [confirmNode, askConfirm] = useConfirmSheet()
   const [entityType, setEntityType] = useState(mapping?.entity_type ?? 'customer')
   const [localRef, setLocalRef] = useState(mapping?.local_ref ?? '')
   const [externalId, setExternalId] = useState(mapping?.external_id ?? '')
@@ -154,11 +155,13 @@ function MappingForm({
 
   const remove = async () => {
     if (!mapping) return
-    if (
-      typeof window !== 'undefined' &&
-      !window.confirm(`Delete ${mapping.entity_type} ↔ QBO #${mapping.external_id}?`)
-    )
-      return
+    const ok = await askConfirm({
+      title: 'Delete QBO mapping?',
+      body: `Unlink ${mapping.entity_type} from QBO #${mapping.external_id}.`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (!ok) return
     try {
       await del.mutateAsync({ id: mapping.id, expected_version: mapping.version })
       onClose()
@@ -196,6 +199,7 @@ function MappingForm({
           ) : null}
         </div>
       </div>
+      {confirmNode}
     </Sheet>
   )
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
 import {
   useCreateServiceItem,
   useDeleteServiceItem,
@@ -95,6 +95,7 @@ function ServiceItemForm({
 }) {
   const patch = usePatchServiceItem(item?.code ?? '')
   const del = useDeleteServiceItem()
+  const [confirmNode, askConfirm] = useConfirmSheet()
   const [code, setCode] = useState(item?.code ?? '')
   const [name, setName] = useState(item?.name ?? '')
   const [category, setCategory] = useState(item?.category ?? 'labor')
@@ -131,7 +132,13 @@ function ServiceItemForm({
 
   const remove = async () => {
     if (!item) return
-    if (typeof window !== 'undefined' && !window.confirm(`Delete "${item.code}"?`)) return
+    const ok = await askConfirm({
+      title: 'Delete service item?',
+      body: `Permanently remove "${item.code}".`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (!ok) return
     try {
       await del.mutateAsync({ code: item.code, expected_version: item.version })
       onClose()
@@ -170,6 +177,7 @@ function ServiceItemForm({
           ) : null}
         </div>
       </div>
+      {confirmNode}
     </Sheet>
   )
 }

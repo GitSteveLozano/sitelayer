@@ -3,3 +3,4 @@ export { MobileButton, type MobileButtonProps, type ButtonVariant } from './Butt
 export { Pill, type PillProps, type PillTone } from './Pill'
 export { PhoneTopBar, type PhoneTopBarProps } from './PhoneTopBar'
 export { Sheet, type SheetProps } from './Sheet'
+export { ConfirmSheet, useConfirmSheet, type ConfirmSheetProps } from './ConfirmSheet'
