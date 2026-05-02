@@ -48,6 +48,8 @@ jobs:
 
       - run: npm run web:bundle-budget
 
+      - run: npm run web-v2:bundle-budget
+
       - name: Fixture web build
         run: VITE_FIXTURES=1 npm run build --workspace @sitelayer/web
 
