@@ -2,7 +2,6 @@ import { Outlet } from 'react-router-dom'
 import { BottomTabBar } from '@/components/nav/BottomTabBar'
 import { DesktopSideRail } from '@/components/nav/DesktopSideRail'
 import { InstallPromptBanner } from './InstallPromptBanner'
-import { IosInstallHint } from './IosInstallHint'
 import { OfflineBanner } from './OfflineBanner'
 import { PushDeniedBanner } from './PushDeniedBanner'
 import { UpdateBanner } from './UpdateBanner'
@@ -13,6 +12,10 @@ import { UpdateBanner } from './UpdateBanner'
  * OfflineBanner sits at the top of the scroll container so it's visible
  * on every screen without intruding when the user is online + the
  * queue is empty (it returns null in that case).
+ *
+ * iOS Add-to-Home-Screen used to show as a thin banner here
+ * (`IosInstallHint`); the full-screen `splash-landing` takeover (App.tsx
+ * `FirstRunGate`) handles that case better, so the banner was retired.
  */
 export function AppShell() {
   return (
@@ -23,7 +26,6 @@ export function AppShell() {
           <OfflineBanner />
           <UpdateBanner />
           <InstallPromptBanner />
-          <IosInstallHint />
           <PushDeniedBanner />
           <Outlet />
         </div>
