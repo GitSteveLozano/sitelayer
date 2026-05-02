@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
-import { Card, MobileButton, PhoneTopBar, Pill } from '@/components/mobile'
 
 /**
  * `wk-clockin` — full-screen takeover after an auto-geofence clock-in
- * succeeds. Shows the location, project, and a 2-minute correction
- * window so the worker can void if the trigger was wrong.
+ * succeeds, redesigned per Sitemap §11 (Worker app, "Auto clock-in
+ * success"). The brief calls for a quiet, full-bleed dark surface with
+ * a single orange beacon — the geofence ping confirming the crossing —
+ * and a 2-minute correction window so the worker can void if the
+ * trigger was wrong.
  *
- * Phase 1D.2 ships the visual + countdown; the actual void endpoint
- * lands in Phase 1D.4 along with the clock_events soft-delete migration.
- * The button here just dismisses for now (returns to wk-today).
+ * Dark theme is engaged via the `.m-dark` wrapper class, which flips
+ * the CSS custom properties (`--m-bg`, `--m-card`, `--m-ink`, …) in
+ * `tokens.css`. All Tailwind utilities mapped to those tokens (`bg-bg`,
+ * `text-ink`, etc.) automatically pick up the dark values, so the
+ * primitives don't need to know they're rendering in focus mode.
  *
  * Auto-fades after 6 seconds per the design (`wk-clockin → wk-today
  * after auto-fade`); the correction window stays open server-side per
@@ -46,55 +49,61 @@ export function ClockInSuccess({ projectName, occurredAt, correctibleUntil, onDi
   }, [onDismiss])
 
   return (
-    <div className="flex flex-col h-full bg-bg">
-      <PhoneTopBar activeProject={projectName ?? 'On site'} />
-
-      <div className="px-5 pt-6 pb-4 flex-1 flex flex-col">
+    <div className="m-dark flex flex-col min-h-dvh bg-bg text-ink">
+      <div className="flex-1 flex flex-col px-6 pt-10 pb-8">
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-good">Clocked in</div>
-        <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">You're checked in</h1>
-        <p className="text-[14px] text-ink-2 mt-1">
-          {formatTime(occurredAt)} at {projectName ?? 'this project'}
+        <h1 className="mt-1.5 font-display text-[30px] font-bold tracking-tight leading-tight">You're clocked in</h1>
+        <p className="text-[14px] text-ink-2 mt-2 max-w-[24ch]">
+          We detected you crossed {projectName ?? 'the project geofence'} at {formatTime(occurredAt)}.
         </p>
 
-        <Card className="mt-6">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="w-2 h-2 rounded-full bg-good shrink-0" aria-hidden="true" />
-            <span className="text-[13px] font-medium">Auto clock-in confirmed</span>
-          </div>
-          <p className="text-[12px] text-ink-3 leading-relaxed">
-            We detected you crossed the project geofence. The site map shows your pin inside the work area.
-          </p>
-        </Card>
+        <div className="flex-1 flex items-center justify-center my-10">
+          <Beacon />
+        </div>
 
         {correctibleUntil && secondsLeft > 0 ? (
-          <Card className="mt-3" tight>
-            <div className="flex items-center justify-between">
+          <button
+            type="button"
+            onClick={() => onVoid?.()}
+            disabled={!onVoid}
+            className="w-full text-left bg-card-soft border border-line-2 rounded-[12px] px-4 py-3 mb-3 active:opacity-80"
+          >
+            <div className="flex items-center justify-between gap-3">
               <div>
-                <div className="text-[12px] font-semibold">Wait, that wasn't me</div>
-                <div className="text-[11px] text-ink-3 mt-0.5">{secondsLeft}s left to void this clock-in</div>
+                <div className="text-[13px] font-semibold">Wrong location?</div>
+                <div className="font-mono tabular-nums text-[11px] text-ink-3 mt-0.5">Void in {secondsLeft}s</div>
               </div>
-              <MobileButton variant="ghost" size="sm" fullWidth={false} onClick={() => onVoid?.()} disabled={!onVoid}>
-                Void
-              </MobileButton>
+              <span className="text-[12px] font-semibold text-warn shrink-0">Void</span>
             </div>
-          </Card>
-        ) : (
-          <Card className="mt-3" tight>
-            <div className="flex items-center justify-between">
-              <Pill tone="default">Correction window closed</Pill>
-              <Link to="/" className="text-[12px] text-accent font-medium">
-                Got it
-              </Link>
-            </div>
-          </Card>
-        )}
+          </button>
+        ) : null}
 
-        <div className="mt-auto pt-6">
-          <MobileButton variant="primary" onClick={onDismiss}>
-            See today's scope
-          </MobileButton>
-        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="w-full h-[50px] rounded-[14px] bg-accent text-white text-[16px] font-semibold"
+        >
+          See today's scope
+        </button>
       </div>
+    </div>
+  )
+}
+
+/**
+ * The single orange ping at the centre of the surface — the visual
+ * answer to "was the auto-clock-in actually you". Concentric pulses
+ * fade out so the beacon reads as 'live, just confirmed'.
+ */
+function Beacon() {
+  return (
+    <div className="relative w-[180px] h-[180px] flex items-center justify-center">
+      <span className="absolute inset-0 rounded-full bg-accent/15 animate-ping" aria-hidden="true" />
+      <span className="absolute inset-6 rounded-full bg-accent/25" aria-hidden="true" />
+      <span
+        className="relative w-[68px] h-[68px] rounded-full bg-accent shadow-[0_0_40px_rgba(217,144,74,0.45)]"
+        aria-hidden="true"
+      />
     </div>
   )
 }
