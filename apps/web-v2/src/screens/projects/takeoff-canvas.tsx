@@ -162,9 +162,14 @@ export function TakeoffCanvasScreen() {
           <h1 className="font-display text-[22px] font-bold tracking-tight leading-tight truncate">
             {activeBlueprint?.file_name ?? 'No blueprint'}
           </h1>
-          <Link to={`/projects/${projectId}/takeoff-summary`} className="text-[12px] font-medium text-accent shrink-0">
-            Summary →
-          </Link>
+          <div className="flex items-center gap-3 shrink-0">
+            <Link to={`/projects/${projectId}/photo-measure`} className="text-[12px] font-medium text-accent">
+              Photo →
+            </Link>
+            <Link to={`/projects/${projectId}/takeoff-summary`} className="text-[12px] font-medium text-accent">
+              Summary →
+            </Link>
+          </div>
         </div>
       </div>
 

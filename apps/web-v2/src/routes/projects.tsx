@@ -3,6 +3,7 @@ import { ProjectsListScreen, ProjectDetailScreen } from '@/screens/projects'
 import { ProjectSetupScreen } from '@/screens/projects/setup'
 import { TakeoffCanvasScreen } from '@/screens/projects/takeoff-canvas'
 import { TakeoffSummaryScreen } from '@/screens/projects/takeoff-summary'
+import { PhotoMeasureScreen } from '@/screens/projects/photo-measure'
 import { ProjectRentalContractScreen } from '@/screens/inventory-admin'
 
 /**
@@ -22,6 +23,7 @@ export default function ProjectsRoute() {
       <Route path=":id/setup" element={<ProjectSetupScreen />} />
       <Route path=":id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
       <Route path=":id/takeoff-summary" element={<TakeoffSummaryScreen />} />
+      <Route path=":id/photo-measure" element={<PhotoMeasureScreen />} />
       <Route path=":id/rental-contract" element={<ProjectRentalContractScreen />} />
     </Routes>
   )
