@@ -16,6 +16,7 @@
  */
 export { Spark, type SparkProps, type SparkState } from './Spark'
 export { Attribution, type AttributionProps } from './Attribution'
+export { AiEyebrow, type AiEyebrowProps, type AiEyebrowTone } from './AiEyebrow'
 export { StripeCard, type StripeCardProps, type StripeTone } from './StripeCard'
 export { AgentSurface, type AgentSurfaceProps } from './AgentSurface'
 export { Dismiss, type DismissProps } from './Dismiss'
