@@ -10,6 +10,7 @@ import {
   useWorkers,
   type InventoryItem,
 } from '@/lib/api'
+import { BarcodeScannerSheet, isBarcodeScanSupported } from './barcode-scanner'
 
 /**
  * `rnt-scan-dispatch` — worker scan-driven dispatch flow.
@@ -43,6 +44,8 @@ export function RentalsScanScreen() {
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
   const [coordError, setCoordError] = useState<string | null>(null)
   const [posted, setPosted] = useState<boolean>(false)
+  const [cameraOpen, setCameraOpen] = useState(false)
+  const cameraSupported = useMemo(() => isBarcodeScanSupported(), [])
 
   // Resolve item from scanned code. Catalog code is the source of truth;
   // anything else is a typo or wrong sticker.
@@ -113,15 +116,27 @@ export function RentalsScanScreen() {
       <div className="px-4 pb-8 space-y-3">
         <Card>
           <label className="block text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Asset code</label>
-          <input
-            type="text"
-            inputMode="text"
-            autoComplete="off"
-            value={scanCode}
-            onChange={(e) => setScanCode(e.target.value)}
-            placeholder="e.g. cup-lock-frame"
-            className="mt-1 w-full text-[16px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
-          />
+          <div className="flex items-center gap-2 mt-1">
+            <input
+              type="text"
+              inputMode="text"
+              autoComplete="off"
+              value={scanCode}
+              onChange={(e) => setScanCode(e.target.value)}
+              placeholder="e.g. cup-lock-frame"
+              className="flex-1 min-w-0 text-[16px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
+            />
+            {cameraSupported ? (
+              <button
+                type="button"
+                onClick={() => setCameraOpen(true)}
+                className="shrink-0 px-3 py-2 rounded-md bg-accent text-white text-[12px] font-semibold"
+                aria-label="Scan barcode with camera"
+              >
+                Scan
+              </button>
+            ) : null}
+          </div>
           {scanCode && !resolved ? (
             <div className="text-[11px] text-status-warn mt-1">
               No catalog match for “{scanCode}”. Check the sticker or try the catalog.
@@ -224,6 +239,15 @@ export function RentalsScanScreen() {
           <div className="text-[12px] text-status-warn">{dispatch.error?.message ?? 'Failed to post movement'}</div>
         ) : null}
       </div>
+
+      <BarcodeScannerSheet
+        open={cameraOpen}
+        onClose={() => setCameraOpen(false)}
+        onDetected={(value) => {
+          setScanCode(value.trim())
+          setCameraOpen(false)
+        }}
+      />
     </div>
   )
 }
