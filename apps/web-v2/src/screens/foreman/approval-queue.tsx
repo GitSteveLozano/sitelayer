@@ -55,6 +55,9 @@ export function ApprovalQueueScreen() {
             <Link to="/time/burden" className="text-accent font-medium">
               Burden →
             </Link>
+            <Link to="/time/vs" className="text-accent font-medium">
+              Vs plan →
+            </Link>
           </span>
         </div>
       </div>
