@@ -13,7 +13,7 @@ import {
 } from '@/lib/api'
 import { findOpenSpan, pairClockSpans, sumHoursInRange, startOfDay } from '@/lib/clock-derive'
 import { EstimateSummaryScreen } from './estimate-summary'
-import { TakeoffHubScreen } from './takeoff-hub'
+import { TakeoffListScreen } from './takeoff-list'
 
 /**
  * `prj-detail` shell — header + sub-tab nav + per-sub-tab content.
@@ -114,7 +114,7 @@ export function ProjectDetailScreen() {
 
       <div className="px-4 py-4 pb-8">
         {tab === 'overview' ? <OverviewTab project={data} /> : null}
-        {tab === 'takeoff' ? <TakeoffHubScreen projectId={data.id} /> : null}
+        {tab === 'takeoff' ? <TakeoffListScreen projectId={data.id} /> : null}
         {tab === 'estimate' ? <EstimateSummaryScreen projectId={data.id} /> : null}
         {tab === 'schedule' ? <SchedulePreview projectId={data.id} /> : null}
         {tab === 'time' ? <TimePreview projectId={data.id} /> : null}
