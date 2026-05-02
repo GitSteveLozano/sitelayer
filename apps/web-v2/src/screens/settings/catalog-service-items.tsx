@@ -161,7 +161,7 @@ function ServiceItemForm({
         <Select label="Category" value={category} onChange={setCategory} options={CATEGORIES} />
         <Select label="Unit" value={unit} onChange={setUnit} options={UNITS} />
         <Field label="Default rate (optional)" value={String(rate ?? '')} onChange={setRate} placeholder="0.00" />
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <div className={item ? 'grid grid-cols-2 gap-2' : ''}>
           <MobileButton
             variant="primary"

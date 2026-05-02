@@ -123,7 +123,7 @@ function CustomerSheet({
       <div className="space-y-3">
         <Field label="Name" value={name} onChange={setName} placeholder="Customer name" />
         <Field label="QBO external id (optional)" value={externalId} onChange={setExternalId} placeholder="123" />
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <div className={isNew ? '' : 'grid grid-cols-2 gap-2'}>
           <MobileButton variant="primary" onClick={submit} disabled={!name.trim() || patch.isPending}>
             {isNew ? 'Create' : 'Save'}

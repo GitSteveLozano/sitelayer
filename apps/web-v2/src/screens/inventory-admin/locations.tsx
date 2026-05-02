@@ -189,7 +189,7 @@ function LocationForm({
           />
           <span className="text-[13px]">Default yard (one per company)</span>
         </label>
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <div className={location ? 'grid grid-cols-2 gap-2' : ''}>
           <MobileButton variant="primary" onClick={submit} disabled={!name.trim() || patch.isPending}>
             {location ? 'Save' : 'Create'}

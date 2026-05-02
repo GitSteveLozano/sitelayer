@@ -218,7 +218,7 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
             </div>
           </div>
         ) : null}
-        {error ? <div className="text-[12px] text-status-warn mt-2">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn mt-2">{error}</div> : null}
       </Card>
 
       <div className="mt-2">
@@ -290,7 +290,7 @@ function NewContractSheet({
         <Field label="Billing start date" value={start} onChange={setStart} type="date" />
         <Field label="Cycle days" value={cycle} onChange={setCycle} placeholder="25" />
         <Select label="Mode" value={mode} onChange={setMode} options={['arrears', 'in_advance']} />
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <MobileButton variant="primary" onClick={submit} disabled={!start}>
           Create
         </MobileButton>
@@ -345,7 +345,7 @@ function ContractHeaderSheet({
         <Field label="Cycle days" value={cycle} onChange={setCycle} placeholder="25" />
         <Select label="Mode" value={mode} onChange={setMode} options={['arrears', 'in_advance']} />
         <Select label="Status" value={status} onChange={setStatus} options={['draft', 'active', 'paused', 'closed']} />
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <MobileButton variant="primary" onClick={submit}>
           Save
         </MobileButton>
@@ -448,7 +448,7 @@ function LineForm({
         />
         <Field label="On-rent date" value={onRent} onChange={setOnRent} type="date" />
         <Field label="Off-rent date (optional)" value={offRent} onChange={setOffRent} type="date" />
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <div className={line ? 'grid grid-cols-2 gap-2' : ''}>
           <MobileButton
             variant="primary"

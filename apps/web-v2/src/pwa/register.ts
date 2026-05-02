@@ -18,7 +18,7 @@ export interface RegisterOptions {
   onRegisterError?: (err: unknown) => void
 }
 
-export function registerServiceWorker(opts: RegisterOptions = {}): () => Promise<void> {
+export function registerServiceWorker(opts: RegisterOptions = {}): (reloadPage?: boolean) => Promise<void> {
   const updateSW = registerSW({
     immediate: true,
     onNeedRefresh: () => opts.onNeedRefresh?.(),
