@@ -31,9 +31,18 @@ type PreparedTakeoffMeasurementInput = {
   // Sitemap §5 panel 1 — first-class elevation tag (East / South /
   // West / North / Roof / Other / null = untagged).
   elevation: string | null
+  // Sitemap §5 panel 3 — photo-measure thumbnail as a data URL.
+  // Compressed client-side (≈ 30–80KB) so it fits inline; the
+  // photo-bucket follow-on will swap this for a Spaces storage key.
+  imageThumbnail: string | null
 }
 
 const ELEVATION_VOCAB = new Set(['east', 'south', 'west', 'north', 'roof', 'other'])
+
+// Cap inline thumbnail size to keep the JSON body small. 200KB is
+// generous for a 512×n JPEG @ q=0.7; bigger inputs almost certainly
+// mean the client forgot to compress.
+const MAX_INLINE_THUMBNAIL_BYTES = 200 * 1024
 
 function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'): PreparedTakeoffMeasurementInput {
   if (typeof rawInput !== 'object' || rawInput === null || Array.isArray(rawInput)) {
@@ -63,6 +72,23 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     throw new HttpError(400, `${label}.elevation must be one of: east, south, west, north, roof, other`)
   }
   const elevation = rawElevation
+
+  const rawThumb =
+    input.image_thumbnail === undefined || input.image_thumbnail === null || String(input.image_thumbnail).trim() === ''
+      ? null
+      : String(input.image_thumbnail)
+  if (rawThumb !== null) {
+    if (!rawThumb.startsWith('data:image/')) {
+      throw new HttpError(400, `${label}.image_thumbnail must be a data: URL with image MIME`)
+    }
+    if (rawThumb.length > MAX_INLINE_THUMBNAIL_BYTES) {
+      throw new HttpError(
+        413,
+        `${label}.image_thumbnail exceeds the 200KB inline cap; compress client-side or use the photo upload endpoint when wired`,
+      )
+    }
+  }
+  const imageThumbnail = rawThumb
 
   if (!serviceItemCode) {
     throw new HttpError(400, `${label}.service_item_code is required`)
@@ -99,7 +125,17 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     throw new HttpError(400, `${label}.quantity must be a non-negative number`)
   }
 
-  return { serviceItemCode, quantity, unit, notes, geometryJson, blueprintDocumentId, divisionCode, elevation }
+  return {
+    serviceItemCode,
+    quantity,
+    unit,
+    notes,
+    geometryJson,
+    blueprintDocumentId,
+    divisionCode,
+    elevation,
+    imageThumbnail,
+  }
 }
 
 export async function assertBlueprintDocumentsBelongToProject(
@@ -208,10 +244,10 @@ export async function handleTakeoffWriteRoutes(
       const insertResult = await client.query(
         `
         insert into takeoff_measurements (
-          company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation
+          company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail
         )
-        values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9, $10)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, version, deleted_at, created_at
+        values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9, $10, $11)
+        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, version, deleted_at, created_at
         `,
         [
           ctx.company.id,
@@ -224,6 +260,7 @@ export async function handleTakeoffWriteRoutes(
           measurementInput.geometryJson,
           measurementInput.divisionCode,
           measurementInput.elevation,
+          measurementInput.imageThumbnail,
         ],
       )
       const row = insertResult.rows[0]
@@ -326,10 +363,10 @@ export async function handleTakeoffWriteRoutes(
         const insertResult = await client.query(
           `
           insert into takeoff_measurements (
-            company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation
+            company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail
           )
-          values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9, $10)
-          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, version, deleted_at, created_at
+          values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9, $10, $11)
+          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, version, deleted_at, created_at
           `,
           [
             ctx.company.id,
@@ -342,6 +379,7 @@ export async function handleTakeoffWriteRoutes(
             measurement.geometryJson,
             measurement.divisionCode,
             measurement.elevation,
+            measurement.imageThumbnail,
           ],
         )
         createdRows.push(insertResult.rows[0])

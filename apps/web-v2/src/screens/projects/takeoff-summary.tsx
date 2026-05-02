@@ -34,6 +34,8 @@ export function TakeoffSummaryScreen() {
     unit: string
     totalQty: number
     measurementCount: number
+    /** First photo-measure thumbnail in this group, if any. */
+    thumbnail: string | null
   }
 
   const groups = useMemo<Group[]>(() => {
@@ -50,9 +52,11 @@ export function TakeoffSummaryScreen() {
           unit: r.unit,
           totalQty: 0,
           measurementCount: 0,
+          thumbnail: null,
         }
         existing.totalQty += qty
         existing.measurementCount += 1
+        if (!existing.thumbnail && r.image_thumbnail) existing.thumbnail = r.image_thumbnail
         m.set(code, existing)
       }
     } else {
@@ -69,9 +73,11 @@ export function TakeoffSummaryScreen() {
           unit: r.unit,
           totalQty: 0,
           measurementCount: 0,
+          thumbnail: null,
         }
         existing.totalQty += qty
         existing.measurementCount += 1
+        if (!existing.thumbnail && r.image_thumbnail) existing.thumbnail = r.image_thumbnail
         // Mixed-unit rollups happen when a single elevation has both
         // sqft polygons and lf lineal — we surface the dominant unit
         // (first row's unit "wins") rather than switching to a vague
@@ -177,7 +183,14 @@ function SummaryRow({
   maxQty,
   projectId,
 }: {
-  group: { code: string; name: string; unit: string; totalQty: number; measurementCount: number }
+  group: {
+    code: string
+    name: string
+    unit: string
+    totalQty: number
+    measurementCount: number
+    thumbnail: string | null
+  }
   maxQty: number
   projectId: string
 }) {
@@ -186,10 +199,20 @@ function SummaryRow({
     <Link to={`/projects/${projectId}/takeoff-canvas?item=${encodeURIComponent(group.code)}`} className="block">
       <Card>
         <div className="flex items-baseline justify-between gap-3 mb-1.5">
-          <div className="min-w-0">
-            <div className="text-[13px] font-semibold truncate">{group.code}</div>
-            <div className="text-[11px] text-ink-3 mt-0.5 truncate">
-              {group.name} · {group.measurementCount} {group.measurementCount === 1 ? 'measurement' : 'measurements'}
+          <div className="min-w-0 flex items-baseline gap-2">
+            {group.thumbnail ? (
+              <img
+                src={group.thumbnail}
+                alt=""
+                className="w-9 h-9 rounded-md object-cover shrink-0 border border-line"
+                aria-hidden="true"
+              />
+            ) : null}
+            <div className="min-w-0">
+              <div className="text-[13px] font-semibold truncate">{group.code}</div>
+              <div className="text-[11px] text-ink-3 mt-0.5 truncate">
+                {group.name} · {group.measurementCount} {group.measurementCount === 1 ? 'measurement' : 'measurements'}
+              </div>
             </div>
           </div>
           <div className="text-right shrink-0">

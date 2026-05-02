@@ -139,15 +139,12 @@ export function PhotoMeasureScreen() {
     try {
       // Persist as a `lineal` measurement carrying the longer side
       // (a photo-measured frame is a 1D feature most of the time —
-      // caulk run, lintel, vent height). The shorter side is stashed
-      // in notes for the audit trail.
+      // caulk run, lintel, vent height). The shorter side goes into
+      // notes for the audit trail; the rectangle + ref dim go inline
+      // on the thumbnail data URL so a future re-render can replay.
       const longer = Math.max(computed.w, computed.h)
       const shorter = Math.min(computed.w, computed.h)
-      const meta = JSON.stringify({
-        rect,
-        ref: { axis: refAxis, value: Number(refValue), unit: refUnit },
-        computed: { w: computed.w, h: computed.h },
-      })
+      const thumbnail = imgRef.current && imageNatural ? await compressThumbnail(imgRef.current) : null
       await create.mutateAsync({
         blueprint_document_id: null,
         service_item_code: serviceItemCode,
@@ -160,7 +157,8 @@ export function PhotoMeasureScreen() {
             { x: rect.x2, y: rect.y2 },
           ],
         },
-        notes: `photo:${meta}\nshorter:${shorter.toFixed(2)} ${refUnit}`,
+        notes: `photo · ref ${refValue} ${refUnit} ${refAxis === 'w' ? 'wide' : 'tall'} · short ${shorter.toFixed(2)} ${refUnit}`,
+        image_thumbnail: thumbnail,
       })
       navigate(`/projects/${projectId}/takeoff-summary`)
     } catch (e) {
@@ -368,4 +366,26 @@ export function PhotoMeasureScreen() {
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n))
+}
+
+/**
+ * Downscale the loaded photo to a 512px-wide JPEG @ q=0.7 and return
+ * the data URL. Stays well under the 200KB inline cap the server
+ * enforces; falls back to null if the canvas API isn't available.
+ */
+async function compressThumbnail(img: HTMLImageElement): Promise<string | null> {
+  if (typeof document === 'undefined' || !img.naturalWidth) return null
+  const TARGET_W = 512
+  const ratio = img.naturalWidth > TARGET_W ? TARGET_W / img.naturalWidth : 1
+  const w = Math.round(img.naturalWidth * ratio)
+  const h = Math.round(img.naturalHeight * ratio)
+  const canvas = document.createElement('canvas')
+  canvas.width = w
+  canvas.height = h
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return null
+  ctx.drawImage(img, 0, 0, w, h)
+  // Quality 0.7 keeps construction-photo legibility while staying
+  // small. q=0.5 starts to look smudgy on EIFS / plank textures.
+  return canvas.toDataURL('image/jpeg', 0.7)
 }
