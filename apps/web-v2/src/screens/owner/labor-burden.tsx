@@ -119,8 +119,11 @@ export function OwnerLaborBurdenScreen() {
         )}
       </div>
 
-      <div className="px-4 pb-6">
-        <Link to="/time" className="block">
+      <div className="px-4 pb-6 flex gap-2">
+        <Link to="/time/vs" className="flex-1">
+          <MobileButton variant="ghost">Live vs budget →</MobileButton>
+        </Link>
+        <Link to="/time" className="flex-1">
           <MobileButton variant="ghost">Back to Time</MobileButton>
         </Link>
       </div>
