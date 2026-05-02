@@ -274,6 +274,7 @@ export {
   projectQueryKeys,
   useProject,
   useProjects,
+  useProjectSummary,
   useProjectTimeline,
   type ProjectDetail,
   type ProjectDetailResponse,
@@ -281,6 +282,9 @@ export {
   type ProjectListResponse,
   type ProjectListRow,
   type ProjectStatus,
+  type ProjectSummaryResponse,
+  type ProjectSummaryEstimateLine,
+  type ProjectSummaryLaborEntry,
   type ProjectTimelineEvent,
   type ProjectTimelineResponse,
 } from './projects'
