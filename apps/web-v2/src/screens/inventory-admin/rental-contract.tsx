@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import {
   useCreateContractLine,
@@ -91,6 +91,7 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
   const createLine = useCreateContractLine(contract.id)
   const preview = usePreviewBillingRun(contract.id)
   const generate = useGenerateBillingRun(contract.id)
+  const [confirmNode, askConfirm] = useConfirmSheet()
   const [editingLine, setEditingLine] = useState<RentalContractLine | 'new' | null>(null)
   const [previewData, setPreviewData] = useState<BillingRunPreview | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -108,8 +109,12 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
 
   const onGenerate = async () => {
     setError(null)
-    if (typeof window !== 'undefined' && !window.confirm('Generate the billing run? This creates an approvable run.'))
-      return
+    const ok = await askConfirm({
+      title: 'Generate billing run?',
+      body: 'This creates an approvable run. Approval + post happens on the Financial tab.',
+      confirmLabel: 'Generate',
+    })
+    if (!ok) return
     try {
       await generate.mutateAsync({})
       setPreviewData(null)
@@ -243,6 +248,7 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
           }}
         />
       ) : null}
+      {confirmNode}
     </div>
   )
 }
@@ -369,6 +375,7 @@ function LineForm({
   const items = useInventoryItems()
   const patch = usePatchContractLine(line?.id ?? '')
   const del = useDeleteContractLine()
+  const [confirmNode, askConfirm] = useConfirmSheet()
   const [itemId, setItemId] = useState(line?.inventory_item_id ?? '')
   const [quantity, setQuantity] = useState(line?.quantity ?? '1')
   const [rate, setRate] = useState(line?.agreed_rate ?? '0')
@@ -401,7 +408,13 @@ function LineForm({
 
   const remove = async () => {
     if (!line) return
-    if (typeof window !== 'undefined' && !window.confirm('Delete this line?')) return
+    const ok = await askConfirm({
+      title: 'Delete contract line?',
+      body: 'This removes the line from the contract; existing billing runs are unaffected.',
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (!ok) return
     try {
       await del.mutateAsync({ id: line.id, expected_version: line.version })
       onClose()
@@ -451,6 +464,7 @@ function LineForm({
           ) : null}
         </div>
       </div>
+      {confirmNode}
     </Sheet>
   )
 }

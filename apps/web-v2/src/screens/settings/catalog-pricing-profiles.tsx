@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
 import {
   useCreatePricingProfile,
   useDeletePricingProfile,
@@ -87,6 +87,7 @@ function PricingProfileForm({
 }) {
   const patch = usePatchPricingProfile(profile?.id ?? '')
   const del = useDeletePricingProfile()
+  const [confirmNode, askConfirm] = useConfirmSheet()
   const [name, setName] = useState(profile?.name ?? '')
   const [isDefault, setIsDefault] = useState(profile?.is_default ?? false)
   const [configText, setConfigText] = useState(
@@ -122,7 +123,13 @@ function PricingProfileForm({
 
   const remove = async () => {
     if (!profile) return
-    if (typeof window !== 'undefined' && !window.confirm(`Delete "${profile.name}"?`)) return
+    const ok = await askConfirm({
+      title: 'Delete pricing profile?',
+      body: `Permanently remove "${profile.name}".`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (!ok) return
     try {
       await del.mutateAsync({ id: profile.id, expected_version: profile.version })
       onClose()
@@ -173,6 +180,7 @@ function PricingProfileForm({
           ) : null}
         </div>
       </div>
+      {confirmNode}
     </Sheet>
   )
 }

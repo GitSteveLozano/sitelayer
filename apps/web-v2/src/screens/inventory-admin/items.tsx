@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
 import {
   useCreateInventoryItem,
   useDeleteInventoryItem,
@@ -99,6 +99,7 @@ function ItemForm({
 }) {
   const patch = usePatchInventoryItem(item?.id ?? '')
   const del = useDeleteInventoryItem()
+  const [confirmNode, askConfirm] = useConfirmSheet()
   const [code, setCode] = useState(item?.code ?? '')
   const [description, setDescription] = useState(item?.description ?? '')
   const [category, setCategory] = useState(item?.category ?? 'scaffold')
@@ -146,7 +147,13 @@ function ItemForm({
 
   const remove = async () => {
     if (!item) return
-    if (typeof window !== 'undefined' && !window.confirm(`Delete "${item.code}"?`)) return
+    const ok = await askConfirm({
+      title: 'Delete inventory item?',
+      body: `Permanently remove "${item.code}".`,
+      confirmLabel: 'Delete',
+      destructive: true,
+    })
+    if (!ok) return
     try {
       await del.mutateAsync({ id: item.id, expected_version: item.version })
       onClose()
@@ -190,6 +197,7 @@ function ItemForm({
           ) : null}
         </div>
       </div>
+      {confirmNode}
     </Sheet>
   )
 }
