@@ -1,7 +1,14 @@
 import { useState, type ReactNode } from 'react'
 import { Card, MobileButton, Pill, Row, Sheet } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
-import { estimatePdfUrl, useScopeVsBid, type BidVsScopeStatus, type EstimateLine } from '@/lib/api'
+import {
+  estimatePdfUrl,
+  useProjectTimeline,
+  useScopeVsBid,
+  type BidVsScopeStatus,
+  type EstimateLine,
+  type ProjectTimelineEvent,
+} from '@/lib/api'
 
 /**
  * `est-summary` — Estimate draft for a project. Renders the
@@ -88,6 +95,8 @@ export function EstimateSummaryScreen({ projectId }: { projectId: string }) {
           Send estimate
         </MobileButton>
       </div>
+
+      <ProjectTimelineCard projectId={projectId} />
 
       <ShareSheet open={shareOpen} onClose={() => setShareOpen(false)} projectId={projectId} />
     </div>
@@ -285,4 +294,77 @@ function statusLabel(status: BidVsScopeStatus): string {
   if (status === 'ok') return 'matches'
   if (status === 'warn') return 'small drift'
   return 'mismatch'
+}
+
+/**
+ * `est-sent` from Sitemap §6 panel 2 — project timeline.
+ *
+ * Project-scoped audit trail showing who did what (created, updated,
+ * closed-out, etc.). Doesn't surface external 'opened by client' events
+ * yet (that needs email open tracking) — but covers internal lifecycle
+ * which is the bulk of what the foreman / PM cares about: 'when did
+ * the bid go out, who tweaked the geofence, who locked the summary'.
+ */
+function ProjectTimelineCard({ projectId }: { projectId: string }) {
+  const timeline = useProjectTimeline(projectId)
+  const events = timeline.data?.events ?? []
+  if (timeline.isPending) return null
+  if (events.length === 0) return null
+  return (
+    <Card className="!p-0 overflow-hidden">
+      <div className="px-4 py-3 border-b border-line text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">
+        Timeline
+      </div>
+      <ul className="divide-y divide-line">
+        {events.slice(0, 10).map((e) => (
+          <li key={e.id} className="px-4 py-3 flex items-start gap-3">
+            <span aria-hidden="true" className="w-2 h-2 rounded-full bg-accent shrink-0 mt-1.5" />
+            <div className="flex-1 min-w-0">
+              <div className="text-[13px] font-medium">{prettyAction(e)}</div>
+              <div className="text-[11px] text-ink-3 mt-0.5">
+                {e.actor_role ?? 'system'} · {formatTimelineTime(e.created_at)}
+              </div>
+            </div>
+          </li>
+        ))}
+      </ul>
+      <div className="px-4 py-2 border-t border-line">
+        <Attribution source="Live from /api/projects/:id/timeline · most recent first" />
+      </div>
+    </Card>
+  )
+}
+
+function prettyAction(e: ProjectTimelineEvent): string {
+  // Capitalise the action verb and append a contextual phrase per the
+  // most common actions. Anything we don't pretty-print falls through
+  // to the raw verb so the timeline still reads.
+  switch (e.action) {
+    case 'create':
+      return 'Project created'
+    case 'update':
+      return 'Project details updated'
+    case 'closeout':
+      return 'Project closed out'
+    case 'lock_summary':
+      return 'Summary locked'
+    case 'unlock_summary':
+      return 'Summary reopened'
+    default:
+      return e.action.charAt(0).toUpperCase() + e.action.slice(1).replace(/_/g, ' ')
+  }
+}
+
+function formatTimelineTime(iso: string): string {
+  const d = new Date(iso)
+  const now = Date.now()
+  const ms = now - d.getTime()
+  if (ms < 60_000) return 'just now'
+  const min = Math.floor(ms / 60_000)
+  if (min < 60) return `${min}m ago`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h ago`
+  const days = Math.floor(hr / 24)
+  if (days < 30) return `${days}d ago`
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
