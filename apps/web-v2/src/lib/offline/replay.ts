@@ -42,9 +42,13 @@ export async function replayOfflineQueue(): Promise<{ replayed: number; dropped:
     for (const row of rows) {
       // Backoff: rows with 5+ attempts wait 60s × 2^(attempt-5) before
       // the next try. Caps at 1h; keeps a stuck row from hammering.
+      // Measured from last_attempt_at — measuring from enqueued_at would
+      // let any row that's been sitting in the queue longer than the
+      // backoff window slip through every heartbeat (15s).
       if (row.attempt_count >= 5) {
         const backoffMs = Math.min(60 * 60_000, 60_000 * Math.pow(2, row.attempt_count - 5))
-        if (Date.now() - row.enqueued_at < backoffMs) {
+        const since = row.last_attempt_at ?? row.enqueued_at
+        if (Date.now() - since < backoffMs) {
           deferred++
           continue
         }
@@ -76,6 +80,7 @@ export async function replayOfflineQueue(): Promise<{ replayed: number; dropped:
         await updateOfflineMutation({
           ...row,
           attempt_count: row.attempt_count + 1,
+          last_attempt_at: Date.now(),
           last_error: err instanceof Error ? err.message.slice(0, 500) : String(err).slice(0, 500),
         })
       }
