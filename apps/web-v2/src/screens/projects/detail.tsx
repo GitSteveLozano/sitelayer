@@ -18,12 +18,10 @@ import { TakeoffHubScreen } from './takeoff-hub'
  * `prj-detail` shell — header + sub-tab nav + per-sub-tab content.
  *
  * Sub-tabs from `Sitemap.html` § 02:
- *   - Overview (default) — wired below in 2B
- *   - Takeoff — Phase 3 lands the canvas; placeholder until then
- *   - Schedule — links to `/projects/:id` schedule sub-tab; full
- *     calendar lands in 2D
- *   - Time — pulls live-vs-budget from /api/labor-burden/today scoped
- *     to the project; full burden detail (t-burden) is Phase 5
+ *   - Overview (default) — KPI tiles + open-log card
+ *   - Takeoff — links into the polygon canvas + summary
+ *   - Schedule — sub-list of upcoming crew assignments for this project
+ *   - Time — burden detail with stacked-bar per-worker breakdown
  *
  * Sub-tab state lives in the `?tab=` query param so the back button
  * works the way users expect (browser history captures each tab
