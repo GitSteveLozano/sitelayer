@@ -149,23 +149,74 @@ function WeekView() {
     }
   })
 
+  const totalHours = days.reduce((sum, d) => sum + d.hours, 0)
+  const maxBarH = days.reduce((max, d) => Math.max(max, d.hours), 0)
+  // Cap the bar scale at 10h so a normal 8-hour day fills most of the
+  // chart; an outlier 12h day still plots within bounds via min().
+  const scaleH = Math.max(10, maxBarH)
+
   return (
-    <Card>
-      <ul className="divide-y divide-line">
-        {days.map((day) => (
-          <li key={day.label + day.dayNum} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
-            <div className="flex items-baseline gap-3">
-              <div className="w-10 text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">{day.label}</div>
-              <div className="num text-[16px] font-medium">{day.dayNum}</div>
-              {day.isToday ? <Pill tone="accent">today</Pill> : null}
+    <div className="space-y-3">
+      {/* Bar chart from Sitemap §11 panel 5 ("My week · hours"). */}
+      <Card>
+        <div className="flex items-baseline justify-between mb-3">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Total this week</div>
+            <div className="font-mono tabular-nums text-[32px] font-bold tracking-[-0.02em] leading-none mt-1">
+              {totalHours.toFixed(1)}
+              <span className="text-[14px] text-ink-3 font-normal ml-1">h</span>
             </div>
-            <div className="num text-[14px] font-medium text-ink-2">
-              {day.isFuture ? '—' : formatDecimalHours(day.hours)}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </Card>
+          </div>
+        </div>
+        <div className="flex items-end justify-between h-24 gap-1">
+          {days.map((day) => {
+            const h = day.isFuture ? 0 : day.hours
+            const heightPct = scaleH > 0 ? Math.min(100, (h / scaleH) * 100) : 0
+            return (
+              <div
+                key={day.label + day.dayNum}
+                className="flex-1 flex flex-col items-center justify-end h-full"
+                aria-label={`${day.label} ${formatDecimalHours(h)}`}
+              >
+                <div
+                  className={`w-full rounded-sm ${
+                    day.isToday ? 'bg-accent' : day.isFuture ? 'bg-card-soft' : 'bg-ink/70'
+                  }`}
+                  style={{ height: `${Math.max(day.isFuture ? 4 : 6, heightPct)}%` }}
+                />
+              </div>
+            )
+          })}
+        </div>
+        <div className="flex items-center justify-between mt-1.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
+          {days.map((day) => (
+            <span
+              key={day.label + day.dayNum}
+              className={`flex-1 text-center ${day.isToday ? 'text-accent' : day.isFuture ? 'text-ink-4' : ''}`}
+            >
+              {day.label[0]}
+            </span>
+          ))}
+        </div>
+      </Card>
+
+      <Card>
+        <ul className="divide-y divide-line">
+          {days.map((day) => (
+            <li key={day.label + day.dayNum} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
+              <div className="flex items-baseline gap-3">
+                <div className="w-10 text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">{day.label}</div>
+                <div className="num text-[16px] font-medium">{day.dayNum}</div>
+                {day.isToday ? <Pill tone="accent">today</Pill> : null}
+              </div>
+              <div className="num text-[14px] font-medium text-ink-2">
+                {day.isFuture ? '—' : formatDecimalHours(day.hours)}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </Card>
+    </div>
   )
 }
 
