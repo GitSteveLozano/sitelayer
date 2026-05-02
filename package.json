@@ -25,7 +25,8 @@
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --check \"**/*.{ts,tsx,js,cjs,mjs,json,css,md,yml,yaml}\"",
     "format:write": "prettier --write \"**/*.{ts,tsx,js,cjs,mjs,json,css,md,yml,yaml}\"",
-    "sentry:sourcemaps": "sh scripts/sentry-upload-sourcemaps.sh apps/web/dist"
+    "sentry:sourcemaps": "sh scripts/sentry-upload-sourcemaps.sh apps/web-v2/dist",
+    "sentry:sourcemaps:web": "sh scripts/sentry-upload-sourcemaps.sh apps/web/dist"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
