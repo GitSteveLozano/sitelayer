@@ -53,7 +53,7 @@ export async function handleTakeoffMeasurementRoutes(
     }
     const result = await ctx.pool.query(
       `
-      select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at
+      select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, image_thumbnail, version, deleted_at, created_at
       from takeoff_measurements
       where company_id = $1 and project_id = $2 and deleted_at is null
       order by created_at desc
