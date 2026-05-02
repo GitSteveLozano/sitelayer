@@ -18,6 +18,12 @@ export interface ProjectListRow {
   closed_at: string | null
   created_at: string
   updated_at: string
+  // Geofence — selected by the list query in projects-query.ts so the
+  // foreman live-crew map can avoid an N+1 detail fetch. Will be null
+  // for projects without a geofence configured.
+  site_lat?: string | null
+  site_lng?: string | null
+  site_radius_m?: number | null
 }
 
 export interface ProjectDetail extends ProjectListRow {
