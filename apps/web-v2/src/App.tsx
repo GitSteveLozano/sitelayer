@@ -12,6 +12,7 @@ const RentalsRoute = lazy(() => import('@/routes/rentals'))
 const MoreRoute = lazy(() => import('@/routes/more'))
 const LogRoute = lazy(() => import('@/routes/log'))
 const ScheduleRoute = lazy(() => import('@/routes/schedule'))
+const LiveCrewRoute = lazy(() => import('@/routes/live-crew'))
 const BidAccuracyRoute = lazy(() => import('@/routes/bid-accuracy'))
 const FinancialRoute = lazy(() => import('@/routes/financial'))
 const OnboardingRoute = lazy(() => import('@/routes/onboarding'))
@@ -61,6 +62,7 @@ export default function App() {
                 <Route path="/more/*" element={<MoreRoute />} />
                 <Route path="/log" element={<LogRoute />} />
                 <Route path="/schedule" element={<ScheduleRoute />} />
+                <Route path="/live-crew" element={<LiveCrewRoute />} />
                 <Route path="/bid-accuracy" element={<BidAccuracyRoute />} />
                 <Route path="/financial/*" element={<FinancialRoute />} />
                 <Route path="/onboarding" element={<OnboardingRoute />} />
