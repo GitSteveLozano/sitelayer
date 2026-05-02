@@ -163,7 +163,7 @@ export function ForemanTodayScreen() {
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">Quick</div>
         <div className="grid grid-cols-2 gap-2.5">
           <ActionTile to="/time" label="Crew time" detail={`${crewRows.length} entries`} />
-          <ActionTile to="/" label="Crew map" detail="live pins · soon" disabled />
+          <ActionTile to="/live-crew" label="Live crew" detail={`${onSiteCount} on site`} />
           <ActionTile to="/log" label="Daily log" detail="photos + notes" highlight />
           <ActionTile to="/" label="Materials" detail="request" disabled />
         </div>
