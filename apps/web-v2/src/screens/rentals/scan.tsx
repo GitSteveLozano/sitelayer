@@ -155,7 +155,7 @@ export function RentalsScanScreen() {
               type="button"
               onClick={() => setMovementType('deliver')}
               className={`py-3 rounded-md text-[13px] font-semibold ${
-                movementType === 'deliver' ? 'bg-accent text-white' : 'bg-bg-2 text-ink-2'
+                movementType === 'deliver' ? 'bg-accent text-white' : 'bg-card-soft text-ink-2'
               }`}
             >
               Deliver to job
@@ -164,7 +164,7 @@ export function RentalsScanScreen() {
               type="button"
               onClick={() => setMovementType('return')}
               className={`py-3 rounded-md text-[13px] font-semibold ${
-                movementType === 'return' ? 'bg-accent text-white' : 'bg-bg-2 text-ink-2'
+                movementType === 'return' ? 'bg-accent text-white' : 'bg-card-soft text-ink-2'
               }`}
             >
               Return to yard

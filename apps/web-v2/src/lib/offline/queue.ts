@@ -45,6 +45,13 @@ export interface OfflineMutation {
   kind: OfflineMutationKind
   /** Wall-clock timestamp at enqueue time. */
   enqueued_at: number
+  /**
+   * Wall-clock timestamp of the most recent replay attempt — set by the
+   * replayer when it bumps `attempt_count`. The backoff window measures
+   * from this, not `enqueued_at`, so a row that's been on the queue for
+   * an hour doesn't bypass its 1-min retry gate.
+   */
+  last_attempt_at?: number
   /** Re-stringified arguments. The replay handler casts to its expected shape. */
   payload: Record<string, unknown>
   /** Last error message captured during a failed replay attempt. */
