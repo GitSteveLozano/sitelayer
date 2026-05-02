@@ -55,7 +55,12 @@ export function ConfirmSheet({
           <MobileButton variant="ghost" onClick={onCancel} disabled={busy}>
             {cancelLabel}
           </MobileButton>
-          <MobileButton variant={destructive ? 'primary' : 'primary'} onClick={handle} disabled={busy}>
+          <MobileButton
+            variant="primary"
+            onClick={handle}
+            disabled={busy}
+            className={destructive ? 'bg-bad text-white' : undefined}
+          >
             {busy ? 'Working…' : confirmLabel}
           </MobileButton>
         </div>

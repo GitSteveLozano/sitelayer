@@ -13,7 +13,7 @@ import { registerServiceWorker } from '@/pwa/register'
 export function UpdateBanner() {
   const [needsRefresh, setNeedsRefresh] = useState(false)
   const [updating, setUpdating] = useState(false)
-  const [updateSW, setUpdateSW] = useState<(() => Promise<void>) | null>(null)
+  const [updateSW, setUpdateSW] = useState<((reloadPage?: boolean) => Promise<void>) | null>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -31,8 +31,9 @@ export function UpdateBanner() {
     setUpdating(true)
     try {
       // updateSW(true) skips the waiting SW, takes control, and reloads.
-      // The reload is what the user perceives as "new version applied."
-      if (updateSW) await updateSW()
+      // Without the `true` arg, vite-plugin-pwa only sends SKIP_WAITING
+      // and the user perceives nothing happening.
+      if (updateSW) await updateSW(true)
     } catch {
       // Fall back to a manual reload — the new SW will activate when
       // every tab is closed, and the banner will re-show after that.

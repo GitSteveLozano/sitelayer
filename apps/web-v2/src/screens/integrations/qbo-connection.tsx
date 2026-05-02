@@ -121,7 +121,7 @@ export function QboConnectionScreen() {
           </Card>
         </Link>
 
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <Attribution source="GET /api/integrations/qbo · POST /api/integrations/qbo/sync" />
       </div>
     </div>

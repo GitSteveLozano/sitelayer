@@ -197,7 +197,7 @@ function RecordSheet({ onClose }: { onClose: () => void }) {
         />
         <Field label="Ticket # (optional)" value={ticket} onChange={setTicket} placeholder="DELV-1234" />
         <Field label="Notes (optional)" value={notes} onChange={setNotes} placeholder="" />
-        {error ? <div className="text-[12px] text-status-warn">{error}</div> : null}
+        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <MobileButton variant="primary" onClick={submit} disabled={!canSubmit}>
           {dispatch.isPending ? 'Recording…' : 'Record movement'}
         </MobileButton>
