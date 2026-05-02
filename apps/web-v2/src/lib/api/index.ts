@@ -274,12 +274,15 @@ export {
   projectQueryKeys,
   useProject,
   useProjects,
+  useProjectTimeline,
   type ProjectDetail,
   type ProjectDetailResponse,
   type ProjectListParams,
   type ProjectListResponse,
   type ProjectListRow,
   type ProjectStatus,
+  type ProjectTimelineEvent,
+  type ProjectTimelineResponse,
 } from './projects'
 
 export {
