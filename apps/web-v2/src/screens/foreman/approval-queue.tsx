@@ -42,15 +42,20 @@ export function ApprovalQueueScreen() {
       <div className="px-5 pt-6 pb-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Owner / PM · Time</div>
         <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">Approvals</h1>
-        <div className="text-[12px] text-ink-3 mt-1 flex items-center justify-between">
+        <div className="text-[12px] text-ink-3 mt-1 flex items-center justify-between gap-2">
           <span>
             {rows.length} {tab} run{rows.length === 1 ? '' : 's'}
           </span>
-          {anomalyTotal > 0 ? (
-            <Link to="/time/anomalies" className="text-accent font-medium">
-              {anomalyTotal} anomal{anomalyTotal === 1 ? 'y' : 'ies'} →
+          <span className="flex items-center gap-3">
+            {anomalyTotal > 0 ? (
+              <Link to="/time/anomalies" className="text-accent font-medium">
+                {anomalyTotal} anomal{anomalyTotal === 1 ? 'y' : 'ies'} →
+              </Link>
+            ) : null}
+            <Link to="/time/burden" className="text-accent font-medium">
+              Burden →
             </Link>
-          ) : null}
+          </span>
         </div>
       </div>
 
