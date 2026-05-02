@@ -4,7 +4,9 @@ import { calculateGeometryQuantity, normalizeGeometry } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import { evaluateLww } from '../lww.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
-import { isValidUuid, parseExpectedVersion } from '../http-utils.js'
+import { HttpError, isValidUuid, parseExpectedVersion } from '../http-utils.js'
+
+const ELEVATION_VOCAB_PATCH = new Set(['east', 'south', 'west', 'north', 'roof', 'other'])
 
 export type TakeoffMeasurementRouteCtx = {
   pool: Pool
@@ -51,7 +53,7 @@ export async function handleTakeoffMeasurementRoutes(
     }
     const result = await ctx.pool.query(
       `
-      select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at
+      select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at
       from takeoff_measurements
       where company_id = $1 and project_id = $2 and deleted_at is null
       order by created_at desc
@@ -139,7 +141,7 @@ export async function handleTakeoffMeasurementRoutes(
         updated_at: string
       }>(
         `select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes,
-                geometry, version, deleted_at, created_at, updated_at
+                geometry, elevation, version, deleted_at, created_at, updated_at
          from takeoff_measurements
          where company_id = $1 and id = $2`,
         [ctx.company.id, measurementId],
@@ -178,10 +180,11 @@ export async function handleTakeoffMeasurementRoutes(
           notes = coalesce($6, notes),
           blueprint_document_id = coalesce($7, blueprint_document_id),
           geometry = coalesce($8::jsonb, geometry),
+          elevation = coalesce($10, elevation),
           version = version + 1,
           updated_at = now()
         where company_id = $1 and id = $2 and deleted_at is null and ($9::int is null or version = $9)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at, updated_at
+        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at, updated_at
         `,
         [
           ctx.company.id,
@@ -193,6 +196,15 @@ export async function handleTakeoffMeasurementRoutes(
           patchBlueprintDocumentId,
           geometryJson,
           expectedVersion,
+          body.elevation === undefined || body.elevation === null || String(body.elevation).trim() === ''
+            ? null
+            : (() => {
+                const v = String(body.elevation).trim().toLowerCase()
+                if (!ELEVATION_VOCAB_PATCH.has(v)) {
+                  throw new HttpError(400, 'elevation must be one of: east, south, west, north, roof, other')
+                }
+                return v
+              })(),
         ],
       )
       const row = result.rows[0]
@@ -240,7 +252,7 @@ export async function handleTakeoffMeasurementRoutes(
         update takeoff_measurements
         set deleted_at = now(), version = version + 1
         where company_id = $1 and id = $2 and deleted_at is null and ($3::int is null or version = $3)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, deleted_at, created_at
+        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at
         `,
         [ctx.company.id, measurementId, expectedVersion],
       )
