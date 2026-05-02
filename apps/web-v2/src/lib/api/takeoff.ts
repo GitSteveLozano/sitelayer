@@ -1,11 +1,98 @@
 // Phase 3 takeoff resource layer — tags, pages, assemblies, import,
-// QBO custom-field mappings. The full polygon-canvas UI lives in v1
-// for now; v2 ships the data layer + non-canvas surfaces (tag table,
-// page nav, calibration form, assembly editor, CSV importer, custom
-// field settings).
+// QBO custom-field mappings, and the polygon-canvas data layer
+// (blueprints + measurements + measurement create).
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { request } from './client'
+
+// ---------------------------------------------------------------------------
+// Blueprints + measurements (Phase 3 polygon canvas)
+// ---------------------------------------------------------------------------
+
+export interface BlueprintDocument {
+  id: string
+  project_id: string
+  file_name: string
+  storage_path: string
+  preview_type: string
+  calibration_length: string | null
+  calibration_unit: string | null
+  sheet_scale: string | null
+  version: number
+  deleted_at: string | null
+  replaces_blueprint_document_id: string | null
+  created_at: string
+}
+
+export interface MeasurementGeometry {
+  kind: 'polygon' | 'lineal' | 'volume' | 'count'
+  points?: Array<{ x: number; y: number }>
+  length?: number
+  width?: number
+  height?: number
+}
+
+export interface TakeoffMeasurement {
+  id: string
+  project_id: string
+  blueprint_document_id: string | null
+  service_item_code: string
+  quantity: string
+  unit: string
+  notes: string | null
+  geometry: MeasurementGeometry | Record<string, never>
+  version: number
+  created_at: string
+}
+
+export function useProjectBlueprints(projectId: string | null | undefined) {
+  return useQuery<{ blueprints: BlueprintDocument[] }>({
+    queryKey: ['blueprints', 'by-project', projectId ?? ''],
+    queryFn: () => request(`/api/projects/${encodeURIComponent(projectId!)}/blueprints`),
+    enabled: Boolean(projectId),
+  })
+}
+
+export function useProjectMeasurements(projectId: string | null | undefined) {
+  return useQuery<{ measurements: TakeoffMeasurement[] }>({
+    queryKey: ['takeoff', 'measurements', 'by-project', projectId ?? ''],
+    queryFn: () => request(`/api/projects/${encodeURIComponent(projectId!)}/takeoff/measurements`),
+    enabled: Boolean(projectId),
+  })
+}
+
+export interface CreateMeasurementInput {
+  blueprint_document_id?: string | null
+  service_item_code: string
+  quantity?: number
+  unit?: string
+  notes?: string | null
+  geometry: MeasurementGeometry
+}
+
+export function useCreateMeasurement(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation<TakeoffMeasurement, Error, CreateMeasurementInput>({
+    mutationFn: (input) =>
+      request<TakeoffMeasurement>(`/api/projects/${encodeURIComponent(projectId)}/takeoff/measurement`, {
+        method: 'POST',
+        json: input,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['takeoff'] }),
+  })
+}
+
+export function useDeleteMeasurement() {
+  const qc = useQueryClient()
+  return useMutation<unknown, Error, { id: string; expected_version?: number }>({
+    mutationFn: ({ id, expected_version }) =>
+      request(`/api/takeoff/measurements/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        json: expected_version !== undefined ? { expected_version } : undefined,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['takeoff'] }),
+  })
+}
 
 // ---------------------------------------------------------------------------
 // Multi-condition tags (3A)
