@@ -28,7 +28,14 @@ function readAllowedHosts(): true | string[] | undefined {
     .filter(Boolean)
 }
 
+// `VITE_BASE` lets the gh-pages build produce `/sitelayer/`-prefixed
+// asset URLs without a separate vite config. Local + droplet builds
+// keep the default `/`.
+const base = process.env.VITE_BASE ?? '/'
+const baseNoTrailing = base.endsWith('/') ? base.slice(0, -1) : base
+
 export default defineConfig({
+  base,
   plugins: [
     react(),
     VitePWA({
@@ -45,8 +52,8 @@ export default defineConfig({
         background_color: '#f5f1ec',
         display: 'standalone',
         orientation: 'portrait',
-        start_url: '/',
-        scope: '/',
+        start_url: base,
+        scope: base,
         icons: [
           { src: 'icons/icon.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
           { src: 'icons/maskable.svg', sizes: 'any', type: 'image/svg+xml', purpose: 'maskable' },
@@ -55,7 +62,7 @@ export default defineConfig({
       workbox: {
         // Cache the app shell aggressively, never cache /api/* (that path
         // owns its own freshness via TanStack Query in Phase 1).
-        navigateFallback: '/index.html',
+        navigateFallback: `${baseNoTrailing}/index.html`,
         navigateFallbackDenylist: [/^\/api\//],
         globPatterns: ['**/*.{js,css,html,svg,woff2}'],
         runtimeCaching: [
