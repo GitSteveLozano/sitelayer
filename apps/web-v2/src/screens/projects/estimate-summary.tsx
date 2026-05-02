@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
+import { useState, type ReactNode } from 'react'
+import { Card, MobileButton, Pill, Row, Sheet } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { estimatePdfUrl, useScopeVsBid, type BidVsScopeStatus, type EstimateLine } from '@/lib/api'
 
@@ -111,6 +111,21 @@ function LineRow({ line }: { line: EstimateLine }) {
   )
 }
 
+/**
+ * `est-share` from Sitemap §6 panel 3 — 4-row send sheet.
+ *
+ * Matches the design's send menu:
+ *   1. Email · PDF attached  (primary path — opens mailto: prefilled)
+ *   2. Text message · web link  (sms: link with copyable URL fallback)
+ *   3. Print  (window.print on the PDF tab)
+ *   4. Copy link  (the design's "lucky bag" / PDF-protection slot —
+ *      we use it for a copyable presigned URL until the QBO
+ *      estimate-push workflow lands)
+ *
+ * Each row uses the Row primitive (52 min-h leading-32 chip + headline
+ * + supporting + chev) so the sheet reads as a navigation menu, not a
+ * pile of buttons.
+ */
 function ShareSheet({ open, onClose, projectId }: { open: boolean; onClose: () => void; projectId: string }) {
   const [copied, setCopied] = useState(false)
   const pdfUrl = estimatePdfUrl(projectId)
@@ -122,52 +137,133 @@ function ShareSheet({ open, onClose, projectId }: { open: boolean; onClose: () =
         setCopied(true)
         window.setTimeout(() => setCopied(false), 1500)
       } catch {
-        // ignore — fallback handled inline below
+        // Clipboard API blocked — toast falls back to the row's
+        // supporting text where the URL is shown verbatim.
       }
     }
   }
 
+  const onEmail = () => {
+    const subject = encodeURIComponent('Project estimate')
+    const body = encodeURIComponent(`Estimate PDF:\n${pdfUrl}\n\n— sent from Sitelayer`)
+    window.location.href = `mailto:?subject=${subject}&body=${body}`
+    onClose()
+  }
+
+  const onText = () => {
+    const body = encodeURIComponent(`Estimate PDF: ${pdfUrl}`)
+    window.location.href = `sms:?&body=${body}`
+    onClose()
+  }
+
+  const onPrint = () => {
+    const w = window.open(pdfUrl, '_blank', 'noopener')
+    if (w) {
+      // Wait for the PDF tab to load before triggering the print
+      // dialog — Chrome ignores window.print() called too early.
+      w.addEventListener('load', () => w.print())
+    }
+    onClose()
+  }
+
+  const sendRows: ReadonlyArray<{
+    icon: ReactNode
+    headline: string
+    supporting: string
+    onClick: () => void
+  }> = [
+    {
+      icon: (
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          width="18"
+          height="18"
+        >
+          <rect x="3" y="5" width="18" height="14" rx="2" />
+          <path d="M3 7l9 7 9-7" />
+        </svg>
+      ),
+      headline: 'Email · PDF attached',
+      supporting: 'Opens your mail client with the PDF link prefilled.',
+      onClick: onEmail,
+    },
+    {
+      icon: (
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          width="18"
+          height="18"
+        >
+          <path d="M21 12a9 9 0 11-3.5-7.1L21 4v5h-5" />
+        </svg>
+      ),
+      headline: 'Text message · web link',
+      supporting: 'Sends the PDF URL via your phone — best for mobile clients.',
+      onClick: onText,
+    },
+    {
+      icon: (
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          width="18"
+          height="18"
+        >
+          <path d="M6 9V3h12v6M6 18h12v3H6zM4 9h16v9H4z" />
+        </svg>
+      ),
+      headline: 'Print',
+      supporting: 'Opens the PDF and triggers the print dialog.',
+      onClick: onPrint,
+    },
+    {
+      icon: (
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          width="18"
+          height="18"
+        >
+          <rect x="9" y="9" width="11" height="11" rx="2" />
+          <path d="M5 15V5a2 2 0 012-2h10" />
+        </svg>
+      ),
+      headline: copied ? 'Copied to clipboard' : 'Copy PDF link',
+      supporting: pdfUrl,
+      onClick: () => void onCopy(),
+    },
+  ]
+
   return (
     <Sheet open={open} onClose={onClose} title="Send estimate">
-      <div className="text-[12px] text-ink-3 mb-4">
-        Pick how the customer gets it. The PDF link is auth-required and only resolves for users on this company; share
-        it via your usual channel for now (Phase 5 sends via the QBO estimate-push workflow).
+      <div className="text-[12px] text-ink-3 mb-3 px-1">
+        The PDF link is auth-required and only resolves for users on this company.
       </div>
-      <div className="space-y-2.5">
-        <a href={pdfUrl} target="_blank" rel="noopener" className="block" onClick={() => onClose()}>
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[13px] font-semibold">Open / Download PDF</div>
-                <div className="text-[11px] text-ink-3 mt-0.5">Streamed from /api/projects/:id/estimate.pdf</div>
-              </div>
-              <span className="text-ink-4" aria-hidden="true">
-                ↗
-              </span>
-            </div>
-          </Card>
-        </a>
-
-        <button type="button" onClick={onCopy} className="block w-full text-left">
-          <Card>
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[13px] font-semibold">{copied ? 'Copied!' : 'Copy PDF link'}</div>
-                <div className="text-[11px] text-ink-3 mt-0.5 truncate">{pdfUrl}</div>
-              </div>
-              <span className="text-ink-4" aria-hidden="true">
-                ⎘
-              </span>
-            </div>
-          </Card>
-        </button>
-
-        <Card>
-          <div className="text-[13px] font-semibold">Email + QBO push</div>
-          <div className="text-[11px] text-ink-3 mt-0.5">
-            Phase 5 wires the estimate-pushes workflow + an email send.
-          </div>
-        </Card>
+      <div className="bg-card border border-line rounded-[12px] overflow-hidden">
+        {sendRows.map((r, i) => (
+          <Row
+            key={i}
+            leading={r.icon}
+            leadingTone="accent"
+            headline={r.headline}
+            supporting={r.supporting}
+            onClick={r.onClick}
+          />
+        ))}
       </div>
 
       <div className="mt-4">
