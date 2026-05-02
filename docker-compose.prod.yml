@@ -105,6 +105,44 @@ services:
     networks:
       - sitelayer
 
+  # Rollback target for ADR 0002 cutover criterion #6. Brought up only
+  # when the `rollback` profile is activated:
+  #
+  #   docker compose -f docker-compose.prod.yml --profile rollback up -d web-legacy
+  #   WEB_BACKEND=web-legacy:3000 docker compose -f docker-compose.prod.yml up -d caddy
+  #
+  # Caddy reads WEB_BACKEND via a Caddyfile env-sub, so flipping back to
+  # v2 is the same compose command with WEB_BACKEND=web:3000 (or unset).
+  # `apps/web/dist` ships in the runtime image specifically for this path.
+  web-legacy:
+    image: ${APP_IMAGE:-registry.digitalocean.com/sitelayer/sitelayer:main}
+    command: npm start -w @sitelayer/web
+    environment:
+      NODE_ENV: production
+    restart: always
+    stop_grace_period: 20s
+    profiles:
+      - rollback
+    logging:
+      driver: json-file
+      options:
+        max-size: '20m'
+        max-file: '5'
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('node:http').get('http://127.0.0.1:3000/',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    networks:
+      - sitelayer
+
   worker:
     image: ${APP_IMAGE:-registry.digitalocean.com/sitelayer/sitelayer:main}
     command: npm start -w @sitelayer/worker
@@ -160,6 +198,12 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: always
+    environment:
+      # Default: route all web traffic to the v2 web service.
+      # Set WEB_BACKEND=web-legacy:3000 to flip to apps/web (v1) per
+      # ADR 0002 rollback path. The Caddyfile's `handle` block reads
+      # this with `{$WEB_BACKEND:web:3000}`.
+      WEB_BACKEND: ${WEB_BACKEND:-web:3000}
     ports:
       - '80:80'
       - '443:443'

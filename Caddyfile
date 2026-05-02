@@ -9,7 +9,13 @@ sitelayer.sandolab.xyz {
 		reverse_proxy api:3001
 	}
 
+	# Web upstream is env-substituted so the reverse-proxy can flip
+	# between apps/web-v2 (default — `web:3000`) and the apps/web (v1)
+	# rollback target without a Caddyfile edit. ADR 0002 cutover criterion
+	# #6 requires this routing knob during the post-cutover release window.
+	# See docker-compose.prod.yml `web-legacy` service + DEPLOY_RUNBOOK
+	# "Roll back to apps/web (v1)".
 	handle {
-		reverse_proxy web:3000
+		reverse_proxy {$WEB_BACKEND:web:3000}
 	}
 }

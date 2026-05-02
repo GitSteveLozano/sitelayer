@@ -151,6 +151,42 @@ If the schema migration that shipped with the bad code is itself bad,
 write a new migration that reverses the damage and ship it the same
 way (PR → preview → main).
 
+#### Roll back to apps/web (v1)
+
+ADR 0002 cutover criterion #6 reserves an option to route web traffic
+back to `apps/web/` (v1) for the post-cutover release window. Use this
+when a v2-specific regression slipped past `rollback-droplet.sh` (e.g.
+a v2 PWA / IndexedDB issue that doesn't repro under v1's flat IA).
+
+Prerequisites: the deployed image must include `apps/web/dist`. The
+`Dockerfile` ships v1 dist alongside v2 dist for exactly this path
+(`COPY apps/web/dist`), so any image built after the rollback-toggle
+PR landed is eligible.
+
+Steps:
+
+```sh
+ssh root@165.245.230.3
+cd /app/sitelayer
+# Bring up the v1 service (the rollback profile is intentionally not
+# part of the default `docker compose up`).
+docker compose -f docker-compose.prod.yml --profile rollback up -d web-legacy
+# Flip Caddy's upstream and restart it.
+WEB_BACKEND=web-legacy:3000 \
+  docker compose -f docker-compose.prod.yml up -d caddy
+```
+
+To return to v2:
+
+```sh
+WEB_BACKEND=web:3000 \
+  docker compose -f docker-compose.prod.yml up -d caddy
+docker compose -f docker-compose.prod.yml stop web-legacy
+```
+
+The `api` and `worker` containers are unchanged in either direction
+— this rollback is web-only.
+
 #### Rollback drill log
 
 | Date       | Drill | Result | Notes                                                                                                                                                                                                                    |
