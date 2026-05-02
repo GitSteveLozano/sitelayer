@@ -29,6 +29,11 @@ const queryClient = new QueryClient({
   },
 })
 
+// Vite injects `import.meta.env.BASE_URL` at build time from the `base`
+// option. When deployed to gh-pages this is `/sitelayer/`; locally it's
+// `/`. React Router needs the basename without the trailing slash.
+const ROUTER_BASENAME = import.meta.env.BASE_URL.replace(/\/$/, '')
+
 function Loading() {
   return <div className="px-5 pt-8 text-[13px] text-ink-3">Loading…</div>
 }
@@ -45,7 +50,7 @@ export default function App() {
   return (
     <AuthProvider>
       <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
+        <BrowserRouter basename={ROUTER_BASENAME}>
           <Suspense fallback={<Loading />}>
             <Routes>
               <Route element={<AppShell />}>
