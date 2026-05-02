@@ -242,6 +242,15 @@ export {
 } from './audit'
 
 export {
+  createWorkerIssue,
+  useCreateWorkerIssue,
+  type CreateWorkerIssueRequest,
+  type CreateWorkerIssueResponse,
+  type WorkerIssue,
+  type WorkerIssueKind,
+} from './issues'
+
+export {
   useCreateCompany,
   useInviteMember,
   type Company,
