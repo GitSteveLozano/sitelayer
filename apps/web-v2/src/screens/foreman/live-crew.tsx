@@ -1,19 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { useQueries } from '@tanstack/react-query'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { EmptyState } from '@/components/shell/EmptyState'
-import { fetchProject, projectQueryKeys } from '@/lib/api/projects'
-import {
-  useClockTimeline,
-  useProjects,
-  useSchedules,
-  useWorkers,
-  type ProjectDetail,
-  type ProjectDetailResponse,
-  type Worker,
-} from '@/lib/api'
+import { useClockTimeline, useProjects, useSchedules, useWorkers, type Worker } from '@/lib/api'
 import { findOpenSpan, formatHms, pairClockSpans } from '@/lib/clock-derive'
 
 /**
@@ -43,25 +33,10 @@ export function ForemanLiveCrewScreen() {
   const todaySchedules = schedules.data?.schedules ?? []
   const projects = projectsQuery.data?.projects ?? []
   const workerById = useMemo(() => new Map(workers.map((w) => [w.id, w])), [workers])
-
-  // Project list rows don't carry site_lat / site_lng — those live on
-  // ProjectDetail. Parallel-fetch the per-project detail records so
-  // the map view has real coordinates without a backend change.
-  const detailQueries = useQueries({
-    queries: projects.map((p) => ({
-      queryKey: projectQueryKeys.detail(p.id),
-      queryFn: (): Promise<ProjectDetailResponse> => fetchProject(p.id),
-      staleTime: 5 * 60_000,
-    })),
-  })
-  const projectDetailById = useMemo(() => {
-    const m = new Map<string, ProjectDetail>()
-    for (const q of detailQueries) {
-      const d = q.data?.project
-      if (d) m.set(d.id, d)
-    }
-    return m
-  }, [detailQueries])
+  // The list endpoint carries site_lat / site_lng inline now (see
+  // projects-query.ts), so the map can read coords directly without
+  // an N+1 detail fetch.
+  const projectById = useMemo(() => new Map(projects.map((p) => [p.id, p])), [projects])
 
   // Build per-project rosters — open spans = on site right now,
   // scheduled-not-yet-clocked = expected, off-site = the rest.
@@ -112,14 +87,14 @@ export function ForemanLiveCrewScreen() {
   const pins = useMemo(() => {
     return rosters
       .map((r) => {
-        const proj = projectDetailById.get(r.projectId)
+        const proj = projectById.get(r.projectId)
         const lat = proj?.site_lat != null ? Number(proj.site_lat) : NaN
         const lng = proj?.site_lng != null ? Number(proj.site_lng) : NaN
         if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null
         return { roster: r, lat, lng }
       })
       .filter((p): p is { roster: ProjectRoster; lat: number; lng: number } => p !== null)
-  }, [rosters, projectDetailById])
+  }, [rosters, projectById])
 
   return (
     <div className="flex flex-col">
