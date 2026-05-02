@@ -1,7 +1,11 @@
-import { useMemo } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { BurdenHeroCard, Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
+import { TopAppBar } from '@/components/nav/TopAppBar'
+import { NavDrawer } from '@/components/nav/NavDrawer'
+import { ProjectSwitcherSheet } from '@/components/nav/ProjectSwitcherSheet'
+import { useCurrentProjectId } from '@/lib/current-project'
 import {
   useClockTimeline,
   useDailyLogs,
@@ -16,37 +20,54 @@ import { EstimateSummaryScreen } from './estimate-summary'
 import { TakeoffListScreen } from './takeoff-list'
 
 /**
- * `prj-detail` shell — header + sub-tab nav + per-sub-tab content.
+ * `prj-detail` shell — top app bar + sub-tab nav + per-sub-tab content.
  *
- * Sub-tabs from `Sitemap.html` § 02:
- *   - Overview (default) — KPI tiles + open-log card
+ * Sub-tabs from `Sitemap.html` § 02 panel 2:
+ *   - Overview (default) — KPI tiles + open-log card + estimate jump
  *   - Takeoff — links into the polygon canvas + summary
  *   - Schedule — sub-list of upcoming crew assignments for this project
  *   - Time — burden detail with stacked-bar per-worker breakdown
  *
+ * Estimate is reachable via `?tab=estimate` (preserved so existing
+ * deep links work) and via the "Open estimate" button on Overview,
+ * but is intentionally not in the visible tab strip — the design
+ * keeps the strip to the four operational views.
+ *
  * Sub-tab state lives in the `?tab=` query param so the back button
- * works the way users expect (browser history captures each tab
- * change).
+ * works the way users expect.
  */
 type SubTab = 'overview' | 'takeoff' | 'estimate' | 'schedule' | 'time'
 
-const SUB_TABS: ReadonlyArray<{ key: SubTab; label: string }> = [
+const VALID_SUB_TABS: ReadonlySet<SubTab> = new Set(['overview', 'takeoff', 'estimate', 'schedule', 'time'])
+
+const VISIBLE_SUB_TABS: ReadonlyArray<{ key: SubTab; label: string }> = [
   { key: 'overview', label: 'Overview' },
   { key: 'takeoff', label: 'Takeoff' },
-  { key: 'estimate', label: 'Estimate' },
   { key: 'schedule', label: 'Schedule' },
   { key: 'time', label: 'Time' },
 ]
 
 export function ProjectDetailScreen() {
   const params = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const id = params.id ?? null
   const [searchParams, setSearchParams] = useSearchParams()
   const tabParam = searchParams.get('tab') as SubTab | null
-  const tab: SubTab = tabParam && SUB_TABS.some((t) => t.key === tabParam) ? tabParam : 'overview'
+  const tab: SubTab = tabParam && VALID_SUB_TABS.has(tabParam) ? tabParam : 'overview'
+
+  const [, setCurrentProjectId] = useCurrentProjectId()
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [switcherOpen, setSwitcherOpen] = useState(false)
 
   const project = useProject(id)
   const data = project.data?.project
+
+  // Pin the project the user is actively viewing as the "current"
+  // one. The drawer header and More-tab user card key off this so
+  // the project switcher always opens with the right context.
+  useEffect(() => {
+    if (data?.id) setCurrentProjectId(data.id)
+  }, [data?.id, setCurrentProjectId])
 
   if (project.isPending) {
     return (
@@ -76,27 +97,35 @@ export function ProjectDetailScreen() {
 
   return (
     <div className="flex flex-col">
-      {/* Header */}
-      <div className="px-5 pt-6 pb-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-          {data.customer_name ?? 'No customer'}
-          {data.division_code ? ` · ${data.division_code}` : ''}
-        </div>
-        <h1 className="mt-1 font-display text-[26px] font-bold tracking-tight leading-tight">{data.name}</h1>
-        <div className="mt-2 flex items-center gap-2">
-          <Pill tone={data.status === 'active' ? 'good' : data.status === 'completed' ? 'default' : 'warn'}>
-            {data.status}
-          </Pill>
-          {Number(data.bid_total) > 0 ? (
-            <span className="num text-[12px] text-ink-3">${Number(data.bid_total).toLocaleString()} bid</span>
-          ) : null}
-        </div>
+      <TopAppBar
+        eyebrow={
+          <>
+            {data.customer_name ?? 'No customer'}
+            {data.division_code ? ` · ${data.division_code}` : ''}
+          </>
+        }
+        title={data.name}
+        showBack
+        backTo="/projects"
+        onSearch={() => navigate('/projects')}
+        onOverflow={() => setDrawerOpen(true)}
+      />
+
+      {/* Sub-header KPI strip — restated under the bar so the page
+          identity (status + bid) is visible without crowding the bar. */}
+      <div className="px-5 pt-3 pb-2 flex items-center gap-2">
+        <Pill tone={data.status === 'active' ? 'good' : data.status === 'completed' ? 'default' : 'warn'}>
+          {data.status}
+        </Pill>
+        {Number(data.bid_total) > 0 ? (
+          <span className="num text-[12px] text-ink-3">${Number(data.bid_total).toLocaleString()} bid</span>
+        ) : null}
       </div>
 
-      {/* Sub-tab strip */}
+      {/* Sub-tab strip — 4 visible tabs per Sitemap §02 panel 2 */}
       <div className="px-4 border-b border-line">
         <div className="flex gap-1">
-          {SUB_TABS.map((t) => (
+          {VISIBLE_SUB_TABS.map((t) => (
             <button
               key={t.key}
               type="button"
@@ -113,17 +142,27 @@ export function ProjectDetailScreen() {
       </div>
 
       <div className="px-4 py-4 pb-8">
-        {tab === 'overview' ? <OverviewTab project={data} /> : null}
+        {tab === 'overview' ? <OverviewTab project={data} onOpenEstimate={() => setTab('estimate')} /> : null}
         {tab === 'takeoff' ? <TakeoffListScreen projectId={data.id} /> : null}
         {tab === 'estimate' ? <EstimateSummaryScreen projectId={data.id} /> : null}
         {tab === 'schedule' ? <SchedulePreview projectId={data.id} /> : null}
         {tab === 'time' ? <TimePreview projectId={data.id} /> : null}
       </div>
+
+      <NavDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        onAvatarTap={() => {
+          setDrawerOpen(false)
+          setSwitcherOpen(true)
+        }}
+      />
+      <ProjectSwitcherSheet open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
     </div>
   )
 }
 
-function OverviewTab({ project }: { project: ProjectDetail }) {
+function OverviewTab({ project, onOpenEstimate }: { project: ProjectDetail; onOpenEstimate: () => void }) {
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const timeline = useClockTimeline({ date: todayIso })
   const events = (timeline.data?.events ?? []).filter((e) => e.project_id === project.id)
@@ -192,11 +231,14 @@ function OverviewTab({ project }: { project: ProjectDetail }) {
         <Link to="/log" className="block">
           <MobileButton variant="primary">Open daily log</MobileButton>
         </Link>
+        <MobileButton variant="ghost" onClick={onOpenEstimate}>
+          Open estimate
+        </MobileButton>
+      </div>
+      <div className="grid grid-cols-2 gap-2.5 pt-1">
         <Link to={`/projects/${project.id}/setup`} className="block">
           <MobileButton variant="ghost">Project setup</MobileButton>
         </Link>
-      </div>
-      <div className="pt-1">
         <Link to={`/projects/${project.id}/rental-contract`} className="block">
           <MobileButton variant="ghost">Rental contract</MobileButton>
         </Link>
