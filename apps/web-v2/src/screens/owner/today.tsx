@@ -1,38 +1,49 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, Kpi, MobileButton, Pill } from '@/components/mobile'
+import { useQueries } from '@tanstack/react-query'
+import { BurdenHeroCard, Card, Kpi, MobileButton, Pill } from '@/components/mobile'
 import { AgentSurface, Attribution, Dismiss, StripeCard, useRejectSheet } from '@/components/ai'
 import {
+  fetchLaborBurdenToday,
+  laborBurdenQueryKeys,
   useAiInsights,
   useApplyInsight,
   useClockTimeline,
   useDailyLogs,
   useDismissInsight,
   useLaborBurdenToday,
+  useProjects,
   useSchedules,
   useTimeReviewRuns,
   useTriggerBidFollowUp,
   type AiInsight,
   type BidFollowUpDraft,
   type CrewScheduleRow,
+  type LaborBurdenSummaryResponse,
+  type ProjectListRow,
 } from '@/lib/api'
 import { pairClockSpans } from '@/lib/clock-derive'
 
 /**
- * Owner / PM home — `db-calm-default` from `Sitemap.html` § 01.
+ * Owner / PM home — `db-calm-default` + `db-pm` variants from
+ * `Sitemap.html` § 01.
  *
- * Two states the chip row toggles between:
- *   1. **Today** (default): "You're caught up." headline, three running
- *      projects with on-site count + hours today.
+ * Three views the chip row toggles between:
+ *   1. **Today** (default, `db-calm-default`): "You're caught up."
+ *      headline, three running projects with on-site count + hours
+ *      today.
  *   2. **What needs me?**: priority list of attention items derived
  *      from time-review pending + over-budget burden + stale drafts.
+ *   3. **PM** (`db-pm` busy-day): denser layout for hands-on PMs —
+ *      workspace BurdenHeroCard + per-project burn rows + inline
+ *      attention. Less calm framing, more numbers per screen.
  *
  * Data sources are all existing hooks — composing client-side keeps the
  * dashboard responsive to per-resource cache invalidations from
  * elsewhere in the app (a foreman submitting a log makes the count
  * tick down on the owner's calm view immediately).
  */
-type View = 'today' | 'attention'
+type View = 'today' | 'attention' | 'pm'
 
 export function OwnerTodayScreen() {
   const [view, setView] = useState<View>('today')
@@ -84,7 +95,7 @@ export function OwnerTodayScreen() {
                 : `${projectsToday.length} ${projectsToday.length === 1 ? 'job is' : 'jobs are'} running, ${onSiteCount} crew clocked in, the day's plan is set.`}
             </p>
           </>
-        ) : (
+        ) : view === 'attention' ? (
           <>
             <h1 className="mt-1 font-display text-[30px] font-bold tracking-tight leading-[1] max-w-xs">
               {attentionCount === 0
@@ -93,6 +104,13 @@ export function OwnerTodayScreen() {
             </h1>
             <p className="text-[13px] text-ink-2 mt-2.5 max-w-md leading-relaxed">
               Sorted by impact. Tap to handle, swipe to dismiss.
+            </p>
+          </>
+        ) : (
+          <>
+            <h1 className="mt-1 font-display text-[26px] font-bold tracking-tight leading-tight">PM today</h1>
+            <p className="text-[13px] text-ink-2 mt-2 max-w-md leading-relaxed">
+              {onSiteCount} on site · {totalHoursToday.toFixed(1)} crew-hrs logged so far. Per-project burn below.
             </p>
           </>
         )}
@@ -109,6 +127,9 @@ export function OwnerTodayScreen() {
           dotTone={attentionCount > 0 ? 'warn' : 'default'}
         >
           What needs me? {attentionCount > 0 ? <span className="opacity-70 ml-1">{attentionCount}</span> : null}
+        </Chip>
+        <Chip active={view === 'pm'} onClick={() => setView('pm')}>
+          PM
         </Chip>
         <Link
           to="/bid-accuracy"
@@ -140,7 +161,7 @@ export function OwnerTodayScreen() {
       <div className="flex-1 px-4 pb-8 pt-2">
         {view === 'today' ? (
           <TodayList projects={projectsToday} totalHoursToday={totalHoursToday} />
-        ) : (
+        ) : view === 'attention' ? (
           <>
             <AttentionList items={attention} />
             <BidFollowUpList
@@ -163,6 +184,13 @@ export function OwnerTodayScreen() {
               }}
             />
           </>
+        ) : (
+          <PmDashboard
+            workspaceBurden={burden.data}
+            schedules={projectsToday}
+            attention={attention}
+            reviewsCount={reviews.data?.timeReviewRuns.length ?? 0}
+          />
         )}
       </div>
       {rejectNode}
@@ -447,4 +475,184 @@ function formatDollars(cents: number): string {
   const dollars = cents / 100
   if (dollars >= 1000) return `$${dollars.toLocaleString(undefined, { maximumFractionDigits: 0 })}`
   return `$${dollars.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
+}
+
+// ---------------------------------------------------------------------------
+// db-pm — busy-day dashboard
+// ---------------------------------------------------------------------------
+
+interface PmDashboardProps {
+  workspaceBurden: LaborBurdenSummaryResponse | undefined
+  schedules: CrewScheduleRow[]
+  attention: AttentionItem[]
+  reviewsCount: number
+}
+
+/**
+ * `db-pm` — denser layout for hands-on PMs. Workspace BurdenHeroCard
+ * up top, then per-active-project burden rows (one query per project
+ * via useQueries), then the same attention items the calm view shows
+ * inlined under a "Watch list" header.
+ *
+ * Pulls active projects via `useProjects({ status: 'active' })` rather
+ * than relying on `crew_schedules` so a project still shows up here
+ * even on a day with no scheduled crew (the office still wants to see
+ * burn for it).
+ */
+function PmDashboard({ workspaceBurden, schedules, attention, reviewsCount }: PmDashboardProps) {
+  const projects = useProjects({ status: 'active' })
+  const activeProjects = projects.data?.projects ?? []
+  // Fan-out per-project burden so each row in the list shows real
+  // dollars + budget pct. Throttled to 60s, same as the workspace one.
+  const burdenQueries = useQueries({
+    queries: activeProjects.map((p) => ({
+      queryKey: laborBurdenQueryKeys.today({ projectId: p.id }),
+      queryFn: () => fetchLaborBurdenToday({ projectId: p.id }),
+      refetchInterval: 60_000 as const,
+    })),
+  })
+  const scheduledIds = useMemo(() => new Set(schedules.map((s) => s.project_id)), [schedules])
+
+  // Sort: scheduled-today first, then highest burden $.
+  const rows = useMemo(() => {
+    const merged = activeProjects.map((p, i) => ({
+      project: p,
+      burden: burdenQueries[i]?.data,
+      scheduled: scheduledIds.has(p.id),
+    }))
+    merged.sort((a, b) => {
+      if (a.scheduled !== b.scheduled) return a.scheduled ? -1 : 1
+      const ac = a.burden?.total_cents ?? 0
+      const bc = b.burden?.total_cents ?? 0
+      return bc - ac
+    })
+    return merged
+  }, [activeProjects, burdenQueries, scheduledIds])
+
+  return (
+    <div className="space-y-3">
+      <BurdenHeroCard burden={workspaceBurden} label="Workspace burden today" />
+
+      {reviewsCount > 0 ? (
+        <Link to="/time" className="block">
+          <Card tight className="!flex !items-center !justify-between">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Approval queue</div>
+              <div className="text-[13px] font-semibold mt-1">
+                {reviewsCount} time-review run{reviewsCount === 1 ? '' : 's'} pending
+              </div>
+            </div>
+            <span className="text-[13px] text-accent font-medium">Review →</span>
+          </Card>
+        </Link>
+      ) : null}
+
+      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pt-1">
+        Active projects · burn today
+      </div>
+      {projects.isPending ? (
+        <Card tight>
+          <div className="text-[12px] text-ink-3">Loading projects…</div>
+        </Card>
+      ) : rows.length === 0 ? (
+        <Card tight>
+          <div className="text-[13px] font-semibold">No active projects</div>
+          <div className="text-[11px] text-ink-3 mt-1">Set a project to active in Projects to see it here.</div>
+        </Card>
+      ) : (
+        <ul className="space-y-2">
+          {rows.map(({ project, burden, scheduled }) => (
+            <li key={project.id}>
+              <PmProjectRow project={project} burden={burden} scheduled={scheduled} />
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {attention.length > 0 ? (
+        <>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pt-2">Watch list</div>
+          <PmAttentionList items={attention} />
+        </>
+      ) : null}
+
+      <div className="pt-1">
+        <Attribution source="Live from /api/projects + /api/labor-burden/today (per project)" />
+      </div>
+    </div>
+  )
+}
+
+interface PmProjectRowProps {
+  project: ProjectListRow
+  burden: LaborBurdenSummaryResponse | undefined
+  scheduled: boolean
+}
+
+function PmProjectRow({ project, burden, scheduled }: PmProjectRowProps) {
+  const cents = burden?.total_cents ?? 0
+  const budgetCents = burden?.total_budget_cents ?? 0
+  const pct = budgetCents > 0 ? (burden?.burden_pct_of_budget ?? 0) : 0
+  const overBudget = budgetCents > 0 && cents > budgetCents
+  const onSiteCount = burden?.per_worker.length ?? 0
+  return (
+    <Link to={`/projects/${project.id}`} className="block">
+      <Card tight>
+        <div className="flex items-baseline justify-between gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="text-[13px] font-semibold truncate">{project.name}</div>
+            <div className="text-[11px] text-ink-3 mt-0.5 truncate">
+              {project.customer_name ?? 'No customer'}
+              {scheduled ? ' · scheduled today' : ''}
+            </div>
+          </div>
+          <div className="text-right shrink-0">
+            <div className="font-mono tabular-nums text-[14px] font-semibold">{formatDollars(cents)}</div>
+            <div className="text-[10px] text-ink-3 mt-0.5">
+              {onSiteCount} worker{onSiteCount === 1 ? '' : 's'}
+            </div>
+          </div>
+        </div>
+        {budgetCents > 0 ? (
+          <>
+            <div className="mt-2 h-1.5 bg-card-soft rounded-full overflow-hidden">
+              <div
+                className={overBudget ? 'h-full bg-bad' : 'h-full bg-accent'}
+                style={{ width: `${Math.min(100, pct * 100)}%` }}
+                aria-hidden="true"
+              />
+            </div>
+            <div className="flex items-center justify-between mt-1 text-[10px] text-ink-3">
+              <span className="font-mono tabular-nums">{(pct * 100).toFixed(0)}% of plan</span>
+              <span className="font-mono tabular-nums">{formatDollars(budgetCents)} budget</span>
+            </div>
+          </>
+        ) : (
+          <div className="mt-1.5 text-[10px] text-ink-3">No daily budget set.</div>
+        )}
+      </Card>
+    </Link>
+  )
+}
+
+function PmAttentionList({ items }: { items: AttentionItem[] }) {
+  return (
+    <ul className="space-y-2">
+      {items.map((item) => (
+        <li key={item.id}>
+          <Link to={item.action_to} className="block">
+            <Card tight>
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">{item.eyebrow}</div>
+                  <div className="text-[13px] font-semibold mt-1 truncate">{item.title}</div>
+                </div>
+                <span className="text-[13px] text-accent font-medium shrink-0">{item.action_label} →</span>
+              </div>
+            </Card>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  )
 }
