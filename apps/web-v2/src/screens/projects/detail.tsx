@@ -208,9 +208,14 @@ function SchedulePreview({ projectId }: { projectId: string }) {
     <div className="space-y-2">
       {projectSchedules.length === 0 ? (
         <Card tight>
-          <div className="text-[12px] text-ink-3">No upcoming schedules.</div>
+          <div className="text-[13px] font-semibold">No upcoming schedules</div>
           <div className="text-[11px] text-ink-3 mt-1">
-            Phase 2D adds a per-project schedule sub-tab with the day stream + week grid.
+            Add a crew assignment via the Schedule tab — it'll show up here for the project.
+          </div>
+          <div className="mt-2.5">
+            <Link to="/schedule" className="text-[12px] text-accent font-medium">
+              Open Schedule →
+            </Link>
           </div>
         </Card>
       ) : (
