@@ -62,9 +62,7 @@ export function SettingsScreen() {
   return (
     <div className="px-5 pt-6 pb-12 max-w-2xl">
       <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">More</div>
-      <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">
-        Everything else
-      </h1>
+      <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">Everything else</h1>
 
       {/* User identity card — taps open the project switcher per panel 4 */}
       <button
@@ -81,12 +79,12 @@ export function SettingsScreen() {
               aria-hidden="true"
               className={`inline-block w-1.5 h-1.5 rounded-full ${online ? 'bg-good' : 'bg-warn'}`}
             />
-            <span className={online ? 'text-good' : 'text-warn'}>
-              {online ? 'Synced' : 'Offline · queued'}
-            </span>
+            <span className={online ? 'text-good' : 'text-warn'}>{online ? 'Synced' : 'Offline · queued'}</span>
           </div>
         </div>
-        <span aria-hidden="true" className="text-ink-4 text-[18px]">›</span>
+        <span aria-hidden="true" className="text-ink-4 text-[18px]">
+          ›
+        </span>
       </button>
 
       {/* WORKFLOW group */}
@@ -122,7 +120,12 @@ function NavGroup({
   rows,
 }: {
   title: string
-  rows: ReadonlyArray<{ key: string; to: string; label: string; icon: React.ComponentType<React.SVGProps<SVGSVGElement>> }>
+  rows: ReadonlyArray<{
+    key: string
+    to: string
+    label: string
+    icon: React.ComponentType<React.SVGProps<SVGSVGElement>>
+  }>
 }) {
   return (
     <div className="mt-6">

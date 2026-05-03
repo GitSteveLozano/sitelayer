@@ -78,10 +78,7 @@ function SwitcherList({ query, onSelect }: { query: string; onSelect: () => void
 
   // Always fetch active projects; if the user is searching we widen
   // the filter so non-active matches surface too.
-  const params = useMemo(
-    () => (query ? { q: query, limit: 12 } : { status: 'active' as const, limit: 12 }),
-    [query],
-  )
+  const params = useMemo(() => (query ? { q: query, limit: 12 } : { status: 'active' as const, limit: 12 }), [query])
   const projects = useProjects(params)
   const rows = projects.data?.projects ?? []
 
@@ -130,22 +127,15 @@ function SwitcherList({ query, onSelect }: { query: string; onSelect: () => void
   )
 }
 
-function SwitcherRow({
-  project,
-  active,
-  onPick,
-}: {
-  project: ProjectListRow
-  active: boolean
-  onPick: () => void
-}) {
+function SwitcherRow({ project, active, onPick }: { project: ProjectListRow; active: boolean; onPick: () => void }) {
   const tone = project.status === 'active' ? 'good' : project.status === 'completed' ? 'default' : 'warn'
-  const initials = project.name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((s) => s[0]?.toUpperCase() ?? '')
-    .join('') || '··'
+  const initials =
+    project.name
+      .split(/\s+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((s) => s[0]?.toUpperCase() ?? '')
+      .join('') || '··'
   const customer = project.customer_name ?? 'No customer'
 
   return (
