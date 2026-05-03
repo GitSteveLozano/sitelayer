@@ -40,14 +40,7 @@ const ROLE_LABEL: Record<Role, string> = {
   worker: 'Worker',
 }
 
-export function NavDrawer({
-  open,
-  onClose,
-  onAvatarTap,
-  displayName,
-  subline,
-  initials,
-}: NavDrawerProps) {
+export function NavDrawer({ open, onClose, onAvatarTap, displayName, subline, initials }: NavDrawerProps) {
   const role = useRole()
   const online = useOnlineStatus()
   const sheetRef = useRef<HTMLDivElement>(null)
@@ -124,14 +117,9 @@ export function NavDrawer({
             <div className="mt-1.5 inline-flex items-center gap-1.5 text-[11px]">
               <span
                 aria-hidden="true"
-                className={cn(
-                  'inline-block w-1.5 h-1.5 rounded-full',
-                  online ? 'bg-good' : 'bg-warn',
-                )}
+                className={cn('inline-block w-1.5 h-1.5 rounded-full', online ? 'bg-good' : 'bg-warn')}
               />
-              <span className={online ? 'text-good' : 'text-warn'}>
-                {online ? 'Synced' : 'Offline · queued'}
-              </span>
+              <span className={online ? 'text-good' : 'text-warn'}>{online ? 'Synced' : 'Offline · queued'}</span>
             </div>
           </div>
           {onAvatarTap ? (

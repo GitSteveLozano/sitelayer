@@ -121,9 +121,7 @@ export function OwnerTodayScreen() {
           </>
         ) : view === 'this_week' ? (
           <>
-            <h1 className="mt-1 font-display text-[30px] font-bold tracking-tight leading-tight max-w-xs">
-              This week
-            </h1>
+            <h1 className="mt-1 font-display text-[30px] font-bold tracking-tight leading-tight max-w-xs">This week</h1>
             <p className="text-[13px] text-ink-2 mt-2 max-w-md leading-relaxed">
               Forward-looking — scheduled crew, open drafts, and pending approvals across the next 7 days.
             </p>
@@ -187,11 +185,7 @@ export function OwnerTodayScreen() {
 
       <div className="flex-1 px-4 pb-8 pt-2">
         {view === 'today' ? (
-          <TodayList
-            projects={projectsToday}
-            totalHoursToday={totalHoursToday}
-            hoursByProjectId={hoursByProjectId}
-          />
+          <TodayList projects={projectsToday} totalHoursToday={totalHoursToday} hoursByProjectId={hoursByProjectId} />
         ) : view === 'attention' ? (
           <>
             <AttentionList items={attention} reviewsPending={reviews.data?.timeReviewRuns ?? []} />
@@ -964,7 +958,9 @@ function ThisWeekList({ schedules, isLoading, attentionCount }: ThisWeekListProp
       ) : (
         days.map(([day, scheds]) => (
           <Card key={day} tight>
-            <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">{formatDayLabel(day)}</div>
+            <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">
+              {formatDayLabel(day)}
+            </div>
             <ul className="mt-2 divide-y divide-line">
               {scheds.map((s) => {
                 const crewCount = s.crew && Array.isArray(s.crew) ? (s.crew as unknown[]).length : 0
@@ -1056,9 +1052,7 @@ function isoDateOffset(iso: string, days: number): string {
 /** YYYY-MM-DD → "Mon · Apr 28". Local TZ. */
 function formatDayLabel(iso: string): string {
   const d = new Date(`${iso}T00:00:00`)
-  return d
-    .toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
-    .replace(',', ' ·')
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }).replace(',', ' ·')
 }
 
 /**
