@@ -88,3 +88,29 @@ jobs:
           # The runner already lives on the preview droplet, so the reaper
           # is just a local bash script invocation. No SSH hop needed.
           bash scripts/preview-gc-remote.sh
+
+      - name: Reclaim docker disk on the runner
+        # The host's `sitelayer-preview-prune.service` systemd unit only
+        # prunes preview *stacks* older than 14 days. It does not prune
+        # the build cache or stale image layers, which are what actually
+        # filled root to 100% on 2026-05-03 (78GB build cache + 21GB
+        # reclaimable images). Run an aggressive but bounded prune here
+        # so disk hygiene rides on the same daily schedule as the stack
+        # GC. `until=24h` for builder cache keeps recent caches around
+        # for in-progress preview deploys; `until=72h` for images is
+        # generous enough that a rollback drill within the window can
+        # still pull a previously-built sha by tag.
+        run: |
+          set -euo pipefail
+          echo "=== before ==="
+          df -h /
+          docker system df || true
+          echo "=== docker builder prune ==="
+          docker builder prune -af --filter until=24h || true
+          echo "=== docker image prune ==="
+          docker image prune -af --filter until=72h || true
+          echo "=== docker volume prune (only dangling) ==="
+          docker volume prune -f || true
+          echo "=== after ==="
+          df -h /
+          docker system df || true

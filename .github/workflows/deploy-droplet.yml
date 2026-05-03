@@ -26,6 +26,21 @@ jobs:
         with:
           token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
 
+      - name: Reclaim docker disk before build
+        # Defensive: the prod-image build is the heaviest disk-consuming step
+        # on the self-hosted preview runner, and ENOSPC here aborts the deploy.
+        # Prune build cache > 24h old and untagged image layers > 72h old; this
+        # leaves recent caches in place so consecutive deploys still benefit
+        # from BuildKit reuse, but stops the build cache + layer pile from
+        # filling root over time. Best-effort — never blocks the deploy.
+        run: |
+          set +e
+          df -h /
+          docker builder prune -af --filter until=24h
+          docker image prune -af --filter until=72h
+          df -h /
+          true
+
       - name: Prune old registry tags
         # The DO Container Registry Starter tier caps storage at 500 MB.
         # Keep the most recent N git-sha tags plus the floating `main` tag.
