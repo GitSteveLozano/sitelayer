@@ -269,13 +269,19 @@ export {
 } from './labor-burden'
 
 export {
+  createProject,
   fetchProject,
   fetchProjects,
+  patchProject,
   projectQueryKeys,
+  useCreateProject,
+  usePatchProject,
   useProject,
   useProjects,
   useProjectSummary,
   useProjectTimeline,
+  type ProjectCreateRequest,
+  type ProjectPatchRequest,
   type ProjectDetail,
   type ProjectDetailResponse,
   type ProjectListParams,

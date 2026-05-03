@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { BurdenHeroCard, Card, MobileButton, Pill } from '@/components/mobile'
+import { BurdenHeroCard, Card, MobileButton, Pill, useConfirmSheet } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { TopAppBar } from '@/components/nav/TopAppBar'
 import { NavDrawer } from '@/components/nav/NavDrawer'
@@ -10,6 +10,7 @@ import {
   useClockTimeline,
   useDailyLogs,
   useLaborBurdenToday,
+  usePatchProject,
   useProject,
   useProjectSummary,
   useSchedules,
@@ -58,9 +59,12 @@ export function ProjectDetailScreen() {
   const [, setCurrentProjectId] = useCurrentProjectId()
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [switcherOpen, setSwitcherOpen] = useState(false)
+  const [optionsOpen, setOptionsOpen] = useState(false)
+  const [confirmNode, askConfirm] = useConfirmSheet()
 
   const project = useProject(id)
   const data = project.data?.project
+  const patchProject = usePatchProject(id ?? '')
 
   // Pin the project the user is actively viewing as the "current"
   // one. The drawer header and More-tab user card key off this so
@@ -95,6 +99,24 @@ export function ProjectDetailScreen() {
     setSearchParams(sp, { replace: true })
   }
 
+  const archive = async () => {
+    if (!data) return
+    const ok = await askConfirm({
+      title: 'Archive this project?',
+      body: `Archived projects move out of the active list and skip future schedules. You can pull ${data.name} back to active any time from the Archive tab.`,
+      confirmLabel: 'Archive',
+      cancelLabel: 'Keep active',
+      destructive: false,
+    })
+    if (!ok) return
+    try {
+      await patchProject.mutateAsync({ status: 'archived', expected_version: data.version })
+      navigate('/projects', { replace: true })
+    } catch {
+      /* swallow — patch errors surface via toast in a later pass */
+    }
+  }
+
   return (
     <div className="flex flex-col">
       <TopAppBar
@@ -108,19 +130,11 @@ export function ProjectDetailScreen() {
         showBack
         backTo="/projects"
         onSearch={() => navigate('/projects')}
-        onOverflow={() => setDrawerOpen(true)}
+        onOverflow={() => setOptionsOpen(true)}
       />
 
-      {/* Sub-header KPI strip — restated under the bar so the page
-          identity (status + bid) is visible without crowding the bar. */}
-      <div className="px-5 pt-3 pb-2 flex items-center gap-2">
-        <Pill tone={data.status === 'active' ? 'good' : data.status === 'completed' ? 'default' : 'warn'}>
-          {data.status}
-        </Pill>
-        {Number(data.bid_total) > 0 ? (
-          <span className="num text-[12px] text-ink-3">${Number(data.bid_total).toLocaleString()} bid</span>
-        ) : null}
-      </div>
+      {/* Hero header — Sitemap §04 panels 5/8/9 */}
+      <ProjectHeroHeader project={data} />
 
       {/* Sub-tab strip — 4 visible tabs per Sitemap §02 panel 2 */}
       <div className="px-4 border-b border-line">
@@ -158,6 +172,114 @@ export function ProjectDetailScreen() {
         }}
       />
       <ProjectSwitcherSheet open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
+      <ProjectOptionsSheet
+        open={optionsOpen}
+        onClose={() => setOptionsOpen(false)}
+        onOpenDrawer={() => {
+          setOptionsOpen(false)
+          setDrawerOpen(true)
+        }}
+        onArchive={async () => {
+          setOptionsOpen(false)
+          await archive()
+        }}
+        canArchive={data.status !== 'archived'}
+      />
+      {confirmNode}
+    </div>
+  )
+}
+
+/**
+ * Hero header — Sitemap §04 panels 5/8/9. Pulls bid_total to a
+ * prominent number so the project's "scale" is visible the moment the
+ * detail screen opens. Status pill and a contextual eyebrow ride
+ * underneath; division/customer already live in the TopAppBar above.
+ */
+function ProjectHeroHeader({ project }: { project: ProjectDetail }) {
+  const bid = Number(project.bid_total)
+  const tone =
+    project.status === 'active'
+      ? 'good'
+      : project.status === 'completed'
+        ? 'default'
+        : project.status === 'archived'
+          ? 'default'
+          : 'warn'
+  const eyebrow =
+    project.status === 'lead'
+      ? 'Bid'
+      : project.status === 'active'
+        ? 'Contract'
+        : project.status === 'completed'
+          ? 'Closed'
+          : 'Archived'
+  return (
+    <div className="px-5 pt-4 pb-3">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-3">{eyebrow}</div>
+      <div className="mt-0.5 flex items-baseline gap-3">
+        <div className="num font-display text-[34px] font-bold tracking-tight leading-none">
+          {bid > 0 ? `$${bid.toLocaleString()}` : '—'}
+        </div>
+        <Pill tone={tone}>{project.status}</Pill>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Project overflow sheet — `⋯` from the TopAppBar opens this with a
+ * short list of project-level actions. Keeps Archive (Sitemap §04
+ * panel 12) discoverable without putting destructive options inline
+ * on Overview.
+ */
+function ProjectOptionsSheet({
+  open,
+  onClose,
+  onOpenDrawer,
+  onArchive,
+  canArchive,
+}: {
+  open: boolean
+  onClose: () => void
+  onOpenDrawer: () => void
+  onArchive: () => void
+  canArchive: boolean
+}) {
+  if (!open) return null
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Project options"
+      className="fixed inset-0 z-40 flex items-end bg-black/45"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="w-full bg-bg rounded-t-[24px] pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+16px)] shadow-[0_-4px_24px_rgba(0,0,0,0.12)]">
+        <div aria-hidden="true" className="w-9 h-1 bg-line-2 rounded-full mx-auto mb-2" />
+        <div className="px-5 pt-1 pb-3 border-b border-line text-[18px] font-semibold tracking-tight">
+          Project options
+        </div>
+        <div className="px-2 py-2">
+          <button
+            type="button"
+            onClick={onOpenDrawer}
+            className="w-full text-left px-3 py-3 rounded-md text-[15px] hover:bg-card-soft active:bg-card-soft"
+          >
+            Open navigation
+          </button>
+          <button
+            type="button"
+            onClick={onArchive}
+            disabled={!canArchive}
+            className="w-full text-left px-3 py-3 rounded-md text-[15px] text-bad hover:bg-card-soft active:bg-card-soft disabled:opacity-40 disabled:hover:bg-transparent"
+          >
+            Archive this project…
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -182,6 +304,7 @@ function OverviewTab({ project, onOpenEstimate }: { project: ProjectDetail; onOp
 
   return (
     <div className="space-y-3">
+      <ProjectProgressHero projectId={project.id} />
       <BurdenHeroCard burden={burden.data} label="Project burden today" />
       <div className="grid grid-cols-2 gap-2.5">
         <Card tight>
@@ -443,6 +566,75 @@ function ScopeProgressCard({ projectId }: { projectId: string }) {
       </ul>
       <div className="px-4 py-2 border-t border-line">
         <Attribution source="Computed from estimate_lines × labor_entries.sqft_done" />
+      </div>
+    </Card>
+  )
+}
+
+/**
+ * `prj-progress-hero` — Sitemap §04 panel 10 ("Express progress").
+ *
+ * Aggregates the per-scope completion percentages from
+ * `useProjectSummary` into a single project-wide % so the Overview
+ * tab opens with a one-glance answer to "how done is this?".
+ *
+ * Math: weighted average across estimate_lines, weighted by quantity,
+ * with completion = sum(labor.sqft_done where service_item_code = line.code) / line.quantity.
+ * Lines without sqft_done contribute 0 weight (calm-by-default per AI
+ * Rules Law 03 — surface-when-meaningful, not always).
+ *
+ * Hides entirely when there are no estimate lines or no labor with a
+ * sqft_done value.
+ */
+function ProjectProgressHero({ projectId }: { projectId: string }) {
+  const summary = useProjectSummary(projectId)
+  const data = summary.data
+  if (!data || data.estimateLines.length === 0) return null
+
+  const laborByCode = new Map<string, number>()
+  for (const e of data.laborEntries) {
+    const code = e.service_item_code
+    if (!code) continue
+    const sqft = Number(e.sqft_done ?? 0)
+    if (!Number.isFinite(sqft) || sqft <= 0) continue
+    laborByCode.set(code, (laborByCode.get(code) ?? 0) + sqft)
+  }
+  if (laborByCode.size === 0) return null
+
+  let totalPlanned = 0
+  let totalDone = 0
+  for (const line of data.estimateLines) {
+    const planned = Number(line.quantity)
+    if (!Number.isFinite(planned) || planned <= 0) continue
+    const done = Math.min(planned, laborByCode.get(line.service_item_code) ?? 0)
+    totalPlanned += planned
+    totalDone += done
+  }
+  if (totalPlanned <= 0) return null
+  const pct = totalDone / totalPlanned
+  const tone = pct >= 0.95 ? 'good' : pct >= 0.5 ? 'accent' : 'accent'
+
+  return (
+    <Card>
+      <div className="flex items-baseline justify-between gap-2">
+        <div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Progress</div>
+          <div className="num text-[28px] font-semibold mt-0.5 leading-none">{(pct * 100).toFixed(0)}%</div>
+        </div>
+        <div className="text-[11px] text-ink-3 num tabular-nums text-right">
+          {totalDone.toFixed(0)} / {totalPlanned.toFixed(0)}
+          <div className="mt-0.5 text-ink-4">across {data.estimateLines.length} scopes</div>
+        </div>
+      </div>
+      <div className="mt-3 h-1.5 bg-card-soft rounded-full overflow-hidden">
+        <div
+          className={tone === 'good' ? 'h-full bg-good' : 'h-full bg-accent'}
+          style={{ width: `${Math.max(2, pct * 100)}%` }}
+          aria-hidden="true"
+        />
+      </div>
+      <div className="mt-2">
+        <Attribution source="Weighted across estimate_lines × labor_entries.sqft_done" />
       </div>
     </Card>
   )

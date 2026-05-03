@@ -2,7 +2,7 @@
 // screens. Wraps GET /api/projects (system.ts) + GET /api/projects/:id
 // (projects.ts).
 
-import { useQuery, type UseQueryOptions } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query'
 import { request } from './client'
 
 export type ProjectStatus = 'active' | 'lead' | 'completed' | 'archived' | string
@@ -98,6 +98,71 @@ export function useProject(id: string | null | undefined, options?: Partial<UseQ
     queryFn: () => fetchProject(id!),
     enabled: Boolean(id),
     ...options,
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Mutations
+// ---------------------------------------------------------------------------
+
+export interface ProjectCreateRequest {
+  name: string
+  customer_name: string
+  customer_id?: string | null
+  division_code?: string
+  status?: ProjectStatus
+  bid_total?: number
+  labor_rate?: number
+  target_sqft_per_hr?: number | null
+  bonus_pool?: number
+  site_lat?: number | null
+  site_lng?: number | null
+  site_radius_m?: number | null
+}
+
+export interface ProjectPatchRequest {
+  name?: string
+  customer_name?: string
+  division_code?: string
+  status?: ProjectStatus
+  bid_total?: number
+  labor_rate?: number
+  target_sqft_per_hr?: number | null
+  bonus_pool?: number
+  site_lat?: number | null
+  site_lng?: number | null
+  site_radius_m?: number | null
+  auto_clock_in_enabled?: boolean
+  auto_clock_out_grace_seconds?: number
+  auto_clock_correction_window_seconds?: number
+  daily_budget_cents?: number
+  expected_version?: number
+}
+
+export function createProject(input: ProjectCreateRequest): Promise<ProjectDetail> {
+  return request<ProjectDetail>('/api/projects', { method: 'POST', json: input })
+}
+
+export function patchProject(id: string, input: ProjectPatchRequest): Promise<ProjectDetail> {
+  return request<ProjectDetail>(`/api/projects/${encodeURIComponent(id)}`, { method: 'PATCH', json: input })
+}
+
+export function useCreateProject() {
+  const qc = useQueryClient()
+  return useMutation<ProjectDetail, Error, ProjectCreateRequest>({
+    mutationFn: createProject,
+    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
+  })
+}
+
+export function usePatchProject(id: string) {
+  const qc = useQueryClient()
+  return useMutation<ProjectDetail, Error, ProjectPatchRequest>({
+    mutationFn: (input) => patchProject(id, input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: KEYS.all() })
+      void qc.invalidateQueries({ queryKey: KEYS.detail(id) })
+    },
   })
 }
 

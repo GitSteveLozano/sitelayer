@@ -1,5 +1,5 @@
 import { Route, Routes } from 'react-router-dom'
-import { ProjectsListScreen, ProjectDetailScreen } from '@/screens/projects'
+import { NewProjectScreen, ProjectsListScreen, ProjectDetailScreen } from '@/screens/projects'
 import { ProjectSetupScreen } from '@/screens/projects/setup'
 import { TakeoffCanvasScreen } from '@/screens/projects/takeoff-canvas'
 import { TakeoffSummaryScreen } from '@/screens/projects/takeoff-summary'
@@ -14,6 +14,7 @@ import { ProjectRentalContractScreen } from '@/screens/inventory-admin'
  *   list (prj-detail Takeoff sub-tab) → detail → photo / canvas → summary
  *
  *   /projects                                  → prj-list
+ *   /projects/new                              → prj-new wizard (Sitemap §04 panels 2/3/4)
  *   /projects/:id                              → prj-detail (sub-tabs via ?tab=)
  *   /projects/:id/setup                        → prj-geofence + project setup form
  *   /projects/:id/takeoff/:measurementId       → to-detail single measurement view
@@ -26,6 +27,7 @@ export default function ProjectsRoute() {
   return (
     <Routes>
       <Route index element={<ProjectsListScreen />} />
+      <Route path="new" element={<NewProjectScreen />} />
       <Route path=":id" element={<ProjectDetailScreen />} />
       <Route path=":id/setup" element={<ProjectSetupScreen />} />
       <Route path=":id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />

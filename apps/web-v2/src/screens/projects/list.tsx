@@ -45,10 +45,31 @@ export function ProjectsListScreen() {
 
   return (
     <div className="flex flex-col">
-      <div className="px-5 pt-6 pb-3">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Tab · Projects</div>
-        <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">Projects</h1>
-        <div className="text-[12px] text-ink-3 mt-1">{projects.isPending ? 'Loading…' : `${rows.length} ${chip}`}</div>
+      <div className="px-5 pt-6 pb-3 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Tab · Projects</div>
+          <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">Projects</h1>
+          <div className="text-[12px] text-ink-3 mt-1">{projects.isPending ? 'Loading…' : `${rows.length} ${chip}`}</div>
+        </div>
+        {/* `+` from Sitemap §04 panel 1 — opens the new-project wizard */}
+        <Link
+          to="/projects/new"
+          aria-label="New project"
+          className="shrink-0 mt-1 inline-flex items-center justify-center w-11 h-11 rounded-full bg-accent text-white shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            width="22"
+            height="22"
+            aria-hidden="true"
+          >
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </Link>
       </div>
 
       <div className="px-4 pb-2">
@@ -124,7 +145,7 @@ export function ProjectsListScreen() {
             primaryAction={
               chip === 'active' ? (
                 <Link
-                  to="/onboarding"
+                  to="/projects/new"
                   className="w-full h-[50px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
                 >
                   + New project
