@@ -124,13 +124,7 @@ export function TopAppBar({
               aria-label="More options"
               className="w-10 h-10 inline-flex items-center justify-center rounded-full text-ink hover:bg-card-soft active:bg-card-soft focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
             >
-              <svg
-                viewBox="0 0 24 24"
-                fill="currentColor"
-                width="20"
-                height="20"
-                aria-hidden="true"
-              >
+              <svg viewBox="0 0 24 24" fill="currentColor" width="20" height="20" aria-hidden="true">
                 <circle cx="5" cy="12" r="1.7" />
                 <circle cx="12" cy="12" r="1.7" />
                 <circle cx="19" cy="12" r="1.7" />
