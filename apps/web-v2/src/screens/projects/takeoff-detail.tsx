@@ -61,7 +61,7 @@ export function TakeoffDetailScreen() {
     return (
       <div className="px-5 pt-8">
         <Link to={`/projects/${projectId}?tab=takeoff`} className="text-accent text-[13px] font-medium">
-          ← Takeoff
+          ← Measurements
         </Link>
         <ErrorState title="Measurement not found" body="It may have been deleted on another device." />
       </div>
@@ -95,7 +95,7 @@ export function TakeoffDetailScreen() {
     <div className="flex flex-col">
       <div className="px-5 pt-6 pb-3">
         <Link to={`/projects/${projectId}?tab=takeoff`} className="text-[12px] text-ink-3">
-          ← Takeoff
+          ← Measurements
         </Link>
         <h1 className="mt-2 font-display text-[22px] font-bold tracking-tight leading-tight">
           {measurement.service_item_code}
