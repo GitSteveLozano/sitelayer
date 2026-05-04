@@ -78,6 +78,7 @@ const loadProjectsView = () => import('./views/projects.js')
 const loadRentalsView = () => import('./views/rentals.js')
 const loadScheduleView = () => import('./views/schedule.js')
 const loadTakeoffsView = () => import('./views/takeoffs.js')
+const loadMPreviewView = () => import('./views/m-preview.js')
 
 const AuditView = lazy(() => loadAuditView().then(({ AuditView }) => ({ default: AuditView })))
 const BonusSimView = lazy(() => loadBonusSimView().then(({ BonusSimView }) => ({ default: BonusSimView })))
@@ -110,6 +111,7 @@ const ProjectsView = lazy(() => loadProjectsView().then(({ ProjectsView }) => ({
 const RentalsView = lazy(() => loadRentalsView().then(({ RentalsView }) => ({ default: RentalsView })))
 const ScheduleView = lazy(() => loadScheduleView().then(({ ScheduleView }) => ({ default: ScheduleView })))
 const TakeoffsView = lazy(() => loadTakeoffsView().then(({ TakeoffsView }) => ({ default: TakeoffsView })))
+const MPreviewView = lazy(() => loadMPreviewView().then(({ MPreviewView }) => ({ default: MPreviewView })))
 
 const ROUTE_PRELOADS: Record<string, () => Promise<unknown>> = {
   '/audit': loadAuditView,
@@ -710,6 +712,10 @@ function AppShell() {
           <Route
             path="/dev/*"
             element={devSurfaceEnabled ? <DevScratchView features={features} /> : <Navigate to="/projects" replace />}
+          />
+          <Route
+            path="/m-preview"
+            element={devSurfaceEnabled ? <MPreviewView /> : <Navigate to="/projects" replace />}
           />
           {/* If a signed-in user lands on a sign-in URL, bounce them home. */}
           <Route path="/sign-in/*" element={<Navigate to="/confirm" replace />} />

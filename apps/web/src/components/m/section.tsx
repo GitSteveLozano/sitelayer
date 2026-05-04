@@ -1,0 +1,50 @@
+import type { ReactNode } from 'react'
+
+export type MSectionHProps = {
+  children: ReactNode
+  link?: ReactNode
+  onLinkClick?: () => void
+}
+
+/**
+ * Section eyebrow with optional right-side link action. 11px uppercase,
+ * 0.06em letter-spacing per the design system.
+ */
+export function MSectionH({ children, link, onLinkClick }: MSectionHProps) {
+  if (!link) {
+    return <div className="m-section-h">{children}</div>
+  }
+  return (
+    <div className="m-section-h m-section-h-row">
+      <div>{children}</div>
+      <button type="button" className="m-link" onClick={onLinkClick}>
+        {link}
+      </button>
+    </div>
+  )
+}
+
+export function MShell({ children, className }: { children: ReactNode; className?: string }) {
+  return <div className={`m${className ? ` ${className}` : ''}`}>{children}</div>
+}
+
+export function MBody({ children, pad }: { children: ReactNode; pad?: boolean }) {
+  return <div className={`m-body${pad ? ' m-body-pad' : ''}`}>{children}</div>
+}
+
+export function MStatStrip({
+  children,
+}: {
+  children: ReactNode
+}) {
+  return <div className="m-stat-strip">{children}</div>
+}
+
+export function MStat({ label, value }: { label: ReactNode; value: ReactNode }) {
+  return (
+    <div>
+      <div className="m-stat-strip-l">{label}</div>
+      <div className="m-stat-strip-v num">{value}</div>
+    </div>
+  )
+}
