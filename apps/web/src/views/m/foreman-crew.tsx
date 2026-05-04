@@ -51,7 +51,15 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
       <MTopBar title="Crew" actionIcon={<MI.Plus size={20} />} actionLabel="Add" />
       <MBody>
         <div style={{ padding: '8px 16px 0' }}>
-          <div style={{ fontSize: 11, color: 'var(--m-ink-3)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+          <div
+            style={{
+              fontSize: 11,
+              color: 'var(--m-ink-3)',
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+            }}
+          >
             Crew · today
           </div>
           <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>
@@ -76,7 +84,16 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
         </MChipRow>
         {grp === 'map' ? (
           <div style={{ padding: '0 16px' }}>
-            <div className="m-card" style={{ height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--m-ink-3)' }}>
+            <div
+              className="m-card"
+              style={{
+                height: 220,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--m-ink-3)',
+              }}
+            >
               Map view coming soon
             </div>
           </div>
@@ -120,11 +137,7 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
                   .reduce((sum, l) => sum + Number(l.hours ?? 0), 0)
                 const onSiteWorkers = workers.filter((w) =>
                   labor.some(
-                    (l) =>
-                      l.occurred_on === today &&
-                      !l.deleted_at &&
-                      l.project_id === p.id &&
-                      l.worker_id === w.id,
+                    (l) => l.occurred_on === today && !l.deleted_at && l.project_id === p.id && l.worker_id === w.id,
                   ),
                 )
                 if (onSiteWorkers.length === 0) return null

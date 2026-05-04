@@ -44,13 +44,7 @@ type IssueRow = {
 
 type Filter = 'all' | 'blockers' | 'photos' | 'resolved'
 
-export function ForemanField({
-  bootstrap,
-  companySlug,
-}: {
-  bootstrap: BootstrapResponse | null
-  companySlug: string
-}) {
+export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const [issues, setIssues] = useState<readonly IssueRow[] | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
@@ -59,10 +53,7 @@ export function ForemanField({
 
   const refresh = async () => {
     try {
-      const r = await apiGet<{ worker_issues: IssueRow[] }>(
-        '/api/worker-issues?resolved=true',
-        companySlug,
-      )
+      const r = await apiGet<{ worker_issues: IssueRow[] }>('/api/worker-issues?resolved=true', companySlug)
       setIssues(r.worker_issues ?? [])
     } catch {
       setIssues([])
@@ -124,7 +115,15 @@ export function ForemanField({
       <MTopBar title="Field" actionIcon={<MI.AlertTri size={20} />} actionLabel="Filter" />
       <MBody>
         <div style={{ padding: '8px 16px 0' }}>
-          <div style={{ fontSize: 11, color: 'var(--m-ink-3)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+          <div
+            style={{
+              fontSize: 11,
+              color: 'var(--m-ink-3)',
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+            }}
+          >
             From the field · today
           </div>
           <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>
@@ -193,13 +192,7 @@ export function ForemanField({
   )
 }
 
-function ClusterStripe({
-  issues,
-  bootstrap,
-}: {
-  issues: readonly IssueRow[]
-  bootstrap: BootstrapResponse | null
-}) {
+function ClusterStripe({ issues, bootstrap }: { issues: readonly IssueRow[]; bootstrap: BootstrapResponse | null }) {
   // Groups by project, surfaces an AI stripe when 3+ open events are on
   // the same site within the last hour. Heuristic; tune in production.
   const cluster = useMemo(() => {
@@ -229,7 +222,11 @@ function ClusterStripe({
         tone="warn"
         eyebrow="Cluster"
         title={`${cluster.project} has ${cluster.count} open events in the last hour`}
-        attribution={<>Based on <strong>open issues</strong>.</>}
+        attribution={
+          <>
+            Based on <strong>open issues</strong>.
+          </>
+        }
       >
         Likely the same root cause. Resolve once and ack the rest.
       </MAiStripe>
@@ -259,12 +256,12 @@ function ForemanIssueDetail({
       <MBody pad>
         <div className="m-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {w ? (
-              <MAvatar initials={initialsFor(w.name)} tone={avatarToneFor(w.id)} size="lg" />
-            ) : null}
+            {w ? <MAvatar initials={initialsFor(w.name)} tone={avatarToneFor(w.id)} size="lg" /> : null}
             <div>
               <div style={{ fontSize: 16, fontWeight: 600 }}>{w?.name ?? 'Unknown worker'}</div>
-              <div className="m-quiet-sm">{shortAgo(issue.created_at)} · {timeOfDay(issue.created_at)}</div>
+              <div className="m-quiet-sm">
+                {shortAgo(issue.created_at)} · {timeOfDay(issue.created_at)}
+              </div>
             </div>
           </div>
           <div style={{ borderTop: '1px solid var(--m-line)', margin: '12px 0' }} />
@@ -279,9 +276,24 @@ function ForemanIssueDetail({
           <>
             <MSectionH>How are you fixing it?</MSectionH>
             <MListInset>
-              <MListRow leading={<MI.Truck size={18} />} headline="Order more" supporting="Drewski's preferred vendor" chev />
-              <MListRow leading={<MI.Home size={18} />} headline="Bring from another site" supporting="Pick a truck" chev />
-              <MListRow leading={<MI.Check size={18} />} headline="Use what's on hand" supporting="Reply to worker" chev />
+              <MListRow
+                leading={<MI.Truck size={18} />}
+                headline="Order more"
+                supporting="Drewski's preferred vendor"
+                chev
+              />
+              <MListRow
+                leading={<MI.Home size={18} />}
+                headline="Bring from another site"
+                supporting="Pick a truck"
+                chev
+              />
+              <MListRow
+                leading={<MI.Check size={18} />}
+                headline="Use what's on hand"
+                supporting="Reply to worker"
+                chev
+              />
               <MListRow leading={<MI.Clock size={18} />} headline="Park for now" supporting="Low priority" chev />
             </MListInset>
             <div style={{ padding: 16 }}>

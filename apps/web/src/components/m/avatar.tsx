@@ -14,11 +14,7 @@ export type MAvatarProps = {
  */
 export function MAvatar({ initials, tone, size = 'md' }: MAvatarProps) {
   return (
-    <span
-      className="m-avatar"
-      data-tone={tone}
-      data-size={size === 'md' ? undefined : size}
-    >
+    <span className="m-avatar" data-tone={tone} data-size={size === 'md' ? undefined : size}>
       {initials}
     </span>
   )

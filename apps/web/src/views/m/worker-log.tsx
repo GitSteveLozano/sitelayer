@@ -9,13 +9,7 @@ import { useNavigate } from 'react-router-dom'
 import { apiPost, type BootstrapResponse } from '../../api.js'
 import { MBody, MButton, MButtonStack, MI, MTopBar } from '../../components/m/index.js'
 
-export function WorkerLog({
-  bootstrap,
-  companySlug,
-}: {
-  bootstrap: BootstrapResponse | null
-  companySlug: string
-}) {
+export function WorkerLog({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const inputRef = useRef<HTMLInputElement>(null)
   const [preview, setPreview] = useState<string | null>(null)
@@ -64,11 +58,7 @@ export function WorkerLog({
           }}
         >
           {preview ? (
-            <img
-              src={preview}
-              alt="Captured"
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-            />
+            <img src={preview} alt="Captured" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           ) : (
             <button
               type="button"
@@ -133,9 +123,7 @@ export function WorkerLog({
                 className="m-input m-textarea"
                 style={{ width: '100%', minHeight: 80 }}
               />
-              {error ? (
-                <div style={{ marginTop: 12, color: 'var(--m-red)', fontSize: 13 }}>{error}</div>
-              ) : null}
+              {error ? <div style={{ marginTop: 12, color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
               <div style={{ marginTop: 12 }}>
                 <MButtonStack>
                   <MButton variant="primary" onClick={handleSend} disabled={busy}>

@@ -12,7 +12,7 @@ describe('computeActiveContext', () => {
     ).toEqual({ kind: 'admin', projectId: 'p1' })
   })
 
-  it("aliases legacy office company role to admin", () => {
+  it('aliases legacy office company role to admin', () => {
     expect(
       computeActiveContext({
         companyRole: 'office',

@@ -43,9 +43,7 @@ export function MChip({ active, outline, children, onClick, count }: MChipProps)
       onClick={onClick}
     >
       {children}
-      {typeof count === 'number' ? (
-        <span style={{ opacity: 0.7, fontWeight: 400 }}>{count}</span>
-      ) : null}
+      {typeof count === 'number' ? <span style={{ opacity: 0.7, fontWeight: 400 }}>{count}</span> : null}
     </button>
   )
 }

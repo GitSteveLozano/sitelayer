@@ -76,7 +76,10 @@ export function AdminHome({ bootstrap }: AdminHomeProps) {
     )
   }
 
-  const heroTitle = activeProjects.length === 0 ? "You're caught up." : `${activeProjects.length} ${pl(activeProjects.length, 'site', 'sites')} running`
+  const heroTitle =
+    activeProjects.length === 0
+      ? "You're caught up."
+      : `${activeProjects.length} ${pl(activeProjects.length, 'site', 'sites')} running`
   const heroSub =
     activeProjects.length === 0
       ? 'Nothing on fire. Plan tomorrow when you have a minute.'
@@ -92,7 +95,9 @@ export function AdminHome({ bootstrap }: AdminHomeProps) {
       />
       <MBody>
         <MLargeHead
-          eyebrow={new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase()}
+          eyebrow={new Date()
+            .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
+            .toUpperCase()}
           title={heroTitle}
           sub={heroSub}
           right={<MAvatar initials={initialsFromCompany(bootstrap.company.name)} />}

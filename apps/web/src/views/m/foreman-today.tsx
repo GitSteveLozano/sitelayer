@@ -38,13 +38,7 @@ type IssueRow = {
   created_at: string
 }
 
-export function ForemanToday({
-  bootstrap,
-  companySlug,
-}: {
-  bootstrap: BootstrapResponse | null
-  companySlug: string
-}) {
+export function ForemanToday({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const [issues, setIssues] = useState<readonly IssueRow[] | null>(null)
 
@@ -139,7 +133,15 @@ export function ForemanToday({
           }}
         >
           <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#aea69a' }}>
+            <div
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+                color: '#aea69a',
+              }}
+            >
               All sites · today
             </div>
             <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }} className="num">
@@ -199,12 +201,7 @@ export function ForemanToday({
           )}
         </MListInset>
         <div style={{ padding: 16 }}>
-          <button
-            type="button"
-            className="m-btn"
-            data-variant="primary"
-            onClick={() => navigate('/m/brief')}
-          >
+          <button type="button" className="m-btn" data-variant="primary" onClick={() => navigate('/m/brief')}>
             Brief the crew
           </button>
         </div>
@@ -214,7 +211,5 @@ export function ForemanToday({
 }
 
 function shortMonthDay(): string {
-  return new Date()
-    .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
-    .toUpperCase()
+  return new Date().toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase()
 }

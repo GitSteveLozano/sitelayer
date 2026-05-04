@@ -19,16 +19,7 @@ export type MListRowProps = {
  * supporting copy, trailing meta + optional chevron. Wrap rows in
  * <MListInset> for the rounded card group, or <MListPlain> for full-bleed.
  */
-export function MListRow({
-  leading,
-  leadingTone,
-  headline,
-  supporting,
-  trailing,
-  badge,
-  chev,
-  onTap,
-}: MListRowProps) {
+export function MListRow({ leading, leadingTone, headline, supporting, trailing, badge, chev, onTap }: MListRowProps) {
   const Tag = onTap ? 'button' : 'div'
   return (
     <Tag

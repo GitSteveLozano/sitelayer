@@ -52,7 +52,13 @@ export function MobileRentalsUtilization({ companySlug }: { companySlug: string 
         <div style={{ padding: '0 16px' }}>
           <MKpiRow cols={2}>
             <MKpi label="Utilization" value={`${utilizationPct}%`} meta="of fleet active" metaTone="green" />
-            <MKpi label="Idle revenue" value={formatMoney(idleDailyValue)} unit="/day" meta="leaving on the table" metaTone="amber" />
+            <MKpi
+              label="Idle revenue"
+              value={formatMoney(idleDailyValue)}
+              unit="/day"
+              meta="leaving on the table"
+              metaTone="amber"
+            />
           </MKpiRow>
         </div>
         {idle.length > 0 ? (
@@ -60,7 +66,11 @@ export function MobileRentalsUtilization({ companySlug }: { companySlug: string 
             <MAiStripe
               eyebrow="Monetize"
               title={`${idle.length} idle ${idle.length === 1 ? 'item' : 'items'} could be earning`}
-              attribution={<>Based on <strong>fleet activity</strong>.</>}
+              attribution={
+                <>
+                  Based on <strong>fleet activity</strong>.
+                </>
+              }
               action={
                 <MButton variant="ghost" size="sm" onClick={() => navigate('/m/rentals/dispatch')}>
                   Dispatch
@@ -76,17 +86,19 @@ export function MobileRentalsUtilization({ companySlug }: { companySlug: string 
           {idle.length === 0 ? (
             <MListRow headline="Everything's deployed" supporting="Nice — full fleet utilization." />
           ) : (
-            idle.slice(0, 8).map((i) => (
-              <MListRow
-                key={i.id}
-                leading={<MI.Truck size={18} />}
-                leadingTone="amber"
-                headline={i.description}
-                supporting={`${i.code} · $${i.default_rental_rate}/${i.unit || 'day'}`}
-                trailing={<span className="num">$0/day</span>}
-                chev
-              />
-            ))
+            idle
+              .slice(0, 8)
+              .map((i) => (
+                <MListRow
+                  key={i.id}
+                  leading={<MI.Truck size={18} />}
+                  leadingTone="amber"
+                  headline={i.description}
+                  supporting={`${i.code} · $${i.default_rental_rate}/${i.unit || 'day'}`}
+                  trailing={<span className="num">$0/day</span>}
+                  chev
+                />
+              ))
           )}
         </MListInset>
       </MBody>

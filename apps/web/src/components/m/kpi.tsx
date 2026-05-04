@@ -30,13 +30,7 @@ export function MKpi({ label, value, unit, meta, metaTone }: MKpiProps) {
   )
 }
 
-export function MKpiRow({
-  cols = 2,
-  children,
-}: {
-  cols?: 2 | 3
-  children: ReactNode
-}) {
+export function MKpiRow({ cols = 2, children }: { cols?: 2 | 3; children: ReactNode }) {
   return <div className={`m-kpi-row${cols === 3 ? ' m-kpi-row-3' : ''}`}>{children}</div>
 }
 

@@ -30,21 +30,50 @@ type IssueCategory = {
 }
 
 const CATEGORIES: ReadonlyArray<IssueCategory> = [
-  { label: 'Out of materials', sub: 'Need delivery', kind: 'materials_out', designKind: 'out_of_materials', Icon: MI.Layers, tone: 'amber' },
-  { label: 'Equipment broken', sub: 'Tool / scaffold', kind: 'other', designKind: 'equipment_broken', Icon: MI.Drill, tone: 'red' },
-  { label: 'Safety concern', sub: 'Stop work', kind: 'safety', designKind: 'safety_concern', Icon: MI.ShieldAlert, tone: 'red' },
-  { label: 'Weather hold', sub: 'Rain / wind', kind: 'other', designKind: 'weather_hold', Icon: MI.CloudRain, tone: 'amber' },
-  { label: 'Scope question', sub: 'Need clarity', kind: 'other', designKind: 'scope_question', Icon: MI.AlertTri, tone: 'blue' },
+  {
+    label: 'Out of materials',
+    sub: 'Need delivery',
+    kind: 'materials_out',
+    designKind: 'out_of_materials',
+    Icon: MI.Layers,
+    tone: 'amber',
+  },
+  {
+    label: 'Equipment broken',
+    sub: 'Tool / scaffold',
+    kind: 'other',
+    designKind: 'equipment_broken',
+    Icon: MI.Drill,
+    tone: 'red',
+  },
+  {
+    label: 'Safety concern',
+    sub: 'Stop work',
+    kind: 'safety',
+    designKind: 'safety_concern',
+    Icon: MI.ShieldAlert,
+    tone: 'red',
+  },
+  {
+    label: 'Weather hold',
+    sub: 'Rain / wind',
+    kind: 'other',
+    designKind: 'weather_hold',
+    Icon: MI.CloudRain,
+    tone: 'amber',
+  },
+  {
+    label: 'Scope question',
+    sub: 'Need clarity',
+    kind: 'other',
+    designKind: 'scope_question',
+    Icon: MI.AlertTri,
+    tone: 'blue',
+  },
   { label: 'Other', sub: 'Type it out', kind: 'other', designKind: 'other', Icon: MI.Alert, tone: 'accent' },
 ]
 
-export function WorkerIssue({
-  bootstrap,
-  companySlug,
-}: {
-  bootstrap: BootstrapResponse | null
-  companySlug: string
-}) {
+export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const [category, setCategory] = useState<IssueCategory | null>(null)
   const [message, setMessage] = useState('')
@@ -83,7 +112,15 @@ export function WorkerIssue({
       <>
         <MTopBar back title="Flag a problem" sub={category.label} onBack={() => setCategory(null)} />
         <MBody pad>
-          <div style={{ padding: '0 0 12px', fontSize: 12, color: 'var(--m-ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          <div
+            style={{
+              padding: '0 0 12px',
+              fontSize: 12,
+              color: 'var(--m-ink-3)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.06em',
+            }}
+          >
             What's wrong?
           </div>
           <textarea
@@ -93,9 +130,7 @@ export function WorkerIssue({
             className="m-input m-textarea"
             style={{ width: '100%', minHeight: 120 }}
           />
-          {error ? (
-            <div style={{ marginTop: 12, color: 'var(--m-red)', fontSize: 13 }}>{error}</div>
-          ) : null}
+          {error ? <div style={{ marginTop: 12, color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
           <div style={{ marginTop: 16 }}>
             <MButtonStack>
               <MButton variant="primary" onClick={handleSend} disabled={busy}>

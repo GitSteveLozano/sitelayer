@@ -6,15 +6,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiGet, apiPost, type BootstrapResponse } from '../../api.js'
-import {
-  MBody,
-  MButton,
-  MI,
-  MKpi,
-  MKpiRow,
-  MSectionH,
-  MTopBar,
-} from '../../components/m/index.js'
+import { MBody, MButton, MI, MKpi, MKpiRow, MSectionH, MTopBar } from '../../components/m/index.js'
 import { MAiStripe } from '../../components/m/ai.js'
 import { formatDecimalHours, todayIso } from './format.js'
 
@@ -26,13 +18,7 @@ type IssueRow = {
   created_at: string
 }
 
-export function ForemanLog({
-  bootstrap,
-  companySlug,
-}: {
-  bootstrap: BootstrapResponse | null
-  companySlug: string
-}) {
+export function ForemanLog({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const projects = bootstrap?.projects.filter((p) => /progress|active/i.test(p.status)) ?? []
   const [projectId, setProjectId] = useState<string>(() => projects[0]?.id ?? '')
@@ -52,15 +38,10 @@ export function ForemanLog({
   useEffect(() => {
     if (!projectId) return
     let cancelled = false
-    apiGet<{ worker_issues: IssueRow[] }>(
-      `/api/worker-issues?resolved=true&project_id=${projectId}`,
-      companySlug,
-    )
+    apiGet<{ worker_issues: IssueRow[] }>(`/api/worker-issues?resolved=true&project_id=${projectId}`, companySlug)
       .then((r) => {
         if (cancelled) return
-        const todayIssues = (r.worker_issues ?? []).filter(
-          (i) => i.created_at.slice(0, 10) === today,
-        )
+        const todayIssues = (r.worker_issues ?? []).filter((i) => i.created_at.slice(0, 10) === today)
         setIssues(todayIssues)
         setPhotoCount(todayIssues.filter((i) => /^\[photo_log\]/.test(i.message)).length)
       })
@@ -120,9 +101,7 @@ export function ForemanLog({
       />
       <MBody pad>
         {projects.length === 0 ? (
-          <div style={{ padding: 24, color: 'var(--m-ink-3)', fontSize: 13 }}>
-            No active projects today.
-          </div>
+          <div style={{ padding: 24, color: 'var(--m-ink-3)', fontSize: 13 }}>No active projects today.</div>
         ) : (
           <>
             {projects.length > 1 ? (
@@ -150,7 +129,11 @@ export function ForemanLog({
               <MAiStripe
                 eyebrow={`DRAFT SUMMARY · ${todayLabor.length + issues.length} events`}
                 title="Edit before sending"
-                attribution={<>Drafted from <strong>today's events</strong>.</>}
+                attribution={
+                  <>
+                    Drafted from <strong>today's events</strong>.
+                  </>
+                }
               >
                 <textarea
                   value={summary}
@@ -177,9 +160,7 @@ export function ForemanLog({
                 ))}
               </div>
             )}
-            {error ? (
-              <div style={{ marginTop: 12, color: 'var(--m-red)', fontSize: 13 }}>{error}</div>
-            ) : null}
+            {error ? <div style={{ marginTop: 12, color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
             <div style={{ marginTop: 16 }}>
               <MButton variant="primary" onClick={handleSend} disabled={busy || !project}>
                 {busy ? 'Sending…' : 'Send to office'}

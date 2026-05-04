@@ -92,11 +92,22 @@ export function MobileProjectDetail({ bootstrap }: { bootstrap: BootstrapRespons
       <MBody>
         <ProjectHero project={project} pctSpent={pctSpent} onTrack={onTrack} spent={spent} bid={bid} />
         <TabBar active={tab} onChange={setTab} />
-        {tab === 'overview' && <Overview project={project} totalHours={totalHours} bid={bid} spent={spent} pctSpent={pctSpent} navigate={navigate} />}
+        {tab === 'overview' && (
+          <Overview
+            project={project}
+            totalHours={totalHours}
+            bid={bid}
+            spent={spent}
+            pctSpent={pctSpent}
+            navigate={navigate}
+          />
+        )}
         {tab === 'estimate' && <EstimateTab project={project} navigate={navigate} />}
         {tab === 'crew' && <CrewTab labor={labor} workers={bootstrap?.workers ?? []} />}
         {tab === 'materials' && <MaterialsTab bills={materialBills} />}
-        {tab === 'budget' && <BudgetTab project={project} totalHours={totalHours} spent={spent} bid={bid} pctSpent={pctSpent} />}
+        {tab === 'budget' && (
+          <BudgetTab project={project} totalHours={totalHours} spent={spent} bid={bid} pctSpent={pctSpent} />
+        )}
         {tab === 'log' && <LogTab project={project} navigate={navigate} />}
         {tab === 'files' && <FilesTab project={project} navigate={navigate} />}
       </MBody>
@@ -127,7 +138,15 @@ function ProjectHero({
           {onTrack ? 'On track' : 'Watch'}
         </span>
       </div>
-      <div style={{ fontSize: 11, color: 'var(--m-ink-3)', letterSpacing: '0.06em', textTransform: 'uppercase', fontWeight: 600 }}>
+      <div
+        style={{
+          fontSize: 11,
+          color: 'var(--m-ink-3)',
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          fontWeight: 600,
+        }}
+      >
         {project.customer_name} · {project.division_code}
       </div>
       <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: '-0.02em', lineHeight: 1.1, margin: '4px 0 6px' }}>
@@ -202,7 +221,11 @@ function Overview({
             tone="warn"
             eyebrow="Budget watch"
             title={`${pctSpent}% of bid spent — keep an eye on materials`}
-            attribution={<>Based on <strong>logged labor + materials</strong>.</>}
+            attribution={
+              <>
+                Based on <strong>logged labor + materials</strong>.
+              </>
+            }
           >
             Labor pace {formatDecimalHours(totalHours, 1)}; remaining budget {formatMoney(bid - spent)}.
           </MAiStripe>
@@ -226,8 +249,18 @@ function Overview({
           chev
           onTap={() => navigate(`/m/projects/${project.id}/estimate`)}
         />
-        <MListRow leading={<MI.Users size={18} />} headline="Crew & hours" supporting={`${formatDecimalHours(totalHours, 1)} logged`} chev />
-        <MListRow leading={<MI.Truck size={18} />} headline="Materials & costs" supporting="Bills + rental dispatch" chev />
+        <MListRow
+          leading={<MI.Users size={18} />}
+          headline="Crew & hours"
+          supporting={`${formatDecimalHours(totalHours, 1)} logged`}
+          chev
+        />
+        <MListRow
+          leading={<MI.Truck size={18} />}
+          headline="Materials & costs"
+          supporting="Bills + rental dispatch"
+          chev
+        />
         <MListRow leading={<MI.Clock size={18} />} headline="Schedule" supporting="Slot in 4-week planner" chev />
         <MListRow leading={<MI.FileText size={18} />} headline="Daily log" supporting="From foreman" chev />
       </MListInset>
@@ -365,7 +398,10 @@ function BudgetTab({
       </MKpiRow>
       <div style={{ padding: '12px 16px' }}>
         <div className="m-progress">
-          <div className="m-progress-fill" style={{ width: `${Math.min(100, pctSpent)}%`, background: `var(--m-${tone})` }} />
+          <div
+            className="m-progress-fill"
+            style={{ width: `${Math.min(100, pctSpent)}%`, background: `var(--m-${tone})` }}
+          />
         </div>
         <div style={{ fontSize: 12, color: 'var(--m-ink-3)', marginTop: 6 }}>
           {pctSpent}% of bid · {formatMoney(remaining)} remaining
@@ -385,8 +421,8 @@ function LogTab({ project, navigate }: { project: ProjectRow; navigate: (path: s
     <div style={{ paddingTop: 8 }}>
       <div style={{ padding: '0 16px 12px' }}>
         <MAiStripe eyebrow="Daily log" title="Pulled from foreman submissions" onDismiss={() => {}}>
-          When the foreman ends their day, the daily log lands here. Until then, the desktop log view shows
-          everything logged so far.
+          When the foreman ends their day, the daily log lands here. Until then, the desktop log view shows everything
+          logged so far.
         </MAiStripe>
       </div>
       <div style={{ padding: '0 16px' }}>

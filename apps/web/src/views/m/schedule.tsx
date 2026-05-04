@@ -33,7 +33,10 @@ export function MobileSchedule({ bootstrap }: { bootstrap: BootstrapResponse | n
     return Array.from(map.values()).sort((a, b) => a.date.localeCompare(b.date))
   }, [schedules])
 
-  const totalCrew = byDay.reduce((sum, d) => sum + d.entries.reduce((c, e) => c + (Array.isArray(e.crew) ? e.crew.length : 0), 0), 0)
+  const totalCrew = byDay.reduce(
+    (sum, d) => sum + d.entries.reduce((c, e) => c + (Array.isArray(e.crew) ? e.crew.length : 0), 0),
+    0,
+  )
   const utilizationPct = byDay.length > 0 ? Math.round((totalCrew / Math.max(1, byDay.length * 8)) * 100) : 0
 
   if (byDay.length === 0) {
@@ -111,7 +114,15 @@ function DayCard({ date, entries }: { date: string; entries: readonly DayEntry[]
         padding: '12px 14px',
       }}
     >
-      <div style={{ fontSize: 11, color: 'var(--m-ink-3)', fontWeight: 600, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+      <div
+        style={{
+          fontSize: 11,
+          color: 'var(--m-ink-3)',
+          fontWeight: 600,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+        }}
+      >
         {shortDate(date)}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>

@@ -34,13 +34,7 @@ type ClockEvent = {
   lng: string | null
 }
 
-export function WorkerToday({
-  bootstrap,
-  companySlug,
-}: {
-  bootstrap: BootstrapResponse | null
-  companySlug: string
-}) {
+export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const [events, setEvents] = useState<readonly ClockEvent[]>([])
   const [busy, setBusy] = useState<'in' | 'out' | null>(null)
@@ -70,9 +64,7 @@ export function WorkerToday({
   }, [companySlug])
 
   const latest = useMemo(() => {
-    return [...events].sort((a, b) =>
-      a.occurred_at < b.occurred_at ? 1 : a.occurred_at > b.occurred_at ? -1 : 0,
-    )[0]
+    return [...events].sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : a.occurred_at > b.occurred_at ? -1 : 0))[0]
   }, [events])
 
   const isClockedIn = latest?.event_type === 'in'

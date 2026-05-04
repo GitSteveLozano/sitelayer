@@ -8,13 +8,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse } from '../../api.js'
-import {
-  MBody,
-  MButton,
-  MButtonStack,
-  MSectionH,
-  MTopBar,
-} from '../../components/m/index.js'
+import { MBody, MButton, MButtonStack, MSectionH, MTopBar } from '../../components/m/index.js'
 import { formatMoney } from './format.js'
 
 export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse | null }) {

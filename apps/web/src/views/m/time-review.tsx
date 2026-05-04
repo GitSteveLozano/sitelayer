@@ -67,7 +67,12 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
           <>
             <MKpiRow cols={2}>
               <MKpi label="Approved" value={String(approved.length)} meta="ready for payroll" metaTone="green" />
-              <MKpi label="Pending" value={String(pending.length)} meta="awaiting review" metaTone={pending.length > 0 ? 'amber' : undefined} />
+              <MKpi
+                label="Pending"
+                value={String(pending.length)}
+                meta="awaiting review"
+                metaTone={pending.length > 0 ? 'amber' : undefined}
+              />
             </MKpiRow>
             {pending.length > 0 ? (
               <>
@@ -88,9 +93,7 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
                         }
                         headline={w?.name ?? 'Unassigned'}
                         supporting={`${p?.name ?? 'Unknown project'} · ${l.service_item_code ?? ''}`}
-                        trailing={
-                          <span className="num">{formatDecimalHours(Number(l.hours ?? 0), 1)}</span>
-                        }
+                        trailing={<span className="num">{formatDecimalHours(Number(l.hours ?? 0), 1)}</span>}
                         chev
                       />
                     )

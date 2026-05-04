@@ -9,16 +9,7 @@
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse } from '../../api.js'
-import {
-  MBody,
-  MI,
-  MLargeHead,
-  MListInset,
-  MListRow,
-  MPill,
-  MSectionH,
-  MTopBar,
-} from '../../components/m/index.js'
+import { MBody, MI, MLargeHead, MListInset, MListRow, MPill, MSectionH, MTopBar } from '../../components/m/index.js'
 import { formatDecimalHours, formatMoney, shortDate } from './format.js'
 
 export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
@@ -54,9 +45,7 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
       days.push({
         iso,
         label: d.toLocaleDateString('en-US', { weekday: 'short' }),
-        hours: recent
-          .filter((l) => l.occurred_on === iso)
-          .reduce((sum, l) => sum + Number(l.hours ?? 0), 0),
+        hours: recent.filter((l) => l.occurred_on === iso).reduce((sum, l) => sum + Number(l.hours ?? 0), 0),
       })
     }
     return days
@@ -73,7 +62,9 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
           title={
             <span>
               <span className="num">{totalHours.toFixed(1)}</span>
-              <span style={{ color: 'var(--m-ink-3)', fontSize: 14, fontWeight: 500, marginLeft: 6 }}>hours so far</span>
+              <span style={{ color: 'var(--m-ink-3)', fontSize: 14, fontWeight: 500, marginLeft: 6 }}>
+                hours so far
+              </span>
             </span>
           }
           sub={
@@ -87,7 +78,10 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
             const height = Math.max(4, (d.hours / peak) * 110)
             const isToday = d.iso === new Date().toISOString().slice(0, 10)
             return (
-              <div key={d.iso} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+              <div
+                key={d.iso}
+                style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}
+              >
                 <span style={{ fontSize: 10, color: isToday ? 'var(--m-accent)' : 'var(--m-ink-3)', fontWeight: 600 }}>
                   {d.hours > 0 ? d.hours.toFixed(1) : ''}
                 </span>

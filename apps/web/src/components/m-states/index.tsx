@@ -13,13 +13,7 @@ import { MBanner } from '../m/banner.js'
 import { MButton, MButtonStack } from '../m/button.js'
 import { MI } from '../m/icons.js'
 
-export function MOfflineHeader({
-  queuedCount,
-  onRetry,
-}: {
-  queuedCount: number
-  onRetry?: () => void
-}) {
+export function MOfflineHeader({ queuedCount, onRetry }: { queuedCount: number; onRetry?: () => void }) {
   return (
     <div
       style={{

@@ -6,16 +6,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { listInventoryItems, type InventoryItemRow } from '../../api.js'
-import {
-  MBody,
-  MChip,
-  MChipRow,
-  MI,
-  MPill,
-  MStat,
-  MStatStrip,
-  MTopBar,
-} from '../../components/m/index.js'
+import { MBody, MChip, MChipRow, MI, MPill, MStat, MStatStrip, MTopBar } from '../../components/m/index.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
 import { formatMoney } from './format.js'
 
@@ -62,19 +53,17 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
       filter === 'all'
         ? arr
         : filter === 'out'
-        ? arr.filter((i) => !i.active)
-        : filter === 'available'
-        ? arr.filter((i) => i.active)
-        : []
+          ? arr.filter((i) => !i.active)
+          : filter === 'available'
+            ? arr.filter((i) => i.active)
+            : []
     if (!query.trim()) return filtered
     const q = query.toLowerCase()
-    return filtered.filter(
-      (i) => i.code.toLowerCase().includes(q) || i.description.toLowerCase().includes(q),
-    )
+    return filtered.filter((i) => i.code.toLowerCase().includes(q) || i.description.toLowerCase().includes(q))
   }, [items, filter, query])
 
   const dailyRevenue = visible
-    .filter((i) => !i.active === false ? false : false)
+    .filter((i) => (!i.active === false ? false : false))
     .reduce((s, i) => s + Number(i.default_rental_rate ?? 0), 0)
   const utilizationPct = counts.all > 0 ? Math.round((counts.out / counts.all) * 100) : 0
 
@@ -149,11 +138,7 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
             ))}
           </div>
         )}
-        <button
-          type="button"
-          className="m-fab m-fab-extended"
-          onClick={() => navigate('/m/rentals/scan')}
-        >
+        <button type="button" className="m-fab m-fab-extended" onClick={() => navigate('/m/rentals/scan')}>
           <MI.Camera size={18} />
           Scan tag
         </button>

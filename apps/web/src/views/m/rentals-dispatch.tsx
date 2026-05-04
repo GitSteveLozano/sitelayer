@@ -5,16 +5,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { listInventoryItems, type BootstrapResponse, type InventoryItemRow } from '../../api.js'
-import {
-  MBody,
-  MButton,
-  MButtonStack,
-  MI,
-  MListInset,
-  MListRow,
-  MSectionH,
-  MTopBar,
-} from '../../components/m/index.js'
+import { MBody, MButton, MButtonStack, MI, MListInset, MListRow, MSectionH, MTopBar } from '../../components/m/index.js'
 
 export function MobileRentalDispatch({
   bootstrap,
@@ -83,18 +74,10 @@ export function MobileRentalDispatch({
         </MListInset>
         <MSectionH>Billing</MSectionH>
         <div style={{ padding: '0 16px', display: 'flex', gap: 10 }}>
-          <button
-            type="button"
-            onClick={() => setBillUpfront(true)}
-            style={chipStyle(billUpfront)}
-          >
+          <button type="button" onClick={() => setBillUpfront(true)} style={chipStyle(billUpfront)}>
             Bill upfront
           </button>
-          <button
-            type="button"
-            onClick={() => setBillUpfront(false)}
-            style={chipStyle(!billUpfront)}
-          >
+          <button type="button" onClick={() => setBillUpfront(false)} style={chipStyle(!billUpfront)}>
             At return
           </button>
         </div>

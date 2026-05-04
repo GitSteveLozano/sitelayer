@@ -18,13 +18,7 @@ import { MI, Spark } from './icons.js'
  *   - No numeric confidence scores anywhere.
  */
 
-export function MAiEyebrow({
-  tone,
-  children,
-}: {
-  tone?: 'warn' | undefined
-  children: ReactNode
-}) {
+export function MAiEyebrow({ tone, children }: { tone?: 'warn' | undefined; children: ReactNode }) {
   return (
     <span className="m-ai-eyebrow" data-tone={tone}>
       <Spark size={11} state="strong" />
@@ -56,15 +50,7 @@ export type MAiStripeProps = {
   onDismiss?: (() => void) | undefined
 }
 
-export function MAiStripe({
-  tone,
-  eyebrow,
-  title,
-  children,
-  attribution,
-  action,
-  onDismiss,
-}: MAiStripeProps) {
+export function MAiStripe({ tone, eyebrow, title, children, attribution, action, onDismiss }: MAiStripeProps) {
   return (
     <div className="m-ai-stripe" data-tone={tone}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
@@ -74,9 +60,7 @@ export function MAiStripe({
               <MAiEyebrow tone={tone === 'warn' ? 'warn' : undefined}>{eyebrow}</MAiEyebrow>
             </div>
           ) : null}
-          {title ? (
-            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{title}</div>
-          ) : null}
+          {title ? <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{title}</div> : null}
           <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.4 }}>{children}</div>
           {attribution ? (
             <div style={{ marginTop: 8 }}>
@@ -85,12 +69,7 @@ export function MAiStripe({
           ) : null}
         </div>
         {onDismiss ? (
-          <button
-            type="button"
-            className="m-ai-dismiss"
-            aria-label="Dismiss"
-            onClick={onDismiss}
-          >
+          <button type="button" className="m-ai-dismiss" aria-label="Dismiss" onClick={onDismiss}>
             <MI.X size={12} />
           </button>
         ) : null}
@@ -117,12 +96,7 @@ export function MAiAgent({ children, attribution, onDismiss }: MAiAgentProps) {
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
         <div style={{ flex: 1, minWidth: 0, fontSize: 14, color: 'var(--m-ink)' }}>{children}</div>
         {onDismiss ? (
-          <button
-            type="button"
-            className="m-ai-dismiss"
-            aria-label="Dismiss"
-            onClick={onDismiss}
-          >
+          <button type="button" className="m-ai-dismiss" aria-label="Dismiss" onClick={onDismiss}>
             <MI.X size={12} />
           </button>
         ) : null}

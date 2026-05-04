@@ -122,7 +122,10 @@ export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShell
           <Route path="schedule" element={<MobileSchedule bootstrap={bootstrap} />} />
           <Route path="schedule/*" element={<MobileSchedule bootstrap={bootstrap} />} />
           <Route path="rentals" element={<MobileRentals companySlug={companySlug} />} />
-          <Route path="rentals/dispatch" element={<MobileRentalDispatch bootstrap={bootstrap} companySlug={companySlug} />} />
+          <Route
+            path="rentals/dispatch"
+            element={<MobileRentalDispatch bootstrap={bootstrap} companySlug={companySlug} />}
+          />
           <Route path="rentals/utilization" element={<MobileRentalsUtilization companySlug={companySlug} />} />
           <Route path="rentals/scan" element={<MobileRentals companySlug={companySlug} />} />
           <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} />} />
@@ -172,7 +175,13 @@ function TodayPlaceholder({ ctx }: { ctx: ActiveContext }) {
       <MBody pad>
         <MLargeHead
           eyebrow={eyebrow.toUpperCase()}
-          title={ctx.kind === 'admin' ? "You're caught up." : ctx.kind === 'foreman' ? '3 sites · 6 crew' : 'Hillcrest Mews — Phase 4'}
+          title={
+            ctx.kind === 'admin'
+              ? "You're caught up."
+              : ctx.kind === 'foreman'
+                ? '3 sites · 6 crew'
+                : 'Hillcrest Mews — Phase 4'
+          }
           sub={
             ctx.kind === 'worker'
               ? 'EPS · East elevation · 7:00 AM start'

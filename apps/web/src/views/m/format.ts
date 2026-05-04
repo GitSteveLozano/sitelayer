@@ -32,9 +32,7 @@ export function formatMoney(n: number | string): string {
 }
 
 export function formatStatusLabel(status: string): string {
-  return status
-    .replace(/[_-]+/g, ' ')
-    .toUpperCase()
+  return status.replace(/[_-]+/g, ' ').toUpperCase()
 }
 
 export function statusTone(status: string): 'green' | 'amber' | 'blue' | 'red' | undefined {
