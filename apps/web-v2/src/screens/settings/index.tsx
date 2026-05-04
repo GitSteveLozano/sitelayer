@@ -30,7 +30,7 @@ const ROLE_LABEL: Record<Role, string> = {
  * Layout from the design:
  *   - Page title "More · Everything else"
  *   - User identity card (avatar / name / role · org / synced)
- *   - WORKFLOW group: Takeoff, Estimates, Schedule, Crews — fast jumps
+ *   - WORKFLOW group: Measurements, Estimates, Schedule, Crews — fast jumps
  *     into operational surfaces that don't have a dedicated tab.
  *   - WORKSPACE group: Catalog, Integrations, Inventory, Bonus sim, Audit.
  *   - YOU group: Notifications + Persona override (dev).

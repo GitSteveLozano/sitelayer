@@ -192,7 +192,7 @@ function TakeoffToBidPanel({ projectId }: { projectId: string }) {
       >
         <span className="flex items-center gap-2">
           <Spark state={hasInsight ? 'accent' : 'dim'} size={10} aria-label="" />
-          Takeoff → bid agent {hasInsight ? `· ${insight!.confidence} draft` : '· no run yet'}
+          Measurements → bid agent {hasInsight ? `· ${insight!.confidence} draft` : '· no run yet'}
         </span>
         <span className="text-ink-3">{open ? '−' : '+'}</span>
       </button>
