@@ -15,6 +15,17 @@ export interface CrewScheduleRow {
   created_at: string
   /** Joined from projects.name in the company-wide list. */
   project_name?: string | null
+  /** HH:MM[:SS] wall-clock; null when the assignment hasn't been timed yet. */
+  start_time?: string | null
+  /** HH:MM[:SS] wall-clock; nullability matches start_time (both-or-neither). */
+  end_time?: string | null
+  /** Optional FK into takeoff_measurements; the next four fields are denormalized for display. */
+  takeoff_measurement_id?: string | null
+  takeoff_service_item_code?: string | null
+  takeoff_elevation?: string | null
+  /** Numeric strings — pg numeric round-trips through JSON as text. */
+  takeoff_quantity?: string | null
+  takeoff_unit?: string | null
 }
 
 export interface ScheduleListParams {

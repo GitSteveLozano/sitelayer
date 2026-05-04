@@ -21,14 +21,36 @@ import { isValidDateInput, parseExpectedVersion, parseJsonBody } from '../http-u
 // YYYY-MM-DD per existing isValidDateInput. `crew` is jsonb; we
 // accept any array (workers + roles vary). `status` defaults to
 // 'draft' on insert; we constrain the legal values the route accepts.
-const CreateScheduleBodySchema = z.object({
-  project_id: z.uuid(),
-  scheduled_for: z.string().refine((v) => isValidDateInput(v), {
-    message: 'must be YYYY-MM-DD',
-  }),
-  crew: z.array(z.unknown()).optional(),
-  status: z.enum(['draft', 'confirmed']).optional(),
-})
+
+// HH:MM or HH:MM:SS — Postgres `time` accepts both. Anchored so we
+// reject anything trailing (e.g. timezone suffixes the SPA shouldn't
+// be sending for a wall-clock crew start).
+const TIME_OF_DAY_RE = /^(?:[01]\d|2[0-3]):[0-5]\d(?::[0-5]\d)?$/
+
+const CreateScheduleBodySchema = z
+  .object({
+    project_id: z.uuid(),
+    scheduled_for: z.string().refine((v) => isValidDateInput(v), {
+      message: 'must be YYYY-MM-DD',
+    }),
+    crew: z.array(z.unknown()).optional(),
+    status: z.enum(['draft', 'confirmed']).optional(),
+    start_time: z.string().regex(TIME_OF_DAY_RE, { message: 'must be HH:MM' }).nullish(),
+    end_time: z.string().regex(TIME_OF_DAY_RE, { message: 'must be HH:MM' }).nullish(),
+    takeoff_measurement_id: z.uuid().nullish(),
+  })
+  .refine(
+    (v) => {
+      // Both-or-neither for time range: it's allowed to have neither,
+      // but a one-sided range is meaningless and would render half a
+      // pill in the day stream. Easier to reject at the boundary than
+      // to render a partial in the UI.
+      const hasStart = v.start_time != null && v.start_time !== ''
+      const hasEnd = v.end_time != null && v.end_time !== ''
+      return hasStart === hasEnd
+    },
+    { message: 'start_time and end_time must be provided together', path: ['end_time'] },
+  )
 
 export type ScheduleRouteCtx = {
   pool: Pool
@@ -65,11 +87,22 @@ export async function handleScheduleRoutes(
     const schedule = await withMutationTx(async (client: PoolClient) => {
       const result = await client.query(
         `
-        insert into crew_schedules (company_id, project_id, scheduled_for, crew, status, version)
-        values ($1, $2, $3, $4::jsonb, coalesce($5, 'draft'), 1)
-        returning id, project_id, scheduled_for, crew, status, version, deleted_at, created_at
+        insert into crew_schedules (company_id, project_id, scheduled_for, crew, status, version,
+                                    start_time, end_time, takeoff_measurement_id)
+        values ($1, $2, $3, $4::jsonb, coalesce($5, 'draft'), 1, $6, $7, $8)
+        returning id, project_id, scheduled_for, crew, status, version, deleted_at, created_at,
+                  start_time, end_time, takeoff_measurement_id
         `,
-        [ctx.company.id, body.project_id, body.scheduled_for, JSON.stringify(body.crew ?? []), body.status ?? 'draft'],
+        [
+          ctx.company.id,
+          body.project_id,
+          body.scheduled_for,
+          JSON.stringify(body.crew ?? []),
+          body.status ?? 'draft',
+          body.start_time ?? null,
+          body.end_time ?? null,
+          body.takeoff_measurement_id ?? null,
+        ],
       )
       const row = result.rows[0]
       await recordMutationLedger(client, {
@@ -94,10 +127,19 @@ export async function handleScheduleRoutes(
     }
     const result = await ctx.pool.query(
       `
-      select id, project_id, scheduled_for, crew, status, version, deleted_at, created_at
-      from crew_schedules
-      where company_id = $1 and project_id = $2 and deleted_at is null
-      order by scheduled_for desc, created_at desc
+      select s.id, s.project_id, s.scheduled_for, s.crew, s.status, s.version, s.deleted_at, s.created_at,
+             s.start_time, s.end_time, s.takeoff_measurement_id,
+             tm.service_item_code as takeoff_service_item_code,
+             tm.elevation        as takeoff_elevation,
+             tm.quantity         as takeoff_quantity,
+             tm.unit             as takeoff_unit
+      from crew_schedules s
+      left join takeoff_measurements tm
+             on tm.id = s.takeoff_measurement_id
+            and tm.company_id = s.company_id
+            and tm.deleted_at is null
+      where s.company_id = $1 and s.project_id = $2 and s.deleted_at is null
+      order by s.scheduled_for desc, s.created_at desc
       `,
       [ctx.company.id, projectId],
     )
@@ -124,9 +166,18 @@ export async function handleScheduleRoutes(
       `
       select s.id, s.project_id, s.scheduled_for, s.crew, s.status, s.version,
              s.deleted_at, s.created_at,
-             p.name as project_name
+             s.start_time, s.end_time, s.takeoff_measurement_id,
+             p.name as project_name,
+             tm.service_item_code as takeoff_service_item_code,
+             tm.elevation        as takeoff_elevation,
+             tm.quantity         as takeoff_quantity,
+             tm.unit             as takeoff_unit
       from crew_schedules s
       left join projects p on p.id = s.project_id and p.company_id = s.company_id
+      left join takeoff_measurements tm
+             on tm.id = s.takeoff_measurement_id
+            and tm.company_id = s.company_id
+            and tm.deleted_at is null
       where s.company_id = $1
         and s.deleted_at is null
         and ($2 = '' or s.scheduled_for >= $2::date)
@@ -323,7 +374,7 @@ export async function handleScheduleRoutes(
       // Pull all source rows in [fromMonday, fromMonday+6]
       const source = await client.query(
         `
-        select project_id, scheduled_for, crew
+        select project_id, scheduled_for, crew, start_time, end_time, takeoff_measurement_id
         from crew_schedules
         where company_id = $1
           and deleted_at is null
@@ -357,11 +408,21 @@ export async function handleScheduleRoutes(
         }
         const insert = await client.query(
           `
-          insert into crew_schedules (company_id, project_id, scheduled_for, crew, status, version)
-          values ($1, $2, $3::date, $4::jsonb, 'draft', 1)
-          returning id, project_id, scheduled_for, crew, status, version, created_at
+          insert into crew_schedules (company_id, project_id, scheduled_for, crew, status, version,
+                                      start_time, end_time, takeoff_measurement_id)
+          values ($1, $2, $3::date, $4::jsonb, 'draft', 1, $5, $6, $7)
+          returning id, project_id, scheduled_for, crew, status, version, created_at,
+                    start_time, end_time, takeoff_measurement_id
           `,
-          [ctx.company.id, src.project_id, targetISO, JSON.stringify(src.crew)],
+          [
+            ctx.company.id,
+            src.project_id,
+            targetISO,
+            JSON.stringify(src.crew),
+            src.start_time,
+            src.end_time,
+            src.takeoff_measurement_id,
+          ],
         )
         const row = insert.rows[0]
         copied += 1
