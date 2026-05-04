@@ -32,6 +32,11 @@ import { WorkerScope } from './m/worker-scope.js'
 import { WorkerIssue } from './m/worker-issue.js'
 import { WorkerHours } from './m/worker-hours.js'
 import { WorkerLog } from './m/worker-log.js'
+import { ForemanToday } from './m/foreman-today.js'
+import { ForemanField } from './m/foreman-field.js'
+import { ForemanCrew } from './m/foreman-crew.js'
+import { ForemanBrief } from './m/foreman-brief.js'
+import { ForemanLog } from './m/foreman-log.js'
 
 export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
@@ -94,10 +99,14 @@ export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShell
               ) : ctx.kind === 'worker' ? (
                 <WorkerToday bootstrap={bootstrap} companySlug={companySlug} />
               ) : (
-                <TodayPlaceholder ctx={ctx} />
+                <ForemanToday bootstrap={bootstrap} companySlug={companySlug} />
               )
             }
           />
+          <Route path="brief" element={<ForemanBrief bootstrap={bootstrap} companySlug={companySlug} />} />
+          <Route path="brief/:projectId" element={<ForemanBrief bootstrap={bootstrap} companySlug={companySlug} />} />
+          <Route path="field" element={<ForemanField bootstrap={bootstrap} companySlug={companySlug} />} />
+          <Route path="field/*" element={<ForemanField bootstrap={bootstrap} companySlug={companySlug} />} />
           <Route path="clockin" element={<WorkerClockinConfirm />} />
           <Route path="scope" element={<WorkerScope bootstrap={bootstrap} />} />
           <Route path="issue" element={<WorkerIssue bootstrap={bootstrap} companySlug={companySlug} />} />
@@ -110,7 +119,8 @@ export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShell
           <Route path="schedule/*" element={<MobileSchedule bootstrap={bootstrap} />} />
           <Route path="rentals/*" element={<TabPlaceholder title="Rentals" body="Phase 9 lands here." />} />
           <Route path="more/*" element={<TabPlaceholder title="More" body="Settings, profile, integrations." />} />
-          <Route path="crew/*" element={<TabPlaceholder title="Crew" body="Phase 8 lands here." />} />
+          <Route path="crew" element={<ForemanCrew bootstrap={bootstrap} />} />
+          <Route path="crew/*" element={<ForemanCrew bootstrap={bootstrap} />} />
           <Route path="field/*" element={<TabPlaceholder title="Field" body="Phase 8 lands here." />} />
           <Route
             path="log"
@@ -118,11 +128,20 @@ export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShell
               ctx.kind === 'worker' ? (
                 <WorkerLog bootstrap={bootstrap} companySlug={companySlug} />
               ) : (
-                <TabPlaceholder title="Log" body="Foreman daily log lands in Phase 8." />
+                <ForemanLog bootstrap={bootstrap} companySlug={companySlug} />
               )
             }
           />
-          <Route path="log/*" element={<WorkerLog bootstrap={bootstrap} companySlug={companySlug} />} />
+          <Route
+            path="log/*"
+            element={
+              ctx.kind === 'worker' ? (
+                <WorkerLog bootstrap={bootstrap} companySlug={companySlug} />
+              ) : (
+                <ForemanLog bootstrap={bootstrap} companySlug={companySlug} />
+              )
+            }
+          />
           <Route path="time" element={<MobileTimeReview bootstrap={bootstrap} />} />
           <Route path="time/*" element={<MobileTimeReview bootstrap={bootstrap} />} />
           <Route path="scope/*" element={<WorkerScope bootstrap={bootstrap} />} />
