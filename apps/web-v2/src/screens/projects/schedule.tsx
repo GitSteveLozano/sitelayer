@@ -1,12 +1,15 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import {
+  useProjectMeasurements,
   useProjects,
   useSchedules,
   useWorkers,
   type CrewScheduleRow,
   type ProjectListRow,
+  type TakeoffMeasurement,
   type Worker,
 } from '@/lib/api'
 import { request } from '@/lib/api/client'
@@ -113,6 +116,8 @@ function DayView({ schedules, workers, weekStartMs, selectedDate, onSelectDate }
 
   const todays = schedules.filter((s) => s.scheduled_for === selectedDate)
   const workerById = new Map(workers.map((w) => [w.id, w]))
+  const summary = summarizeDay(todays)
+  const headerLabel = formatDayHeader(selectedDate)
 
   return (
     <>
@@ -140,6 +145,31 @@ function DayView({ schedules, workers, weekStartMs, selectedDate, onSelectDate }
           </Card>
         ) : (
           <div className="space-y-2.5">
+            <div className="px-1 pb-1">
+              <div className="font-display text-[22px] font-bold tracking-tight leading-tight">
+                {headerLabel.eyebrow}
+              </div>
+              <div className="text-[12px] text-ink-3 mt-0.5">{headerLabel.subhead}</div>
+              <div className="text-[12px] text-ink-2 mt-1">
+                <span className="num font-medium">{summary.jobs}</span> job{summary.jobs === 1 ? '' : 's'}
+                {summary.crew > 0 ? (
+                  <>
+                    {' · '}
+                    <span className="num font-medium">{summary.crew}</span> crew
+                  </>
+                ) : null}
+                {summary.crewHours > 0 ? (
+                  <>
+                    {' · '}
+                    <span className="num font-medium">{summary.crewHours.toFixed(1)}h</span>
+                  </>
+                ) : null}
+                {' · '}
+                <span className={summary.allConfirmed ? 'text-good font-medium' : 'text-warn font-medium'}>
+                  {summary.allConfirmed ? 'all confirmed' : `${summary.pending} pending`}
+                </span>
+              </div>
+            </div>
             {todays.map((s) => (
               <ScheduleCard key={s.id} schedule={s} workerById={workerById} />
             ))}
@@ -153,11 +183,104 @@ function DayView({ schedules, workers, weekStartMs, selectedDate, onSelectDate }
   )
 }
 
+function summarizeDay(rows: CrewScheduleRow[]): {
+  jobs: number
+  crew: number
+  crewHours: number
+  pending: number
+  allConfirmed: boolean
+} {
+  let pending = 0
+  let crewHours = 0
+  const crewIds = new Set<string>()
+  for (const r of rows) {
+    if (r.status !== 'confirmed') pending += 1
+    const ids = Array.isArray(r.crew) ? (r.crew as unknown[]).filter((x): x is string => typeof x === 'string') : []
+    for (const id of ids) crewIds.add(id)
+    const hours = hoursBetween(r.start_time, r.end_time)
+    if (hours != null) crewHours += hours * ids.length
+  }
+  return {
+    jobs: rows.length,
+    crew: crewIds.size,
+    crewHours,
+    pending,
+    allConfirmed: rows.length > 0 && pending === 0,
+  }
+}
+
+function formatDayHeader(iso: string): { eyebrow: string; subhead: string } {
+  const d = new Date(`${iso}T00:00:00`)
+  const today = new Date()
+  const isToday =
+    d.getFullYear() === today.getFullYear() && d.getMonth() === today.getMonth() && d.getDate() === today.getDate()
+  return {
+    eyebrow: isToday ? 'Today' : d.toLocaleDateString(undefined, { weekday: 'long' }),
+    subhead: d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }),
+  }
+}
+
+/**
+ * Wall-clock hours between two `time` columns. Returns null if either
+ * is missing — the day-stream card hides the hours pill in that case
+ * rather than showing 0h. Same-day only; an end before start would
+ * indicate bad data and we surface as null.
+ */
+function hoursBetween(start?: string | null, end?: string | null): number | null {
+  if (!start || !end) return null
+  const a = parseTimeOfDay(start)
+  const b = parseTimeOfDay(end)
+  if (a == null || b == null || b <= a) return null
+  return (b - a) / 3600
+}
+
+function parseTimeOfDay(t: string): number | null {
+  const m = /^(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(t)
+  if (!m) return null
+  const h = Number(m[1])
+  const min = Number(m[2])
+  const s = m[3] ? Number(m[3]) : 0
+  if (h > 23 || min > 59 || s > 59) return null
+  return h * 3600 + min * 60 + s
+}
+
+function formatTimeOfDay(t: string): string {
+  const seconds = parseTimeOfDay(t)
+  if (seconds == null) return t
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const period = h >= 12 ? 'PM' : 'AM'
+  const hour12 = h % 12 === 0 ? 12 : h % 12
+  return m === 0 ? `${hour12}:00 ${period}` : `${hour12}:${m.toString().padStart(2, '0')} ${period}`
+}
+
+/**
+ * "EPS — east elevation" / "EPS · 1,284 sqft" style label. Falls back
+ * to just the service-item code when no elevation tag is set, and
+ * returns null when no scope link exists (the card hides the line).
+ */
+function takeoffScopeLabel(s: CrewScheduleRow): string | null {
+  if (!s.takeoff_measurement_id) return null
+  const code = s.takeoff_service_item_code ?? ''
+  const elev = s.takeoff_elevation?.trim() ?? ''
+  if (code && elev) return `${code} — ${elev}`
+  if (code) return code
+  if (elev) return elev
+  return null
+}
+
 function ScheduleCard({ schedule, workerById }: { schedule: CrewScheduleRow; workerById: Map<string, Worker> }) {
   const crewIds = Array.isArray(schedule.crew)
     ? (schedule.crew as unknown[]).filter((x): x is string => typeof x === 'string')
     : []
   const accent = colorForProject(schedule.project_name ?? schedule.project_id)
+  const scopeLabel = takeoffScopeLabel(schedule)
+  const hours = hoursBetween(schedule.start_time, schedule.end_time)
+  const crewHours = hours != null ? hours * crewIds.length : null
+  const timeRange =
+    schedule.start_time && schedule.end_time
+      ? `${formatTimeOfDay(schedule.start_time)} – ${formatTimeOfDay(schedule.end_time)}`
+      : null
   return (
     <Card className="!p-0 overflow-hidden">
       <div className="h-1" style={{ background: accent }} />
@@ -165,14 +288,13 @@ function ScheduleCard({ schedule, workerById }: { schedule: CrewScheduleRow; wor
         <div className="flex items-start justify-between gap-2">
           <div className="min-w-0">
             <div className="text-[15px] font-semibold truncate">{schedule.project_name ?? 'Project'}</div>
-            <div className="text-[12px] text-ink-2 mt-0.5 truncate">
-              {crewIds.length} crew · {schedule.status === 'confirmed' ? 'all confirmed' : 'pending confirmation'}
-            </div>
+            {scopeLabel ? <div className="text-[12px] text-ink-2 mt-0.5 truncate">{scopeLabel}</div> : null}
+            {timeRange ? <div className="font-mono tabular-nums text-[12px] text-ink-3 mt-0.5">{timeRange}</div> : null}
           </div>
           <Pill tone={schedule.status === 'confirmed' ? 'good' : 'warn'}>{schedule.status}</Pill>
         </div>
-        <div className="flex items-center mt-3">
-          <div className="flex">
+        <div className="flex items-center justify-between mt-3 gap-2">
+          <div className="flex min-w-0">
             {crewIds.slice(0, 5).map((id, i) => {
               const w = workerById.get(id)
               return (
@@ -193,6 +315,14 @@ function ScheduleCard({ schedule, workerById }: { schedule: CrewScheduleRow; wor
                 +{crewIds.length - 5}
               </div>
             ) : null}
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span className="font-mono tabular-nums text-[12px] text-ink-2">
+              {crewIds.length} crew{crewHours != null ? ` · ${crewHours.toFixed(1)}h` : ''}
+            </span>
+            <Link to={`/projects/${schedule.project_id}?tab=schedule`} className="text-[12px] text-accent font-medium">
+              Open ›
+            </Link>
           </div>
         </div>
       </div>
@@ -402,9 +532,29 @@ function CreateAssignmentSheet({ open, onClose, projects, workers, defaultDate }
   const [projectId, setProjectId] = useState<string>('')
   const [scheduledFor, setScheduledFor] = useState(defaultDate)
   const [pickedCrew, setPickedCrew] = useState<Set<string>>(new Set())
+  const [startTime, setStartTime] = useState<string>('')
+  const [endTime, setEndTime] = useState<string>('')
+  const [takeoffMeasurementId, setTakeoffMeasurementId] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const qc = useQueryClient()
+
+  // Scope picker depends on the selected project; the hook is gated
+  // off so we don't fire a useless request before a project is chosen.
+  const measurements = useProjectMeasurements(projectId || null)
+  const measurementOptions = useMemo<TakeoffMeasurement[]>(
+    () => measurements.data?.measurements ?? [],
+    [measurements.data],
+  )
+
+  const reset = () => {
+    setProjectId('')
+    setPickedCrew(new Set())
+    setStartTime('')
+    setEndTime('')
+    setTakeoffMeasurementId('')
+    setError(null)
+  }
 
   const onSave = async () => {
     setError(null)
@@ -416,6 +566,16 @@ function CreateAssignmentSheet({ open, onClose, projects, workers, defaultDate }
       setError('Pick a date')
       return
     }
+    // Mirror the API's both-or-neither rule for the time range so the
+    // user gets a clear inline error instead of a 400 body string.
+    if ((startTime && !endTime) || (!startTime && endTime)) {
+      setError('Set both start and end time, or leave both blank')
+      return
+    }
+    if (startTime && endTime && hoursBetween(startTime, endTime) == null) {
+      setError('End time must be after start time')
+      return
+    }
     setSaving(true)
     try {
       await request('/api/schedules', {
@@ -425,12 +585,13 @@ function CreateAssignmentSheet({ open, onClose, projects, workers, defaultDate }
           scheduled_for: scheduledFor,
           crew: Array.from(pickedCrew),
           status: 'draft',
+          start_time: startTime || null,
+          end_time: endTime || null,
+          takeoff_measurement_id: takeoffMeasurementId || null,
         },
       })
       void qc.invalidateQueries({ queryKey: scheduleQueryKeys.all() })
-      // Reset and close.
-      setProjectId('')
-      setPickedCrew(new Set())
+      reset()
       onClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
@@ -448,6 +609,20 @@ function CreateAssignmentSheet({ open, onClose, projects, workers, defaultDate }
     })
   }
 
+  // Project change invalidates the scope selection (a measurement
+  // belongs to one project). Without this reset the scope dropdown
+  // would briefly point at a stale option from the prior project.
+  const onProjectChange = (id: string) => {
+    setProjectId(id)
+    setTakeoffMeasurementId('')
+  }
+
+  const crewHourEstimate = (() => {
+    const h = hoursBetween(startTime || null, endTime || null)
+    if (h == null) return null
+    return h * pickedCrew.size
+  })()
+
   return (
     <Sheet open={open} onClose={onClose} title="New assignment">
       <div className="space-y-4">
@@ -457,7 +632,7 @@ function CreateAssignmentSheet({ open, onClose, projects, workers, defaultDate }
           </label>
           <select
             value={projectId}
-            onChange={(e) => setProjectId(e.target.value)}
+            onChange={(e) => onProjectChange(e.target.value)}
             className="w-full p-3 rounded border border-line-2 bg-card text-[14px] focus:outline-none focus:border-accent"
           >
             <option value="">Select…</option>
@@ -479,9 +654,66 @@ function CreateAssignmentSheet({ open, onClose, projects, workers, defaultDate }
           />
         </div>
 
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">
+              Start
+            </label>
+            <input
+              type="time"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              className="w-full p-3 rounded border border-line-2 bg-card text-[14px] focus:outline-none focus:border-accent"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">End</label>
+            <input
+              type="time"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              className="w-full p-3 rounded border border-line-2 bg-card text-[14px] focus:outline-none focus:border-accent"
+            />
+          </div>
+        </div>
+
         <div>
           <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">
-            Crew {pickedCrew.size > 0 ? `(${pickedCrew.size})` : ''}
+            Scope (from takeoff)
+          </label>
+          {!projectId ? (
+            <div className="text-[12px] text-ink-3 px-1">Pick a project first.</div>
+          ) : measurements.isPending ? (
+            <div className="text-[12px] text-ink-3 px-1">Loading takeoff…</div>
+          ) : measurementOptions.length === 0 ? (
+            <div className="text-[12px] text-ink-3 px-1">
+              No takeoff measurements yet — add one from the project's Takeoff tab.
+            </div>
+          ) : (
+            <select
+              value={takeoffMeasurementId}
+              onChange={(e) => setTakeoffMeasurementId(e.target.value)}
+              className="w-full p-3 rounded border border-line-2 bg-card text-[14px] focus:outline-none focus:border-accent"
+            >
+              <option value="">No scope link</option>
+              {measurementOptions.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {formatMeasurementOption(m)}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">
+            Crew{' '}
+            {pickedCrew.size > 0 ? (
+              <span className="font-mono tabular-nums normal-case tracking-normal text-ink-2">
+                ({pickedCrew.size}
+                {crewHourEstimate != null ? ` · ${crewHourEstimate.toFixed(1)} crew-hrs` : ''})
+              </span>
+            ) : null}
           </label>
           <div className="space-y-1 max-h-[40dvh] overflow-y-auto">
             {workers.length === 0 ? (
@@ -523,6 +755,15 @@ function CreateAssignmentSheet({ open, onClose, projects, workers, defaultDate }
       </div>
     </Sheet>
   )
+}
+
+function formatMeasurementOption(m: TakeoffMeasurement): string {
+  const code = m.service_item_code
+  const elev = m.elevation?.trim()
+  const qty = Number(m.quantity)
+  const head = elev ? `${code} — ${elev}` : code
+  const qtyLabel = Number.isFinite(qty) && qty > 0 ? ` (${qty.toLocaleString()} ${m.unit})` : ''
+  return `${head}${qtyLabel}`
 }
 
 function initials(name: string): string {
