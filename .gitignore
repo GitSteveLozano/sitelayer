@@ -11,3 +11,12 @@ docker-compose.override.yml
 .env
 .env.*
 !/.env.example
+
+# Block zip uploads. The v3.3.0 design handoff bundle was uploaded
+# directly to main via the GitHub web UI on 2026-05-04 (commits
+# 43612f3 → a80163a) and deleted 2 minutes later. The blob is permanent
+# in pack history; un-rewriting requires force-pushing all of main and
+# wasn't worth it. This rule prevents the next one. Existing committed
+# zips need explicit allowlist entries (e.g. /docs/...zip).
+*.zip
+!/docs/WhatsApp Chat with LA _ Tiny Bison.zip
