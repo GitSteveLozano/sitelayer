@@ -37,6 +37,10 @@ import { ForemanField } from './m/foreman-field.js'
 import { ForemanCrew } from './m/foreman-crew.js'
 import { ForemanBrief } from './m/foreman-brief.js'
 import { ForemanLog } from './m/foreman-log.js'
+import { MobileRentals } from './m/rentals.js'
+import { MobileRentalDispatch } from './m/rentals-dispatch.js'
+import { MobileRentalsUtilization } from './m/rentals-utilization.js'
+import { MobileQuickInvoice } from './m/invoice-quick.js'
 
 export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
@@ -117,7 +121,12 @@ export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShell
           <Route path="projects/:projectId/*" element={<MobileProjectDetail bootstrap={bootstrap} />} />
           <Route path="schedule" element={<MobileSchedule bootstrap={bootstrap} />} />
           <Route path="schedule/*" element={<MobileSchedule bootstrap={bootstrap} />} />
-          <Route path="rentals/*" element={<TabPlaceholder title="Rentals" body="Phase 9 lands here." />} />
+          <Route path="rentals" element={<MobileRentals companySlug={companySlug} />} />
+          <Route path="rentals/dispatch" element={<MobileRentalDispatch bootstrap={bootstrap} companySlug={companySlug} />} />
+          <Route path="rentals/utilization" element={<MobileRentalsUtilization companySlug={companySlug} />} />
+          <Route path="rentals/scan" element={<MobileRentals companySlug={companySlug} />} />
+          <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} />} />
+          <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
           <Route path="more/*" element={<TabPlaceholder title="More" body="Settings, profile, integrations." />} />
           <Route path="crew" element={<ForemanCrew bootstrap={bootstrap} />} />
           <Route path="crew/*" element={<ForemanCrew bootstrap={bootstrap} />} />
