@@ -253,11 +253,12 @@ function OverviewTab({ project, onOpenEstimate }: { project: ProjectDetail; onOp
         </MobileButton>
       </div>
       <div className="grid grid-cols-2 gap-2.5 pt-1">
-        {/* Takeoff stays one tap away from Overview now that the
-            sub-tab strip is Overview / Estimate / Crew / Schedule —
-            see the CLAUDE.md note on the IA reshuffle. */}
+        {/* Measurements (formerly "Takeoff") stays one tap away from
+            Overview now that the sub-tab strip is Overview / Estimate
+            / Crew / Schedule — see the CLAUDE.md note on the IA
+            reshuffle. */}
         <Link to={`/projects/${project.id}?tab=takeoff`} className="block">
-          <MobileButton variant="ghost">Takeoff</MobileButton>
+          <MobileButton variant="ghost">Measurements</MobileButton>
         </Link>
         <Link to={`/projects/${project.id}/setup`} className="block">
           <MobileButton variant="ghost">Project setup</MobileButton>

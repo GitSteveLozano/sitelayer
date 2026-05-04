@@ -679,15 +679,15 @@ function CreateAssignmentSheet({ open, onClose, projects, workers, defaultDate }
 
         <div>
           <label className="block text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">
-            Scope (from takeoff)
+            Scope (from measurements)
           </label>
           {!projectId ? (
             <div className="text-[12px] text-ink-3 px-1">Pick a project first.</div>
           ) : measurements.isPending ? (
-            <div className="text-[12px] text-ink-3 px-1">Loading takeoff…</div>
+            <div className="text-[12px] text-ink-3 px-1">Loading measurements…</div>
           ) : measurementOptions.length === 0 ? (
             <div className="text-[12px] text-ink-3 px-1">
-              No takeoff measurements yet — add one from the project's Takeoff tab.
+              No measurements yet — add one from the project's Measurements tab.
             </div>
           ) : (
             <select

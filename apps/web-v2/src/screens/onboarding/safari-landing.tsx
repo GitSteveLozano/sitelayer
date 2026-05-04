@@ -38,7 +38,7 @@ export function SafariLandingScreen({ onSkip }: SafariLandingProps) {
         </h1>
 
         <p className="text-[14px] text-[#aea69a] mt-4 max-w-[28ch] leading-relaxed">
-          Clock in, takeoff, daily logs, and crew chat — all offline first. Install to your home screen.
+          Clock in, measurements, daily logs, and crew chat — all offline first. Install to your home screen.
         </p>
       </div>
 

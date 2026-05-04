@@ -31,8 +31,8 @@ import type { ComponentType, SVGProps } from 'react'
  *   - PRIMARY  — the bottom tabs plus Time (drawer-only, same target
  *                as Crew). Always shown so the drawer is a complete
  *                index of the IA.
- *   - WORKFLOW — operational shortcuts (Takeoff, Estimates, Rentals,
- *                Crews). These don't have their own tab.
+ *   - WORKFLOW — operational shortcuts (Measurements, Estimates,
+ *                Rentals, Crews). These don't have their own tab.
  *   - WORKSPACE — admin-flavoured surfaces (Catalog / Integrations /
  *                Inventory admin / Bonus simulator / Audit).
  *   - YOU      — per-user prefs.
@@ -66,7 +66,7 @@ export const PRIMARY_NAV: ReadonlyArray<NavItem> = [
 ]
 
 export const WORKFLOW_NAV: ReadonlyArray<NavItem> = [
-  { key: 'takeoff', to: '/projects?focus=takeoff', label: 'Takeoff', icon: Layers },
+  { key: 'takeoff', to: '/projects?focus=takeoff', label: 'Measurements', icon: Layers },
   { key: 'estimates', to: '/projects?focus=estimate', label: 'Estimates', icon: FileText },
   { key: 'rentals', to: '/rentals', label: 'Rentals', icon: Package },
   { key: 'live-crew', to: '/live-crew', label: 'Live crew', icon: Users },

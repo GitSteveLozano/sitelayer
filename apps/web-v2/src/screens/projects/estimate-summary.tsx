@@ -40,7 +40,7 @@ export function EstimateSummaryScreen({ projectId }: { projectId: string }) {
       <Card tight>
         <div className="text-[13px] font-semibold">No estimate yet</div>
         <div className="text-[11px] text-ink-3 mt-1">
-          Draw a takeoff or add scope items to this project; the estimate appears here automatically.
+          Add measurements or scope items to this project; the estimate appears here automatically.
         </div>
       </Card>
     )
@@ -78,7 +78,7 @@ export function EstimateSummaryScreen({ projectId }: { projectId: string }) {
       <Card>
         <div className="text-[13px] font-semibold mb-2">Line items</div>
         {data.lines.length === 0 ? (
-          <div className="text-[12px] text-ink-3">No scope items yet. Draw a takeoff to populate.</div>
+          <div className="text-[12px] text-ink-3">No scope items yet. Add a measurement to populate.</div>
         ) : (
           <ul className="divide-y divide-line">
             {data.lines.map((line) => (
