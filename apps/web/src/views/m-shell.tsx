@@ -24,6 +24,8 @@ import { MobileProjectsList } from './m/projects-list.js'
 import { MobileProjectDetail } from './m/project-detail.js'
 import { MobileTakeoffList } from './m/takeoff-list.js'
 import { MobileEstimateReview } from './m/estimate-review.js'
+import { MobileSchedule } from './m/schedule.js'
+import { MobileTimeReview } from './m/time-review.js'
 
 export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
@@ -89,13 +91,15 @@ export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShell
           <Route path="projects/:projectId/takeoff" element={<MobileTakeoffList companySlug={companySlug} />} />
           <Route path="projects/:projectId/estimate" element={<MobileEstimateReview companySlug={companySlug} />} />
           <Route path="projects/:projectId/*" element={<MobileProjectDetail bootstrap={bootstrap} />} />
-          <Route path="schedule/*" element={<TabPlaceholder title="Schedule" body="Phase 6 lands here." />} />
+          <Route path="schedule" element={<MobileSchedule bootstrap={bootstrap} />} />
+          <Route path="schedule/*" element={<MobileSchedule bootstrap={bootstrap} />} />
           <Route path="rentals/*" element={<TabPlaceholder title="Rentals" body="Phase 9 lands here." />} />
           <Route path="more/*" element={<TabPlaceholder title="More" body="Settings, profile, integrations." />} />
           <Route path="crew/*" element={<TabPlaceholder title="Crew" body="Phase 8 lands here." />} />
           <Route path="field/*" element={<TabPlaceholder title="Field" body="Phase 8 lands here." />} />
           <Route path="log/*" element={<TabPlaceholder title="Log" body="Phase 7 / 8 lands here." />} />
-          <Route path="time/*" element={<TabPlaceholder title="Time" body="Phase 6 lands here." />} />
+          <Route path="time" element={<MobileTimeReview bootstrap={bootstrap} />} />
+          <Route path="time/*" element={<MobileTimeReview bootstrap={bootstrap} />} />
           <Route path="scope/*" element={<TabPlaceholder title="Scope" body="Phase 7 lands here." />} />
           <Route path="hours/*" element={<TabPlaceholder title="Hours" body="Phase 7 lands here." />} />
           <Route path="*" element={<Navigate to="today" replace />} />
