@@ -1,11 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { EmptyState } from '@/components/shell/EmptyState'
 import { ErrorState } from '@/components/shell/ErrorState'
 import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
-import { useProjects, type ProjectListRow, type ProjectStatus } from '@/lib/api'
+import { useProjects, useSchedules, useTimeReviewRuns, type ProjectListRow, type ProjectStatus } from '@/lib/api'
 
 /**
  * `prj-list` — Projects list with status filter chips.
@@ -42,6 +42,30 @@ export function ProjectsListScreen() {
   if (debouncedQ) params.q = debouncedQ
   const projects = useProjects(params)
   const rows = projects.data?.projects ?? []
+
+  // Action-row signals — pending review counts + this-week schedule
+  // counts joined per project. Only fetched on the Active chip since
+  // the action rows are scoped to in-progress projects per the design.
+  const showActionRows = chip === 'active'
+  const range = useMemo(() => {
+    const today = new Date()
+    const monday = new Date(today)
+    const dow = monday.getDay()
+    const offsetToMonday = (dow + 6) % 7
+    monday.setDate(monday.getDate() - offsetToMonday)
+    const sunday = new Date(monday)
+    sunday.setDate(sunday.getDate() + 6)
+    return {
+      from: monday.toISOString().slice(0, 10),
+      to: sunday.toISOString().slice(0, 10),
+    }
+  }, [])
+  const reviewRuns = useTimeReviewRuns(undefined, { enabled: showActionRows })
+  const schedules = useSchedules(showActionRows ? range : {}, { enabled: showActionRows })
+  const signalsByProject = useMemo(
+    () => buildProjectSignals(reviewRuns.data?.timeReviewRuns ?? [], schedules.data?.schedules ?? []),
+    [reviewRuns.data, schedules.data],
+  )
 
   return (
     <div className="flex flex-col">
@@ -146,7 +170,11 @@ export function ProjectsListScreen() {
           <div className="space-y-2">
             <Attribution source={`Live from /api/projects?status=${filter.status ?? 'any'}`} />
             {rows.map((p) => (
-              <ProjectRow key={p.id} project={p} />
+              <ProjectRow
+                key={p.id}
+                project={p}
+                signals={showActionRows ? (signalsByProject.get(p.id) ?? null) : null}
+              />
             ))}
           </div>
         )}
@@ -155,7 +183,7 @@ export function ProjectsListScreen() {
   )
 }
 
-function ProjectRow({ project }: { project: ProjectListRow }) {
+function ProjectRow({ project, signals }: { project: ProjectListRow; signals: ProjectSignals | null }) {
   const updated = formatRelative(project.updated_at)
   const tone = project.status === 'active' ? 'good' : project.status === 'completed' ? 'default' : 'warn'
   const bid = Number(project.bid_total)
@@ -176,9 +204,100 @@ function ProjectRow({ project }: { project: ProjectListRow }) {
           <span className="num">{bid > 0 ? `$${bid.toLocaleString()}` : 'No bid set'}</span>
           <span>updated {updated}</span>
         </div>
+        {signals?.pendingApprovals || signals?.scheduleSummary ? (
+          <div className="mt-2 pt-2 border-t border-line space-y-1">
+            {signals.pendingApprovals ? (
+              <ActionRow
+                label="Crew & hours"
+                detail={signals.pendingApprovals}
+                tone={signals.pendingHasAnomaly ? 'warn' : 'accent'}
+              />
+            ) : null}
+            {signals.scheduleSummary ? (
+              <ActionRow label="Schedule" detail={signals.scheduleSummary} tone="default" />
+            ) : null}
+          </div>
+        ) : null}
       </Card>
     </Link>
   )
+}
+
+function ActionRow({ label, detail, tone }: { label: string; detail: string; tone: 'accent' | 'warn' | 'default' }) {
+  const detailClass =
+    tone === 'warn' ? 'text-warn font-medium' : tone === 'accent' ? 'text-accent font-medium' : 'text-ink-2'
+  return (
+    <div className="flex items-baseline justify-between gap-2 text-[12px]">
+      <span className="text-ink-3">{label}</span>
+      <span className={`truncate ${detailClass}`}>{detail}</span>
+    </div>
+  )
+}
+
+interface ProjectSignals {
+  pendingApprovals: string | null
+  pendingHasAnomaly: boolean
+  scheduleSummary: string | null
+}
+
+/**
+ * Roll cross-project review-runs + this-week schedules into per-project
+ * action-row signals. Only emits a string when there's something to
+ * say — calm-by-default — so a project with nothing pending and
+ * nothing scheduled this week shows no extra rows.
+ *
+ * Schedule day-range is derived from the min/max scheduled_for for
+ * each project this week (e.g. "Mon–Fri") plus the unique crew count.
+ */
+function buildProjectSignals(
+  runs: Array<{ project_id: string | null; state: string; anomaly_count: number }>,
+  schedules: Array<{ project_id: string; scheduled_for: string; crew: unknown }>,
+): Map<string, ProjectSignals> {
+  const reviewByProject = new Map<string, { pending: number; anomaly: number }>()
+  for (const r of runs) {
+    if (!r.project_id || r.state !== 'pending') continue
+    const cur = reviewByProject.get(r.project_id) ?? { pending: 0, anomaly: 0 }
+    cur.pending += 1
+    cur.anomaly += r.anomaly_count
+    reviewByProject.set(r.project_id, cur)
+  }
+
+  type ScheduleAgg = { dows: Set<number>; crew: Set<string> }
+  const schedByProject = new Map<string, ScheduleAgg>()
+  for (const s of schedules) {
+    const cur = schedByProject.get(s.project_id) ?? { dows: new Set(), crew: new Set() }
+    const dow = new Date(`${s.scheduled_for}T00:00:00`).getDay()
+    cur.dows.add(dow)
+    if (Array.isArray(s.crew)) {
+      for (const id of s.crew as unknown[]) {
+        if (typeof id === 'string') cur.crew.add(id)
+      }
+    }
+    schedByProject.set(s.project_id, cur)
+  }
+
+  const out = new Map<string, ProjectSignals>()
+  const allKeys = new Set([...reviewByProject.keys(), ...schedByProject.keys()])
+  for (const projectId of allKeys) {
+    const r = reviewByProject.get(projectId)
+    const s = schedByProject.get(projectId)
+    out.set(projectId, {
+      pendingApprovals: r ? `${r.pending} entr${r.pending === 1 ? 'y' : 'ies'} to approve` : null,
+      pendingHasAnomaly: !!r && r.anomaly > 0,
+      scheduleSummary: s ? formatScheduleSummary(s.dows, s.crew.size) : null,
+    })
+  }
+  return out
+}
+
+const DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
+
+function formatScheduleSummary(dows: Set<number>, crewCount: number): string {
+  const sorted = [...dows].sort((a, b) => a - b)
+  if (sorted.length === 0) return ''
+  const range =
+    sorted.length === 1 ? DOW_NAMES[sorted[0]!] : `${DOW_NAMES[sorted[0]!]}–${DOW_NAMES[sorted[sorted.length - 1]!]}`
+  return crewCount > 0 ? `${range} · ${crewCount} crew` : `${range}`
 }
 
 function formatRelative(iso: string): string {
