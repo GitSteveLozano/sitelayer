@@ -19,6 +19,8 @@ import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 're
 import type { BootstrapResponse } from '../api.js'
 import { computeActiveContext, type ActiveContext } from '../lib/active-context.js'
 import { MBottomTabs, MBody, MI, MLargeHead, MShell, MTopBar } from '../components/m/index.js'
+import { AdminHome } from './m/admin-home.js'
+import { MobileProjectsList } from './m/projects-list.js'
 
 export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
@@ -72,8 +74,14 @@ export function MobileShell({ bootstrap, companyRole }: MobileShellProps) {
       <MShell className={isWorker ? 'm-dark' : undefined}>
         <Routes>
           <Route index element={<Navigate to="today" replace />} />
-          <Route path="today" element={<TodayPlaceholder ctx={ctx} />} />
-          <Route path="projects/*" element={<TabPlaceholder title="Projects" body="Phase 3 lands here." />} />
+          <Route
+            path="today"
+            element={
+              ctx.kind === 'admin' ? <AdminHome bootstrap={bootstrap} /> : <TodayPlaceholder ctx={ctx} />
+            }
+          />
+          <Route path="projects" element={<MobileProjectsList bootstrap={bootstrap} />} />
+          <Route path="projects/:projectId/*" element={<TabPlaceholder title="Project" body="Phase 4 lands here." />} />
           <Route path="schedule/*" element={<TabPlaceholder title="Schedule" body="Phase 6 lands here." />} />
           <Route path="rentals/*" element={<TabPlaceholder title="Rentals" body="Phase 9 lands here." />} />
           <Route path="more/*" element={<TabPlaceholder title="More" body="Settings, profile, integrations." />} />

@@ -4,11 +4,11 @@ import { MI } from './icons.js'
 export type MBannerTone = 'info' | 'error' | 'ok' | 'warn'
 
 export type MBannerProps = {
-  tone?: MBannerTone
+  tone?: MBannerTone | undefined
   title: ReactNode
-  body?: ReactNode
-  icon?: ReactNode
-  action?: ReactNode
+  body?: ReactNode | undefined
+  icon?: ReactNode | undefined
+  action?: ReactNode | undefined
 }
 
 /**

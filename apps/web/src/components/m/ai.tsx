@@ -47,13 +47,13 @@ export function MAttribution({ children }: MAttributionProps) {
 }
 
 export type MAiStripeProps = {
-  tone?: 'warn' | 'good'
-  eyebrow?: ReactNode
-  title?: ReactNode
+  tone?: 'warn' | 'good' | undefined
+  eyebrow?: ReactNode | undefined
+  title?: ReactNode | undefined
   children: ReactNode
-  attribution?: ReactNode
-  action?: ReactNode
-  onDismiss?: () => void
+  attribution?: ReactNode | undefined
+  action?: ReactNode | undefined
+  onDismiss?: (() => void) | undefined
 }
 
 export function MAiStripe({
@@ -102,8 +102,8 @@ export function MAiStripe({
 
 export type MAiAgentProps = {
   children: ReactNode
-  attribution?: ReactNode
-  onDismiss?: () => void
+  attribution?: ReactNode | undefined
+  onDismiss?: (() => void) | undefined
 }
 
 /**

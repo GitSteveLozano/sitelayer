@@ -2,8 +2,8 @@ import type { ReactNode } from 'react'
 import type { MTone } from './list.js'
 
 export type MPillProps = {
-  tone?: MTone
-  dot?: boolean
+  tone?: MTone | undefined
+  dot?: boolean | undefined
   children: ReactNode
 }
 
@@ -21,11 +21,11 @@ export function MPill({ tone, dot, children }: MPillProps) {
 }
 
 export type MChipProps = {
-  active?: boolean
-  outline?: boolean
+  active?: boolean | undefined
+  outline?: boolean | undefined
   children: ReactNode
-  onClick?: () => void
-  count?: number
+  onClick?: (() => void) | undefined
+  count?: number | undefined
 }
 
 /**

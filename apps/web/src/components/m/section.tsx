@@ -34,7 +34,13 @@ export function MShell({
   return <div className={`m${className ? ` ${className}` : ''}`}>{children}</div>
 }
 
-export function MBody({ children, pad }: { children: ReactNode; pad?: boolean }) {
+export function MBody({
+  children,
+  pad,
+}: {
+  children?: ReactNode | undefined
+  pad?: boolean | undefined
+}) {
   return <div className={`m-body${pad ? ' m-body-pad' : ''}`}>{children}</div>
 }
 

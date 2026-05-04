@@ -2,9 +2,9 @@ import type { ReactNode } from 'react'
 
 export type MLargeHeadProps = {
   title: ReactNode
-  sub?: ReactNode
-  eyebrow?: ReactNode
-  right?: ReactNode
+  sub?: ReactNode | undefined
+  eyebrow?: ReactNode | undefined
+  right?: ReactNode | undefined
 }
 
 /**

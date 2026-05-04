@@ -2,14 +2,14 @@ import { MI } from './icons.js'
 import type { ReactNode } from 'react'
 
 export type MTopBarProps = {
-  back?: boolean
+  back?: boolean | undefined
   title: string
-  sub?: string
-  eyebrow?: string
-  actionLabel?: string
-  actionIcon?: ReactNode
-  onBack?: () => void
-  onAction?: () => void
+  sub?: string | undefined
+  eyebrow?: string | undefined
+  actionLabel?: string | undefined
+  actionIcon?: ReactNode | undefined
+  onBack?: (() => void) | undefined
+  onAction?: (() => void) | undefined
 }
 
 /**

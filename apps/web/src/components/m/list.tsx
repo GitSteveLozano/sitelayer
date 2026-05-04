@@ -4,14 +4,14 @@ import { MI } from './icons.js'
 export type MTone = 'accent' | 'green' | 'red' | 'amber' | 'blue'
 
 export type MListRowProps = {
-  leading?: ReactNode
-  leadingTone?: MTone
+  leading?: ReactNode | undefined
+  leadingTone?: MTone | undefined
   headline: ReactNode
-  supporting?: ReactNode
-  trailing?: ReactNode
-  badge?: ReactNode
-  chev?: boolean
-  onTap?: () => void
+  supporting?: ReactNode | undefined
+  trailing?: ReactNode | undefined
+  badge?: ReactNode | undefined
+  chev?: boolean | undefined
+  onTap?: (() => void) | undefined
 }
 
 /**

@@ -4,9 +4,9 @@ import type { MTone } from './list.js'
 export type MKpiProps = {
   label: ReactNode
   value: ReactNode
-  unit?: ReactNode
-  meta?: ReactNode
-  metaTone?: 'green' | 'red' | 'amber'
+  unit?: ReactNode | undefined
+  meta?: ReactNode | undefined
+  metaTone?: 'green' | 'red' | 'amber' | undefined
 }
 
 /**
