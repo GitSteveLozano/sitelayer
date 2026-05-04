@@ -24,31 +24,15 @@ export function MSectionH({ children, link, onLinkClick }: MSectionHProps) {
   )
 }
 
-export function MShell({
-  children,
-  className,
-}: {
-  children: ReactNode
-  className?: string | undefined
-}) {
+export function MShell({ children, className }: { children: ReactNode; className?: string | undefined }) {
   return <div className={`m${className ? ` ${className}` : ''}`}>{children}</div>
 }
 
-export function MBody({
-  children,
-  pad,
-}: {
-  children?: ReactNode | undefined
-  pad?: boolean | undefined
-}) {
+export function MBody({ children, pad }: { children?: ReactNode | undefined; pad?: boolean | undefined }) {
   return <div className={`m-body${pad ? ' m-body-pad' : ''}`}>{children}</div>
 }
 
-export function MStatStrip({
-  children,
-}: {
-  children: ReactNode
-}) {
+export function MStatStrip({ children }: { children: ReactNode }) {
   return <div className="m-stat-strip">{children}</div>
 }
 

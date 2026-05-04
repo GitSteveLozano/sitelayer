@@ -43,11 +43,7 @@ export function MobileRentalDispatch({
       <MTopBar back title="Dispatch" onBack={() => navigate('/m/rentals')} />
       <MBody pad>
         <MSectionH>To project</MSectionH>
-        <MSelect
-          value={projectId}
-          onChange={(e) => setProjectId(e.currentTarget.value)}
-          style={{ width: '100%' }}
-        >
+        <MSelect value={projectId} onChange={(e) => setProjectId(e.currentTarget.value)} style={{ width: '100%' }}>
           <option value="">Pick a project…</option>
           {projects.map((p) => (
             <option key={p.id} value={p.id}>

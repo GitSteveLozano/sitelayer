@@ -132,9 +132,9 @@ export async function handleProjectAssignmentRoutes(
 }
 
 async function projectBelongsToCompany(pool: Pool, companyId: string, projectId: string): Promise<boolean> {
-  const result = await pool.query<{ id: string }>(
-    'select id from projects where company_id = $1 and id = $2 limit 1',
-    [companyId, projectId],
-  )
+  const result = await pool.query<{ id: string }>('select id from projects where company_id = $1 and id = $2 limit 1', [
+    companyId,
+    projectId,
+  ])
   return result.rows.length > 0
 }

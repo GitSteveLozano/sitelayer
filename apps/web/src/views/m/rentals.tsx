@@ -64,23 +64,19 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
       filter === 'all'
         ? arr
         : filter === 'out'
-        ? arr.filter((i) => !i.active)
-        : filter === 'available'
-        ? arr.filter((i) => i.active)
-        : []
+          ? arr.filter((i) => !i.active)
+          : filter === 'available'
+            ? arr.filter((i) => i.active)
+            : []
     if (!query.trim()) return filtered
     const q = query.toLowerCase()
-    return filtered.filter(
-      (i) => i.code.toLowerCase().includes(q) || i.description.toLowerCase().includes(q),
-    )
+    return filtered.filter((i) => i.code.toLowerCase().includes(q) || i.description.toLowerCase().includes(q))
   }, [items, filter, query])
 
   // Items that are currently dispatched (active=false in our placeholder
   // model) earn their default rental rate per day. Once true dispatch
   // state lands, replace with the dispatched-item sum.
-  const dailyRevenue = visible
-    .filter((i) => !i.active)
-    .reduce((s, i) => s + Number(i.default_rental_rate ?? 0), 0)
+  const dailyRevenue = visible.filter((i) => !i.active).reduce((s, i) => s + Number(i.default_rental_rate ?? 0), 0)
   const utilizationPct = counts.all > 0 ? Math.round((counts.out / counts.all) * 100) : 0
 
   return (

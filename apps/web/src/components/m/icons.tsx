@@ -71,18 +71,8 @@ export function Spark({
   size?: number
 } & React.SVGProps<SVGSVGElement>) {
   return (
-    <span
-      className={`m-spark${className ? ` ${className}` : ''}`}
-      data-state={state ?? 'accent'}
-    >
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 24 24"
-        fill="currentColor"
-        aria-hidden="true"
-        {...rest}
-      >
+    <span className={`m-spark${className ? ` ${className}` : ''}`} data-state={state ?? 'accent'}>
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" {...rest}>
         <path d="M12 2 L13.7 9.5 L21 11 L13.7 12.5 L12 20 L10.3 12.5 L3 11 L10.3 9.5 Z" />
       </svg>
     </span>

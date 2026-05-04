@@ -45,12 +45,11 @@ export function WorkerScope({ bootstrap }: { bootstrap: BootstrapResponse | null
               ? 'Continue scope per yesterday’s plan. Foreman brief loads here when sent.'
               : 'No active project. Check with your foreman.'}
           </div>
-          <div
-            className="m-quiet-sm"
-            style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}
-          >
+          <div className="m-quiet-sm" style={{ marginTop: 12, display: 'flex', alignItems: 'center', gap: 8 }}>
             <MAvatar
-              initials={initialsFor(bootstrap?.workers.find((w) => /lead|foreman/i.test(w.role ?? ''))?.name ?? 'Foreman')}
+              initials={initialsFor(
+                bootstrap?.workers.find((w) => /lead|foreman/i.test(w.role ?? ''))?.name ?? 'Foreman',
+              )}
               tone="5"
               size="sm"
             />

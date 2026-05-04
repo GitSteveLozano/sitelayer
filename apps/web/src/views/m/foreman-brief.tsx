@@ -25,22 +25,14 @@ import {
 } from '../../components/m/index.js'
 import { MAiAgent } from '../../components/m/ai.js'
 
-export function ForemanBrief({
-  bootstrap,
-  companySlug,
-}: {
-  bootstrap: BootstrapResponse | null
-  companySlug: string
-}) {
+export function ForemanBrief({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const params = useParams<{ projectId?: string }>()
   const projects = useMemo(
     () => bootstrap?.projects.filter((p) => /progress|active/i.test(p.status)) ?? [],
     [bootstrap?.projects],
   )
-  const [projectId, setProjectId] = useState<string>(
-    () => params.projectId ?? projects[0]?.id ?? '',
-  )
+  const [projectId, setProjectId] = useState<string>(() => params.projectId ?? projects[0]?.id ?? '')
   const project = useMemo(() => projects.find((p) => p.id === projectId) ?? null, [projects, projectId])
 
   const [goal, setGoal] = useState('')
@@ -105,9 +97,19 @@ export function ForemanBrief({
             ) : null}
             <MSectionH>Today's scope</MSectionH>
             <MListInset>
-              <MListRow leading={<MI.Layers size={18} />} leadingTone="accent" headline="East elevation" supporting="In progress · 56%" trailing={<MI.Check size={18} />} />
+              <MListRow
+                leading={<MI.Layers size={18} />}
+                leadingTone="accent"
+                headline="East elevation"
+                supporting="In progress · 56%"
+                trailing={<MI.Check size={18} />}
+              />
               <MListRow leading={<MI.Layers size={18} />} headline="West elevation" supporting="Not started" />
-              <MListRow leading={<MI.Layers size={18} />} headline="Basecoat · East" supporting="Queued · needs EPS done" />
+              <MListRow
+                leading={<MI.Layers size={18} />}
+                headline="Basecoat · East"
+                supporting="Queued · needs EPS done"
+              />
             </MListInset>
             <MSectionH>Today's goal</MSectionH>
             <MTextarea
@@ -121,13 +123,17 @@ export function ForemanBrief({
               {goal.length} / 280
             </div>
             <div style={{ marginTop: 16 }}>
-              <MAiAgent attribution={<>Drafted from <strong>yesterday's progress</strong>.</>}>
+              <MAiAgent
+                attribution={
+                  <>
+                    Drafted from <strong>yesterday's progress</strong>.
+                  </>
+                }
+              >
                 Yesterday's "Plate fasteners" wasn't completed — added it as Step 1 carryover.
               </MAiAgent>
             </div>
-            {error ? (
-              <div style={{ marginTop: 12, color: 'var(--m-red)', fontSize: 13 }}>{error}</div>
-            ) : null}
+            {error ? <div style={{ marginTop: 12, color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
             <div style={{ marginTop: 16 }}>
               <MButton variant="primary" onClick={handleSend} disabled={busy || !project}>
                 {busy ? 'Sending…' : 'Send to crew'}

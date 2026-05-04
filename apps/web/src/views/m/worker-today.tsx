@@ -11,16 +11,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiGet, apiPost, type BootstrapResponse } from '../../api.js'
-import {
-  MAvatar,
-  MBody,
-  MButton,
-  MButtonRow,
-  MI,
-  MLargeHead,
-  MTopBar,
-  initialsFor,
-} from '../../components/m/index.js'
+import { MAvatar, MBody, MButton, MButtonRow, MI, MLargeHead, MTopBar, initialsFor } from '../../components/m/index.js'
 import { formatRunningHours, timeOfDay, todayIso } from './format.js'
 
 type ClockEvent = {
@@ -33,13 +24,7 @@ type ClockEvent = {
   lng: string | null
 }
 
-export function WorkerToday({
-  bootstrap,
-  companySlug,
-}: {
-  bootstrap: BootstrapResponse | null
-  companySlug: string
-}) {
+export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const [events, setEvents] = useState<readonly ClockEvent[]>([])
   const [busy, setBusy] = useState<'in' | 'out' | null>(null)
@@ -69,9 +54,7 @@ export function WorkerToday({
   }, [companySlug])
 
   const latest = useMemo(() => {
-    return [...events].sort((a, b) =>
-      a.occurred_at < b.occurred_at ? 1 : a.occurred_at > b.occurred_at ? -1 : 0,
-    )[0]
+    return [...events].sort((a, b) => (a.occurred_at < b.occurred_at ? 1 : a.occurred_at > b.occurred_at ? -1 : 0))[0]
   }, [events])
 
   const isClockedIn = latest?.event_type === 'in'
