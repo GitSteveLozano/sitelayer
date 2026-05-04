@@ -8,3 +8,13 @@ playwright-report
 .vite-cache
 storage
 package-lock.json
+
+# Design-handoff bundle uploaded directly to main on 2026-05-04
+# (commits 65dac64..4e2697a). 22k lines of jsx/css/md/png from the
+# v3.3.0 design source. Not application code; should live under
+# docs/handoff/v3.3.0/ alongside other handoff artifacts. Until that
+# move happens, exempt from the format gate so PRs aren't blocked.
+Design Overview
+estimator
+foreman
+worker
