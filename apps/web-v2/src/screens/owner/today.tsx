@@ -95,18 +95,31 @@ export function OwnerTodayScreen() {
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">{formatDateLabel()}</div>
         {view === 'today' ? (
           <>
-            <h1 className="mt-1 font-display text-[34px] font-bold tracking-tight leading-[1] max-w-xs">
-              You're
-              <br />
-              caught up.
-            </h1>
-            <p className="text-[13px] text-ink-2 mt-2.5 max-w-md leading-relaxed">
-              {buildCalmSubline({
-                projectsCount: projectsToday.length,
-                onSiteCount,
-                attentionCount,
-              })}
-            </p>
+            {attentionCount > 0 ? (
+              <>
+                <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight max-w-md">
+                  {firstName ? `Good ${greetingWord()}, ${firstName}.` : `Good ${greetingWord()}.`}
+                </h1>
+                <p className="text-[13px] text-ink-2 mt-2.5 max-w-md leading-relaxed">
+                  {buildAllSitesSubline({ projectsCount: projectsToday.length, onSiteCount, attentionCount })}
+                </p>
+              </>
+            ) : (
+              <>
+                <h1 className="mt-1 font-display text-[34px] font-bold tracking-tight leading-[1] max-w-xs">
+                  You're
+                  <br />
+                  caught up.
+                </h1>
+                <p className="text-[13px] text-ink-2 mt-2.5 max-w-md leading-relaxed">
+                  {buildCalmSubline({
+                    projectsCount: projectsToday.length,
+                    onSiteCount,
+                    attentionCount,
+                  })}
+                </p>
+              </>
+            )}
           </>
         ) : view === 'attention' ? (
           <>
@@ -185,7 +198,21 @@ export function OwnerTodayScreen() {
 
       <div className="flex-1 px-4 pb-8 pt-2">
         {view === 'today' ? (
-          <TodayList projects={projectsToday} totalHoursToday={totalHoursToday} hoursByProjectId={hoursByProjectId} />
+          <>
+            {attention.length > 0 ? (
+              <div className="mb-3">
+                <InlineAttentionPreview
+                  top={attention[0]!}
+                  totalCount={attentionCount}
+                  onSeeAll={() => setView('attention')}
+                />
+              </div>
+            ) : null}
+            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 pb-2">
+              Today on site
+            </div>
+            <TodayList projects={projectsToday} totalHoursToday={totalHoursToday} hoursByProjectId={hoursByProjectId} />
+          </>
         ) : view === 'attention' ? (
           <>
             <AttentionList items={attention} reviewsPending={reviews.data?.timeReviewRuns ?? []} />
@@ -410,6 +437,53 @@ function buildAttentionItems(inputs: BuildAttentionInputs): AttentionItem[] {
   }
 
   return items
+}
+
+/**
+ * Single inline preview of the highest-priority attention item, shown
+ * on the calm/today view when at least one item exists. The full
+ * attention list still lives behind the "what needs me?" chip; this
+ * preview is the design audit's "with attention card" state — calm
+ * view morphs to surface one signal without leaving the today filter.
+ *
+ * Tapping "See all N →" jumps to the attention chip, where the user
+ * can dismiss / approve / open project per the existing affordances.
+ */
+function InlineAttentionPreview({
+  top,
+  totalCount,
+  onSeeAll,
+}: {
+  top: AttentionItem
+  totalCount: number
+  onSeeAll: () => void
+}) {
+  return (
+    <StripeCard tone={top.tone}>
+      <div className="flex items-start justify-between gap-2 mb-1.5">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-warn">{top.eyebrow}</div>
+        {totalCount > 1 ? (
+          <button
+            type="button"
+            onClick={onSeeAll}
+            className="text-[11px] text-accent font-medium underline-offset-2 hover:underline shrink-0"
+          >
+            See all {totalCount} →
+          </button>
+        ) : null}
+      </div>
+      <div className="text-[14.5px] font-semibold leading-snug">{top.title}</div>
+      <div className="text-[12px] text-ink-2 mt-1 leading-relaxed">{top.detail}</div>
+      <div className="mt-2.5 pt-2.5 border-t border-dashed border-line-2 flex items-center justify-between gap-2">
+        <Attribution source={top.attribution} state="muted" />
+        <Link to={top.action_to}>
+          <MobileButton variant="primary" size="sm" fullWidth={false}>
+            {top.action_label}
+          </MobileButton>
+        </Link>
+      </div>
+    </StripeCard>
+  )
 }
 
 function AttentionList({
