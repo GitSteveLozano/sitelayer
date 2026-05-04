@@ -26,6 +26,12 @@ import { MobileTakeoffList } from './m/takeoff-list.js'
 import { MobileEstimateReview } from './m/estimate-review.js'
 import { MobileSchedule } from './m/schedule.js'
 import { MobileTimeReview } from './m/time-review.js'
+import { WorkerToday } from './m/worker-today.js'
+import { WorkerClockinConfirm } from './m/worker-clockin.js'
+import { WorkerScope } from './m/worker-scope.js'
+import { WorkerIssue } from './m/worker-issue.js'
+import { WorkerHours } from './m/worker-hours.js'
+import { WorkerLog } from './m/worker-log.js'
 
 export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
@@ -83,9 +89,18 @@ export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShell
           <Route
             path="today"
             element={
-              ctx.kind === 'admin' ? <AdminHome bootstrap={bootstrap} /> : <TodayPlaceholder ctx={ctx} />
+              ctx.kind === 'admin' ? (
+                <AdminHome bootstrap={bootstrap} />
+              ) : ctx.kind === 'worker' ? (
+                <WorkerToday bootstrap={bootstrap} companySlug={companySlug} />
+              ) : (
+                <TodayPlaceholder ctx={ctx} />
+              )
             }
           />
+          <Route path="clockin" element={<WorkerClockinConfirm />} />
+          <Route path="scope" element={<WorkerScope bootstrap={bootstrap} />} />
+          <Route path="issue" element={<WorkerIssue bootstrap={bootstrap} companySlug={companySlug} />} />
           <Route path="projects" element={<MobileProjectsList bootstrap={bootstrap} />} />
           <Route path="projects/:projectId" element={<MobileProjectDetail bootstrap={bootstrap} />} />
           <Route path="projects/:projectId/takeoff" element={<MobileTakeoffList companySlug={companySlug} />} />
@@ -97,11 +112,22 @@ export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShell
           <Route path="more/*" element={<TabPlaceholder title="More" body="Settings, profile, integrations." />} />
           <Route path="crew/*" element={<TabPlaceholder title="Crew" body="Phase 8 lands here." />} />
           <Route path="field/*" element={<TabPlaceholder title="Field" body="Phase 8 lands here." />} />
-          <Route path="log/*" element={<TabPlaceholder title="Log" body="Phase 7 / 8 lands here." />} />
+          <Route
+            path="log"
+            element={
+              ctx.kind === 'worker' ? (
+                <WorkerLog bootstrap={bootstrap} companySlug={companySlug} />
+              ) : (
+                <TabPlaceholder title="Log" body="Foreman daily log lands in Phase 8." />
+              )
+            }
+          />
+          <Route path="log/*" element={<WorkerLog bootstrap={bootstrap} companySlug={companySlug} />} />
           <Route path="time" element={<MobileTimeReview bootstrap={bootstrap} />} />
           <Route path="time/*" element={<MobileTimeReview bootstrap={bootstrap} />} />
-          <Route path="scope/*" element={<TabPlaceholder title="Scope" body="Phase 7 lands here." />} />
-          <Route path="hours/*" element={<TabPlaceholder title="Hours" body="Phase 7 lands here." />} />
+          <Route path="scope/*" element={<WorkerScope bootstrap={bootstrap} />} />
+          <Route path="hours" element={<WorkerHours bootstrap={bootstrap} />} />
+          <Route path="hours/*" element={<WorkerHours bootstrap={bootstrap} />} />
           <Route path="*" element={<Navigate to="today" replace />} />
         </Routes>
         <MBottomTabs tabs={[...tabs]} activeId={activeTab} onSelect={(id) => navigate(`/m/${id}`)} />
