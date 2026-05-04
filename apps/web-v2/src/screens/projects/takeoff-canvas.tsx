@@ -156,7 +156,7 @@ export function TakeoffCanvasScreen() {
     <div className="flex flex-col">
       <div className="px-5 pt-6 pb-3">
         <Link to={`/projects/${projectId}?tab=takeoff`} className="text-[12px] text-ink-3">
-          ← Takeoff hub
+          ← Measurements
         </Link>
         <div className="mt-2 flex items-baseline justify-between gap-3">
           <h1 className="font-display text-[22px] font-bold tracking-tight leading-tight truncate">
