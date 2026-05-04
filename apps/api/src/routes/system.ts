@@ -74,7 +74,7 @@ export async function handleSystemRoutes(req: http.IncomingMessage, url: URL, ct
         return true
       }
     }
-    const bootstrap = await loadBootstrap(ctx.pool, ctx.company.id)
+    const bootstrap = await loadBootstrap(ctx.pool, ctx.company.id, ctx.currentUserId)
     ctx.sendJson(200, { company: ctx.company, ...bootstrap })
     return true
   }
@@ -125,8 +125,11 @@ export async function handleSystemRoutes(req: http.IncomingMessage, url: URL, ct
 /**
  * Loads the parallel set of read queries that hydrate the SPA on session
  * start. Same SQL, ordering, and shape as the inline server.ts version.
+ *
+ * `callerUserId` drives the user-scoped slice of the response (currently
+ * just `projectAssignments`); company-scoped data ignores it.
  */
-async function loadBootstrap(pool: Pool, companyId: string) {
+async function loadBootstrap(pool: Pool, companyId: string, callerUserId: string) {
   const [
     divisions,
     serviceItems,
@@ -139,6 +142,7 @@ async function loadBootstrap(pool: Pool, companyId: string) {
     mappings,
     schedules,
     laborEntries,
+    projectAssignments,
   ] = await Promise.all([
     pool.query('select code, name, sort_order from divisions where company_id = $1 order by sort_order asc', [
       companyId,
@@ -194,6 +198,17 @@ async function loadBootstrap(pool: Pool, companyId: string) {
         limit 1000`,
       [companyId],
     ),
+    // Caller's own active project assignments. Drives the role-aware shell
+    // selector on the web client (see docs/MOBILE_DESIGN_ROADMAP.md § Phase 2).
+    pool.query(
+      `select id, project_id, role, assigned_by_clerk_user_id, created_at
+         from project_assignments
+        where company_id = $1
+          and clerk_user_id = $2
+          and deleted_at is null
+        order by created_at asc`,
+      [companyId, callerUserId],
+    ),
   ])
 
   return {
@@ -210,6 +225,7 @@ async function loadBootstrap(pool: Pool, companyId: string) {
     integrationMappings: mappings.rows,
     schedules: schedules.rows,
     laborEntries: laborEntries.rows,
+    projectAssignments: projectAssignments.rows,
   }
 }
 
