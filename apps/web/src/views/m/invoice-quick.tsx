@@ -34,11 +34,7 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
       <MTopBar back title="Quick invoice" onBack={() => navigate('/m/today')} />
       <MBody pad>
         <MSectionH>Project</MSectionH>
-        <MSelect
-          value={projectId}
-          onChange={(e) => setProjectId(e.currentTarget.value)}
-          style={{ width: '100%' }}
-        >
+        <MSelect value={projectId} onChange={(e) => setProjectId(e.currentTarget.value)} style={{ width: '100%' }}>
           {projects.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}

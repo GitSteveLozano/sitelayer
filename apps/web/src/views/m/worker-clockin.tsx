@@ -9,13 +9,7 @@
  */
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import {
-  MBody,
-  MButton,
-  MButtonStack,
-  MI,
-  MTopBar,
-} from '../../components/m/index.js'
+import { MBody, MButton, MButtonStack, MI, MTopBar } from '../../components/m/index.js'
 import { timeOfDay } from './format.js'
 
 export function WorkerClockinConfirm() {
@@ -78,7 +72,8 @@ export function WorkerClockinConfirm() {
           </div>
           <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.01em' }}>You're clocked in</div>
           <div className="m-quiet-sm" style={{ marginTop: 6 }}>
-            Walked into the geofence at <strong style={{ color: 'var(--m-accent-ink)' }}>{timeOfDay(punchedAt)}</strong> · auto-clocked.
+            Walked into the geofence at <strong style={{ color: 'var(--m-accent-ink)' }}>{timeOfDay(punchedAt)}</strong>{' '}
+            · auto-clocked.
           </div>
         </div>
         <div style={{ padding: '0 16px' }}>

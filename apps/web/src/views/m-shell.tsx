@@ -122,7 +122,10 @@ export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShell
           <Route path="schedule" element={<MobileSchedule bootstrap={bootstrap} />} />
           <Route path="schedule/*" element={<MobileSchedule bootstrap={bootstrap} />} />
           <Route path="rentals" element={<MobileRentals companySlug={companySlug} />} />
-          <Route path="rentals/dispatch" element={<MobileRentalDispatch bootstrap={bootstrap} companySlug={companySlug} />} />
+          <Route
+            path="rentals/dispatch"
+            element={<MobileRentalDispatch bootstrap={bootstrap} companySlug={companySlug} />}
+          />
           <Route path="rentals/utilization" element={<MobileRentalsUtilization companySlug={companySlug} />} />
           <Route path="rentals/scan" element={<MobileRentals companySlug={companySlug} />} />
           <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} />} />

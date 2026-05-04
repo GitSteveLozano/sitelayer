@@ -87,7 +87,11 @@ export function MPreviewView() {
               <MAiStripe
                 eyebrow="OVERNIGHT"
                 title="Drewski's order arrived. Hillcrest is unblocked."
-                attribution={<>Based on <strong>overnight events</strong>.</>}
+                attribution={
+                  <>
+                    Based on <strong>overnight events</strong>.
+                  </>
+                }
                 onDismiss={() => {}}
               >
                 EPS sheets are staged. Crew can resume east elevation at first light.
@@ -130,17 +134,14 @@ export function MPreviewView() {
                 tone="info"
                 title="QuickBooks reconciliation needed"
                 body="3 invoices haven't synced since Tuesday."
-                action={<MButton variant="ghost" size="sm">Open</MButton>}
+                action={
+                  <MButton variant="ghost" size="sm">
+                    Open
+                  </MButton>
+                }
               />
-              <MBanner
-                tone="error"
-                title="QuickBooks lost auth"
-                body="Reconnect to resume invoice sync."
-              />
-              <MBanner
-                tone="ok"
-                title="Daily backup verified"
-              />
+              <MBanner tone="error" title="QuickBooks lost auth" body="Reconnect to resume invoice sync." />
+              <MBanner tone="ok" title="Daily backup verified" />
               <MBanner
                 title="Approaching daily OT"
                 body="Marcus is at 7:30 elapsed — clock-out by 4:30 PM to stay under 40."
@@ -159,9 +160,15 @@ export function MPreviewView() {
               <MSectionH>Pills</MSectionH>
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', padding: '0 16px' }}>
                 <MPill>Default</MPill>
-                <MPill tone="accent" dot>Live</MPill>
-                <MPill tone="green" dot>Approved</MPill>
-                <MPill tone="red" dot>Disputed</MPill>
+                <MPill tone="accent" dot>
+                  Live
+                </MPill>
+                <MPill tone="green" dot>
+                  Approved
+                </MPill>
+                <MPill tone="red" dot>
+                  Disputed
+                </MPill>
                 <MPill tone="amber">Pending</MPill>
                 <MPill tone="blue">Note</MPill>
               </div>
@@ -196,7 +203,13 @@ export function MPreviewView() {
                 <p style={{ fontSize: 14, color: 'var(--m-ink-2)', margin: 0 }}>
                   <MAiEyebrow>Likely budget</MAiEyebrow> $48k–$72k for this archetype in this zip.
                 </p>
-                <MAiAgent attribution={<>Drafted from <strong>yesterday's progress</strong>.</>}>
+                <MAiAgent
+                  attribution={
+                    <>
+                      Drafted from <strong>yesterday's progress</strong>.
+                    </>
+                  }
+                >
                   Anchor + plate east wall, top to bottom — leave the cornice for tomorrow.
                 </MAiAgent>
                 <MAttribution>
@@ -285,7 +298,15 @@ export function MPreviewView() {
               <MTopBar back title="Hillcrest Mews" sub="loading…" />
               <MBody pad>
                 <div className="m-card" aria-busy="true" style={{ marginBottom: 16 }}>
-                  <div style={{ width: '60%', height: 12, borderRadius: 4, background: 'var(--m-card-soft)', marginBottom: 8 }} />
+                  <div
+                    style={{
+                      width: '60%',
+                      height: 12,
+                      borderRadius: 4,
+                      background: 'var(--m-card-soft)',
+                      marginBottom: 8,
+                    }}
+                  />
                   <div style={{ width: '40%', height: 9, borderRadius: 4, background: 'var(--m-card-soft)' }} />
                 </div>
                 <MSectionH>By scope</MSectionH>
@@ -313,14 +334,10 @@ export function MPreviewView() {
           <MShell className="m-dark">
             <MTopBar title="Today" />
             <MBody pad>
-              <MLargeHead
-                eyebrow="HEY, MARCUS"
-                title="Mon · April 28"
-                right={<MAvatar initials="ML" tone="2" />}
-              />
+              <MLargeHead eyebrow="HEY, MARCUS" title="Mon · April 28" right={<MAvatar initials="ML" tone="2" />} />
               <div className="m-card" style={{ marginBottom: 16 }}>
                 <div className="m-topbar-eyebrow" style={{ marginBottom: 6 }}>
-                  TODAY'S JOB · {' '}
+                  TODAY'S JOB ·{' '}
                   <span style={{ color: 'var(--m-accent-ink)' }}>{initialsFor('Ana Castillo')} scoped by Ana</span>
                 </div>
                 <div style={{ fontSize: 19, fontWeight: 600 }}>Hillcrest Mews — Phase 4</div>
@@ -329,7 +346,16 @@ export function MPreviewView() {
                 <div className="m-topbar-eyebrow" style={{ textAlign: 'center' }}>
                   CURRENTLY CLOCKED IN
                 </div>
-                <div style={{ textAlign: 'center', fontSize: 60, fontWeight: 600, fontFeatureSettings: '"tnum"', letterSpacing: '-0.02em', lineHeight: 1 }}>
+                <div
+                  style={{
+                    textAlign: 'center',
+                    fontSize: 60,
+                    fontWeight: 600,
+                    fontFeatureSettings: '"tnum"',
+                    letterSpacing: '-0.02em',
+                    lineHeight: 1,
+                  }}
+                >
                   4:24<span style={{ fontSize: 26, color: 'var(--m-ink-3)' }}>:18</span>
                 </div>
                 <div className="m-quiet-sm" style={{ textAlign: 'center', marginTop: 4 }}>
@@ -380,9 +406,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function SideBySide({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', justifyContent: 'center' }}>{children}</div>
-  )
+  return <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', justifyContent: 'center' }}>{children}</div>
 }
 
 function PhoneFrame({ children, dark }: { children: React.ReactNode; dark?: boolean }) {

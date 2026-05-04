@@ -72,12 +72,7 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
 
   return (
     <>
-      <MTopBar
-        back
-        title="Estimate"
-        sub={summary.project.name}
-        onBack={() => navigate(`/m/projects/${projectId}`)}
-      />
+      <MTopBar back title="Estimate" sub={summary.project.name} onBack={() => navigate(`/m/projects/${projectId}`)} />
       <MBody>
         <MKpiRow cols={2}>
           <MKpi label="Total" value={formatMoney(m.estimateTotal)} />
@@ -92,7 +87,11 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
           <MAiStripe
             eyebrow="Bid accuracy"
             title="This estimate is in line with comparable jobs"
-            attribution={<>Based on <strong>historical close rate</strong>.</>}
+            attribution={
+              <>
+                Based on <strong>historical close rate</strong>.
+              </>
+            }
           >
             Labor cost {formatMoney(m.laborCost)} · materials {formatMoney(m.materialCost)} · subs{' '}
             {formatMoney(m.subCost)}.

@@ -21,6 +21,7 @@ This doc is the sequencing source of truth for shipping the design. It assumes t
 The design handoff was reviewed against the live repo. Most of the backend is built; the gap is the mobile UI and a small amount of role/assignment plumbing.
 
 ### Backend — present
+
 - Resources with full CRUD + workflow handlers in `apps/api/src/routes/`:
   - `daily-logs`, `worker-issues`, `time-review-runs`, `schedules`, `clock`, `labor-entries`, `labor-burden`, `push-subscriptions`, `notification-preferences`, `assemblies`, `bid-accuracy`, `inventory-utilization`, `takeoff-import`, `takeoff-tags`, `takeoff-write`, `dispatch`, `rental-billing-state`, `rental-contracts-crud`, `rental-inventory-crud`, `rental-inventory-csv`, `estimate-pushes`, `qbo-custom-fields`, `qbo-mappings`, `support-packets`
 - Schema (45 migrations) covering geofence policy (`029`), clock-event void (`031`), multi-condition takeoff (`033`), blueprint pages + revisions (`034`, `037`), AI insights (`040`–`041`), worker issues (`044`), crew schedule + time scope (`045`)
@@ -29,6 +30,7 @@ The design handoff was reviewed against the live repo. Most of the backend is bu
 - Trace propagation, audit log, support debug packets
 
 ### Web — present
+
 - React 19 SPA in `apps/web/src/` with React Router and an existing `MobileNav` collapse-on-phone behavior
 - shadcn-style primitives in `components/ui/` (`button`, `card`, `dialog`, `input`, `select`, `textarea`, `toast`, `checkbox`, `search-input`)
 - XState machines for offline replay, billing review, day confirmed, estimate push, project selection, run-action
@@ -36,11 +38,13 @@ The design handoff was reviewed against the live repo. Most of the backend is bu
 - Tailwind + HSL CSS variables, but the **palette is currently cool blue/teal** — needs swap to warm sand/orange per `mobile-tokens.css`
 
 ### Backend — net-new for this design
+
 - `project_assignments` table — per-project role join (a user can be foreman on one project, worker on another)
 - A small endpoint adjustment: scope `worker-issues` and `daily-logs` reads to assignment-aware filters
 - Realtime channel for foreman field-event push (currently DB-only — see Cross-cutting § Realtime)
 
 ### Web — net-new for this design
+
 - Mobile primitive set: `MTopBar`, `MLargeHead`, `MSectionH`, `MRow`, `MKpi`, `MPill`, `MBanner`, `MBottomTabs`, `MQA`, `MAvatarGroup`, plus AI atoms (`Spark`, `AiStripe`, `AiAgent`, `AiEyebrow`)
 - Warm sand palette + dark theme variant (mostly worker, plus capture viewfinders)
 - Role-aware app shell (contextual navigation — see Phase 2)
@@ -54,7 +58,7 @@ The design handoff was reviewed against the live repo. Most of the backend is bu
 - **Per-project assignments** in a new `project_assignments` table. A user can be assigned `foreman` on Hillcrest and `worker` on Aspen Ridge simultaneously.
 - **Admin = superset.** Admin always retains the calm dashboard / projects / schedule / time / rentals / settings surfaces.
 - **Contextual shell, no manual toggle.** The active "view mode" is computed from (geofence + project assignment + recent activity), not chosen. See Phase 2 for the heuristic.
-- **Defaults for new companies:** one admin who does everything. Foreman/worker assignments are additive — a company never *needs* them.
+- **Defaults for new companies:** one admin who does everything. Foreman/worker assignments are additive — a company never _needs_ them.
 - **`wk-issue` recipient picker is removed.** Issues route to the project's foreman, falling through to admin(s) when no foreman is assigned.
 
 ---
@@ -64,6 +68,7 @@ The design handoff was reviewed against the live repo. Most of the backend is bu
 **Goal:** support per-project role assignments and normalize the role enum.
 
 **Schema (new migration `046_project_assignments.sql`):**
+
 ```sql
 create table if not exists project_assignments (
   id uuid primary key default gen_random_uuid(),
@@ -82,6 +87,7 @@ create index project_assignments_project_active
 ```
 
 **API:**
+
 - `GET/POST/DELETE /api/projects/:id/assignments` — admin-only writes
 - Extend `/api/bootstrap` to include the caller's active project assignments (drives the contextual shell)
 - Helper in `apps/api/src/auth.ts`: `getProjectRole(clerkUserId, projectId)` returning `'admin' | 'foreman' | 'worker' | null`. Admin always wins.
@@ -99,6 +105,7 @@ create index project_assignments_project_active
 **Goal:** the warm-sand palette, the ~12 mobile primitives, and the 5 system states. Everything else builds on this.
 
 **Files:**
+
 - `apps/web/src/styles.css` — replace HSL palette with the tokens from `Design Overview/design_system/source/mobile-tokens.css`. Light = `:root`, dark = `[data-theme="dark"]` on the shell root.
 - `apps/web/tailwind.config.ts` — extend colors per the design-system README's Tailwind translation block (sand/card/line/ink/accent + success/danger/warning/info)
 - New: `apps/web/src/components/mobile/` directory with one file per primitive:
@@ -119,12 +126,14 @@ create index project_assignments_project_active
 **Goal:** the app reshapes per role context, with no manual toggle.
 
 **Heuristic for `activeContext`:**
+
 1. If admin and not currently inside any project's geofence → `admin` context (calm dashboard home, sidebar nav)
 2. If user has a foreman assignment on a project they've opened or been geofenced into in the last 4h → `foreman` context (5-tab bottom bar: Today/Crew/Field/Log/Time, scoped to that project)
 3. If user has a worker assignment on a geofenced or recently-active project → `worker` context (4-tab dark bottom bar: Today/Scope/Hours/Log)
 4. Tie-breaks: explicit project switch in the user chip overrides; otherwise highest-rank assignment for the current project wins (foreman > worker)
 
 **Files:**
+
 - New: `apps/web/src/lib/active-context.ts` — pure function from `(memberships, assignments, geofenceState, recentActivity)` to a context object
 - Modify: `apps/web/src/App.tsx` — split routes into three top-level shells: `<AdminShell>`, `<ForemanShell>`, `<WorkerShell>`. Each renders its own bottom-tab nav. Routes inside are persona-scoped.
 - Modify: `apps/web/src/api.ts` — bootstrap response now includes `assignments[]` and `geofenceState`
@@ -133,6 +142,7 @@ create index project_assignments_project_active
 **Reuses:** `MobileNav`, `BrowserRouter`, the existing `company-switcher.tsx`. Existing routes survive intact under the admin shell.
 
 **Done when:**
+
 - An admin with no assignments stays in admin shell forever
 - An admin with a foreman assignment to Hillcrest, opening that project, sees the foreman 5-tab bar
 - The same user, leaving the geofence and going home, returns to admin shell on next session resume
@@ -146,11 +156,13 @@ create index project_assignments_project_active
 **Goal:** the first screen an admin sees, plus the projects index.
 
 **Screens:**
+
 - `db-calm-default` — "You're caught up." hero + segmented control (Today / What needs me? / This week / All sites) + stacked site cards (Hillcrest, Aspen Ridge, Greenwillow with hours)
-- `db-pm` — variant when something *is* on fire (AI stripe with "Open project" CTA)
+- `db-pm` — variant when something _is_ on fire (AI stripe with "Open project" CTA)
 - `prj-list` — search + state-filter pills (Active / Awaiting client / Closeout) + stacked project cards with state pill, address, "Day X of Y", crew count
 
 **Files:**
+
 - New: `apps/web/src/views/mobile/home.tsx`, `views/mobile/projects-list.tsx`
 - Modify: `apps/web/src/api.ts` — add `getMobileHome()` (aggregates from existing `/api/bootstrap` + today's labor cost rollup)
 
@@ -169,10 +181,12 @@ create index project_assignments_project_active
 **Screens:** Single mobile project detail with sub-nav: Overview · Estimate · Schedule · Crew · Materials · Budget · Log · Files. Each tab renders a different React component sharing a project context.
 
 **Files:**
+
 - New: `apps/web/src/views/mobile/project-detail.tsx` (router) + one component per tab in `views/mobile/project-tabs/`
 - Reuses: existing `views/project-detail.tsx` desktop logic — extract shared data hooks into `apps/web/src/hooks/use-project.ts`
 
 **Reuses:**
+
 - All existing project endpoints (`/api/projects/:id`, `/api/projects/:id/summary`, `/api/projects/:id/closeout`)
 - `daily-logs` route → Log tab
 - `labor-entries` + `labor-burden` → Crew tab
@@ -193,6 +207,7 @@ create index project_assignments_project_active
 **Screens:** `prj-blueprint` (canvas + measurement chips on dark), `mb-takeoff`, `mb-estimate` (line items + send).
 
 **Files:**
+
 - New: `apps/web/src/views/mobile/takeoff.tsx` — wraps the existing canvas logic with mobile gesture handling (pinch zoom, single-finger pan, long-press to drop a polygon vertex)
 - Reuses: `apps/web/src/components/takeoff-pan-overlay.tsx`, the existing `views/takeoffs.tsx` rendering pipeline, `packages/domain` polygon math (`normalizePolygonGeometry`, `calculateTakeoffQuantity`)
 - Reuses: `/api/projects/:id/takeoff/measurement(s)`, `/api/blueprints/*`
@@ -210,6 +225,7 @@ create index project_assignments_project_active
 **Screens:** `sch-week`, `sch-day`, `sch-create`, `fm-time-review` (foreman approve hours), `t-vs` (live vs budget chart).
 
 **Files:**
+
 - New: `apps/web/src/views/mobile/schedule.tsx`, `views/foreman/time-review.tsx`, `views/admin/live-vs-budget.tsx`
 - Reuses: `time-review-runs` workflow + machine, `crew_schedule_workflow`, `labor-burden` rollup, `labor-reports` for the burndown chart data
 
@@ -226,15 +242,17 @@ create index project_assignments_project_active
 **Screens:** `wk-today`, `wk-clockin`, `wk-scope`, `wk-issue`, `wk-hours`, `wk-log`.
 
 **Files:**
+
 - New: `apps/web/src/views/worker/*.tsx` — one per screen
 - New: `apps/web/src/lib/auto-clockin.ts` — geofence-triggered auto clock-in, with a 2-minute "Wrong project? Tap to fix" override window (per the screenshot, not the README)
 - Reuses: `clock` route (already supports `/api/clock/in`, `/api/clock/out`), `worker-issues` route, geofence policy, push subscriptions
 - Reuses: `daily-log-photo-upload.ts` for `wk-log`
 
 **Visual notes captured from screenshots (not in design-system README):**
+
 - Time format: running uses `4:24` (colon); aggregated/settled uses `8.2h` (decimal). Add a `formatTime(seconds, mode)` helper to `packages/domain`.
 - `wk-issue` is a 6-tile grid (Out of materials / Equipment broken / Safety concern / Weather hold / Scope question / Other), not the 4-chip version in the README. Visuals are the source of truth.
-- `wk-clockin` shows the worker's own `$28/hr` rate — confirm this is the worker's *self-rate only* (never any other worker's). Server-side enforcement: worker tier sees `workers.rate` only when `workers.id = self`.
+- `wk-clockin` shows the worker's own `$28/hr` rate — confirm this is the worker's _self-rate only_ (never any other worker's). Server-side enforcement: worker tier sees `workers.rate` only when `workers.id = self`.
 
 **Done when:** a worker drives into a geofence, gets the "You're clocked in · auto-clocked" screen with map preview, then can flag an issue, log a photo, and check this week's hours.
 
@@ -249,11 +267,13 @@ create index project_assignments_project_active
 **Screens:** `fm-today` (stacked sites), `fm-brief` (morning brief composer), `fm-crew` (live roster), `fm-field` (event inbox), `fm-blocker-detail`, `fm-log` (daily log builder), `fm-map`, `fm-sched`.
 
 **Files:**
+
 - New: `apps/web/src/views/foreman/*.tsx`
 - Reuses: `worker-issues` (= field events) + `daily-logs` + `time-review-runs` routes; `notifications` for the "From the field · 2 need you" stripe
 - Reuses: AI stripe pattern from Phase 1
 
 **New small server work:**
+
 - `POST /api/projects/:id/briefs` — store the morning brief (a row attached to the project); workers' `wk-today` reads from it. Schema-wise this is one new table or it can be modelled as a special kind of `daily_log` (a "plan" instead of "log"). Decision deferred — see open questions.
 - `worker-issues` resolution endpoint — if not present, add `PATCH /api/worker-issues/:id` for foreman resolution. Verify before writing.
 
@@ -270,6 +290,7 @@ create index project_assignments_project_active
 **Screens:** `rent-cat`, `rent-dispatch`, `rent-return`, `rent-scan`, `rent-util`, `mb-invoice-quick`.
 
 **Files:**
+
 - New: `apps/web/src/views/mobile/rentals/*.tsx`
 - Reuses: existing rental routes (already extensive — `rental-billing-state`, `rental-contracts-crud`, `rental-inventory-crud`, `dispatch`), the deterministic billing workflow
 
@@ -303,7 +324,7 @@ Confirm that `worker_issues` and `daily_logs` writes go through the offline queu
 Add to `packages/domain`:
 
 ```ts
-export function formatDuration(seconds: number, mode: 'running' | 'settled'): string;
+export function formatDuration(seconds: number, mode: 'running' | 'settled'): string
 // running: 4:24, 4:24:18 if seconds matter
 // settled: 8.2h, 32.8 (no unit when in column header)
 ```
