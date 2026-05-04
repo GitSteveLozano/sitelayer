@@ -10,6 +10,7 @@ import { SafariLandingScreen, useShouldShowSafariLanding } from '@/screens/onboa
 const HomeRoute = lazy(() => import('@/routes/home'))
 const ProjectsRoute = lazy(() => import('@/routes/projects'))
 const TimeRoute = lazy(() => import('@/routes/time'))
+const CrewRoute = lazy(() => import('@/routes/crew'))
 const RentalsRoute = lazy(() => import('@/routes/rentals'))
 const MoreRoute = lazy(() => import('@/routes/more'))
 const LogRoute = lazy(() => import('@/routes/log'))
@@ -73,6 +74,7 @@ export default function App() {
                   <Route path="/" element={<HomeRoute />} />
                   <Route path="/projects/*" element={<ProjectsRoute />} />
                   <Route path="/time/*" element={<TimeRoute />} />
+                  <Route path="/crew/*" element={<CrewRoute />} />
                   <Route path="/rentals/*" element={<RentalsRoute />} />
                   <Route path="/more/*" element={<MoreRoute />} />
                   <Route path="/log" element={<LogRoute />} />
