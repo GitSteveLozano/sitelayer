@@ -726,6 +726,7 @@ function AppShell() {
               <MobileShell
                 bootstrap={bootstrap}
                 companyRole={normalizeMobileShellRole(sessionRole)}
+                companySlug={companySlug}
               />
             }
           />
@@ -735,6 +736,7 @@ function AppShell() {
               <MobileShell
                 bootstrap={bootstrap}
                 companyRole={normalizeMobileShellRole(sessionRole)}
+                companySlug={companySlug}
               />
             }
           />

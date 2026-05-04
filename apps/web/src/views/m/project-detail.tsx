@@ -29,10 +29,11 @@ import { MAiStripe } from '../../components/m/ai.js'
 import { MEmptyState } from '../../components/m-states/index.js'
 import { formatDecimalHours, formatMoney, formatStatusLabel, statusTone } from './format.js'
 
-type TabKey = 'overview' | 'crew' | 'materials' | 'budget' | 'log' | 'files'
+type TabKey = 'overview' | 'estimate' | 'crew' | 'materials' | 'budget' | 'log' | 'files'
 
 const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
   { key: 'overview', label: 'Overview' },
+  { key: 'estimate', label: 'Estimate' },
   { key: 'crew', label: 'Crew' },
   { key: 'materials', label: 'Materials' },
   { key: 'budget', label: 'Budget' },
@@ -91,7 +92,8 @@ export function MobileProjectDetail({ bootstrap }: { bootstrap: BootstrapRespons
       <MBody>
         <ProjectHero project={project} pctSpent={pctSpent} onTrack={onTrack} spent={spent} bid={bid} />
         <TabBar active={tab} onChange={setTab} />
-        {tab === 'overview' && <Overview project={project} totalHours={totalHours} bid={bid} spent={spent} pctSpent={pctSpent} />}
+        {tab === 'overview' && <Overview project={project} totalHours={totalHours} bid={bid} spent={spent} pctSpent={pctSpent} navigate={navigate} />}
+        {tab === 'estimate' && <EstimateTab project={project} navigate={navigate} />}
         {tab === 'crew' && <CrewTab labor={labor} workers={bootstrap?.workers ?? []} />}
         {tab === 'materials' && <MaterialsTab bills={materialBills} />}
         {tab === 'budget' && <BudgetTab project={project} totalHours={totalHours} spent={spent} bid={bid} pctSpent={pctSpent} />}
@@ -181,12 +183,14 @@ function Overview({
   bid,
   spent,
   pctSpent,
+  navigate,
 }: {
   project: ProjectRow
   totalHours: number
   bid: number
   spent: number
   pctSpent: number
+  navigate: (path: string) => void
 }) {
   const summary = `${project.name}, ${formatMoney(bid)} ${project.division_code} job for ${project.customer_name}.`
 
@@ -207,12 +211,46 @@ function Overview({
       <div style={{ padding: '0 20px 14px', fontSize: 14, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>{summary}</div>
       <MSectionH>Drill in</MSectionH>
       <MListInset>
+        <MListRow
+          leading={<MI.Layers size={18} />}
+          leadingTone="accent"
+          headline="Blueprints / takeoff"
+          supporting="Drawings + measurements"
+          chev
+          onTap={() => navigate(`/m/projects/${project.id}/takeoff`)}
+        />
+        <MListRow
+          leading={<MI.FileText size={18} />}
+          headline="Estimate"
+          supporting="Line items + send"
+          chev
+          onTap={() => navigate(`/m/projects/${project.id}/estimate`)}
+        />
         <MListRow leading={<MI.Users size={18} />} headline="Crew & hours" supporting={`${formatDecimalHours(totalHours, 1)} logged`} chev />
         <MListRow leading={<MI.Truck size={18} />} headline="Materials & costs" supporting="Bills + rental dispatch" chev />
         <MListRow leading={<MI.Clock size={18} />} headline="Schedule" supporting="Slot in 4-week planner" chev />
         <MListRow leading={<MI.FileText size={18} />} headline="Daily log" supporting="From foreman" chev />
-        <MListRow leading={<MI.Layers size={18} />} headline="Files" supporting="Drawings, contracts" chev />
       </MListInset>
+    </div>
+  )
+}
+
+function EstimateTab({ project, navigate }: { project: ProjectRow; navigate: (path: string) => void }) {
+  return (
+    <div style={{ paddingTop: 8, padding: 16 }}>
+      <p style={{ color: 'var(--m-ink-2)', fontSize: 14, lineHeight: 1.5, marginTop: 0 }}>
+        Estimate detail loads in its own screen — line items, totals, and send-to-client live there.
+      </p>
+      <div style={{ marginTop: 16 }}>
+        <button
+          type="button"
+          className="m-btn"
+          data-variant="primary"
+          onClick={() => navigate(`/m/projects/${project.id}/estimate`)}
+        >
+          Open estimate
+        </button>
+      </div>
     </div>
   )
 }

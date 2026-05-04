@@ -22,10 +22,13 @@ import { MBottomTabs, MBody, MI, MLargeHead, MShell, MTopBar } from '../componen
 import { AdminHome } from './m/admin-home.js'
 import { MobileProjectsList } from './m/projects-list.js'
 import { MobileProjectDetail } from './m/project-detail.js'
+import { MobileTakeoffList } from './m/takeoff-list.js'
+import { MobileEstimateReview } from './m/estimate-review.js'
 
 export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
   companyRole: 'admin' | 'foreman' | 'office' | 'member'
+  companySlug: string
 }
 
 const ADMIN_TABS = [
@@ -51,7 +54,7 @@ const WORKER_TABS = [
   { id: 'log', label: 'Log', Icon: MI.Camera },
 ] as const
 
-export function MobileShell({ bootstrap, companyRole }: MobileShellProps) {
+export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShellProps) {
   const params = useParams<{ projectId?: string }>()
   const location = useLocation()
   const navigate = useNavigate()
@@ -82,6 +85,9 @@ export function MobileShell({ bootstrap, companyRole }: MobileShellProps) {
             }
           />
           <Route path="projects" element={<MobileProjectsList bootstrap={bootstrap} />} />
+          <Route path="projects/:projectId" element={<MobileProjectDetail bootstrap={bootstrap} />} />
+          <Route path="projects/:projectId/takeoff" element={<MobileTakeoffList companySlug={companySlug} />} />
+          <Route path="projects/:projectId/estimate" element={<MobileEstimateReview companySlug={companySlug} />} />
           <Route path="projects/:projectId/*" element={<MobileProjectDetail bootstrap={bootstrap} />} />
           <Route path="schedule/*" element={<TabPlaceholder title="Schedule" body="Phase 6 lands here." />} />
           <Route path="rentals/*" element={<TabPlaceholder title="Rentals" body="Phase 9 lands here." />} />
