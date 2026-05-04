@@ -58,7 +58,6 @@ import {
 import { Input } from './components/ui/input.js'
 import { Toaster } from './components/ui/toast.js'
 import { recordSupportRoute, recordSupportState } from './support-recorder.js'
-import { normalizeMobileShellRole } from './lib/active-context.js'
 
 const loadAuditView = () => import('./views/audit.js')
 const loadBonusSimView = () => import('./views/bonus-sim.js')
@@ -79,8 +78,9 @@ const loadProjectsView = () => import('./views/projects.js')
 const loadRentalsView = () => import('./views/rentals.js')
 const loadScheduleView = () => import('./views/schedule.js')
 const loadTakeoffsView = () => import('./views/takeoffs.js')
-const loadMPreviewView = () => import('./views/m-preview.js')
-const loadMShellView = () => import('./views/m-shell.js')
+// m-preview and m-shell migrated to apps/web-v2/src/views/ on 2026-05-04
+// (see ops/migrate-mobile-design-to-v2). The /m/* and /m-preview routes
+// in v1 below are kept to redirect to v2 if anyone bookmarks them.
 
 const AuditView = lazy(() => loadAuditView().then(({ AuditView }) => ({ default: AuditView })))
 const BonusSimView = lazy(() => loadBonusSimView().then(({ BonusSimView }) => ({ default: BonusSimView })))
@@ -113,8 +113,9 @@ const ProjectsView = lazy(() => loadProjectsView().then(({ ProjectsView }) => ({
 const RentalsView = lazy(() => loadRentalsView().then(({ RentalsView }) => ({ default: RentalsView })))
 const ScheduleView = lazy(() => loadScheduleView().then(({ ScheduleView }) => ({ default: ScheduleView })))
 const TakeoffsView = lazy(() => loadTakeoffsView().then(({ TakeoffsView }) => ({ default: TakeoffsView })))
-const MPreviewView = lazy(() => loadMPreviewView().then(({ MPreviewView }) => ({ default: MPreviewView })))
-const MobileShell = lazy(() => loadMShellView().then(({ MobileShell }) => ({ default: MobileShell })))
+// MPreviewView and MobileShell migrated to apps/web-v2/src/views/ — see
+// the comment above where the lazy loaders used to be. v1 routes below
+// redirect.
 
 const ROUTE_PRELOADS: Record<string, () => Promise<unknown>> = {
   '/audit': loadAuditView,
@@ -716,30 +717,10 @@ function AppShell() {
             path="/dev/*"
             element={devSurfaceEnabled ? <DevScratchView features={features} /> : <Navigate to="/projects" replace />}
           />
-          <Route
-            path="/m-preview"
-            element={devSurfaceEnabled ? <MPreviewView /> : <Navigate to="/projects" replace />}
-          />
-          <Route
-            path="/m/*"
-            element={
-              <MobileShell
-                bootstrap={bootstrap}
-                companyRole={normalizeMobileShellRole(sessionRole)}
-                companySlug={companySlug}
-              />
-            }
-          />
-          <Route
-            path="/m/projects/:projectId/*"
-            element={
-              <MobileShell
-                bootstrap={bootstrap}
-                companyRole={normalizeMobileShellRole(sessionRole)}
-                companySlug={companySlug}
-              />
-            }
-          />
+          {/* /m and /m-preview moved to apps/web-v2/. v1 redirects so any
+              bookmark from before the migration lands somewhere reachable. */}
+          <Route path="/m-preview" element={<Navigate to="/m-preview" replace />} />
+          <Route path="/m/*" element={<Navigate to="/m" replace />} />
           {/* If a signed-in user lands on a sign-in URL, bounce them home. */}
           <Route path="/sign-in/*" element={<Navigate to="/confirm" replace />} />
           <Route path="/sign-up/*" element={<Navigate to="/confirm" replace />} />

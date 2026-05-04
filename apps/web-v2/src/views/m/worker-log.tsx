@@ -6,7 +6,7 @@
  */
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiPost, type BootstrapResponse } from '../../api.js'
+import { apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
 import { MBody, MButton, MButtonStack, MI, MInput, MTapCard, MTextarea, MTopBar } from '../../components/m/index.js'
 
 export function WorkerLog({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {

@@ -75,35 +75,10 @@ export default tseslint.config(
     },
   },
   {
-    files: [
-      'apps/web/src/components/ui/**/*.{ts,tsx}',
-      'apps/web/src/components/m/**/*.{ts,tsx}',
-      'apps/web/src/components/m-states/**/*.{ts,tsx}',
-    ],
+    files: ['apps/web/src/components/ui/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-syntax': 'off',
       'react-refresh/only-export-components': 'off',
-    },
-  },
-  {
-    // Views layer of PR #229's mobile design system (apps/web/src/views/m/**,
-    // m-shell.tsx, m-preview.tsx) uses raw <button>/<select>/<textarea> in
-    // ~30 places, plus a few react-hooks purity / exhaustive-deps / unused
-    // import violations. The retired apps/web/ doesn't ship to prod
-    // (Dockerfile copies apps/web-v2/dist only), so enforcing the v1
-    // design-system rules on this dead-code path just blocks main.
-    // Structural answer: move the work to apps/web-v2/ or revert. Tracked
-    // separately — not unilaterally my call.
-    files: ['apps/web/src/views/m/**/*.{ts,tsx}', 'apps/web/src/views/m-shell.tsx', 'apps/web/src/views/m-preview.tsx'],
-    linterOptions: {
-      reportUnusedDisableDirectives: 'off',
-    },
-    rules: {
-      'no-restricted-syntax': 'off',
-      'react-hooks/exhaustive-deps': 'off',
-      'react-hooks/preserve-manual-memoization': 'off',
-      'react-hooks/purity': 'off',
-      '@typescript-eslint/no-unused-vars': 'off',
     },
   },
   {

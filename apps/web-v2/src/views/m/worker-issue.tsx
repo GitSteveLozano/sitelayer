@@ -12,7 +12,7 @@
  */
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiPost, type BootstrapResponse } from '../../api.js'
+import { apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
 import { MBody, MButton, MButtonStack, MI, MTapCard, MTextarea, MTopBar } from '../../components/m/index.js'
 
 type IssueCategory = {

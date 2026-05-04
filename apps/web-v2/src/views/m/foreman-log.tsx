@@ -5,7 +5,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiGet, apiPost, type BootstrapResponse } from '../../api.js'
+import { apiGet, apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
 import { MBody, MButton, MI, MKpi, MKpiRow, MSectionH, MSelect, MTextarea, MTopBar } from '../../components/m/index.js'
 import { MAiStripe } from '../../components/m/ai.js'
 import { formatDecimalHours, todayIso } from './format.js'

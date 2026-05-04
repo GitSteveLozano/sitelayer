@@ -5,7 +5,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { listInventoryItems, type InventoryItemRow } from '../../api.js'
+import { listInventoryItems, type InventoryItemRow } from '../../api-v1-compat.js'
 import {
   MBody,
   MChip,

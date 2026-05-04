@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiGet, apiPost, type BootstrapResponse } from '../../api.js'
+import { apiGet, apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
 import { MAvatar, MBody, MButton, MButtonRow, MI, MLargeHead, MTopBar, initialsFor } from '../../components/m/index.js'
 import { formatRunningHours, timeOfDay, todayIso } from './format.js'
 

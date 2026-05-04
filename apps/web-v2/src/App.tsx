@@ -22,6 +22,12 @@ const FinancialRoute = lazy(() => import('@/routes/financial'))
 const OnboardingRoute = lazy(() => import('@/routes/onboarding'))
 const LocationPrimeRoute = lazy(() => import('@/routes/permissions-location'))
 const NotificationsPrimeRoute = lazy(() => import('@/routes/permissions-notifications'))
+// /m/* — Steve's mobile design system from PR #229, migrated 2026-05-04
+// from apps/web/src/views/m-shell.tsx. The route renders the shell that
+// then dispatches to admin/foreman/worker tabs internally. Lives outside
+// AppShell because it has its own bottom-tab chrome.
+const MRoute = lazy(() => import('@/routes/m'))
+const MPreviewRoute = lazy(() => import('@/views/m-preview').then((m) => ({ default: m.MPreviewView })))
 
 // Single client for the whole app. v2 uses TanStack Query for fetching
 // and caching; offline-aware mutations land in Phase 1.
@@ -90,6 +96,12 @@ export default function App() {
                     full-screen takeovers without bottom-tab chrome. */}
                 <Route path="/permissions/location" element={<LocationPrimeRoute />} />
                 <Route path="/permissions/notifications" element={<NotificationsPrimeRoute />} />
+                {/* Steve's role-aware mobile shell from PR #229 — also
+                    renders outside AppShell because it provides its own
+                    bottom-tab nav. /m-preview is the dev-only primitive
+                    showcase. */}
+                <Route path="/m/*" element={<MRoute />} />
+                <Route path="/m-preview" element={<MPreviewRoute />} />
               </Routes>
             </FirstRunGate>
           </Suspense>
