@@ -5,6 +5,7 @@ import { Attribution } from '@/components/ai'
 import { TopAppBar } from '@/components/nav/TopAppBar'
 import { NavDrawer } from '@/components/nav/NavDrawer'
 import { ProjectSwitcherSheet } from '@/components/nav/ProjectSwitcherSheet'
+import { CleanBulkCard, TimeReviewRunCard } from '@/components/time-review'
 import { useCurrentProjectId } from '@/lib/current-project'
 import {
   useClockTimeline,
@@ -13,6 +14,7 @@ import {
   useProject,
   useProjectSummary,
   useSchedules,
+  useTimeReviewRuns,
   type ProjectDetail,
 } from '@/lib/api'
 import { findOpenSpan, pairClockSpans, sumHoursInRange, startOfDay } from '@/lib/clock-derive'
@@ -22,38 +24,48 @@ import { TakeoffListScreen } from './takeoff-list'
 /**
  * `prj-detail` shell — top app bar + sub-tab nav + per-sub-tab content.
  *
- * Sub-tabs from `Sitemap.html` § 02 panel 2:
- *   - Overview (default) — KPI tiles + open-log card + estimate jump
- *   - Takeoff — links into the polygon canvas + summary
- *   - Schedule — sub-list of upcoming crew assignments for this project
- *   - Time — burden detail with stacked-bar per-worker breakdown
+ * Sub-tabs (per the post-MVP IA — labor management is the per-project
+ * Crew tab, not a top-level destination):
+ *   - Overview — KPI tiles, open-log card, action grid
+ *   - Estimate — scope-vs-bid, send sheet, push to QBO
+ *   - Crew — approval queue scoped to this project, links to Burden /
+ *            Vs plan; replaces the old "Time" sub-tab
+ *   - Schedule — upcoming crew assignments
  *
- * Estimate is reachable via `?tab=estimate` (preserved so existing
- * deep links work) and via the "Open estimate" button on Overview,
- * but is intentionally not in the visible tab strip — the design
- * keeps the strip to the four operational views.
+ * Takeoff is reachable via `?tab=takeoff` (preserved so existing
+ * deep links and the takeoff sub-screens' back-links keep working)
+ * and via the Takeoff button on Overview, but is intentionally not
+ * in the visible tab strip.
+ *
+ * `?tab=time` is aliased to Crew for backward compatibility — old
+ * bookmarks land on the new tab without a redirect round-trip.
  *
  * Sub-tab state lives in the `?tab=` query param so the back button
  * works the way users expect.
  */
-type SubTab = 'overview' | 'takeoff' | 'estimate' | 'schedule' | 'time'
+type SubTab = 'overview' | 'takeoff' | 'estimate' | 'schedule' | 'crew'
 
-const VALID_SUB_TABS: ReadonlySet<SubTab> = new Set(['overview', 'takeoff', 'estimate', 'schedule', 'time'])
+const VALID_SUB_TABS: ReadonlySet<SubTab> = new Set(['overview', 'takeoff', 'estimate', 'schedule', 'crew'])
 
 const VISIBLE_SUB_TABS: ReadonlyArray<{ key: SubTab; label: string }> = [
   { key: 'overview', label: 'Overview' },
-  { key: 'takeoff', label: 'Takeoff' },
+  { key: 'estimate', label: 'Estimate' },
+  { key: 'crew', label: 'Crew' },
   { key: 'schedule', label: 'Schedule' },
-  { key: 'time', label: 'Time' },
 ]
+
+function normalizeSubTab(raw: string | null): SubTab {
+  if (raw === 'time') return 'crew'
+  if (raw && (VALID_SUB_TABS as ReadonlySet<string>).has(raw)) return raw as SubTab
+  return 'overview'
+}
 
 export function ProjectDetailScreen() {
   const params = useParams<{ id: string }>()
   const navigate = useNavigate()
   const id = params.id ?? null
   const [searchParams, setSearchParams] = useSearchParams()
-  const tabParam = searchParams.get('tab') as SubTab | null
-  const tab: SubTab = tabParam && VALID_SUB_TABS.has(tabParam) ? tabParam : 'overview'
+  const tab: SubTab = normalizeSubTab(searchParams.get('tab'))
 
   const [, setCurrentProjectId] = useCurrentProjectId()
   const [drawerOpen, setDrawerOpen] = useState(false)
@@ -146,7 +158,7 @@ export function ProjectDetailScreen() {
         {tab === 'takeoff' ? <TakeoffListScreen projectId={data.id} /> : null}
         {tab === 'estimate' ? <EstimateSummaryScreen projectId={data.id} /> : null}
         {tab === 'schedule' ? <SchedulePreview projectId={data.id} /> : null}
-        {tab === 'time' ? <TimePreview projectId={data.id} /> : null}
+        {tab === 'crew' ? <CrewTab projectId={data.id} /> : null}
       </div>
 
       <NavDrawer
@@ -236,9 +248,17 @@ function OverviewTab({ project, onOpenEstimate }: { project: ProjectDetail; onOp
         </MobileButton>
       </div>
       <div className="grid grid-cols-2 gap-2.5 pt-1">
+        {/* Takeoff stays one tap away from Overview now that the
+            sub-tab strip is Overview / Estimate / Crew / Schedule —
+            see the CLAUDE.md note on the IA reshuffle. */}
+        <Link to={`/projects/${project.id}?tab=takeoff`} className="block">
+          <MobileButton variant="ghost">Takeoff</MobileButton>
+        </Link>
         <Link to={`/projects/${project.id}/setup`} className="block">
           <MobileButton variant="ghost">Project setup</MobileButton>
         </Link>
+      </div>
+      <div className="grid grid-cols-1 gap-2.5 pt-1">
         <Link to={`/projects/${project.id}/rental-contract`} className="block">
           <MobileButton variant="ghost">Rental contract</MobileButton>
         </Link>
@@ -285,96 +305,116 @@ function SchedulePreview({ projectId }: { projectId: string }) {
 }
 
 /**
- * Project Time-tab burden card — Sitemap §8 panel 3 ("Labor burden").
- * Big total, stacked-segment bar showing each worker's contribution,
- * then a per-worker list with hours + amount.
+ * `prj-detail` Crew sub-tab — project-scoped flavor of the cross-project
+ * approval queue. Shares the bulk-approve and per-run card components
+ * from `@/components/time-review` so the cross-project queue and this
+ * surface never drift.
  *
- * Each worker gets a deterministic accent shade so the segment in the
- * bar lines up with the row underneath without legend gymnastics.
+ * KPI strip surfaces what we already aggregate today (on-site count,
+ * crew-hours today, pending review count). Week-to-date hours, loaded
+ * cost vs plan, and pace are tracked in CLAUDE.md as a follow-on —
+ * `useLaborBurdenToday` is today-only at the moment.
+ *
+ * Lunch / GPS-match / per-anomaly text from the design also need
+ * schema extensions; this tab ships with the data we have and a calm
+ * fallback in their place.
  */
-function TimePreview({ projectId }: { projectId: string }) {
-  const burden = useLaborBurdenToday({ projectId })
-  const data = burden.data
-  if (burden.isPending || !data) {
-    return (
-      <Card tight>
-        <div className="text-[12px] text-ink-3">Loading burden…</div>
-      </Card>
-    )
-  }
-  const total = data.total_cents
-  const sortedWorkers = [...data.per_worker].sort((a, b) => b.total_cents - a.total_cents)
-  const segmentColor = (i: number): string => BURDEN_PALETTE[i % BURDEN_PALETTE.length] ?? BURDEN_PALETTE[0]!
+function CrewTab({ projectId }: { projectId: string }) {
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const timeline = useClockTimeline({ date: todayIso })
+  const events = (timeline.data?.events ?? []).filter((e) => e.project_id === projectId)
+  const spans = pairClockSpans(events)
+  const open = findOpenSpan(spans)
+  const onSiteNow = open ? 1 : 0
+  const hoursToday = sumHoursInRange(
+    spans,
+    startOfDay(Date.now()),
+    startOfDay(Date.now()) + 24 * 3600 * 1000,
+    Date.now(),
+  )
+
+  // Project-scoped runs across all states so we can show both the
+  // pending split (clean / needs review) and a tail of recently
+  // approved/disputed without three queries.
+  const runs = useTimeReviewRuns({ projectId })
+  const all = runs.data?.timeReviewRuns ?? []
+  const pending = all.filter((r) => r.state === 'pending')
+  const cleanPending = pending.filter((r) => r.anomaly_count === 0)
+  const reviewPending = pending.filter((r) => r.anomaly_count > 0)
+  const recentDecided = all.filter((r) => r.state !== 'pending').slice(0, 3)
+  const projectByIdEmpty = useMemo(() => new Map<string, never>(), [])
+
   return (
-    <Card>
-      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Burden today</div>
-      <div className="font-mono tabular-nums text-[28px] font-bold tracking-tight leading-none mt-1">
-        ${(total / 100).toFixed(2)}
+    <div className="space-y-3">
+      <div className="grid grid-cols-3 gap-2.5">
+        <Card tight>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">On site now</div>
+          <div className="num text-[22px] font-semibold mt-1">{onSiteNow}</div>
+        </Card>
+        <Card tight>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Hours today</div>
+          <div className="num text-[22px] font-semibold mt-1">{hoursToday.toFixed(1)}h</div>
+        </Card>
+        <Card tight>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Pending</div>
+          <div className="num text-[22px] font-semibold mt-1">{pending.length}</div>
+          {pending.length > 0 ? (
+            <div className="text-[10px] text-ink-3 mt-0.5">
+              {reviewPending.length > 0 ? `${reviewPending.length} need review` : 'all clean'}
+            </div>
+          ) : null}
+        </Card>
       </div>
-      <div className="text-[11px] text-ink-3 mt-1">
-        {data.total_hours.toFixed(1)} crew-hrs · {sortedWorkers.length} worker
-        {sortedWorkers.length === 1 ? '' : 's'}
-        {data.total_ot_hours > 0 ? ` · ${data.total_ot_hours.toFixed(1)} OT` : ''}
-      </div>
-      {sortedWorkers.length > 0 ? (
-        <div className="mt-3 flex h-2 rounded-full overflow-hidden" aria-hidden="true">
-          {sortedWorkers.map((w, i) => {
-            const pct = total > 0 ? (w.total_cents / total) * 100 : 0
-            return <span key={w.worker_id} style={{ width: `${pct}%`, background: segmentColor(i) }} />
-          })}
-        </div>
-      ) : null}
-      {data.total_budget_cents > 0 ? (
-        <div className="font-mono tabular-nums text-[11px] text-ink-3 mt-2">
-          {(data.burden_pct_of_budget * 100).toFixed(0)}% of ${(data.total_budget_cents / 100).toLocaleString()} budget
-        </div>
+
+      {runs.isPending ? (
+        <Card tight>
+          <div className="text-[12px] text-ink-3">Loading approvals…</div>
+        </Card>
+      ) : pending.length === 0 ? (
+        <Card tight>
+          <div className="text-[13px] font-semibold">Nothing waiting on you</div>
+          <div className="text-[11px] text-ink-3 mt-1">
+            New time-review runs land here as the foreman submits crew time for this project.
+          </div>
+        </Card>
       ) : (
-        <div className="text-[11px] text-ink-3 mt-2">No daily budget set on this project.</div>
-      )}
-      {sortedWorkers.length > 0 ? (
-        <ul className="mt-3 divide-y divide-line">
-          {sortedWorkers.map((w, i) => (
-            <li key={w.worker_id} className="py-2 first:pt-0 last:pb-0 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <span
-                  aria-hidden="true"
-                  className="w-2 h-2 rounded-sm shrink-0"
-                  style={{ background: segmentColor(i) }}
-                />
-                <span className="text-[12px] text-ink-2 font-mono tabular-nums">
-                  {(w.straight_hours + w.ot_hours).toFixed(1)}h
-                </span>
-                <span className="text-[12px] text-ink-3 truncate">
-                  {w.ot_hours > 0 ? `incl ${w.ot_hours.toFixed(1)} OT` : 'straight'}
-                </span>
+        <>
+          {cleanPending.length > 0 ? <CleanBulkCard runs={cleanPending} /> : null}
+          {reviewPending.length > 0 ? (
+            <>
+              <div className="px-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
+                Needs review ({reviewPending.length})
               </div>
-              <span className="font-mono tabular-nums text-[12px] font-medium shrink-0">
-                ${(w.total_cents / 100).toFixed(2)}
-              </span>
-            </li>
+              {reviewPending.map((row) => (
+                <TimeReviewRunCard key={row.id} row={row} projectById={projectByIdEmpty} hideProject />
+              ))}
+            </>
+          ) : null}
+        </>
+      )}
+
+      {recentDecided.length > 0 ? (
+        <>
+          <div className="px-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Recent</div>
+          {recentDecided.map((row) => (
+            <TimeReviewRunCard key={row.id} row={row} projectById={projectByIdEmpty} hideProject />
           ))}
-        </ul>
+        </>
       ) : null}
-      <div className="mt-3">
-        <Attribution source="Live from /api/labor-burden/today?project_id=…" />
+
+      <Attribution source="Live from /api/time-review-runs?project_id=… + /api/clock/timeline" />
+
+      <div className="grid grid-cols-2 gap-2.5 pt-2">
+        <Link to="/time/burden" className="block">
+          <MobileButton variant="ghost">Burden →</MobileButton>
+        </Link>
+        <Link to="/time/vs" className="block">
+          <MobileButton variant="ghost">Vs plan →</MobileButton>
+        </Link>
       </div>
-    </Card>
+    </div>
   )
 }
-
-/**
- * Six-stop accent ramp so the stacked-bar segments stay visually
- * distinct without falling out of the warm-sand palette. Sourced from
- * the design's accent + semantic ramp.
- */
-const BURDEN_PALETTE = [
-  'var(--m-accent)',
-  'var(--m-accent-ink)',
-  'var(--m-blue)',
-  'var(--m-green)',
-  'var(--m-amber)',
-  'var(--m-red)',
-] as const
 
 function formatScheduleDate(iso: string): string {
   const d = new Date(iso + 'T00:00:00')
