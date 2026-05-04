@@ -21,6 +21,7 @@ import { computeActiveContext, type ActiveContext } from '../lib/active-context.
 import { MBottomTabs, MBody, MI, MLargeHead, MShell, MTopBar } from '../components/m/index.js'
 import { AdminHome } from './m/admin-home.js'
 import { MobileProjectsList } from './m/projects-list.js'
+import { MobileProjectDetail } from './m/project-detail.js'
 
 export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
@@ -81,7 +82,7 @@ export function MobileShell({ bootstrap, companyRole }: MobileShellProps) {
             }
           />
           <Route path="projects" element={<MobileProjectsList bootstrap={bootstrap} />} />
-          <Route path="projects/:projectId/*" element={<TabPlaceholder title="Project" body="Phase 4 lands here." />} />
+          <Route path="projects/:projectId/*" element={<MobileProjectDetail bootstrap={bootstrap} />} />
           <Route path="schedule/*" element={<TabPlaceholder title="Schedule" body="Phase 6 lands here." />} />
           <Route path="rentals/*" element={<TabPlaceholder title="Rentals" body="Phase 9 lands here." />} />
           <Route path="more/*" element={<TabPlaceholder title="More" body="Settings, profile, integrations." />} />
