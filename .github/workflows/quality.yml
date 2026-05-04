@@ -36,6 +36,9 @@ jobs:
       - name: Migration immutability
         run: bash scripts/check-migrations-immutable.sh
 
+      - name: v1 no-new-files guard
+        run: bash scripts/check-no-new-v1-files.sh
+
       - run: npm run lint
 
       - run: npm run format

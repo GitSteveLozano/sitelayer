@@ -2,6 +2,29 @@
 
 Construction operations platform: blueprint takeoff, estimation, crew scheduling, and QBO sync.
 
+## ⚠️ STOP — Read this before adding any UI code
+
+**`apps/web/` is RETIRED.** Production runs **`apps/web-v2/`**. If you are adding a new screen, primitive, or view, the place is **`apps/web-v2/`** — not `apps/web/`.
+
+Mechanical proof points (so you don't have to take this prose on faith):
+
+- `Dockerfile:66` only `COPY`s `apps/web-v2/dist` into the runtime image.
+- `docker-compose.prod.yml:web` runs `npm start -w @sitelayer/web-v2`.
+- `docker-compose.preview.yml:web` runs `npm run dev:web-v2`.
+- `docker-compose.yml:web` (local dev) runs `npm run dev:web-v2`.
+- `.github/workflows/deploy-pages.yml` builds `@sitelayer/web-v2`.
+- `apps/web/RETIRED.md` documents the cutover.
+
+Where new code goes:
+
+- **New mobile primitive** → `apps/web-v2/src/components/mobile/` (Avatar, Banner, BurdenHeroCard, Button, Card, ConfirmSheet, Kpi, LargeHead, PhoneTopBar, Pill, QuickAction, Row, SectionH, Sheet are already there — extend, don't reinvent).
+- **New screen** → `apps/web-v2/src/screens/<persona>/` (`owner`, `foreman`, `worker`, `projects`, `rentals`, `financial`, `settings`, `inventory-admin`, `integrations`, `onboarding` already exist — match the persona).
+- **New API route** → `apps/api/src/routes/`. Backend is shared between v1 and v2 and is real, live code.
+
+CI guard: `scripts/check-no-new-v1-files.sh` runs in `Quality / validate` and **fails the PR** if any new file is added under `apps/web/src/`. Modifications to existing v1 files are allowed (the rollback target needs to stay patchable). To intentionally override on a v1 rollback patch that genuinely needs a new file, set `V1_GUARD_OVERRIDE=1`.
+
+This rule was added on 2026-05-04 after PR #229 + #231 added 1,700+ LOC of mobile design system into `apps/web/src/views/m/` that won't ship and duplicates primitives that already existed in `apps/web-v2/src/components/mobile/`. See [docs/MOBILE_DESIGN_ROADMAP.md](docs/MOBILE_DESIGN_ROADMAP.md) for that work; **its eventual home should be `apps/web-v2/`** if it lands at all.
+
 ## Agent skills
 
 This repo uses repo-local agent docs to make imported skills explicit and repeatable. When a root `SKILL.md` exists, treat it as the project-local workflow skill for this repository.
