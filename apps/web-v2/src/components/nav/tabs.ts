@@ -1,4 +1,4 @@
-import { Briefcase, Clock, Grid3x3, Home, Package } from 'lucide-react'
+import { Briefcase, Calendar, Grid3x3, Home, Users } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 
 export interface TabDef {
@@ -8,14 +8,16 @@ export interface TabDef {
 }
 
 /**
- * The five permanent tabs from `Sitemap.html` § 00. Order is canonical:
- * Home / Projects / Time / Rentals / More. Settings was demoted to a
- * More row in the design — don't add it back as a sixth tab.
+ * The five permanent tabs from the post-audit IA: Home / Projects /
+ * Schedule / Crew / More. Time and Rentals were demoted out of the
+ * bottom bar — Time is reachable from the drawer (label "Time", route
+ * /time which serves the same cross-project queue as Crew), Rentals
+ * lives under More + the workspace nav group.
  */
 export const TABS: ReadonlyArray<TabDef> = [
   { to: '/', label: 'Home', icon: Home },
   { to: '/projects', label: 'Projects', icon: Briefcase },
-  { to: '/time', label: 'Time', icon: Clock },
-  { to: '/rentals', label: 'Rentals', icon: Package },
+  { to: '/schedule', label: 'Schedule', icon: Calendar },
+  { to: '/crew', label: 'Crew', icon: Users },
   { to: '/more', label: 'More', icon: Grid3x3 },
 ]
