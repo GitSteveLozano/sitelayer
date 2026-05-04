@@ -8,7 +8,7 @@
  */
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { BootstrapResponse } from '../../api.js'
+import type { BootstrapResponse } from '../../api-v1-compat.js'
 import { MBody, MI, MLargeHead, MListInset, MListRow, MPill, MSectionH, MTopBar } from '../../components/m/index.js'
 import { formatDecimalHours, formatMoney, shortDate } from './format.js'
 

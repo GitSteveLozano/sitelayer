@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { apiGet, type ProjectSummary } from '../../api.js'
+import { apiGet, type ProjectSummary } from '../../api-v1-compat.js'
 import {
   MBody,
   MButton,

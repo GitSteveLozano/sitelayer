@@ -7,7 +7,7 @@
  * bootstrap labor counts as a proxy until the timeline call is wired.
  */
 import { useMemo, useState } from 'react'
-import type { BootstrapResponse } from '../../api.js'
+import type { BootstrapResponse } from '../../api-v1-compat.js'
 import {
   MAvatar,
   MBody,

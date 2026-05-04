@@ -9,7 +9,7 @@
  */
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { apiGet } from '../../api.js'
+import { apiGet } from '../../api-v1-compat.js'
 import { MBody, MButton, MI, MListInset, MListRow, MSectionH, MTopBar } from '../../components/m/index.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
 import { shortDate } from './format.js'

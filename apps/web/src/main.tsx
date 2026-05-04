@@ -8,7 +8,8 @@ import { captureException, initSentry } from './instrument.js'
 import { installSupportRecorder } from './support-recorder.js'
 import './styles.css'
 import './components/ui/mobile.css'
-import './styles/m.css'
+// styles/m.css moved to apps/web-v2/src/styles/m.css with the rest of
+// the mobile design system on 2026-05-04.
 
 const BUILD_ID = import.meta.env.VITE_SENTRY_RELEASE || import.meta.env.MODE || 'local'
 const CHUNK_RELOAD_STORAGE_KEY = 'sitelayer.chunk-reload-build'

@@ -11,7 +11,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { apiPost, type BootstrapResponse } from '../../api.js'
+import { apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
 import {
   MBody,
   MButton,

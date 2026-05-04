@@ -25,6 +25,16 @@ CI guard: `scripts/check-no-new-v1-files.sh` runs in `Quality / validate` and **
 
 This rule was added on 2026-05-04 after PR #229 + #231 added 1,700+ LOC of mobile design system into `apps/web/src/views/m/` that won't ship and duplicates primitives that already existed in `apps/web-v2/src/components/mobile/`. See [docs/MOBILE_DESIGN_ROADMAP.md](docs/MOBILE_DESIGN_ROADMAP.md) for that work; **its eventual home should be `apps/web-v2/`** if it lands at all.
 
+### About the `apps/web-v2/src/views/m/` mobile shell
+
+On 2026-05-04 the mobile design system from PR #229 (originally landed under `apps/web/src/`) was relocated into `apps/web-v2/src/` so it actually ships. Same files, same naming.
+
+`apps/web-v2/src/api-v1-compat.ts` keeps a v1-style `apiGet`/`apiPost`/`apiPatch` surface for the mobile shell, but the function bodies are thin shims over v2's `lib/api/client.ts:request<T>()`. **There is exactly one HTTP client in v2** — the shim is just types + four wrapper functions (~250 lines, was 1.6k).
+
+`apps/web-v2/src/views/m-shell.tsx` mounts at `/m/*`, with its own bottom-tab nav, **outside** the main `AppShell`. It's a parallel UX next to v2's main routes. A future call: either lift the m-shell pieces into v2's main `screens/<persona>/` tree, or keep `/m` as the canonical mobile entry and retire v2's existing main routes.
+
+If you're adding _more_ mobile screens, prefer `apps/web-v2/src/screens/<persona>/` (uses TanStack Query, integrates with AppShell). If you're patching existing m-shell screens, edit them in place under `apps/web-v2/src/views/m/`.
+
 ## Agent skills
 
 This repo uses repo-local agent docs to make imported skills explicit and repeatable. When a root `SKILL.md` exists, treat it as the project-local workflow skill for this repository.

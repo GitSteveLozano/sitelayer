@@ -5,6 +5,11 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import { startOfflineReplayLoop } from './lib/offline/replay'
 import './styles/globals.css'
+// m.css is the design-token + component CSS for the mobile shell at /m/*
+// (migrated from apps/web in #229). Loaded eagerly so /m routes render
+// without a flash of unstyled content; the rules are scoped under .m-*
+// classes so they don't bleed into v2's main routes.
+import './styles/m.css'
 
 const container = document.getElementById('root')
 if (!container) throw new Error('#root not found')

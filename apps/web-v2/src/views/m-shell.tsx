@@ -16,7 +16,7 @@
  */
 import { useMemo } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
-import type { BootstrapResponse } from '../api.js'
+import type { BootstrapResponse } from '../api-v1-compat.js'
 import { computeActiveContext, type ActiveContext } from '../lib/active-context.js'
 import { MBottomTabs, MBody, MI, MShell, MTopBar } from '../components/m/index.js'
 import { AdminHome } from './m/admin-home.js'

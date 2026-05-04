@@ -1,0 +1,60 @@
+/**
+ * /m/* route mount point — bridges v2's runtime to the mobile shell that
+ * Steve built in PR #229 (originally inside apps/web/src/views/m-shell.tsx,
+ * migrated here on 2026-05-04).
+ *
+ * The mobile shell expects:
+ *   - bootstrap: BootstrapResponse | null   (v1-style /api/bootstrap response)
+ *   - companyRole: 'admin' | 'foreman' | 'office' | 'member'
+ *   - companySlug: string
+ *
+ * v2's main runtime uses TanStack Query + Clerk-derived role. This wrapper
+ * fetches the v1 bootstrap on mount and threads it in so we don't have to
+ * rewrite the shell against v2's hooks. The two API clients coexist —
+ * api-v1-compat.ts (the moved 1.6k-line v1 client) services the shell;
+ * lib/api/* services everything else. Deduplication is a follow-up.
+ */
+import { useEffect, useState } from 'react'
+import { apiGet, getStoredCompanySlug, type BootstrapResponse, type SessionResponse } from '../api-v1-compat'
+import { normalizeMobileShellRole } from '../lib/active-context'
+import { MobileShell } from '../views/m-shell'
+
+export default function MRoute() {
+  const companySlug = getStoredCompanySlug() ?? 'la-operations'
+  const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null)
+  const [session, setSession] = useState<SessionResponse | null>(null)
+  const [error, setError] = useState<unknown>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([
+      apiGet<BootstrapResponse>('/api/bootstrap', companySlug),
+      apiGet<SessionResponse>('/api/session', companySlug),
+    ])
+      .then(([b, s]) => {
+        if (cancelled) return
+        setBootstrap(b)
+        setSession(s)
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companySlug])
+
+  if (error) {
+    return <div className="p-4 text-[12px] text-bad">Failed to load: {String(error)}</div>
+  }
+
+  // Match the v1 caller pattern: prefer the membership row that lines up
+  // with the active company, fall back to user.role on the session, then
+  // fall back to 'member' (which the shell upgrades per project
+  // assignment).
+  const sessionRole = session?.memberships?.find((m) => m.slug === companySlug)?.role ?? session?.user?.role ?? null
+
+  return (
+    <MobileShell bootstrap={bootstrap} companyRole={normalizeMobileShellRole(sessionRole)} companySlug={companySlug} />
+  )
+}

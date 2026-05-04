@@ -7,7 +7,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { BootstrapResponse } from '../../api.js'
+import type { BootstrapResponse } from '../../api-v1-compat.js'
 import { MBody, MChip, MChipRow, MI, MSectionH, MTopBar } from '../../components/m/index.js'
 import { MEmptyState } from '../../components/m-states/index.js'
 import { shortDate } from './format.js'

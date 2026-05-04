@@ -9,7 +9,7 @@
  * in <30 min" trigger, relaxed slightly because we don't have realtime.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { apiGet, apiPatch, type BootstrapResponse } from '../../api.js'
+import { apiGet, apiPatch, type BootstrapResponse } from '../../api-v1-compat.js'
 import {
   MBody,
   MButton,
@@ -60,7 +60,6 @@ export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapR
 
   useEffect(() => {
     void refresh()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companySlug])
 
   const counts = useMemo(() => {

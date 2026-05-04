@@ -7,7 +7,7 @@
  */
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { BootstrapResponse } from '../../api.js'
+import type { BootstrapResponse } from '../../api-v1-compat.js'
 import {
   MBody,
   MButton,

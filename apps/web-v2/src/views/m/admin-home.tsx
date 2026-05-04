@@ -9,7 +9,7 @@
  */
 import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { BootstrapResponse, ProjectRow } from '../../api.js'
+import type { BootstrapResponse, ProjectRow } from '../../api-v1-compat.js'
 import {
   MAvatar,
   MBody,
