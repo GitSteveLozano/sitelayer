@@ -22,17 +22,17 @@ import type { ComponentType, SVGProps } from 'react'
  * `MoreScreen` (panel 5). Both surfaces render the same destinations,
  * so they must read from one source.
  *
- * Post-audit bottom-nav is Home / Projects / Schedule / Crew / More.
- * Time was demoted out of the bottom bar but stays reachable via the
- * drawer's primary list (label "Time", route /time — same screen as
- * /crew). Rentals is now a workflow drawer entry, not a tab.
+ * Bottom-nav per the design audit: Home / Projects / Schedule /
+ * Rentals / More. Time and Crew were demoted out of the bottom bar
+ * but stay reachable via the drawer's primary list. /crew and /time
+ * route to the same role-aware screen (cross-project queue / batch
+ * entry / personal hours).
  *
  * Group order matches the design:
- *   - PRIMARY  — the bottom tabs plus Time (drawer-only, same target
- *                as Crew). Always shown so the drawer is a complete
- *                index of the IA.
+ *   - PRIMARY  — the bottom tabs plus drawer-only Crew + Time so the
+ *                drawer is a complete index of the IA.
  *   - WORKFLOW — operational shortcuts (Measurements, Estimates,
- *                Rentals, Crews). These don't have their own tab.
+ *                Live crew). These don't have their own tab.
  *   - WORKSPACE — admin-flavoured surfaces (Catalog / Integrations /
  *                Inventory admin / Bonus simulator / Audit).
  *   - YOU      — per-user prefs.
@@ -61,6 +61,7 @@ export const PRIMARY_NAV: ReadonlyArray<NavItem> = [
   { key: 'home', to: '/', label: 'Today', icon: Home },
   { key: 'projects', to: '/projects', label: 'Projects', icon: Briefcase },
   { key: 'schedule', to: '/schedule', label: 'Schedule', icon: Calendar },
+  { key: 'rentals', to: '/rentals', label: 'Rentals', icon: Package },
   { key: 'crew', to: '/crew', label: 'Crew', icon: Users },
   { key: 'time', to: '/time', label: 'Time', icon: Clock },
 ]
@@ -68,7 +69,6 @@ export const PRIMARY_NAV: ReadonlyArray<NavItem> = [
 export const WORKFLOW_NAV: ReadonlyArray<NavItem> = [
   { key: 'takeoff', to: '/projects?focus=takeoff', label: 'Measurements', icon: Layers },
   { key: 'estimates', to: '/projects?focus=estimate', label: 'Estimates', icon: FileText },
-  { key: 'rentals', to: '/rentals', label: 'Rentals', icon: Package },
   { key: 'live-crew', to: '/live-crew', label: 'Live crew', icon: Users },
 ]
 
