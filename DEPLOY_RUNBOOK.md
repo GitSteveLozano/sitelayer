@@ -193,6 +193,46 @@ The `api` and `worker` containers are unchanged in either direction
 | ---------- | ----- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 2026-04-29 | First | OK     | Rolled `09afad2 → 563d372 → 09afad2` on prod, ~30s downtime each swap. Discovered `DOCKER_CONFIG=/home/sitelayer/.docker` requirement and `APP_BUILD_SHA` export needed. Both folded into `scripts/rollback-droplet.sh`. |
 
+### DO Container Registry quota — what to do when push fails
+
+The DO Container Registry Starter tier caps storage at 500 MB. The
+deploy workflow already (a) prunes old SHA tags before each build and
+(b) retries the push once after kicking off `garbage-collection` if the
+first attempt hits `quota exceeded`. That mostly works.
+
+**When it doesn't work, do NOT manually run `doctl registry
+garbage-collection start`.** Trap discovered 2026-05-04 (workflow run
+25342451665 → 25343615088 → 25344345514):
+
+1. The push hits "quota exceeded" because >500 MB of blobs sit in the
+   registry, including untagged blobs from earlier failed pushes.
+2. GC frees the space, but the _async_ GC can't finalize until every
+   active `--read-write` docker-config JWT expires. The workflow mints
+   those at `--expiry-seconds 3600` (1h) — see `deploy-droplet.yml:109`.
+3. While GC is in `waiting for write JWTs to expire` state,
+   **all new write tokens for the registry are rejected with `401
+Unauthorized`**, blocking every subsequent deploy attempt.
+
+If a deploy fails mid-push and you `doctl registry garbage-collection
+start` to "help", you've now blocked deploys for up to 1h waiting for
+your own write JWTs to time out.
+
+**Right play when push fails:**
+
+- `doctl registry get -ojson | grep storage_usage_bytes` to see actual
+  usage. If it's already < 400 MB, the failure was transient — just
+  re-run the workflow.
+- If it's > 400 MB and the workflow's own GC retry already triggered
+  (check `doctl registry garbage-collection list` for a recent
+  `succeeded` entry), wait for the workflow's GC to complete naturally
+  and re-run the deploy.
+- Only manually trigger GC if (a) the workflow hasn't already triggered
+  one _and_ (b) you accept that no deploy will succeed for the next
+  ~60 min.
+
+Long-term: if registry pressure becomes routine, bump from Starter
+($0/mo, 500 MB) to Basic ($5/mo, 5 GB) — that's the structural fix.
+
 ### Workflow event log replay
 
 For workflows under `packages/workflows/` (rental_billing_run,
