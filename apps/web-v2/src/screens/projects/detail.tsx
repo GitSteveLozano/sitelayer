@@ -7,15 +7,20 @@ import { NavDrawer } from '@/components/nav/NavDrawer'
 import { ProjectSwitcherSheet } from '@/components/nav/ProjectSwitcherSheet'
 import { CleanBulkCard, TimeReviewRunCard } from '@/components/time-review'
 import { useCurrentProjectId } from '@/lib/current-project'
+import { useRole } from '@/lib/role'
 import {
   useClockTimeline,
+  useCreateTimeReviewRun,
   useDailyLogs,
   useLaborBurdenToday,
   useProject,
   useProjectSummary,
   useSchedules,
   useTimeReviewRuns,
+  useWorkers,
+  type ClockEvent,
   type ProjectDetail,
+  type Worker,
 } from '@/lib/api'
 import { findOpenSpan, pairClockSpans, sumHoursInRange, startOfDay } from '@/lib/clock-derive'
 import { EstimateSummaryScreen } from './estimate-summary'
@@ -320,6 +325,15 @@ function SchedulePreview({ projectId }: { projectId: string }) {
  * fallback in their place.
  */
 function CrewTab({ projectId }: { projectId: string }) {
+  const role = useRole()
+  // Foreman flavor is a different content shape entirely (dark
+  // Today's-crew hero + per-worker In/Lunch/Out pills + Submit for
+  // approval). Owner / admin / office land on the approval queue.
+  if (role === 'foreman') return <ForemanCrewView projectId={projectId} />
+  return <OwnerCrewView projectId={projectId} />
+}
+
+function OwnerCrewView({ projectId }: { projectId: string }) {
   const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), [])
   const timeline = useClockTimeline({ date: todayIso })
   const events = (timeline.data?.events ?? []).filter((e) => e.project_id === projectId)
@@ -414,6 +428,275 @@ function CrewTab({ projectId }: { projectId: string }) {
       </div>
     </div>
   )
+}
+
+/**
+ * Foreman flavor of the Crew sub-tab — dark "Today's crew" hero with
+ * a Submit-for-approval CTA, plus per-worker cards showing In / Lunch
+ * / Out for the day.
+ *
+ * Lunch is derived from the gap between consecutive in/out spans on
+ * the same worker; we don't have a dedicated lunch event type yet, so
+ * a single same-day return between an out and an in registers as
+ * lunch, anything longer is shown as the literal break duration. Calm
+ * fallback ("—") when only one span exists or the worker is still in.
+ */
+function ForemanCrewView({ projectId }: { projectId: string }) {
+  const todayIso = useMemo(() => new Date().toISOString().slice(0, 10), [])
+  const timeline = useClockTimeline({ date: todayIso })
+  const workers = useWorkers()
+  const events = useMemo(
+    () => (timeline.data?.events ?? []).filter((e) => e.project_id === projectId),
+    [timeline.data, projectId],
+  )
+  const eventsByWorker = useMemo(() => groupEventsByWorker(events), [events])
+  const workerById = useMemo(() => new Map((workers.data?.workers ?? []).map((w) => [w.id, w])), [workers.data])
+
+  const perWorker = useMemo(() => {
+    const out: Array<{ workerId: string; worker: Worker | null; rollup: WorkerDayRollup }> = []
+    for (const [workerId, wEvents] of eventsByWorker) {
+      out.push({ workerId, worker: workerById.get(workerId) ?? null, rollup: rollupWorkerDay(wEvents) })
+    }
+    return out.sort((a, b) => b.rollup.totalHours - a.rollup.totalHours)
+  }, [eventsByWorker, workerById])
+
+  const totals = useMemo(() => {
+    const totalHours = perWorker.reduce((sum, p) => sum + p.rollup.totalHours, 0)
+    const lunchMinutes = perWorker.reduce((sum, p) => sum + p.rollup.lunchMinutes, 0)
+    const earliestIn = perWorker.reduce<number | null>((min, p) => {
+      if (p.rollup.firstInMs == null) return min
+      return min == null ? p.rollup.firstInMs : Math.min(min, p.rollup.firstInMs)
+    }, null)
+    const latestOut = perWorker.reduce<number | null>((max, p) => {
+      if (p.rollup.lastOutMs == null) return max
+      return max == null ? p.rollup.lastOutMs : Math.max(max, p.rollup.lastOutMs)
+    }, null)
+    return { totalHours, lunchMinutes, earliestIn, latestOut, crewSize: perWorker.length }
+  }, [perWorker])
+
+  const createRun = useCreateTimeReviewRun()
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [submitSuccess, setSubmitSuccess] = useState(false)
+  const onSubmit = async () => {
+    setSubmitError(null)
+    setSubmitSuccess(false)
+    try {
+      await createRun.mutateAsync({ project_id: projectId, period_start: todayIso, period_end: todayIso })
+      setSubmitSuccess(true)
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'Submit failed')
+    }
+  }
+
+  const dayLabel = useMemo(() => {
+    const d = new Date(`${todayIso}T00:00:00`)
+    return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })
+  }, [todayIso])
+
+  return (
+    <div className="space-y-3">
+      <div className="text-[12px] text-ink-3 px-1">{dayLabel} · you're foreman of record</div>
+
+      <div className="rounded-2xl bg-ink text-white p-4 shadow-1">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] opacity-70">Today's crew</div>
+            <div className="font-mono tabular-nums text-[36px] font-bold tracking-tight leading-none mt-1">
+              {totals.totalHours.toFixed(1)}h
+            </div>
+          </div>
+          <MobileButton
+            variant="primary"
+            size="sm"
+            onClick={onSubmit}
+            disabled={createRun.isPending || perWorker.length === 0}
+          >
+            {createRun.isPending ? '…' : submitSuccess ? 'Submitted' : 'Submit for approval'}
+          </MobileButton>
+        </div>
+        <div className="mt-3 text-[12px] opacity-80">
+          {totals.crewSize} crew
+          {totals.earliestIn != null && totals.latestOut != null
+            ? ` · ${formatHm(totals.earliestIn)}–${formatHm(totals.latestOut)}`
+            : ''}
+          {totals.lunchMinutes > 0 ? ` · ${(totals.lunchMinutes / 60).toFixed(1)}h lunch` : ''}
+        </div>
+        {submitError ? <div className="mt-2 text-[12px] text-bad bg-bad-soft rounded p-2">{submitError}</div> : null}
+        {submitSuccess && !submitError ? (
+          <div className="mt-2 text-[11px] opacity-80">A new review run is now in the approver's queue.</div>
+        ) : null}
+      </div>
+
+      <div className="px-1 pt-1 flex items-baseline justify-between">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
+          Crew ({perWorker.length})
+        </span>
+      </div>
+
+      {timeline.isPending ? (
+        <Card tight>
+          <div className="text-[12px] text-ink-3">Loading crew…</div>
+        </Card>
+      ) : perWorker.length === 0 ? (
+        <Card tight>
+          <div className="text-[13px] font-semibold">No clock activity on this project today</div>
+          <div className="text-[11px] text-ink-3 mt-1">
+            Once the crew clocks in, In / Lunch / Out times appear here for review before submit.
+          </div>
+        </Card>
+      ) : (
+        perWorker.map(({ workerId, worker, rollup }) => (
+          <ForemanWorkerCard key={workerId} worker={worker} workerId={workerId} rollup={rollup} />
+        ))
+      )}
+
+      <Attribution source="Live from /api/clock/timeline (lunch derived from same-day in/out gap)" />
+    </div>
+  )
+}
+
+function ForemanWorkerCard({
+  worker,
+  workerId,
+  rollup,
+}: {
+  worker: Worker | null
+  workerId: string
+  rollup: WorkerDayRollup
+}) {
+  const name = worker?.name ?? `Worker ${workerId.slice(0, 8)}…`
+  const role = worker?.role ?? null
+  return (
+    <Card tight>
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <Avatar name={name} />
+          <div className="min-w-0">
+            <div className="text-[14px] font-semibold truncate">{name}</div>
+            {role ? <div className="text-[11px] text-ink-3">{role}</div> : null}
+          </div>
+        </div>
+        <div className="font-mono tabular-nums text-[18px] font-bold tracking-tight shrink-0">
+          {rollup.totalHours.toFixed(1)}h
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <TimePill label="In" value={rollup.firstInMs != null ? formatHm(rollup.firstInMs) : '—'} />
+        <TimePill
+          label="Lunch"
+          value={rollup.lunchMinutes > 0 ? `${rollup.lunchMinutes}m` : '—'}
+          muted={rollup.lunchMinutes === 0}
+        />
+        <TimePill label="Out" value={rollup.lastOutMs != null ? formatHm(rollup.lastOutMs) : 'open'} />
+      </div>
+    </Card>
+  )
+}
+
+function TimePill({ label, value, muted = false }: { label: string; value: string; muted?: boolean }) {
+  return (
+    <div className={`rounded-md p-2 border ${muted ? 'bg-card-soft border-line' : 'bg-card border-line-2'}`}>
+      <div className="text-[9px] font-semibold uppercase tracking-[0.06em] text-ink-3">{label}</div>
+      <div className={`font-mono tabular-nums text-[14px] font-semibold mt-0.5 ${muted ? 'text-ink-3' : 'text-ink'}`}>
+        {value}
+      </div>
+    </div>
+  )
+}
+
+function Avatar({ name }: { name: string }) {
+  const initials = name
+    .split(' ')
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join('')
+    .toUpperCase()
+  return (
+    <div className="w-9 h-9 rounded-full bg-accent-soft text-accent-ink text-[12px] font-semibold inline-flex items-center justify-center shrink-0">
+      {initials}
+    </div>
+  )
+}
+
+interface WorkerDayRollup {
+  totalHours: number
+  /** First clock-in of the day (ms epoch) or null. */
+  firstInMs: number | null
+  /** Last clock-out (ms epoch) or null when worker is still in. */
+  lastOutMs: number | null
+  /** Sum of gaps between consecutive in/out pairs on the same day, in minutes. */
+  lunchMinutes: number
+}
+
+function groupEventsByWorker(events: ClockEvent[]): Map<string, ClockEvent[]> {
+  const map = new Map<string, ClockEvent[]>()
+  for (const e of events) {
+    if (!e.worker_id) continue
+    const list = map.get(e.worker_id) ?? []
+    list.push(e)
+    map.set(e.worker_id, list)
+  }
+  return map
+}
+
+/**
+ * Roll an ordered event stream into a foreman-facing day summary.
+ * `lunchMinutes` is the total gap-time between consecutive (out → in)
+ * pairs — capturing the typical "step out for lunch, come back" flow.
+ * Open spans (no closing out) cap totalHours at now() so the hero
+ * ticks live.
+ */
+function rollupWorkerDay(events: ClockEvent[]): WorkerDayRollup {
+  const sorted = [...events].sort((a, b) => Date.parse(a.occurred_at) - Date.parse(b.occurred_at))
+  let totalMs = 0
+  let lunchMs = 0
+  let firstInMs: number | null = null
+  let lastOutMs: number | null = null
+  let openInMs: number | null = null
+  let lastOutForLunchMs: number | null = null
+
+  for (const e of sorted) {
+    const ms = Date.parse(e.occurred_at)
+    if (e.event_type === 'in') {
+      if (firstInMs == null) firstInMs = ms
+      if (lastOutForLunchMs != null) {
+        lunchMs += Math.max(0, ms - lastOutForLunchMs)
+        lastOutForLunchMs = null
+      }
+      if (openInMs != null) {
+        // Implicit close — same rule as pairClockSpans.
+        totalMs += Math.max(0, ms - openInMs)
+      }
+      openInMs = ms
+      continue
+    }
+    // out / auto_out_geo / auto_out_idle
+    if (openInMs != null) {
+      totalMs += Math.max(0, ms - openInMs)
+      openInMs = null
+    }
+    lastOutMs = ms
+    lastOutForLunchMs = ms
+  }
+  if (openInMs != null) {
+    totalMs += Math.max(0, Date.now() - openInMs)
+    lastOutMs = null
+  }
+
+  return {
+    totalHours: totalMs / (1000 * 60 * 60),
+    firstInMs,
+    lastOutMs,
+    lunchMinutes: Math.round(lunchMs / (1000 * 60)),
+  }
+}
+
+function formatHm(ms: number): string {
+  const d = new Date(ms)
+  const h = d.getHours()
+  const m = d.getMinutes()
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`
 }
 
 function formatScheduleDate(iso: string): string {
