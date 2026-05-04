@@ -54,6 +54,17 @@ export type BootstrapResponse = {
     deleted_at: string | null
     created_at?: string
   }>
+  // Caller's own active project assignments. Drives the contextual mobile
+  // shell — see apps/web/src/lib/active-context.ts.
+  projectAssignments?: Array<ProjectAssignmentRow>
+}
+
+export type ProjectAssignmentRow = {
+  id: string
+  project_id: string
+  role: 'foreman' | 'worker'
+  assigned_by_clerk_user_id: string | null
+  created_at: string
 }
 
 export type ProjectRow = {

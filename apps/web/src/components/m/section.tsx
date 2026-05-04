@@ -24,7 +24,13 @@ export function MSectionH({ children, link, onLinkClick }: MSectionHProps) {
   )
 }
 
-export function MShell({ children, className }: { children: ReactNode; className?: string }) {
+export function MShell({
+  children,
+  className,
+}: {
+  children: ReactNode
+  className?: string | undefined
+}) {
   return <div className={`m${className ? ` ${className}` : ''}`}>{children}</div>
 }
 
