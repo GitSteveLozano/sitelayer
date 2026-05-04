@@ -11,6 +11,7 @@ import type { BootstrapResponse } from '../../api.js'
 import {
   MAvatar,
   MBody,
+  MButton,
   MI,
   MLargeHead,
   MListInset,
@@ -75,24 +76,9 @@ export function WorkerScope({ bootstrap }: { bootstrap: BootstrapResponse | null
           </MListInset>
         </div>
         <div style={{ padding: 16 }}>
-          <button
-            type="button"
-            onClick={() => navigate('/m/issue?category=scope_question')}
-            style={{
-              width: '100%',
-              background: 'transparent',
-              border: '1px solid var(--m-line-2)',
-              borderRadius: 12,
-              padding: '14px',
-              color: 'var(--m-ink)',
-              fontFamily: 'inherit',
-              fontSize: 15,
-              fontWeight: 500,
-              cursor: 'pointer',
-            }}
-          >
+          <MButton variant="ghost" onClick={() => navigate('/m/issue?category=scope_question')}>
             Question this scope
-          </button>
+          </MButton>
         </div>
       </MBody>
     </>

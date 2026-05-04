@@ -12,7 +12,10 @@ import {
   MBody,
   MButton,
   MButtonStack,
+  MInput,
   MSectionH,
+  MSelect,
+  MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
 import { formatMoney } from './format.js'
@@ -31,10 +34,9 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
       <MTopBar back title="Quick invoice" onBack={() => navigate('/m/today')} />
       <MBody pad>
         <MSectionH>Project</MSectionH>
-        <select
+        <MSelect
           value={projectId}
           onChange={(e) => setProjectId(e.currentTarget.value)}
-          className="m-input"
           style={{ width: '100%' }}
         >
           {projects.map((p) => (
@@ -42,13 +44,12 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
               {p.name}
             </option>
           ))}
-        </select>
+        </MSelect>
         <MSectionH>Amount</MSectionH>
-        <input
+        <MInput
           type="number"
           value={amount}
           onChange={(e) => setAmount(e.currentTarget.value)}
-          className="m-input"
           style={{ width: '100%' }}
           placeholder="0.00"
         />
@@ -56,10 +57,9 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
           {amount ? `${formatMoney(amount)} net 30` : 'Enter the milestone amount'}
         </div>
         <MSectionH>Memo</MSectionH>
-        <textarea
+        <MTextarea
           value={memo}
           onChange={(e) => setMemo(e.currentTarget.value)}
-          className="m-input m-textarea"
           style={{ width: '100%', minHeight: 90 }}
           placeholder="Milestone description (e.g., 50% complete — east elevation)"
         />

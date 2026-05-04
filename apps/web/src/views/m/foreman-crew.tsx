@@ -28,9 +28,9 @@ type GroupBy = 'site' | 'person' | 'map'
 
 export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const [grp, setGrp] = useState<GroupBy>('site')
-  const projects = bootstrap?.projects ?? []
-  const workers = bootstrap?.workers ?? []
-  const labor = bootstrap?.laborEntries ?? []
+  const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
+  const workers = useMemo(() => bootstrap?.workers ?? [], [bootstrap?.workers])
+  const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
   const today = todayIso()
 
   const todayHoursByWorker = useMemo(() => {

@@ -75,7 +75,11 @@ export default tseslint.config(
     },
   },
   {
-    files: ['apps/web/src/components/ui/**/*.{ts,tsx}'],
+    files: [
+      'apps/web/src/components/ui/**/*.{ts,tsx}',
+      'apps/web/src/components/m/**/*.{ts,tsx}',
+      'apps/web/src/components/m-states/**/*.{ts,tsx}',
+    ],
     rules: {
       'no-restricted-syntax': 'off',
       'react-refresh/only-export-components': 'off',

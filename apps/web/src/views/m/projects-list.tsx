@@ -13,7 +13,9 @@ import {
   MChip,
   MChipRow,
   MI,
+  MInput,
   MPill,
+  MTapCard,
   MTopBar,
 } from '../../components/m/index.js'
 import { MEmptyState } from '../../components/m-states/index.js'
@@ -33,7 +35,7 @@ export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse
   const [filter, setFilter] = useState<FilterKey>('active')
   const [query, setQuery] = useState('')
 
-  const projects = bootstrap?.projects ?? []
+  const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
 
   const counts = useMemo(() => {
     return {
@@ -78,7 +80,7 @@ export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse
             }}
           >
             <MI.Search size={18} style={{ color: 'var(--m-ink-3)' }} />
-            <input
+            <MInput
               type="search"
               placeholder="Search projects, clients…"
               value={query}
@@ -88,9 +90,9 @@ export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse
                 background: 'transparent',
                 border: 'none',
                 outline: 'none',
-                fontFamily: 'inherit',
+                height: 'auto',
+                padding: 0,
                 fontSize: 15,
-                color: 'var(--m-ink)',
               }}
             />
           </div>
@@ -136,20 +138,9 @@ export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse
 function ProjectCard({ project, onOpen }: { project: ProjectRow; onOpen: () => void }) {
   const tone = statusTone(project.status)
   return (
-    <button
-      type="button"
+    <MTapCard
       onClick={onOpen}
-      style={{
-        background: 'var(--m-card)',
-        border: '1px solid var(--m-line)',
-        borderLeft: `4px solid var(--m-${tone === 'green' ? 'green' : tone === 'amber' ? 'amber' : tone === 'red' ? 'red' : tone === 'blue' ? 'blue' : 'line-2'})`,
-        borderRadius: 12,
-        padding: '12px 14px',
-        textAlign: 'left',
-        font: 'inherit',
-        color: 'inherit',
-        cursor: 'pointer',
-      }}
+      borderLeft={`4px solid var(--m-${tone === 'green' ? 'green' : tone === 'amber' ? 'amber' : tone === 'red' ? 'red' : tone === 'blue' ? 'blue' : 'line-2'})`}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
         <MPill tone={tone} dot>
@@ -172,6 +163,6 @@ function ProjectCard({ project, onOpen }: { project: ProjectRow; onOpen: () => v
         <span>Bid {formatMoney(project.bid_total)}</span>
         {project.target_sqft_per_hr ? <span>Target {project.target_sqft_per_hr} sf/hr</span> : null}
       </div>
-    </button>
+    </MTapCard>
   )
 }

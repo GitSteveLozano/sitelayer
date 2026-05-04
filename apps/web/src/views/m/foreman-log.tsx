@@ -13,6 +13,8 @@ import {
   MKpi,
   MKpiRow,
   MSectionH,
+  MSelect,
+  MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
 import { MAiStripe } from '../../components/m/ai.js'
@@ -127,10 +129,9 @@ export function ForemanLog({
           <>
             {projects.length > 1 ? (
               <div style={{ marginBottom: 12 }}>
-                <select
+                <MSelect
                   value={projectId}
                   onChange={(e) => setProjectId(e.currentTarget.value)}
-                  className="m-input"
                   style={{ width: '100%' }}
                 >
                   {projects.map((p) => (
@@ -138,7 +139,7 @@ export function ForemanLog({
                       {p.name}
                     </option>
                   ))}
-                </select>
+                </MSelect>
               </div>
             ) : null}
             <MKpiRow cols={3}>
@@ -152,10 +153,9 @@ export function ForemanLog({
                 title="Edit before sending"
                 attribution={<>Drafted from <strong>today's events</strong>.</>}
               >
-                <textarea
+                <MTextarea
                   value={summary}
                   onChange={(e) => setSummary(e.currentTarget.value)}
-                  className="m-input m-textarea"
                   style={{ width: '100%', minHeight: 100, marginTop: 8 }}
                 />
               </MAiStripe>

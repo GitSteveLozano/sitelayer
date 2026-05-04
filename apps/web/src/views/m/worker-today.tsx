@@ -19,7 +19,6 @@ import {
   MI,
   MLargeHead,
   MTopBar,
-  avatarToneFor,
   initialsFor,
 } from '../../components/m/index.js'
 import { formatRunningHours, timeOfDay, todayIso } from './format.js'
@@ -44,7 +43,7 @@ export function WorkerToday({
   const navigate = useNavigate()
   const [events, setEvents] = useState<readonly ClockEvent[]>([])
   const [busy, setBusy] = useState<'in' | 'out' | null>(null)
-  const [tick, setTick] = useState(Date.now())
+  const [tick, setTick] = useState(() => Date.now())
 
   // Tick once a second so the running clock updates.
   useEffect(() => {
@@ -211,29 +210,10 @@ function OffClockCard({ onClockIn, busy }: { onClockIn: () => void; busy: boolea
 
 function FlagIssueButton({ onClick }: { onClick: () => void }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        width: '100%',
-        background: 'transparent',
-        border: '1px solid var(--m-line-2)',
-        borderRadius: 12,
-        padding: '14px',
-        color: 'var(--m-ink)',
-        fontFamily: 'inherit',
-        fontSize: 15,
-        fontWeight: 500,
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        cursor: 'pointer',
-      }}
-    >
+    <MButton variant="ghost" onClick={onClick}>
       <MI.AlertTri size={18} />
       Flag an issue
-    </button>
+    </MButton>
   )
 }
 

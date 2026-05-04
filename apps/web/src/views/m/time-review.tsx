@@ -32,9 +32,9 @@ import { formatDecimalHours, formatMoney, todayIso } from './format.js'
 
 export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const navigate = useNavigate()
-  const labor = bootstrap?.laborEntries ?? []
-  const workers = bootstrap?.workers ?? []
-  const projects = bootstrap?.projects ?? []
+  const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
+  const workers = useMemo(() => bootstrap?.workers ?? [], [bootstrap?.workers])
+  const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
 
   const today = todayIso()
   const todayLabor = useMemo(() => labor.filter((l) => l.occurred_on === today && !l.deleted_at), [labor, today])

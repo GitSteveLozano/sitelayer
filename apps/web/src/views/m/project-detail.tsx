@@ -14,6 +14,7 @@ import type { BootstrapResponse, ProjectRow } from '../../api.js'
 import {
   MAvatarGroup,
   MBody,
+  MButton,
   MI,
   MKpi,
   MKpiRow,
@@ -21,6 +22,7 @@ import {
   MListRow,
   MPill,
   MSectionH,
+  MTapCard,
   MTopBar,
   avatarToneFor,
   initialsFor,
@@ -154,9 +156,8 @@ function TabBar({ active, onChange }: { active: TabKey; onChange: (k: TabKey) =>
       }}
     >
       {TABS.map((t) => (
-        <button
+        <MTapCard
           key={t.key}
-          type="button"
           onClick={() => onChange(t.key)}
           style={{
             background: active === t.key ? 'var(--m-ink)' : 'transparent',
@@ -164,14 +165,12 @@ function TabBar({ active, onChange }: { active: TabKey; onChange: (k: TabKey) =>
             border: 'none',
             borderRadius: 999,
             padding: '6px 14px',
-            fontSize: 13,
-            fontWeight: 500,
-            cursor: 'pointer',
+            width: 'auto',
             flexShrink: 0,
           }}
         >
-          {t.label}
-        </button>
+          <span style={{ fontSize: 13, fontWeight: 500 }}>{t.label}</span>
+        </MTapCard>
       ))}
     </div>
   )
@@ -242,14 +241,9 @@ function EstimateTab({ project, navigate }: { project: ProjectRow; navigate: (pa
         Estimate detail loads in its own screen — line items, totals, and send-to-client live there.
       </p>
       <div style={{ marginTop: 16 }}>
-        <button
-          type="button"
-          className="m-btn"
-          data-variant="primary"
-          onClick={() => navigate(`/m/projects/${project.id}/estimate`)}
-        >
+        <MButton variant="primary" onClick={() => navigate(`/m/projects/${project.id}/estimate`)}>
           Open estimate
-        </button>
+        </MButton>
       </div>
     </div>
   )
@@ -390,14 +384,9 @@ function LogTab({ project, navigate }: { project: ProjectRow; navigate: (path: s
         </MAiStripe>
       </div>
       <div style={{ padding: '0 16px' }}>
-        <button
-          type="button"
-          className="m-btn"
-          data-variant="ghost"
-          onClick={() => navigate(`/projects/${project.id}`)}
-        >
+        <MButton variant="ghost" onClick={() => navigate(`/projects/${project.id}`)}>
           Open full project on desktop
-        </button>
+        </MButton>
       </div>
     </div>
   )
@@ -407,14 +396,9 @@ function FilesTab({ project, navigate }: { project: ProjectRow; navigate: (path:
   return (
     <div style={{ paddingTop: 8 }}>
       <div style={{ padding: '0 16px' }}>
-        <button
-          type="button"
-          className="m-btn"
-          data-variant="ghost"
-          onClick={() => navigate(`/takeoffs/${project.id}`)}
-        >
+        <MButton variant="ghost" onClick={() => navigate(`/takeoffs/${project.id}`)}>
           Open blueprints / takeoff
-        </button>
+        </MButton>
       </div>
     </div>
   )

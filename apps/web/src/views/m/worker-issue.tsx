@@ -13,7 +13,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiPost, type BootstrapResponse } from '../../api.js'
-import { MBody, MButton, MButtonStack, MI, MTopBar } from '../../components/m/index.js'
+import { MBody, MButton, MButtonStack, MI, MTapCard, MTextarea, MTopBar } from '../../components/m/index.js'
 
 type IssueCategory = {
   /** Displayed label */
@@ -86,11 +86,10 @@ export function WorkerIssue({
           <div style={{ padding: '0 0 12px', fontSize: 12, color: 'var(--m-ink-3)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
             What's wrong?
           </div>
-          <textarea
+          <MTextarea
             value={message}
             onChange={(e) => setMessage(e.currentTarget.value)}
             placeholder="Describe the issue — short is fine."
-            className="m-input m-textarea"
             style={{ width: '100%', minHeight: 120 }}
           />
           {error ? (
@@ -120,17 +119,13 @@ export function WorkerIssue({
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           {CATEGORIES.map((c) => (
-            <button
+            <MTapCard
               key={c.designKind}
-              type="button"
               onClick={() => setCategory(c)}
               style={{
                 aspectRatio: '1.1 / 1',
                 borderRadius: 14,
-                border: '1px solid var(--m-line)',
-                background: 'var(--m-card)',
                 padding: 14,
-                textAlign: 'left',
                 cursor: 'pointer',
                 fontFamily: 'inherit',
                 color: 'inherit',
@@ -160,7 +155,7 @@ export function WorkerIssue({
                   {c.sub}
                 </div>
               </div>
-            </button>
+            </MTapCard>
           ))}
         </div>
       </MBody>
