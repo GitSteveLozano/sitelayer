@@ -18,7 +18,7 @@ import { useMemo } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { BootstrapResponse } from '../api.js'
 import { computeActiveContext, type ActiveContext } from '../lib/active-context.js'
-import { MBottomTabs, MBody, MI, MLargeHead, MShell, MTopBar } from '../components/m/index.js'
+import { MBottomTabs, MBody, MI, MShell, MTopBar } from '../components/m/index.js'
 import { AdminHome } from './m/admin-home.js'
 import { MobileProjectsList } from './m/projects-list.js'
 import { MobileProjectDetail } from './m/project-detail.js'
@@ -161,26 +161,6 @@ export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShell
         <MBottomTabs tabs={[...tabs]} activeId={activeTab} onSelect={(id) => navigate(`/m/${id}`)} />
       </MShell>
     </div>
-  )
-}
-
-function TodayPlaceholder({ ctx }: { ctx: ActiveContext }) {
-  const eyebrow = ctx.kind === 'admin' ? 'Calm dashboard' : ctx.kind === 'foreman' ? 'Sites today' : "Today's job"
-  return (
-    <>
-      <MTopBar title="Today" />
-      <MBody pad>
-        <MLargeHead
-          eyebrow={eyebrow.toUpperCase()}
-          title={ctx.kind === 'admin' ? "You're caught up." : ctx.kind === 'foreman' ? '3 sites · 6 crew' : 'Hillcrest Mews — Phase 4'}
-          sub={
-            ctx.kind === 'worker'
-              ? 'EPS · East elevation · 7:00 AM start'
-              : 'Phase 3+ replaces this with the real screen.'
-          }
-        />
-      </MBody>
-    </>
   )
 }
 

@@ -10,7 +10,9 @@ import {
   MBody,
   MChip,
   MChipRow,
+  MFab,
   MI,
+  MInput,
   MPill,
   MStat,
   MStatStrip,
@@ -73,8 +75,11 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
     )
   }, [items, filter, query])
 
+  // Items that are currently dispatched (active=false in our placeholder
+  // model) earn their default rental rate per day. Once true dispatch
+  // state lands, replace with the dispatched-item sum.
   const dailyRevenue = visible
-    .filter((i) => !i.active === false ? false : false)
+    .filter((i) => !i.active)
     .reduce((s, i) => s + Number(i.default_rental_rate ?? 0), 0)
   const utilizationPct = counts.all > 0 ? Math.round((counts.out / counts.all) * 100) : 0
 
@@ -95,7 +100,7 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
             }}
           >
             <MI.Search size={18} style={{ color: 'var(--m-ink-3)' }} />
-            <input
+            <MInput
               type="search"
               placeholder="Search by tag or name"
               value={query}
@@ -105,9 +110,9 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
                 background: 'transparent',
                 border: 'none',
                 outline: 'none',
-                fontFamily: 'inherit',
+                height: 'auto',
+                padding: 0,
                 fontSize: 15,
-                color: 'var(--m-ink)',
               }}
             />
           </div>
@@ -149,14 +154,10 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
             ))}
           </div>
         )}
-        <button
-          type="button"
-          className="m-fab m-fab-extended"
-          onClick={() => navigate('/m/rentals/scan')}
-        >
+        <MFab extended ariaLabel="Scan tag" onClick={() => navigate('/m/rentals/scan')}>
           <MI.Camera size={18} />
           Scan tag
-        </button>
+        </MFab>
       </MBody>
     </>
   )

@@ -9,10 +9,13 @@ import {
   MBody,
   MButton,
   MButtonStack,
+  MChip,
+  MChipRow,
   MI,
   MListInset,
   MListRow,
   MSectionH,
+  MSelect,
   MTopBar,
 } from '../../components/m/index.js'
 
@@ -40,10 +43,9 @@ export function MobileRentalDispatch({
       <MTopBar back title="Dispatch" onBack={() => navigate('/m/rentals')} />
       <MBody pad>
         <MSectionH>To project</MSectionH>
-        <select
+        <MSelect
           value={projectId}
           onChange={(e) => setProjectId(e.currentTarget.value)}
-          className="m-input"
           style={{ width: '100%' }}
         >
           <option value="">Pick a project…</option>
@@ -52,7 +54,7 @@ export function MobileRentalDispatch({
               {p.name}
             </option>
           ))}
-        </select>
+        </MSelect>
         <MSectionH>Equipment</MSectionH>
         <MListInset>
           {items.length === 0 ? (
@@ -82,22 +84,14 @@ export function MobileRentalDispatch({
           )}
         </MListInset>
         <MSectionH>Billing</MSectionH>
-        <div style={{ padding: '0 16px', display: 'flex', gap: 10 }}>
-          <button
-            type="button"
-            onClick={() => setBillUpfront(true)}
-            style={chipStyle(billUpfront)}
-          >
+        <MChipRow>
+          <MChip active={billUpfront} onClick={() => setBillUpfront(true)}>
             Bill upfront
-          </button>
-          <button
-            type="button"
-            onClick={() => setBillUpfront(false)}
-            style={chipStyle(!billUpfront)}
-          >
+          </MChip>
+          <MChip active={!billUpfront} onClick={() => setBillUpfront(false)}>
             At return
-          </button>
-        </div>
+          </MChip>
+        </MChipRow>
         <div style={{ padding: 16, marginTop: 12 }}>
           <MButtonStack>
             <MButton
@@ -115,18 +109,4 @@ export function MobileRentalDispatch({
       </MBody>
     </>
   )
-}
-
-function chipStyle(active: boolean): React.CSSProperties {
-  return {
-    flex: 1,
-    background: active ? 'var(--m-accent)' : 'var(--m-card-soft)',
-    color: active ? 'white' : 'var(--m-ink-2)',
-    border: 'none',
-    borderRadius: 999,
-    padding: '10px 14px',
-    fontSize: 14,
-    fontWeight: 500,
-    cursor: 'pointer',
-  }
 }

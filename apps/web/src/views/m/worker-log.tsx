@@ -7,7 +7,7 @@
 import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiPost, type BootstrapResponse } from '../../api.js'
-import { MBody, MButton, MButtonStack, MI, MTopBar } from '../../components/m/index.js'
+import { MBody, MButton, MButtonStack, MI, MInput, MTapCard, MTextarea, MTopBar } from '../../components/m/index.js'
 
 export function WorkerLog({
   bootstrap,
@@ -70,8 +70,7 @@ export function WorkerLog({
               style={{ width: '100%', height: '100%', objectFit: 'cover' }}
             />
           ) : (
-            <button
-              type="button"
+            <MTapCard
               onClick={() => inputRef.current?.click()}
               style={{
                 background: 'transparent',
@@ -79,8 +78,7 @@ export function WorkerLog({
                 color: 'var(--m-ink-3)',
                 borderRadius: 18,
                 padding: '40px 28px',
-                cursor: 'pointer',
-                fontFamily: 'inherit',
+                width: 'auto',
                 display: 'flex',
                 flexDirection: 'column',
                 alignItems: 'center',
@@ -89,7 +87,7 @@ export function WorkerLog({
             >
               <MI.Camera size={36} />
               <span style={{ fontSize: 14, fontWeight: 500 }}>Tap to capture</span>
-            </button>
+            </MTapCard>
           )}
           <div
             style={{
@@ -113,7 +111,7 @@ export function WorkerLog({
           </div>
         </div>
         <MBody pad>
-          <input
+          <MInput
             ref={inputRef}
             type="file"
             accept="image/*"
@@ -126,11 +124,10 @@ export function WorkerLog({
           />
           {preview ? (
             <>
-              <textarea
+              <MTextarea
                 value={note}
                 onChange={(e) => setNote(e.currentTarget.value)}
                 placeholder="Add a note — optional"
-                className="m-input m-textarea"
                 style={{ width: '100%', minHeight: 80 }}
               />
               {error ? (

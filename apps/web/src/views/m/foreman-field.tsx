@@ -9,7 +9,6 @@
  * in <30 min" trigger, relaxed slightly because we don't have realtime.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { apiGet, apiPatch, type BootstrapResponse } from '../../api.js'
 import {
   MBody,
@@ -51,7 +50,6 @@ export function ForemanField({
   bootstrap: BootstrapResponse | null
   companySlug: string
 }) {
-  const navigate = useNavigate()
   const [issues, setIssues] = useState<readonly IssueRow[] | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [selected, setSelected] = useState<IssueRow | null>(null)
@@ -202,25 +200,11 @@ function ClusterStripe({
 }) {
   // Groups by project, surfaces an AI stripe when 3+ open events are on
   // the same site within the last hour. Heuristic; tune in production.
-  const cluster = useMemo(() => {
-    const map = new Map<string, IssueRow[]>()
-    const cutoff = Date.now() - 60 * 60 * 1000
-    for (const i of issues) {
-      if (i.resolved_at) continue
-      if (new Date(i.created_at).valueOf() < cutoff) continue
-      if (!i.project_id) continue
-      const arr = map.get(i.project_id) ?? []
-      arr.push(i)
-      map.set(i.project_id, arr)
-    }
-    for (const [pid, arr] of map) {
-      if (arr.length >= 3) {
-        const project = bootstrap?.projects.find((p) => p.id === pid)
-        return { project: project?.name ?? 'A site', count: arr.length }
-      }
-    }
-    return null
-  }, [issues, bootstrap?.projects])
+  // Cutoff captured lazily at mount; "last hour" drifts relative to first
+  // render, which is fine for this surface — re-mounting refreshes it. The
+  // React Compiler auto-memoizes the body, so no manual useMemo here.
+  const [cutoff] = useState(() => Date.now() - 60 * 60 * 1000)
+  const cluster = computeCluster(issues, bootstrap?.projects ?? [], cutoff)
 
   if (!cluster) return null
   return (
@@ -302,6 +286,29 @@ function ForemanIssueDetail({
 
 function isPhotoLog(i: IssueRow): boolean {
   return /^\[photo_log\]/.test(i.message)
+}
+
+function computeCluster(
+  issues: readonly IssueRow[],
+  projects: readonly { id: string; name: string }[],
+  cutoff: number,
+): { project: string; count: number } | null {
+  const map = new Map<string, IssueRow[]>()
+  for (const i of issues) {
+    if (i.resolved_at) continue
+    if (new Date(i.created_at).valueOf() < cutoff) continue
+    if (!i.project_id) continue
+    const arr = map.get(i.project_id) ?? []
+    arr.push(i)
+    map.set(i.project_id, arr)
+  }
+  for (const [pid, arr] of map) {
+    if (arr.length >= 3) {
+      const project = projects.find((p) => p.id === pid)
+      return { project: project?.name ?? 'A site', count: arr.length }
+    }
+  }
+  return null
 }
 
 function shortAgo(iso: string): string {

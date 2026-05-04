@@ -13,11 +13,11 @@ import { apiGet, type BootstrapResponse } from '../../api.js'
 import {
   MAvatarGroup,
   MBody,
+  MButton,
   MI,
   MLargeHead,
   MListInset,
   MListRow,
-  MPill,
   MSectionH,
   MTopBar,
   avatarToneFor,
@@ -62,9 +62,9 @@ export function ForemanToday({
     }
   }, [companySlug])
 
-  const projects = bootstrap?.projects ?? []
-  const workers = bootstrap?.workers ?? []
-  const labor = bootstrap?.laborEntries ?? []
+  const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
+  const workers = useMemo(() => bootstrap?.workers ?? [], [bootstrap?.workers])
+  const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
 
   const today = todayIso()
   const activeSites = useMemo(() => projects.filter((p) => /progress|active/i.test(p.status)), [projects])
@@ -103,14 +103,9 @@ export function ForemanToday({
               eyebrow={`FROM THE FIELD · ${needYou} need ${needYou === 1 ? 'you' : 'you'}`}
               tone="warn"
               action={
-                <button
-                  type="button"
-                  className="m-btn m-btn-sm"
-                  data-variant="quiet"
-                  onClick={() => navigate('/m/field')}
-                >
+                <MButton variant="quiet" size="sm" onClick={() => navigate('/m/field')}>
                   See all
-                </button>
+                </MButton>
               }
             >
               {openIssues.slice(0, 3).map((i) => {
@@ -199,14 +194,9 @@ export function ForemanToday({
           )}
         </MListInset>
         <div style={{ padding: 16 }}>
-          <button
-            type="button"
-            className="m-btn"
-            data-variant="primary"
-            onClick={() => navigate('/m/brief')}
-          >
+          <MButton variant="primary" onClick={() => navigate('/m/brief')}>
             Brief the crew
-          </button>
+          </MButton>
         </div>
       </MBody>
     </>

@@ -19,6 +19,8 @@ import {
   MListInset,
   MListRow,
   MSectionH,
+  MSelect,
+  MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
 import { MAiAgent } from '../../components/m/ai.js'
@@ -32,7 +34,10 @@ export function ForemanBrief({
 }) {
   const navigate = useNavigate()
   const params = useParams<{ projectId?: string }>()
-  const projects = bootstrap?.projects.filter((p) => /progress|active/i.test(p.status)) ?? []
+  const projects = useMemo(
+    () => bootstrap?.projects.filter((p) => /progress|active/i.test(p.status)) ?? [],
+    [bootstrap?.projects],
+  )
   const [projectId, setProjectId] = useState<string>(
     () => params.projectId ?? projects[0]?.id ?? '',
   )
@@ -85,10 +90,9 @@ export function ForemanBrief({
           <>
             {projects.length > 1 ? (
               <div style={{ marginBottom: 12 }}>
-                <select
+                <MSelect
                   value={projectId}
                   onChange={(e) => setProjectId(e.currentTarget.value)}
-                  className="m-input"
                   style={{ width: '100%', height: 46 }}
                 >
                   {projects.map((p) => (
@@ -96,7 +100,7 @@ export function ForemanBrief({
                       {p.name}
                     </option>
                   ))}
-                </select>
+                </MSelect>
               </div>
             ) : null}
             <MSectionH>Today's scope</MSectionH>
@@ -106,10 +110,9 @@ export function ForemanBrief({
               <MListRow leading={<MI.Layers size={18} />} headline="Basecoat · East" supporting="Queued · needs EPS done" />
             </MListInset>
             <MSectionH>Today's goal</MSectionH>
-            <textarea
+            <MTextarea
               value={goal}
               onChange={(e) => setGoal(e.currentTarget.value)}
-              className="m-input m-textarea"
               style={{ width: '100%', minHeight: 110 }}
               placeholder="What's the crew building today, in plain words?"
               maxLength={280}

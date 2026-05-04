@@ -23,8 +23,8 @@ import { formatDecimalHours, formatMoney, shortDate } from './format.js'
 
 export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const navigate = useNavigate()
-  const labor = bootstrap?.laborEntries ?? []
-  const projects = bootstrap?.projects ?? []
+  const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
+  const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
 
   // Without a workers join keyed by clerk_user_id, we can't reliably scope
   // to "the calling user's labor". Until that mapping is wired we render

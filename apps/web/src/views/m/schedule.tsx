@@ -18,8 +18,8 @@ export function MobileSchedule({ bootstrap }: { bootstrap: BootstrapResponse | n
   const navigate = useNavigate()
   const [mode, setMode] = useState<Mode>('week')
 
-  const schedules = bootstrap?.schedules ?? []
-  const projects = bootstrap?.projects ?? []
+  const schedules = useMemo(() => bootstrap?.schedules ?? [], [bootstrap?.schedules])
+  const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
 
   const byDay = useMemo(() => {
     const map = new Map<string, { date: string; entries: typeof schedules }>()

@@ -33,8 +33,8 @@ export type AdminHomeProps = {
 export function AdminHome({ bootstrap }: AdminHomeProps) {
   const navigate = useNavigate()
 
-  const projects = bootstrap?.projects ?? []
-  const labor = bootstrap?.laborEntries ?? []
+  const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
+  const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
 
   const { activeProjects, todayHoursByProject, todayTotal } = useMemo(() => {
     const today = todayIso()
