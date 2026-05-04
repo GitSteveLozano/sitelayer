@@ -20,6 +20,7 @@ import { handleLaborEntryRoutes } from './labor-entries.js'
 import { handleMaterialBillRoutes } from './material-bills.js'
 import { handleNotificationPreferenceRoutes } from './notification-preferences.js'
 import { handlePricingProfileRoutes } from './pricing-profiles.js'
+import { handleProjectAssignmentRoutes } from './project-assignments.js'
 import { handleProjectRoutes } from './projects.js'
 import { handlePushSubscriptionRoutes } from './push-subscriptions.js'
 import { handleQboMappingRoutes } from './qbo-mappings.js'
@@ -326,6 +327,21 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       readBody,
       sendJson,
       checkVersion,
+    })
+  ) {
+    return true
+  }
+
+  // Per-project foreman/worker assignments. Sits next to project routes
+  // so /api/projects/:id/assignments lands in the same shape.
+  if (
+    await handleProjectAssignmentRoutes(req, url, {
+      pool,
+      company,
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+      getCurrentUserId: ctx.getCurrentUserId,
     })
   ) {
     return true

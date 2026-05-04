@@ -10,7 +10,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "npm run typecheck",
     "format": "npm run typecheck",
-    "test": "npm run typecheck",
+    "test": "vitest run && npm run typecheck",
     "e2e": "playwright test"
   },
   "dependencies": {
