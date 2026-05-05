@@ -530,9 +530,34 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            const company = await getCompany(req)
+            let company = await getCompany(req)
+            // Single-tenant self-onboard. The Clerk webhook that mirrors
+            // user → company_memberships isn't wired (CLERK_WEBHOOK_SECRET
+            // is unset in prod) and ADR 0003 marks the install as zero-
+            // customer, so the first authenticated user against a known
+            // company slug auto-claims an admin membership. This bridges
+            // until the org-membership webhook lands.
+            if (!company && activeCompanySlug && identity.userId) {
+              try {
+                await pool.query(
+                  `insert into company_memberships (company_id, clerk_user_id, role)
+                   select id, $1, 'admin' from companies where slug = $2
+                   on conflict (company_id, clerk_user_id) do nothing`,
+                  [identity.userId, activeCompanySlug],
+                )
+                company = await getCompany(req)
+              } catch (err) {
+                logger.warn(
+                  { err, route: url.pathname, slug: activeCompanySlug, userId: identity.userId },
+                  'auto-onboard membership insert failed',
+                )
+              }
+            }
             if (!company) {
-              sendJson(res, 404, { error: `company slug ${activeCompanySlug} not found` })
+              sendJson(res, 404, {
+                error: `company slug ${activeCompanySlug} not found`,
+                user_id: identity.userId,
+              })
               return
             }
 
