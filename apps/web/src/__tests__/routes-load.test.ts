@@ -22,7 +22,7 @@ const ROUTES: ReadonlyArray<readonly [string, () => Promise<{ default: unknown }
   ['onboarding', () => import('@/routes/onboarding')],
 ]
 
-describe('apps/web-v2 lazy routes', () => {
+describe('apps/web lazy routes', () => {
   test.each(ROUTES)('%s route module exposes a default React component', async (_name, importFn) => {
     const mod = await importFn()
     expect(mod.default).toBeDefined()

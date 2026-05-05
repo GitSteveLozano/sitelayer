@@ -1,5 +1,5 @@
 // Shared time-review components used by the cross-project queue
-// (apps/web-v2/src/screens/foreman/approval-queue.tsx) and the
+// (apps/web/src/screens/foreman/approval-queue.tsx) and the
 // per-project Crew sub-tab on prj-detail. Same approval engine, two
 // surfaces — keeping the bulk-approve and per-run card logic in one
 // place avoids a slow drift between them.

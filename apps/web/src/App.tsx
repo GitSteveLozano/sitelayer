@@ -11,7 +11,7 @@ import { SafariLandingScreen, useShouldShowSafariLanding } from '@/screens/onboa
 // production is mobile-first, so the role-aware shell with bottom tabs
 // is what every user sees by default.
 const MRoute = lazy(() => import('@/routes/m'))
-const MPreviewRoute = lazy(() => import('@/views/m-preview').then((m) => ({ default: m.MPreviewView })))
+const MPreviewRoute = lazy(() => import('@/screens/mobile-preview').then((m) => ({ default: m.MPreviewView })))
 
 // Specialized full-screen routes that don't fit the bottom-tab chrome.
 // These must match before the mobile-shell catch-all below. /more is

@@ -1,6 +1,6 @@
 /**
  * api-v1-compat — type defs + thin function shims for Steve's mobile shell
- * (apps/web-v2/src/views/m-shell.tsx and friends, migrated from
+ * (apps/web/src/screens/mobile-shell.tsx and friends, migrated from
  * apps/web/src/ in PR #235).
  *
  * Originally a verbatim copy of the 1.6k-line apps/web/src/api.ts. As of
@@ -8,9 +8,9 @@
  * delegate to v2's `lib/api/client.ts:request<T>()`, which is the same
  * code v2's TanStack Query hooks use under the hood. So there's exactly
  * one HTTP client in v2 now; this file just preserves the v1-style
- * function signatures and types Steve's views were already importing.
+ * function signatures and types the mobile screens were already importing.
  *
- * Types kept verbatim from v1 because Steve's views reference them
+ * Types kept verbatim from v1 because the mobile screens reference them
  * directly. They're plain shapes; deduplicating against v2's narrower
  * resource types is real product work, not a bug-fix.
  */
@@ -242,7 +242,7 @@ export function apiDelete<T>(path: string, companySlug?: string): Promise<T> {
 
 /**
  * Single-call helper used by Steve's rentals/inventory mobile screens.
- * Mirrors the v1 export so the views don't need a code change.
+ * Mirrors the v1 export so the mobile screens don't need a code change.
  */
 export async function listInventoryItems(companySlug: string): Promise<{ inventoryItems: InventoryItemRow[] }> {
   return apiGet<{ inventoryItems: InventoryItemRow[] }>('/api/inventory/items', companySlug)

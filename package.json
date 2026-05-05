@@ -9,21 +9,20 @@
   "scripts": {
     "dev": "concurrently -k -n api,web,worker \"npm run dev:api\" \"npm run dev:web\" \"npm run dev:worker\"",
     "dev:api": "npm run dev --workspace @sitelayer/api",
-    "dev:web": "npm run dev --workspace @sitelayer/web-v2",
-    "dev:web-v2": "npm run dev --workspace @sitelayer/web-v2",
+    "dev:web": "npm run dev --workspace @sitelayer/web",
     "dev:worker": "npm run dev --workspace @sitelayer/worker",
-    "build": "npm run build --workspace @sitelayer/config && npm run build --workspace @sitelayer/domain && npm run build --workspace @sitelayer/logger && npm run build --workspace @sitelayer/queue && npm run build --workspace @sitelayer/workflows && npm run build --workspace @sitelayer/api && npm run build --workspace @sitelayer/web-v2 && npm run build --workspace @sitelayer/worker",
+    "build": "npm run build --workspace @sitelayer/config && npm run build --workspace @sitelayer/domain && npm run build --workspace @sitelayer/logger && npm run build --workspace @sitelayer/queue && npm run build --workspace @sitelayer/workflows && npm run build --workspace @sitelayer/api && npm run build --workspace @sitelayer/web && npm run build --workspace @sitelayer/worker",
     "db:migrate": "scripts/migrate-db.sh",
     "db:check": "scripts/check-db-schema.sh",
     "seed:dev": "tsx apps/api/scripts/seed-dev.ts",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run test --workspaces --if-present",
-    "web:bundle-budget": "node scripts/check-web-bundle-budget.mjs web-v2",
+    "web:bundle-budget": "node scripts/check-web-bundle-budget.mjs web",
     "ci:quality": "bash -n scripts/*.sh && npm run lint && npm run format && npm run typecheck && npm run test && npm run build && npm run web:bundle-budget",
     "lint": "eslint . --max-warnings=0",
     "format": "prettier --check \"**/*.{ts,tsx,js,cjs,mjs,json,css,md,yml,yaml}\"",
     "format:write": "prettier --write \"**/*.{ts,tsx,js,cjs,mjs,json,css,md,yml,yaml}\"",
-    "sentry:sourcemaps": "sh scripts/sentry-upload-sourcemaps.sh apps/web-v2/dist"
+    "sentry:sourcemaps": "sh scripts/sentry-upload-sourcemaps.sh apps/web/dist"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -1,6 +1,6 @@
 // Phase 5: AI Layer hooks. Bid-accuracy cohort stats + insight CRUD +
 // takeoff-to-bid agent trigger. The visual primitives live in
-// apps/web-v2/src/components/ai/; this module is just the data layer.
+// apps/web/src/components/ai/; this module is just the data layer.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { request } from './client'

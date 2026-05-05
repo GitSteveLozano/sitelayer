@@ -77,10 +77,9 @@ services:
 
   web:
     image: ${APP_IMAGE:-registry.digitalocean.com/sitelayer/sitelayer:main}
-    # Hard cutover from apps/web (v1) to apps/web-v2 (mobile-first PWA
-    # rebuild from PR #138). The container name and port stay the same
+    # Single production web app. The container name and port stay stable
     # so Caddy doesn't need a Caddyfile change.
-    command: npm start -w @sitelayer/web-v2
+    command: npm start -w @sitelayer/web
     environment:
       NODE_ENV: production
     restart: always

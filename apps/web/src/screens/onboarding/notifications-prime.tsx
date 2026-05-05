@@ -89,61 +89,63 @@ export function NotificationsPrimeScreen() {
   }
 
   return (
-    <div className="min-h-dvh flex flex-col bg-paper text-ink">
-      <div className="px-5 pt-[calc(env(safe-area-inset-top,0px)+24px)] pb-2 flex items-center gap-3">
-        <button type="button" onClick={onSkip} className="text-[14px] text-ink-3 font-medium" aria-label="Back">
-          ‹
-        </button>
-        <span className="text-[13px] text-ink-2 font-medium">Stay in the loop</span>
-      </div>
+    <div className="m-host">
+      <div className="m-standalone h-full w-full flex flex-col bg-paper text-ink">
+        <div className="px-5 pt-[calc(env(safe-area-inset-top,0px)+24px)] pb-2 flex items-center gap-3">
+          <button type="button" onClick={onSkip} className="text-[14px] text-ink-3 font-medium" aria-label="Back">
+            ‹
+          </button>
+          <span className="text-[13px] text-ink-2 font-medium">Stay in the loop</span>
+        </div>
 
-      <div className="px-5 pt-4">
-        <h1 className="font-display text-[26px] font-bold tracking-tight leading-tight">
-          Get notified when work changes.
-        </h1>
-        <p className="text-[13px] text-ink-3 mt-2 max-w-[36ch] leading-relaxed">
-          We'll only ping you for things you'd want to interrupt your day.
-        </p>
-      </div>
+        <div className="px-5 pt-4">
+          <h1 className="font-display text-[26px] font-bold tracking-tight leading-tight">
+            Get notified when work changes.
+          </h1>
+          <p className="text-[13px] text-ink-3 mt-2 max-w-[36ch] leading-relaxed">
+            We'll only ping you for things you'd want to interrupt your day.
+          </p>
+        </div>
 
-      <ul className="px-4 pt-4 space-y-2">
-        {CATEGORIES.map((c) => (
-          <li key={c.id}>
-            <button
-              type="button"
-              onClick={() => toggle(c.id)}
-              className="w-full flex items-center gap-3 px-4 py-3 bg-card rounded-[12px] border border-line text-left active:bg-card-soft"
-            >
-              <CategoryIcon kind={c.icon} />
-              <div className="min-w-0 flex-1">
-                <div className="text-[14px] font-semibold leading-tight">{c.title}</div>
-                <div className="text-[11px] text-ink-3 mt-0.5">{c.detail}</div>
-              </div>
-              <Toggle on={prefs[c.id] ?? false} />
-            </button>
-          </li>
-        ))}
-      </ul>
+        <ul className="px-4 pt-4 space-y-2">
+          {CATEGORIES.map((c) => (
+            <li key={c.id}>
+              <button
+                type="button"
+                onClick={() => toggle(c.id)}
+                className="w-full flex items-center gap-3 px-4 py-3 bg-card rounded-[12px] border border-line text-left active:bg-card-soft"
+              >
+                <CategoryIcon kind={c.icon} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-[14px] font-semibold leading-tight">{c.title}</div>
+                  <div className="text-[11px] text-ink-3 mt-0.5">{c.detail}</div>
+                </div>
+                <Toggle on={prefs[c.id] ?? false} />
+              </button>
+            </li>
+          ))}
+        </ul>
 
-      <div className="flex-1" />
+        <div className="flex-1" />
 
-      <div className="px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-3">
-        {state === 'denied' ? (
-          <div className="text-[12px] text-bad text-center mb-2">
-            Notifications are blocked at the OS level. Re-enable in Settings → Notifications.
-          </div>
-        ) : null}
-        <button
-          type="button"
-          onClick={onAllow}
-          disabled={busy || state === 'unsupported' || state === 'denied'}
-          className="w-full h-[52px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center disabled:opacity-50"
-        >
-          {busy ? 'Asking…' : 'Allow notifications'}
-        </button>
-        <button type="button" onClick={onSkip} className="block w-full text-[12px] text-ink-3 font-medium py-2 mt-1">
-          Maybe later
-        </button>
+        <div className="px-4 pb-[calc(env(safe-area-inset-bottom,0px)+20px)] pt-3">
+          {state === 'denied' ? (
+            <div className="text-[12px] text-bad text-center mb-2">
+              Notifications are blocked at the OS level. Re-enable in Settings → Notifications.
+            </div>
+          ) : null}
+          <button
+            type="button"
+            onClick={onAllow}
+            disabled={busy || state === 'unsupported' || state === 'denied'}
+            className="w-full h-[52px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center disabled:opacity-50"
+          >
+            {busy ? 'Asking…' : 'Allow notifications'}
+          </button>
+          <button type="button" onClick={onSkip} className="block w-full text-[12px] text-ink-3 font-medium py-2 mt-1">
+            Maybe later
+          </button>
+        </div>
       </div>
     </div>
   )

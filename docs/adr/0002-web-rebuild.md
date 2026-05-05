@@ -1,4 +1,4 @@
-# ADR 0002 — Rebuild the web client as `apps/web-v2/`; keep the backend
+# ADR 0002 — Rebuild the web client as `apps/web/`; keep the backend
 
 **Status:** superseded
 **Date:** 2026-05-01
@@ -43,7 +43,7 @@ handoff bundle (`Mobile.html`, `Sitemap.html`, `AI Layer.html`,
 
 ## Decision
 
-**Keep the backend. Rebuild the web client as `apps/web-v2/` in
+**Keep the backend. Rebuild the web client as `apps/web/` in
 parallel with `apps/web/` until cutover.**
 
 The backend (`apps/api`, `apps/worker`, `packages/{config,domain,
@@ -100,7 +100,7 @@ surfaces, no shared screens) and can run as two streams. Phase 4 is also
 independent and can slot alongside. Phase 2 reads time-anomaly data
 produced by Phase 1, so it sequences after.
 
-## Tech defaults for `apps/web-v2/`
+## Tech defaults for `apps/web/`
 
 - Vite + `vite-plugin-pwa` (matches v1 bundler; offline-first fits)
 - React 19, React Router 7, Clerk 5, Sentry 10 (pinned to v1 versions)
@@ -109,7 +109,7 @@ produced by Phase 1, so it sequences after.
 - Tailwind 3.4 driven by CSS custom properties — design tokens are the
   source of truth, Tailwind reads them via `theme.extend.colors:
 'var(--m-…)'` so engineers can write `bg-paper text-ink border-line`
-- Tokens and AI primitives stay local to `apps/web-v2/` until Phase 1
+- Tokens and AI primitives stay local to `apps/web/` until Phase 1
   or 3 needs to share them with `apps/web/`. No premature `packages/`
   promotion.
 

@@ -4,7 +4,7 @@ Date-stamped historical docs. These captured the project's intent / architecture
 
 **None of these are authoritative.** The live state of the system lives in:
 
-- `apps/web-v2/`, `apps/api/`, `apps/worker/`, `packages/*` — the code
+- `apps/web/`, `apps/api/`, `apps/worker/`, `packages/*` — the code
 - `CLAUDE.md` — operating rules, deploy procedure, current snapshot
 - `docs/adr/` — durable architectural decisions
 - `DEPLOY_RUNBOOK.md` — deploy/migration contract

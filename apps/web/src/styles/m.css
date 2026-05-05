@@ -59,6 +59,14 @@
    ============================================================ */
 
 /* Phone canvas: fills the IOS/Android frame */
+.m-host {
+  height: 100dvh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--m-bg);
+}
+
 .m {
   width: 100%;
   height: 100%;
@@ -77,6 +85,32 @@
 .m .num {
   font-feature-settings: 'tnum';
   font-variant-numeric: tabular-nums;
+}
+
+@media (min-width: 900px) {
+  .m-host {
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    background: var(--m-sand);
+  }
+
+  .m-host > .m {
+    width: min(100%, 720px);
+    height: min(100%, 960px);
+    border: 1px solid var(--m-line);
+    border-radius: 24px;
+    box-shadow: var(--m-shadow-2);
+  }
+
+  .m-host > .m-standalone {
+    width: min(100%, 720px);
+    height: min(100%, 960px);
+    border: 1px solid var(--m-line);
+    border-radius: 24px;
+    box-shadow: var(--m-shadow-2);
+    overflow: hidden;
+  }
 }
 
 /* Top app bar */

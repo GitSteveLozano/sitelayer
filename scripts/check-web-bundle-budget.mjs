@@ -7,8 +7,8 @@ import { gzipSync } from 'node:zlib'
 // Per-app budget config. Thresholds are picked to be tight enough to catch
 // regressions but not so tight that an honest dependency bump trips them.
 const APPS = {
-  'web-v2': {
-    distDir: 'apps/web-v2/dist',
+  web: {
+    distDir: 'apps/web/dist',
     initialJsGzipBudget: 160 * 1024,
     eagerChunkGzipBudget: 110 * 1024,
     lazyAppChunkGzipBudget: 40 * 1024,
@@ -17,7 +17,7 @@ const APPS = {
   },
 }
 
-const appName = process.argv[2] || 'web-v2'
+const appName = process.argv[2] || 'web'
 const config = APPS[appName]
 if (!config) {
   console.error(`Unknown app: ${appName}. Known: ${Object.keys(APPS).join(', ')}`)

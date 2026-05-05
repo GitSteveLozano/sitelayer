@@ -14,6 +14,7 @@ import {
   MI,
   MKpi,
   MKpiRow,
+  MPill,
   MListInset,
   MListRow,
   MSectionH,
@@ -121,17 +122,21 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
             No line items yet. Run takeoff first, then recompute the estimate.
           </div>
         ) : (
-          <MListInset>
-            {lines.map((line, i) => (
-              <MListRow
-                key={`${line.service_item_code}-${i}`}
-                leading={<MI.FileText size={18} />}
-                headline={line.service_item_code}
-                supporting={`${line.quantity} ${line.unit} @ ${formatMoney(Number(line.rate))}`}
-                trailing={<span className="num">{formatMoney(Number(line.amount))}</span>}
-              />
-            ))}
-          </MListInset>
+          <>
+            <EstimateScopeTree lines={lines} />
+            <MSectionH>Builder</MSectionH>
+            <MListInset>
+              {lines.map((line, i) => (
+                <MListRow
+                  key={`${line.service_item_code}-${i}`}
+                  leading={<MI.FileText size={18} />}
+                  headline={line.service_item_code}
+                  supporting={`${line.quantity} ${line.unit} @ ${formatMoney(Number(line.rate))}`}
+                  trailing={<span className="num">{formatMoney(Number(line.amount))}</span>}
+                />
+              ))}
+            </MListInset>
+          </>
         )}
         {createError ? (
           <div style={{ padding: '0 16px', color: 'var(--m-red)', fontSize: 13 }}>{createError}</div>
@@ -147,6 +152,43 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
           </MButtonStack>
         </div>
       </MBody>
+    </>
+  )
+}
+
+function EstimateScopeTree({ lines }: { lines: ProjectSummary['estimateLines'] }) {
+  const groups = new Map<string, { count: number; amount: number }>()
+  for (const line of lines) {
+    const group = line.service_item_code.split(/[-_.]/)[0] || line.service_item_code
+    const cur = groups.get(group) ?? { count: 0, amount: 0 }
+    cur.count += 1
+    cur.amount += Number(line.amount ?? 0)
+    groups.set(group, cur)
+  }
+
+  return (
+    <>
+      <MSectionH>Scope tree</MSectionH>
+      <div style={{ padding: '0 16px 12px', display: 'grid', gap: 8 }}>
+        {Array.from(groups.entries()).map(([group, value]) => (
+          <div
+            key={group}
+            className="m-card m-card-tight"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}
+          >
+            <div>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>{group}</div>
+              <div className="m-quiet-sm">{value.count} line items</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="num" style={{ fontSize: 13, color: 'var(--m-ink-2)' }}>
+                {formatMoney(value.amount)}
+              </span>
+              <MPill tone="accent">priced</MPill>
+            </div>
+          </div>
+        ))}
+      </div>
     </>
   )
 }

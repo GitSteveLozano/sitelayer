@@ -39,9 +39,9 @@ updates:
           - minor
           - patch
 
-  # apps/web-v2 — the only web app (v1 retired and deleted 2026-05-04)
+  # apps/web — the only web app
   - package-ecosystem: npm
-    directory: /apps/web-v2
+    directory: /apps/web
     schedule:
       interval: weekly
       day: monday

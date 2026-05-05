@@ -18,7 +18,7 @@ import { lazy, useMemo } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { BootstrapResponse } from '../api-v1-compat.js'
 import { computeActiveContext, type ActiveContext } from '../lib/active-context.js'
-import { MBottomTabs, MBody, MI, MShell, MTopBar } from '../components/m/index.js'
+import { MBottomTabs, MI, MShell } from '../components/m/index.js'
 
 // MoreRoute lives outside the shell historically; we mount it inside so
 // the bottom-tab chrome stays visible while the user is in settings,
@@ -29,30 +29,32 @@ import { InstallPromptBanner } from '../components/shell/InstallPromptBanner.js'
 import { OfflineBanner } from '../components/shell/OfflineBanner.js'
 import { PushDeniedBanner } from '../components/shell/PushDeniedBanner.js'
 import { UpdateBanner } from '../components/shell/UpdateBanner.js'
-import { AdminHome } from './m/admin-home.js'
-import { MobileProjectsList } from './m/projects-list.js'
-import { MobileProjectDetail } from './m/project-detail.js'
-import { MobileProjectNew } from './m/project-new.js'
-import { MobileTakeoffList } from './m/takeoff-list.js'
-import { MobileEstimateReview } from './m/estimate-review.js'
-import { MobileEstimatePush } from './m/estimate-push.js'
-import { MobileSchedule } from './m/schedule.js'
-import { MobileTimeReview } from './m/time-review.js'
-import { WorkerToday } from './m/worker-today.js'
-import { WorkerClockinConfirm } from './m/worker-clockin.js'
-import { WorkerScope } from './m/worker-scope.js'
-import { WorkerIssue } from './m/worker-issue.js'
-import { WorkerHours } from './m/worker-hours.js'
-import { WorkerLog } from './m/worker-log.js'
-import { ForemanToday } from './m/foreman-today.js'
-import { ForemanField } from './m/foreman-field.js'
-import { ForemanCrew } from './m/foreman-crew.js'
-import { ForemanBrief } from './m/foreman-brief.js'
-import { ForemanLog } from './m/foreman-log.js'
-import { MobileRentals } from './m/rentals.js'
-import { MobileRentalDispatch } from './m/rentals-dispatch.js'
-import { MobileRentalsUtilization } from './m/rentals-utilization.js'
-import { MobileQuickInvoice } from './m/invoice-quick.js'
+import { AdminHome } from './mobile/admin-home.js'
+import { MobileProjectsList } from './mobile/projects-list.js'
+import { MobileProjectDetail } from './mobile/project-detail.js'
+import { MobileProjectNew } from './mobile/project-new.js'
+import { MobileTakeoffList } from './mobile/takeoff-list.js'
+import { MobileEstimateReview } from './mobile/estimate-review.js'
+import { MobileEstimatePush } from './mobile/estimate-push.js'
+import { MobileSchedule } from './mobile/schedule.js'
+import { MobileTimeReview } from './mobile/time-review.js'
+import { WorkerToday } from './mobile/worker-today.js'
+import { WorkerClockinConfirm } from './mobile/worker-clockin.js'
+import { WorkerScope } from './mobile/worker-scope.js'
+import { WorkerIssue } from './mobile/worker-issue.js'
+import { WorkerHours } from './mobile/worker-hours.js'
+import { WorkerLog } from './mobile/worker-log.js'
+import { ForemanToday } from './mobile/foreman-today.js'
+import { ForemanField } from './mobile/foreman-field.js'
+import { ForemanCrew } from './mobile/foreman-crew.js'
+import { ForemanBrief } from './mobile/foreman-brief.js'
+import { ForemanLog } from './mobile/foreman-log.js'
+import { MobileRentals } from './mobile/rentals.js'
+import { MobileRentalDispatch } from './mobile/rentals-dispatch.js'
+import { MobileRentalsUtilization } from './mobile/rentals-utilization.js'
+import { MobileRentalScan } from './mobile/rentals-scan.js'
+import { MobileRentalsPortal } from './mobile/rentals-portal.js'
+import { MobileQuickInvoice } from './mobile/invoice-quick.js'
 
 export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
@@ -114,7 +116,7 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
   const isWorker = ctx.kind === 'worker'
 
   return (
-    <div data-context={ctx.kind} style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+    <div data-context={ctx.kind} className="m-host">
       <MShell className={isWorker ? 'm-dark' : undefined}>
         <OfflineBanner />
         <UpdateBanner />
@@ -159,13 +161,20 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
             element={<MobileRentalDispatch bootstrap={bootstrap} companySlug={companySlug} />}
           />
           <Route path="rentals/utilization" element={<MobileRentalsUtilization companySlug={companySlug} />} />
-          <Route path="rentals/scan" element={<MobileRentals companySlug={companySlug} />} />
+          <Route
+            path="rentals/scan"
+            element={<MobileRentalScan bootstrap={bootstrap} companySlug={companySlug} initialMode="deliver" />}
+          />
+          <Route
+            path="rentals/return"
+            element={<MobileRentalScan bootstrap={bootstrap} companySlug={companySlug} initialMode="return" />}
+          />
+          <Route path="rentals/portal" element={<MobileRentalsPortal companySlug={companySlug} />} />
           <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} />} />
           <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
           <Route path="more/*" element={<MoreRoute />} />
           <Route path="crew" element={<ForemanCrew bootstrap={bootstrap} />} />
           <Route path="crew/*" element={<ForemanCrew bootstrap={bootstrap} />} />
-          <Route path="field/*" element={<TabPlaceholder title="Field" body="Phase 8 lands here." />} />
           <Route
             path="log"
             element={
@@ -196,16 +205,5 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
         <MBottomTabs tabs={[...tabs]} activeId={activeTab} onSelect={(id) => navigate(`${basePath}/${id}`)} />
       </MShell>
     </div>
-  )
-}
-
-function TabPlaceholder({ title, body }: { title: string; body: string }) {
-  return (
-    <>
-      <MTopBar title={title} />
-      <MBody pad>
-        <div style={{ padding: 24, color: 'var(--m-ink-2)' }}>{body}</div>
-      </MBody>
-    </>
   )
 }
