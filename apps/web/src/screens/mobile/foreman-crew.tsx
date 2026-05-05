@@ -7,6 +7,7 @@
  * bootstrap labor counts as a proxy until the timeline call is wired.
  */
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse } from '../../api-v1-compat.js'
 import {
   MAvatar,
@@ -27,6 +28,7 @@ import { formatDecimalHours, todayIso } from './format.js'
 type GroupBy = 'site' | 'person' | 'map'
 
 export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
+  const navigate = useNavigate()
   const [grp, setGrp] = useState<GroupBy>('site')
   const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
   const workers = useMemo(() => bootstrap?.workers ?? [], [bootstrap?.workers])
@@ -83,20 +85,13 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
           </MChip>
         </MChipRow>
         {grp === 'map' ? (
-          <div style={{ padding: '0 16px' }}>
-            <div
-              className="m-card"
-              style={{
-                height: 220,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                color: 'var(--m-ink-3)',
-              }}
-            >
-              Map view coming soon
-            </div>
-          </div>
+          <ForemanCrewMap
+            projects={projects}
+            workers={workers}
+            labor={labor}
+            today={today}
+            onOpenProject={(projectId) => navigate(`/projects/${projectId}`)}
+          />
         ) : grp === 'person' ? (
           <>
             <MSectionH>All crew</MSectionH>
@@ -187,5 +182,332 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
         )}
       </MBody>
     </>
+  )
+}
+
+type ForemanCrewMapProps = {
+  projects: BootstrapResponse['projects']
+  workers: BootstrapResponse['workers']
+  labor: BootstrapResponse['laborEntries']
+  today: string
+  onOpenProject: (projectId: string) => void
+}
+
+function ForemanCrewMap({ projects, workers, labor, today, onOpenProject }: ForemanCrewMapProps) {
+  const activeProjects = projects.filter((p) => /progress|active/i.test(p.status)).slice(0, 3)
+  const mappedProjects = activeProjects.length > 0 ? activeProjects : projects.slice(0, 3)
+  const todayLabor = labor.filter((l) => l.occurred_on === today && !l.deleted_at && l.worker_id)
+  const workersById = new Map(workers.map((w) => [w.id, w]))
+  const pins = todayLabor
+    .map((entry, index) => {
+      const worker = entry.worker_id ? workersById.get(entry.worker_id) : null
+      const projectIndex = Math.max(
+        0,
+        mappedProjects.findIndex((p) => p.id === entry.project_id),
+      )
+      if (!worker) return null
+      return {
+        id: `${entry.id}-${worker.id}`,
+        worker,
+        projectId: entry.project_id,
+        hours: Number(entry.hours ?? 0),
+        x: 24 + ((index * 17 + projectIndex * 29) % 56),
+        y: 26 + ((index * 23 + projectIndex * 11) % 38),
+      }
+    })
+    .filter((pin): pin is NonNullable<typeof pin> => Boolean(pin))
+
+  const roster =
+    pins.length > 0
+      ? pins
+      : workers.slice(0, 4).map((worker, index) => ({
+          id: `offline-${worker.id}`,
+          worker,
+          projectId: mappedProjects[index % Math.max(1, mappedProjects.length)]?.id ?? null,
+          hours: 0,
+          x: 24 + index * 13,
+          y: 30 + index * 9,
+        }))
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div
+        style={{
+          position: 'relative',
+          height: 'clamp(300px, 46dvh, 430px)',
+          flex: '0 0 auto',
+          overflow: 'hidden',
+          borderTop: '1px solid var(--m-line)',
+          borderBottom: '1px solid var(--m-line)',
+          background: '#e7decc',
+        }}
+      >
+        <MapRoad top="42%" left="-8%" width="116%" rotate={0} />
+        <MapRoad top="-8%" left="48%" width="116%" rotate={90} />
+        <MapRoad top="19%" left="38%" width="78%" rotate={57} />
+        <MapBlock top="12%" left="11%" width="28%" height="30%" />
+        <MapBlock top="55%" left="7%" width="34%" height="32%" />
+        <MapBlock top="53%" left="63%" width="28%" height="27%" />
+        {mappedProjects.map((project, index) => {
+          const anchors = [
+            { x: 25, y: 25, r: 94 },
+            { x: 66, y: 55, r: 72 },
+            { x: 38, y: 70, r: 66 },
+          ]
+          const anchor = anchors[index % anchors.length]!
+          return (
+            <button
+              key={project.id}
+              type="button"
+              onClick={() => onOpenProject(project.id)}
+              aria-label={`Open ${project.name}`}
+              style={{
+                position: 'absolute',
+                left: `${anchor.x}%`,
+                top: `${anchor.y}%`,
+                width: anchor.r,
+                height: anchor.r,
+                transform: 'translate(-50%, -50%)',
+                borderRadius: '50%',
+                border: '2px dashed rgba(44, 138, 85, 0.75)',
+                background: 'rgba(44, 138, 85, 0.08)',
+                cursor: 'pointer',
+              }}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  left: '50%',
+                  top: -10,
+                  transform: 'translateX(-50%)',
+                  borderRadius: 999,
+                  background: '#1c1816',
+                  color: '#f3ecdf',
+                  padding: '3px 8px',
+                  fontSize: 9,
+                  fontWeight: 700,
+                  textTransform: 'uppercase',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {project.name.split(/\s+/).slice(0, 2).join(' ')}
+              </span>
+            </button>
+          )
+        })}
+        {roster.map((pin) => {
+          const onSite = pin.hours > 0
+          return (
+            <button
+              key={pin.id}
+              type="button"
+              aria-label={`${pin.worker.name} ${onSite ? 'clocked in' : 'off clock'}`}
+              style={{
+                position: 'absolute',
+                left: `${pin.x}%`,
+                top: `${pin.y}%`,
+                transform: 'translate(-50%, -50%)',
+                border: 0,
+                background: 'transparent',
+                padding: 0,
+                cursor: 'pointer',
+              }}
+            >
+              <span style={{ position: 'relative', display: 'inline-flex' }}>
+                <MAvatar initials={initialsFor(pin.worker.name)} tone={avatarToneFor(pin.worker.id)} size="sm" />
+                <span
+                  style={{
+                    position: 'absolute',
+                    right: -1,
+                    bottom: -1,
+                    width: 10,
+                    height: 10,
+                    borderRadius: '50%',
+                    border: '2px solid #fff',
+                    background: onSite ? 'var(--m-green)' : 'var(--m-ink-4)',
+                  }}
+                />
+              </span>
+              <span
+                style={{
+                  display: 'block',
+                  marginTop: 2,
+                  borderRadius: 999,
+                  background: '#1c1816',
+                  color: '#f3ecdf',
+                  padding: '2px 6px',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {pin.worker.name.split(/\s+/).slice(0, 2).join(' ')}
+              </span>
+            </button>
+          )
+        })}
+        <div style={{ position: 'absolute', right: 12, top: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <MapZoom label="+" />
+          <MapZoom label="-" />
+        </div>
+        {roster.some((pin) => pin.hours === 0) ? (
+          <div
+            style={{
+              position: 'absolute',
+              left: 16,
+              right: 16,
+              bottom: 14,
+              borderRadius: 10,
+              background: 'var(--m-amber)',
+              color: '#fffaf2',
+              padding: '10px 12px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              fontSize: 12,
+              fontWeight: 600,
+              boxShadow: 'var(--m-shadow-2)',
+            }}
+          >
+            <MI.AlertTri size={18} />
+            <span>{roster.filter((pin) => pin.hours === 0).length} crew member needs a clock-in check.</span>
+          </div>
+        ) : null}
+      </div>
+      <div style={{ background: 'var(--m-bg)', borderTop: '1px solid var(--m-line)', paddingTop: 10 }}>
+        <div style={{ padding: '0 16px 10px' }}>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, 1fr)',
+              gap: 8,
+            }}
+          >
+            <MapStat label="In fence" value={String(pins.length)} />
+            <MapStat label="Sites" value={String(mappedProjects.length)} />
+            <MapStat label="Off map" value={String(Math.max(0, workers.length - roster.length))} />
+          </div>
+        </div>
+        <MSectionH>Roster · live</MSectionH>
+        <MListInset>
+          {roster.slice(0, 5).map((pin) => (
+            <MListRow
+              key={pin.id}
+              leading={
+                <MAvatar initials={initialsFor(pin.worker.name)} tone={avatarToneFor(pin.worker.id)} size="sm" />
+              }
+              headline={pin.worker.name}
+              supporting={mappedProjects.find((p) => p.id === pin.projectId)?.name ?? pin.worker.role ?? 'Crew'}
+              trailing={
+                pin.hours > 0 ? (
+                  <MPill tone="green" dot>
+                    in fence
+                  </MPill>
+                ) : (
+                  <MPill tone="amber" dot>
+                    check
+                  </MPill>
+                )
+              }
+            />
+          ))}
+        </MListInset>
+      </div>
+    </div>
+  )
+}
+
+function MapRoad({ top, left, width, rotate }: { top: string; left: string; width: string; rotate: number }) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top,
+        left,
+        width,
+        height: 42,
+        transform: `rotate(${rotate}deg)`,
+        background: '#cbbda7',
+        borderTop: '1px solid rgba(255,255,255,0.45)',
+        borderBottom: '1px solid rgba(130,111,88,0.18)',
+      }}
+    >
+      <div
+        style={{
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          top: '50%',
+          borderTop: '2px dashed rgba(255,255,255,0.45)',
+        }}
+      />
+    </div>
+  )
+}
+
+function MapBlock({ top, left, width, height }: { top: string; left: string; width: string; height: string }) {
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top,
+        left,
+        width,
+        height,
+        border: '1px solid rgba(117, 101, 79, 0.18)',
+        background: 'rgba(245, 241, 236, 0.62)',
+      }}
+    />
+  )
+}
+
+function MapZoom({ label }: { label: string }) {
+  return (
+    <button
+      type="button"
+      aria-label={label === '+' ? 'Zoom in' : 'Zoom out'}
+      style={{
+        width: 36,
+        height: 36,
+        border: '1px solid var(--m-line)',
+        borderRadius: 10,
+        background: '#fff',
+        color: 'var(--m-ink)',
+        fontSize: 20,
+        fontWeight: 700,
+        boxShadow: 'var(--m-shadow-1)',
+      }}
+    >
+      {label}
+    </button>
+  )
+}
+
+function MapStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        borderRadius: 10,
+        border: '1px solid var(--m-line)',
+        background: 'var(--m-card)',
+        padding: '9px 10px',
+      }}
+    >
+      <div className="num" style={{ fontSize: 18, fontWeight: 700 }}>
+        {value}
+      </div>
+      <div
+        style={{
+          marginTop: 2,
+          color: 'var(--m-ink-3)',
+          fontSize: 10,
+          fontWeight: 600,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+        }}
+      >
+        {label}
+      </div>
+    </div>
   )
 }
