@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import { computeActiveContext } from './active-context.js'
+import { availableRoleModes, computeActiveContext, normalizeRoleMode } from './active-context.js'
 
 describe('computeActiveContext', () => {
-  it('admin always wins regardless of assignments or geofence', () => {
+  it('admin is the default for admin users regardless of assignments or geofence', () => {
     expect(
       computeActiveContext({
         companyRole: 'admin',
@@ -10,6 +10,29 @@ describe('computeActiveContext', () => {
         currentProjectId: 'p1',
       }),
     ).toEqual({ kind: 'admin', projectId: 'p1' })
+  })
+
+  it('allows an admin user to enter foreman mode when assigned as foreman', () => {
+    expect(
+      computeActiveContext({
+        companyRole: 'admin',
+        assignments: [
+          { project_id: 'p1', role: 'foreman' },
+          { project_id: 'p2', role: 'worker' },
+        ],
+        modeOverride: 'foreman',
+      }),
+    ).toEqual({ kind: 'foreman', projectId: null })
+  })
+
+  it('ignores unavailable mode overrides', () => {
+    expect(
+      computeActiveContext({
+        companyRole: 'admin',
+        assignments: [],
+        modeOverride: 'worker',
+      }),
+    ).toEqual({ kind: 'admin', projectId: null })
   })
 
   it('aliases legacy office company role to admin', () => {
@@ -97,5 +120,38 @@ describe('computeActiveContext', () => {
         currentProjectId: 'p99',
       }),
     ).toEqual({ kind: 'foreman', projectId: null })
+  })
+})
+
+describe('availableRoleModes', () => {
+  it('is admin-first for multi-role admin users', () => {
+    expect(
+      availableRoleModes({
+        companyRole: 'admin',
+        assignments: [
+          { project_id: 'p1', role: 'worker' },
+          { project_id: 'p2', role: 'foreman' },
+        ],
+      }),
+    ).toEqual(['admin', 'foreman', 'worker'])
+  })
+
+  it('does not expose admin mode to field-only users', () => {
+    expect(
+      availableRoleModes({
+        companyRole: 'member',
+        assignments: [{ project_id: 'p1', role: 'worker' }],
+      }),
+    ).toEqual(['worker'])
+  })
+})
+
+describe('normalizeRoleMode', () => {
+  it('accepts only shell role modes', () => {
+    expect(normalizeRoleMode('admin')).toBe('admin')
+    expect(normalizeRoleMode('foreman')).toBe('foreman')
+    expect(normalizeRoleMode('worker')).toBe('worker')
+    expect(normalizeRoleMode('member')).toBeNull()
+    expect(normalizeRoleMode(null)).toBeNull()
   })
 })
