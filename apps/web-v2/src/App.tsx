@@ -1,7 +1,8 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { AuthProvider } from '@/lib/auth'
+import { SignedIn, SignedOut, SignIn, SignUp } from '@clerk/clerk-react'
+import { AuthProvider, isClerkConfigured } from '@/lib/auth'
 import { ColdStartSplash } from '@/components/shell/ColdStartSplash'
 import { SafariLandingScreen, useShouldShowSafariLanding } from '@/screens/onboarding'
 
@@ -76,6 +77,45 @@ function FirstRunGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+/**
+ * Auth gate for the production tier. With `AUTH_ALLOW_HEADER_FALLBACK=0`
+ * and a `CLERK_JWT_KEY` set on the API, every request needs a Clerk
+ * Bearer token, so unauthenticated visitors must hit `<SignIn>` before
+ * they can render the mobile shell. v1 had this gate; v2 dropped it
+ * during the SPA refactor and added it back on 2026-05-05 once the
+ * mobile shell promoted to the canonical root.
+ *
+ * When Clerk isn't configured (local dev without `VITE_CLERK_PUBLISHABLE_KEY`,
+ * fixture mode), `ClerkProvider` isn't mounted — `<SignedIn>`/`<SignedOut>`
+ * would throw — so we render children directly. The API's header
+ * fallback path keeps that flow working.
+ */
+function ClerkAuthGate({ children }: { children: React.ReactNode }) {
+  if (!isClerkConfigured()) return <>{children}</>
+  return (
+    <>
+      <SignedOut>
+        <UnauthShell />
+      </SignedOut>
+      <SignedIn>{children}</SignedIn>
+    </>
+  )
+}
+
+function UnauthShell() {
+  return (
+    <div
+      style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '2rem' }}
+    >
+      <Routes>
+        <Route path="/sign-in/*" element={<SignIn routing="path" path="/sign-in" signUpUrl="/sign-up" />} />
+        <Route path="/sign-up/*" element={<SignUp routing="path" path="/sign-up" signInUrl="/sign-in" />} />
+        <Route path="*" element={<Navigate to="/sign-in" replace />} />
+      </Routes>
+    </div>
+  )
+}
+
 export default function App() {
   return (
     <AuthProvider>
@@ -83,39 +123,41 @@ export default function App() {
         <BrowserRouter basename={ROUTER_BASENAME}>
           <Suspense fallback={<ColdStartSplash />}>
             <FirstRunGate>
-              <Routes>
-                {/* Project deep routes that need the full viewport. */}
-                <Route path="/projects/:id/setup" element={<ProjectSetupScreen />} />
-                <Route path="/projects/:id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />
-                <Route path="/projects/:id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
-                <Route path="/projects/:id/takeoff-summary" element={<TakeoffSummaryScreen />} />
-                <Route path="/projects/:id/photo-measure" element={<PhotoMeasureScreen />} />
-                <Route path="/projects/:id/rental-contract" element={<ProjectRentalContractScreen />} />
+              <ClerkAuthGate>
+                <Routes>
+                  {/* Project deep routes that need the full viewport. */}
+                  <Route path="/projects/:id/setup" element={<ProjectSetupScreen />} />
+                  <Route path="/projects/:id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />
+                  <Route path="/projects/:id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
+                  <Route path="/projects/:id/takeoff-summary" element={<TakeoffSummaryScreen />} />
+                  <Route path="/projects/:id/photo-measure" element={<PhotoMeasureScreen />} />
+                  <Route path="/projects/:id/rental-contract" element={<ProjectRentalContractScreen />} />
 
-                {/* Admin / specialized full-screen routes — no bottom-tab
-                    chrome. Linked from the mobile shell's More tab and
-                    elsewhere; a future iteration may pull them inside
-                    the shell. */}
-                <Route path="/more/*" element={<MoreRoute />} />
-                <Route path="/financial/*" element={<FinancialRoute />} />
-                <Route path="/bid-accuracy" element={<BidAccuracyRoute />} />
-                <Route path="/photo" element={<PhotoRoute />} />
-                <Route path="/live-crew" element={<LiveCrewRoute />} />
+                  {/* Admin / specialized full-screen routes — no bottom-tab
+                      chrome. Linked from the mobile shell's More tab and
+                      elsewhere; a future iteration may pull them inside
+                      the shell. */}
+                  <Route path="/more/*" element={<MoreRoute />} />
+                  <Route path="/financial/*" element={<FinancialRoute />} />
+                  <Route path="/bid-accuracy" element={<BidAccuracyRoute />} />
+                  <Route path="/photo" element={<PhotoRoute />} />
+                  <Route path="/live-crew" element={<LiveCrewRoute />} />
 
-                {/* Onboarding + permission primes — full-screen takeovers. */}
-                <Route path="/onboarding" element={<OnboardingRoute />} />
-                <Route path="/permissions/location" element={<LocationPrimeRoute />} />
-                <Route path="/permissions/notifications" element={<NotificationsPrimeRoute />} />
+                  {/* Onboarding + permission primes — full-screen takeovers. */}
+                  <Route path="/onboarding" element={<OnboardingRoute />} />
+                  <Route path="/permissions/location" element={<LocationPrimeRoute />} />
+                  <Route path="/permissions/notifications" element={<NotificationsPrimeRoute />} />
 
-                {/* Dev-only primitive showcase. */}
-                <Route path="/m-preview" element={<MPreviewRoute />} />
+                  {/* Dev-only primitive showcase. */}
+                  <Route path="/m-preview" element={<MPreviewRoute />} />
 
-                {/* Legacy alias — original mount of the mobile shell. */}
-                <Route path="/m/*" element={<MRoute basePath="/m" />} />
+                  {/* Legacy alias — original mount of the mobile shell. */}
+                  <Route path="/m/*" element={<MRoute basePath="/m" />} />
 
-                {/* Mobile shell — canonical UX, claims everything else. */}
-                <Route path="/*" element={<MRoute />} />
-              </Routes>
+                  {/* Mobile shell — canonical UX, claims everything else. */}
+                  <Route path="/*" element={<MRoute />} />
+                </Routes>
+              </ClerkAuthGate>
             </FirstRunGate>
           </Suspense>
         </BrowserRouter>
