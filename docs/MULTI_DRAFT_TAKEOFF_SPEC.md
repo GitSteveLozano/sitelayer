@@ -50,7 +50,7 @@ Existing `GET/POST/PATCH /api/projects/:id/takeoff/measurements` endpoints add a
 
 ### UI
 
-The takeoffs canvas (`apps/web/src/views/takeoffs.tsx`) gets a dropdown picker above the toolbar: "Draft: [Default ▾]" with options to switch, plus a "+ New draft" entry and "Duplicate this draft" action. The canvas state machine should treat `draft_id` as part of its key so switching drafts cleanly resets the polygon array, calibration, and estimate cache.
+The takeoffs canvas (`apps/web/src/screens/projects/takeoff-canvas.tsx`) gets a dropdown picker above the toolbar: "Draft: [Default ▾]" with options to switch, plus a "+ New draft" entry and "Duplicate this draft" action. The canvas state machine should treat `draft_id` as part of its key so switching drafts cleanly resets the polygon array, calibration, and estimate cache.
 
 Existing scope: blueprint selection is sticky per project; draft selection should be sticky per `(project, blueprint)` pair.
 

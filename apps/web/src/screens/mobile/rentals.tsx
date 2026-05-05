@@ -14,6 +14,9 @@ import {
   MI,
   MInput,
   MPill,
+  MQuickAction,
+  MQuickActionGrid,
+  MSectionH,
   MStat,
   MStatStrip,
   MTopBar,
@@ -132,6 +135,13 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
           <MStat label="Daily revenue" value={formatMoney(dailyRevenue)} />
           <MStat label="Util" value={`${utilizationPct}%`} />
         </MStatStrip>
+        <MSectionH>Rental yard</MSectionH>
+        <MQuickActionGrid>
+          <MQuickAction Icon={MI.Truck} label="Dispatch" onClick={() => navigate('/rentals/dispatch')} />
+          <MQuickAction Icon={MI.Check} label="Return" onClick={() => navigate('/rentals/return')} />
+          <MQuickAction Icon={MI.Camera} label="Scan" onClick={() => navigate('/rentals/scan')} />
+          <MQuickAction Icon={MI.FileText} label="Portal" onClick={() => navigate('/rentals/portal')} />
+        </MQuickActionGrid>
         {error ? (
           <div style={{ padding: 24, color: 'var(--m-red)', fontSize: 13 }}>{error}</div>
         ) : items === null ? (

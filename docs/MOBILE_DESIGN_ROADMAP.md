@@ -163,7 +163,7 @@ create index project_assignments_project_active
 
 **Files:**
 
-- New: `apps/web/src/views/mobile/home.tsx`, `views/mobile/projects-list.tsx`
+- New: `apps/web/src/screens/mobileobile/home.tsx`, `screens/mobile/projects-list.tsx`
 - Modify: `apps/web/src/api.ts` — add `getMobileHome()` (aggregates from existing `/api/bootstrap` + today's labor cost rollup)
 
 **Reuses:** existing `/api/projects`, `/api/analytics`, `/api/clock/timeline`. The admin sidebar from the desktop view is kept untouched for desktop; mobile uses the new home.
@@ -182,7 +182,7 @@ create index project_assignments_project_active
 
 **Files:**
 
-- New: `apps/web/src/views/mobile/project-detail.tsx` (router) + one component per tab in `views/mobile/project-tabs/`
+- New: `apps/web/src/screens/mobileobile/project-detail.tsx` (router) + one component per tab in `screens/mobile/project-tabs/`
 - Reuses: existing `views/project-detail.tsx` desktop logic — extract shared data hooks into `apps/web/src/hooks/use-project.ts`
 
 **Reuses:**
@@ -208,7 +208,7 @@ create index project_assignments_project_active
 
 **Files:**
 
-- New: `apps/web/src/views/mobile/takeoff.tsx` — wraps the existing canvas logic with mobile gesture handling (pinch zoom, single-finger pan, long-press to drop a polygon vertex)
+- New: `apps/web/src/screens/mobileobile/takeoff.tsx` — wraps the existing canvas logic with mobile gesture handling (pinch zoom, single-finger pan, long-press to drop a polygon vertex)
 - Reuses: `apps/web/src/components/takeoff-pan-overlay.tsx`, the existing `views/takeoffs.tsx` rendering pipeline, `packages/domain` polygon math (`normalizePolygonGeometry`, `calculateTakeoffQuantity`)
 - Reuses: `/api/projects/:id/takeoff/measurement(s)`, `/api/blueprints/*`
 
@@ -226,7 +226,7 @@ create index project_assignments_project_active
 
 **Files:**
 
-- New: `apps/web/src/views/mobile/schedule.tsx`, `views/foreman/time-review.tsx`, `views/admin/live-vs-budget.tsx`
+- New: `apps/web/src/screens/mobileobile/schedule.tsx`, `views/foreman/time-review.tsx`, `views/admin/live-vs-budget.tsx`
 - Reuses: `time-review-runs` workflow + machine, `crew_schedule_workflow`, `labor-burden` rollup, `labor-reports` for the burndown chart data
 
 **Done when:** a foreman ending their day can approve all their crew's hours via the existing `time_review_runs` deterministic workflow, surfaced through the mobile UI; an admin can see the burndown chart on phone.
@@ -243,7 +243,7 @@ create index project_assignments_project_active
 
 **Files:**
 
-- New: `apps/web/src/views/worker/*.tsx` — one per screen
+- New: `apps/web/src/screens/worker/*.tsx` — one per screen
 - New: `apps/web/src/lib/auto-clockin.ts` — geofence-triggered auto clock-in, with a 2-minute "Wrong project? Tap to fix" override window (per the screenshot, not the README)
 - Reuses: `clock` route (already supports `/api/clock/in`, `/api/clock/out`), `worker-issues` route, geofence policy, push subscriptions
 - Reuses: `daily-log-photo-upload.ts` for `wk-log`
@@ -268,7 +268,7 @@ create index project_assignments_project_active
 
 **Files:**
 
-- New: `apps/web/src/views/foreman/*.tsx`
+- New: `apps/web/src/screens/foreman/*.tsx`
 - Reuses: `worker-issues` (= field events) + `daily-logs` + `time-review-runs` routes; `notifications` for the "From the field · 2 need you" stripe
 - Reuses: AI stripe pattern from Phase 1
 
@@ -291,7 +291,7 @@ create index project_assignments_project_active
 
 **Files:**
 
-- New: `apps/web/src/views/mobile/rentals/*.tsx`
+- New: `apps/web/src/screens/mobileobile/rentals/*.tsx`
 - Reuses: existing rental routes (already extensive — `rental-billing-state`, `rental-contracts-crud`, `rental-inventory-crud`, `dispatch`), the deterministic billing workflow
 
 **Done when:** a yard manager on a phone can scan a tag, dispatch equipment to a project, and run the billing workflow for a returned rental, all using the existing workflow plumbing.

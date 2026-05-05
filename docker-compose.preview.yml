@@ -29,7 +29,7 @@ services:
     volumes:
       - .:/app
       - preview_node_modules:/app/node_modules
-      - preview_vite_cache:/app/apps/web-v2/.vite-cache
+      - preview_vite_cache:/app/apps/web/.vite-cache
       - blueprint_storage:/app/storage/blueprints
     restart: unless-stopped
     networks:
@@ -47,13 +47,10 @@ services:
   web:
     image: node:20-alpine
     working_dir: /app
-    # Production traffic was cut over to apps/web-v2 in PR #139. Previews
-    # need to match prod, otherwise reviewers approve a v2-design PR after
-    # only seeing the v1 app — which is exactly the loop that drove the
-    # post-cutover polish queue. Vite dev for v2 listens on 3100 (see
-    # apps/web-v2/vite.config.ts); the Traefik service port below was
-    # updated to match.
-    command: npm run dev:web-v2
+    # Previews need to match prod so reviewers see the actual web app.
+    # Vite dev listens on 3100 (see apps/web/vite.config.ts); the
+    # Traefik service port below matches that.
+    command: npm run dev:web
     env_file:
       - ${PREVIEW_STACK_ENV_FILE:-.env}
     environment:
@@ -76,7 +73,7 @@ services:
     volumes:
       - .:/app
       - preview_node_modules:/app/node_modules
-      - preview_vite_cache:/app/apps/web-v2/.vite-cache
+      - preview_vite_cache:/app/apps/web/.vite-cache
     restart: unless-stopped
     networks:
       - router

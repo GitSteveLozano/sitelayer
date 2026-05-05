@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url'
 import { defineConfig, mergeConfig } from 'vitest/config'
 import viteConfig from './vite.config'
 
-// Test config for apps/web-v2.
+// Test config for apps/web.
 //
 // Default environment is jsdom so component render tests (mounting
 // primitives, asserting on the resulting DOM) work without per-file
@@ -21,7 +21,7 @@ export default mergeConfig(
       include: ['src/**/*.test.{ts,tsx}'],
       globals: false,
       // Vitest defaults to running in the workspace root. Pinning the
-      // root keeps test discovery scoped to web-v2 even when invoked
+      // root keeps test discovery scoped to web even when invoked
       // from the monorepo root.
       root: fileURLToPath(new URL('.', import.meta.url)),
     },

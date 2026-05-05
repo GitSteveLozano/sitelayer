@@ -5,7 +5,7 @@
  * For Phase 4 the data is sourced from bootstrap (projects, laborEntries,
  * schedules, materialBills filtered by project_id). Tabs that need
  * heavier data (estimate lines, daily logs, blueprints) render lightly
- * and link out to existing desktop views via /projects/:id; later phases
+ * and link out to existing project screens via /projects/:id; later phases
  * replace those with native mobile implementations.
  */
 import { useMemo, useState } from 'react'
@@ -214,6 +214,7 @@ function Overview({
 
   return (
     <div style={{ paddingTop: 8 }}>
+      <ProjectStatePanel project={project} navigate={navigate} />
       {pctSpent > 75 ? (
         <div style={{ padding: '0 16px 12px' }}>
           <MAiStripe
@@ -259,12 +260,117 @@ function Overview({
           headline="Materials & costs"
           supporting="Bills + rental dispatch"
           chev
+          onTap={() => navigate('/rentals/dispatch')}
         />
-        <MListRow leading={<MI.Clock size={18} />} headline="Schedule" supporting="Slot in 4-week planner" chev />
-        <MListRow leading={<MI.FileText size={18} />} headline="Daily log" supporting="From foreman" chev />
+        <MListRow
+          leading={<MI.Clock size={18} />}
+          headline="Schedule"
+          supporting="Slot in 4-week planner"
+          chev
+          onTap={() => navigate('/schedule')}
+        />
+        <MListRow
+          leading={<MI.FileText size={18} />}
+          headline="Daily log"
+          supporting="From foreman"
+          chev
+          onTap={() => navigate('/log')}
+        />
       </MListInset>
     </div>
   )
+}
+
+function ProjectStatePanel({ project, navigate }: { project: ProjectRow; navigate: (path: string) => void }) {
+  const state = normalizeProjectState(project.status)
+  const config =
+    state === 'draft'
+      ? {
+          eyebrow: 'Drafting',
+          title: 'Start with takeoff, then build the estimate.',
+          body: 'Client and archetype are enough for now. Measurements and line items come next.',
+          primary: 'Start takeoff',
+          primaryPath: `/projects/${project.id}/takeoff`,
+          secondary: 'Open estimate',
+          secondaryPath: `/projects/${project.id}/estimate`,
+        }
+      : state === 'sent'
+        ? {
+            eyebrow: 'Awaiting client',
+            title: 'Estimate is out. Watch read status before nudging.',
+            body: 'Signed portal activity and estimate push history live in the estimate workflow.',
+            primary: 'Review send',
+            primaryPath: `/projects/${project.id}/estimate`,
+            secondary: 'Share link',
+            secondaryPath: `/projects/${project.id}/estimate`,
+          }
+        : state === 'accepted'
+          ? {
+              eyebrow: 'Accepted',
+              title: 'Assign foreman and lock the start date.',
+              body: 'Once scheduled, this appears in the foreman morning flow.',
+              primary: 'Schedule',
+              primaryPath: '/schedule',
+              secondary: 'Crew',
+              secondaryPath: '/crew',
+            }
+          : state === 'active'
+            ? {
+                eyebrow: 'In progress',
+                title: 'Track budget, daily log, crew, and materials.',
+                body: 'Foreman logs and worker evidence roll up here as the job moves.',
+                primary: 'Budget',
+                primaryPath: `/projects/${project.id}`,
+                secondary: 'Brief crew',
+                secondaryPath: `/brief/${project.id}`,
+              }
+            : state === 'done'
+              ? {
+                  eyebrow: 'Closing',
+                  title: 'Create final invoice and archive when paid.',
+                  body: 'Use logged scope, materials, and approved time as the closeout record.',
+                  primary: 'Invoice',
+                  primaryPath: '/invoice/new',
+                  secondary: 'Files',
+                  secondaryPath: `/projects/${project.id}/takeoff`,
+                }
+              : {
+                  eyebrow: 'Archived',
+                  title: 'Read-only job record.',
+                  body: 'Use this project for reports, bid accuracy, and historical comparisons.',
+                  primary: 'Files',
+                  primaryPath: `/projects/${project.id}/takeoff`,
+                  secondary: 'Projects',
+                  secondaryPath: '/projects',
+                }
+
+  return (
+    <div style={{ padding: '0 16px 12px' }}>
+      <div className="m-card" style={{ background: 'var(--m-card-soft)' }}>
+        <div className="m-topbar-eyebrow">{config.eyebrow}</div>
+        <div style={{ fontSize: 17, fontWeight: 600, marginTop: 4 }}>{config.title}</div>
+        <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.45, marginTop: 4 }}>{config.body}</div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+          <MButton variant="primary" size="sm" onClick={() => navigate(config.primaryPath)}>
+            {config.primary}
+          </MButton>
+          <MButton variant="ghost" size="sm" onClick={() => navigate(config.secondaryPath)}>
+            {config.secondary}
+          </MButton>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function normalizeProjectState(status: string): 'draft' | 'sent' | 'accepted' | 'active' | 'done' | 'archived' {
+  const s = status.toLowerCase()
+  if (/archive/.test(s)) return 'archived'
+  if (/done|closed|closing|complete/.test(s)) return 'done'
+  if (/progress|active/.test(s)) return 'active'
+  if (/accepted|won|signed/.test(s)) return 'accepted'
+  if (/sent|await|proposal/.test(s)) return 'sent'
+  return 'draft'
 }
 
 function EstimateTab({ project, navigate }: { project: ProjectRow; navigate: (path: string) => void }) {

@@ -29,7 +29,7 @@ import { type BootstrapResponse, type SessionResponse } from '../api-v1-compat'
 import { ApiError, request, getActiveCompanySlug } from '../lib/api/client'
 import { queryKeys } from '../lib/api/keys'
 import { normalizeMobileShellRole } from '../lib/active-context'
-import { MobileShell } from '../views/m-shell'
+import { MobileShell } from '../screens/mobile-shell'
 
 type MRouteProps = {
   basePath?: string

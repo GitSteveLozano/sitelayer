@@ -4,30 +4,30 @@ Construction operations platform: blueprint takeoff, estimation, crew scheduling
 
 ## ⚠️ Architecture at a glance
 
-**One web app: `apps/web-v2/`.** v1 was deleted on 2026-05-05 (ADR 0003). There's nothing called `apps/web/` anymore. New screens, primitives, machines all go under `apps/web-v2/src/`.
+**One web app: `apps/web/`.** The old parallel frontend track was removed on 2026-05-05 (ADR 0003). New screens, primitives, and machines all go under `apps/web/src/`.
 
 **State management:**
 
-- **Frontend orchestration** lives in **XState** machines under `apps/web-v2/src/machines/`: `bootstrap-refresh`, `offline-replay`, `project-selection`, `estimate-push`, `billing-review`. These own long-lived UI state (offline queue, role/company switching, multi-step approval flows).
-- **Frontend data fetching/caching** lives in **TanStack Query** (`apps/web-v2/src/lib/api/`). Resource-shaped hooks (`useProjects`, `useClockIn`, `useEstimatePush`, etc.).
+- **Frontend orchestration** lives in **XState** machines under `apps/web/src/machines/`: `bootstrap-refresh`, `offline-replay`, `project-selection`, `estimate-push`, `billing-review`. These own long-lived UI state (offline queue, role/company switching, multi-step approval flows).
+- **Frontend data fetching/caching** lives in **TanStack Query** (`apps/web/src/lib/api/`). Resource-shaped hooks (`useProjects`, `useClockIn`, `useEstimatePush`, etc.).
 - **Backend workflows** are **temporal.io-style** deterministic state machines in `packages/workflows/` (rental-billing, estimate-push, project-closeout, crew-schedule, time-review, rental). See `docs/DETERMINISTIC_WORKFLOWS.md`.
-- **Single HTTP client** = `apps/web-v2/src/lib/api/client.ts:request<T>()`. `api-v1-compat.ts` is a name-bridge for the migrated XState machines and delegates to the same `request<T>()` underneath.
+- **Single HTTP client** = `apps/web/src/lib/api/client.ts:request<T>()`. `api-v1-compat.ts` is a name-bridge for the migrated XState machines and delegates to the same `request<T>()` underneath.
 
 Where new code goes:
 
-- **New screen** → `apps/web-v2/src/views/m/<name>.tsx` (Steve's mobile shell — the canonical UI, mounted at `/`). The previous parallel `screens/<persona>/` tree was retired in PR #238.
-- **New primitive** → `apps/web-v2/src/components/m/` (lowercase, e.g. `button.tsx`, `kpi.tsx`).
-- **New durable UI state machine** → `apps/web-v2/src/machines/<name>.ts` using the patterns in the existing five.
+- **New screen** → `apps/web/src/screens/mobile/<name>.tsx` for canonical mobile shell work, or the existing feature folders under `apps/web/src/screens/` when extending a specialized full-screen route.
+- **New primitive** → `apps/web/src/components/m/` (lowercase, e.g. `button.tsx`, `kpi.tsx`).
+- **New durable UI state machine** → `apps/web/src/machines/<name>.ts` using the patterns in the existing five.
 - **New backend workflow** → `packages/workflows/<name>.ts` following the rules in `docs/DETERMINISTIC_WORKFLOWS.md`.
 - **New API route** → `apps/api/src/routes/<name>.ts`.
 
 Mechanical proof of the single-app invariant:
 
-- `Dockerfile` only `COPY`s `apps/web-v2/dist`.
-- `docker-compose.prod.yml`, `.preview.yml`, `.yml` all run `@sitelayer/web-v2`.
-- `.github/workflows/deploy-pages.yml` builds `@sitelayer/web-v2`.
-- Root `package.json` build chain enumerates `@sitelayer/web-v2` only.
-- `.github/dependabot.yml` tracks `apps/web-v2/` only.
+- `Dockerfile` only `COPY`s `apps/web/dist`.
+- `docker-compose.prod.yml`, `.preview.yml`, `.yml` all run `@sitelayer/web`.
+- `.github/workflows/deploy-pages.yml` builds `@sitelayer/web`.
+- Root `package.json` build chain enumerates `@sitelayer/web` only.
+- `.github/dependabot.yml` tracks `apps/web/` only.
 
 ## Agent skills
 
