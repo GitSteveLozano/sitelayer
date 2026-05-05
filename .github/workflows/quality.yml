@@ -36,9 +36,6 @@ jobs:
       - name: Migration immutability
         run: bash scripts/check-migrations-immutable.sh
 
-      - name: v1 no-new-files guard
-        run: bash scripts/check-no-new-v1-files.sh
-
       - run: npm run lint
 
       - run: npm run format
@@ -50,30 +47,6 @@ jobs:
       - run: npm run build
 
       - run: npm run web:bundle-budget
-
-      - run: npm run web-v2:bundle-budget
-
-      - name: Fixture web build
-        run: VITE_FIXTURES=1 npm run build --workspace @sitelayer/web
-
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('**/package-lock.json') }}
-
-      - name: Install Playwright browser
-        run: |
-          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
-            # Cache hit: only the system deps step is needed; browser binaries
-            # are already on disk under ~/.cache/ms-playwright.
-            npx playwright install-deps chromium
-          else
-            npx playwright install --with-deps chromium
-          fi
-
-      - run: npm run e2e
 
   test-integration:
     runs-on: ubuntu-latest

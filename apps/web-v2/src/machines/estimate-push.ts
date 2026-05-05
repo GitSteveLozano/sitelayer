@@ -3,76 +3,67 @@ import { useMachine } from '@xstate/react'
 import { assign, fromPromise, setup } from 'xstate'
 
 import {
-  dispatchRentalBillingEvent,
-  getRentalBillingRunSnapshot,
-  type RentalBillingHumanEvent,
-  type RentalBillingWorkflowSnapshotResponse,
-} from '../api.js'
+  dispatchEstimatePushEvent,
+  getEstimatePushSnapshot,
+  type EstimatePushHumanEvent,
+  type EstimatePushWorkflowSnapshotResponse,
+} from '../api-v1-compat'
 
 /**
- * Headless billing-review state machine.
+ * Headless estimate-push state machine.
  *
- * This machine owns ONLY UI state (idle / loading / submitting /
- * showingError / outOfSync). It NEVER mirrors business state — the
- * billing-run's `state` ('generated', 'approved', etc.), `state_version`,
- * and `next_events` come from the server snapshot and are stored on
- * context as-is.
+ * Owns ONLY UI state (idle / loading / submitting / showingError /
+ * outOfSync). Never mirrors business state — the push's `state` ('drafted',
+ * 'reviewed', 'approved', 'posting', 'posted', 'failed', 'voided'),
+ * `state_version`, and `next_events` come from the server snapshot and
+ * are stored on context as-is.
  *
- * See docs/DETERMINISTIC_WORKFLOWS.md → Headless UI Process Model.
- *
- * Events:
- *   LOAD            — fetch the run snapshot (initial load + manual refresh)
- *   DISPATCH        — submit a workflow event to the API
- *   DISMISS_ERROR   — clear a transient error banner
+ * Mirror of apps/web/src/machines/billing-review.ts. Two of these now
+ * exist; if a third lands, lift the shared shape into a generic
+ * `headlessWorkflowMachine<TSnapshot, TEvent>()` factory.
  */
 
 type Context = {
-  runId: string
+  pushId: string
   companySlug: string
-  snapshot: RentalBillingWorkflowSnapshotResponse | null
+  snapshot: EstimatePushWorkflowSnapshotResponse | null
   error: string | null
-  /** True when the last DISPATCH returned 409 — UI should call out the
-   * stale-state condition explicitly so the user knows their click was
-   * ignored against a newer server state. */
   outOfSync: boolean
 }
 
-type Event = { type: 'LOAD' } | { type: 'DISPATCH'; event: RentalBillingHumanEvent } | { type: 'DISMISS_ERROR' }
+type Event = { type: 'LOAD' } | { type: 'DISPATCH'; event: EstimatePushHumanEvent } | { type: 'DISMISS_ERROR' }
 
-type LoadInput = { runId: string; companySlug: string }
+type LoadInput = { pushId: string; companySlug: string }
 type DispatchInput = {
-  runId: string
+  pushId: string
   companySlug: string
-  event: RentalBillingHumanEvent
+  event: EstimatePushHumanEvent
   stateVersion: number
 }
 
 type DispatchOutput =
-  | { kind: 'ok'; snapshot: RentalBillingWorkflowSnapshotResponse }
-  | { kind: 'conflict'; snapshot: RentalBillingWorkflowSnapshotResponse | null; message: string }
+  | { kind: 'ok'; snapshot: EstimatePushWorkflowSnapshotResponse }
+  | { kind: 'conflict'; snapshot: EstimatePushWorkflowSnapshotResponse | null; message: string }
 
-export const billingReviewMachine = setup({
+export const estimatePushMachine = setup({
   types: {
     context: {} as Context,
-    input: {} as { runId: string; companySlug: string },
+    input: {} as { pushId: string; companySlug: string },
     events: {} as Event,
   },
   actors: {
-    loadSnapshot: fromPromise<RentalBillingWorkflowSnapshotResponse, LoadInput>(async ({ input }) => {
-      return getRentalBillingRunSnapshot(input.runId, input.companySlug)
+    loadSnapshot: fromPromise<EstimatePushWorkflowSnapshotResponse, LoadInput>(async ({ input }) => {
+      return getEstimatePushSnapshot(input.pushId, input.companySlug)
     }),
     submitEvent: fromPromise<DispatchOutput, DispatchInput>(async ({ input }) => {
       try {
-        const next = await dispatchRentalBillingEvent(input.runId, input.event, input.stateVersion, input.companySlug)
+        const next = await dispatchEstimatePushEvent(input.pushId, input.event, input.stateVersion, input.companySlug)
         return { kind: 'ok', snapshot: next }
       } catch (caught) {
         const message = caught instanceof Error ? caught.message : 'unknown error'
-        // 409 from the API surfaces as Error('… 409 …'). Detect it so the
-        // machine can fetch the fresh snapshot rather than showing an opaque
-        // banner.
         if (/\b409\b|state_version|not allowed|illegal/i.test(message)) {
           try {
-            const fresh = await getRentalBillingRunSnapshot(input.runId, input.companySlug)
+            const fresh = await getEstimatePushSnapshot(input.pushId, input.companySlug)
             return { kind: 'conflict', snapshot: fresh, message }
           } catch {
             return { kind: 'conflict', snapshot: null, message }
@@ -83,10 +74,10 @@ export const billingReviewMachine = setup({
     }),
   },
 }).createMachine({
-  id: 'billingReview',
+  id: 'estimatePush',
   initial: 'loading',
   context: ({ input }) => ({
-    runId: input.runId,
+    pushId: input.pushId,
     companySlug: input.companySlug,
     snapshot: null,
     error: null,
@@ -108,7 +99,7 @@ export const billingReviewMachine = setup({
     loading: {
       invoke: {
         src: 'loadSnapshot',
-        input: ({ context }) => ({ runId: context.runId, companySlug: context.companySlug }),
+        input: ({ context }) => ({ pushId: context.pushId, companySlug: context.companySlug }),
         onDone: {
           target: 'idle',
           actions: assign({
@@ -129,11 +120,9 @@ export const billingReviewMachine = setup({
       invoke: {
         src: 'submitEvent',
         input: ({ context, event }) => {
-          // Narrow: the guard in idle ensures `snapshot` is non-null at this
-          // point. The DISPATCH event carries the workflow event type.
           if (event.type !== 'DISPATCH') throw new Error('submitting entered without DISPATCH event')
           return {
-            runId: context.runId,
+            pushId: context.pushId,
             companySlug: context.companySlug,
             event: event.event,
             stateVersion: context.snapshot!.state_version,
@@ -143,17 +132,9 @@ export const billingReviewMachine = setup({
           target: 'idle',
           actions: assign(({ event }) => {
             if (event.output.kind === 'ok') {
-              return {
-                snapshot: event.output.snapshot,
-                error: null,
-                outOfSync: false,
-              }
+              return { snapshot: event.output.snapshot, error: null, outOfSync: false }
             }
-            return {
-              snapshot: event.output.snapshot,
-              error: event.output.message,
-              outOfSync: true,
-            }
+            return { snapshot: event.output.snapshot, error: event.output.message, outOfSync: true }
           }),
         },
         onError: {
@@ -167,27 +148,26 @@ export const billingReviewMachine = setup({
   },
 })
 
-export type BillingReviewSnapshot = {
-  snapshot: RentalBillingWorkflowSnapshotResponse | null
+export type EstimatePushHookSnapshot = {
+  snapshot: EstimatePushWorkflowSnapshotResponse | null
   error: string | null
   outOfSync: boolean
   isLoading: boolean
   isSubmitting: boolean
   refresh: () => void
-  dispatch: (event: RentalBillingHumanEvent) => void
+  dispatch: (event: EstimatePushHumanEvent) => void
   dismissError: () => void
 }
 
-export function useBillingReview(runId: string, companySlug: string): BillingReviewSnapshot {
-  const [state, send] = useMachine(billingReviewMachine, { input: { runId, companySlug } })
+export function useEstimatePush(pushId: string, companySlug: string): EstimatePushHookSnapshot {
+  const [state, send] = useMachine(estimatePushMachine, { input: { pushId, companySlug } })
 
-  // Re-load when the caller switches to a different run id.
   useEffect(() => {
     send({ type: 'LOAD' })
-  }, [runId, companySlug, send])
+  }, [pushId, companySlug, send])
 
   const refresh = useCallback(() => send({ type: 'LOAD' }), [send])
-  const dispatch = useCallback((event: RentalBillingHumanEvent) => send({ type: 'DISPATCH', event }), [send])
+  const dispatch = useCallback((event: EstimatePushHumanEvent) => send({ type: 'DISPATCH', event }), [send])
   const dismissError = useCallback(() => send({ type: 'DISMISS_ERROR' }), [send])
 
   return {

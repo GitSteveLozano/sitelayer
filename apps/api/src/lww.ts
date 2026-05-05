@@ -3,8 +3,8 @@
  *
  * The flow:
  *   - Frontend persists a `client_updated_at` ISO timestamp on every queued
- *     offline mutation (apps/web/src/api.ts). When replaying, it sets the
- *     `If-Unmodified-Since` header to that value.
+ *     offline mutation (apps/web-v2/src/lib/offline/queue.ts). When replaying,
+ *     it sets the `If-Unmodified-Since` header to that value.
  *   - The API reads the row's current `updated_at` and, if the server is
  *     newer than the client's reference timestamp, returns 409 with the
  *     authoritative server value so the client can drop the queued mutation

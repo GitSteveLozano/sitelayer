@@ -2,9 +2,14 @@ import { useEffect } from 'react'
 import { useMachine } from '@xstate/react'
 import { assign, fromPromise, setup } from 'xstate'
 
-import { readOfflineQueue, replayOfflineMutations, type OfflineMutation } from '../api.js'
-import { toastError, toastInfo } from '../components/ui/toast.js'
-
+import { readOfflineQueue, replayOfflineMutations, type OfflineMutation } from '../api-v1-compat'
+// toast helpers from v1 dropped during machine migration; replace with v2 toaster when one exists
+const toastError = (title: string, detail?: string) => {
+  if (typeof console !== 'undefined') console.warn('[toast.error]', title, detail ?? '')
+}
+const toastInfo = (title: string, detail?: string) => {
+  if (typeof console !== 'undefined') console.info('[toast.info]', title, detail ?? '')
+}
 /**
  * Offline replay state machine.
  *

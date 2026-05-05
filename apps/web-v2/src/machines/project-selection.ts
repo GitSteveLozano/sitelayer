@@ -9,7 +9,7 @@ import {
   type MeasurementRow,
   type ProjectSummary,
   type ScheduleRow,
-} from '../api.js'
+} from '../api-v1-compat'
 
 /**
  * Project-selection state machine.
