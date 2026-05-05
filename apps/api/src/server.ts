@@ -531,17 +531,26 @@ const server = http.createServer(async (req, res) => {
             }
 
             let company = await getCompany(req)
-            // Single-tenant self-onboard. The Clerk webhook that mirrors
-            // user → company_memberships isn't wired (CLERK_WEBHOOK_SECRET
-            // is unset in prod) and ADR 0003 marks the install as zero-
-            // customer, so the first authenticated user against a known
-            // company slug auto-claims an admin membership. This bridges
-            // until the org-membership webhook lands.
+            // First-user self-onboard. The Clerk webhook that mirrors
+            // org membership into `company_memberships` isn't wired
+            // (CLERK_WEBHOOK_SECRET unset) and ADR 0003 marks the install
+            // as zero-customer, so the first authenticated user against
+            // a company slug that has *no memberships at all* auto-claims
+            // admin. After that the upsert no-ops — additional users must
+            // be invited via POST /api/companies/:id/memberships, and the
+            // role gate stays honest (otherwise every test fixture user
+            // gets promoted to admin and the role-rejection tests fail).
+            // Drop this block once the Clerk webhook ships.
             if (!company && activeCompanySlug && identity.userId) {
               try {
                 await pool.query(
                   `insert into company_memberships (company_id, clerk_user_id, role)
-                   select id, $1, 'admin' from companies where slug = $2
+                   select c.id, $1, 'admin'
+                   from companies c
+                   where c.slug = $2
+                     and not exists (
+                       select 1 from company_memberships m where m.company_id = c.id
+                     )
                    on conflict (company_id, clerk_user_id) do nothing`,
                   [identity.userId, activeCompanySlug],
                 )
