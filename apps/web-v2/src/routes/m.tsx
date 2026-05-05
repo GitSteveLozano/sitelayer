@@ -1,9 +1,17 @@
 /**
- * /m/* route mount point — bridges v2's runtime to the mobile shell that
- * Steve built in PR #229 (originally inside apps/web/src/views/m-shell.tsx,
- * migrated here on 2026-05-04).
+ * Mount point for the role-aware mobile shell.
  *
- * The mobile shell expects:
+ * Originally landed at `/m/*` (PR #229) as a parallel mobile UX next to
+ * v2's desktop AppShell. On 2026-05-05 we promoted it to the app root
+ * (Option A) and retired AppShell — production is mobile-first. The
+ * `basePath` prop lets the same component serve both:
+ *
+ *   - basePath=""   → mounted at `/*`     (canonical, post-2026-05-05)
+ *   - basePath="/m" → mounted at `/m/*`   (legacy alias kept for any
+ *                                          external links pointing at
+ *                                          the original entry)
+ *
+ * The shell expects:
  *   - bootstrap: BootstrapResponse | null   (v1-style /api/bootstrap response)
  *   - companyRole: 'admin' | 'foreman' | 'office' | 'member'
  *   - companySlug: string
@@ -19,7 +27,11 @@ import { apiGet, getStoredCompanySlug, type BootstrapResponse, type SessionRespo
 import { normalizeMobileShellRole } from '../lib/active-context'
 import { MobileShell } from '../views/m-shell'
 
-export default function MRoute() {
+type MRouteProps = {
+  basePath?: string
+}
+
+export default function MRoute({ basePath = '' }: MRouteProps) {
   const companySlug = getStoredCompanySlug() ?? 'la-operations'
   const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null)
   const [session, setSession] = useState<SessionResponse | null>(null)
@@ -55,6 +67,11 @@ export default function MRoute() {
   const sessionRole = session?.memberships?.find((m) => m.slug === companySlug)?.role ?? session?.user?.role ?? null
 
   return (
-    <MobileShell bootstrap={bootstrap} companyRole={normalizeMobileShellRole(sessionRole)} companySlug={companySlug} />
+    <MobileShell
+      bootstrap={bootstrap}
+      companyRole={normalizeMobileShellRole(sessionRole)}
+      companySlug={companySlug}
+      basePath={basePath}
+    />
   )
 }
