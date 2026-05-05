@@ -26,7 +26,7 @@ export function WorkerScope({ bootstrap }: { bootstrap: BootstrapResponse | null
 
   return (
     <>
-      <MTopBar back title="Scope" onBack={() => navigate('/m/today')} />
+      <MTopBar back title="Scope" onBack={() => navigate('/today')} />
       <MBody pad>
         <MLargeHead
           eyebrow="TODAY'S SCOPE"
@@ -75,7 +75,7 @@ export function WorkerScope({ bootstrap }: { bootstrap: BootstrapResponse | null
           </MListInset>
         </div>
         <div style={{ padding: 16 }}>
-          <MButton variant="ghost" onClick={() => navigate('/m/issue?category=scope_question')}>
+          <MButton variant="ghost" onClick={() => navigate('/issue?category=scope_question')}>
             Question this scope
           </MButton>
         </div>

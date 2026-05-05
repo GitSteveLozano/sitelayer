@@ -5,8 +5,11 @@ services:
       POSTGRES_DB: sitelayer
       POSTGRES_USER: sitelayer
       POSTGRES_PASSWORD: sitelayer
+    # pg18 image stores data under a major-version subdirectory of
+    # /var/lib/postgresql, so the volume must mount the parent — not
+    # /var/lib/postgresql/data — or the entrypoint refuses to start.
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
 
   minio:

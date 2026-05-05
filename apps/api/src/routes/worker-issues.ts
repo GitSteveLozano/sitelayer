@@ -74,10 +74,13 @@ export async function handleWorkerIssueRoutes(
 
     // Resolve worker_id from the active membership when it exists. A row
     // without a worker mapping is fine — we still want to capture the
-    // ping; just leave worker_id null.
+    // ping; just leave worker_id null. The `workers` table doesn't carry
+    // `clerk_user_id` directly (membership lives on `company_memberships`),
+    // so we mirror clock.ts's placeholder: pick the oldest worker until
+    // the Clerk user → worker mapping lands in Phase 1D.4.
     const workerLookup = await ctx.pool.query<{ id: string }>(
-      `select id from workers where company_id = $1 and clerk_user_id = $2 and deleted_at is null limit 1`,
-      [ctx.company.id, ctx.currentUserId],
+      `select id from workers where company_id = $1 and deleted_at is null order by created_at asc limit 1`,
+      [ctx.company.id],
     )
     const workerId = workerLookup.rows[0]?.id ?? null
 

@@ -21,7 +21,7 @@ export function WorkerClockinConfirm() {
     const id = window.setInterval(() => {
       setSecondsLeft((s) => {
         if (s <= 1) {
-          navigate('/m/today')
+          navigate('/today')
           return 0
         }
         return s - 1
@@ -32,7 +32,7 @@ export function WorkerClockinConfirm() {
 
   return (
     <>
-      <MTopBar back title="Clocked in" onBack={() => navigate('/m/today')} />
+      <MTopBar back title="Clocked in" onBack={() => navigate('/today')} />
       <MBody>
         <div style={{ position: 'relative' }}>
           <MapPreview />
@@ -78,10 +78,10 @@ export function WorkerClockinConfirm() {
         </div>
         <div style={{ padding: '0 16px' }}>
           <MButtonStack>
-            <MButton variant="primary" onClick={() => navigate('/m/scope')}>
+            <MButton variant="primary" onClick={() => navigate('/scope')}>
               See today's scope
             </MButton>
-            <MButton variant="ghost" onClick={() => navigate('/m/today')}>
+            <MButton variant="ghost" onClick={() => navigate('/today')}>
               Wrong project? Tap to fix · {secondsLeft}s
             </MButton>
           </MButtonStack>

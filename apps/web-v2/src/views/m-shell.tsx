@@ -14,11 +14,17 @@
  * Implementation note: for Phase 2 the per-tab screens are placeholders.
  * Each phase from 3 onward replaces a placeholder with a real screen.
  */
-import { useMemo } from 'react'
+import { lazy, useMemo } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { BootstrapResponse } from '../api-v1-compat.js'
 import { computeActiveContext, type ActiveContext } from '../lib/active-context.js'
 import { MBottomTabs, MBody, MI, MShell, MTopBar } from '../components/m/index.js'
+
+// MoreRoute lives outside the shell historically; we mount it inside so
+// the bottom-tab chrome stays visible while the user is in settings,
+// catalog, integrations, etc. Lazy-loaded so the More tab doesn't pull
+// the settings-screen bundle into the initial paint.
+const MoreRoute = lazy(() => import('../routes/more.js'))
 import { InstallPromptBanner } from '../components/shell/InstallPromptBanner.js'
 import { OfflineBanner } from '../components/shell/OfflineBanner.js'
 import { PushDeniedBanner } from '../components/shell/PushDeniedBanner.js'
@@ -26,8 +32,10 @@ import { UpdateBanner } from '../components/shell/UpdateBanner.js'
 import { AdminHome } from './m/admin-home.js'
 import { MobileProjectsList } from './m/projects-list.js'
 import { MobileProjectDetail } from './m/project-detail.js'
+import { MobileProjectNew } from './m/project-new.js'
 import { MobileTakeoffList } from './m/takeoff-list.js'
 import { MobileEstimateReview } from './m/estimate-review.js'
+import { MobileEstimatePush } from './m/estimate-push.js'
 import { MobileSchedule } from './m/schedule.js'
 import { MobileTimeReview } from './m/time-review.js'
 import { WorkerToday } from './m/worker-today.js'
@@ -134,9 +142,14 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
           <Route path="scope" element={<WorkerScope bootstrap={bootstrap} />} />
           <Route path="issue" element={<WorkerIssue bootstrap={bootstrap} companySlug={companySlug} />} />
           <Route path="projects" element={<MobileProjectsList bootstrap={bootstrap} />} />
+          <Route path="projects/new" element={<MobileProjectNew companySlug={companySlug} />} />
           <Route path="projects/:projectId" element={<MobileProjectDetail bootstrap={bootstrap} />} />
           <Route path="projects/:projectId/takeoff" element={<MobileTakeoffList companySlug={companySlug} />} />
           <Route path="projects/:projectId/estimate" element={<MobileEstimateReview companySlug={companySlug} />} />
+          <Route
+            path="projects/:projectId/estimate-push/:pushId"
+            element={<MobileEstimatePush companySlug={companySlug} />}
+          />
           <Route path="projects/:projectId/*" element={<MobileProjectDetail bootstrap={bootstrap} />} />
           <Route path="schedule" element={<MobileSchedule bootstrap={bootstrap} />} />
           <Route path="schedule/*" element={<MobileSchedule bootstrap={bootstrap} />} />
@@ -149,7 +162,7 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
           <Route path="rentals/scan" element={<MobileRentals companySlug={companySlug} />} />
           <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} />} />
           <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
-          <Route path="more/*" element={<TabPlaceholder title="More" body="Settings, profile, integrations." />} />
+          <Route path="more/*" element={<MoreRoute />} />
           <Route path="crew" element={<ForemanCrew bootstrap={bootstrap} />} />
           <Route path="crew/*" element={<ForemanCrew bootstrap={bootstrap} />} />
           <Route path="field/*" element={<TabPlaceholder title="Field" body="Phase 8 lands here." />} />

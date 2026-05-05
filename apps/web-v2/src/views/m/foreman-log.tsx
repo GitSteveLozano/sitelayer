@@ -82,7 +82,7 @@ export function ForemanLog({ bootstrap, companySlug }: { bootstrap: BootstrapRes
         },
         companySlug,
       )
-      navigate('/m/today')
+      navigate('/today')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {

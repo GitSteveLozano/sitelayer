@@ -70,7 +70,7 @@ export function AdminHome({ bootstrap }: AdminHomeProps) {
           body="Start with an address or upload drawings — Sitelayer will help you get to a measurement plan in under a minute."
           primaryLabel="New project"
           secondaryLabel="Import from QuickBooks"
-          onPrimary={() => navigate('/m/projects/new')}
+          onPrimary={() => navigate('/projects/new')}
         />
       </>
     )
@@ -91,7 +91,7 @@ export function AdminHome({ bootstrap }: AdminHomeProps) {
         title="Today"
         actionIcon={<MI.Plus size={20} />}
         actionLabel="New"
-        onAction={() => navigate('/m/projects/new')}
+        onAction={() => navigate('/projects/new')}
       />
       <MBody>
         <MLargeHead
@@ -116,7 +116,7 @@ export function AdminHome({ bootstrap }: AdminHomeProps) {
             metaTone={todayTotal > 0 ? 'green' : undefined}
           />
         </MKpiRow>
-        <MSectionH link="See all" onLinkClick={() => navigate('/m/projects')}>
+        <MSectionH link="See all" onLinkClick={() => navigate('/projects')}>
           Today on site
         </MSectionH>
         {activeProjects.length === 0 ? (
@@ -146,7 +146,7 @@ export function AdminHome({ bootstrap }: AdminHomeProps) {
                     )
                   }
                   chev
-                  onTap={() => navigate(`/m/projects/${p.id}`)}
+                  onTap={() => navigate(`/projects/${p.id}`)}
                 />
               )
             })}

@@ -33,7 +33,7 @@ export function MobileRentalsUtilization({ companySlug }: { companySlug: string 
   if (items === null) {
     return (
       <>
-        <MTopBar back title="Utilization" onBack={() => navigate('/m/rentals')} />
+        <MTopBar back title="Utilization" onBack={() => navigate('/rentals')} />
         <MBody>
           <MSkeletonList count={5} />
         </MBody>
@@ -47,17 +47,22 @@ export function MobileRentalsUtilization({ companySlug }: { companySlug: string 
 
   return (
     <>
-      <MTopBar back title="Utilization" onBack={() => navigate('/m/rentals')} />
+      <MTopBar back title="Utilization" onBack={() => navigate('/rentals')} />
       <MBody>
         <div style={{ padding: '0 16px' }}>
           <MKpiRow cols={2}>
-            <MKpi label="Utilization" value={`${utilizationPct}%`} meta="of fleet active" metaTone="green" />
+            <MKpi
+              label="Utilization"
+              value={`${utilizationPct}%`}
+              meta="of fleet active"
+              metaTone={utilizationPct >= 70 ? 'green' : utilizationPct >= 40 ? 'amber' : 'red'}
+            />
             <MKpi
               label="Idle revenue"
               value={formatMoney(idleDailyValue)}
               unit="/day"
               meta="leaving on the table"
-              metaTone="amber"
+              metaTone={idleDailyValue > 0 ? 'amber' : 'green'}
             />
           </MKpiRow>
         </div>
@@ -72,7 +77,7 @@ export function MobileRentalsUtilization({ companySlug }: { companySlug: string 
                 </>
               }
               action={
-                <MButton variant="ghost" size="sm" onClick={() => navigate('/m/rentals/dispatch')}>
+                <MButton variant="ghost" size="sm" onClick={() => navigate('/rentals/dispatch')}>
                   Dispatch
                 </MButton>
               }

@@ -45,10 +45,14 @@ module.exports = {
         2: 'var(--m-shadow-2)',
         card: 'var(--m-shadow-card)',
       },
+      // Mobile-first PWA — system stack matches the design handoff
+      // (§typography: "do NOT substitute Inter or Geist"). Tailwind's
+      // `font-sans`/`font-display`/`font-mono` mirror the --m-font*
+      // CSS custom properties in tokens.css.
       fontFamily: {
-        sans: ['Geist', '-apple-system', 'SF Pro Text', 'system-ui', 'sans-serif'],
-        display: ['Geist', '-apple-system', 'SF Pro Display', 'system-ui', 'sans-serif'],
-        mono: ['Geist Mono', 'ui-monospace', 'SF Mono', 'JetBrains Mono', 'Menlo', 'monospace'],
+        sans: ['-apple-system', 'SF Pro Text', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
+        display: ['-apple-system', 'SF Pro Display', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
+        mono: ['ui-monospace', 'SF Mono', 'JetBrains Mono', 'Menlo', 'monospace'],
       },
     },
   },

@@ -6,6 +6,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, type ProjectSummary } from '../../api-v1-compat.js'
+import { createEstimatePush } from '../../lib/api/estimate-pushes.js'
 import {
   MBody,
   MButton,
@@ -28,6 +29,23 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   const projectId = params.projectId ?? ''
   const [summary, setSummary] = useState<ProjectSummary | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [creatingPush, setCreatingPush] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
+
+  const handleSendToClient = async () => {
+    if (!projectId) return
+    setCreatingPush(true)
+    setCreateError(null)
+    try {
+      const result = await createEstimatePush(projectId)
+      const pushId = result.kind === 'created' ? result.pushId : result.openId
+      navigate(`/projects/${projectId}/estimate-push/${pushId}`)
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setCreatingPush(false)
+    }
+  }
 
   useEffect(() => {
     if (!projectId) return
@@ -49,7 +67,7 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   if (error) {
     return (
       <>
-        <MTopBar back title="Estimate" onBack={() => navigate(`/m/projects/${projectId}`)} />
+        <MTopBar back title="Estimate" onBack={() => navigate(`/projects/${projectId}`)} />
         <MBody>
           <div style={{ padding: 24, color: 'var(--m-red)', fontSize: 13 }}>{error}</div>
         </MBody>
@@ -59,7 +77,7 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   if (!summary) {
     return (
       <>
-        <MTopBar back title="Estimate" onBack={() => navigate(`/m/projects/${projectId}`)} />
+        <MTopBar back title="Estimate" onBack={() => navigate(`/projects/${projectId}`)} />
         <MBody>
           <MSkeletonList count={5} />
         </MBody>
@@ -72,7 +90,7 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
 
   return (
     <>
-      <MTopBar back title="Estimate" sub={summary.project.name} onBack={() => navigate(`/m/projects/${projectId}`)} />
+      <MTopBar back title="Estimate" sub={summary.project.name} onBack={() => navigate(`/projects/${projectId}`)} />
       <MBody>
         <MKpiRow cols={2}>
           <MKpi label="Total" value={formatMoney(m.estimateTotal)} />
@@ -115,11 +133,16 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
             ))}
           </MListInset>
         )}
+        {createError ? (
+          <div style={{ padding: '0 16px', color: 'var(--m-red)', fontSize: 13 }}>{createError}</div>
+        ) : null}
         <div style={{ padding: 16 }}>
           <MButtonStack>
-            <MButton variant="primary">Send to client</MButton>
+            <MButton variant="primary" onClick={handleSendToClient} disabled={creatingPush || lines.length === 0}>
+              {creatingPush ? 'Drafting…' : 'Send to client'}
+            </MButton>
             <MButton variant="ghost" onClick={() => navigate(`/projects/${projectId}`)}>
-              Open full project on desktop
+              Back to project
             </MButton>
           </MButtonStack>
         </div>

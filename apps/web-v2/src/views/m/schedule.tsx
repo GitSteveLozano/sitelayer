@@ -47,7 +47,7 @@ export function MobileSchedule({ bootstrap }: { bootstrap: BootstrapResponse | n
           title="Nothing scheduled"
           body="Build a week ahead by assigning crews to projects. Tap a project to add it to the schedule."
           primaryLabel="See projects"
-          onPrimary={() => navigate('/m/projects')}
+          onPrimary={() => navigate('/projects')}
         />
       </>
     )

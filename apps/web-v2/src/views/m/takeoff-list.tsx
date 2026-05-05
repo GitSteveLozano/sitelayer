@@ -3,9 +3,9 @@
  * links to the full takeoff canvas. Phase 5 stops here; a native mobile
  * takeoff canvas with pinch-to-zoom + polygon gestures is a follow-up.
  *
- * For now the canvas itself uses the existing /takeoffs/:projectId desktop
- * route — opening it on mobile works but isn't optimized. The mobile entry
- * surfaces blueprint metadata, lineage, and an "Open in canvas" CTA.
+ * The canvas route is the full-viewport `/projects/:id/takeoff-canvas`
+ * declared in App.tsx — it sits outside the mobile shell on purpose so
+ * the polygon canvas can claim the whole screen.
  */
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -14,13 +14,15 @@ import { MBody, MButton, MI, MListInset, MListRow, MSectionH, MTopBar } from '..
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
 import { shortDate } from './format.js'
 
+// Mirrors the response from `GET /api/projects/:id/blueprints`. The API
+// uses `file_name` / `created_at`; do not rename to camel-case here —
+// callers compare straight against the persisted shape.
 type BlueprintRow = {
   id: string
   project_id: string
-  filename: string
+  file_name: string
   storage_path: string
-  uploaded_at: string
-  page_count: number | null
+  created_at: string
   deleted_at: string | null
   replaces_blueprint_document_id?: string | null
 }
@@ -51,7 +53,7 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
 
   return (
     <>
-      <MTopBar back title="Blueprints" onBack={() => navigate(`/m/projects/${projectId}`)} />
+      <MTopBar back title="Blueprints" onBack={() => navigate(`/projects/${projectId}`)} />
       <MBody>
         {error ? (
           <div style={{ padding: 24, color: 'var(--m-red)', fontSize: 13 }}>{error}</div>
@@ -65,11 +67,11 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
             title="No drawings yet"
             body="Upload a PDF or image to start the takeoff. Sitelayer will help you trace polygons and compute square footage."
             primaryLabel="Upload drawing"
-            onPrimary={() => navigate(`/takeoffs/${projectId}`)}
+            onPrimary={() => navigate(`/projects/${projectId}/takeoff-canvas`)}
           />
         ) : (
           <>
-            <MSectionH link="Open canvas" onLinkClick={() => navigate(`/takeoffs/${projectId}`)}>
+            <MSectionH link="Open canvas" onLinkClick={() => navigate(`/projects/${projectId}/takeoff-canvas`)}>
               {blueprints.length} {blueprints.length === 1 ? 'drawing' : 'drawings'}
             </MSectionH>
             <MListInset>
@@ -78,16 +80,16 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
                   key={b.id}
                   leading={<MI.Layers size={18} />}
                   leadingTone="accent"
-                  headline={b.filename}
-                  supporting={`${b.page_count ?? 1} ${(b.page_count ?? 1) === 1 ? 'page' : 'pages'} · uploaded ${shortDate(b.uploaded_at)}`}
+                  headline={b.file_name}
+                  supporting={`Uploaded ${shortDate(b.created_at)}`}
                   trailing={b.replaces_blueprint_document_id ? <span style={{ fontSize: 11 }}>v2+</span> : null}
                   chev
-                  onTap={() => navigate(`/takeoffs/${projectId}?blueprint=${b.id}`)}
+                  onTap={() => navigate(`/projects/${projectId}/takeoff-canvas?blueprint=${b.id}`)}
                 />
               ))}
             </MListInset>
             <div style={{ padding: '16px' }}>
-              <MButton variant="primary" onClick={() => navigate(`/takeoffs/${projectId}`)}>
+              <MButton variant="primary" onClick={() => navigate(`/projects/${projectId}/takeoff-canvas`)}>
                 Open takeoff canvas
               </MButton>
             </div>

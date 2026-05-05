@@ -97,7 +97,7 @@ export function ForemanToday({ bootstrap, companySlug }: { bootstrap: BootstrapR
               eyebrow={`FROM THE FIELD · ${needYou} need ${needYou === 1 ? 'you' : 'you'}`}
               tone="warn"
               action={
-                <MButton variant="quiet" size="sm" onClick={() => navigate('/m/field')}>
+                <MButton variant="quiet" size="sm" onClick={() => navigate('/field')}>
                   See all
                 </MButton>
               }
@@ -189,14 +189,14 @@ export function ForemanToday({ bootstrap, companySlug }: { bootstrap: BootstrapR
                     )
                   }
                   chev
-                  onTap={() => navigate(`/m/projects/${p.id}`)}
+                  onTap={() => navigate(`/projects/${p.id}`)}
                 />
               )
             })
           )}
         </MListInset>
         <div style={{ padding: 16 }}>
-          <MButton variant="primary" onClick={() => navigate('/m/brief')}>
+          <MButton variant="primary" onClick={() => navigate('/brief')}>
             Brief the crew
           </MButton>
         </div>

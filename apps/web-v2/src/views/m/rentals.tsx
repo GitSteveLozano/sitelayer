@@ -150,7 +150,7 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
             ))}
           </div>
         )}
-        <MFab extended ariaLabel="Scan tag" onClick={() => navigate('/m/rentals/scan')}>
+        <MFab extended ariaLabel="Scan tag" onClick={() => navigate('/rentals/scan')}>
           <MI.Camera size={18} />
           Scan tag
         </MFab>
