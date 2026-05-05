@@ -2,38 +2,32 @@
 
 Construction operations platform: blueprint takeoff, estimation, crew scheduling, and QBO sync.
 
-## ⚠️ STOP — Read this before adding any UI code
+## ⚠️ Architecture at a glance
 
-**`apps/web/` is RETIRED.** Production runs **`apps/web-v2/`**. If you are adding a new screen, primitive, or view, the place is **`apps/web-v2/`** — not `apps/web/`.
+**One web app: `apps/web-v2/`.** v1 was deleted on 2026-05-05 (ADR 0003). There's nothing called `apps/web/` anymore. New screens, primitives, machines all go under `apps/web-v2/src/`.
 
-Mechanical proof points (so you don't have to take this prose on faith):
+**State management:**
 
-- `Dockerfile:66` only `COPY`s `apps/web-v2/dist` into the runtime image.
-- `docker-compose.prod.yml:web` runs `npm start -w @sitelayer/web-v2`.
-- `docker-compose.preview.yml:web` runs `npm run dev:web-v2`.
-- `docker-compose.yml:web` (local dev) runs `npm run dev:web-v2`.
-- `.github/workflows/deploy-pages.yml` builds `@sitelayer/web-v2`.
-- `apps/web/RETIRED.md` documents the cutover.
+- **Frontend orchestration** lives in **XState** machines under `apps/web-v2/src/machines/`: `bootstrap-refresh`, `offline-replay`, `project-selection`, `estimate-push`, `billing-review`. These own long-lived UI state (offline queue, role/company switching, multi-step approval flows).
+- **Frontend data fetching/caching** lives in **TanStack Query** (`apps/web-v2/src/lib/api/`). Resource-shaped hooks (`useProjects`, `useClockIn`, `useEstimatePush`, etc.).
+- **Backend workflows** are **temporal.io-style** deterministic state machines in `packages/workflows/` (rental-billing, estimate-push, project-closeout, crew-schedule, time-review, rental). See `docs/DETERMINISTIC_WORKFLOWS.md`.
+- **Single HTTP client** = `apps/web-v2/src/lib/api/client.ts:request<T>()`. `api-v1-compat.ts` is a name-bridge for the migrated XState machines and delegates to the same `request<T>()` underneath.
 
 Where new code goes:
 
-- **New mobile primitive** → `apps/web-v2/src/components/mobile/` (Avatar, Banner, BurdenHeroCard, Button, Card, ConfirmSheet, Kpi, LargeHead, PhoneTopBar, Pill, QuickAction, Row, SectionH, Sheet are already there — extend, don't reinvent).
-- **New screen** → `apps/web-v2/src/screens/<persona>/` (`owner`, `foreman`, `worker`, `projects`, `rentals`, `financial`, `settings`, `inventory-admin`, `integrations`, `onboarding` already exist — match the persona).
-- **New API route** → `apps/api/src/routes/`. Backend is shared between v1 and v2 and is real, live code.
+- **New screen** → `apps/web-v2/src/views/m/<name>.tsx` (Steve's mobile shell — the canonical UI, mounted at `/`). The previous parallel `screens/<persona>/` tree was retired in PR #238.
+- **New primitive** → `apps/web-v2/src/components/m/` (lowercase, e.g. `button.tsx`, `kpi.tsx`).
+- **New durable UI state machine** → `apps/web-v2/src/machines/<name>.ts` using the patterns in the existing five.
+- **New backend workflow** → `packages/workflows/<name>.ts` following the rules in `docs/DETERMINISTIC_WORKFLOWS.md`.
+- **New API route** → `apps/api/src/routes/<name>.ts`.
 
-CI guard: `scripts/check-no-new-v1-files.sh` runs in `Quality / validate` and **fails the PR** if any new file is added under `apps/web/src/`. Modifications to existing v1 files are allowed (the rollback target needs to stay patchable). To intentionally override on a v1 rollback patch that genuinely needs a new file, set `V1_GUARD_OVERRIDE=1`.
+Mechanical proof of the single-app invariant:
 
-This rule was added on 2026-05-04 after PR #229 + #231 added 1,700+ LOC of mobile design system into `apps/web/src/views/m/` that won't ship and duplicates primitives that already existed in `apps/web-v2/src/components/mobile/`. See [docs/MOBILE_DESIGN_ROADMAP.md](docs/MOBILE_DESIGN_ROADMAP.md) for that work; **its eventual home should be `apps/web-v2/`** if it lands at all.
-
-### About the `apps/web-v2/src/views/m/` mobile shell
-
-On 2026-05-04 the mobile design system from PR #229 (originally landed under `apps/web/src/`) was relocated into `apps/web-v2/src/` so it actually ships. Same files, same naming.
-
-`apps/web-v2/src/api-v1-compat.ts` keeps a v1-style `apiGet`/`apiPost`/`apiPatch` surface for the mobile shell, but the function bodies are thin shims over v2's `lib/api/client.ts:request<T>()`. **There is exactly one HTTP client in v2** — the shim is just types + four wrapper functions (~250 lines, was 1.6k).
-
-`apps/web-v2/src/views/m-shell.tsx` mounts at `/m/*`, with its own bottom-tab nav, **outside** the main `AppShell`. It's a parallel UX next to v2's main routes. A future call: either lift the m-shell pieces into v2's main `screens/<persona>/` tree, or keep `/m` as the canonical mobile entry and retire v2's existing main routes.
-
-If you're adding _more_ mobile screens, prefer `apps/web-v2/src/screens/<persona>/` (uses TanStack Query, integrates with AppShell). If you're patching existing m-shell screens, edit them in place under `apps/web-v2/src/views/m/`.
+- `Dockerfile` only `COPY`s `apps/web-v2/dist`.
+- `docker-compose.prod.yml`, `.preview.yml`, `.yml` all run `@sitelayer/web-v2`.
+- `.github/workflows/deploy-pages.yml` builds `@sitelayer/web-v2`.
+- Root `package.json` build chain enumerates `@sitelayer/web-v2` only.
+- `.github/dependabot.yml` tracks `apps/web-v2/` only.
 
 ## Agent skills
 
@@ -814,7 +808,7 @@ Background job processor:
 ## References
 
 - **Domain Model**: See `packages/domain/src/index.ts`
-- **Requirements**: See `docs/REQUIREMENTS_SPEC.md`
 - **Deployment**: See `DEPLOYMENT.md`, `INFRASTRUCTURE_READY.md`, `DEPLOY_RUNBOOK.md`
 - **QBO Integration**: See `docs/QBO_EXTRACTION_CANONICAL_REFERENCE.md`
-- **Greenfield Architecture**: See `docs/GREENFIELD_ARCHITECTURE_PLAN.md`
+- **ADRs**: See `docs/adr/` (current architectural decisions)
+- **Historical reference (pre-pilot)**: `docs/archived/` — requirements/product/architecture snapshots from 2026-04-23..25, kept for archaeology only
