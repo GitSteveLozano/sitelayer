@@ -6,14 +6,27 @@ import { fileURLToPath, URL } from 'node:url'
 // Same chunking strategy as apps/web/vite.config.ts so the SPA's critical
 // path stays small and vendor caches survive across deploys where only app
 // code changed. Order matters — more specific patterns first.
+//
+// Clerk + React 19: Clerk reaches into React internals (`React.Activity`
+// is a React 19 transition API). When Clerk lands in its own chunk and
+// React lands in `vendor-react`, the chunk-load order can leave Clerk
+// holding an undefined reference to React at the moment it tries to
+// register, throwing "Cannot set properties of undefined (setting
+// 'Activity')". Fix: bundle Clerk alongside React in `vendor-react`
+// so they share one resolved module instance.
 function manualChunks(id: string): string | undefined {
   const normalized = id.replace(/\\/g, '/')
   if (!normalized.includes('/node_modules/')) return undefined
-  if (normalized.includes('/@clerk/')) return 'vendor-clerk'
   if (normalized.includes('/@sentry/')) return 'vendor-sentry'
   if (normalized.includes('/@tanstack/')) return 'vendor-tanstack'
   if (normalized.includes('/react-router')) return 'vendor-router'
-  if (normalized.includes('/scheduler/') || /\/react(?:-dom)?\//.test(normalized)) return 'vendor-react'
+  if (
+    normalized.includes('/@clerk/') ||
+    normalized.includes('/scheduler/') ||
+    /\/react(?:-dom)?\//.test(normalized)
+  ) {
+    return 'vendor-react'
+  }
   if (normalized.includes('/lucide-react/')) return 'vendor-icons'
   return undefined
 }
