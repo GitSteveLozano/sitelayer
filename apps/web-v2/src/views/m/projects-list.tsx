@@ -14,11 +14,19 @@ import { formatMoney, formatStatusLabel, statusTone } from './format.js'
 
 type FilterKey = 'all' | 'active' | 'awaiting' | 'closeout'
 
+// Per the project-closeout workflow (migration 024): any status that
+// isn't "completed" is treated as active. The Awaiting / Closeout chips
+// pull more specific subsets out of that bucket. A project sitting in
+// `lead`, `in_progress`, or any other non-terminal value belongs in
+// Active so it doesn't disappear behind the default chip.
+const isCloseout = (s: string) => /close|done|completed/i.test(s)
+const isAwaiting = (s: string) => /estim|sent|await|draft/i.test(s)
+
 const FILTER_MATCHERS: Record<FilterKey, (p: ProjectRow) => boolean> = {
   all: () => true,
-  active: (p) => /progress|active/i.test(p.status),
-  awaiting: (p) => /estim|sent|await|draft/i.test(p.status),
-  closeout: (p) => /close|done/i.test(p.status),
+  active: (p) => !isCloseout(p.status) && !isAwaiting(p.status),
+  awaiting: (p) => isAwaiting(p.status),
+  closeout: (p) => isCloseout(p.status),
 }
 
 export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
@@ -55,7 +63,7 @@ export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse
         title="Projects"
         actionIcon={<MI.Plus size={20} />}
         actionLabel="New project"
-        onAction={() => navigate('/m/projects/new')}
+        onAction={() => navigate('/projects/new')}
       />
       <MBody>
         <div style={{ padding: '12px 16px 4px' }}>
@@ -108,7 +116,7 @@ export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse
             body="Start with an address or upload drawings — Sitelayer will help you get to a measurement plan in under a minute."
             primaryLabel="New project"
             secondaryLabel="Import from QuickBooks"
-            onPrimary={() => navigate('/m/projects/new')}
+            onPrimary={() => navigate('/projects/new')}
           />
         ) : visible.length === 0 ? (
           <div style={{ padding: '40px 24px', textAlign: 'center', color: 'var(--m-ink-3)', fontSize: 13 }}>
@@ -117,7 +125,7 @@ export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 16px 16px' }}>
             {visible.map((p) => (
-              <ProjectCard key={p.id} project={p} onOpen={() => navigate(`/m/projects/${p.id}`)} />
+              <ProjectCard key={p.id} project={p} onOpen={() => navigate(`/projects/${p.id}`)} />
             ))}
           </div>
         )}

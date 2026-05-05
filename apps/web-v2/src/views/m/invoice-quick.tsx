@@ -31,7 +31,7 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
 
   return (
     <>
-      <MTopBar back title="Quick invoice" onBack={() => navigate('/m/today')} />
+      <MTopBar back title="Quick invoice" onBack={() => navigate('/today')} />
       <MBody pad>
         <MSectionH>Project</MSectionH>
         <MSelect value={projectId} onChange={(e) => setProjectId(e.currentTarget.value)} style={{ width: '100%' }}>
@@ -68,13 +68,10 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
             >
               Send invoice
             </MButton>
-            <MButton variant="ghost" onClick={() => navigate('/m/today')}>
+            <MButton variant="ghost" onClick={() => navigate('/today')}>
               Cancel
             </MButton>
           </MButtonStack>
-        </div>
-        <div className="m-quiet-sm" style={{ textAlign: 'center', padding: '16px 0' }}>
-          Full invoice send + portal link uses the desktop view for now.
         </div>
       </MBody>
     </>

@@ -54,12 +54,15 @@
   --m-shadow-2: 0 6px 16px rgba(0, 0, 0, 0.06);
   --m-shadow-card: 0 1px 0 rgba(0, 0, 0, 0.03), 0 4px 12px rgba(0, 0, 0, 0.04);
 
-  /* Type stacks. Geist is loaded from Google Fonts in index.html;
-   * the system fallback chain matches v1 so installs without network
-   * still render in the right metric. */
-  --m-font: 'Geist', -apple-system, 'SF Pro Text', BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --m-font-display: 'Geist', -apple-system, 'SF Pro Display', BlinkMacSystemFont, system-ui, sans-serif;
-  --m-num: 'Geist Mono', ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
+  /* Type stacks. Mobile is a PWA — the handoff is explicit:
+   * "use Apple system font on iOS, Roboto on Android. Native feel
+   * matters. Do NOT substitute Inter or Geist." (design_handoff
+   * README-FOR-CLAUDE-CODE.md). System stack everywhere so a worker
+   * on a phone gets the native metric without paying a network round
+   * trip for a webfont. */
+  --m-font: -apple-system, 'SF Pro Text', BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --m-font-display: -apple-system, 'SF Pro Display', BlinkMacSystemFont, system-ui, sans-serif;
+  --m-num: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 }
 
 /* Dark variant — applied to <html> via Tailwind's class-based dark mode

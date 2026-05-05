@@ -75,7 +75,7 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
         const res = await apiPost<{ clockEvent?: ClockEvent }>(`/api/clock/${kind}`, body, companySlug)
         if (res.clockEvent) {
           setEvents((cur) => [...cur, res.clockEvent!])
-          if (kind === 'in') navigate('/m/clockin')
+          if (kind === 'in') navigate('/clockin')
         }
       } finally {
         setBusy(null)
@@ -112,7 +112,7 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
         ) : (
           <OffClockCard onClockIn={() => handlePunch('in')} busy={busy === 'in'} />
         )}
-        <FlagIssueButton onClick={() => navigate('/m/issue')} />
+        <FlagIssueButton onClick={() => navigate('/issue')} />
       </MBody>
     </>
   )

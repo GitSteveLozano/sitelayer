@@ -14,8 +14,9 @@ const MRoute = lazy(() => import('@/routes/m'))
 const MPreviewRoute = lazy(() => import('@/views/m-preview').then((m) => ({ default: m.MPreviewView })))
 
 // Specialized full-screen routes that don't fit the bottom-tab chrome.
-// These must match before the mobile-shell catch-all below.
-const MoreRoute = lazy(() => import('@/routes/more'))
+// These must match before the mobile-shell catch-all below. /more is
+// intentionally not in this list — it's wired as a tab in m-shell so
+// the bottom-tab chrome stays visible from settings/catalog/integrations.
 const FinancialRoute = lazy(() => import('@/routes/financial'))
 const BidAccuracyRoute = lazy(() => import('@/routes/bid-accuracy'))
 const PhotoRoute = lazy(() => import('@/routes/photo'))
@@ -134,10 +135,9 @@ export default function App() {
                   <Route path="/projects/:id/rental-contract" element={<ProjectRentalContractScreen />} />
 
                   {/* Admin / specialized full-screen routes — no bottom-tab
-                      chrome. Linked from the mobile shell's More tab and
-                      elsewhere; a future iteration may pull them inside
-                      the shell. */}
-                  <Route path="/more/*" element={<MoreRoute />} />
+                      chrome. Linked from the mobile shell elsewhere. /more
+                      lives inside the shell instead so the 5-tab IA stays
+                      intact when the user is in settings/catalog. */}
                   <Route path="/financial/*" element={<FinancialRoute />} />
                   <Route path="/bid-accuracy" element={<BidAccuracyRoute />} />
                   <Route path="/photo" element={<PhotoRoute />} />

@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
+import { useSubmitForm } from '../../machines/submit-form.js'
 import {
   MBody,
   MButton,
@@ -24,6 +25,7 @@ import {
   MTopBar,
 } from '../../components/m/index.js'
 import { MAiAgent } from '../../components/m/ai.js'
+import { todayIso } from './format.js'
 
 export function ForemanBrief({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
@@ -32,12 +34,16 @@ export function ForemanBrief({ bootstrap, companySlug }: { bootstrap: BootstrapR
     () => bootstrap?.projects.filter((p) => /progress|active/i.test(p.status)) ?? [],
     [bootstrap?.projects],
   )
-  const [projectId, setProjectId] = useState<string>(() => params.projectId ?? projects[0]?.id ?? '')
+  // The project list comes from bootstrap which can land after first
+  // render. Tracking the *user's* explicit pick separately from the
+  // *fallback* (= first active project) means the default updates as
+  // soon as data arrives — without overwriting an explicit pick later.
+  const [pickedId, setPickedId] = useState<string | null>(params.projectId ?? null)
+  const projectId = pickedId ?? projects[0]?.id ?? ''
+  const setProjectId = (id: string) => setPickedId(id)
   const project = useMemo(() => projects.find((p) => p.id === projectId) ?? null, [projects, projectId])
 
   const [goal, setGoal] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
 
   // Default the goal to a reasonable starter once a project lands.
   useEffect(() => {
@@ -46,33 +52,37 @@ export function ForemanBrief({ bootstrap, companySlug }: { bootstrap: BootstrapR
     }
   }, [project, goal])
 
-  const handleSend = async () => {
-    if (!project) return
-    setBusy(true)
-    setError(null)
-    try {
-      await apiPost(
-        `/api/projects/${project.id}/briefs`,
+  // XState machine owns submitting / error UI state. The submitter
+  // closes over the active project + companySlug so the payload is
+  // computed at submit time, not on render.
+  const { submit, isSubmitting, error } = useSubmitForm<{ projectId: string; goal: string }, unknown>(
+    async ({ projectId: pid, goal: g }) => {
+      const res = await apiPost(
+        `/api/projects/${pid}/briefs`,
         {
-          effective_date: new Date().toISOString().slice(0, 10),
-          goal: goal.trim(),
+          effective_date: todayIso(),
+          goal: g,
           steps: [],
           crew: [],
           materials: [],
         },
         companySlug,
       )
-      navigate('/m/today')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
+      navigate('/today')
+      return res
+    },
+  )
+  const handleSend = () => {
+    if (!project) return
+    const trimmed = goal.trim()
+    if (!trimmed) return
+    submit({ projectId: project.id, goal: trimmed })
   }
+  const busy = isSubmitting
 
   return (
     <>
-      <MTopBar back title="Brief crew" sub={project?.name} onBack={() => navigate('/m/today')} />
+      <MTopBar back title="Brief crew" sub={project?.name} onBack={() => navigate('/today')} />
       <MBody pad>
         {projects.length === 0 ? (
           <div style={{ padding: 24, color: 'var(--m-ink-3)', fontSize: 13 }}>

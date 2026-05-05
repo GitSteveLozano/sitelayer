@@ -8,14 +8,13 @@ import { useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
 import { MBody, MButton, MButtonStack, MI, MInput, MTapCard, MTextarea, MTopBar } from '../../components/m/index.js'
+import { useSubmitForm } from '../../machines/submit-form.js'
 
 export function WorkerLog({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const inputRef = useRef<HTMLInputElement>(null)
   const [preview, setPreview] = useState<string | null>(null)
   const [note, setNote] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const projectId = bootstrap?.projects.find((p) => /progress|active/i.test(p.status))?.id ?? null
   const projectName = bootstrap?.projects.find((p) => p.id === projectId)?.name ?? 'this site'
 
@@ -23,27 +22,29 @@ export function WorkerLog({ bootstrap, companySlug }: { bootstrap: BootstrapResp
     setPreview(URL.createObjectURL(file))
   }
 
-  const handleSend = async () => {
-    setBusy(true)
-    setError(null)
-    try {
+  // Workers post photo+note pings as worker_issues with a `[photo_log]`
+  // tag in the message body — the foreman triages these into the
+  // project's daily_log at end-of-day. Direct daily_log writes require
+  // foreman+ role; the photo-upload path lands when /api/projects/:id/photos
+  // ships in a follow-up.
+  const { submit, isSubmitting, error } = useSubmitForm<{ projectId: string | null; note: string }, unknown>(
+    async ({ projectId: pid, note: n }) => {
       const body: Record<string, unknown> = {
         kind: 'other',
-        message: `[photo_log] ${note.trim() || 'Daily log photo.'}`,
+        message: `[photo_log] ${n.trim() || 'Daily log photo.'}`,
       }
-      if (projectId) body.project_id = projectId
-      await apiPost('/api/worker-issues', body, companySlug)
-      navigate('/m/today')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-    }
-  }
+      if (pid) body.project_id = pid
+      const res = await apiPost('/api/worker-issues', body, companySlug)
+      navigate('/today')
+      return res
+    },
+  )
+  const handleSend = () => submit({ projectId, note })
+  const busy = isSubmitting
 
   return (
     <>
-      <MTopBar back title="Log photo" onBack={() => navigate('/m/today')} />
+      <MTopBar back title="Log photo" onBack={() => navigate('/today')} />
       <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
         <div
           style={{

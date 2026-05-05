@@ -99,7 +99,7 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
         body.message = `[${category.designKind}] ${body.message as string}`
       }
       await apiPost('/api/worker-issues', body, companySlug)
-      navigate('/m/today')
+      navigate('/today')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -147,11 +147,15 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
 
   return (
     <>
-      <MTopBar back title="Flag a problem" onBack={() => navigate('/m/today')} />
+      <MTopBar back title="Flag a problem" onBack={() => navigate('/today')} />
       <MBody pad>
         <div className="m-topbar-eyebrow" style={{ marginBottom: 12 }}>
           WHAT'S THE ISSUE?
         </div>
+        {/* Aspect-ratio sizing keeps the tiles square on a phone but
+         * blows them up to ~800px tall on a wide desktop viewport, so
+         * cap the tile height. The grid still feels native at mobile
+         * widths because the cap is well above the natural square. */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           {CATEGORIES.map((c) => (
             <MTapCard
@@ -159,6 +163,7 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
               onClick={() => setCategory(c)}
               style={{
                 aspectRatio: '1.1 / 1',
+                maxHeight: 180,
                 borderRadius: 14,
                 padding: 14,
                 cursor: 'pointer',

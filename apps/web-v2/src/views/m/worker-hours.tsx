@@ -10,7 +10,17 @@ import { useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse } from '../../api-v1-compat.js'
 import { MBody, MI, MLargeHead, MListInset, MListRow, MPill, MSectionH, MTopBar } from '../../components/m/index.js'
-import { formatDecimalHours, formatMoney, shortDate } from './format.js'
+import { formatDecimalHours, formatMoney, shortDate, todayIso } from './format.js'
+
+// Local-date ISO. `Date.toISOString()` is UTC and rolls "today" forward
+// in negative-offset timezones — labor.occurred_on is keyed off the
+// user's calendar, so we need the local date here.
+function localIso(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
 
 export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const navigate = useNavigate()
@@ -23,7 +33,7 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
   const recent = useMemo(() => {
     const sevenDaysAgo = new Date()
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
-    const cutoff = sevenDaysAgo.toISOString().slice(0, 10)
+    const cutoff = localIso(sevenDaysAgo)
     return labor
       .filter((l) => !l.deleted_at && (l.occurred_on ?? '') >= cutoff)
       .sort((a, b) => (a.occurred_on < b.occurred_on ? 1 : -1))
@@ -41,7 +51,7 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
     for (let i = 6; i >= 0; i--) {
       const d = new Date()
       d.setDate(d.getDate() - i)
-      const iso = d.toISOString().slice(0, 10)
+      const iso = localIso(d)
       days.push({
         iso,
         label: d.toLocaleDateString('en-US', { weekday: 'short' }),
@@ -55,7 +65,7 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
 
   return (
     <>
-      <MTopBar back title="My week" onBack={() => navigate('/m/today')} />
+      <MTopBar back title="My week" onBack={() => navigate('/today')} />
       <MBody pad>
         <MLargeHead
           eyebrow={`THIS WEEK · ${shortDate(dayBars[0]!.iso).toUpperCase()}–${shortDate(dayBars[6]!.iso).toUpperCase()}`}
@@ -76,7 +86,7 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, padding: '8px 4px 16px', height: 140 }}>
           {dayBars.map((d) => {
             const height = Math.max(4, (d.hours / peak) * 110)
-            const isToday = d.iso === new Date().toISOString().slice(0, 10)
+            const isToday = d.iso === todayIso()
             return (
               <div
                 key={d.iso}
@@ -106,7 +116,7 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
             .map((d) => {
               const dayEntries = recent.filter((l) => l.occurred_on === d.iso)
               const totalForDay = dayEntries.reduce((sum, l) => sum + Number(l.hours ?? 0), 0)
-              const isToday = d.iso === new Date().toISOString().slice(0, 10)
+              const isToday = d.iso === todayIso()
               return (
                 <MListRow
                   key={d.iso}

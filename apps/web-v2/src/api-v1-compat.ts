@@ -248,6 +248,25 @@ export async function listInventoryItems(companySlug: string): Promise<{ invento
   return apiGet<{ inventoryItems: InventoryItemRow[] }>('/api/inventory/items', companySlug)
 }
 
+export type InventoryLocationRow = {
+  id: string
+  company_id: string
+  project_id: string | null
+  name: string
+  location_type: 'yard' | 'job_site' | 'service' | string
+  is_default: boolean
+  version: number
+  deleted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export async function listInventoryLocations(
+  companySlug: string,
+): Promise<{ inventoryLocations: InventoryLocationRow[] }> {
+  return apiGet<{ inventoryLocations: InventoryLocationRow[] }>('/api/inventory/locations', companySlug)
+}
+
 /**
  * Active company-slug accessor. v1 stored this in localStorage; v2's
  * lib/api/client.ts has its own active-slug state. This shim points at

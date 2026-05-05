@@ -65,12 +65,12 @@ export function MobileProjectDetail({ bootstrap }: { bootstrap: BootstrapRespons
   if (!project) {
     return (
       <>
-        <MTopBar back title="Project" onBack={() => navigate('/m/projects')} />
+        <MTopBar back title="Project" onBack={() => navigate('/projects')} />
         <MEmptyState
           title="Project not found"
           body="It may have been archived or you may not have access. Try the projects list."
           primaryLabel="Back to projects"
-          onPrimary={() => navigate('/m/projects')}
+          onPrimary={() => navigate('/projects')}
         />
       </>
     )
@@ -89,7 +89,7 @@ export function MobileProjectDetail({ bootstrap }: { bootstrap: BootstrapRespons
         back
         title="Project"
         sub={schedules.length > 0 ? `Day ${schedules.length} of ${Math.max(schedules.length, 14)}` : undefined}
-        onBack={() => navigate('/m/projects')}
+        onBack={() => navigate('/projects')}
       />
       <MBody>
         <ProjectHero project={project} pctSpent={pctSpent} onTrack={onTrack} spent={spent} bid={bid} />
@@ -179,7 +179,7 @@ function TabBar({ active, onChange }: { active: TabKey; onChange: (k: TabKey) =>
           key={t.key}
           onClick={() => onChange(t.key)}
           style={{
-            background: active === t.key ? 'var(--m-ink)' : 'transparent',
+            background: active === t.key ? 'var(--m-accent)' : 'transparent',
             color: active === t.key ? 'white' : 'var(--m-ink-2)',
             border: 'none',
             borderRadius: 999,
@@ -239,14 +239,14 @@ function Overview({
           headline="Blueprints / takeoff"
           supporting="Drawings + measurements"
           chev
-          onTap={() => navigate(`/m/projects/${project.id}/takeoff`)}
+          onTap={() => navigate(`/projects/${project.id}/takeoff`)}
         />
         <MListRow
           leading={<MI.FileText size={18} />}
           headline="Estimate"
           supporting="Line items + send"
           chev
-          onTap={() => navigate(`/m/projects/${project.id}/estimate`)}
+          onTap={() => navigate(`/projects/${project.id}/estimate`)}
         />
         <MListRow
           leading={<MI.Users size={18} />}
@@ -274,7 +274,7 @@ function EstimateTab({ project, navigate }: { project: ProjectRow; navigate: (pa
         Estimate detail loads in its own screen — line items, totals, and send-to-client live there.
       </p>
       <div style={{ marginTop: 16 }}>
-        <MButton variant="primary" onClick={() => navigate(`/m/projects/${project.id}/estimate`)}>
+        <MButton variant="primary" onClick={() => navigate(`/projects/${project.id}/estimate`)}>
           Open estimate
         </MButton>
       </div>
@@ -432,7 +432,7 @@ function FilesTab({ project, navigate }: { project: ProjectRow; navigate: (path:
   return (
     <div style={{ paddingTop: 8 }}>
       <div style={{ padding: '0 16px' }}>
-        <MButton variant="ghost" onClick={() => navigate(`/takeoffs/${project.id}`)}>
+        <MButton variant="ghost" onClick={() => navigate(`/projects/${project.id}/takeoff`)}>
           Open blueprints / takeoff
         </MButton>
       </div>

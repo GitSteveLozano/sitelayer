@@ -45,11 +45,29 @@ export function statusTone(status: string): 'green' | 'amber' | 'blue' | 'red' |
 }
 
 export function todayIso(): string {
-  return new Date().toISOString().slice(0, 10)
+  // Local-date YYYY-MM-DD. `Date.toISOString()` returns UTC and crosses
+  // midnight before the user's clock does, which flips "today" to
+  // tomorrow on the West Coast every evening. Stick to local components.
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+// Date-only ISO strings (`YYYY-MM-DD`) parse as UTC midnight, which is
+// the previous evening in any negative-offset zone. Wrap parsing so a
+// bare date string lands on the local calendar day the user wrote.
+function parseLocalish(iso: string): Date {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) {
+    const [y, m, d] = iso.split('-').map(Number) as [number, number, number]
+    return new Date(y, m - 1, d)
+  }
+  return new Date(iso)
 }
 
 export function shortDate(iso: string): string {
-  const d = new Date(iso)
+  const d = parseLocalish(iso)
   if (Number.isNaN(d.valueOf())) return iso
   return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
 }

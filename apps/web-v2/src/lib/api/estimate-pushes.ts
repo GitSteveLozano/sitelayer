@@ -3,7 +3,7 @@
 // apps/api/src/routes/estimate-pushes.ts.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { request } from './client'
+import { ApiError, request } from './client'
 
 export type EstimatePushState = 'drafted' | 'reviewed' | 'approved' | 'posting' | 'posted' | 'failed' | 'voided'
 export type EstimatePushHumanEvent = 'REVIEW' | 'APPROVE' | 'POST_REQUESTED' | 'RETRY_POST' | 'VOID'
@@ -89,6 +89,43 @@ export function fetchEstimatePushes(params: EstimatePushListParams = {}): Promis
 
 export function fetchEstimatePush(id: string): Promise<EstimatePushSnapshot> {
   return request<EstimatePushSnapshot>(`/api/estimate-pushes/${encodeURIComponent(id)}`)
+}
+
+/**
+ * Snapshot the project's current estimate_lines into a new estimate_push.
+ * Returns the inserted row; callers typically follow up with a fetch via
+ * `fetchEstimatePush(row.id)` to get the full WorkflowSnapshot shape.
+ *
+ * 409 surfaces when an open (non-terminal) push already exists for the
+ * project; the response body carries `{open_id}` so callers can hop
+ * straight to the existing review screen.
+ */
+export type CreateEstimatePushResult =
+  | { kind: 'created'; pushId: string; snapshot: EstimatePushSnapshot }
+  | { kind: 'conflict'; openId: string }
+
+export async function createEstimatePush(projectId: string): Promise<CreateEstimatePushResult> {
+  try {
+    // Server returns the full WorkflowSnapshot (`state`, `state_version`,
+    // `next_events`, `context`) on 201 — not the bare row.
+    const snapshot = await request<EstimatePushSnapshot>(
+      `/api/projects/${encodeURIComponent(projectId)}/estimate-pushes`,
+      { method: 'POST', json: {} },
+    )
+    return { kind: 'created', pushId: snapshot.context.id, snapshot }
+  } catch (err) {
+    // 409 means a non-terminal push already exists. Surface the open id
+    // as a typed result so the caller can hop to the in-progress review
+    // screen instead of dead-ending on a generic error.
+    if (err instanceof ApiError && err.status === 409) {
+      const body = err.body
+      if (body && typeof body === 'object' && 'open_estimate_push_id' in body) {
+        const openId = (body as { open_estimate_push_id: unknown }).open_estimate_push_id
+        if (typeof openId === 'string') return { kind: 'conflict', openId }
+      }
+    }
+    throw err
+  }
 }
 
 export function useEstimatePushes(params: EstimatePushListParams = {}) {
