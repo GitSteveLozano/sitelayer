@@ -1,9 +1,11 @@
 # ADR 0002 — Rebuild the web client as `apps/web-v2/`; keep the backend
 
-**Status:** accepted
+**Status:** superseded
 **Date:** 2026-05-01
 **Supersedes:** —
-**Superseded by:** —
+**Superseded by:** [0003](0003-retire-apps-web-no-customers.md)
+
+> **2026-05-05:** This ADR is **superseded** by ADR 0003. The "rollback to v1" path it reserved (criterion #6) was never exercised; with zero customers there's no rollback target to keep around. `apps/web/` was deleted in PR #236. The phasing table and customer-driven rationale below are kept as historical context.
 
 ## Context
 
