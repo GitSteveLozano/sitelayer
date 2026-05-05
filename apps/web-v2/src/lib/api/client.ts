@@ -69,12 +69,34 @@ export function registerTokenProvider(fn: TokenProvider): void {
 }
 
 // Active company slug — set by the shell when the user picks / lands on
-// a company. Until Phase 1D.4 wires the picker we default to the API's
-// own ACTIVE_COMPANY_SLUG fallback ('la-operations').
-let activeCompanySlug: string = (import.meta.env.VITE_DEFAULT_COMPANY_SLUG ?? 'la-operations') as string
+// a company, persisted to localStorage so a reload after onboarding
+// doesn't drop back to the build-time default. Until Phase 1D.4 wires
+// the picker we still fall back to VITE_DEFAULT_COMPANY_SLUG (or the
+// API's own ACTIVE_COMPANY_SLUG = 'la-operations') on first paint.
+const COMPANY_SLUG_STORAGE_KEY = 'sitelayer.v2.active-company-slug'
+const DEFAULT_COMPANY_SLUG = (import.meta.env.VITE_DEFAULT_COMPANY_SLUG ?? 'la-operations') as string
+
+function readPersistedSlug(): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const value = window.localStorage.getItem(COMPANY_SLUG_STORAGE_KEY)
+    return value && value.trim() ? value : null
+  } catch {
+    return null
+  }
+}
+
+let activeCompanySlug: string = readPersistedSlug() ?? DEFAULT_COMPANY_SLUG
 
 export function setActiveCompanySlug(slug: string): void {
   activeCompanySlug = slug
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(COMPANY_SLUG_STORAGE_KEY, slug)
+  } catch {
+    // localStorage can throw in private mode / over-quota; the in-memory
+    // value still flows for this session.
+  }
 }
 
 export function getActiveCompanySlug(): string {

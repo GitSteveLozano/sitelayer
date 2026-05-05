@@ -23,7 +23,9 @@
  * lib/api/* services everything else. Deduplication is a follow-up.
  */
 import { useEffect, useState } from 'react'
+import { Navigate } from 'react-router-dom'
 import { apiGet, getStoredCompanySlug, type BootstrapResponse, type SessionResponse } from '../api-v1-compat'
+import { ApiError } from '../lib/api/client'
 import { normalizeMobileShellRole } from '../lib/active-context'
 import { MobileShell } from '../views/m-shell'
 
@@ -55,6 +57,18 @@ export default function MRoute({ basePath = '' }: MRouteProps) {
       cancelled = true
     }
   }, [companySlug])
+
+  // First-time visitors have a valid Clerk session but no company yet —
+  // both bootstrap and session 404 with `company slug X not found`.
+  // Promise.all rejects with whichever lost the race, so accept either
+  // path. Send the user to the wizard instead of leaving an error toast.
+  if (
+    error instanceof ApiError &&
+    error.status === 404 &&
+    (error.path === '/api/bootstrap' || error.path === '/api/session')
+  ) {
+    return <Navigate to="/onboarding" replace />
+  }
 
   if (error) {
     return <div className="p-4 text-[12px] text-bad">Failed to load: {String(error)}</div>
