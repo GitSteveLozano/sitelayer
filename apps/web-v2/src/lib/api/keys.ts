@@ -35,4 +35,6 @@ export const queryKeys = {
     all: () => ['notification-preferences'] as const,
     current: () => [...queryKeys.notificationPreferences.all(), 'current'] as const,
   },
+  bootstrap: (companySlug: string) => ['bootstrap', companySlug] as const,
+  session: (companySlug: string) => ['session', companySlug] as const,
 } as const
