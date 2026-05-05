@@ -20,11 +20,7 @@ function manualChunks(id: string): string | undefined {
   if (normalized.includes('/@sentry/')) return 'vendor-sentry'
   if (normalized.includes('/@tanstack/')) return 'vendor-tanstack'
   if (normalized.includes('/react-router')) return 'vendor-router'
-  if (
-    normalized.includes('/@clerk/') ||
-    normalized.includes('/scheduler/') ||
-    /\/react(?:-dom)?\//.test(normalized)
-  ) {
+  if (normalized.includes('/@clerk/') || normalized.includes('/scheduler/') || /\/react(?:-dom)?\//.test(normalized)) {
     return 'vendor-react'
   }
   if (normalized.includes('/lucide-react/')) return 'vendor-icons'
