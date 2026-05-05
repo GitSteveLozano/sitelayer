@@ -9,7 +9,7 @@ import {
   type QboConnectionResponse,
   type SessionResponse,
   type SyncStatusResponse,
-} from '../api.js'
+} from '../api-v1-compat'
 
 /**
  * Bootstrap-refresh state machine.
