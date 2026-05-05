@@ -19,6 +19,10 @@ import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 're
 import type { BootstrapResponse } from '../api-v1-compat.js'
 import { computeActiveContext, type ActiveContext } from '../lib/active-context.js'
 import { MBottomTabs, MBody, MI, MShell, MTopBar } from '../components/m/index.js'
+import { InstallPromptBanner } from '../components/shell/InstallPromptBanner.js'
+import { OfflineBanner } from '../components/shell/OfflineBanner.js'
+import { PushDeniedBanner } from '../components/shell/PushDeniedBanner.js'
+import { UpdateBanner } from '../components/shell/UpdateBanner.js'
 import { AdminHome } from './m/admin-home.js'
 import { MobileProjectsList } from './m/projects-list.js'
 import { MobileProjectDetail } from './m/project-detail.js'
@@ -46,6 +50,13 @@ export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
   companyRole: 'admin' | 'foreman' | 'office' | 'member'
   companySlug: string
+  /**
+   * Where the shell is mounted. '/m' is the legacy alias kept for any
+   * external links that point at the original mobile-only entry; '' (or
+   * undefined) means mounted at the app root, which is the canonical
+   * location post-2026-05-05 when the desktop AppShell was retired.
+   */
+  basePath?: string
 }
 
 const ADMIN_TABS = [
@@ -71,7 +82,7 @@ const WORKER_TABS = [
   { id: 'log', label: 'Log', Icon: MI.Camera },
 ] as const
 
-export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShellProps) {
+export function MobileShell({ bootstrap, companyRole, companySlug, basePath = '' }: MobileShellProps) {
   const params = useParams<{ projectId?: string }>()
   const location = useLocation()
   const navigate = useNavigate()
@@ -86,13 +97,21 @@ export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShell
 
   const tabs = ctx.kind === 'admin' ? ADMIN_TABS : ctx.kind === 'foreman' ? FOREMAN_TABS : WORKER_TABS
 
-  const activeTab = tabs.find((t) => location.pathname.startsWith(`/m/${t.id}`))?.id ?? 'today'
+  const activeTab =
+    tabs.find((t) => {
+      const prefix = `${basePath}/${t.id}`
+      return location.pathname === prefix || location.pathname.startsWith(`${prefix}/`)
+    })?.id ?? 'today'
 
   const isWorker = ctx.kind === 'worker'
 
   return (
     <div data-context={ctx.kind} style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
       <MShell className={isWorker ? 'm-dark' : undefined}>
+        <OfflineBanner />
+        <UpdateBanner />
+        <InstallPromptBanner />
+        <PushDeniedBanner />
         <Routes>
           <Route index element={<Navigate to="today" replace />} />
           <Route
@@ -161,7 +180,7 @@ export function MobileShell({ bootstrap, companyRole, companySlug }: MobileShell
           <Route path="hours/*" element={<WorkerHours bootstrap={bootstrap} />} />
           <Route path="*" element={<Navigate to="today" replace />} />
         </Routes>
-        <MBottomTabs tabs={[...tabs]} activeId={activeTab} onSelect={(id) => navigate(`/m/${id}`)} />
+        <MBottomTabs tabs={[...tabs]} activeId={activeTab} onSelect={(id) => navigate(`${basePath}/${id}`)} />
       </MShell>
     </div>
   )
