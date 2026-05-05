@@ -141,7 +141,7 @@ export function AdminHome({ bootstrap }: AdminHomeProps) {
             .toUpperCase()}
           title={
             view === 'needs'
-              ? `${attentionItems.length} ${pl(attentionItems.length, 'thing', 'things')} need you.`
+              ? `${attentionItems.length} ${pl(attentionItems.length, 'thing', 'things')} ${attentionItems.length === 1 ? 'needs' : 'need'} you.`
               : heroTitle
           }
           sub={view === 'needs' ? 'Sorted by impact. Tap to handle, then get back to the day.' : heroSub}
