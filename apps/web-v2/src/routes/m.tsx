@@ -23,9 +23,10 @@
  * caching, retry, and dedupe machinery is v2's standard
  * `lib/api/client.ts:request<T>()` path.
  */
+import { Navigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { type BootstrapResponse, type SessionResponse } from '../api-v1-compat'
-import { request, getActiveCompanySlug } from '../lib/api/client'
+import { ApiError, request, getActiveCompanySlug } from '../lib/api/client'
 import { queryKeys } from '../lib/api/keys'
 import { normalizeMobileShellRole } from '../lib/active-context'
 import { MobileShell } from '../views/m-shell'
@@ -48,6 +49,25 @@ export default function MRoute({ basePath = '' }: MRouteProps) {
   })
 
   const error = bootstrapQuery.error ?? sessionQuery.error
+
+  // First-sign-in path: the user authenticated with Clerk but has no
+  // company_memberships row yet, so getCompany() returns null and the
+  // API responds 404 with `error: "company slug … not found"`. Bounce
+  // them to /onboarding where the wizard creates a company + admin
+  // membership in one POST. Anything else (network, 5xx, real auth
+  // failure) renders the inline error so we don't mask outages.
+  const needsOnboarding =
+    error instanceof ApiError &&
+    error.status === 404 &&
+    error.body !== null &&
+    typeof error.body === 'object' &&
+    'error' in error.body &&
+    typeof (error.body as { error: unknown }).error === 'string' &&
+    /company slug.*not found|requires_onboarding/i.test((error.body as { error: string }).error)
+
+  if (needsOnboarding) {
+    return <Navigate to="/onboarding" replace />
+  }
   if (error) {
     return <div className="p-4 text-[12px] text-bad">Failed to load: {String(error)}</div>
   }
