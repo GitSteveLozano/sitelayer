@@ -14,11 +14,17 @@
  * Implementation note: for Phase 2 the per-tab screens are placeholders.
  * Each phase from 3 onward replaces a placeholder with a real screen.
  */
-import { lazy, useMemo } from 'react'
+import { lazy, useEffect, useMemo, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { BootstrapResponse } from '../api-v1-compat.js'
-import { computeActiveContext, type ActiveContext } from '../lib/active-context.js'
-import { MBottomTabs, MI, MShell } from '../components/m/index.js'
+import {
+  availableRoleModes,
+  computeActiveContext,
+  normalizeRoleMode,
+  type ActiveContext,
+  type RoleMode,
+} from '../lib/active-context.js'
+import { MBottomTabs, MChip, MChipRow, MI, MShell } from '../components/m/index.js'
 
 // MoreRoute lives outside the shell historically; we mount it inside so
 // the bottom-tab chrome stays visible while the user is in settings,
@@ -92,18 +98,50 @@ const WORKER_TABS = [
   { id: 'log', label: 'Log', Icon: MI.Camera },
 ] as const
 
+const ROLE_MODE_STORAGE_KEY = 'sitelayer.roleMode'
+const ROLE_MODE_LABEL: Record<RoleMode, string> = {
+  admin: 'Admin',
+  foreman: 'Foreman',
+  worker: 'Worker',
+}
+
 export function MobileShell({ bootstrap, companyRole, companySlug, basePath = '' }: MobileShellProps) {
   const params = useParams<{ projectId?: string }>()
   const location = useLocation()
   const navigate = useNavigate()
+  const [modeOverride, setModeOverride] = useState<RoleMode | null>(() => readStoredRoleMode())
+
+  const roleModes = useMemo(
+    () =>
+      availableRoleModes({
+        companyRole,
+        assignments: bootstrap?.projectAssignments ?? [],
+      }),
+    [companyRole, bootstrap?.projectAssignments],
+  )
+
+  useEffect(() => {
+    if (modeOverride && !roleModes.includes(modeOverride)) {
+      setModeOverride(null)
+      writeStoredRoleMode(null)
+    }
+  }, [modeOverride, roleModes])
+
+  useEffect(() => {
+    const routeMode = inferRoleModeFromPath(location.pathname, basePath)
+    if (!routeMode || !roleModes.includes(routeMode) || routeMode === modeOverride) return
+    setModeOverride(routeMode)
+    writeStoredRoleMode(routeMode)
+  }, [basePath, location.pathname, modeOverride, roleModes])
 
   const ctx = useMemo<ActiveContext>(() => {
     return computeActiveContext({
       companyRole,
       assignments: bootstrap?.projectAssignments ?? [],
       currentProjectId: params.projectId ?? null,
+      modeOverride,
     })
-  }, [companyRole, bootstrap?.projectAssignments, params.projectId])
+  }, [companyRole, bootstrap?.projectAssignments, params.projectId, modeOverride])
 
   const tabs = ctx.kind === 'admin' ? ADMIN_TABS : ctx.kind === 'foreman' ? FOREMAN_TABS : WORKER_TABS
 
@@ -122,6 +160,17 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
         <UpdateBanner />
         <InstallPromptBanner />
         <PushDeniedBanner />
+        {roleModes.length > 1 ? (
+          <RoleModeSwitcher
+            modes={roleModes}
+            active={ctx.kind}
+            onSelect={(mode) => {
+              setModeOverride(mode)
+              writeStoredRoleMode(mode)
+              navigate(`${basePath}/today`)
+            }}
+          />
+        ) : null}
         <Routes>
           <Route index element={<Navigate to="today" replace />} />
           <Route
@@ -206,4 +255,76 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
       </MShell>
     </div>
   )
+}
+
+function RoleModeSwitcher({
+  modes,
+  active,
+  onSelect,
+}: {
+  modes: readonly RoleMode[]
+  active: RoleMode
+  onSelect: (mode: RoleMode) => void
+}) {
+  return (
+    <div
+      style={{
+        borderBottom: '1px solid var(--m-line)',
+        background: 'var(--m-bg)',
+      }}
+    >
+      <MChipRow>
+        {modes.map((mode) => (
+          <MChip key={mode} active={active === mode} onClick={() => onSelect(mode)}>
+            {ROLE_MODE_LABEL[mode]}
+          </MChip>
+        ))}
+      </MChipRow>
+    </div>
+  )
+}
+
+function readStoredRoleMode(): RoleMode | null {
+  if (typeof window === 'undefined') return null
+  try {
+    return normalizeRoleMode(window.sessionStorage.getItem(ROLE_MODE_STORAGE_KEY))
+  } catch {
+    return null
+  }
+}
+
+function writeStoredRoleMode(mode: RoleMode | null): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (mode) {
+      window.sessionStorage.setItem(ROLE_MODE_STORAGE_KEY, mode)
+    } else {
+      window.sessionStorage.removeItem(ROLE_MODE_STORAGE_KEY)
+    }
+  } catch {
+    // Private-mode storage failures should not block navigation.
+  }
+}
+
+function inferRoleModeFromPath(pathname: string, basePath: string): RoleMode | null {
+  const base = basePath.replace(/\/+$/, '')
+  const relative =
+    base && pathname.startsWith(`${base}/`) ? pathname.slice(base.length + 1) : pathname.replace(/^\/+/, '')
+  const segment = relative.split('/')[0] ?? ''
+  if (
+    segment === 'projects' ||
+    segment === 'schedule' ||
+    segment === 'rentals' ||
+    segment === 'more' ||
+    segment === 'invoice'
+  ) {
+    return 'admin'
+  }
+  if (segment === 'crew' || segment === 'field' || segment === 'brief') {
+    return 'foreman'
+  }
+  if (segment === 'scope' || segment === 'hours' || segment === 'clockin' || segment === 'issue') {
+    return 'worker'
+  }
+  return null
 }
