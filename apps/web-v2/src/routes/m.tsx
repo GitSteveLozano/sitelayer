@@ -12,18 +12,21 @@
  *                                          the original entry)
  *
  * The shell expects:
- *   - bootstrap: BootstrapResponse | null   (v1-style /api/bootstrap response)
+ *   - bootstrap: BootstrapResponse | null
  *   - companyRole: 'admin' | 'foreman' | 'office' | 'member'
  *   - companySlug: string
  *
- * v2's main runtime uses TanStack Query + Clerk-derived role. This wrapper
- * fetches the v1 bootstrap on mount and threads it in so we don't have to
- * rewrite the shell against v2's hooks. The two API clients coexist —
- * api-v1-compat.ts (the moved 1.6k-line v1 client) services the shell;
- * lib/api/* services everything else. Deduplication is a follow-up.
+ * Data flow (post-PR #244): the bootstrap + session payloads are fetched
+ * via TanStack Query so a re-mount, route change, or background refetch
+ * doesn't force a full reload. Underneath, the two queries still hit
+ * `/api/bootstrap` and `/api/session` — same shape as v1 — but the
+ * caching, retry, and dedupe machinery is v2's standard
+ * `lib/api/client.ts:request<T>()` path.
  */
-import { useEffect, useState } from 'react'
-import { apiGet, getStoredCompanySlug, type BootstrapResponse, type SessionResponse } from '../api-v1-compat'
+import { useQuery } from '@tanstack/react-query'
+import { type BootstrapResponse, type SessionResponse } from '../api-v1-compat'
+import { request, getActiveCompanySlug } from '../lib/api/client'
+import { queryKeys } from '../lib/api/keys'
 import { normalizeMobileShellRole } from '../lib/active-context'
 import { MobileShell } from '../views/m-shell'
 
@@ -32,43 +35,32 @@ type MRouteProps = {
 }
 
 export default function MRoute({ basePath = '' }: MRouteProps) {
-  const companySlug = getStoredCompanySlug() ?? 'la-operations'
-  const [bootstrap, setBootstrap] = useState<BootstrapResponse | null>(null)
-  const [session, setSession] = useState<SessionResponse | null>(null)
-  const [error, setError] = useState<unknown>(null)
+  const companySlug = getActiveCompanySlug() || 'la-operations'
 
-  useEffect(() => {
-    let cancelled = false
-    Promise.all([
-      apiGet<BootstrapResponse>('/api/bootstrap', companySlug),
-      apiGet<SessionResponse>('/api/session', companySlug),
-    ])
-      .then(([b, s]) => {
-        if (cancelled) return
-        setBootstrap(b)
-        setSession(s)
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [companySlug])
+  const bootstrapQuery = useQuery({
+    queryKey: queryKeys.bootstrap(companySlug),
+    queryFn: () => request<BootstrapResponse>('/api/bootstrap', { companySlug }),
+  })
 
+  const sessionQuery = useQuery({
+    queryKey: queryKeys.session(companySlug),
+    queryFn: () => request<SessionResponse>('/api/session', { companySlug }),
+  })
+
+  const error = bootstrapQuery.error ?? sessionQuery.error
   if (error) {
     return <div className="p-4 text-[12px] text-bad">Failed to load: {String(error)}</div>
   }
 
-  // Match the v1 caller pattern: prefer the membership row that lines up
-  // with the active company, fall back to user.role on the session, then
-  // fall back to 'member' (which the shell upgrades per project
-  // assignment).
+  // Prefer the membership row that lines up with the active company,
+  // then user.role on the session, then 'member'. The shell still upgrades
+  // role per project assignment.
+  const session = sessionQuery.data ?? null
   const sessionRole = session?.memberships?.find((m) => m.slug === companySlug)?.role ?? session?.user?.role ?? null
 
   return (
     <MobileShell
-      bootstrap={bootstrap}
+      bootstrap={bootstrapQuery.data ?? null}
       companyRole={normalizeMobileShellRole(sessionRole)}
       companySlug={companySlug}
       basePath={basePath}
