@@ -11,7 +11,7 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@clerk/clerk-react": "5.61.3",
+    "@clerk/clerk-react": "5.61.6",
     "@sentry/react": "^10.51.0",
     "@sitelayer/domain": "file:../../packages/domain",
     "@sitelayer/workflows": "file:../../packages/workflows",
