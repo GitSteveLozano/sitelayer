@@ -2,7 +2,7 @@
 
 Implementation plan for the mobile-first design handoff in `Design Overview/`.
 
-**Last updated:** 2026-05-04
+**Last updated:** 2026-05-06
 
 This doc is the sequencing source of truth for shipping the design. It assumes the design handoff is fixed and the backend is mostly in place. The bulk of the work is web-side: a new mobile design system, role-aware shell, and screen implementations.
 
@@ -57,7 +57,7 @@ The design handoff was reviewed against the live repo. Most of the backend is bu
 - **One role per user per company** in `company_memberships.role`. Values: `admin`, `foreman`, `member`, plus legacy `office` aliased to `admin` in code (no enum migration — text column allows it).
 - **Per-project assignments** in a new `project_assignments` table. A user can be assigned `foreman` on Hillcrest and `worker` on Aspen Ridge simultaneously.
 - **Admin = superset.** Admin always retains the calm dashboard / projects / schedule / time / rentals / settings surfaces.
-- **Contextual shell, no manual toggle.** The active "view mode" is computed from (geofence + project assignment + recent activity), not chosen. See Phase 2 for the heuristic.
+- **Permission-adaptive shell, admin-first.** The app derives available modes from company role + project assignments. Admins land in the owner/estimator surfaces by default and can enter Foreman or Worker mode when their permissions/assignments allow it.
 - **Defaults for new companies:** one admin who does everything. Foreman/worker assignments are additive — a company never _needs_ them.
 - **`wk-issue` recipient picker is removed.** Issues route to the project's foreman, falling through to admin(s) when no foreman is assigned.
 
@@ -123,19 +123,20 @@ create index project_assignments_project_active
 
 ## Phase 2 — Role-aware shell
 
-**Goal:** the app reshapes per role context, with no manual toggle.
+**Goal:** the app reshapes per role context while keeping admin-first navigation for users who can administer the company.
 
 **Heuristic for `activeContext`:**
 
-1. If admin and not currently inside any project's geofence → `admin` context (calm dashboard home, sidebar nav)
-2. If user has a foreman assignment on a project they've opened or been geofenced into in the last 4h → `foreman` context (5-tab bottom bar: Today/Crew/Field/Log/Time, scoped to that project)
-3. If user has a worker assignment on a geofenced or recently-active project → `worker` context (4-tab dark bottom bar: Today/Scope/Hours/Log)
-4. Tie-breaks: explicit project switch in the user chip overrides; otherwise highest-rank assignment for the current project wins (foreman > worker)
+1. Company `admin` / legacy `office` users default to `admin` context: Today, Projects, Schedule, Rentals, More.
+2. Users with foreman assignments can enter `foreman` mode: Today, Crew, Field, Log, Time.
+3. Users with worker assignments can enter `worker` mode: Today, Scope, Hours, Log.
+4. Route intent also adapts the mode. Opening Projects/Schedule/Rentals returns to admin; Crew/Field/Brief enters foreman; Scope/Hours/Clock-in/Issue enters worker.
+5. The explicit mode switcher appears only when more than one mode is allowed and persists for the current browser session.
 
 **Files:**
 
 - New: `apps/web/src/lib/active-context.ts` — pure function from `(memberships, assignments, geofenceState, recentActivity)` to a context object
-- Modify: `apps/web/src/App.tsx` — split routes into three top-level shells: `<AdminShell>`, `<ForemanShell>`, `<WorkerShell>`. Each renders its own bottom-tab nav. Routes inside are persona-scoped.
+- Modify: `apps/web/src/screens/mobile-shell.tsx` — route the three persona tab sets through one mobile shell so admin, foreman, and worker modes do not become parallel app tracks.
 - Modify: `apps/web/src/api.ts` — bootstrap response now includes `assignments[]` and `geofenceState`
 - New: `apps/web/src/lib/geofence.ts` — wraps `navigator.geolocation` and the existing `029_geofence_policy` server data; emits enter/exit events used by the active-context selector
 
@@ -143,9 +144,9 @@ create index project_assignments_project_active
 
 **Done when:**
 
-- An admin with no assignments stays in admin shell forever
-- An admin with a foreman assignment to Hillcrest, opening that project, sees the foreman 5-tab bar
-- The same user, leaving the geofence and going home, returns to admin shell on next session resume
+- An admin with no assignments stays in the admin shell.
+- An admin with a foreman assignment sees the admin shell by default and can enter Foreman mode.
+- Navigating to admin-owned sections returns the user to admin mode without exposing worker/foreman tabs there.
 
 **Size:** ~3 days.
 
@@ -163,7 +164,7 @@ create index project_assignments_project_active
 
 **Files:**
 
-- New: `apps/web/src/screens/mobileobile/home.tsx`, `screens/mobile/projects-list.tsx`
+- New: `apps/web/src/screens/mobile/home.tsx`, `screens/mobile/projects-list.tsx`
 - Modify: `apps/web/src/api.ts` — add `getMobileHome()` (aggregates from existing `/api/bootstrap` + today's labor cost rollup)
 
 **Reuses:** existing `/api/projects`, `/api/analytics`, `/api/clock/timeline`. The admin sidebar from the desktop view is kept untouched for desktop; mobile uses the new home.
@@ -182,7 +183,7 @@ create index project_assignments_project_active
 
 **Files:**
 
-- New: `apps/web/src/screens/mobileobile/project-detail.tsx` (router) + one component per tab in `screens/mobile/project-tabs/`
+- New: `apps/web/src/screens/mobile/project-detail.tsx` (router) + one component per tab in `screens/mobile/project-tabs/`
 - Reuses: existing `views/project-detail.tsx` desktop logic — extract shared data hooks into `apps/web/src/hooks/use-project.ts`
 
 **Reuses:**
@@ -208,7 +209,7 @@ create index project_assignments_project_active
 
 **Files:**
 
-- New: `apps/web/src/screens/mobileobile/takeoff.tsx` — wraps the existing canvas logic with mobile gesture handling (pinch zoom, single-finger pan, long-press to drop a polygon vertex)
+- New: `apps/web/src/screens/mobile/takeoff.tsx` — wraps the existing canvas logic with mobile gesture handling (pinch zoom, single-finger pan, long-press to drop a polygon vertex)
 - Reuses: `apps/web/src/components/takeoff-pan-overlay.tsx`, the existing `views/takeoffs.tsx` rendering pipeline, `packages/domain` polygon math (`normalizePolygonGeometry`, `calculateTakeoffQuantity`)
 - Reuses: `/api/projects/:id/takeoff/measurement(s)`, `/api/blueprints/*`
 
@@ -226,7 +227,7 @@ create index project_assignments_project_active
 
 **Files:**
 
-- New: `apps/web/src/screens/mobileobile/schedule.tsx`, `views/foreman/time-review.tsx`, `views/admin/live-vs-budget.tsx`
+- New: `apps/web/src/screens/mobile/schedule.tsx`, `views/foreman/time-review.tsx`, `views/admin/live-vs-budget.tsx`
 - Reuses: `time-review-runs` workflow + machine, `crew_schedule_workflow`, `labor-burden` rollup, `labor-reports` for the burndown chart data
 
 **Done when:** a foreman ending their day can approve all their crew's hours via the existing `time_review_runs` deterministic workflow, surfaced through the mobile UI; an admin can see the burndown chart on phone.

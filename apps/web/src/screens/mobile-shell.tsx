@@ -202,8 +202,8 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
             element={<MobileEstimatePush companySlug={companySlug} />}
           />
           <Route path="projects/:projectId/*" element={<MobileProjectDetail bootstrap={bootstrap} />} />
-          <Route path="schedule" element={<MobileSchedule bootstrap={bootstrap} />} />
-          <Route path="schedule/*" element={<MobileSchedule bootstrap={bootstrap} />} />
+          <Route path="schedule" element={<MobileSchedule bootstrap={bootstrap} companySlug={companySlug} />} />
+          <Route path="schedule/*" element={<MobileSchedule bootstrap={bootstrap} companySlug={companySlug} />} />
           <Route path="rentals" element={<MobileRentals companySlug={companySlug} />} />
           <Route
             path="rentals/dispatch"
