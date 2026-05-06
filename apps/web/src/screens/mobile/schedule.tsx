@@ -5,21 +5,46 @@
  * Per estimator/screenshots/sch-week.png — left rail shows day labels,
  * right side shows site cards with crew dot counts.
  */
-import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import type { BootstrapResponse } from '../../api-v1-compat.js'
-import { MBody, MChip, MChipRow, MI, MSectionH, MTopBar } from '../../components/m/index.js'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
+import {
+  MBody,
+  MButton,
+  MButtonRow,
+  MChip,
+  MChipRow,
+  MI,
+  MInput,
+  MSectionH,
+  MSelect,
+  MTopBar,
+} from '../../components/m/index.js'
+import { Sheet } from '../../components/mobile/Sheet.js'
 import { MEmptyState } from '../../components/m-states/index.js'
 import { shortDate } from './format.js'
 
 type Mode = 'day' | 'week'
+type ScheduleRow = BootstrapResponse['schedules'][number]
+type WorkerRow = BootstrapResponse['workers'][number]
+type ProjectRow = BootstrapResponse['projects'][number]
 
-export function MobileSchedule({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
-  const navigate = useNavigate()
+export function MobileSchedule({
+  bootstrap,
+  companySlug,
+}: {
+  bootstrap: BootstrapResponse | null
+  companySlug: string
+}) {
   const [mode, setMode] = useState<Mode>('week')
+  const [createOpen, setCreateOpen] = useState(false)
+  const [createdSchedules, setCreatedSchedules] = useState<ScheduleRow[]>([])
 
-  const schedules = useMemo(() => bootstrap?.schedules ?? [], [bootstrap?.schedules])
+  const schedules = useMemo(
+    () => [...(bootstrap?.schedules ?? []), ...createdSchedules],
+    [bootstrap?.schedules, createdSchedules],
+  )
   const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
+  const workers = useMemo(() => bootstrap?.workers ?? [], [bootstrap?.workers])
 
   const byDay = useMemo(() => {
     const map = new Map<string, { date: string; entries: typeof schedules }>()
@@ -38,16 +63,26 @@ export function MobileSchedule({ bootstrap }: { bootstrap: BootstrapResponse | n
     0,
   )
   const utilizationPct = byDay.length > 0 ? Math.round((totalCrew / Math.max(1, byDay.length * 8)) * 100) : 0
+  const openCreate = () => setCreateOpen(true)
 
   if (byDay.length === 0) {
     return (
       <>
-        <MTopBar title="Schedule" actionIcon={<MI.Plus size={20} />} actionLabel="New" />
+        <MTopBar title="Schedule" actionIcon={<MI.Plus size={20} />} actionLabel="New" onAction={openCreate} />
         <MEmptyState
           title="Nothing scheduled"
-          body="Build a week ahead by assigning crews to projects. Tap a project to add it to the schedule."
-          primaryLabel="See projects"
-          onPrimary={() => navigate('/projects')}
+          body="Build a week ahead by assigning crews to projects."
+          primaryLabel="New assignment"
+          onPrimary={openCreate}
+        />
+        <CreateAssignmentSheet
+          open={createOpen}
+          onClose={() => setCreateOpen(false)}
+          projects={projects}
+          workers={workers}
+          companySlug={companySlug}
+          defaultDate={nextDate()}
+          onCreated={(schedule) => setCreatedSchedules((rows) => [...rows, schedule])}
         />
       </>
     )
@@ -55,7 +90,7 @@ export function MobileSchedule({ bootstrap }: { bootstrap: BootstrapResponse | n
 
   return (
     <>
-      <MTopBar title="Schedule" actionIcon={<MI.Plus size={20} />} actionLabel="New" />
+      <MTopBar title="Schedule" actionIcon={<MI.Plus size={20} />} actionLabel="New" onAction={openCreate} />
       <MBody>
         <div style={{ padding: '12px 16px 4px' }}>
           <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.01em' }}>
@@ -93,7 +128,185 @@ export function MobileSchedule({ bootstrap }: { bootstrap: BootstrapResponse | n
           ))}
         </div>
       </MBody>
+      <CreateAssignmentSheet
+        open={createOpen}
+        onClose={() => setCreateOpen(false)}
+        projects={projects}
+        workers={workers}
+        companySlug={companySlug}
+        defaultDate={byDay[0]?.date ?? nextDate()}
+        onCreated={(schedule) => setCreatedSchedules((rows) => [...rows, schedule])}
+      />
     </>
+  )
+}
+
+function CreateAssignmentSheet({
+  open,
+  onClose,
+  projects,
+  workers,
+  companySlug,
+  defaultDate,
+  onCreated,
+}: {
+  open: boolean
+  onClose: () => void
+  projects: readonly ProjectRow[]
+  workers: readonly WorkerRow[]
+  companySlug: string
+  defaultDate: string
+  onCreated: (schedule: ScheduleRow) => void
+}) {
+  const eligibleProjects = useMemo(() => projects.filter((p) => /accepted|progress|active/i.test(p.status)), [projects])
+  const [projectId, setProjectId] = useState('')
+  const [scheduledFor, setScheduledFor] = useState(defaultDate)
+  const [pickedCrew, setPickedCrew] = useState<Set<string>>(new Set())
+  const [error, setError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    setScheduledFor(defaultDate)
+    setError(null)
+  }, [defaultDate, open])
+
+  const toggleCrew = (workerId: string) => {
+    setPickedCrew((prev) => {
+      const next = new Set(prev)
+      if (next.has(workerId)) next.delete(workerId)
+      else next.add(workerId)
+      return next
+    })
+  }
+
+  const resetAndClose = () => {
+    setProjectId('')
+    setPickedCrew(new Set())
+    setError(null)
+    onClose()
+  }
+
+  const save = async () => {
+    setError(null)
+    if (!projectId) {
+      setError('Pick a project')
+      return
+    }
+    if (!scheduledFor) {
+      setError('Pick a date')
+      return
+    }
+    setSaving(true)
+    try {
+      const schedule = await apiPost<ScheduleRow>(
+        '/api/schedules',
+        {
+          project_id: projectId,
+          scheduled_for: scheduledFor,
+          crew: Array.from(pickedCrew),
+          status: 'draft',
+        },
+        companySlug,
+      )
+      onCreated(schedule)
+      resetAndClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Sheet open={open} onClose={resetAndClose} title="New assignment" className="max-w-[720px] mx-auto">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <Field label="Project">
+          <MSelect value={projectId} onChange={(e) => setProjectId(e.currentTarget.value)}>
+            <option value="">Select project</option>
+            {eligibleProjects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </MSelect>
+        </Field>
+
+        <Field label="Date">
+          <MInput type="date" value={scheduledFor} onChange={(e) => setScheduledFor(e.currentTarget.value)} />
+        </Field>
+
+        <Field label={`Crew${pickedCrew.size > 0 ? ` (${pickedCrew.size})` : ''}`}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, maxHeight: '34dvh', overflowY: 'auto' }}>
+            {workers.length === 0 ? (
+              <div className="m-quiet-sm">No workers on the roster.</div>
+            ) : (
+              workers.map((w) => (
+                <button
+                  key={w.id}
+                  type="button"
+                  onClick={() => toggleCrew(w.id)}
+                  style={{
+                    border: '1px solid var(--m-line)',
+                    background: pickedCrew.has(w.id) ? 'var(--m-accent-soft)' : 'var(--m-card)',
+                    borderRadius: 12,
+                    padding: '10px 12px',
+                    color: 'inherit',
+                    font: 'inherit',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    textAlign: 'left',
+                  }}
+                >
+                  <span style={{ minWidth: 0 }}>
+                    <span style={{ display: 'block', fontSize: 14, fontWeight: 650 }}>{w.name}</span>
+                    <span className="m-quiet-sm">{w.role}</span>
+                  </span>
+                  {pickedCrew.has(w.id) ? <MI.Check size={18} color="var(--m-accent)" /> : null}
+                </button>
+              ))
+            )}
+          </div>
+        </Field>
+
+        <Field label="Foreman">
+          <div
+            style={{
+              border: '1px solid var(--m-line)',
+              borderRadius: 12,
+              padding: '11px 12px',
+              color: 'var(--m-ink-2)',
+              fontSize: 14,
+              background: 'var(--m-card-soft)',
+            }}
+          >
+            Uses the assigned project foreman
+          </div>
+        </Field>
+
+        {error ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
+
+        <MButtonRow>
+          <MButton variant="ghost" onClick={resetAndClose} disabled={saving}>
+            Cancel
+          </MButton>
+          <MButton variant="primary" onClick={save} disabled={saving}>
+            {saving ? 'Saving...' : 'Save'}
+          </MButton>
+        </MButtonRow>
+      </div>
+    </Sheet>
+  )
+}
+
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <span className="m-topbar-eyebrow">{label}</span>
+      {children}
+    </label>
   )
 }
 
@@ -172,4 +385,10 @@ function CrewDots({ count }: { count: number }) {
       {count > 6 ? <span style={{ marginLeft: 4, fontSize: 11, color: 'var(--m-ink-3)' }}>+{count - 6}</span> : null}
     </div>
   )
+}
+
+function nextDate(): string {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
+  return d.toISOString().slice(0, 10)
 }
