@@ -289,9 +289,7 @@ describe('parseFieldEventEventRequest', () => {
 
   it('requires action + message_to_worker for RESOLVE', () => {
     expect(parseFieldEventEventRequest({ event: 'RESOLVE', state_version: 1 }).ok).toBe(false)
-    expect(
-      parseFieldEventEventRequest({ event: 'RESOLVE', state_version: 1, action: 'order_more' }).ok,
-    ).toBe(false)
+    expect(parseFieldEventEventRequest({ event: 'RESOLVE', state_version: 1, action: 'order_more' }).ok).toBe(false)
     expect(
       parseFieldEventEventRequest({
         event: 'RESOLVE',
@@ -339,9 +337,6 @@ describe('fieldEventWorkflow registry', () => {
     expect(fieldEventWorkflow.name).toBe('field_event')
     expect(fieldEventWorkflow.initialState).toBe('open')
     expect(fieldEventWorkflow.terminalStates).toEqual([])
-    expect(fieldEventWorkflow.sideEffectTypes).toEqual([
-      'notify_worker_resolution',
-      'notify_estimator_escalation',
-    ])
+    expect(fieldEventWorkflow.sideEffectTypes).toEqual(['notify_worker_resolution', 'notify_estimator_escalation'])
   })
 })

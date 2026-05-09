@@ -307,11 +307,7 @@ export function FourWeekScheduleGrid({
             >
               Zoom to week ›
             </button>
-            <MobileButton
-              variant="primary"
-              onClick={onConfirmAllClean}
-              disabled={bulkBusy || allDrafts.length === 0}
-            >
+            <MobileButton variant="primary" onClick={onConfirmAllClean} disabled={bulkBusy || allDrafts.length === 0}>
               {bulkBusy
                 ? `Confirming… (${bulkResult?.ok ?? 0}/${allDrafts.length})`
                 : allDrafts.length === 0
@@ -359,9 +355,7 @@ export function FourWeekScheduleGrid({
                 title={d.iso}
               >
                 <div className="text-[9px] uppercase tracking-[0.06em] text-ink-3">{d.dow}</div>
-                <div className={`num text-[12px] font-semibold ${d.isToday ? 'text-accent' : 'text-ink-2'}`}>
-                  {d.n}
-                </div>
+                <div className={`num text-[12px] font-semibold ${d.isToday ? 'text-accent' : 'text-ink-2'}`}>{d.n}</div>
               </div>
             ))}
 
@@ -486,11 +480,7 @@ function FourWeekRow({
             aria-label={`${crew.label}, ${d.iso}, ${cell.length} assignments`}
           >
             {accent ? (
-              <span
-                aria-hidden
-                className="absolute left-0 top-0 bottom-0 w-[3px]"
-                style={{ background: accent }}
-              />
+              <span aria-hidden className="absolute left-0 top-0 bottom-0 w-[3px]" style={{ background: accent }} />
             ) : null}
             <div className="p-1 flex flex-col gap-1 min-h-[52px]">
               {cell.length === 0 ? (
@@ -526,9 +516,7 @@ function FourWeekRow({
                   )
                 })
               )}
-              {cell.length > 2 ? (
-                <span className="text-[9px] text-ink-3 num">+{cell.length - 2} more</span>
-              ) : null}
+              {cell.length > 2 ? <span className="text-[9px] text-ink-3 num">+{cell.length - 2} more</span> : null}
             </div>
           </button>
         )

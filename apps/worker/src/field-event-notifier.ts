@@ -85,14 +85,7 @@ async function insertNotification(
     `insert into notifications (
        company_id, recipient_clerk_user_id, recipient_email, kind, subject, body_text, body_html, payload
      ) values ($1, $2, null, $3, $4, $5, null, $6::jsonb)`,
-    [
-      args.companyId,
-      args.recipientUserId,
-      args.kind,
-      args.subject,
-      args.text,
-      JSON.stringify(args.payload),
-    ],
+    [args.companyId, args.recipientUserId, args.kind, args.subject, args.text, JSON.stringify(args.payload)],
   )
 }
 

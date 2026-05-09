@@ -193,11 +193,7 @@ export function TakeoffCanvasScreen() {
             {activeBlueprint?.file_name ?? 'No blueprint'}
           </h1>
           <div className="flex items-center gap-3 shrink-0">
-            <button
-              type="button"
-              onClick={() => setCompareOpen(true)}
-              className="text-[12px] font-medium text-accent"
-            >
+            <button type="button" onClick={() => setCompareOpen(true)} className="text-[12px] font-medium text-accent">
               Compare
             </button>
             <Link to={`/projects/${projectId}/photo-measure`} className="text-[12px] font-medium text-accent">
@@ -399,11 +395,7 @@ export function TakeoffCanvasScreen() {
         </>
       )}
 
-      <PageCalibrationOverlay
-        open={calibrationOpen}
-        onClose={() => setCalibrationOpen(false)}
-        page={activePage}
-      />
+      <PageCalibrationOverlay open={calibrationOpen} onClose={() => setCalibrationOpen(false)} page={activePage} />
       <RevisionCompareStub
         open={compareOpen}
         onClose={() => setCompareOpen(false)}
@@ -421,7 +413,7 @@ export function TakeoffCanvasScreen() {
         }
         defaultUnit={
           tagSheetMeasurementId
-            ? blueprintMeasurements.find((m) => m.id === tagSheetMeasurementId)?.unit ?? undefined
+            ? (blueprintMeasurements.find((m) => m.id === tagSheetMeasurementId)?.unit ?? undefined)
             : undefined
         }
       />

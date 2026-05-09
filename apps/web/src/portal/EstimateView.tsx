@@ -69,9 +69,7 @@ export function EstimateView() {
   if (!view) {
     return (
       <Shell title="Estimate">
-        <div style={{ padding: 24, textAlign: 'center', color: 'var(--m-ink-3, #64748b)', fontSize: 14 }}>
-          Loading…
-        </div>
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--m-ink-3, #64748b)', fontSize: 14 }}>Loading…</div>
       </Shell>
     )
   }

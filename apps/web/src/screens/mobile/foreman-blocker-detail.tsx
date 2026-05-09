@@ -96,7 +96,7 @@ export function ForemanBlockerDetail({
       .then((r) => {
         if (cancelled) return
         const row =
-          'worker_issue' in r ? r.worker_issue : (r.worker_issues ?? []).find((i) => i.id === issueId) ?? null
+          'worker_issue' in r ? r.worker_issue : ((r.worker_issues ?? []).find((i) => i.id === issueId) ?? null)
         setLegacyRow(row)
       })
       .catch(() => {
@@ -162,12 +162,7 @@ export function ForemanBlockerDetail({
 
   return (
     <>
-      <MTopBar
-        back
-        title="Field event"
-        sub={project?.name}
-        onBack={() => navigate('/field')}
-      />
+      <MTopBar back title="Field event" sub={project?.name} onBack={() => navigate('/field')} />
       <MBody pad>
         {missing ? (
           <MBanner
@@ -179,7 +174,7 @@ export function ForemanBlockerDetail({
         {fe.error ? (
           <MBanner
             tone="error"
-            title={fe.outOfSync ? "Server has a newer version" : "Couldn't apply that action"}
+            title={fe.outOfSync ? 'Server has a newer version' : "Couldn't apply that action"}
             body={fe.error}
             action={
               <MButton size="sm" variant="quiet" onClick={fe.dismissError}>
@@ -193,9 +188,7 @@ export function ForemanBlockerDetail({
             {worker ? <MAvatar initials={initialsFor(worker.name)} tone={avatarToneFor(worker.id)} size="lg" /> : null}
             <div>
               <div style={{ fontSize: 16, fontWeight: 600 }}>{worker?.name ?? 'Unknown worker'}</div>
-              <div className="m-quiet-sm">
-                {createdAt ? `${shortAgo(createdAt)} · ${timeOfDay(createdAt)}` : '—'}
-              </div>
+              <div className="m-quiet-sm">{createdAt ? `${shortAgo(createdAt)} · ${timeOfDay(createdAt)}` : '—'}</div>
             </div>
           </div>
           <div style={{ borderTop: '1px solid var(--m-line)', margin: '12px 0' }} />
@@ -260,8 +253,8 @@ export function ForemanBlockerDetail({
                 </div>
                 {!fe.snapshot && !fe.isLoading ? (
                   <div className="m-quiet-sm" style={{ marginTop: 8 }}>
-                    Workflow route not available yet — the resolve action will be queued once
-                    PATCH /api/worker-issues/:id ships.
+                    Workflow route not available yet — the resolve action will be queued once PATCH
+                    /api/worker-issues/:id ships.
                   </div>
                 ) : null}
               </>

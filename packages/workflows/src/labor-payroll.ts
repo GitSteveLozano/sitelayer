@@ -220,9 +220,7 @@ export const LaborPayrollEventRequestSchema = z.object({
 
 export type LaborPayrollEventRequest = z.infer<typeof LaborPayrollEventRequestSchema>
 
-export type LaborPayrollEventParseResult =
-  | { ok: true; value: LaborPayrollEventRequest }
-  | { ok: false; error: string }
+export type LaborPayrollEventParseResult = { ok: true; value: LaborPayrollEventRequest } | { ok: false; error: string }
 
 /**
  * Parse a JSON-body Record<string, unknown> as a labor-payroll event

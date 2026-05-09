@@ -59,10 +59,7 @@ export function fetchCrewScheduleSnapshot(id: string): Promise<CrewScheduleSnaps
   return request<CrewScheduleSnapshot>(`/api/schedules/${encodeURIComponent(id)}`)
 }
 
-export function dispatchCrewScheduleEvent(
-  id: string,
-  input: CrewScheduleEventRequest,
-): Promise<CrewScheduleSnapshot> {
+export function dispatchCrewScheduleEvent(id: string, input: CrewScheduleEventRequest): Promise<CrewScheduleSnapshot> {
   return request<CrewScheduleSnapshot>(`/api/schedules/${encodeURIComponent(id)}/events`, {
     method: 'POST',
     json: input,

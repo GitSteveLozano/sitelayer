@@ -273,13 +273,7 @@ function DailyLogEditor({ log, bootstrap, onDone }: DailyLogEditorProps) {
  * foreman can see the timeline shape that will fill in once photos
  * land with `scope_step_id` metadata.
  */
-function PhotoTimeline({
-  log,
-  briefs,
-}: {
-  log: DailyLog
-  briefs: { steps: unknown }[]
-}) {
+function PhotoTimeline({ log, briefs }: { log: DailyLog; briefs: { steps: unknown }[] }) {
   const steps = useMemo<ProjectBriefStep[]>(() => {
     const first = briefs[0]
     if (!first) return []

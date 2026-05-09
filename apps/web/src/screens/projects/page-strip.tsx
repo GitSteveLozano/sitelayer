@@ -56,9 +56,7 @@ export function PageStrip({ blueprintId, activePageId, onSelectPage }: PageStrip
               <div className="px-1.5 py-1 flex items-center justify-between gap-1">
                 <span className="text-[10px] font-mono tabular-nums font-semibold">p.{page.page_number}</span>
                 <span
-                  className={`text-[9px] font-medium ${
-                    calibrated ? 'text-good' : 'text-warn'
-                  }`}
+                  className={`text-[9px] font-medium ${calibrated ? 'text-good' : 'text-warn'}`}
                   aria-label={calibrated ? 'Calibrated' : 'Uncalibrated'}
                 >
                   {calibrated ? 'cal' : 'uncal'}
@@ -85,9 +83,9 @@ export function PageStrip({ blueprintId, activePageId, onSelectPage }: PageStrip
 function isCalibrated(page: BlueprintPage): boolean {
   return Boolean(
     page.calibration_world_distance &&
-      page.calibration_x1 &&
-      page.calibration_y1 &&
-      page.calibration_x2 &&
-      page.calibration_y2,
+    page.calibration_x1 &&
+    page.calibration_y1 &&
+    page.calibration_x2 &&
+    page.calibration_y2,
   )
 }

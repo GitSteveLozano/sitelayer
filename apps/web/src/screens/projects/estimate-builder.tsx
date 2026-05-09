@@ -444,9 +444,7 @@ function LineItemRow({ line, item, pending, onEdit }: LineItemRowProps) {
           {expanded ? '−' : '+'}
         </button>
       </div>
-      {pending ? (
-        <div className="text-[10px] text-accent mt-1">Edited · saving on next debounce</div>
-      ) : null}
+      {pending ? <div className="text-[10px] text-accent mt-1">Edited · saving on next debounce</div> : null}
       {expanded ? (
         <div className="mt-2 pl-3 border-l-2 border-accent/30">
           <EstimateLineAssembly

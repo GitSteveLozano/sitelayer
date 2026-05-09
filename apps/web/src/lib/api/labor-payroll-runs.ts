@@ -92,9 +92,7 @@ const KEYS = {
 
 export const laborPayrollRunQueryKeys = KEYS
 
-export function fetchLaborPayrollRuns(
-  params: LaborPayrollRunListParams = {},
-): Promise<LaborPayrollRunListResponse> {
+export function fetchLaborPayrollRuns(params: LaborPayrollRunListParams = {}): Promise<LaborPayrollRunListResponse> {
   const search = new URLSearchParams()
   if (params.state) search.set('state', params.state)
   if (params.period_start) search.set('period_start', params.period_start)

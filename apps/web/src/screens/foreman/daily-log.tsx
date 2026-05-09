@@ -544,7 +544,7 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyProposal, attribution
     typeof window !== 'undefined' &&
     Boolean(
       (window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown }).SpeechRecognition ||
-        (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition,
+      (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition,
     )
 
   const startVoice = () => {

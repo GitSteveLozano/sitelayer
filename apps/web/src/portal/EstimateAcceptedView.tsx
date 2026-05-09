@@ -78,9 +78,7 @@ function Hero({ view }: { view: PortalEstimateView }) {
         {view.signer_name ? `Signed by ${view.signer_name}` : 'Acceptance recorded'}
         {view.accepted_at ? ` · ${formatDate(view.accepted_at)}` : ''}
       </div>
-      <div style={{ fontSize: 12, color: '#065f46' }}>
-        {view.company_name} will be in touch about next steps.
-      </div>
+      <div style={{ fontSize: 12, color: '#065f46' }}>{view.company_name} will be in touch about next steps.</div>
     </section>
   )
 }

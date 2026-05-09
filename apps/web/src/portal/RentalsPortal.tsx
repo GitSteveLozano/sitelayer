@@ -191,9 +191,7 @@ export function RentalsPortal() {
         ))}
       </div>
 
-      {filtered.length === 0 ? (
-        <div style={{ padding: 24, color: '#888' }}>No items matched your search.</div>
-      ) : null}
+      {filtered.length === 0 ? <div style={{ padding: 24, color: '#888' }}>No items matched your search.</div> : null}
     </div>
   )
 }

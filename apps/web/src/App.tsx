@@ -43,21 +43,13 @@ const TakeoffDetailScreen = lazy(() =>
 const PhotoMeasureScreen = lazy(() =>
   import('@/screens/projects/photo-measure').then((m) => ({ default: m.PhotoMeasureScreen })),
 )
-const PortalEstimateView = lazy(() =>
-  import('@/portal/EstimateView').then((m) => ({ default: m.EstimateView })),
-)
+const PortalEstimateView = lazy(() => import('@/portal/EstimateView').then((m) => ({ default: m.EstimateView })))
 const PortalEstimateAcceptedView = lazy(() =>
   import('@/portal/EstimateAcceptedView').then((m) => ({ default: m.EstimateAcceptedView })),
 )
-const PortalRentalsView = lazy(() =>
-  import('@/portal/RentalsPortal').then((m) => ({ default: m.RentalsPortal })),
-)
-const PortalRentalsCart = lazy(() =>
-  import('@/portal/RentalsCart').then((m) => ({ default: m.RentalsCart })),
-)
-const PortalRentalsConfirm = lazy(() =>
-  import('@/portal/RentalsConfirm').then((m) => ({ default: m.RentalsConfirm })),
-)
+const PortalRentalsView = lazy(() => import('@/portal/RentalsPortal').then((m) => ({ default: m.RentalsPortal })))
+const PortalRentalsCart = lazy(() => import('@/portal/RentalsCart').then((m) => ({ default: m.RentalsCart })))
+const PortalRentalsConfirm = lazy(() => import('@/portal/RentalsConfirm').then((m) => ({ default: m.RentalsConfirm })))
 const EstimateBuilderScreen = lazy(() =>
   import('@/screens/projects/estimate-builder').then((m) => ({ default: m.EstimateBuilderScreen })),
 )
@@ -175,37 +167,37 @@ export default function App() {
 function AppShellRoutes() {
   return (
     <Routes>
-                  {/* Project deep routes that need the full viewport. */}
-                  <Route path="/projects/:id/setup" element={<ProjectSetupScreen />} />
-                  <Route path="/projects/:id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />
-                  <Route path="/projects/:id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
-                  <Route path="/projects/:id/takeoff-summary" element={<TakeoffSummaryScreen />} />
-                  <Route path="/projects/:id/photo-measure" element={<PhotoMeasureScreen />} />
-                  <Route path="/projects/:id/rental-contract" element={<ProjectRentalContractScreen />} />
-                  <Route path="/projects/:id/estimate-builder" element={<EstimateBuilderScreen />} />
+      {/* Project deep routes that need the full viewport. */}
+      <Route path="/projects/:id/setup" element={<ProjectSetupScreen />} />
+      <Route path="/projects/:id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />
+      <Route path="/projects/:id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
+      <Route path="/projects/:id/takeoff-summary" element={<TakeoffSummaryScreen />} />
+      <Route path="/projects/:id/photo-measure" element={<PhotoMeasureScreen />} />
+      <Route path="/projects/:id/rental-contract" element={<ProjectRentalContractScreen />} />
+      <Route path="/projects/:id/estimate-builder" element={<EstimateBuilderScreen />} />
 
-                  {/* Admin / specialized full-screen routes — no bottom-tab
+      {/* Admin / specialized full-screen routes — no bottom-tab
                       chrome. Linked from the mobile shell elsewhere. /more
                       lives inside the shell instead so the 5-tab IA stays
                       intact when the user is in settings/catalog. */}
-                  <Route path="/financial/*" element={<FinancialRoute />} />
-                  <Route path="/bid-accuracy" element={<BidAccuracyRoute />} />
-                  <Route path="/photo" element={<PhotoRoute />} />
-                  <Route path="/live-crew" element={<LiveCrewRoute />} />
+      <Route path="/financial/*" element={<FinancialRoute />} />
+      <Route path="/bid-accuracy" element={<BidAccuracyRoute />} />
+      <Route path="/photo" element={<PhotoRoute />} />
+      <Route path="/live-crew" element={<LiveCrewRoute />} />
 
-                  {/* Onboarding + permission primes — full-screen takeovers. */}
-                  <Route path="/onboarding" element={<OnboardingRoute />} />
-                  <Route path="/permissions/location" element={<LocationPrimeRoute />} />
-                  <Route path="/permissions/notifications" element={<NotificationsPrimeRoute />} />
+      {/* Onboarding + permission primes — full-screen takeovers. */}
+      <Route path="/onboarding" element={<OnboardingRoute />} />
+      <Route path="/permissions/location" element={<LocationPrimeRoute />} />
+      <Route path="/permissions/notifications" element={<NotificationsPrimeRoute />} />
 
-                  {/* Dev-only primitive showcase. */}
-                  <Route path="/m-preview" element={<MPreviewRoute />} />
+      {/* Dev-only primitive showcase. */}
+      <Route path="/m-preview" element={<MPreviewRoute />} />
 
-                  {/* Legacy alias — original mount of the mobile shell. */}
-                  <Route path="/m/*" element={<MRoute basePath="/m" />} />
+      {/* Legacy alias — original mount of the mobile shell. */}
+      <Route path="/m/*" element={<MRoute basePath="/m" />} />
 
-                  {/* Mobile shell — canonical UX, claims everything else. */}
-                  <Route path="/*" element={<MRoute />} />
-                </Routes>
+      {/* Mobile shell — canonical UX, claims everything else. */}
+      <Route path="/*" element={<MRoute />} />
+    </Routes>
   )
 }

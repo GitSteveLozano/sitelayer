@@ -45,10 +45,9 @@ export function RevisionCompareStub({ open, onClose, projectId, initialAfterId }
     const after = initialAfterId ? list.find((b) => b.id === initialAfterId) : list[0]
     if (!after) return
     setAfterId((prev) => prev || after.id)
-    const before =
-      after.replaces_blueprint_document_id
-        ? list.find((b) => b.id === after.replaces_blueprint_document_id)
-        : list.find((b) => b.id !== after.id)
+    const before = after.replaces_blueprint_document_id
+      ? list.find((b) => b.id === after.replaces_blueprint_document_id)
+      : list.find((b) => b.id !== after.id)
     if (before) setBeforeId((prev) => prev || before.id)
   }, [open, initialAfterId, list])
 

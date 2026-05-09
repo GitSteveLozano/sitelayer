@@ -36,9 +36,7 @@ const KEYS = {
 export const estimateShareQueryKeys = KEYS
 
 export function fetchEstimateShares(projectId: string): Promise<{ shares: EstimateShareSummary[] }> {
-  return request<{ shares: EstimateShareSummary[] }>(
-    `/api/projects/${encodeURIComponent(projectId)}/estimate/shares`,
-  )
+  return request<{ shares: EstimateShareSummary[] }>(`/api/projects/${encodeURIComponent(projectId)}/estimate/shares`)
 }
 
 export function useEstimateShares(
@@ -63,10 +61,10 @@ export function createEstimateShare(
   projectId: string,
   input: CreateEstimateShareInput,
 ): Promise<EstimateShareCreateResponse> {
-  return request<EstimateShareCreateResponse>(
-    `/api/projects/${encodeURIComponent(projectId)}/estimate/share`,
-    { method: 'POST', json: input },
-  )
+  return request<EstimateShareCreateResponse>(`/api/projects/${encodeURIComponent(projectId)}/estimate/share`, {
+    method: 'POST',
+    json: input,
+  })
 }
 
 export function useCreateEstimateShare(projectId: string) {
@@ -80,10 +78,9 @@ export function useCreateEstimateShare(projectId: string) {
 }
 
 export function revokeEstimateShare(shareId: string): Promise<{ id: string; status: 'revoked' }> {
-  return request<{ id: string; status: 'revoked' }>(
-    `/api/estimate-shares/${encodeURIComponent(shareId)}/revoke`,
-    { method: 'POST' },
-  )
+  return request<{ id: string; status: 'revoked' }>(`/api/estimate-shares/${encodeURIComponent(shareId)}/revoke`, {
+    method: 'POST',
+  })
 }
 
 export function useRevokeEstimateShare(projectId: string) {

@@ -2,11 +2,7 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { createLogger } from '@sitelayer/logger'
 import type { ActiveCompany } from '../auth-types.js'
-import {
-  generateShareToken,
-  verifyShareToken,
-  type VerifyShareTokenResult,
-} from '../estimate-share-token.js'
+import { generateShareToken, verifyShareToken, type VerifyShareTokenResult } from '../estimate-share-token.js'
 import { recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
 
 const logger = createLogger('api:estimate-shares')
@@ -336,8 +332,7 @@ export async function handlePublicEstimateShareRoutes(
     const token = decodeURIComponent(acceptMatch[1] ?? '')
     const body = await ctx.readBody()
     const signer_name = typeof body.signer_name === 'string' ? body.signer_name.trim() : ''
-    const signature_data_url =
-      typeof body.signature_data_url === 'string' ? body.signature_data_url.trim() : ''
+    const signature_data_url = typeof body.signature_data_url === 'string' ? body.signature_data_url.trim() : ''
     if (!signer_name) {
       ctx.sendJson(400, { error: 'signer_name is required' })
       return true
@@ -442,8 +437,7 @@ export async function handlePublicEstimateShareRoutes(
   if (req.method === 'POST' && declineMatch) {
     const token = decodeURIComponent(declineMatch[1] ?? '')
     const body = await ctx.readBody()
-    const decline_reason =
-      typeof body.decline_reason === 'string' ? body.decline_reason.trim().slice(0, 2000) : ''
+    const decline_reason = typeof body.decline_reason === 'string' ? body.decline_reason.trim().slice(0, 2000) : ''
     if (!decline_reason) {
       ctx.sendJson(400, { error: 'decline_reason is required' })
       return true
@@ -613,10 +607,7 @@ type ShareLookupOk = { ok: true; row: EstimateShareRow }
 type ShareLookupErr = { ok: false; status: number; error: string }
 type ShareLookupResult = ShareLookupOk | ShareLookupErr
 
-function classifyShareForRecipient(
-  row: EstimateShareRow | null,
-  verify: VerifyShareTokenResult,
-): ShareLookupResult {
+function classifyShareForRecipient(row: EstimateShareRow | null, verify: VerifyShareTokenResult): ShareLookupResult {
   if (!verify.ok) return { ok: false, status: 401, error: 'invalid share token' }
   if (!row) return { ok: false, status: 404, error: 'share link not found' }
   const expiresMs = new Date(row.expires_at).getTime()
@@ -687,10 +678,7 @@ function shareStatus(row: EstimateShareRow): 'accepted' | 'declined' | 'expired'
   return 'pending'
 }
 
-function buildPortalView(
-  row: EstimateShareRow,
-  meta: { project_name: string; company_name: string },
-) {
+function buildPortalView(row: EstimateShareRow, meta: { project_name: string; company_name: string }) {
   return {
     id: row.id,
     project_name: meta.project_name,
@@ -784,11 +772,7 @@ async function maybeApplyLifecycleEvent(
   const occurredAt = new Date().toISOString()
   const nextStateVersion = project.lifecycle_state_version + 1
 
-  const setClauses: string[] = [
-    'lifecycle_state = $1',
-    'lifecycle_state_version = $2',
-    'updated_at = now()',
-  ]
+  const setClauses: string[] = ['lifecycle_state = $1', 'lifecycle_state_version = $2', 'updated_at = now()']
   const params: unknown[] = [transition.to, nextStateVersion]
   if (args.eventType === 'SEND') {
     setClauses.push(`lifecycle_sent_at = $${params.length + 1}`)

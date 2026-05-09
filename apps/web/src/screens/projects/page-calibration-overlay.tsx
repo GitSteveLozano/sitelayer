@@ -188,12 +188,8 @@ export function PageCalibrationOverlay({ open, onClose, page }: PageCalibrationO
 
         <Card tight>
           <div className="grid grid-cols-2 gap-2 text-[11px] text-ink-3">
-            <div>
-              Point 1: {p1 ? `${p1.x.toFixed(1)}, ${p1.y.toFixed(1)}` : 'tap canvas'}
-            </div>
-            <div>
-              Point 2: {p2 ? `${p2.x.toFixed(1)}, ${p2.y.toFixed(1)}` : 'tap canvas'}
-            </div>
+            <div>Point 1: {p1 ? `${p1.x.toFixed(1)}, ${p1.y.toFixed(1)}` : 'tap canvas'}</div>
+            <div>Point 2: {p2 ? `${p2.x.toFixed(1)}, ${p2.y.toFixed(1)}` : 'tap canvas'}</div>
           </div>
         </Card>
 

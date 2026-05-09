@@ -30,9 +30,7 @@ type Context = {
   error: string | null
 }
 
-type Event =
-  | { type: 'SUBMIT'; payload: CreateEstimateShareInput }
-  | { type: 'RESET' }
+type Event = { type: 'SUBMIT'; payload: CreateEstimateShareInput } | { type: 'RESET' }
 
 export function createEstimateShareMachine(projectId: string) {
   return setup({
@@ -79,8 +77,7 @@ export function createEstimateShareMachine(projectId: string) {
           onError: {
             target: 'error',
             actions: assign({
-              error: ({ event }) =>
-                event.error instanceof Error ? event.error.message : 'Could not send estimate.',
+              error: ({ event }) => (event.error instanceof Error ? event.error.message : 'Could not send estimate.'),
               result: () => null,
             }),
           },
@@ -111,10 +108,7 @@ export function useEstimateShareMachine(projectId: string) {
   const machine = useMemo(() => createEstimateShareMachine(projectId), [projectId])
   const [state, send] = useMachine(machine, { input: { projectId } })
 
-  const submit = useCallback(
-    (payload: CreateEstimateShareInput) => send({ type: 'SUBMIT', payload }),
-    [send],
-  )
+  const submit = useCallback((payload: CreateEstimateShareInput) => send({ type: 'SUBMIT', payload }), [send])
   const reset = useCallback(() => send({ type: 'RESET' }), [send])
 
   return {

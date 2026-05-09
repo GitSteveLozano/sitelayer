@@ -106,9 +106,7 @@ async function applyLaborPayrollWorkerEvent(
   client: QueueClient,
   companyId: string,
   runId: string,
-  outcome:
-    | { kind: 'succeeded'; qbo_timeactivity_ids: string[] }
-    | { kind: 'failed'; error: string },
+  outcome: { kind: 'succeeded'; qbo_timeactivity_ids: string[] } | { kind: 'failed'; error: string },
 ): Promise<LaborPayrollRunStateRow | null> {
   const lockResult = await client.query<LaborPayrollRunStateRow>(
     `select id, state, state_version, qbo_payroll_batch_ref,
@@ -244,7 +242,10 @@ export const stubLaborPayrollPush: LaborPayrollPushFn = async ({ runId, payload 
     ? ((payload as { covered_labor_entry_ids: string[] }).covered_labor_entry_ids ?? [])
     : []
   const ts = Date.now()
-  const synthetic = ids.length > 0 ? ids.map((_, i) => `STUB-TA-${runId.slice(0, 8)}-${ts}-${i}`) : [`STUB-TA-${runId.slice(0, 8)}-${ts}`]
+  const synthetic =
+    ids.length > 0
+      ? ids.map((_, i) => `STUB-TA-${runId.slice(0, 8)}-${ts}-${i}`)
+      : [`STUB-TA-${runId.slice(0, 8)}-${ts}`]
   return { qbo_timeactivity_ids: synthetic }
 }
 

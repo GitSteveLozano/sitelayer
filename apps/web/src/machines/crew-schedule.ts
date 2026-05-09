@@ -37,10 +37,7 @@ type Context = {
   outOfSync: boolean
 }
 
-type Event =
-  | { type: 'LOAD' }
-  | { type: 'DISPATCH'; event: CrewScheduleHumanEvent }
-  | { type: 'DISMISS_ERROR' }
+type Event = { type: 'LOAD' } | { type: 'DISPATCH'; event: CrewScheduleHumanEvent } | { type: 'DISMISS_ERROR' }
 
 type LoadInput = { scheduleId: string; companySlug: string }
 type DispatchInput = {

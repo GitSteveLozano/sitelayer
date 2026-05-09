@@ -30,12 +30,7 @@ import { apiGet, apiPatch } from '../api-v1-compat'
 // workflows package directly — see api-v1-compat for the convention.
 export type FieldEventState = 'open' | 'resolved' | 'escalated' | 'dismissed'
 
-export type FieldEventResolutionAction =
-  | 'order_more'
-  | 'bring_from_site'
-  | 'use_what_we_have'
-  | 'park'
-  | 'change_order'
+export type FieldEventResolutionAction = 'order_more' | 'bring_from_site' | 'use_what_we_have' | 'park' | 'change_order'
 
 export type FieldEventHumanEvent =
   | { event: 'RESOLVE'; action: FieldEventResolutionAction; message_to_worker: string }
@@ -85,10 +80,7 @@ interface MachineContext {
   outOfSync: boolean
 }
 
-type MachineEvent =
-  | { type: 'LOAD' }
-  | { type: 'DISPATCH'; event: FieldEventHumanEvent }
-  | { type: 'DISMISS_ERROR' }
+type MachineEvent = { type: 'LOAD' } | { type: 'DISPATCH'; event: FieldEventHumanEvent } | { type: 'DISMISS_ERROR' }
 
 type LoadInput = { issueId: string; companySlug: string }
 type DispatchInput = {

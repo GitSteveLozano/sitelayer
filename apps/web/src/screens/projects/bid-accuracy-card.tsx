@@ -42,9 +42,7 @@ export function BidAccuracyCard({ projectId, onDismiss }: BidAccuracyCardProps) 
 
   if (accuracy.isPending) {
     return (
-      <div className="rounded border border-dashed border-line p-3 text-[12px] text-ink-3">
-        Loading bid accuracy…
-      </div>
+      <div className="rounded border border-dashed border-line p-3 text-[12px] text-ink-3">Loading bid accuracy…</div>
     )
   }
   if (accuracy.isError || !accuracy.data || !accuracy.data.summary) {

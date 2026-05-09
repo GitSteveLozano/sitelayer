@@ -42,9 +42,7 @@ export function useAssemblyByServiceItem(code: string | null | undefined) {
   return useQuery<AssemblyDetailResponse | null>({
     queryKey: KEYS.detailFromCode(code ?? ''),
     queryFn: async () => {
-      const list = await request<AssemblyListResponse>(
-        `/api/assemblies?service_item_code=${encodeURIComponent(code!)}`,
-      )
+      const list = await request<AssemblyListResponse>(`/api/assemblies?service_item_code=${encodeURIComponent(code!)}`)
       const head = list.assemblies[0]
       if (!head) return null
       return request<AssemblyDetailResponse>(`/api/assemblies/${encodeURIComponent(head.id)}`)

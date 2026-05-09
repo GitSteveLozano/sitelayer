@@ -189,10 +189,7 @@ export type GeofenceSample = {
   at: number
 }
 
-export type GeofenceWatchTransitionError =
-  | { kind: 'permission_denied' }
-  | { kind: 'unavailable' }
-  | { kind: 'timeout' }
+export type GeofenceWatchTransitionError = { kind: 'permission_denied' } | { kind: 'unavailable' } | { kind: 'timeout' }
 
 export type GeofenceWatchOptions = GeofenceShape & {
   onEnter?: ((sample: GeofenceSample) => void) | undefined

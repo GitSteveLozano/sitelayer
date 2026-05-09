@@ -24,13 +24,7 @@ export type EstimateShareSheetProps = {
   defaultName?: string
 }
 
-export function EstimateShareSheet({
-  open,
-  onClose,
-  projectId,
-  defaultEmail,
-  defaultName,
-}: EstimateShareSheetProps) {
+export function EstimateShareSheet({ open, onClose, projectId, defaultEmail, defaultName }: EstimateShareSheetProps) {
   const [email, setEmail] = useState(defaultEmail ?? '')
   const [name, setName] = useState(defaultName ?? '')
   const [days, setDays] = useState<number>(30)
@@ -97,9 +91,7 @@ export function EstimateShareSheet({
       {/* History — only render when we have data so we don't flicker. */}
       {shares.data && shares.data.shares.length > 0 ? (
         <div className="mt-5">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-2">
-            Previously sent
-          </div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-2">Previously sent</div>
           <div className="bg-card border border-line rounded-[12px] overflow-hidden">
             {shares.data.shares.slice(0, 8).map((share) => (
               <Row
@@ -141,8 +133,8 @@ function FormPhase({
   return (
     <div className="flex flex-col gap-3">
       <p className="text-[12px] text-ink-3">
-        We'll create a unique, signed link the customer can open without an account. Accept and decline are
-        recorded with their signature.
+        We'll create a unique, signed link the customer can open without an account. Accept and decline are recorded
+        with their signature.
       </p>
 
       <Field label="Recipient email">
@@ -157,20 +149,11 @@ function FormPhase({
       </Field>
 
       <Field label="Recipient name (optional)">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="m-input"
-          placeholder="Pat Customer"
-        />
+        <input value={name} onChange={(e) => setName(e.target.value)} className="m-input" placeholder="Pat Customer" />
       </Field>
 
       <Field label="Link expires after">
-        <select
-          value={String(days)}
-          onChange={(e) => setDays(Number(e.target.value))}
-          className="m-input"
-        >
+        <select value={String(days)} onChange={(e) => setDays(Number(e.target.value))} className="m-input">
           <option value="7">7 days</option>
           <option value="14">14 days</option>
           <option value="30">30 days</option>
@@ -179,7 +162,11 @@ function FormPhase({
         </select>
       </Field>
 
-      {error ? <Banner tone="error" title="Could not send">{error}</Banner> : null}
+      {error ? (
+        <Banner tone="error" title="Could not send">
+          {error}
+        </Banner>
+      ) : null}
 
       <div className="pt-1">
         <MobileButton variant="primary" disabled={isSending || !email.trim()} onClick={onSubmit}>
@@ -236,10 +223,19 @@ function SentPhase({
 
   return (
     <div className="flex flex-col gap-3">
-      <Banner tone="ok" title="Share link created">Send it to the customer below.</Banner>
+      <Banner tone="ok" title="Share link created">
+        Send it to the customer below.
+      </Banner>
       <div className="bg-card border border-line rounded-[12px] overflow-hidden">
         {rows.map((r, i) => (
-          <Row key={i} leadingTone="accent" leading={r.icon} headline={r.headline} supporting={r.supporting} onClick={r.onClick} />
+          <Row
+            key={i}
+            leadingTone="accent"
+            leading={r.icon}
+            headline={r.headline}
+            supporting={r.supporting}
+            onClick={r.onClick}
+          />
         ))}
       </div>
       <div className="pt-1">

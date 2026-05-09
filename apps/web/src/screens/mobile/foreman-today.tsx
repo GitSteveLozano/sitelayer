@@ -255,9 +255,7 @@ function SiteCard({
   const crewSize = workers.length
   const onSiteCount = hours > 0 ? Math.min(crewSize, Math.max(1, Math.round(hours / 4))) : 0
   const expected = Math.max(crewSize, onSiteCount)
-  const progressPct = project.target_sqft_per_hr
-    ? Math.min(100, Math.round((hours / 8) * 100))
-    : null
+  const progressPct = project.target_sqft_per_hr ? Math.min(100, Math.round((hours / 8) * 100)) : null
   return (
     <div className="m-card" style={{ padding: 14 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>

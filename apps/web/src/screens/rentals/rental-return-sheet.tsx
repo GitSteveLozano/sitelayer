@@ -230,7 +230,9 @@ function PhotoSlot({
     <Card tight>
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-[12px] font-semibold">Photos {required ? <span className="text-warn">*</span> : null}</div>
+          <div className="text-[12px] font-semibold">
+            Photos {required ? <span className="text-warn">*</span> : null}
+          </div>
           <div className="text-[11px] text-ink-3 mt-0.5">
             {required ? 'Required for damaged or lost items' : 'Optional — attach evidence if useful'}
           </div>

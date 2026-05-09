@@ -123,13 +123,11 @@ const qboStateSecret = qboStateSecretCheck.stateSecret
 // QBO_STATE_SECRET in non-prod so dev fixtures keep working without an extra
 // env var; in prod we still accept the fallback but log a warning so it can
 // be rotated independently. See apps/api/src/estimate-share-token.ts.
-const estimateShareSecret =
-  process.env.ESTIMATE_SHARE_SECRET?.trim() || qboStateSecret || ''
+const estimateShareSecret = process.env.ESTIMATE_SHARE_SECRET?.trim() || qboStateSecret || ''
 if (appConfig.tier === 'prod' && !process.env.ESTIMATE_SHARE_SECRET?.trim()) {
   logger.warn('[estimate-share] ESTIMATE_SHARE_SECRET not set; falling back to QBO_STATE_SECRET')
 }
-const portalBaseUrl =
-  process.env.APP_PUBLIC_URL?.trim() || 'https://sitelayer.sandolab.xyz'
+const portalBaseUrl = process.env.APP_PUBLIC_URL?.trim() || 'https://sitelayer.sandolab.xyz'
 const clerkWebhookSecret = process.env.CLERK_WEBHOOK_SECRET?.trim() || null
 const qboWebhookVerifier = process.env.QBO_WEBHOOK_VERIFIER?.trim() || null
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)

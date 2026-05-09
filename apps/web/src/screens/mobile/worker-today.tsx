@@ -144,9 +144,7 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
       if (s.scheduled_for.slice(0, 10) !== today) return false
       if (s.status === 'confirmed') return false
       if (s.deleted_at) return false
-      const ids = Array.isArray(s.crew)
-        ? (s.crew as unknown[]).filter((x): x is string => typeof x === 'string')
-        : []
+      const ids = Array.isArray(s.crew) ? (s.crew as unknown[]).filter((x): x is string => typeof x === 'string') : []
       return ids.includes(meWorkerId)
     })
   }, [bootstrap, meWorkerId, today])
@@ -198,11 +196,7 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
                   : `${unconfirmedAssignments.length} assignments waiting for confirmation.`
               }
               action={
-                <MButton
-                  variant="primary"
-                  size="sm"
-                  onClick={() => setConfirmTarget(unconfirmedAssignments[0]!.id)}
-                >
+                <MButton variant="primary" size="sm" onClick={() => setConfirmTarget(unconfirmedAssignments[0]!.id)}>
                   Review
                 </MButton>
               }

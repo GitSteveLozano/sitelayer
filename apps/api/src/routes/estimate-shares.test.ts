@@ -65,10 +65,7 @@ class FakePool {
       const row = this.shares.find((s) => s.share_token === token) ?? null
       return { rows: row ? [this.serializeShare(row)] : [], rowCount: row ? 1 : 0 }
     }
-    if (
-      /select[\s\S]+from estimate_share_links/i.test(sql) &&
-      /project_id = \$2/.test(sql)
-    ) {
+    if (/select[\s\S]+from estimate_share_links/i.test(sql) && /project_id = \$2/.test(sql)) {
       const [companyId, projectId] = params as [string, string]
       const rows = this.shares
         .filter((s) => s.company_id === companyId && s.project_id === projectId)
@@ -366,11 +363,7 @@ describe('handleEstimateShareRoutes — POST /api/projects/:id/estimate/share', 
     seedProject(pool)
     const { ctx, responses, reads } = makeAuthCtx(pool)
     reads.push({})
-    await handleEstimateShareRoutes(
-      { method: 'POST' } as never,
-      buildUrl('/api/projects/p-1/estimate/share'),
-      ctx,
-    )
+    await handleEstimateShareRoutes({ method: 'POST' } as never, buildUrl('/api/projects/p-1/estimate/share'), ctx)
     expect(responses[0]?.status).toBe(400)
   })
 
@@ -379,11 +372,7 @@ describe('handleEstimateShareRoutes — POST /api/projects/:id/estimate/share', 
     seedProject(pool)
     const { ctx, responses, reads } = makeAuthCtx(pool)
     reads.push({ recipient_email: 'a@b.co', expires_in_days: 999 })
-    await handleEstimateShareRoutes(
-      { method: 'POST' } as never,
-      buildUrl('/api/projects/p-1/estimate/share'),
-      ctx,
-    )
+    await handleEstimateShareRoutes({ method: 'POST' } as never, buildUrl('/api/projects/p-1/estimate/share'), ctx)
     expect(responses[0]?.status).toBe(400)
   })
 
@@ -392,11 +381,7 @@ describe('handleEstimateShareRoutes — POST /api/projects/:id/estimate/share', 
     pool.companies.push({ id: 'co-1', name: 'Acme Co' })
     const { ctx, responses, reads } = makeAuthCtx(pool)
     reads.push({ recipient_email: 'a@b.co' })
-    await handleEstimateShareRoutes(
-      { method: 'POST' } as never,
-      buildUrl('/api/projects/missing/estimate/share'),
-      ctx,
-    )
+    await handleEstimateShareRoutes({ method: 'POST' } as never, buildUrl('/api/projects/missing/estimate/share'), ctx)
     expect(responses[0]?.status).toBe(404)
   })
 
@@ -405,11 +390,7 @@ describe('handleEstimateShareRoutes — POST /api/projects/:id/estimate/share', 
     seedProject(pool, { lifecycle_state: 'sent', lifecycle_state_version: 3 })
     const { ctx, responses, reads } = makeAuthCtx(pool)
     reads.push({ recipient_email: 'client@example.com' })
-    await handleEstimateShareRoutes(
-      { method: 'POST' } as never,
-      buildUrl('/api/projects/p-1/estimate/share'),
-      ctx,
-    )
+    await handleEstimateShareRoutes({ method: 'POST' } as never, buildUrl('/api/projects/p-1/estimate/share'), ctx)
     expect(responses[0]?.status).toBe(201)
     const project = pool.projects[0]!
     expect(project.lifecycle_state).toBe('sent')
@@ -450,11 +431,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     seedProject(pool)
     const { ctx, reads } = makeAuthCtx(pool)
     reads.push({ recipient_email: 'client@example.com', recipient_name: 'Client' })
-    await handleEstimateShareRoutes(
-      { method: 'POST' } as never,
-      buildUrl('/api/projects/p-1/estimate/share'),
-      ctx,
-    )
+    await handleEstimateShareRoutes({ method: 'POST' } as never, buildUrl('/api/projects/p-1/estimate/share'), ctx)
     const row = pool.shares[0]!
     return { token: row.share_token, id: row.id }
   }
@@ -463,11 +440,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     const pool = new FakePool()
     const { token } = await seedShare(pool)
     const { ctx, responses } = makePublicCtx(pool)
-    await handlePublicEstimateShareRoutes(
-      { method: 'GET' } as never,
-      buildUrl(`/portal/estimates/${token}`),
-      ctx,
-    )
+    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/portal/estimates/${token}`), ctx)
     expect(responses[0]?.status).toBe(200)
     const body = responses[0]?.body as { status: string; estimate: { lines: unknown[] }; project_name: string }
     expect(body.status).toBe('pending')
@@ -481,11 +454,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     const pool = new FakePool()
     await seedShare(pool)
     const { ctx, responses } = makePublicCtx(pool)
-    await handlePublicEstimateShareRoutes(
-      { method: 'GET' } as never,
-      buildUrl(`/portal/estimates/abc.def`),
-      ctx,
-    )
+    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/portal/estimates/abc.def`), ctx)
     expect(responses[0]?.status).toBe(401)
   })
 
@@ -494,11 +463,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     const { token } = await seedShare(pool)
     pool.shares[0]!.expires_at = new Date(Date.now() - 1000).toISOString()
     const { ctx, responses } = makePublicCtx(pool)
-    await handlePublicEstimateShareRoutes(
-      { method: 'GET' } as never,
-      buildUrl(`/portal/estimates/${token}`),
-      ctx,
-    )
+    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/portal/estimates/${token}`), ctx)
     expect(responses[0]?.status).toBe(410)
   })
 
@@ -603,11 +568,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
   it('returns false for non-portal paths so the public dispatcher keeps walking', async () => {
     const pool = new FakePool()
     const { ctx } = makePublicCtx(pool)
-    const handled = await handlePublicEstimateShareRoutes(
-      { method: 'GET' } as never,
-      buildUrl('/api/health'),
-      ctx,
-    )
+    const handled = await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl('/api/health'), ctx)
     expect(handled).toBe(false)
   })
 
@@ -616,11 +577,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     seedProject(pool)
     const { token } = generateShareToken('a-different-secret')
     const { ctx, responses } = makePublicCtx(pool)
-    await handlePublicEstimateShareRoutes(
-      { method: 'GET' } as never,
-      buildUrl(`/portal/estimates/${token}`),
-      ctx,
-    )
+    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/portal/estimates/${token}`), ctx)
     expect(responses[0]?.status).toBe(401)
   })
 })

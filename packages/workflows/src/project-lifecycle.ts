@@ -299,16 +299,7 @@ export function projectStatusToLifecycleState(value: string): ProjectLifecycleWo
 //   { event, state_version, reason? }
 // `reason` is only consumed by DECLINE; ignored elsewhere.
 export const ProjectLifecycleEventRequestSchema = z.object({
-  event: z.enum([
-    'START_ESTIMATING',
-    'SEND',
-    'ACCEPT',
-    'DECLINE',
-    'START_WORK',
-    'COMPLETE',
-    'ARCHIVE',
-    'REOPEN',
-  ]),
+  event: z.enum(['START_ESTIMATING', 'SEND', 'ACCEPT', 'DECLINE', 'START_WORK', 'COMPLETE', 'ARCHIVE', 'REOPEN']),
   state_version: z.number().int().positive(),
   reason: z.string().min(1).max(2000).optional(),
 })

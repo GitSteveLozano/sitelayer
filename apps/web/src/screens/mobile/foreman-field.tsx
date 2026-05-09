@@ -187,7 +187,11 @@ export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapR
                         <>
                           <MPill>{shortAgo(i.created_at)}</MPill>
                           <MPill tone={tone}>
-                            {resolved ? 'resolved' : photo ? 'photo' : sev ?? (i.kind === 'safety' ? 'stopped' : 'blocker')}
+                            {resolved
+                              ? 'resolved'
+                              : photo
+                                ? 'photo'
+                                : (sev ?? (i.kind === 'safety' ? 'stopped' : 'blocker'))}
                           </MPill>
                         </>
                       }
@@ -323,10 +327,7 @@ function severityFromMessage(i: IssueRow): 'question' | 'slowing' | 'stopped' | 
   return (m?.[1] as 'question' | 'slowing' | 'stopped' | undefined) ?? null
 }
 
-function sevTone(
-  sev: 'question' | 'slowing' | 'stopped' | null,
-  kind: string,
-): 'red' | 'amber' | 'blue' {
+function sevTone(sev: 'question' | 'slowing' | 'stopped' | null, kind: string): 'red' | 'amber' | 'blue' {
   if (sev === 'stopped' || kind === 'safety') return 'red'
   if (sev === 'slowing') return 'amber'
   if (sev === 'question') return 'blue'

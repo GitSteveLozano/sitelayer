@@ -146,9 +146,7 @@ export function TakeoffDetailScreen() {
 
         <Card>
           <div className="flex items-center justify-between mb-2">
-            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
-              Multi-condition tags
-            </div>
+            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Multi-condition tags</div>
             <button
               type="button"
               onClick={() => setTagSheetOpen(true)}

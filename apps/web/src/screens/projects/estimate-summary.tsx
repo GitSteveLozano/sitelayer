@@ -104,11 +104,7 @@ export function EstimateSummaryScreen({ projectId }: { projectId: string }) {
       <ProjectTimelineCard projectId={projectId} />
 
       <ShareSheet open={shareOpen} onClose={() => setShareOpen(false)} projectId={projectId} />
-      <EstimateShareSheet
-        open={clientShareOpen}
-        onClose={() => setClientShareOpen(false)}
-        projectId={projectId}
-      />
+      <EstimateShareSheet open={clientShareOpen} onClose={() => setClientShareOpen(false)} projectId={projectId} />
     </div>
   )
 }

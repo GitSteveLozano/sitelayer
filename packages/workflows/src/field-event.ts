@@ -82,12 +82,7 @@ export type FieldEventWorkflowState = 'open' | 'resolved' | 'escalated' | 'dismi
 
 export const FIELD_EVENT_WORKFLOW_NAME = 'field_event'
 export const FIELD_EVENT_WORKFLOW_SCHEMA_VERSION = 1
-export const FIELD_EVENT_ALL_STATES: readonly FieldEventWorkflowState[] = [
-  'open',
-  'resolved',
-  'escalated',
-  'dismissed',
-]
+export const FIELD_EVENT_ALL_STATES: readonly FieldEventWorkflowState[] = ['open', 'resolved', 'escalated', 'dismissed']
 // REOPEN escapes any non-open state, so nothing is truly terminal.
 export const FIELD_EVENT_TERMINAL_STATES: readonly FieldEventWorkflowState[] = []
 export const FIELD_EVENT_EVENT_TYPES = ['RESOLVE', 'ESCALATE', 'DISMISS', 'REOPEN'] as const
@@ -259,9 +254,7 @@ export function nextFieldEventEvents(
 }
 
 export function isHumanFieldEventEvent(eventType: string): eventType is FieldEventHumanEventType {
-  return (
-    eventType === 'RESOLVE' || eventType === 'ESCALATE' || eventType === 'DISMISS' || eventType === 'REOPEN'
-  )
+  return eventType === 'RESOLVE' || eventType === 'ESCALATE' || eventType === 'DISMISS' || eventType === 'REOPEN'
 }
 
 export const fieldEventWorkflow = registerWorkflow<
@@ -330,9 +323,7 @@ export const FieldEventEventRequestSchema = z.discriminatedUnion('event', [
 
 export type FieldEventEventRequest = z.infer<typeof FieldEventEventRequestSchema>
 
-export type FieldEventEventParseResult =
-  | { ok: true; value: FieldEventEventRequest }
-  | { ok: false; error: string }
+export type FieldEventEventParseResult = { ok: true; value: FieldEventEventRequest } | { ok: false; error: string }
 
 export function parseFieldEventEventRequest(body: unknown): FieldEventEventParseResult {
   const normalized: Record<string, unknown> =

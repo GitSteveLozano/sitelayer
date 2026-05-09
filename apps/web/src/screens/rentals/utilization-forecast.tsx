@@ -114,23 +114,10 @@ export function UtilizationForecast({ inventoryItemId, itemLabel, weeks = 6 }: U
             return (
               <g key={w.week_start}>
                 {idle > 0 ? (
-                  <rect
-                    x={x}
-                    y={idleY}
-                    width={barW}
-                    height={idleH}
-                    fill="var(--good, #6F8F5C)"
-                    opacity={0.45}
-                  />
+                  <rect x={x} y={idleY} width={barW} height={idleH} fill="var(--good, #6F8F5C)" opacity={0.45} />
                 ) : null}
                 {onRent > 0 ? (
-                  <rect
-                    x={x}
-                    y={onRentY}
-                    width={barW}
-                    height={onRentH}
-                    fill="var(--accent, #C77B4F)"
-                  />
+                  <rect x={x} y={onRentY} width={barW} height={onRentH} fill="var(--accent, #C77B4F)" />
                 ) : null}
                 <text
                   x={x + barW / 2}

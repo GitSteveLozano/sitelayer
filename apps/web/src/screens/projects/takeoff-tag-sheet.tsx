@@ -34,13 +34,7 @@ export interface TakeoffTagSheetProps {
   defaultUnit?: string | undefined
 }
 
-export function TakeoffTagSheet({
-  open,
-  onClose,
-  measurementId,
-  defaultQuantity,
-  defaultUnit,
-}: TakeoffTagSheetProps) {
+export function TakeoffTagSheet({ open, onClose, measurementId, defaultQuantity, defaultUnit }: TakeoffTagSheetProps) {
   const tags = useTakeoffTags(measurementId)
   const items = useServiceItems()
   const add = useAddTakeoffTag(measurementId ?? '')
@@ -235,11 +229,7 @@ export function TakeoffTagSheet({
           </Card>
         ) : (
           <div>
-            <MobileButton
-              variant="primary"
-              onClick={beginAdd}
-              disabled={availableItems.length === 0 || !measurementId}
-            >
+            <MobileButton variant="primary" onClick={beginAdd} disabled={availableItems.length === 0 || !measurementId}>
               + Add condition
             </MobileButton>
             {availableItems.length === 0 && tagRows.length > 0 ? (
@@ -251,7 +241,9 @@ export function TakeoffTagSheet({
         {error && !adding ? <div className="text-[12px] text-bad">{error}</div> : null}
 
         <div className="flex items-center justify-between pt-1">
-          <Pill tone="default">{tagRows.length} condition{tagRows.length === 1 ? '' : 's'}</Pill>
+          <Pill tone="default">
+            {tagRows.length} condition{tagRows.length === 1 ? '' : 's'}
+          </Pill>
           <button type="button" onClick={onClose} className="text-[13px] font-semibold text-accent">
             Done
           </button>
