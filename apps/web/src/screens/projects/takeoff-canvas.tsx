@@ -3,15 +3,21 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import {
+  useBlueprintPages,
   useCreateMeasurement,
   useProjectBlueprints,
   useProjectMeasurements,
   useServiceItems,
   type BlueprintDocument,
+  type BlueprintPage,
   type MeasurementGeometry,
   type ServiceItem,
   type TakeoffMeasurement,
 } from '@/lib/api'
+import { CalibrationBanner, PageCalibrationOverlay } from './page-calibration-overlay'
+import { PageStrip } from './page-strip'
+import { RevisionCompareStub } from './revision-compare-stub'
+import { TakeoffTagSheet } from './takeoff-tag-sheet'
 
 /**
  * `prj-takeoff-canvas` — mobile-first polygon / lineal / count canvas
@@ -48,6 +54,7 @@ export function TakeoffCanvasScreen() {
   const blueprintParam = searchParams.get('blueprint')
   const activeBlueprint: BlueprintDocument | null =
     (blueprints.data?.blueprints ?? []).find((b) => b.id === blueprintParam) ?? blueprints.data?.blueprints[0] ?? null
+  const blueprintPages = useBlueprintPages(activeBlueprint?.id)
 
   const setBlueprint = (id: string) => {
     const sp = new URLSearchParams(searchParams)
@@ -66,6 +73,13 @@ export function TakeoffCanvasScreen() {
   const [zoom, setZoom] = useState(1)
   const [error, setError] = useState<string | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
+  const [activePageId, setActivePageId] = useState<string | null>(null)
+  const [calibrationOpen, setCalibrationOpen] = useState(false)
+  const [compareOpen, setCompareOpen] = useState(false)
+  // Tag sheet target — `null` keeps it closed; a measurement id opens
+  // the multi-condition editor (Sitemap §5 panel 2 — "Multi-condition
+  // tags").
+  const [tagSheetMeasurementId, setTagSheetMeasurementId] = useState<string | null>(null)
 
   // Pick a default service item once the catalog loads.
   useEffect(() => {
@@ -73,6 +87,22 @@ export function TakeoffCanvasScreen() {
       setServiceItemCode(serviceItems.data.serviceItems[0].code)
     }
   }, [serviceItemCode, serviceItems.data])
+
+  // Default the active page to page 1 of the active blueprint whenever
+  // the blueprint changes. The page strip below lets the user switch.
+  const pages = blueprintPages.data?.pages ?? []
+  const activePage: BlueprintPage | null = useMemo(() => {
+    if (pages.length === 0) return null
+    return pages.find((p) => p.id === activePageId) ?? pages[0] ?? null
+  }, [pages, activePageId])
+
+  useEffect(() => {
+    // Reset selection when switching blueprint so we don't stick on a
+    // page id from the previous doc.
+    if (activePage && activePage.id !== activePageId) {
+      setActivePageId(activePage.id)
+    }
+  }, [activePage, activePageId])
 
   if (!projectId) {
     return (
@@ -163,6 +193,13 @@ export function TakeoffCanvasScreen() {
             {activeBlueprint?.file_name ?? 'No blueprint'}
           </h1>
           <div className="flex items-center gap-3 shrink-0">
+            <button
+              type="button"
+              onClick={() => setCompareOpen(true)}
+              className="text-[12px] font-medium text-accent"
+            >
+              Compare
+            </button>
             <Link to={`/projects/${projectId}/photo-measure`} className="text-[12px] font-medium text-accent">
               Photo →
             </Link>
@@ -206,6 +243,8 @@ export function TakeoffCanvasScreen() {
             </div>
           ) : null}
 
+          <CalibrationBanner page={activePage} onClickCalibrate={() => setCalibrationOpen(true)} />
+
           <div className="px-4">
             <CanvasSurface
               svgRef={svgRef}
@@ -214,8 +253,15 @@ export function TakeoffCanvasScreen() {
               onTap={onCanvasTap}
               draftPoints={draftPoints}
               measurements={blueprintMeasurements}
+              onMeasurementContext={(measurement) => setTagSheetMeasurementId(measurement.id)}
             />
           </div>
+
+          <PageStrip
+            blueprintId={activeBlueprint?.id}
+            activePageId={activePage?.id ?? null}
+            onSelectPage={(p) => setActivePageId(p.id)}
+          />
 
           <div className="px-4 pt-3 flex items-center justify-between text-[11px] text-ink-3">
             <span>
@@ -324,10 +370,61 @@ export function TakeoffCanvasScreen() {
               <Pill tone="default">{tool}</Pill>
             </div>
 
+            {blueprintMeasurements.length > 0 ? (
+              <Card tight>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">
+                  Saved measurements · long-press to tag
+                </div>
+                <ul className="divide-y divide-line">
+                  {blueprintMeasurements.map((m) => (
+                    <li key={m.id}>
+                      <button
+                        type="button"
+                        onClick={() => setTagSheetMeasurementId(m.id)}
+                        className="w-full flex items-center justify-between gap-2 py-1.5 text-left"
+                      >
+                        <span className="text-[12px] font-semibold truncate">{m.service_item_code}</span>
+                        <span className="font-mono tabular-nums text-[12px] text-ink-3">
+                          {Number(m.quantity).toFixed(2)} {m.unit}
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            ) : null}
+
             <Attribution source="POST /api/projects/:id/takeoff/measurement · geometry shared with @sitelayer/domain" />
           </div>
         </>
       )}
+
+      <PageCalibrationOverlay
+        open={calibrationOpen}
+        onClose={() => setCalibrationOpen(false)}
+        page={activePage}
+      />
+      <RevisionCompareStub
+        open={compareOpen}
+        onClose={() => setCompareOpen(false)}
+        projectId={projectId}
+        initialAfterId={activeBlueprint?.id ?? null}
+      />
+      <TakeoffTagSheet
+        open={tagSheetMeasurementId !== null}
+        onClose={() => setTagSheetMeasurementId(null)}
+        measurementId={tagSheetMeasurementId}
+        defaultQuantity={
+          tagSheetMeasurementId
+            ? Number(blueprintMeasurements.find((m) => m.id === tagSheetMeasurementId)?.quantity ?? 0)
+            : undefined
+        }
+        defaultUnit={
+          tagSheetMeasurementId
+            ? blueprintMeasurements.find((m) => m.id === tagSheetMeasurementId)?.unit ?? undefined
+            : undefined
+        }
+      />
     </div>
   )
 }
@@ -339,9 +436,23 @@ interface CanvasSurfaceProps {
   onTap: (e: ReactPointerEvent<SVGSVGElement>) => void
   draftPoints: Array<{ x: number; y: number }>
   measurements: TakeoffMeasurement[]
+  /**
+   * Right-click / context-menu / long-press on a saved measurement —
+   * the canvas raises this so the parent can open the multi-condition
+   * tag sheet for that measurement.
+   */
+  onMeasurementContext?: (measurement: TakeoffMeasurement) => void
 }
 
-function CanvasSurface({ svgRef, tool, zoom, onTap, draftPoints, measurements }: CanvasSurfaceProps) {
+function CanvasSurface({
+  svgRef,
+  tool,
+  zoom,
+  onTap,
+  draftPoints,
+  measurements,
+  onMeasurementContext,
+}: CanvasSurfaceProps) {
   const viewBoxSize = 100 / zoom
   const viewBoxOrigin = (100 - viewBoxSize) / 2
   return (
@@ -383,6 +494,15 @@ function CanvasSurface({ svgRef, tool, zoom, onTap, draftPoints, measurements }:
         {/* Saved measurements */}
         {measurements.map((m) => {
           const geo = m.geometry as MeasurementGeometry
+          // Right-click → open the multi-condition tag sheet for that
+          // measurement. We `preventDefault` so the browser's native
+          // context menu doesn't compete with our sheet.
+          const onContext = (e: React.MouseEvent<SVGElement>) => {
+            if (!onMeasurementContext) return
+            e.preventDefault()
+            e.stopPropagation()
+            onMeasurementContext(m)
+          }
           if (geo.kind === 'polygon' && geo.points && geo.points.length >= 3) {
             return (
               <polygon
@@ -390,6 +510,7 @@ function CanvasSurface({ svgRef, tool, zoom, onTap, draftPoints, measurements }:
                 points={geo.points.map((p) => `${p.x},${p.y}`).join(' ')}
                 className="fill-accent/15 stroke-accent"
                 strokeWidth={0.3}
+                onContextMenu={onContext}
               />
             )
           }
@@ -401,12 +522,13 @@ function CanvasSurface({ svgRef, tool, zoom, onTap, draftPoints, measurements }:
                 fill="none"
                 className="stroke-accent"
                 strokeWidth={0.4}
+                onContextMenu={onContext}
               />
             )
           }
           if (geo.kind === 'count' && geo.points) {
             return (
-              <g key={m.id}>
+              <g key={m.id} onContextMenu={onContext}>
                 {geo.points.map((p, i) => (
                   <circle key={i} cx={p.x} cy={p.y} r={0.6} className="fill-accent" />
                 ))}

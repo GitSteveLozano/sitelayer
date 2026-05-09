@@ -12,6 +12,8 @@ import {
   type TakeoffMeasurement,
 } from '@/lib/api'
 import { readElevation } from './takeoff-canvas'
+import { TakeoffTagSheet } from './takeoff-tag-sheet'
+import { EstimateLineAssembly } from './estimate-line-assembly'
 
 /**
  * `prj-takeoff-detail` — Sitemap §5 panel 2 ("Measurement detail").
@@ -37,6 +39,7 @@ export function TakeoffDetailScreen() {
   const deleteMutation = useDeleteMeasurement()
   const [error, setError] = useState<string | null>(null)
   const [confirm, askConfirm] = useConfirmSheet()
+  const [tagSheetOpen, setTagSheetOpen] = useState(false)
 
   const measurement: TakeoffMeasurement | undefined = useMemo(
     () => (measurements.data?.measurements ?? []).find((m) => m.id === measurementId),
@@ -141,11 +144,25 @@ export function TakeoffDetailScreen() {
           </div>
         </Card>
 
-        {tagsRows.length > 0 ? (
-          <Card>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-2">
+        <Card>
+          <div className="flex items-center justify-between mb-2">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
               Multi-condition tags
             </div>
+            <button
+              type="button"
+              onClick={() => setTagSheetOpen(true)}
+              className="text-[12px] font-semibold text-accent"
+            >
+              {tagsRows.length === 0 ? '+ Add condition' : 'Edit'}
+            </button>
+          </div>
+          {tagsRows.length === 0 ? (
+            <div className="text-[12px] text-ink-3 leading-snug">
+              One physical surface can carry several billable lines (EPS + basecoat + finish coat + air barrier). Add a
+              condition to attach a service item with its own quantity and rate.
+            </div>
+          ) : (
             <ul className="divide-y divide-line">
               {tagsRows.map((t) => (
                 <li key={t.id} className="py-2 first:pt-0 last:pb-0 flex items-center justify-between gap-2">
@@ -167,11 +184,19 @@ export function TakeoffDetailScreen() {
                 </li>
               ))}
             </ul>
-            <div className="mt-2 pt-2 border-t border-dashed border-line-2">
-              <Attribution source="GET /api/takeoff/measurements/:id/tags" />
-            </div>
-          </Card>
-        ) : null}
+          )}
+          <div className="mt-2 pt-2 border-t border-dashed border-line-2">
+            <Attribution source="GET /api/takeoff/measurements/:id/tags" />
+          </div>
+        </Card>
+
+        {/* Assembly drill-down — exposes materials + waste + labor for the
+            measurement's primary service item. Renders nothing when the
+            item has no assembly configured. */}
+        <EstimateLineAssembly
+          serviceItemCode={measurement.service_item_code}
+          lineLabel={`${Number.isFinite(qty) ? qty.toFixed(2) : '0.00'} ${measurement.unit}`}
+        />
 
         {error ? <div className="text-[12px] text-bad">{error}</div> : null}
 
@@ -187,6 +212,14 @@ export function TakeoffDetailScreen() {
           </MobileButton>
         </div>
       </div>
+
+      <TakeoffTagSheet
+        open={tagSheetOpen}
+        onClose={() => setTagSheetOpen(false)}
+        measurementId={measurement.id}
+        defaultQuantity={Number.isFinite(qty) ? qty : undefined}
+        defaultUnit={measurement.unit}
+      />
 
       {confirm}
     </div>
