@@ -28,6 +28,7 @@ import { handleQboRoutes, type IntegrationMappingRow } from './qbo.js'
 import { handleRentalInventoryRoutes } from './rental-inventory.js'
 import { handleRentalRoutes } from './rentals.js'
 import { handleScheduleRoutes } from './schedules.js'
+import { handleCrewScheduleEventRoutes } from './crew-schedule-events.js'
 import { handleServiceItemRoutes } from './service-items.js'
 import { handleSupportPacketRoutes } from './support-packets.js'
 import { handleSyncRoutes } from './sync.js'
@@ -46,6 +47,10 @@ import { handleWorkerIssueRoutes } from './worker-issues.js'
 import { handleProjectBriefRoutes } from './project-briefs.js'
 import { handleWorkerRoutes } from './workers.js'
 import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
+import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
+import { handleLaborPayrollRunRoutes } from './labor-payroll-runs.js'
+import { handleEstimateShareRoutes } from './estimate-shares.js'
+import { handleInventoryForecastRoutes } from './inventory-forecast.js'
 
 /**
  * Cross-cutting deps the route cascade needs from server.ts. Constructed
@@ -84,6 +89,10 @@ export type DispatchContext = {
     successRedirectUri: string
     stateSecret: string
     baseUrl: string
+  }
+  estimateShareConfig: {
+    secret: string
+    portalBaseUrl: string
   }
 
   // Bridges back into server.ts helpers that own ledger / mapping writes.
@@ -543,6 +552,22 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     return true
   }
 
+  // Crew schedule workflow snapshot + events (GET /:id, POST /:id/events,
+  // PATCH /:id) — mirrors rental-billing-state and time-review-runs.
+  if (
+    await handleCrewScheduleEventRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+      checkVersion,
+    })
+  ) {
+    return true
+  }
+
   // Labor entries
   if (
     await handleLaborEntryRoutes(req, url, {
@@ -612,6 +637,65 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
       readBody,
       sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Project lifecycle workflow (single 7-state machine: draft → … → archived)
+  if (
+    await handleProjectLifecycleRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Labor payroll runs (QBO TimeActivity export) — workflow snapshot + events
+  if (
+    await handleLaborPayrollRunRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Authenticated estimate share-link routes (POST /api/projects/:id/estimate/share, list, revoke)
+  if (
+    await handleEstimateShareRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+      shareSecret: ctx.estimateShareConfig.secret,
+      portalBaseUrl: ctx.estimateShareConfig.portalBaseUrl,
+    })
+  ) {
+    return true
+  }
+
+  // Inventory demand forecast — GET /api/inventory-items/:id/forecast
+  if (
+    await handleInventoryForecastRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+      checkVersion,
     })
   ) {
     return true
