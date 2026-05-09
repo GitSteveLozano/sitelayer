@@ -9,6 +9,7 @@
  * in <30 min" trigger, relaxed slightly because we don't have realtime.
  */
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { apiGet, apiPatch, type BootstrapResponse } from '../../api-v1-compat.js'
 import {
   MBody,
@@ -44,6 +45,7 @@ type IssueRow = {
 type Filter = 'all' | 'blockers' | 'photos' | 'resolved'
 
 export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
+  const navigate = useNavigate()
   const [issues, setIssues] = useState<readonly IssueRow[] | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [selected, setSelected] = useState<IssueRow | null>(null)
@@ -157,28 +159,42 @@ export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapR
                 const p = bootstrap?.projects.find((x) => x.id === i.project_id)
                 const resolved = Boolean(i.resolved_at)
                 const photo = isPhotoLog(i)
-                const tone = photo ? 'blue' : i.kind === 'safety' ? 'red' : 'amber'
+                const sev = severityFromMessage(i)
+                const tone = resolved ? 'green' : photo ? 'blue' : sevTone(sev, i.kind)
                 return (
-                  <MListRow
+                  <div
                     key={i.id}
-                    leading={
-                      w ? (
-                        <MAvatar initials={initialsFor(w.name)} tone={avatarToneFor(w.id)} size="sm" />
-                      ) : (
-                        <MI.Users size={18} />
-                      )
-                    }
-                    leadingTone={resolved ? 'green' : tone}
-                    headline={w?.name ?? 'Unknown worker'}
-                    supporting={`${p?.name ?? 'unknown'} · ${shortAgo(i.created_at)}`}
-                    trailing={
-                      <MPill tone={resolved ? 'green' : tone}>
-                        {resolved ? 'resolved' : photo ? 'photo' : i.kind === 'safety' ? 'safety' : 'blocker'}
-                      </MPill>
-                    }
-                    chev
-                    onTap={() => setSelected(i)}
-                  />
+                    style={{
+                      // 4px severity stripe on the left edge per the
+                      // foreman README — color matches the leadingTone.
+                      borderLeft: `4px solid var(--m-${tone})`,
+                      borderRadius: 4,
+                      marginBottom: 2,
+                    }}
+                  >
+                    <MListRow
+                      leading={
+                        w ? (
+                          <MAvatar initials={initialsFor(w.name)} tone={avatarToneFor(w.id)} size="sm" />
+                        ) : (
+                          <MI.Users size={18} />
+                        )
+                      }
+                      leadingTone={tone}
+                      headline={w?.name ?? 'Unknown worker'}
+                      supporting={`${p?.name ?? 'unknown'} · ${shortAgo(i.created_at)}`}
+                      trailing={
+                        <>
+                          <MPill>{shortAgo(i.created_at)}</MPill>
+                          <MPill tone={tone}>
+                            {resolved ? 'resolved' : photo ? 'photo' : sev ?? (i.kind === 'safety' ? 'stopped' : 'blocker')}
+                          </MPill>
+                        </>
+                      }
+                      chev
+                      onTap={() => navigate(`/foreman/blocker/${i.id}`)}
+                    />
+                  </div>
                 )
               })}
             </MListInset>
@@ -297,6 +313,24 @@ function ForemanIssueDetail({
 
 function isPhotoLog(i: IssueRow): boolean {
   return /^\[photo_log\]/.test(i.message)
+}
+
+/** Pulls a `[severity:...]` tag from the message body if `wk-issue` set
+ *  one. Until the worker_issues schema gets a `severity` column this is
+ *  the bridge — see worker-issue.tsx for the writer side. */
+function severityFromMessage(i: IssueRow): 'question' | 'slowing' | 'stopped' | null {
+  const m = i.message.match(/\[severity:(question|slowing|stopped)\]/)
+  return (m?.[1] as 'question' | 'slowing' | 'stopped' | undefined) ?? null
+}
+
+function sevTone(
+  sev: 'question' | 'slowing' | 'stopped' | null,
+  kind: string,
+): 'red' | 'amber' | 'blue' {
+  if (sev === 'stopped' || kind === 'safety') return 'red'
+  if (sev === 'slowing') return 'amber'
+  if (sev === 'question') return 'blue'
+  return 'amber'
 }
 
 function computeCluster(

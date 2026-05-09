@@ -11,8 +11,22 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiGet, apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
-import { MAvatar, MBody, MButton, MButtonRow, MI, MLargeHead, MTopBar, initialsFor } from '../../components/m/index.js'
+import {
+  MAvatar,
+  MBanner,
+  MBody,
+  MButton,
+  MButtonRow,
+  MI,
+  MLargeHead,
+  MPill,
+  MTopBar,
+  initialsFor,
+} from '../../components/m/index.js'
+import { Sheet } from '../../components/mobile/Sheet.js'
 import { formatRunningHours, timeOfDay, todayIso } from './format.js'
+import { useCrewSchedule } from '../../machines/crew-schedule.js'
+import { useAutoGeofenceClock, usePrimaryProjectFence } from '../../lib/geofence.js'
 
 type ClockEvent = {
   id: string
@@ -87,6 +101,58 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
   const greeting = bootstrap ? `Hey, ${bootstrap.workers[0]?.name?.split(/\s+/)[0] ?? 'crew'}` : 'Hey'
   const userInitials = initialsFor(bootstrap?.workers[0]?.name ?? 'You')
 
+  // Geofence auto-clock — wires the watcher when the worker has a fence
+  // configured and hasn't disabled it. Refreshes the clock timeline when
+  // either auto-in or auto-out lands so the running clock UI catches up.
+  const [geofenceEnabled, setGeofenceEnabled] = useState(true)
+  const { fence, projectId: fenceProjectId, projectName: fenceProjectName } = usePrimaryProjectFence(bootstrap)
+  const refreshClockEvents = useCallback(() => {
+    apiGet<{ events: ClockEvent[] }>(`/api/clock/timeline?date=${todayIso()}`, companySlug)
+      .then((res) => setEvents(res.events ?? []))
+      .catch(() => undefined)
+  }, [companySlug])
+  const geofence = useAutoGeofenceClock({
+    enabled: geofenceEnabled,
+    alreadyClockedIn: isClockedIn,
+    fence,
+    projectId: fenceProjectId,
+    onAutoIn: () => {
+      refreshClockEvents()
+      navigate('/clockin')
+    },
+  })
+  // Refresh the timeline once an exit fires (the mutation hook
+  // invalidates clock query keys but our local state needs a re-fetch).
+  useEffect(() => {
+    if (geofence.sample && !geofence.sample.inside && isClockedIn) {
+      const t = window.setTimeout(refreshClockEvents, 1500)
+      return () => window.clearTimeout(t)
+    }
+    return undefined
+  }, [geofence.sample, isClockedIn, refreshClockEvents])
+
+  // Today's unconfirmed assignments for this worker. The bootstrap
+  // ships per-company schedules, so we filter by (today, crew contains
+  // me, status=draft). The first worker row is the active worker per
+  // existing convention; when a real current-worker selector lands
+  // this picks it up automatically.
+  const today = todayIso()
+  const meWorkerId = bootstrap?.workers[0]?.id ?? null
+  const unconfirmedAssignments = useMemo(() => {
+    if (!bootstrap || !meWorkerId) return [] as Array<BootstrapResponse['schedules'][number]>
+    return bootstrap.schedules.filter((s) => {
+      if (s.scheduled_for.slice(0, 10) !== today) return false
+      if (s.status === 'confirmed') return false
+      if (s.deleted_at) return false
+      const ids = Array.isArray(s.crew)
+        ? (s.crew as unknown[]).filter((x): x is string => typeof x === 'string')
+        : []
+      return ids.includes(meWorkerId)
+    })
+  }, [bootstrap, meWorkerId, today])
+
+  const [confirmTarget, setConfirmTarget] = useState<string | null>(null)
+
   return (
     <>
       <MTopBar
@@ -100,6 +166,49 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
           title={new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
           right={<MAvatar initials={userInitials} tone="2" />}
         />
+        {geofence.error?.kind === 'permission_denied' ? (
+          <div style={{ marginTop: 8 }}>
+            <MBanner
+              tone="warn"
+              title="Location permission needed"
+              body="Allow location access to clock in automatically when you arrive on site."
+              action={
+                <MButton variant="quiet" size="sm" onClick={() => navigate('/permissions/location')}>
+                  Enable
+                </MButton>
+              }
+            />
+          </div>
+        ) : null}
+        <GeofenceChip
+          enabled={geofenceEnabled}
+          onToggle={() => setGeofenceEnabled((v) => !v)}
+          fenceConfigured={Boolean(fence)}
+          projectName={fenceProjectName}
+          inside={geofence.sample?.inside ?? null}
+        />
+        {unconfirmedAssignments.length > 0 ? (
+          <div style={{ marginTop: 8 }}>
+            <MBanner
+              tone="info"
+              title="You have a new assignment"
+              body={
+                unconfirmedAssignments.length === 1
+                  ? 'Tap to confirm or decline.'
+                  : `${unconfirmedAssignments.length} assignments waiting for confirmation.`
+              }
+              action={
+                <MButton
+                  variant="primary"
+                  size="sm"
+                  onClick={() => setConfirmTarget(unconfirmedAssignments[0]!.id)}
+                >
+                  Review
+                </MButton>
+              }
+            />
+          </div>
+        ) : null}
         {isClockedIn && project ? (
           <ClockedInCard
             project={project.name}
@@ -114,7 +223,126 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
         )}
         <FlagIssueButton onClick={() => navigate('/issue')} />
       </MBody>
+      {confirmTarget ? (
+        <ConfirmAssignmentSheet
+          scheduleId={confirmTarget}
+          companySlug={companySlug}
+          projectName={
+            bootstrap?.projects.find(
+              (p) => p.id === unconfirmedAssignments.find((s) => s.id === confirmTarget)?.project_id,
+            )?.name ?? 'Assignment'
+          }
+          onClose={() => setConfirmTarget(null)}
+        />
+      ) : null}
     </>
+  )
+}
+
+interface ConfirmAssignmentSheetProps {
+  scheduleId: string
+  companySlug: string
+  projectName: string
+  onClose: () => void
+}
+
+/**
+ * Worker-facing confirm/decline sheet for a single crew schedule. Wired
+ * through the headless `useCrewSchedule` xstate machine — DISPATCHing
+ * `CONFIRM` flips the row to `confirmed` server-side. Decline is a
+ * no-op against the workflow today (the v1 reducer only models
+ * draft → confirmed); the user-supplied reason is surfaced as a
+ * worker-issue note so the foreman sees it in the schedule view.
+ */
+function ConfirmAssignmentSheet({ scheduleId, companySlug, projectName, onClose }: ConfirmAssignmentSheetProps) {
+  const machine = useCrewSchedule(scheduleId, companySlug)
+  const [declineReason, setDeclineReason] = useState('')
+  const [submitting, setSubmitting] = useState<'confirm' | 'decline' | null>(null)
+
+  const onConfirm = useCallback(() => {
+    if (submitting) return
+    setSubmitting('confirm')
+    machine.dispatch('CONFIRM')
+  }, [machine, submitting])
+
+  // Watch the snapshot — once we transition to confirmed, close.
+  useEffect(() => {
+    if (machine.snapshot?.state === 'confirmed' && submitting === 'confirm') {
+      setSubmitting(null)
+      onClose()
+    }
+    if (!machine.isSubmitting && submitting === 'confirm' && machine.snapshot?.state !== 'confirmed') {
+      setSubmitting(null)
+    }
+  }, [machine.snapshot, machine.isSubmitting, submitting, onClose])
+
+  const onDecline = useCallback(() => {
+    if (submitting) return
+    setSubmitting('decline')
+    // The crew_schedule workflow has no DECLINE event in v1 (see
+    // packages/workflows/src/crew-schedule.ts). Persist the reason via
+    // a worker-issue note so foreman sees it on the schedule view; the
+    // v2 reducer should accept DECLINE directly. We use the existing
+    // `other` kind because the worker-issues route allowlist is
+    // `materials_out | crew_short | safety | other`.
+    void apiPost(
+      '/api/worker-issues',
+      {
+        kind: 'other',
+        message: `Declined schedule ${scheduleId}: ${declineReason.trim() || 'no reason given'}`,
+      },
+      companySlug,
+    ).catch(() => undefined)
+    setSubmitting(null)
+    onClose()
+  }, [companySlug, declineReason, onClose, scheduleId, submitting])
+
+  return (
+    <Sheet open onClose={onClose} title={projectName}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {machine.error ? <MBanner tone="error" title="Couldn't confirm" body={machine.error} /> : null}
+        {machine.outOfSync ? (
+          <MBanner
+            tone="warn"
+            title="Schedule changed"
+            body="The foreman moved this assignment. Re-check before confirming."
+          />
+        ) : null}
+        <div className="m-quiet-sm">Are you good to take this on?</div>
+        <MButtonRow>
+          <MButton variant="primary" onClick={onConfirm} disabled={submitting !== null || machine.isLoading}>
+            {submitting === 'confirm' ? 'Confirming…' : 'Confirm'}
+          </MButton>
+        </MButtonRow>
+        <div style={{ borderTop: '1px solid var(--m-line)' }} />
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span className="m-topbar-eyebrow">If you can't make it</span>
+          <textarea
+            value={declineReason}
+            onChange={(e) => setDeclineReason(e.target.value)}
+            placeholder="Reason (e.g. doctor's appointment)"
+            rows={3}
+            style={{
+              border: '1px solid var(--m-line)',
+              borderRadius: 12,
+              padding: '10px 12px',
+              fontSize: 14,
+              resize: 'vertical',
+              background: 'var(--m-card)',
+              color: 'inherit',
+            }}
+          />
+        </label>
+        <MButtonRow>
+          <MButton variant="ghost" onClick={onClose} disabled={submitting !== null}>
+            Cancel
+          </MButton>
+          <MButton variant="quiet" onClick={onDecline} disabled={submitting !== null}>
+            {submitting === 'decline' ? 'Declining…' : 'Decline'}
+          </MButton>
+        </MButtonRow>
+      </div>
+    </Sheet>
   )
 }
 
@@ -197,6 +425,52 @@ function FlagIssueButton({ onClick }: { onClick: () => void }) {
       <MI.AlertTri size={18} />
       Flag an issue
     </MButton>
+  )
+}
+
+function GeofenceChip({
+  enabled,
+  onToggle,
+  fenceConfigured,
+  projectName,
+  inside,
+}: {
+  enabled: boolean
+  onToggle: () => void
+  fenceConfigured: boolean
+  projectName: string | null
+  inside: boolean | null
+}) {
+  if (!fenceConfigured) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10 }}>
+        <MPill>Manual</MPill>
+        <span className="m-quiet-sm">Geofence not set on this site.</span>
+      </div>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        marginTop: 10,
+        background: 'transparent',
+        border: 'none',
+        padding: 0,
+        cursor: 'pointer',
+      }}
+    >
+      <MPill tone={enabled ? (inside ? 'green' : 'accent') : undefined} dot={enabled}>
+        {enabled ? (inside ? 'On site' : 'Geofence on') : 'Manual'}
+      </MPill>
+      <span className="m-quiet-sm">
+        {enabled ? `Watching ${projectName ?? 'this site'} · tap to switch to manual` : 'Tap to enable auto clock-in'}
+      </span>
+    </button>
   )
 }
 

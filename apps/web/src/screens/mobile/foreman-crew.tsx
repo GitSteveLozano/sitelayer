@@ -6,12 +6,13 @@
  * /api/clock/timeline event per worker. For Phase 8 we render from
  * bootstrap labor counts as a proxy until the timeline call is wired.
  */
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { BootstrapResponse } from '../../api-v1-compat.js'
+import type { BootstrapResponse, WorkerRow } from '../../api-v1-compat.js'
 import {
   MAvatar,
   MBody,
+  MButton,
   MChip,
   MChipRow,
   MI,
@@ -26,10 +27,36 @@ import {
 import { formatDecimalHours, todayIso } from './format.js'
 
 type GroupBy = 'site' | 'person' | 'map'
+type StatusFilter = 'all' | 'on_site' | 'on_break' | 'off_clock'
+type WorkerStatus = 'on_site' | 'on_break' | 'off_clock'
+
+/** Returns the live status dot color/label for a worker.
+ *  on_site (green): 0 < hours <= 8 today
+ *  on_break (amber): hours > 8 today (proxy for "still here past a shift")
+ *  off_clock (gray): no hours today */
+function statusFor(hours: number): WorkerStatus {
+  if (hours <= 0) return 'off_clock'
+  if (hours > 8) return 'on_break'
+  return 'on_site'
+}
+
+const STATUS_TONE: Record<WorkerStatus, 'green' | 'amber' | undefined> = {
+  on_site: 'green',
+  on_break: 'amber',
+  off_clock: undefined,
+}
+
+const STATUS_LABEL: Record<WorkerStatus, string> = {
+  on_site: 'on site',
+  on_break: 'on break',
+  off_clock: 'off-clock',
+}
 
 export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const navigate = useNavigate()
   const [grp, setGrp] = useState<GroupBy>('site')
+  const [filter, setFilter] = useState<StatusFilter>('all')
+  const [actionWorker, setActionWorker] = useState<WorkerRow | null>(null)
   const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
   const workers = useMemo(() => bootstrap?.workers ?? [], [bootstrap?.workers])
   const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
@@ -45,8 +72,14 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
     return map
   }, [labor, today])
 
-  const onSite = workers.filter((w) => (todayHoursByWorker.get(w.id) ?? 0) > 0)
-  const offClock = workers.length - onSite.length
+  const onSiteCount = workers.filter((w) => statusFor(todayHoursByWorker.get(w.id) ?? 0) === 'on_site').length
+  const onBreakCount = workers.filter((w) => statusFor(todayHoursByWorker.get(w.id) ?? 0) === 'on_break').length
+  const offClock = workers.length - onSiteCount - onBreakCount
+
+  const visibleWorkers = useMemo(() => {
+    if (filter === 'all') return workers
+    return workers.filter((w) => statusFor(todayHoursByWorker.get(w.id) ?? 0) === filter)
+  }, [workers, todayHoursByWorker, filter])
 
   return (
     <>
@@ -65,9 +98,14 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
             Crew · today
           </div>
           <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>
-            {onSite.length} of {workers.length} on site
-            {offClock > 0 ? (
+            {onSiteCount} of {workers.length} on site
+            {onBreakCount > 0 ? (
               <span style={{ color: 'var(--m-amber)', fontSize: 13, fontWeight: 600, marginLeft: 6 }}>
+                · {onBreakCount} on break
+              </span>
+            ) : null}
+            {offClock > 0 ? (
+              <span style={{ color: 'var(--m-ink-3)', fontSize: 13, fontWeight: 600, marginLeft: 6 }}>
                 · {offClock} off-clock
               </span>
             ) : null}
@@ -84,6 +122,22 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
             Map
           </MChip>
         </MChipRow>
+        {grp === 'person' ? (
+          <MChipRow>
+            <MChip active={filter === 'all'} onClick={() => setFilter('all')} count={workers.length}>
+              All
+            </MChip>
+            <MChip active={filter === 'on_site'} onClick={() => setFilter('on_site')} count={onSiteCount}>
+              On site
+            </MChip>
+            <MChip active={filter === 'on_break'} onClick={() => setFilter('on_break')} count={onBreakCount}>
+              On break
+            </MChip>
+            <MChip active={filter === 'off_clock'} onClick={() => setFilter('off_clock')} count={offClock}>
+              Off clock
+            </MChip>
+          </MChipRow>
+        ) : null}
         {grp === 'map' ? (
           <ForemanCrewMap
             projects={projects}
@@ -94,29 +148,23 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
           />
         ) : grp === 'person' ? (
           <>
-            <MSectionH>All crew</MSectionH>
+            <MSectionH>{filter === 'all' ? 'All crew' : STATUS_LABEL[filter]}</MSectionH>
             <MListInset>
-              {workers.map((w) => {
+              {visibleWorkers.map((w) => {
                 const hrs = todayHoursByWorker.get(w.id) ?? 0
-                const isOn = hrs > 0
+                const status = statusFor(hrs)
+                const tone = STATUS_TONE[status]
                 return (
-                  <MListRow
+                  <CrewPersonRow
                     key={w.id}
-                    leading={<MAvatar initials={initialsFor(w.name)} tone={avatarToneFor(w.id)} size="sm" />}
-                    headline={w.name}
-                    supporting={w.role ?? 'Crew'}
-                    trailing={
-                      isOn ? (
-                        <>
-                          <span className="num">{formatDecimalHours(hrs, 1)}</span>
-                          <MPill tone="green" dot>
-                            on site
-                          </MPill>
-                        </>
-                      ) : (
-                        <MPill>off-clock</MPill>
-                      )
-                    }
+                    name={w.name}
+                    role={w.role ?? 'Crew'}
+                    initials={initialsFor(w.name)}
+                    avatarTone={avatarToneFor(w.id)}
+                    hours={hrs}
+                    statusLabel={STATUS_LABEL[status]}
+                    pillTone={tone}
+                    onLongPress={() => setActionWorker(w)}
                   />
                 )
               })}
@@ -181,7 +229,152 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
           </div>
         )}
       </MBody>
+      {actionWorker ? (
+        <CrewQuickActions
+          worker={actionWorker}
+          onClose={() => setActionWorker(null)}
+          onMessage={() => {
+            // TODO: wire to a worker-message endpoint when one exists.
+            // For now the foreman writes the message inside the issue
+            // detail surface. Surfaced as a TODO so reviewers see this.
+            setActionWorker(null)
+          }}
+          onAdjustHours={() => {
+            navigate('/time')
+            setActionWorker(null)
+          }}
+        />
+      ) : null}
     </>
+  )
+}
+
+function CrewPersonRow({
+  name,
+  role,
+  initials,
+  avatarTone,
+  hours,
+  statusLabel,
+  pillTone,
+  onLongPress,
+}: {
+  name: string
+  role: string
+  initials: string
+  avatarTone: '2' | '3' | '4' | '5' | undefined
+  hours: number
+  statusLabel: string
+  pillTone: 'green' | 'amber' | undefined
+  onLongPress: () => void
+}) {
+  // Long-press detection — 600ms hold without significant movement
+  // triggers the quick-actions sheet. Click still drills into a future
+  // person sheet (left as a navigate stub).
+  const timerRef = useRef<number | null>(null)
+  const triggeredRef = useRef(false)
+  const start = () => {
+    triggeredRef.current = false
+    timerRef.current = window.setTimeout(() => {
+      triggeredRef.current = true
+      onLongPress()
+    }, 600)
+  }
+  const cancel = () => {
+    if (timerRef.current !== null) {
+      window.clearTimeout(timerRef.current)
+      timerRef.current = null
+    }
+  }
+  return (
+    <div
+      onPointerDown={start}
+      onPointerUp={cancel}
+      onPointerLeave={cancel}
+      onPointerCancel={cancel}
+      onContextMenu={(e) => {
+        // Right-click on desktop — fire long-press equivalent and
+        // suppress the browser menu so the sheet works in the preview.
+        e.preventDefault()
+        onLongPress()
+      }}
+    >
+      <MListRow
+        leading={<MAvatar initials={initials} tone={avatarTone} size="sm" />}
+        headline={name}
+        supporting={role}
+        trailing={
+          hours > 0 ? (
+            <>
+              <span className="num">{formatDecimalHours(hours, 1)}</span>
+              <MPill tone={pillTone} dot={Boolean(pillTone)}>
+                {statusLabel}
+              </MPill>
+            </>
+          ) : (
+            <MPill>{statusLabel}</MPill>
+          )
+        }
+      />
+    </div>
+  )
+}
+
+function CrewQuickActions({
+  worker,
+  onClose,
+  onMessage,
+  onAdjustHours,
+}: {
+  worker: WorkerRow
+  onClose: () => void
+  onMessage: () => void
+  onAdjustHours: () => void
+}) {
+  return (
+    <div
+      role="dialog"
+      aria-label={`Actions for ${worker.name}`}
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        background: 'rgba(0,0,0,0.45)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+        zIndex: 50,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: '100%',
+          maxWidth: 480,
+          background: 'var(--m-card)',
+          borderTopLeftRadius: 16,
+          borderTopRightRadius: 16,
+          padding: 16,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}
+      >
+        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 4 }}>{worker.name}</div>
+        <div className="m-quiet-sm" style={{ marginBottom: 8 }}>
+          {worker.role ?? 'Crew'}
+        </div>
+        <MButton variant="ghost" onClick={onMessage}>
+          <MI.Mic size={16} /> Send message · TODO endpoint
+        </MButton>
+        <MButton variant="ghost" onClick={onAdjustHours}>
+          <MI.Clock size={16} /> Adjust hours
+        </MButton>
+        <MButton variant="quiet" onClick={onClose}>
+          Cancel
+        </MButton>
+      </div>
+    </div>
   )
 }
 
