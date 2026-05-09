@@ -11,6 +11,8 @@ import {
   type InventoryItem,
 } from '@/lib/api'
 import { BarcodeScannerSheet, isBarcodeScanSupported } from './barcode-scanner'
+import { RentalReturnSheet } from './rental-return-sheet'
+import { RentalTransferSheet } from './rental-transfer-sheet'
 
 /**
  * `rnt-scan-dispatch` — worker scan-driven dispatch flow.
@@ -46,6 +48,12 @@ export function RentalsScanScreen() {
   const [posted, setPosted] = useState<boolean>(false)
   const [cameraOpen, setCameraOpen] = useState(false)
   const cameraSupported = useMemo(() => isBarcodeScanSupported(), [])
+  // Optional reconcile sheets — opened by paste-id affordance for the
+  // foreman who's just received a return and needs to record damage/lost
+  // counts. Wires to POST /api/rentals/:id/return and POST /api/rentals/:id/transfer.
+  const [reconcileRentalId, setReconcileRentalId] = useState<string>('')
+  const [returnSheetOpen, setReturnSheetOpen] = useState(false)
+  const [transferSheetOpen, setTransferSheetOpen] = useState(false)
   // Return-condition check state — only meaningful when movementType ===
   // 'return'. Persisted into scan_payload as `{ scan: ..., condition:
   // { frame: 'ok' | 'flag' | 'na', ... } }` so the audit row carries
@@ -255,6 +263,36 @@ export function RentalsScanScreen() {
         ) : null}
       </div>
 
+      {/*
+        Reconcile-return entrypoint — paste a rental id to receive a return
+        with structured good/damaged/lost counts. Mounted here so the same
+        scan screen the foreman is already on can also handle the
+        "shipment came back, log the damage" path without bouncing them
+        to a separate route.
+      */}
+      <Card>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Reconcile return</div>
+        <div className="text-[11px] text-ink-3 mt-1">
+          Paste an Avontus-style rental id to record returned counts (good / damaged / lost) or transfer it to another
+          project.
+        </div>
+        <input
+          type="text"
+          value={reconcileRentalId}
+          onChange={(e) => setReconcileRentalId(e.target.value.trim())}
+          placeholder="rental id (uuid)"
+          className="mt-2 w-full text-[13px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
+        />
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <MobileButton variant="ghost" disabled={!reconcileRentalId} onClick={() => setReturnSheetOpen(true)}>
+            Return
+          </MobileButton>
+          <MobileButton variant="ghost" disabled={!reconcileRentalId} onClick={() => setTransferSheetOpen(true)}>
+            Transfer
+          </MobileButton>
+        </div>
+      </Card>
+
       <BarcodeScannerSheet
         open={cameraOpen}
         onClose={() => setCameraOpen(false)}
@@ -263,6 +301,22 @@ export function RentalsScanScreen() {
           setCameraOpen(false)
         }}
       />
+
+      {reconcileRentalId ? (
+        <>
+          <RentalReturnSheet
+            open={returnSheetOpen}
+            onClose={() => setReturnSheetOpen(false)}
+            rentalId={reconcileRentalId}
+          />
+          <RentalTransferSheet
+            open={transferSheetOpen}
+            onClose={() => setTransferSheetOpen(false)}
+            rentalId={reconcileRentalId}
+            currentProjectId={projectId || null}
+          />
+        </>
+      ) : null}
     </div>
   )
 }

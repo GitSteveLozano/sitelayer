@@ -465,3 +465,102 @@ export function useGenerateBillingRun(contractId: string) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['billing-runs'] }),
   })
 }
+
+// ---------------------------------------------------------------------------
+// Returns reconciliation (Phase 5: rental returns + transfer)
+// ---------------------------------------------------------------------------
+
+export interface RentalReturnRequest {
+  qty_good: number
+  qty_damaged: number
+  qty_lost: number
+  damage_photos: string[]
+  damage_charges_cents: number
+  original_qty?: number
+}
+
+export interface RentalRow {
+  id: string
+  company_id: string
+  project_id: string | null
+  customer_id: string | null
+  item_description: string
+  daily_rate: string
+  delivered_on: string
+  returned_on: string | null
+  invoice_cadence_days: number
+  status: string
+  notes: string | null
+  qty_good: number | null
+  qty_damaged: number | null
+  qty_lost: number | null
+  damage_photos: string[]
+  damage_charges_cents: string
+  damage_work_order_id: string | null
+  transferred_from_rental_id: string | null
+  version: number
+}
+
+export function useRentalReturn(rentalId: string) {
+  const qc = useQueryClient()
+  return useMutation<RentalRow, Error, RentalReturnRequest>({
+    mutationFn: (input) =>
+      request<RentalRow>(`/api/rentals/${encodeURIComponent(rentalId)}/return`, {
+        method: 'POST',
+        json: input,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['rentals'] })
+      qc.invalidateQueries({ queryKey: ['inventory'] })
+    },
+  })
+}
+
+export interface RentalTransferRequest {
+  to_project_id: string
+  transferred_at?: string
+}
+
+export interface RentalTransferResponse {
+  closed: RentalRow
+  created: RentalRow
+}
+
+export function useRentalTransfer(rentalId: string) {
+  const qc = useQueryClient()
+  return useMutation<RentalTransferResponse, Error, RentalTransferRequest>({
+    mutationFn: (input) =>
+      request<RentalTransferResponse>(`/api/rentals/${encodeURIComponent(rentalId)}/transfer`, {
+        method: 'POST',
+        json: input,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['rentals'] })
+      qc.invalidateQueries({ queryKey: ['inventory'] })
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Demand forecast (utilization view, 6-week SVG chart)
+// ---------------------------------------------------------------------------
+
+export interface ForecastWeek {
+  week_start: string
+  projected_on_rent_qty: string
+  projected_idle_qty: string
+}
+
+export interface ForecastResponse {
+  inventory_item_id: string
+  weeks: ForecastWeek[]
+}
+
+export function useInventoryForecast(itemId: string | null | undefined, weeks = 6) {
+  return useQuery<ForecastResponse>({
+    queryKey: ['inventory', 'forecast', itemId ?? '', weeks],
+    queryFn: () =>
+      request<ForecastResponse>(`/api/inventory-items/${encodeURIComponent(itemId!)}/forecast?weeks=${weeks}`),
+    enabled: Boolean(itemId),
+  })
+}
