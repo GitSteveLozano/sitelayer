@@ -98,7 +98,7 @@ async function portalRequest<T>(path: string, init: RequestInit = {}): Promise<T
 }
 
 export function fetchPortalEstimate(shareToken: string): Promise<PortalEstimateView> {
-  return portalRequest<PortalEstimateView>(`/portal/estimates/${encodeURIComponent(shareToken)}`)
+  return portalRequest<PortalEstimateView>(`/api/portal/estimates/${encodeURIComponent(shareToken)}`)
 }
 
 export type PortalAcceptResponse = {
@@ -112,7 +112,7 @@ export function postPortalAccept(
   shareToken: string,
   payload: { signer_name: string; signature_data_url: string },
 ): Promise<PortalAcceptResponse> {
-  return portalRequest<PortalAcceptResponse>(`/portal/estimates/${encodeURIComponent(shareToken)}/accept`, {
+  return portalRequest<PortalAcceptResponse>(`/api/portal/estimates/${encodeURIComponent(shareToken)}/accept`, {
     method: 'POST',
     body: JSON.stringify(payload),
   })
@@ -129,7 +129,7 @@ export function postPortalDecline(
   shareToken: string,
   payload: { decline_reason: string },
 ): Promise<PortalDeclineResponse> {
-  return portalRequest<PortalDeclineResponse>(`/portal/estimates/${encodeURIComponent(shareToken)}/decline`, {
+  return portalRequest<PortalDeclineResponse>(`/api/portal/estimates/${encodeURIComponent(shareToken)}/decline`, {
     method: 'POST',
     body: JSON.stringify(payload),
   })

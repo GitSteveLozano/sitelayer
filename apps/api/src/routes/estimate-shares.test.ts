@@ -436,11 +436,11 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     return { token: row.share_token, id: row.id }
   }
 
-  it('GET /portal/estimates/:token returns the snapshot + bumps view_count on first view', async () => {
+  it('GET /api/portal/estimates/:token returns the snapshot + bumps view_count on first view', async () => {
     const pool = new FakePool()
     const { token } = await seedShare(pool)
     const { ctx, responses } = makePublicCtx(pool)
-    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/portal/estimates/${token}`), ctx)
+    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/api/portal/estimates/${token}`), ctx)
     expect(responses[0]?.status).toBe(200)
     const body = responses[0]?.body as { status: string; estimate: { lines: unknown[] }; project_name: string }
     expect(body.status).toBe('pending')
@@ -454,7 +454,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     const pool = new FakePool()
     await seedShare(pool)
     const { ctx, responses } = makePublicCtx(pool)
-    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/portal/estimates/abc.def`), ctx)
+    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/api/portal/estimates/abc.def`), ctx)
     expect(responses[0]?.status).toBe(401)
   })
 
@@ -463,7 +463,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     const { token } = await seedShare(pool)
     pool.shares[0]!.expires_at = new Date(Date.now() - 1000).toISOString()
     const { ctx, responses } = makePublicCtx(pool)
-    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/portal/estimates/${token}`), ctx)
+    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/api/portal/estimates/${token}`), ctx)
     expect(responses[0]?.status).toBe(410)
   })
 
@@ -480,7 +480,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     })
     await handlePublicEstimateShareRoutes(
       { method: 'POST' } as never,
-      buildUrl(`/portal/estimates/${token}/accept`),
+      buildUrl(`/api/portal/estimates/${token}/accept`),
       ctx,
     )
     expect(responses[0]?.status).toBe(200)
@@ -501,7 +501,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     })
     await handlePublicEstimateShareRoutes(
       { method: 'POST' } as never,
-      buildUrl(`/portal/estimates/${token}/accept`),
+      buildUrl(`/api/portal/estimates/${token}/accept`),
       first.ctx,
     )
     const acceptedAt = pool.shares[0]!.accepted_at
@@ -513,7 +513,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     })
     await handlePublicEstimateShareRoutes(
       { method: 'POST' } as never,
-      buildUrl(`/portal/estimates/${token}/accept`),
+      buildUrl(`/api/portal/estimates/${token}/accept`),
       second.ctx,
     )
     expect(second.responses[0]?.status).toBe(200)
@@ -529,7 +529,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     reads.push({ signer_name: 'X', signature_data_url: 'not-a-data-url' })
     await handlePublicEstimateShareRoutes(
       { method: 'POST' } as never,
-      buildUrl(`/portal/estimates/${token}/accept`),
+      buildUrl(`/api/portal/estimates/${token}/accept`),
       ctx,
     )
     expect(responses[0]?.status).toBe(400)
@@ -542,7 +542,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     reads.push({ decline_reason: 'too expensive' })
     await handlePublicEstimateShareRoutes(
       { method: 'POST' } as never,
-      buildUrl(`/portal/estimates/${token}/decline`),
+      buildUrl(`/api/portal/estimates/${token}/decline`),
       ctx,
     )
     expect(responses[0]?.status).toBe(200)
@@ -559,7 +559,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     reads.push({ decline_reason: 'wait, no' })
     await handlePublicEstimateShareRoutes(
       { method: 'POST' } as never,
-      buildUrl(`/portal/estimates/${token}/decline`),
+      buildUrl(`/api/portal/estimates/${token}/decline`),
       ctx,
     )
     expect(responses[0]?.status).toBe(409)
@@ -577,7 +577,7 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     seedProject(pool)
     const { token } = generateShareToken('a-different-secret')
     const { ctx, responses } = makePublicCtx(pool)
-    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/portal/estimates/${token}`), ctx)
+    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/api/portal/estimates/${token}`), ctx)
     expect(responses[0]?.status).toBe(401)
   })
 })

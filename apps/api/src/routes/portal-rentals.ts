@@ -9,10 +9,10 @@ import { withMutationTx } from '../mutation-tx.js'
  * holding a signed share token — no Bearer JWT exists for them.
  *
  * Surfaces:
- *   GET  /portal/rentals/:share_token/catalog  — public read of the company's
+ *   GET  /api/portal/rentals/:share_token/catalog  — public read of the company's
  *        active inventory_items (id/code/description/category/unit/rate/replacement
  *        only, no internal fields).
- *   POST /portal/rentals/:share_token/reserve  — appends a row to
+ *   POST /api/portal/rentals/:share_token/reserve  — appends a row to
  *        rental_requests (status='pending') for operator review. No live
  *        confirmation; the operator approves out-of-band.
  *
@@ -70,8 +70,8 @@ export async function handlePortalRentalRoutes(
   url: URL,
   ctx: PortalRentalsRouteCtx,
 ): Promise<boolean> {
-  // GET /portal/rentals/:share_token/catalog
-  const catalogMatch = url.pathname.match(/^\/portal\/rentals\/([^/]+)\/catalog$/)
+  // GET /api/portal/rentals/:share_token/catalog
+  const catalogMatch = url.pathname.match(/^\/api\/portal\/rentals\/([^/]+)\/catalog$/)
   if (req.method === 'GET' && catalogMatch) {
     const shareToken = decodeURIComponent(catalogMatch[1]!)
     const resolution = await resolveShareLink(ctx.pool, shareToken)
@@ -104,8 +104,8 @@ export async function handlePortalRentalRoutes(
     return true
   }
 
-  // POST /portal/rentals/:share_token/reserve
-  const reserveMatch = url.pathname.match(/^\/portal\/rentals\/([^/]+)\/reserve$/)
+  // POST /api/portal/rentals/:share_token/reserve
+  const reserveMatch = url.pathname.match(/^\/api\/portal\/rentals\/([^/]+)\/reserve$/)
   if (req.method === 'POST' && reserveMatch) {
     const shareToken = decodeURIComponent(reserveMatch[1]!)
     const resolution = await resolveShareLink(ctx.pool, shareToken)

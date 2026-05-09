@@ -28,12 +28,22 @@ const logger = createLogger('api:estimate-shares')
  *     → set expires_at = now() so subsequent portal lookups 410.
  *
  * Public surface (no Clerk auth, see handlePublicEstimateShareRoutes):
- *   GET /portal/estimates/:share_token
- *   POST /portal/estimates/:share_token/accept
- *   POST /portal/estimates/:share_token/decline
+ *   GET  /api/portal/estimates/:share_token
+ *   POST /api/portal/estimates/:share_token/accept
+ *   POST /api/portal/estimates/:share_token/decline
+ *
+ * The CUSTOMER-FACING URL stays /portal/estimates/:share_token (a React
+ * Router route in apps/web/src/portal/EstimateView.tsx). The React screen
+ * fetches the API endpoints under /api/portal/* — Caddy routes /api/* to
+ * the API container, so the API surface MUST live under /api/* to be
+ * reachable through the production reverse proxy.
  */
 
+// Customer-facing URL prefix (React Router route, served by the SPA).
+// Used to construct the share_url that's emailed/sent to the recipient.
 export const PORTAL_ESTIMATES_PATH_PREFIX = '/portal/estimates/'
+// API endpoint prefix (handled by handlePublicEstimateShareRoutes).
+export const API_PORTAL_ESTIMATES_PATH_PREFIX = '/api/portal/estimates/'
 
 type EstimateLineSnapshot = {
   service_item_code: string
@@ -296,10 +306,10 @@ export async function handlePublicEstimateShareRoutes(
   url: URL,
   ctx: PublicEstimateShareCtx,
 ): Promise<boolean> {
-  if (!url.pathname.startsWith(PORTAL_ESTIMATES_PATH_PREFIX)) return false
+  if (!url.pathname.startsWith(API_PORTAL_ESTIMATES_PATH_PREFIX)) return false
 
-  // GET /portal/estimates/:token
-  const getMatch = url.pathname.match(/^\/portal\/estimates\/([^/]+)$/)
+  // GET /api/portal/estimates/:token
+  const getMatch = url.pathname.match(/^\/api\/portal\/estimates\/([^/]+)$/)
   if (req.method === 'GET' && getMatch) {
     const token = decodeURIComponent(getMatch[1] ?? '')
     const lookup = await loadShareByToken(ctx.pool, ctx.shareSecret, token)
@@ -326,8 +336,8 @@ export async function handlePublicEstimateShareRoutes(
     return true
   }
 
-  // POST /portal/estimates/:token/accept
-  const acceptMatch = url.pathname.match(/^\/portal\/estimates\/([^/]+)\/accept$/)
+  // POST /api/portal/estimates/:token/accept
+  const acceptMatch = url.pathname.match(/^\/api\/portal\/estimates\/([^/]+)\/accept$/)
   if (req.method === 'POST' && acceptMatch) {
     const token = decodeURIComponent(acceptMatch[1] ?? '')
     const body = await ctx.readBody()
@@ -432,8 +442,8 @@ export async function handlePublicEstimateShareRoutes(
     return true
   }
 
-  // POST /portal/estimates/:token/decline
-  const declineMatch = url.pathname.match(/^\/portal\/estimates\/([^/]+)\/decline$/)
+  // POST /api/portal/estimates/:token/decline
+  const declineMatch = url.pathname.match(/^\/api\/portal\/estimates\/([^/]+)\/decline$/)
   if (req.method === 'POST' && declineMatch) {
     const token = decodeURIComponent(declineMatch[1] ?? '')
     const body = await ctx.readBody()

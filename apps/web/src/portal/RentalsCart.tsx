@@ -32,7 +32,7 @@ async function postReserve(
     notes: string | null
   },
 ): Promise<ReserveResponse> {
-  const url = `${API_URL}/portal/rentals/${encodeURIComponent(shareToken)}/reserve`
+  const url = `${API_URL}/api/portal/rentals/${encodeURIComponent(shareToken)}/reserve`
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json; charset=utf-8' },

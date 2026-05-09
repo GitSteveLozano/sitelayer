@@ -58,7 +58,7 @@ export function writeCart(cart: PortalCartLine[]): void {
 }
 
 async function fetchCatalog(shareToken: string): Promise<{ items: PortalCatalogItem[] }> {
-  const url = `${API_URL}/portal/rentals/${encodeURIComponent(shareToken)}/catalog`
+  const url = `${API_URL}/api/portal/rentals/${encodeURIComponent(shareToken)}/catalog`
   const response = await fetch(url, { method: 'GET' })
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { error?: string } | null

@@ -114,8 +114,9 @@ export function isRateLimitExempt(pathname: string): boolean {
   // bandwidth — a separate per-IP limiter should be added inline if abuse
   // becomes an issue, but the global per-user/per-IP `/api/*` bucket would
   // accidentally lock out a legitimate customer who shares a NAT with API
-  // callers.
-  if (pathname.startsWith('/portal/')) return true
+  // callers. Path is /api/portal/* so Caddy proxies it to the API container
+  // (Caddyfile only routes /api/* and /health to the API).
+  if (pathname.startsWith('/api/portal/')) return true
   return false
 }
 
