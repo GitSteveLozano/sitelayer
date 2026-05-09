@@ -188,3 +188,46 @@ export function useProjectSummary(
     ...options,
   })
 }
+
+/**
+ * Foreman morning briefs for a project (`fm-brief`). Wraps GET
+ * /api/projects/:id/briefs?date=YYYY-MM-DD. Used by the daily-log
+ * auto-assembly fallback to seed `scope_progress` from the morning
+ * brief when the AI agent hasn't run yet, and by `wk-today` /
+ * `wk-scope` to surface yesterday's brief to the worker.
+ *
+ * The `useCreateProjectBrief` mutation lives in ./project-briefs.ts —
+ * this is the read side, kept here so callers share one query key.
+ */
+export interface ProjectBrief {
+  id: string
+  company_id: string
+  project_id: string
+  foreman_user_id: string
+  effective_date: string
+  goal: string
+  steps: unknown
+  crew: unknown
+  materials: unknown
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ProjectBriefListResponse {
+  briefs: ProjectBrief[]
+}
+
+export function useProjectBriefs(
+  projectId: string | null | undefined,
+  date?: string,
+  options?: Partial<UseQueryOptions<ProjectBriefListResponse>>,
+) {
+  const qs = date ? `?date=${encodeURIComponent(date)}` : ''
+  return useQuery<ProjectBriefListResponse>({
+    queryKey: ['projects', 'briefs', projectId ?? '', date ?? ''],
+    queryFn: () => request<ProjectBriefListResponse>(`/api/projects/${encodeURIComponent(projectId!)}/briefs${qs}`),
+    enabled: Boolean(projectId),
+    ...options,
+  })
+}

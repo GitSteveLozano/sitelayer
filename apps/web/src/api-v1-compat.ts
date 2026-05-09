@@ -332,6 +332,71 @@ export function dispatchEstimatePushEvent(
   })
 }
 
+// ----------------------------------------------------------------------
+// Project lifecycle workflow — bridges the project-lifecycle xstate machine
+// to GET /api/projects/:id/lifecycle and POST /:id/lifecycle/events.
+// Same v1-style (id, slug) signature as estimate-push for parity.
+// ----------------------------------------------------------------------
+
+export type ProjectLifecycleHumanEvent =
+  | 'START_ESTIMATING'
+  | 'SEND'
+  | 'ACCEPT'
+  | 'DECLINE'
+  | 'START_WORK'
+  | 'COMPLETE'
+  | 'ARCHIVE'
+  | 'REOPEN'
+
+export type ProjectLifecycleWorkflowState =
+  | 'draft'
+  | 'estimating'
+  | 'sent'
+  | 'accepted'
+  | 'declined'
+  | 'in_progress'
+  | 'done'
+  | 'archived'
+
+export type ProjectLifecycleSnapshotResponse = {
+  state: ProjectLifecycleWorkflowState
+  state_version: number
+  context: {
+    project_id: string
+    name: string
+    customer_name: string
+    sent_at: string | null
+    accepted_at: string | null
+    declined_at: string | null
+    decline_reason: string | null
+    started_at: string | null
+    completed_at: string | null
+    archived_at: string | null
+  }
+  next_events: Array<{ type: ProjectLifecycleHumanEvent; label: string; disabled_reason?: string }>
+}
+
+export function getProjectLifecycleSnapshot(
+  projectId: string,
+  _companySlug?: string,
+): Promise<ProjectLifecycleSnapshotResponse> {
+  return apiGet<ProjectLifecycleSnapshotResponse>(`/api/projects/${projectId}/lifecycle`)
+}
+
+export function dispatchProjectLifecycleEvent(
+  projectId: string,
+  event: ProjectLifecycleHumanEvent,
+  stateVersion: number,
+  reason?: string,
+  _companySlug?: string,
+): Promise<ProjectLifecycleSnapshotResponse> {
+  return apiPost<ProjectLifecycleSnapshotResponse>(`/api/projects/${projectId}/lifecycle/events`, {
+    event,
+    state_version: stateVersion,
+    ...(reason ? { reason } : {}),
+  })
+}
+
 export function getRentalBillingRunSnapshot(runId: string, _companySlug?: string): Promise<_RentalBillingSnapshot> {
   return _fetchBillingRun(runId)
 }
