@@ -43,6 +43,24 @@ const TakeoffDetailScreen = lazy(() =>
 const PhotoMeasureScreen = lazy(() =>
   import('@/screens/projects/photo-measure').then((m) => ({ default: m.PhotoMeasureScreen })),
 )
+const PortalEstimateView = lazy(() =>
+  import('@/portal/EstimateView').then((m) => ({ default: m.EstimateView })),
+)
+const PortalEstimateAcceptedView = lazy(() =>
+  import('@/portal/EstimateAcceptedView').then((m) => ({ default: m.EstimateAcceptedView })),
+)
+const PortalRentalsView = lazy(() =>
+  import('@/portal/RentalsPortal').then((m) => ({ default: m.RentalsPortal })),
+)
+const PortalRentalsCart = lazy(() =>
+  import('@/portal/RentalsCart').then((m) => ({ default: m.RentalsCart })),
+)
+const PortalRentalsConfirm = lazy(() =>
+  import('@/portal/RentalsConfirm').then((m) => ({ default: m.RentalsConfirm })),
+)
+const EstimateBuilderScreen = lazy(() =>
+  import('@/screens/projects/estimate-builder').then((m) => ({ default: m.EstimateBuilderScreen })),
+)
 const ProjectRentalContractScreen = lazy(() =>
   import('@/screens/inventory-admin').then((m) => ({ default: m.ProjectRentalContractScreen })),
 )
@@ -123,9 +141,40 @@ export default function App() {
       <QueryClientProvider client={queryClient}>
         <BrowserRouter basename={ROUTER_BASENAME}>
           <Suspense fallback={<ColdStartSplash />}>
-            <FirstRunGate>
-              <ClerkAuthGate>
-                <Routes>
+            <Routes>
+              {/* Public client portal routes. Sales loop (signed estimate
+                  share-link) and rentals customer portal. NO Clerk auth —
+                  recipients hold an HMAC-signed token in the URL. Mounted
+                  above FirstRunGate so customers don't see the iOS Safari
+                  install prompt either. */}
+              <Route path="/portal/estimates/:shareToken" element={<PortalEstimateView />} />
+              <Route path="/portal/estimates/:shareToken/accepted" element={<PortalEstimateAcceptedView />} />
+              <Route path="/portal/rentals/:shareToken" element={<PortalRentalsView />} />
+              <Route path="/portal/rentals/:shareToken/cart" element={<PortalRentalsCart />} />
+              <Route path="/portal/rentals/:shareToken/confirm" element={<PortalRentalsConfirm />} />
+
+              {/* Authenticated app — Clerk-gated. */}
+              <Route
+                path="/*"
+                element={
+                  <FirstRunGate>
+                    <ClerkAuthGate>
+                      <AppShellRoutes />
+                    </ClerkAuthGate>
+                  </FirstRunGate>
+                }
+              />
+            </Routes>
+          </Suspense>
+        </BrowserRouter>
+      </QueryClientProvider>
+    </AuthProvider>
+  )
+}
+
+function AppShellRoutes() {
+  return (
+    <Routes>
                   {/* Project deep routes that need the full viewport. */}
                   <Route path="/projects/:id/setup" element={<ProjectSetupScreen />} />
                   <Route path="/projects/:id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />
@@ -133,6 +182,7 @@ export default function App() {
                   <Route path="/projects/:id/takeoff-summary" element={<TakeoffSummaryScreen />} />
                   <Route path="/projects/:id/photo-measure" element={<PhotoMeasureScreen />} />
                   <Route path="/projects/:id/rental-contract" element={<ProjectRentalContractScreen />} />
+                  <Route path="/projects/:id/estimate-builder" element={<EstimateBuilderScreen />} />
 
                   {/* Admin / specialized full-screen routes — no bottom-tab
                       chrome. Linked from the mobile shell elsewhere. /more
@@ -157,11 +207,5 @@ export default function App() {
                   {/* Mobile shell — canonical UX, claims everything else. */}
                   <Route path="/*" element={<MRoute />} />
                 </Routes>
-              </ClerkAuthGate>
-            </FirstRunGate>
-          </Suspense>
-        </BrowserRouter>
-      </QueryClientProvider>
-    </AuthProvider>
   )
 }

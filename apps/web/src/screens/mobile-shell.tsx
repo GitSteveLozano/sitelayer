@@ -55,6 +55,7 @@ import { ForemanField } from './mobile/foreman-field.js'
 import { ForemanCrew } from './mobile/foreman-crew.js'
 import { ForemanBrief } from './mobile/foreman-brief.js'
 import { ForemanLog } from './mobile/foreman-log.js'
+import { ForemanBlockerDetail } from './mobile/foreman-blocker-detail.js'
 import { MobileRentals } from './mobile/rentals.js'
 import { MobileRentalDispatch } from './mobile/rentals-dispatch.js'
 import { MobileRentalsUtilization } from './mobile/rentals-utilization.js'
@@ -189,6 +190,10 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
           <Route path="brief/:projectId" element={<ForemanBrief bootstrap={bootstrap} companySlug={companySlug} />} />
           <Route path="field" element={<ForemanField bootstrap={bootstrap} companySlug={companySlug} />} />
           <Route path="field/*" element={<ForemanField bootstrap={bootstrap} companySlug={companySlug} />} />
+          <Route
+            path="foreman/blocker/:issueId"
+            element={<ForemanBlockerDetail bootstrap={bootstrap} companySlug={companySlug} />}
+          />
           <Route path="clockin" element={<WorkerClockinConfirm />} />
           <Route path="scope" element={<WorkerScope bootstrap={bootstrap} />} />
           <Route path="issue" element={<WorkerIssue bootstrap={bootstrap} companySlug={companySlug} />} />
