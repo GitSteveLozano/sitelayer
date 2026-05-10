@@ -21,14 +21,29 @@ import { useBidAccuracy, type AccuracyConfidence, type BidAccuracyProject } from
  * predicted margin is the model's draft — the human is the last hand on
  * the wheel. When the model confidence is high we still keep the dashed
  * surround for consistency with `ai-keystone.jsx`.
+ *
+ * Density-aware:
+ *   `compact={true}` renders a single-line chip (Spark + ordinal-confidence
+ *   pill + "{margin}% margin" + chevron). The chip is tappable and the
+ *   estimate-builder wraps it in a `Sheet` so the full keystone is one tap
+ *   away. Used for small estimates (<10 lines) where the full right rail
+ *   would be visually heavy.
  */
 export interface BidAccuracyCardProps {
   projectId: string
   /** Called when the user dismisses. Defaults to a no-op (signal-only). */
   onDismiss?: () => void
+  /**
+   * Render the single-line chip variant instead of the full keystone card.
+   * The chip shows only Spark + ordinal-confidence pill + predicted-margin
+   * + chevron. Callers wire the click handler to expand.
+   */
+  compact?: boolean
+  /** Click handler for the compact chip. Ignored when `compact=false`. */
+  onCompactClick?: () => void
 }
 
-export function BidAccuracyCard({ projectId, onDismiss }: BidAccuracyCardProps) {
+export function BidAccuracyCard({ projectId, onDismiss, compact = false, onCompactClick }: BidAccuracyCardProps) {
   const accuracy = useBidAccuracy(projectId)
   // Session-level dismiss — when the caller doesn't own the dismiss
   // (e.g. inside the right rail of the Estimate Builder), we still
@@ -41,11 +56,25 @@ export function BidAccuracyCard({ projectId, onDismiss }: BidAccuracyCardProps) 
   if (dismissed) return null
 
   if (accuracy.isPending) {
+    if (compact) {
+      return (
+        <div className="rounded-full border border-dashed border-line px-2.5 py-1 text-[11px] text-ink-3">
+          Loading bid accuracy…
+        </div>
+      )
+    }
     return (
       <div className="rounded border border-dashed border-line p-3 text-[12px] text-ink-3">Loading bid accuracy…</div>
     )
   }
   if (accuracy.isError || !accuracy.data || !accuracy.data.summary) {
+    if (compact) {
+      return (
+        <div className="rounded-full border border-dashed border-line px-2.5 py-1 text-[11px] text-ink-3">
+          No bid-accuracy signal yet
+        </div>
+      )
+    }
     return (
       <div className="rounded border border-dashed border-line p-3 text-[12px] text-ink-3">
         No bid-accuracy signal yet — close a few jobs and the keystone fills in.
@@ -58,6 +87,32 @@ export function BidAccuracyCard({ projectId, onDismiss }: BidAccuracyCardProps) 
   const sign = margin >= 0 ? '+' : '−'
   const marginAbs = Math.abs(margin).toFixed(1)
   const confLabel = confidence ? confidenceLabel(confidence) : 'pending'
+
+  if (compact) {
+    // Single-line chip variant. Same accent palette via the dashed border
+    // and Spark — the chip is the smallest possible AI surface that still
+    // honours the AI rules (Spark marker + ordinal confidence + plain-language
+    // margin). Tapping it should open the full keystone in a sheet/popover;
+    // callers wire `onCompactClick` for that.
+    return (
+      <button
+        type="button"
+        onClick={onCompactClick}
+        aria-label={`Bid accuracy — predicted margin ${sign}${marginAbs}%, ${confLabel} confidence. Tap for details.`}
+        className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-accent/50 bg-accent/5 px-2.5 py-1 hover:bg-accent/10 focus:outline-none focus:ring-2 focus:ring-accent/30"
+      >
+        <Spark size={11} state={confidence === 'high' ? 'strong' : 'accent'} />
+        <ConfidencePill confidence={confidence} label={confLabel} />
+        <span className="num text-[11.5px] font-semibold text-ink">
+          {sign}
+          {marginAbs}% margin
+        </span>
+        <span aria-hidden="true" className="text-ink-3 text-[10px] leading-none">
+          ▸
+        </span>
+      </button>
+    )
+  }
 
   return (
     <MAiAgent

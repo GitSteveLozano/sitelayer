@@ -241,16 +241,19 @@ export function TakeoffCanvasScreen() {
 
           <CalibrationBanner page={activePage} onClickCalibrate={() => setCalibrationOpen(true)} />
 
-          <div className="px-4">
-            <CanvasSurface
-              svgRef={svgRef}
-              tool={tool}
-              zoom={zoom}
-              onTap={onCanvasTap}
-              draftPoints={draftPoints}
-              measurements={blueprintMeasurements}
-              onMeasurementContext={(measurement) => setTagSheetMeasurementId(measurement.id)}
-            />
+          <div className="px-4 flex gap-3 items-start">
+            <div className="flex-1 min-w-0">
+              <CanvasSurface
+                svgRef={svgRef}
+                tool={tool}
+                zoom={zoom}
+                onTap={onCanvasTap}
+                draftPoints={draftPoints}
+                measurements={blueprintMeasurements}
+                onMeasurementContext={(measurement) => setTagSheetMeasurementId(measurement.id)}
+              />
+            </div>
+            <RunningTotalsRail measurements={blueprintMeasurements} serviceItems={items} />
           </div>
 
           <PageStrip
@@ -585,6 +588,116 @@ function lineLength(points: ReadonlyArray<{ x: number; y: number }>): number {
     total += Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2)
   }
   return total
+}
+
+/**
+ * `RunningTotalsRail` — sticky right rail (Sitemap §estimator takeoff
+ * canvas, "Right rail shows running quantities by category"). Hidden
+ * below the `md` breakpoint; the canvas reclaims that horizontal space
+ * on phones and the saved-measurements list at the bottom of the screen
+ * already covers the same data for narrow layouts.
+ *
+ * Categories are derived by joining each measurement's `service_item_code`
+ * to the `service_items` catalog and grouping by the catalog row's
+ * `category` (currently `measurable | accounting`, see
+ * `packages/domain/src/index.ts`). Quantities are summed per category and
+ * the share-of-total drives the progress bar — measurable categories take
+ * the accent tone; non-measurable rows fall back to the default tone so
+ * accounting-only items still display without competing visually.
+ */
+interface RunningTotalsRailProps {
+  measurements: TakeoffMeasurement[]
+  serviceItems: ServiceItem[]
+}
+
+interface CategoryTotal {
+  category: string
+  quantity: number
+  unit: string
+  /** Whether multiple measurement units are mixed under this category. */
+  mixedUnits: boolean
+  isMeasurable: boolean
+}
+
+function RunningTotalsRail({ measurements, serviceItems }: RunningTotalsRailProps) {
+  const totals = useMemo<CategoryTotal[]>(() => {
+    if (measurements.length === 0) return []
+    const itemByCode = new Map<string, ServiceItem>()
+    for (const it of serviceItems) itemByCode.set(it.code, it)
+
+    type Bucket = { quantity: number; units: Set<string>; isMeasurable: boolean }
+    const buckets = new Map<string, Bucket>()
+    for (const m of measurements) {
+      const item = itemByCode.get(m.service_item_code)
+      const category = item?.category ?? 'uncategorized'
+      const bucket = buckets.get(category) ?? {
+        quantity: 0,
+        units: new Set<string>(),
+        isMeasurable: item?.category === 'measurable',
+      }
+      bucket.quantity += Number(m.quantity) || 0
+      bucket.units.add(m.unit)
+      buckets.set(category, bucket)
+    }
+    return Array.from(buckets.entries())
+      .map(([category, b]) => {
+        const unit = b.units.size === 1 ? Array.from(b.units)[0]! : 'mixed'
+        return {
+          category,
+          quantity: b.quantity,
+          unit,
+          mixedUnits: b.units.size > 1,
+          isMeasurable: b.isMeasurable,
+        }
+      })
+      .sort((a, b) => b.quantity - a.quantity)
+  }, [measurements, serviceItems])
+
+  const grandTotal = totals.reduce((sum, t) => sum + t.quantity, 0)
+
+  return (
+    <aside className="hidden md:flex w-60 shrink-0 sticky top-2 max-h-[calc(100vh-1rem)] flex-col">
+      <Card tight>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
+          Running totals · by category
+        </div>
+        {totals.length === 0 ? (
+          <div className="mt-2 text-[11px] text-ink-3 leading-snug">No measurements yet. Draw a polygon to start.</div>
+        ) : (
+          <ul className="mt-2 space-y-2.5">
+            {totals.map((t) => {
+              const share = grandTotal > 0 ? t.quantity / grandTotal : 0
+              const widthPct = Math.max(2, Math.round(share * 100))
+              return (
+                <li key={t.category}>
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="text-[12px] font-semibold capitalize truncate">{t.category}</span>
+                    <span className="font-mono tabular-nums text-[11px] text-ink-3 shrink-0">
+                      {formatQuantity(t.quantity)} {t.unit}
+                    </span>
+                  </div>
+                  <div className="mt-1 h-1 w-full rounded-full bg-line/60 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${t.isMeasurable ? 'bg-accent' : 'bg-ink-3'}`}
+                      style={{ width: `${widthPct}%` }}
+                      aria-hidden="true"
+                    />
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </Card>
+    </aside>
+  )
+}
+
+function formatQuantity(n: number): string {
+  if (!Number.isFinite(n)) return '0'
+  if (Math.abs(n) >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 })
+  if (Number.isInteger(n)) return String(n)
+  return n.toLocaleString(undefined, { maximumFractionDigits: 1 })
 }
 
 /**

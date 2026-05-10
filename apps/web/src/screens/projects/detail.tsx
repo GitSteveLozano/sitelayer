@@ -23,6 +23,7 @@ import {
   type Worker,
 } from '@/lib/api'
 import { findOpenSpan, pairClockSpans, sumHoursInRange, startOfDay } from '@/lib/clock-derive'
+import { BidAccuracyCard } from './bid-accuracy-card'
 import { EstimateSummaryScreen } from './estimate-summary'
 import { TakeoffListScreen } from './takeoff-list'
 
@@ -200,6 +201,11 @@ function OverviewTab({ project, onOpenEstimate }: { project: ProjectDetail; onOp
   return (
     <div className="space-y-3">
       <BurdenHeroCard burden={burden.data} label="Project burden today" />
+      {/* Bid-accuracy keystone — surfaced on the overview hero per
+          `/tmp/sitelayer_design_stuff/ai-keystone.jsx`. The card
+          self-hides via its dismissed state and renders a calm
+          single-line placeholder when no comparable cohort exists. */}
+      <BidAccuracyCard projectId={project.id} />
       <div className="grid grid-cols-2 gap-2.5">
         <Card tight>
           <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">On site now</div>
