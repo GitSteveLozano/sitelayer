@@ -1,0 +1,94 @@
+{
+  "meshUrl": "https://blob.example/sitelayer/captures/bedroom-12x14/mesh.glb",
+  "meshFormat": "glb",
+  "captureId": "cap-bedroom-12x14",
+  "capturedAt": "2026-05-07T15:00:00Z",
+  "vendor": "luma",
+  "vendorJobId": "luma-slug-bedroom-12x14",
+  "previewImageUrl": "https://blob.example/sitelayer/captures/bedroom-12x14/preview.png",
+  "scale": {
+    "method": "fiducial-marker",
+    "metersPerUnit": 1.0,
+    "confidence": "medium"
+  },
+  "rooms": [
+    {
+      "id": "room-bedroom",
+      "label": "Bedroom 12x14",
+      "floorAreaM2": 15.6064,
+      "perimeterM": 15.8496,
+      "ceilingHeightM": 2.4384
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "surf-floor",
+      "kind": "floor",
+      "areaM2": 15.6064,
+      "parentRoomId": "room-bedroom",
+      "source": "human-labeled",
+      "confidence": 0.7
+    },
+    {
+      "id": "surf-ceiling",
+      "kind": "ceiling",
+      "areaM2": 15.6064,
+      "parentRoomId": "room-bedroom",
+      "source": "human-labeled",
+      "confidence": 0.7
+    },
+    {
+      "id": "surf-wall-n",
+      "kind": "wall",
+      "areaM2": 10.4053,
+      "parentRoomId": "room-bedroom",
+      "source": "human-labeled",
+      "confidence": 0.7
+    },
+    {
+      "id": "surf-wall-s",
+      "kind": "wall",
+      "areaM2": 10.4053,
+      "parentRoomId": "room-bedroom",
+      "source": "human-labeled",
+      "confidence": 0.7
+    },
+    {
+      "id": "surf-wall-e",
+      "kind": "wall",
+      "areaM2": 8.9189,
+      "parentRoomId": "room-bedroom",
+      "source": "human-labeled",
+      "confidence": 0.7
+    },
+    {
+      "id": "surf-wall-w",
+      "kind": "wall",
+      "areaM2": 8.9189,
+      "parentRoomId": "room-bedroom",
+      "source": "human-labeled",
+      "confidence": 0.7
+    },
+    {
+      "id": "surf-door-1",
+      "kind": "door",
+      "areaM2": 1.97,
+      "parentRoomId": "room-bedroom",
+      "source": "human-labeled",
+      "confidence": 0.7
+    },
+    {
+      "id": "surf-window-1",
+      "kind": "window",
+      "areaM2": 1.34,
+      "parentRoomId": "room-bedroom",
+      "source": "human-labeled",
+      "confidence": 0.7
+    }
+  ],
+  "qa": {
+    "coveragePct": 82,
+    "blindSpots": [],
+    "reconstructionMeanErrorM": 0.018
+  }
+}
