@@ -3,10 +3,11 @@ import type { Pool } from 'pg'
 import { compareBidVsScope } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, recordSyncEvent, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
-import { HttpError } from '../http-utils.js'
+import { HttpError, isValidUuid } from '../http-utils.js'
 import { buildEstimatePdfInputFromSummary, type EstimatePdfInput } from '../pdf.js'
 import { summarizeProject } from './projects.js'
 import { listServiceItemProductivity } from './analytics.js'
+import { resolveDefaultDraftId, validateDraftId } from './takeoff-drafts.js'
 
 export type EstimateRouteCtx = {
   pool: Pool
@@ -32,13 +33,46 @@ function round2(value: number): number {
   return Math.round(value * 100) / 100
 }
 
+/**
+ * Phase A.4 helper. Resolve the draft to operate on for an estimate route.
+ * Accepts `?draft_id=` (always) and `body.draft_id` (POST only). Validates
+ * the uuid syntactically and the tenancy / project membership against
+ * `takeoff_drafts`. Returns:
+ *   - a uuid string when the caller supplied a valid draft_id
+ *   - null when no draft_id was supplied (the helper that consumes this
+ *     value will fall back to the project's default draft)
+ *   - undefined when validation failed and a 400 was already sent — the
+ *     caller should `return true` immediately
+ */
+async function resolveDraftIdParam(
+  ctx: EstimateRouteCtx,
+  url: URL,
+  body: Record<string, unknown>,
+  projectId: string,
+): Promise<string | null | undefined> {
+  const fromQuery = url.searchParams.get('draft_id')
+  const fromBody = typeof body.draft_id === 'string' ? body.draft_id.trim() : ''
+  const raw = (fromQuery ?? fromBody ?? '').trim()
+  if (!raw) return null
+  if (!isValidUuid(raw)) {
+    ctx.sendJson(400, { error: 'draft_id must be a valid uuid' })
+    return undefined
+  }
+  const ok = await validateDraftId(ctx.pool, ctx.company.id, projectId, raw)
+  if (!ok) {
+    ctx.sendJson(400, { error: 'draft_id does not belong to this project' })
+    return undefined
+  }
+  return raw
+}
+
 export async function createEstimateFromMeasurements(
   pool: Pool,
   companyId: string,
   projectId: string,
-  executor?: LedgerExecutor,
+  options: { draftId?: string | null; executor?: LedgerExecutor } = {},
 ) {
-  const actualExecutor = executor ?? pool
+  const actualExecutor = options.executor ?? pool
   const projectResult = await actualExecutor.query<{
     id: string
     bid_total: string | number | null
@@ -52,6 +86,12 @@ export async function createEstimateFromMeasurements(
   const project = projectResult.rows[0]
   if (!project) return null
 
+  // Resolve the target draft. Phase A.4: each draft owns its own
+  // estimate; recompute rebuilds estimate_lines for that draft only.
+  // Lines on sibling drafts (e.g. archived proposals, the future drone
+  // pipeline draft) survive untouched.
+  const draftId = options.draftId ?? (await resolveDefaultDraftId(pool, companyId, projectId))
+
   const [measurementsResult, serviceItemsResult] = await Promise.all([
     actualExecutor.query<{
       service_item_code: string
@@ -60,8 +100,10 @@ export async function createEstimateFromMeasurements(
       notes: string | null
       division_code: string | null
     }>(
-      'select service_item_code, quantity, unit, notes, division_code from takeoff_measurements where company_id = $1 and project_id = $2 order by created_at asc',
-      [companyId, projectId],
+      draftId
+        ? 'select service_item_code, quantity, unit, notes, division_code from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
+        : 'select service_item_code, quantity, unit, notes, division_code from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
+      draftId ? [companyId, projectId, draftId] : [companyId, projectId],
     ),
     actualExecutor.query<{ code: string; default_rate: string | null; unit: string }>(
       'select code, default_rate, unit from service_items where company_id = $1',
@@ -74,10 +116,21 @@ export async function createEstimateFromMeasurements(
     itemIndex.set(item.code, { default_rate: item.default_rate, unit: item.unit })
   }
 
-  await actualExecutor.query('delete from estimate_lines where company_id = $1 and project_id = $2', [
-    companyId,
-    projectId,
-  ])
+  // Phase A.4: scope the wipe to the target draft so sibling drafts'
+  // estimate_lines survive untouched. Null-draft callers (projects with
+  // no draft pre-066, or hard-deleted-draft orphans) get the legacy
+  // "wipe everything" behavior so they still recompute correctly.
+  if (draftId) {
+    await actualExecutor.query(
+      'delete from estimate_lines where company_id = $1 and project_id = $2 and draft_id = $3',
+      [companyId, projectId, draftId],
+    )
+  } else {
+    await actualExecutor.query(
+      'delete from estimate_lines where company_id = $1 and project_id = $2 and draft_id is null',
+      [companyId, projectId],
+    )
+  }
 
   const projectDivisionCode = project.division_code ?? null
   type EstimateLineRow = {
@@ -117,10 +170,11 @@ export async function createEstimateFromMeasurements(
     }
     const insertResult = await actualExecutor.query<EstimateLineRow>(
       `
-      insert into estimate_lines (company_id, project_id, service_item_code, quantity, unit, rate, amount, division_code)
+      insert into estimate_lines (company_id, project_id, draft_id, service_item_code, quantity, unit, rate, amount, division_code)
       select
         $1::uuid,
         $2::uuid,
+        $9::uuid,
         code,
         quantity::numeric,
         unit,
@@ -131,7 +185,7 @@ export async function createEstimateFromMeasurements(
         as t(code, quantity, unit, rate, amount, division_code)
       returning service_item_code, quantity, unit, rate, amount, division_code, created_at
       `,
-      [companyId, projectId, codes, quantities, units, rates, amounts, divisions],
+      [companyId, projectId, codes, quantities, units, rates, amounts, divisions, draftId],
     )
     createdLines = insertResult.rows
   }
@@ -158,13 +212,19 @@ export async function createEstimateFromMeasurements(
 
   return {
     projectId,
+    draftId,
     bidTotal,
     scopeTotal,
     lines: createdLines,
   }
 }
 
-export async function getScopeVsBid(pool: Pool, companyId: string, projectId: string) {
+export async function getScopeVsBid(
+  pool: Pool,
+  companyId: string,
+  projectId: string,
+  options: { draftId?: string | null } = {},
+) {
   const projectResult = await pool.query<{ bid_total: string | number | null }>(
     'select bid_total from projects where company_id = $1 and id = $2 limit 1',
     [companyId, projectId],
@@ -172,12 +232,19 @@ export async function getScopeVsBid(pool: Pool, companyId: string, projectId: st
   const project = projectResult.rows[0]
   if (!project) return null
 
+  const draftId = options.draftId ?? (await resolveDefaultDraftId(pool, companyId, projectId))
+
   const linesResult = await pool.query(
-    `select service_item_code, quantity, unit, rate, amount, division_code, created_at
-     from estimate_lines
-     where company_id = $1 and project_id = $2
-     order by created_at asc, service_item_code asc`,
-    [companyId, projectId],
+    draftId
+      ? `select service_item_code, quantity, unit, rate, amount, division_code, created_at
+           from estimate_lines
+          where company_id = $1 and project_id = $2 and draft_id = $3
+          order by created_at asc, service_item_code asc`
+      : `select service_item_code, quantity, unit, rate, amount, division_code, created_at
+           from estimate_lines
+          where company_id = $1 and project_id = $2 and draft_id is null
+          order by created_at asc, service_item_code asc`,
+    draftId ? [companyId, projectId, draftId] : [companyId, projectId],
   )
 
   const bidTotal = Number(project.bid_total ?? 0)
@@ -186,6 +253,7 @@ export async function getScopeVsBid(pool: Pool, companyId: string, projectId: st
 
   return {
     ...comparison,
+    draft_id: draftId,
     lines: linesResult.rows,
   }
 }
@@ -324,8 +392,18 @@ export async function handleEstimateRoutes(
       ctx.sendJson(400, { error: 'project id is required' })
       return true
     }
+    // Phase A.4: accept draft_id either as ?draft_id= or in the JSON
+    // body. URL is the more idiomatic form for "recompute draft X" but
+    // the body version stays compatible with offline replay queues that
+    // can't easily restructure the URL.
+    const body = req.method === 'POST' ? await ctx.readBody().catch(() => ({})) : {}
+    const draftId = await resolveDraftIdParam(ctx, url, body, projectId)
+    if (draftId === undefined) return true // 400 already sent by helper
     const estimate = await withMutationTx(async (client) => {
-      const computed = await createEstimateFromMeasurements(ctx.pool, ctx.company.id, projectId, client)
+      const computed = await createEstimateFromMeasurements(ctx.pool, ctx.company.id, projectId, {
+        draftId,
+        executor: client,
+      })
       if (!computed) return null
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
@@ -341,7 +419,7 @@ export async function handleEstimateRoutes(
       ctx.sendJson(404, { error: 'project not found' })
       return true
     }
-    const scopeVsBid = await getScopeVsBid(ctx.pool, ctx.company.id, projectId)
+    const scopeVsBid = await getScopeVsBid(ctx.pool, ctx.company.id, projectId, { draftId })
     ;(estimate as { scope_vs_bid?: unknown }).scope_vs_bid = scopeVsBid
     ctx.sendJson(200, estimate)
     return true
@@ -353,7 +431,9 @@ export async function handleEstimateRoutes(
       ctx.sendJson(400, { error: 'project id is required' })
       return true
     }
-    const result = await getScopeVsBid(ctx.pool, ctx.company.id, projectId)
+    const draftId = await resolveDraftIdParam(ctx, url, {}, projectId)
+    if (draftId === undefined) return true
+    const result = await getScopeVsBid(ctx.pool, ctx.company.id, projectId, { draftId })
     if (!result) {
       ctx.sendJson(404, { error: 'project not found' })
       return true
@@ -369,7 +449,9 @@ export async function handleEstimateRoutes(
       ctx.sendJson(400, { error: 'project id is required' })
       return true
     }
-    const summary = await summarizeProject(ctx.pool, ctx.company.id, projectId)
+    const draftId = await resolveDraftIdParam(ctx, url, {}, projectId)
+    if (draftId === undefined) return true
+    const summary = await summarizeProject(ctx.pool, ctx.company.id, projectId, { draftId })
     if (!summary) {
       ctx.sendJson(404, { error: 'project not found' })
       return true

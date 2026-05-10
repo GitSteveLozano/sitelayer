@@ -32,7 +32,12 @@ export type ProjectRouteCtx = {
   checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
 }
 
-export async function summarizeProject(pool: Pool, companyId: string, projectId: string) {
+export async function summarizeProject(
+  pool: Pool,
+  companyId: string,
+  projectId: string,
+  options: { draftId?: string | null } = {},
+) {
   const projectResult = await pool.query(
     'select id, company_id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, version from projects where company_id = $1 and id = $2 limit 1',
     [companyId, projectId],
@@ -40,16 +45,25 @@ export async function summarizeProject(pool: Pool, companyId: string, projectId:
   const project = projectResult.rows[0]
   if (!project) return null
 
+  // Phase A.4: optionally scope measurements + estimate_lines to a
+  // specific takeoff draft (used by the per-draft estimate PDF). When
+  // draftId is omitted, the existing behavior (all rows for the project,
+  // regardless of draft) is preserved so existing callers — the
+  // bid-accuracy dashboard, project lifecycle workflow — keep their
+  // cross-draft rollups.
+  const draftId = options.draftId ?? null
+  const measurementsSql = draftId
+    ? 'select service_item_code, quantity, unit, notes, created_at from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
+    : 'select service_item_code, quantity, unit, notes, created_at from takeoff_measurements where company_id = $1 and project_id = $2 and deleted_at is null order by created_at asc'
+  const estimateLinesSql = draftId
+    ? 'select service_item_code, quantity, unit, rate, amount, created_at from estimate_lines where company_id = $1 and project_id = $2 and draft_id = $3 order by created_at asc'
+    : 'select service_item_code, quantity, unit, rate, amount, created_at from estimate_lines where company_id = $1 and project_id = $2 order by created_at asc'
+  const scopedParams = draftId ? [companyId, projectId, draftId] : [companyId, projectId]
+
   const [measurementsResult, estimateLinesResult, laborEntriesResult, materialBillsResult, bonusRuleResult] =
     await Promise.all([
-      pool.query(
-        'select service_item_code, quantity, unit, notes, created_at from takeoff_measurements where company_id = $1 and project_id = $2 order by created_at asc',
-        [companyId, projectId],
-      ),
-      pool.query(
-        'select service_item_code, quantity, unit, rate, amount, created_at from estimate_lines where company_id = $1 and project_id = $2 order by created_at asc',
-        [companyId, projectId],
-      ),
+      pool.query(measurementsSql, scopedParams),
+      pool.query(estimateLinesSql, scopedParams),
       pool.query(
         'select service_item_code, hours, sqft_done, status, occurred_on from labor_entries where company_id = $1 and project_id = $2 order by occurred_on desc, created_at desc',
         [companyId, projectId],
