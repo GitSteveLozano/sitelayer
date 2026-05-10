@@ -13,9 +13,36 @@ export interface TakeoffDraft {
   type: string
   status: 'active' | 'archived'
   version: number
+  /** Phase C: pipeline that produced this draft. 'manual' for canvas-authored drafts. */
+  source?: 'manual' | 'roomplan' | 'photogrammetry' | 'drone' | 'blueprint_vision'
+  /** Phase C: pipeline-supplied review flag — true when any quantity scored below the confidence floor. */
+  review_required?: boolean
+  /** Phase C: semver of the producing pipeline. Null for manual drafts. */
+  pipeline_version?: string | null
   deleted_at: string | null
   created_at: string
   updated_at: string
+}
+
+export type CaptureKind = 'roomplan' | 'photogrammetry' | 'drone' | 'blueprint_vision'
+
+export interface CaptureRequestBody {
+  kind: CaptureKind
+  name?: string
+  payload: Record<string, unknown>
+}
+
+export interface CaptureResultSummary {
+  quantities_count: number
+  review_required: boolean
+  capture_source: string
+  geometry: { rooms: number; surfaces: number; objects: number }
+  pipeline_version: string
+}
+
+export interface CaptureResponse {
+  draft: TakeoffDraft
+  result_summary: CaptureResultSummary
 }
 
 const draftsByProjectKey = (projectId: string, includeArchived: boolean) =>
@@ -87,5 +114,26 @@ export function useDeleteTakeoffDraft(projectId: string) {
         method: 'DELETE',
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['takeoff-drafts', 'by-project', projectId] }),
+  })
+}
+
+/**
+ * Phase C: run one of the four capture pipelines (roomplan /
+ * photogrammetry / drone / blueprint_vision) against a JSON payload
+ * and land the result as a new takeoff draft. The server validates
+ * `kind`, dispatches to the matching @sitelayer/pipe-* package, and
+ * stashes the TakeoffResult on the new draft.
+ */
+export function useCaptureTakeoffDraft(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation<CaptureResponse, Error, CaptureRequestBody>({
+    mutationFn: (input) =>
+      request<CaptureResponse>(`/api/projects/${encodeURIComponent(projectId)}/takeoff-drafts/capture`, {
+        method: 'POST',
+        json: input,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['takeoff-drafts', 'by-project', projectId] })
+    },
   })
 }
