@@ -40,10 +40,26 @@ import { registerWorkflow } from './registry.js'
  *   ARCHIVE          (done|declined → archived)  {actor_user_id, occurred_at}
  *   REOPEN           (done|archived → in_progress) {actor_user_id, occurred_at}
  *
- * Side effects: none in this phase. The follow-up phase will wire
- * `notify_foreman_assignment` to the worker's outbox so a foreman
- * picked at ACCEPT/START_WORK time gets a push. Until then the
- * `sideEffectTypes` list is intentionally empty.
+ * Side effects:
+ *   notify_foreman_assignment — emitted on ACCEPT (sent → accepted) and
+ *     on START_WORK (accepted → in_progress). The route enqueues one
+ *     outbox row per transition, keyed by
+ *       project_lifecycle:notify_foreman:<project_id>:<state_version>
+ *     so an ACCEPT followed by a START_WORK produces two distinct rows
+ *     (one per state_version) and a replay of the same transition is
+ *     a no-op.
+ *
+ *     The worker drain (apps/worker/src/field-event-notifier.ts) looks
+ *     up project_assignments to find the foreman assigned to this
+ *     project. If a foreman is assigned, a single notifications row is
+ *     inserted addressed to them. If no foreman is assigned (e.g.
+ *     ACCEPT lands before an admin has picked a foreman), the drain
+ *     fans out to admin/office members of the company so the work
+ *     doesn't go unnoticed.
+ *
+ *     ACCEPT is the "Loop 5: Sales" handoff to operations; START_WORK
+ *     is the "Loop 1: Morning Brief" trigger for the foreman to begin
+ *     coordinating the crew.
  */
 
 export type ProjectLifecycleWorkflowState =
@@ -276,10 +292,11 @@ export const projectLifecycleWorkflow = registerWorkflow<
   reduce: transitionProjectLifecycleWorkflow,
   nextEvents: nextProjectLifecycleEvents,
   isHumanEvent: isHumanProjectLifecycleEvent,
-  // Future phase: 'notify_foreman_assignment' — when ACCEPT/START_WORK
-  // assigns a foreman, the worker drains an outbox row to send a push.
-  // Empty for now so the route doesn't enqueue anything.
-  sideEffectTypes: [] as const,
+  // ACCEPT (sent → accepted) and START_WORK (accepted → in_progress)
+  // each enqueue a notify_foreman_assignment outbox row. The worker
+  // resolves project_assignments to a foreman recipient (or fans out
+  // to admin/office if unassigned) and inserts a notifications row.
+  sideEffectTypes: ['notify_foreman_assignment'] as const,
 })
 
 /**

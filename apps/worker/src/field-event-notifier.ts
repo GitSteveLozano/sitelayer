@@ -2,25 +2,30 @@
  * Field-event notification handler.
  *
  * Drains mutation_outbox rows enqueued by the field-event workflow
- * (packages/workflows/src/field-event.ts) and turns them into
- * `notifications` rows. Push delivery is not in scope for this slice —
- * the existing notifications drain (apps/worker/src/notifications.ts)
- * picks up the inserted rows on its next tick and routes them through
- * the channel dispatcher.
+ * (packages/workflows/src/field-event.ts) and the project-lifecycle
+ * workflow (packages/workflows/src/project-lifecycle.ts) and turns
+ * them into `notifications` rows. Push delivery is not in scope for
+ * this slice — the existing notifications drain
+ * (apps/worker/src/notifications.ts) picks up the inserted rows on its
+ * next tick and routes them through the channel dispatcher.
  *
- * Two mutation_types are claimed here:
+ * Three mutation_types are claimed here:
  *   notify_worker_resolution    — RESOLVE event. Notify the worker who
  *                                 filed the ticket (recipient =
  *                                 reporter_clerk_user_id).
  *   notify_estimator_escalation — ESCALATE event. Fan-out to estimator
  *                                 / admin-role members of the company.
+ *   notify_foreman_assignment   — Project-lifecycle ACCEPT or
+ *                                 START_WORK. Resolve the foreman
+ *                                 assigned to the project and notify
+ *                                 them; if no foreman is assigned, fan
+ *                                 out to admin/office.
  *
  * Idempotency is provided by the outbox row's idempotency_key
- * (`worker_issue:notify_*:<id>:<state_version>`), so a re-claim after
- * a worker crash inserts a notification row at most once per
- * state_version. The notifications.id is its own primary key, so
- * inserting twice with the same payload would create two send
- * attempts; the per-state_version key prevents that.
+ * (`worker_issue:notify_*:<id>:<state_version>` or
+ * `project_lifecycle:notify_foreman:<id>:<state_version>`), so a
+ * re-claim after a worker crash inserts a notification row at most
+ * once per state_version.
  *
  * The handler never calls any external API and only writes to
  * `notifications` and `mutation_outbox`. All work for one row happens
@@ -39,12 +44,16 @@ export type FieldEventNotifierSummary = {
 type ClaimedRow = {
   id: string
   entity_id: string
-  mutation_type: 'notify_worker_resolution' | 'notify_estimator_escalation'
+  mutation_type: 'notify_worker_resolution' | 'notify_estimator_escalation' | 'notify_foreman_assignment'
   payload: Record<string, unknown>
   attempt_count: number
 }
 
-const FIELD_EVENT_MUTATION_TYPES = ['notify_worker_resolution', 'notify_estimator_escalation'] as const
+const FIELD_EVENT_MUTATION_TYPES = [
+  'notify_worker_resolution',
+  'notify_estimator_escalation',
+  'notify_foreman_assignment',
+] as const
 
 export const FIELD_EVENT_NOTIFIER_MAX_ATTEMPTS = 5
 
@@ -54,6 +63,32 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+async function listProjectForemen(client: QueueClient, companyId: string, projectId: string): Promise<string[]> {
+  // Project-level assignment is the source of truth for "who's running
+  // this site" (per migration 046's design note). Company-level role is
+  // a fallback only when no project_assignments row exists. We return
+  // every active foreman assignment; a project may legitimately have
+  // multiple foremen during a handoff window.
+  const result = await client.query<{ clerk_user_id: string }>(
+    `select clerk_user_id from project_assignments
+     where company_id = $1 and project_id = $2 and role = 'foreman' and deleted_at is null`,
+    [companyId, projectId],
+  )
+  return result.rows.map((r) => r.clerk_user_id)
+}
+
+async function listAdminOfficeRecipients(client: QueueClient, companyId: string): Promise<string[]> {
+  // Fallback fan-out when notify_foreman_assignment fires before any
+  // foreman has been assigned. Same shape as listEstimatorRecipients
+  // — admin/office members are the catch-all queue for unowned work.
+  const result = await client.query<{ clerk_user_id: string }>(
+    `select cm.clerk_user_id from company_memberships cm
+     where cm.company_id = $1 and cm.role in ('admin', 'office')`,
+    [companyId],
+  )
+  return result.rows.map((r) => r.clerk_user_id)
 }
 
 async function listEstimatorRecipients(client: QueueClient, companyId: string): Promise<string[]> {
@@ -172,6 +207,61 @@ export async function processFieldEventNotifications(
           text,
           payload,
         })
+      } else if (row.mutation_type === 'notify_foreman_assignment') {
+        // Project-lifecycle ACCEPT (Loop 5: Sales handoff) or START_WORK
+        // (Loop 1: Morning Brief). Resolve the foreman from
+        // project_assignments; if unassigned, fan out to admin/office so
+        // someone picks it up and assigns a foreman.
+        const projectId = asString(payload.project_id) ?? row.entity_id
+        const projectName = asString(payload.project_name) ?? '(unnamed project)'
+        const customerName = asString(payload.customer_name) ?? '(unknown customer)'
+        const transition = asString(payload.transition) ?? 'accepted'
+        const subject = transition === 'started' ? 'Work started' : 'New project assigned'
+        const text =
+          transition === 'started'
+            ? `Work has started on "${projectName}" for ${customerName}.`
+            : `New project assigned: "${projectName}" for ${customerName}.`
+        const foremen = await listProjectForemen(client, companyId, projectId)
+        if (foremen.length > 0) {
+          for (const recipientUserId of foremen) {
+            await insertNotification(client, {
+              companyId,
+              recipientUserId,
+              kind: 'foreman_assignment',
+              subject,
+              text,
+              payload,
+            })
+          }
+        } else {
+          // No foreman picked yet — fan out to admin/office. Each
+          // admin/office member gets their own delivery attempt; if no
+          // such recipients exist either, fall back to a broadcast row
+          // so the event isn't silently dropped (mirrors the estimator
+          // escalation path below).
+          const fallback = await listAdminOfficeRecipients(client, companyId)
+          if (fallback.length === 0) {
+            await insertNotification(client, {
+              companyId,
+              recipientUserId: null,
+              kind: 'foreman_assignment',
+              subject,
+              text,
+              payload,
+            })
+          } else {
+            for (const recipientUserId of fallback) {
+              await insertNotification(client, {
+                companyId,
+                recipientUserId,
+                kind: 'foreman_assignment',
+                subject,
+                text,
+                payload,
+              })
+            }
+          }
+        }
       } else {
         // notify_estimator_escalation: fan out to estimator/admin
         // members of the company. Insert one notifications row per

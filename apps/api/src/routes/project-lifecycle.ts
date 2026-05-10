@@ -290,10 +290,36 @@ export async function handleProjectLifecycleRoutes(
           action: `lifecycle:${eventType.toLowerCase()}`,
           row: updated as unknown as Record<string, unknown>,
           // Per-state_version key so REOPEN → COMPLETE → REOPEN cycles
-          // produce distinct outbox rows when side-effects are wired in
-          // a later phase (notify_foreman_assignment).
+          // produce distinct outbox rows.
           idempotencyKey: `project_lifecycle:event:${updated.id}:${updated.lifecycle_state_version}`,
         })
+
+        // ACCEPT (sent → accepted) and START_WORK (accepted → in_progress)
+        // enqueue notify_foreman_assignment so the worker can resolve a
+        // foreman from project_assignments and insert a notifications
+        // row. Idempotency key is per-state_version so a replay (same
+        // request retried) is a no-op, but a later REOPEN → ACCEPT
+        // cycle generates a distinct row.
+        if (eventType === 'ACCEPT' || eventType === 'START_WORK') {
+          const transition: 'accepted' | 'started' = eventType === 'ACCEPT' ? 'accepted' : 'started'
+          await recordMutationLedger(client, {
+            companyId: ctx.company.id,
+            entityType: 'project',
+            entityId: updated.id,
+            action: `notify_foreman_${transition}`,
+            mutationType: 'notify_foreman_assignment',
+            row: updated as unknown as Record<string, unknown>,
+            outboxPayload: {
+              project_id: updated.id,
+              project_name: updated.name,
+              customer_name: updated.customer_name,
+              transition,
+              actor_user_id: ctx.currentUserId,
+              occurred_at: reducerEvent.occurred_at,
+            },
+            idempotencyKey: `project_lifecycle:notify_foreman:${updated.id}:${updated.lifecycle_state_version}`,
+          })
+        }
 
         return { kind: 'ok' as const, project: updated, eventType }
       })

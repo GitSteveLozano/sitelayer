@@ -315,8 +315,8 @@ describe('projectLifecycleWorkflow registry', () => {
     expect(projectLifecycleWorkflow.name).toBe('project_lifecycle')
     expect(projectLifecycleWorkflow.initialState).toBe('draft')
     expect(projectLifecycleWorkflow.terminalStates).toEqual([])
-    // No side-effects in this phase; notify_foreman_assignment is wired
-    // in a follow-up.
-    expect(projectLifecycleWorkflow.sideEffectTypes).toEqual([])
+    // ACCEPT and START_WORK enqueue a notify_foreman_assignment outbox
+    // row that the worker drains into a notifications row.
+    expect(projectLifecycleWorkflow.sideEffectTypes).toEqual(['notify_foreman_assignment'])
   })
 })

@@ -844,5 +844,44 @@ async function maybeApplyLifecycleEvent(
     actorUserId: args.actorUserId,
   })
 
+  // Mirror the side-effect that the canonical lifecycle route emits on
+  // ACCEPT/START_WORK so a customer accepting their estimate from the
+  // public portal triggers the same foreman-assignment notification a
+  // staff-driven ACCEPT would. Idempotency key matches the route shape
+  // (project_lifecycle:notify_foreman:<id>:<state_version>) so retries
+  // and duplicate ACCEPTs upsert the same outbox row.
+  if (args.eventType === 'ACCEPT') {
+    const projectMeta = await client.query<{ name: string; customer_name: string | null }>(
+      `select name, customer_name from projects where company_id = $1 and id = $2 limit 1`,
+      [args.companyId, args.projectId],
+    )
+    const meta = projectMeta.rows[0] ?? { name: 'Project', customer_name: null }
+    await recordMutationLedger(client, {
+      companyId: args.companyId,
+      entityType: 'project',
+      entityId: args.projectId,
+      action: 'notify_foreman_assignment',
+      row: { project_id: args.projectId, lifecycle_state: transition.to, state_version: nextStateVersion },
+      syncPayload: {
+        project_id: args.projectId,
+        project_name: meta.name,
+        customer_name: meta.customer_name,
+        transition: 'accepted',
+        actor_user_id: args.actorUserId,
+        occurred_at: occurredAt,
+      },
+      outboxPayload: {
+        project_id: args.projectId,
+        project_name: meta.name,
+        customer_name: meta.customer_name,
+        transition: 'accepted',
+        actor_user_id: args.actorUserId,
+        occurred_at: occurredAt,
+      },
+      mutationType: 'notify_foreman_assignment',
+      idempotencyKey: `project_lifecycle:notify_foreman:${args.projectId}:${nextStateVersion}`,
+    })
+  }
+
   return { kind: 'applied', toState: transition.to }
 }

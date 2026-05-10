@@ -232,6 +232,14 @@ class FakePool {
       this.outbox.push({ params })
       return { rows: [], rowCount: 1 }
     }
+    // Project meta read used by the inline lifecycle helper to construct
+    // the notify_foreman_assignment outbox payload.
+    if (/select name, customer_name\s+from projects/i.test(sql)) {
+      const [companyId, projectId] = params as [string, string]
+      const project = this.projects.find((p) => p.company_id === companyId && p.id === projectId)
+      if (!project) return { rows: [], rowCount: 0 }
+      return { rows: [{ name: project.name, customer_name: 'Test Customer' }], rowCount: 1 }
+    }
 
     throw new Error(`unexpected SQL in fake pool: ${sql.slice(0, 200)}`)
   }

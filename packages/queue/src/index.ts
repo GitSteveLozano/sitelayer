@@ -71,6 +71,7 @@ export const DEDICATED_HANDLER_MUTATION_TYPES = [
   'post_qbo_time_activities',
   'notify_worker_resolution',
   'notify_estimator_escalation',
+  'notify_foreman_assignment',
 ] as const
 
 /**
