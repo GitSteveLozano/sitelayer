@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { Card, MobileButton, Pill } from '@/components/mobile'
+import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { EmptyState } from '@/components/shell/EmptyState'
 import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
@@ -9,6 +9,14 @@ import { useProject, useServiceItems, type EstimateLine, type ServiceItem } from
 import { useEstimateBuilder } from '@/machines/estimate-builder'
 import { BidAccuracyCard } from './bid-accuracy-card'
 import { EstimateLineAssembly } from './estimate-line-assembly'
+
+/**
+ * Density threshold for the bid-accuracy keystone. Below this line count we
+ * collapse the right rail to a single chip in the header (per the design's
+ * `estimate-builder` density-aware spec). At/above this we keep the full
+ * three-pane layout with the keystone in the right rail.
+ */
+const COMPACT_KEYSTONE_LINE_THRESHOLD = 10
 
 /**
  * `estimate-builder` — Three-pane editor that took the read-only
@@ -79,6 +87,13 @@ export function EstimateBuilderScreen() {
   const status = builder.snapshot?.status ?? 'ok'
   const lifecycle = project.data?.project.status ?? 'draft'
 
+  // Density rule (`estimator/README.md` § estimate-builder): collapse the
+  // right rail's bid-accuracy keystone to a single chip when the estimate
+  // has fewer than 10 lines. The chip lives in the header strip and
+  // expands a Sheet with the full keystone when tapped.
+  const isCompactKeystone = lines.length > 0 && lines.length < COMPACT_KEYSTONE_LINE_THRESHOLD
+  const [keystoneSheetOpen, setKeystoneSheetOpen] = useState(false)
+
   return (
     <div className="px-5 pt-6 pb-12 max-w-[1280px] mx-auto">
       {/* Header. */}
@@ -109,6 +124,12 @@ export function EstimateBuilderScreen() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {isCompactKeystone ? (
+            // Density-aware: when the estimate is small (<10 lines) the right
+            // rail's keystone collapses into this single header chip. Tap to
+            // open the full keystone in a sheet — see `keystoneSheetOpen`.
+            <BidAccuracyCard projectId={projectId} compact onCompactClick={() => setKeystoneSheetOpen(true)} />
+          ) : null}
           <MobileButton
             variant="ghost"
             size="sm"
@@ -156,7 +177,13 @@ export function EstimateBuilderScreen() {
           }
         />
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_320px] gap-4">
+        <div
+          className={
+            isCompactKeystone
+              ? 'grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-4'
+              : 'grid grid-cols-1 lg:grid-cols-[220px_1fr_320px] gap-4'
+          }
+        >
           <ScopeTreePane
             lines={lines}
             items={items.data?.serviceItems ?? []}
@@ -171,30 +198,47 @@ export function EstimateBuilderScreen() {
             pending={builder.pendingEdits}
             status={status}
           />
-          <div className="space-y-3">
-            <BidAccuracyCard projectId={projectId} />
-            <Card tight>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1">Totals</div>
-              <div className="flex items-baseline justify-between mb-1">
-                <span className="text-[12px] text-ink-2">Scope</span>
-                <span className="num text-[14px] font-semibold">${scopeTotal.toLocaleString()}</span>
-              </div>
-              <div className="flex items-baseline justify-between">
-                <span className="text-[12px] text-ink-2">Bid</span>
-                <span className="num text-[14px] font-semibold">${bidTotal.toLocaleString()}</span>
-              </div>
-              <div className="text-[10px] text-ink-3 mt-2">
-                {status === 'ok'
-                  ? 'Scope matches bid — sign-off ready.'
-                  : status === 'warn'
-                    ? 'Small drift — review before sending.'
-                    : 'Mismatch — resolve before sending.'}
-              </div>
-            </Card>
-            <Attribution source={`Live from /api/projects/${projectId.slice(0, 8)}…/estimate/scope-vs-bid`} />
-          </div>
+          {isCompactKeystone ? null : (
+            <div className="space-y-3">
+              <BidAccuracyCard projectId={projectId} />
+              <Card tight>
+                <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1">Totals</div>
+                <div className="flex items-baseline justify-between mb-1">
+                  <span className="text-[12px] text-ink-2">Scope</span>
+                  <span className="num text-[14px] font-semibold">${scopeTotal.toLocaleString()}</span>
+                </div>
+                <div className="flex items-baseline justify-between">
+                  <span className="text-[12px] text-ink-2">Bid</span>
+                  <span className="num text-[14px] font-semibold">${bidTotal.toLocaleString()}</span>
+                </div>
+                <div className="text-[10px] text-ink-3 mt-2">
+                  {status === 'ok'
+                    ? 'Scope matches bid — sign-off ready.'
+                    : status === 'warn'
+                      ? 'Small drift — review before sending.'
+                      : 'Mismatch — resolve before sending.'}
+                </div>
+              </Card>
+              <Attribution source={`Live from /api/projects/${projectId.slice(0, 8)}…/estimate/scope-vs-bid`} />
+            </div>
+          )}
         </div>
       )}
+
+      {/*
+       * Compact-keystone expansion sheet. When the chip is tapped we open
+       * the full BidAccuracyCard in a bottom sheet so the user gets the
+       * comparables / attribution / dismiss affordance without committing
+       * the right-rail real-estate full-time.
+       */}
+      <Sheet
+        open={keystoneSheetOpen}
+        onClose={() => setKeystoneSheetOpen(false)}
+        title="Bid accuracy"
+        ariaLabel="Bid accuracy keystone"
+      >
+        <BidAccuracyCard projectId={projectId} onDismiss={() => setKeystoneSheetOpen(false)} />
+      </Sheet>
 
       {/* Footer. */}
       <div className="mt-6 flex items-center justify-end gap-2 pt-4 border-t border-line">
