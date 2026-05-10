@@ -10,20 +10,23 @@
  * to amend the CHECK constraint. For now we send the closest match and
  * surface the design label in copy.
  *
- * Severity, voice notes, and photo attachments are best-effort:
- * - Severity (`question | slowing | stopped`) is appended to the message
- *   body as a `[severity:slowing]` tag until the schema gets a column.
- * - Voice: captured via MediaRecorder; sent as base64 in the optional
- *   `voice_data_url` field. The current backend ignores the field — this
- *   is a forward-compatible no-op until POST /api/worker-issues accepts
- *   multipart bodies. TODO: revisit once a multipart route lands.
- * - Photo: captured via <input type=file capture=environment>; sent the
- *   same way in `photo_data_url`. Same TODO applies.
+ * Severity is appended to the message body as a `[severity:slowing]` tag
+ * until the schema gets a column.
+ *
+ * Voice + photo attachments persist via migration 054 (`worker_issue_attachments`):
+ * after the POST /api/worker-issues row lands, we follow up with one or
+ * more multipart POSTs to /api/worker-issues/:id/attachments. The
+ * deprecated `voice_data_url` / `photo_data_url` JSON fields used to be
+ * sent inline — they were silently dropped by the server and are removed
+ * here. Attachment failures don't block the foreman ping; they surface
+ * via MBanner so the worker can retry just the upload.
  */
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
+import { API_URL, buildAuthHeaders } from '../../lib/api/client.js'
 import {
+  MBanner,
   MBody,
   MButton,
   MButtonStack,
@@ -95,15 +98,23 @@ const CATEGORIES: ReadonlyArray<IssueCategory> = [
   { label: 'Other', sub: 'Type it out', kind: 'other', designKind: 'other', Icon: MI.Alert, tone: 'accent' },
 ]
 
+type UploadStage = 'idle' | 'creating' | 'uploading-voice' | 'uploading-photo' | 'done'
+
+type WorkerIssueCreateResponse = {
+  worker_issue: { id: string }
+}
+
 export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const [category, setCategory] = useState<IssueCategory | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null)
   const [severity, setSeverity] = useState<Severity>('question')
   const [voice, setVoice] = useState<{ blob: Blob; url: string; durationMs: number } | null>(null)
   const [photo, setPhoto] = useState<{ file: File; url: string } | null>(null)
+  const [stage, setStage] = useState<UploadStage>('idle')
 
   const projectId = bootstrap?.projects.find((p) => /progress|active/i.test(p.status))?.id ?? null
 
@@ -118,6 +129,7 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
     if (!category) return
     setBusy(true)
     setError(null)
+    setAttachmentWarning(null)
     try {
       const trimmed = message.trim() || `${category.label}: ${category.sub}`
       const tags = [`[${category.designKind}]`, `[severity:${severity}]`].filter(Boolean).join(' ')
@@ -126,22 +138,49 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
         message: `${tags} ${trimmed}`.trim(),
       }
       if (projectId) body.project_id = projectId
-      if (voice) {
-        // Forward-compatible: backend ignores unknown fields today, so
-        // this is a soft-launch path. TODO: switch to multipart once the
-        // route accepts a `voice_file` part.
-        body.voice_data_url = await blobToDataUrl(voice.blob)
-        body.voice_duration_ms = voice.durationMs
+      // The deprecated `voice_data_url` / `photo_data_url` JSON fields
+      // (silently dropped by the server) are gone — attachments are now
+      // sent via multipart POST /api/worker-issues/:id/attachments below.
+
+      setStage('creating')
+      const resp = await apiPost<WorkerIssueCreateResponse>('/api/worker-issues', body, companySlug)
+      const issueId = resp?.worker_issue?.id
+      // Best-effort attachment upload — issue ping itself succeeded; if
+      // either part fails we surface the failure but still navigate so
+      // the foreman sees the ticket. The worker can retry from
+      // fm-blocker-detail (TODO: actual retry surface — for v1 this
+      // banner prints the error and the foreman can ask for a re-send).
+      const failures: string[] = []
+      if (issueId && voice) {
+        setStage('uploading-voice')
+        try {
+          await uploadWorkerIssueAttachment(issueId, 'voice', voice.blob, fileNameForVoice(voice.blob))
+        } catch (err) {
+          failures.push(`voice: ${err instanceof Error ? err.message : String(err)}`)
+        }
       }
-      if (photo) {
-        body.photo_data_url = await fileToDataUrl(photo.file)
+      if (issueId && photo) {
+        setStage('uploading-photo')
+        try {
+          await uploadWorkerIssueAttachment(issueId, 'photo', photo.file, photo.file.name || 'photo.jpg')
+        } catch (err) {
+          failures.push(`photo: ${err instanceof Error ? err.message : String(err)}`)
+        }
       }
-      await apiPost('/api/worker-issues', body, companySlug)
+      setStage('done')
+      if (failures.length > 0) {
+        // Issue landed but attachments didn't — keep the user on the
+        // form so they can see the warning.
+        setAttachmentWarning(`Issue sent. Attachment upload failed — ${failures.join('; ')}`)
+        return
+      }
       navigate('/today')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(false)
+      // Leave `stage` at 'done' or whichever step failed; the buttons key
+      // off `busy` for disabled state.
     }
   }
 
@@ -170,11 +209,20 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
           />
           <VoiceRecorder value={voice} onChange={setVoice} onError={(msg) => setError(msg)} />
           <PhotoAttach value={photo} onChange={setPhoto} />
-          {error ? <div style={{ marginTop: 12, color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
+          {error ? (
+            <div style={{ marginTop: 12 }}>
+              <MBanner tone="error" title="Couldn't send the issue" body={error} />
+            </div>
+          ) : null}
+          {attachmentWarning ? (
+            <div style={{ marginTop: 12 }}>
+              <MBanner tone="warn" title="Attachment didn't upload" body={attachmentWarning} />
+            </div>
+          ) : null}
           <div style={{ marginTop: 16 }}>
             <MButtonStack>
               <MButton variant="primary" onClick={handleSend} disabled={busy}>
-                {busy ? 'Sending…' : 'Send to foreman'}
+                {busy ? buttonLabelForStage(stage) : 'Send to foreman'}
               </MButton>
               <MButton variant="ghost" onClick={() => setCategory(null)}>
                 Pick a different category
@@ -408,15 +456,60 @@ function PhotoAttach({
   )
 }
 
-async function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader()
-    r.onload = () => resolve(typeof r.result === 'string' ? r.result : '')
-    r.onerror = () => reject(r.error ?? new Error('failed to read blob'))
-    r.readAsDataURL(blob)
-  })
+function buttonLabelForStage(stage: UploadStage): string {
+  if (stage === 'creating') return 'Sending…'
+  if (stage === 'uploading-voice') return 'Uploading voice note…'
+  if (stage === 'uploading-photo') return 'Uploading photo…'
+  return 'Sending…'
 }
 
-async function fileToDataUrl(file: File): Promise<string> {
-  return blobToDataUrl(file)
+function fileNameForVoice(blob: Blob): string {
+  const type = blob.type.toLowerCase()
+  if (type.includes('webm')) return 'voice.webm'
+  if (type.includes('ogg')) return 'voice.ogg'
+  if (type.includes('mp4') || type.includes('m4a')) return 'voice.m4a'
+  if (type.includes('mpeg')) return 'voice.mp3'
+  if (type.includes('wav')) return 'voice.wav'
+  return 'voice.webm'
+}
+
+/**
+ * POST /api/worker-issues/:id/attachments — multipart upload for a
+ * single voice note or photo. Mirrors the daily-log photo upload helper
+ * (apps/web/src/lib/api/daily-logs.ts: uploadDailyLogPhoto).
+ */
+async function uploadWorkerIssueAttachment(
+  issueId: string,
+  kind: 'voice' | 'photo',
+  payload: Blob | File,
+  fileName: string,
+): Promise<void> {
+  const form = new FormData()
+  form.append('kind', kind)
+  // Note: append `kind` BEFORE the file part. Busboy delivers fields in
+  // wire order; the server reads `fields.kind` inside its `file` handler
+  // so the field has to land first.
+  form.append('file', payload, fileName)
+  const headers = await buildAuthHeaders()
+  const path = `/api/worker-issues/${encodeURIComponent(issueId)}/attachments`
+  const response = await fetch(`${API_URL}${path}`, {
+    method: 'POST',
+    headers,
+    body: form,
+  })
+  if (!response.ok) {
+    const ct = response.headers.get('content-type') ?? ''
+    let detail: string
+    try {
+      if (ct.includes('application/json')) {
+        const body = (await response.json()) as { error?: string }
+        detail = body?.error ?? ''
+      } else {
+        detail = await response.text()
+      }
+    } catch {
+      detail = ''
+    }
+    throw new Error(detail || `attachment upload failed (${response.status})`)
+  }
 }

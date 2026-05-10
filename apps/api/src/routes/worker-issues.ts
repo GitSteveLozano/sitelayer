@@ -4,6 +4,11 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { enqueueNotification, recordMutationLedger, recordWorkflowEvent } from '../mutation-tx.js'
 import { listIssueRecipientUserIds } from '../notifications.js'
 import { withMutationTx } from '../mutation-tx.js'
+import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
+import {
+  parseWorkerIssueAttachmentMultipart,
+  WorkerIssueAttachmentUploadError,
+} from '../worker-issue-attachment-upload.js'
 import {
   FIELD_EVENT_WORKFLOW_NAME,
   FIELD_EVENT_WORKFLOW_SCHEMA_VERSION,
@@ -38,7 +43,35 @@ export type WorkerIssueRouteCtx = {
   requireRole: (allowed: readonly CompanyRole[]) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
+  /**
+   * Storage backend (DO Spaces or local FS). Required by the attachment
+   * upload + download endpoints; same instance the daily-logs and
+   * blueprints routes use.
+   */
+  storage: BlueprintStorage
+  /** Per-attachment cap (bytes). Photos are big; voice notes are small. */
+  maxAttachmentBytes: number
+  /** Whether the attachment download path returns presigned URLs. */
+  attachmentDownloadPresigned: boolean
+  /** Stream-back response shaping for attachment downloads. */
+  sendFileContent: (mimeType: string, fileName: string, content: Buffer | string) => void
+  sendFileRedirect: (location: string) => void
 }
+
+export type WorkerIssueAttachmentRow = {
+  id: string
+  company_id: string
+  worker_issue_id: string
+  kind: 'voice' | 'photo'
+  storage_key: string
+  mime_type: string
+  size_bytes: string | number
+  created_at: string
+}
+
+const ATTACHMENT_COLUMNS = `
+  id, company_id, worker_issue_id, kind, storage_key, mime_type, size_bytes, created_at
+`
 
 const ALLOWED_KINDS = ['materials_out', 'crew_short', 'safety', 'other'] as const
 type IssueKind = (typeof ALLOWED_KINDS)[number]
@@ -214,6 +247,152 @@ export async function handleWorkerIssueRoutes(
     }
 
     ctx.sendJson(201, { worker_issue: insertedRow })
+    return true
+  }
+
+  // -------------------------------------------------------------------
+  // Attachment routes — voice + photo uploads/downloads.
+  //
+  // Issued *before* the bare /api/worker-issues/:id matcher so the path
+  // /api/worker-issues/:id/attachments doesn't accidentally match the
+  // detail (it wouldn't anyway because of the trailing slash, but the
+  // explicit ordering documents intent).
+  // -------------------------------------------------------------------
+
+  const attachmentsMatch = url.pathname.match(/^\/api\/worker-issues\/([^/]+)\/attachments$/)
+  if (req.method === 'POST' && attachmentsMatch) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office', 'member'])) return true
+    const issueId = attachmentsMatch[1]!
+    // Confirm the issue exists and is owned by this company before we
+    // accept upload bytes — refuse early so a misdirected upload doesn't
+    // burn a multipart cycle.
+    const existing = await ctx.pool.query<{ id: string }>(
+      `select id from worker_issues where company_id = $1 and id = $2 limit 1`,
+      [ctx.company.id, issueId],
+    )
+    if (!existing.rows[0]) {
+      ctx.sendJson(404, { error: 'worker_issue not found' })
+      return true
+    }
+
+    let upload
+    try {
+      upload = await parseWorkerIssueAttachmentMultipart(req, ctx.storage, ctx.company.id, issueId, {
+        maxFileBytes: ctx.maxAttachmentBytes,
+      })
+    } catch (err) {
+      if (err instanceof WorkerIssueAttachmentUploadError) {
+        ctx.sendJson(err.status, { error: err.message })
+        return true
+      }
+      throw err
+    }
+
+    const inserted = await withMutationTx(async (client: PoolClient) => {
+      // Voice notes are 1-per-issue; replace any prior voice attachment
+      // (the partial unique index would otherwise reject the insert).
+      if (upload.kind === 'voice') {
+        await client.query(
+          `delete from worker_issue_attachments
+             where company_id = $1 and worker_issue_id = $2 and kind = 'voice'`,
+          [ctx.company.id, issueId],
+        )
+      }
+      const result = await client.query<WorkerIssueAttachmentRow>(
+        `insert into worker_issue_attachments
+           (company_id, worker_issue_id, kind, storage_key, mime_type, size_bytes)
+         values ($1, $2, $3, $4, $5, $6)
+         returning ${ATTACHMENT_COLUMNS}`,
+        [ctx.company.id, issueId, upload.kind, upload.storagePath, upload.mimeType, upload.bytes],
+      )
+      const row = result.rows[0]!
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'worker_issue_attachment',
+        entityId: row.id,
+        action: 'create',
+        row: row as unknown as Record<string, unknown>,
+        actorUserId: ctx.currentUserId,
+      })
+      return row
+    })
+
+    // Pull the issue + the full attachment list so the client gets a
+    // self-sufficient response (mirrors how POST /api/daily-logs/:id/photos
+    // returns the updated row + the new photo).
+    const [issue, attachments] = await Promise.all([
+      ctx.pool.query(`select ${ISSUE_COLUMNS} from worker_issues where company_id = $1 and id = $2 limit 1`, [
+        ctx.company.id,
+        issueId,
+      ]),
+      ctx.pool.query<WorkerIssueAttachmentRow>(
+        `select ${ATTACHMENT_COLUMNS} from worker_issue_attachments
+         where company_id = $1 and worker_issue_id = $2
+         order by created_at asc`,
+        [ctx.company.id, issueId],
+      ),
+    ])
+
+    ctx.sendJson(201, {
+      worker_issue: issue.rows[0] ?? null,
+      attachment: inserted,
+      attachments: attachments.rows,
+    })
+    return true
+  }
+
+  if (req.method === 'GET' && attachmentsMatch) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office', 'member'])) return true
+    const issueId = attachmentsMatch[1]!
+    const result = await ctx.pool.query<WorkerIssueAttachmentRow>(
+      `select ${ATTACHMENT_COLUMNS} from worker_issue_attachments
+       where company_id = $1 and worker_issue_id = $2
+       order by created_at asc`,
+      [ctx.company.id, issueId],
+    )
+    ctx.sendJson(200, { attachments: result.rows })
+    return true
+  }
+
+  // GET /api/worker-issues/:id/attachments/:key/file — stream bytes (or
+  // 302 to a presigned URL when BLUEPRINT_DOWNLOAD_PRESIGNED=1). The
+  // storage key is URL-encoded in the path because keys contain `/`.
+  const attachmentFileMatch = url.pathname.match(/^\/api\/worker-issues\/([^/]+)\/attachments\/([^/]+)\/file$/)
+  if (req.method === 'GET' && attachmentFileMatch) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const issueId = attachmentFileMatch[1]!
+    const rawKey = attachmentFileMatch[2]!
+    const key = decodeURIComponent(rawKey)
+    try {
+      assertKeyInCompany(ctx.company.id, key)
+    } catch (err) {
+      ctx.sendJson(400, { error: err instanceof Error ? err.message : 'invalid key' })
+      return true
+    }
+    // Confirm the key actually points at an attachment for this issue
+    // before we expose bytes. Defense-in-depth: assertKeyInCompany only
+    // proves company scope; the row check proves issue scope.
+    const lookup = await ctx.pool.query<WorkerIssueAttachmentRow>(
+      `select ${ATTACHMENT_COLUMNS} from worker_issue_attachments
+       where company_id = $1 and worker_issue_id = $2 and storage_key = $3
+       limit 1`,
+      [ctx.company.id, issueId, key],
+    )
+    const row = lookup.rows[0]
+    if (!row) {
+      ctx.sendJson(404, { error: 'attachment not found on this issue' })
+      return true
+    }
+    if (ctx.attachmentDownloadPresigned) {
+      const presigned = await ctx.storage.getDownloadUrl(key)
+      if (presigned) {
+        ctx.sendFileRedirect(presigned)
+        return true
+      }
+    }
+    const buf = await ctx.storage.get(key)
+    const fileName = key.split('/').pop() || (row.kind === 'voice' ? 'voice.webm' : 'photo.jpg')
+    ctx.sendFileContent(row.mime_type || 'application/octet-stream', fileName, buf)
     return true
   }
 
