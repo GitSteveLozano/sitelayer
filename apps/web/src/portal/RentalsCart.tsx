@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { API_URL } from '@/lib/api'
+import { MBanner } from '@/components/m'
+import { EmptyState } from '@/components/shell/EmptyState'
 import { readCart, writeCart, type PortalCartLine } from './RentalsPortal'
 
 /**
@@ -111,7 +113,27 @@ export function RentalsCart() {
       <h1 style={{ fontSize: 24, marginTop: 16 }}>Cart</h1>
 
       {cart.length === 0 ? (
-        <p style={{ color: '#888' }}>Your cart is empty.</p>
+        <div style={{ marginTop: 16 }}>
+          <EmptyState
+            title="Cart is empty"
+            body="Add equipment from the catalog to request a reservation."
+            primaryAction={
+              <Link
+                to={`/portal/rentals/${encodeURIComponent(shareToken)}`}
+                style={{
+                  display: 'inline-block',
+                  padding: '10px 16px',
+                  borderRadius: 8,
+                  background: 'var(--m-accent, #d9904a)',
+                  color: '#fff',
+                  textDecoration: 'none',
+                }}
+              >
+                Browse catalog
+              </Link>
+            }
+          />
+        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12, marginTop: 16 }}>
           {cart.map((line, i) => (
@@ -204,7 +226,11 @@ export function RentalsCart() {
         />
       </div>
 
-      {error ? <p style={{ color: '#a44', marginTop: 16 }}>{error}</p> : null}
+      {error ? (
+        <div style={{ marginTop: 16 }}>
+          <MBanner tone="error" title="Could not reserve" body={error} />
+        </div>
+      ) : null}
 
       <button
         type="button"

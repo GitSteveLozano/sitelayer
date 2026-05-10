@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { API_URL } from '@/lib/api'
+import { EmptyState } from '@/components/shell/EmptyState'
 
 /**
  * Public customer rental portal — Browse view.
@@ -191,7 +192,16 @@ export function RentalsPortal() {
         ))}
       </div>
 
-      {filtered.length === 0 ? <div style={{ padding: 24, color: '#888' }}>No items matched your search.</div> : null}
+      {filtered.length === 0 ? (
+        <EmptyState
+          title={query || category !== 'All' ? 'No items match' : 'Catalog is empty'}
+          body={
+            query || category !== 'All'
+              ? 'Try clearing the search or category filter.'
+              : 'Ask the operator to publish inventory items.'
+          }
+        />
+      ) : null}
     </div>
   )
 }

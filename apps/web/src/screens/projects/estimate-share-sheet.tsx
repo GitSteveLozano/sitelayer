@@ -89,20 +89,26 @@ export function EstimateShareSheet({ open, onClose, projectId, defaultEmail, def
       )}
 
       {/* History — only render when we have data so we don't flicker. */}
-      {shares.data && shares.data.shares.length > 0 ? (
+      {shares.data ? (
         <div className="mt-5">
           <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-2">Previously sent</div>
-          <div className="bg-card border border-line rounded-[12px] overflow-hidden">
-            {shares.data.shares.slice(0, 8).map((share) => (
-              <Row
-                key={share.id}
-                leadingTone={statusTone(share.status)}
-                leading={<span className="text-[10px] font-semibold">{statusInitial(share.status)}</span>}
-                headline={share.recipient_email ?? '—'}
-                supporting={`${prettyStatus(share.status)} · ${formatRelative(share.sent_at)}`}
-              />
-            ))}
-          </div>
+          {shares.data.shares.length > 0 ? (
+            <div className="bg-card border border-line rounded-[12px] overflow-hidden">
+              {shares.data.shares.slice(0, 8).map((share) => (
+                <Row
+                  key={share.id}
+                  leadingTone={statusTone(share.status)}
+                  leading={<span className="text-[10px] font-semibold">{statusInitial(share.status)}</span>}
+                  headline={share.recipient_email ?? '—'}
+                  supporting={`${prettyStatus(share.status)} · ${formatRelative(share.sent_at)}`}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="text-[12px] text-ink-3 px-3 py-4 bg-card border border-line rounded-[12px]">
+              No share links sent yet.
+            </div>
+          )}
         </div>
       ) : null}
     </Sheet>

@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
+import { EmptyState } from '@/components/shell/EmptyState'
 import {
   ApiError,
   dispatchCrewScheduleEvent,
@@ -282,6 +283,25 @@ export function FourWeekScheduleGrid({
       h += duration * crew
     }
     return h
+  }
+
+  if (schedules.length === 0) {
+    return (
+      <div className="px-4 py-4 pb-24">
+        <EmptyState
+          title="No assignments in the next 4 weeks"
+          body="Create one to fill the look-ahead and surface conflicts before they bite."
+          primaryAction={
+            <MobileButton
+              variant="primary"
+              onClick={() => onCreateForDateAndCrew(new Date(weekStartMs).toISOString().slice(0, 10))}
+            >
+              New assignment
+            </MobileButton>
+          }
+        />
+      </div>
+    )
   }
 
   return (

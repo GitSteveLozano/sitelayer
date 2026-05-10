@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
+import { MBanner } from '@/components/m'
 import { useProjects, useRentalTransfer, type RentalTransferResponse } from '@/lib/api'
 
 /**
@@ -106,7 +107,7 @@ export function RentalTransferSheet({
           </div>
         </Card>
 
-        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
+        {error ? <MBanner tone="error" title="Could not transfer" body={error} /> : null}
 
         <Attribution source="POST /api/rentals/:id/transfer — closes source + creates a new linked rental" />
 
