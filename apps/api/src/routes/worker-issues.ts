@@ -317,8 +317,7 @@ export async function handleWorkerIssueRoutes(
              resolution_message = $4,
              state_version = $5,
              escalated_to_estimator_at = NULL,
-             escalation_reason = NULL,
-             updated_at = now()
+             escalation_reason = NULL
            where id = $6 and company_id = $7`,
           [
             event.resolved_at,
@@ -335,8 +334,7 @@ export async function handleWorkerIssueRoutes(
           `update worker_issues set
              escalated_to_estimator_at = $1,
              escalation_reason = $2,
-             state_version = $3,
-             updated_at = now()
+             state_version = $3
            where id = $4 and company_id = $5`,
           [event.escalated_at, event.reason, nextSnapshot.state_version, issueId, ctx.company.id],
         )
@@ -346,8 +344,7 @@ export async function handleWorkerIssueRoutes(
              resolved_at = $1,
              resolved_by_clerk_user_id = $2,
              resolved_action = $3,
-             state_version = $4,
-             updated_at = now()
+             state_version = $4
            where id = $5 and company_id = $6`,
           [
             event.dismissed_at,
@@ -367,8 +364,7 @@ export async function handleWorkerIssueRoutes(
              resolution_message = NULL,
              escalated_to_estimator_at = NULL,
              escalation_reason = NULL,
-             state_version = $1,
-             updated_at = now()
+             state_version = $1
            where id = $2 and company_id = $3`,
           [nextSnapshot.state_version, issueId, ctx.company.id],
         )
