@@ -146,6 +146,11 @@ export function ForemanToday({ bootstrap, companySlug }: { bootstrap: BootstrapR
             <MAiStripe
               eyebrow={`FROM THE FIELD · ${needYou} need ${needYou === 1 ? 'you' : 'you'}`}
               tone="warn"
+              attribution={
+                <>
+                  Based on <strong>{needYou} open</strong> {needYou === 1 ? 'issue' : 'issues'} from the field today.
+                </>
+              }
               action={
                 <MButton variant="quiet" size="sm" onClick={() => navigate('/field')}>
                   See all

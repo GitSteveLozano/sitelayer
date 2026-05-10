@@ -325,7 +325,7 @@ function inferRoleModeFromPath(pathname: string, basePath: string): RoleMode | n
   ) {
     return 'admin'
   }
-  if (segment === 'crew' || segment === 'field' || segment === 'brief') {
+  if (segment === 'crew' || segment === 'field' || segment === 'brief' || segment === 'foreman') {
     return 'foreman'
   }
   if (segment === 'scope' || segment === 'hours' || segment === 'clockin' || segment === 'issue') {
