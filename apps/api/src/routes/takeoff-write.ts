@@ -10,6 +10,7 @@ import {
   rejectionMessageForCatalog,
 } from '../catalog.js'
 import { createEstimateFromMeasurements, getScopeVsBid } from './estimate.js'
+import { resolveDefaultDraftId, validateDraftId } from './takeoff-drafts.js'
 
 export type TakeoffWriteRouteCtx = {
   pool: Pool
@@ -217,6 +218,30 @@ export async function handleTakeoffWriteRoutes(
       measurementInput.blueprintDocumentId,
     ])
 
+    // Resolve target draft. Explicit body.draft_id wins (validated against
+    // project tenancy); otherwise fall back to the active default draft.
+    // Returns 400 for foreign draft_id, 500-equivalent via empty fallback
+    // if a project somehow has no drafts (shouldn't happen post-066).
+    const explicitDraftId =
+      typeof body.draft_id === 'string' && body.draft_id.trim().length > 0 ? body.draft_id.trim() : null
+    let draftId: string | null = null
+    if (explicitDraftId) {
+      const ok = await validateDraftId(ctx.pool, ctx.company.id, projectId, explicitDraftId)
+      if (!ok) {
+        ctx.sendJson(400, { error: 'draft_id does not belong to this project' })
+        return true
+      }
+      draftId = explicitDraftId
+    } else {
+      draftId = await resolveDefaultDraftId(ctx.pool, ctx.company.id, projectId)
+      if (!draftId) {
+        ctx.sendJson(409, {
+          error: 'project has no active default draft; create one via POST /api/projects/:id/takeoff-drafts',
+        })
+        return true
+      }
+    }
+
     // Curated-catalog enforcement (per spec): a takeoff cannot reference a
     // service item without at least one curated division mapping, and if a
     // division was supplied it must be in the allowed set.
@@ -244,10 +269,10 @@ export async function handleTakeoffWriteRoutes(
       const insertResult = await client.query(
         `
         insert into takeoff_measurements (
-          company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail
+          company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id
         )
-        values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9, $10, $11)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, version, deleted_at, created_at
+        values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9, $10, $11, $12)
+        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
         `,
         [
           ctx.company.id,
@@ -261,6 +286,7 @@ export async function handleTakeoffWriteRoutes(
           measurementInput.divisionCode,
           measurementInput.elevation,
           measurementInput.imageThumbnail,
+          draftId,
         ],
       )
       const row = insertResult.rows[0]
@@ -320,6 +346,29 @@ export async function handleTakeoffWriteRoutes(
       preparedMeasurements.map((measurement) => measurement.blueprintDocumentId),
     )
 
+    // Resolve target draft for the bulk-replace. The destructive soft-delete
+    // below is scoped to (project_id, draft_id) so other drafts on the same
+    // project survive untouched.
+    const explicitBulkDraftId =
+      typeof body.draft_id === 'string' && body.draft_id.trim().length > 0 ? body.draft_id.trim() : null
+    let bulkDraftId: string | null = null
+    if (explicitBulkDraftId) {
+      const ok = await validateDraftId(ctx.pool, ctx.company.id, projectId, explicitBulkDraftId)
+      if (!ok) {
+        ctx.sendJson(400, { error: 'draft_id does not belong to this project' })
+        return true
+      }
+      bulkDraftId = explicitBulkDraftId
+    } else {
+      bulkDraftId = await resolveDefaultDraftId(ctx.pool, ctx.company.id, projectId)
+      if (!bulkDraftId) {
+        ctx.sendJson(409, {
+          error: 'project has no active default draft; create one via POST /api/projects/:id/takeoff-drafts',
+        })
+        return true
+      }
+    }
+
     // Curated-catalog enforcement applied per measurement BEFORE the
     // destructive soft-delete of the existing set, so a single bad row doesn't
     // wipe the project's takeoff history. Pre-load the
@@ -349,13 +398,15 @@ export async function handleTakeoffWriteRoutes(
     }
 
     const replaced = await withMutationTx(async (client) => {
+      // Scope the destructive soft-delete to the target draft so sibling
+      // drafts on the same project survive untouched.
       await client.query(
         `
         update takeoff_measurements
         set deleted_at = now(), version = version + 1
-        where company_id = $1 and project_id = $2 and deleted_at is null
+        where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null
         `,
-        [ctx.company.id, projectId],
+        [ctx.company.id, projectId, bulkDraftId],
       )
 
       const createdRows: Record<string, unknown>[] = []
@@ -363,10 +414,10 @@ export async function handleTakeoffWriteRoutes(
         const insertResult = await client.query(
           `
           insert into takeoff_measurements (
-            company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail
+            company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id
           )
-          values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9, $10, $11)
-          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, version, deleted_at, created_at
+          values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9, $10, $11, $12)
+          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
           `,
           [
             ctx.company.id,
@@ -380,6 +431,7 @@ export async function handleTakeoffWriteRoutes(
             measurement.divisionCode,
             measurement.elevation,
             measurement.imageThumbnail,
+            bulkDraftId,
           ],
         )
         createdRows.push(insertResult.rows[0])

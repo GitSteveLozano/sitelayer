@@ -5,6 +5,7 @@ import type { ActiveCompany } from '../auth-types.js'
 import { evaluateLww } from '../lww.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidUuid, parseExpectedVersion } from '../http-utils.js'
+import { resolveDefaultDraftId } from './takeoff-drafts.js'
 
 const ELEVATION_VOCAB_PATCH = new Set(['east', 'south', 'west', 'north', 'roof', 'other'])
 
@@ -51,14 +52,41 @@ export async function handleTakeoffMeasurementRoutes(
       ctx.sendJson(400, { error: 'project id is required' })
       return true
     }
+    // Optional ?draft_id= filter (Phase A.2). When omitted, default to the
+    // project's active default draft so existing callers (the takeoff
+    // canvas before the picker UI lands in Phase A.3) keep seeing a coherent
+    // measurement set. Migration 066 backfilled existing projects and
+    // project-create now auto-inserts a default draft, so the only path to
+    // `resolveDefaultDraftId === null` is an operator hard-deleting every
+    // draft via psql — in which case we return an empty set rather than
+    // silently surfacing rows from a deleted draft.
+    const explicitDraftId = url.searchParams.get('draft_id')
+    let draftFilter = ''
+    const params: unknown[] = [ctx.company.id, projectId]
+    if (explicitDraftId !== null) {
+      if (!isValidUuid(explicitDraftId)) {
+        ctx.sendJson(400, { error: 'draft_id must be a valid uuid' })
+        return true
+      }
+      draftFilter = 'and draft_id = $3'
+      params.push(explicitDraftId)
+    } else {
+      const defaultDraftId = await resolveDefaultDraftId(ctx.pool, ctx.company.id, projectId)
+      if (defaultDraftId === null) {
+        ctx.sendJson(200, { measurements: [] })
+        return true
+      }
+      draftFilter = 'and draft_id = $3'
+      params.push(defaultDraftId)
+    }
     const result = await ctx.pool.query(
       `
-      select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, image_thumbnail, version, deleted_at, created_at
+      select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
       from takeoff_measurements
-      where company_id = $1 and project_id = $2 and deleted_at is null
+      where company_id = $1 and project_id = $2 and deleted_at is null ${draftFilter}
       order by created_at desc
       `,
-      [ctx.company.id, projectId],
+      params,
     )
     ctx.sendJson(200, { measurements: result.rows })
     return true
