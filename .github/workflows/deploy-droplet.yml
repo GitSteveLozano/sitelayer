@@ -28,17 +28,48 @@ jobs:
 
       - name: Reclaim docker disk before build
         # Defensive: the prod-image build is the heaviest disk-consuming step
-        # on the self-hosted preview runner, and ENOSPC here aborts the deploy.
-        # Prune build cache > 24h old and untagged image layers > 72h old; this
-        # leaves recent caches in place so consecutive deploys still benefit
-        # from BuildKit reuse, but stops the build cache + layer pile from
-        # filling root over time. Best-effort — never blocks the deploy.
+        # on the self-hosted preview runner, and ENOSPC here aborts the deploy
+        # mid-layer-extraction (observed 2026-05-10: two consecutive deploys
+        # of dc35666a failed at @anthropic-ai/sdk extraction with "no space
+        # left on device", root was at ~95%).
+        #
+        # Reclaim aggressively rather than try to preserve recent cache:
+        # BuildKit cache reuse is nice-to-have, but a stuck deploy is
+        # worse than a 30-second extra extract on the next build. The
+        # earlier 24h/72h filters were too gentle — recent Docker layers
+        # (Phase B brought @anthropic-ai/sdk into the prod image, which
+        # by itself adds ~70 MB of node_modules every build) blew past
+        # the disk budget within hours.
+        #
+        # Two-pass strategy: cheap prune always; if root is still > 80%
+        # full after the cheap prune, escalate to a full `system prune -af`
+        # that drops every layer not referenced by a running container.
+        # Both passes are best-effort; the build will surface its own
+        # ENOSPC if reclaim genuinely can't free space.
         run: |
           set +e
+          echo "==> Pre-reclaim disk usage"
           df -h /
-          docker builder prune -af --filter until=24h
-          docker image prune -af --filter until=72h
+          docker system df 2>/dev/null || true
+
+          echo "==> Pass 1: drop every build cache + untagged layer"
+          docker builder prune -af
+          docker image prune -af
+          docker container prune -f
+
+          echo "==> Post-pass-1 disk usage"
           df -h /
+
+          pct_used="$(df --output=pcent / | tail -1 | tr -dc '0-9')"
+          if [ -z "$pct_used" ]; then pct_used=0; fi
+          if [ "$pct_used" -ge 80 ]; then
+            echo "==> Root still ${pct_used}% full — escalating to system prune"
+            docker system prune -af --volumes
+            echo "==> Post-escalation disk usage"
+            df -h /
+          else
+            echo "==> Root at ${pct_used}% — escalation not needed"
+          fi
           true
 
       - name: Prune old registry tags
