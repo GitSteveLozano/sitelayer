@@ -1,9 +1,20 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { enqueueNotification } from '../mutation-tx.js'
+import { enqueueNotification, recordMutationLedger, recordWorkflowEvent } from '../mutation-tx.js'
 import { listIssueRecipientUserIds } from '../notifications.js'
 import { withMutationTx } from '../mutation-tx.js'
+import {
+  FIELD_EVENT_WORKFLOW_NAME,
+  FIELD_EVENT_WORKFLOW_SCHEMA_VERSION,
+  nextFieldEventEvents,
+  parseFieldEventEventRequest,
+  transitionFieldEventWorkflow,
+  type FieldEventResolutionAction,
+  type FieldEventWorkflowEvent,
+  type FieldEventWorkflowSnapshot,
+  type FieldEventWorkflowState,
+} from '@sitelayer/workflows'
 
 /**
  * Routes for `wk-issue` from Sitemap §11 — worker "Flag a problem" pings.
@@ -48,6 +59,79 @@ const ISSUE_COLUMNS = `
   id, company_id, project_id, worker_id, reporter_clerk_user_id,
   kind, message, resolved_at, resolved_by_clerk_user_id, created_at
 `
+
+const WORKFLOW_ISSUE_COLUMNS = `
+  id, company_id, project_id, worker_id, reporter_clerk_user_id,
+  kind, message, severity, resolved_at, resolved_by_clerk_user_id,
+  resolved_action, resolution_message, state_version,
+  escalated_to_estimator_at, escalation_reason, created_at
+`
+
+type WorkflowIssueRow = {
+  id: string
+  company_id: string
+  project_id: string | null
+  worker_id: string | null
+  reporter_clerk_user_id: string | null
+  kind: string
+  message: string
+  severity: string
+  resolved_at: string | null
+  resolved_by_clerk_user_id: string | null
+  resolved_action: string | null
+  resolution_message: string | null
+  state_version: number
+  escalated_to_estimator_at: string | null
+  escalation_reason: string | null
+  created_at: string
+}
+
+const DISMISSED_ACTION_SENTINEL = '__dismissed__'
+
+function rowToWorkflowState(row: WorkflowIssueRow): FieldEventWorkflowState {
+  if (row.escalated_to_estimator_at) return 'escalated'
+  if (row.resolved_at && row.resolved_action === DISMISSED_ACTION_SENTINEL) return 'dismissed'
+  if (row.resolved_at) return 'resolved'
+  return 'open'
+}
+
+function rowToSnapshot(row: WorkflowIssueRow): FieldEventWorkflowSnapshot {
+  return {
+    state: rowToWorkflowState(row),
+    state_version: row.state_version,
+    resolved_at: row.resolved_at,
+    resolved_action:
+      (row.resolved_action === DISMISSED_ACTION_SENTINEL
+        ? null
+        : (row.resolved_action as FieldEventResolutionAction | null)) ?? null,
+    resolution_message: row.resolution_message,
+    escalated_to_estimator_at: row.escalated_to_estimator_at,
+    escalation_reason: row.escalation_reason,
+  }
+}
+
+function buildWorkflowResponse(row: WorkflowIssueRow) {
+  const snapshot = rowToSnapshot(row)
+  return {
+    state: snapshot.state,
+    state_version: snapshot.state_version,
+    context: {
+      id: row.id,
+      project_id: row.project_id,
+      worker_id: row.worker_id,
+      kind: row.kind,
+      message: row.message,
+      severity: row.severity,
+      resolved_at: row.resolved_at,
+      resolved_action: row.resolved_action === DISMISSED_ACTION_SENTINEL ? null : row.resolved_action,
+      resolution_message: row.resolution_message,
+      escalated_to_estimator_at: row.escalated_to_estimator_at,
+      escalation_reason: row.escalation_reason,
+      created_at: row.created_at,
+    },
+    next_events: nextFieldEventEvents(snapshot.state),
+  }
+}
 
 export async function handleWorkerIssueRoutes(
   req: http.IncomingMessage,
@@ -130,6 +214,248 @@ export async function handleWorkerIssueRoutes(
     }
 
     ctx.sendJson(201, { worker_issue: insertedRow })
+    return true
+  }
+
+  // GET /api/worker-issues/:id — workflow snapshot for fm-blocker-detail.
+  // Returns { state, state_version, context, next_events } shape mirroring
+  // the time-review-runs / rental-billing-state routes so the xstate
+  // machine in apps/web/src/machines/field-event.ts can consume it as-is.
+  const detailMatch = url.pathname.match(/^\/api\/worker-issues\/([^/]+)$/)
+  if (req.method === 'GET' && detailMatch) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const issueId = detailMatch[1]!
+    const result = await ctx.pool.query<WorkflowIssueRow>(
+      `select ${WORKFLOW_ISSUE_COLUMNS} from worker_issues where company_id = $1 and id = $2 limit 1`,
+      [ctx.company.id, issueId],
+    )
+    const row = result.rows[0]
+    if (!row) {
+      ctx.sendJson(404, { error: 'worker_issue not found' })
+      return true
+    }
+    ctx.sendJson(200, buildWorkflowResponse(row))
+    return true
+  }
+
+  // PATCH /api/worker-issues/:id — apply a field-event workflow event
+  // (RESOLVE / ESCALATE / DISMISS / REOPEN). Pure reducer applied in one
+  // tx with optimistic state_version check; 409 on stale version. Side
+  // effects enqueued via mutation_outbox so the worker drain can fan out
+  // notifications. Mirrors apps/api/src/routes/time-review-runs.ts.
+  if (req.method === 'PATCH' && detailMatch) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const issueId = detailMatch[1]!
+    const rawBody = await ctx.readBody()
+    const parsed = parseFieldEventEventRequest(rawBody)
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const updated = await withMutationTx(async (client: PoolClient) => {
+      const existing = await client.query<WorkflowIssueRow>(
+        `select ${WORKFLOW_ISSUE_COLUMNS} from worker_issues
+         where company_id = $1 and id = $2
+         for update
+         limit 1`,
+        [ctx.company.id, issueId],
+      )
+      const row = existing.rows[0]
+      if (!row) return { kind: 'not_found' as const }
+      if (row.state_version !== parsed.value.state_version) {
+        return { kind: 'version_conflict' as const, current: row }
+      }
+      const beforeSnapshot = rowToSnapshot(row)
+      let event: FieldEventWorkflowEvent
+      const now = new Date().toISOString()
+      if (parsed.value.event === 'RESOLVE') {
+        event = {
+          type: 'RESOLVE',
+          resolved_at: now,
+          resolved_by_user_id: ctx.currentUserId,
+          action: parsed.value.action!,
+          message_to_worker: parsed.value.message_to_worker ?? null,
+        }
+      } else if (parsed.value.event === 'ESCALATE') {
+        event = {
+          type: 'ESCALATE',
+          escalated_at: now,
+          escalator_user_id: ctx.currentUserId,
+          reason: parsed.value.reason!,
+        }
+      } else if (parsed.value.event === 'DISMISS') {
+        event = {
+          type: 'DISMISS',
+          dismissed_at: now,
+          dismissed_by_user_id: ctx.currentUserId,
+        }
+      } else {
+        event = {
+          type: 'REOPEN',
+          reopened_at: now,
+          reopener_user_id: ctx.currentUserId,
+        }
+      }
+      let nextSnapshot: FieldEventWorkflowSnapshot
+      try {
+        nextSnapshot = transitionFieldEventWorkflow(beforeSnapshot, event)
+      } catch (err) {
+        return {
+          kind: 'illegal_transition' as const,
+          message: err instanceof Error ? err.message : 'illegal transition',
+          current: row,
+        }
+      }
+      // Persist. Branch by event type so we update only the relevant
+      // columns and preserve the audit trail (reopen clears prior decision).
+      if (event.type === 'RESOLVE') {
+        await client.query(
+          `update worker_issues set
+             resolved_at = $1,
+             resolved_by_clerk_user_id = $2,
+             resolved_action = $3,
+             resolution_message = $4,
+             state_version = $5,
+             escalated_to_estimator_at = NULL,
+             escalation_reason = NULL,
+             updated_at = now()
+           where id = $6 and company_id = $7`,
+          [
+            event.resolved_at,
+            event.resolved_by_user_id,
+            event.action,
+            event.message_to_worker,
+            nextSnapshot.state_version,
+            issueId,
+            ctx.company.id,
+          ],
+        )
+      } else if (event.type === 'ESCALATE') {
+        await client.query(
+          `update worker_issues set
+             escalated_to_estimator_at = $1,
+             escalation_reason = $2,
+             state_version = $3,
+             updated_at = now()
+           where id = $4 and company_id = $5`,
+          [event.escalated_at, event.reason, nextSnapshot.state_version, issueId, ctx.company.id],
+        )
+      } else if (event.type === 'DISMISS') {
+        await client.query(
+          `update worker_issues set
+             resolved_at = $1,
+             resolved_by_clerk_user_id = $2,
+             resolved_action = $3,
+             state_version = $4,
+             updated_at = now()
+           where id = $5 and company_id = $6`,
+          [
+            event.dismissed_at,
+            event.dismissed_by_user_id,
+            DISMISSED_ACTION_SENTINEL,
+            nextSnapshot.state_version,
+            issueId,
+            ctx.company.id,
+          ],
+        )
+      } else {
+        await client.query(
+          `update worker_issues set
+             resolved_at = NULL,
+             resolved_by_clerk_user_id = NULL,
+             resolved_action = NULL,
+             resolution_message = NULL,
+             escalated_to_estimator_at = NULL,
+             escalation_reason = NULL,
+             state_version = $1,
+             updated_at = now()
+           where id = $2 and company_id = $3`,
+          [nextSnapshot.state_version, issueId, ctx.company.id],
+        )
+      }
+      // Workflow event log
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: FIELD_EVENT_WORKFLOW_NAME,
+        schemaVersion: FIELD_EVENT_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'worker_issue',
+        entityId: issueId,
+        stateVersion: row.state_version,
+        eventType: event.type,
+        eventPayload: { ...event },
+        snapshotAfter: { ...nextSnapshot } as Record<string, unknown>,
+        actorUserId: ctx.currentUserId,
+      })
+      // Side effects via outbox
+      const fresh = await client.query<WorkflowIssueRow>(
+        `select ${WORKFLOW_ISSUE_COLUMNS} from worker_issues where id = $1 and company_id = $2 limit 1`,
+        [issueId, ctx.company.id],
+      )
+      const freshRow = fresh.rows[0]!
+      if (event.type === 'RESOLVE') {
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'worker_issue',
+          entityId: issueId,
+          action: 'notify_worker_resolution',
+          row: freshRow,
+          syncPayload: {
+            worker_issue_id: issueId,
+            project_id: freshRow.project_id,
+            reporter_clerk_user_id: freshRow.reporter_clerk_user_id,
+            worker_id: freshRow.worker_id,
+            action: event.action,
+            message_to_worker: event.message_to_worker,
+          },
+          outboxPayload: {
+            worker_issue_id: issueId,
+            project_id: freshRow.project_id,
+            reporter_clerk_user_id: freshRow.reporter_clerk_user_id,
+            worker_id: freshRow.worker_id,
+            action: event.action,
+            message_to_worker: event.message_to_worker,
+          },
+          mutationType: 'notify_worker_resolution',
+          idempotencyKey: `worker_issue:resolve:${issueId}:${nextSnapshot.state_version}`,
+        })
+      } else if (event.type === 'ESCALATE') {
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'worker_issue',
+          entityId: issueId,
+          action: 'notify_estimator_escalation',
+          row: freshRow,
+          syncPayload: {
+            worker_issue_id: issueId,
+            project_id: freshRow.project_id,
+            reason: event.reason,
+            escalator_user_id: event.escalator_user_id,
+          },
+          outboxPayload: {
+            worker_issue_id: issueId,
+            project_id: freshRow.project_id,
+            reason: event.reason,
+            escalator_user_id: event.escalator_user_id,
+          },
+          mutationType: 'notify_estimator_escalation',
+          idempotencyKey: `worker_issue:escalate:${issueId}:${nextSnapshot.state_version}`,
+        })
+      }
+      return { kind: 'ok' as const, row: freshRow }
+    })
+    if (updated.kind === 'not_found') {
+      ctx.sendJson(404, { error: 'worker_issue not found' })
+      return true
+    }
+    if (updated.kind === 'version_conflict') {
+      ctx.sendJson(409, { error: 'state_version stale', ...buildWorkflowResponse(updated.current) })
+      return true
+    }
+    if (updated.kind === 'illegal_transition') {
+      ctx.sendJson(409, { error: updated.message, ...buildWorkflowResponse(updated.current) })
+      return true
+    }
+    ctx.sendJson(200, buildWorkflowResponse(updated.row))
     return true
   }
 
