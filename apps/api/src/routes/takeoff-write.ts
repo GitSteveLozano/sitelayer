@@ -304,9 +304,11 @@ export async function handleTakeoffWriteRoutes(
     })
     // Estimate recompute is a separate side-effect that fans out to
     // estimate_lines; not inside the mutation tx because a recompute failure
-    // must not roll back a successfully-recorded measurement.
-    const estimate = await createEstimateFromMeasurements(ctx.pool, ctx.company.id, projectId)
-    const scopeVsBid = await getScopeVsBid(ctx.pool, ctx.company.id, projectId)
+    // must not roll back a successfully-recorded measurement. Scope the
+    // recompute to the draft we just wrote to (Phase A.4) so sibling
+    // drafts' estimates survive untouched.
+    const estimate = await createEstimateFromMeasurements(ctx.pool, ctx.company.id, projectId, { draftId })
+    const scopeVsBid = await getScopeVsBid(ctx.pool, ctx.company.id, projectId, { draftId })
     ctx.sendJson(201, { measurement, estimate, scope_vs_bid: scopeVsBid })
     return true
   }
@@ -437,7 +439,10 @@ export async function handleTakeoffWriteRoutes(
         createdRows.push(insertResult.rows[0])
       }
 
-      const estimate = await createEstimateFromMeasurements(ctx.pool, ctx.company.id, projectId, client)
+      const estimate = await createEstimateFromMeasurements(ctx.pool, ctx.company.id, projectId, {
+        draftId: bulkDraftId,
+        executor: client,
+      })
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'takeoff_measurement',
@@ -457,7 +462,7 @@ export async function handleTakeoffWriteRoutes(
       })
       return { createdRows, estimate }
     })
-    const scopeVsBid = await getScopeVsBid(ctx.pool, ctx.company.id, projectId)
+    const scopeVsBid = await getScopeVsBid(ctx.pool, ctx.company.id, projectId, { draftId: bulkDraftId })
     ctx.sendJson(201, {
       measurements: replaced.createdRows,
       estimate: replaced.estimate,

@@ -24,35 +24,43 @@ export interface ScopeVsBidResponse {
   delta: number
   delta_pct: number
   status: BidVsScopeStatus
+  /** Phase A.4: which takeoff draft the response is scoped to. Null when no draft exists for the project. */
+  draft_id: string | null
   lines: EstimateLine[]
 }
 
 const KEYS = {
   all: () => ['estimate'] as const,
-  scopeVsBid: (projectId: string) => [...KEYS.all(), 'scope-vs-bid', projectId] as const,
+  scopeVsBid: (projectId: string, draftId: string | null) =>
+    [...KEYS.all(), 'scope-vs-bid', projectId, draftId ?? '__default'] as const,
 }
 
 export const estimateQueryKeys = KEYS
 
-export function fetchScopeVsBid(projectId: string): Promise<ScopeVsBidResponse> {
-  return request<ScopeVsBidResponse>(`/api/projects/${encodeURIComponent(projectId)}/estimate/scope-vs-bid`)
+export function fetchScopeVsBid(projectId: string, draftId: string | null = null): Promise<ScopeVsBidResponse> {
+  const qs = draftId ? `?draft_id=${encodeURIComponent(draftId)}` : ''
+  return request<ScopeVsBidResponse>(`/api/projects/${encodeURIComponent(projectId)}/estimate/scope-vs-bid${qs}`)
 }
 
 export function useScopeVsBid(
   projectId: string | null | undefined,
-  options?: Partial<UseQueryOptions<ScopeVsBidResponse>>,
+  options: { draftId?: string | null } & Partial<UseQueryOptions<ScopeVsBidResponse>> = {},
 ) {
+  const { draftId = null, ...queryOptions } = options
   return useQuery<ScopeVsBidResponse>({
-    queryKey: KEYS.scopeVsBid(projectId ?? ''),
-    queryFn: () => fetchScopeVsBid(projectId!),
+    queryKey: KEYS.scopeVsBid(projectId ?? '', draftId),
+    queryFn: () => fetchScopeVsBid(projectId!, draftId),
     enabled: Boolean(projectId),
-    ...options,
+    ...queryOptions,
   })
 }
 
 /** Build the estimate PDF download URL. The browser handles auth via
  * the Authorization header on the same fetch — the share sheet uses
- * this for the "Download PDF" action; presigned/streamed via the API. */
-export function estimatePdfUrl(projectId: string): string {
-  return `${API_URL}/api/projects/${encodeURIComponent(projectId)}/estimate.pdf`
+ * this for the "Download PDF" action; presigned/streamed via the API.
+ * Phase A.4: optional `draftId` scopes the PDF to a specific takeoff
+ * draft so the per-draft estimate flows through to the rendered PDF. */
+export function estimatePdfUrl(projectId: string, draftId: string | null = null): string {
+  const qs = draftId ? `?draft_id=${encodeURIComponent(draftId)}` : ''
+  return `${API_URL}/api/projects/${encodeURIComponent(projectId)}/estimate.pdf${qs}`
 }
