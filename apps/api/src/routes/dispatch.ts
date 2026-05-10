@@ -19,6 +19,7 @@ import { handleEstimatePushRoutes } from './estimate-pushes.js'
 import { handleLaborEntryRoutes } from './labor-entries.js'
 import { handleMaterialBillRoutes } from './material-bills.js'
 import { handleNotificationPreferenceRoutes } from './notification-preferences.js'
+import { handleNotificationRoutes } from './notifications.js'
 import { handlePricingProfileRoutes } from './pricing-profiles.js'
 import { handleProjectAssignmentRoutes } from './project-assignments.js'
 import { handleProjectRoutes } from './projects.js'
@@ -26,6 +27,7 @@ import { handlePushSubscriptionRoutes } from './push-subscriptions.js'
 import { handleQboMappingRoutes } from './qbo-mappings.js'
 import { handleQboRoutes, type IntegrationMappingRow } from './qbo.js'
 import { handleRentalInventoryRoutes } from './rental-inventory.js'
+import { handleRentalRequestRoutes } from './rental-requests.js'
 import { handleRentalRoutes } from './rentals.js'
 import { handleScheduleRoutes } from './schedules.js'
 import { handleCrewScheduleEventRoutes } from './crew-schedule-events.js'
@@ -247,6 +249,11 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
       readBody,
       sendJson,
+      storage: ctx.storage,
+      maxAttachmentBytes: Number(process.env.MAX_WORKER_ISSUE_ATTACHMENT_BYTES ?? 25 * 1024 * 1024),
+      attachmentDownloadPresigned: ctx.blueprintDownloadPresigned,
+      sendFileContent: ctx.sendFileContent,
+      sendFileRedirect: ctx.sendFileRedirect,
     })
   ) {
     return true
@@ -537,6 +544,21 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     return true
   }
 
+  // Operator-side approval queue for portal rental_requests submissions
+  // (see routes/portal-rentals.ts for the public create path).
+  if (
+    await handleRentalRequestRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
   // Crew schedules
   if (
     await handleScheduleRoutes(req, url, {
@@ -719,6 +741,23 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
   // Per-user notification channel preferences
   if (
     await handleNotificationPreferenceRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Per-user notification feed (list unread + mark read).
+  // Used by wk-today's "Foreman replied" banner to drain the worker's
+  // queue of Loop 2 resolution messages. Scoped via WHERE
+  // recipient_clerk_user_id = currentUserId.
+  if (
+    await handleNotificationRoutes(req, url, {
       pool,
       company,
       currentUserId: ctx.getCurrentUserId(),

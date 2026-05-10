@@ -161,9 +161,36 @@ export function useSubmitDailyLog(id: string) {
 // Photo upload / delete / fetch
 // ---------------------------------------------------------------------------
 
+export interface DailyLogPhotoMetadata {
+  id: string
+  storage_key: string
+  scope_step_id: string | null
+  scope_step_label: string | null
+  captured_at: string
+}
+
+export interface DailyLogPhotoListResponse {
+  photos: DailyLogPhotoMetadata[]
+}
+
+export interface DailyLogPhotoUploadOptions {
+  /** Optional scope-step id captured from the worker chip row. */
+  scope_step_id?: string | null
+  /** Denormalized step label (so the timeline keeps rendering after edits). */
+  scope_step_label?: string | null
+}
+
 export interface DailyLogPhotoUploadResponse {
   dailyLog: DailyLog
-  photo: { key: string; fileName: string; mimeType: string; bytes: number }
+  photo: {
+    key: string
+    fileName: string
+    mimeType: string
+    bytes: number
+    scope_step_id: string | null
+    scope_step_label: string | null
+    captured_at: string | null
+  }
 }
 
 /**
@@ -171,9 +198,15 @@ export interface DailyLogPhotoUploadResponse {
  * for the file, the standard auth headers from buildAuthHeaders.
  * Browser sets the multipart boundary on content-type; we don't.
  */
-export async function uploadDailyLogPhoto(id: string, file: File): Promise<DailyLogPhotoUploadResponse> {
+export async function uploadDailyLogPhoto(
+  id: string,
+  file: File,
+  options: DailyLogPhotoUploadOptions = {},
+): Promise<DailyLogPhotoUploadResponse> {
   const formData = new FormData()
   formData.append('photo_file', file, file.name || 'photo.jpg')
+  if (options.scope_step_id) formData.append('scope_step_id', options.scope_step_id)
+  if (options.scope_step_label) formData.append('scope_step_label', options.scope_step_label)
   const headers = await buildAuthHeaders()
   const path = `/api/daily-logs/${encodeURIComponent(id)}/photos`
 
@@ -204,20 +237,49 @@ export async function deleteDailyLogPhoto(id: string, key: string): Promise<Dail
   })
 }
 
+/** List per-photo metadata for the timeline view (`fm-log` PhotoTimeline). */
+export function fetchDailyLogPhotos(id: string): Promise<DailyLogPhotoListResponse> {
+  return request<DailyLogPhotoListResponse>(`/api/daily-logs/${encodeURIComponent(id)}/photos`)
+}
+
 /** Build the GET URL for a daily-log photo. The endpoint either streams
  * bytes back or 302s to a presigned URL — `<img src>` follows both. */
 export function dailyLogPhotoUrl(id: string, key: string): string {
   return `${API_URL}/api/daily-logs/${encodeURIComponent(id)}/photos/file?key=${encodeURIComponent(key)}`
 }
 
+export interface UseUploadDailyLogPhotoInput {
+  file: File
+  scope_step_id?: string | null
+  scope_step_label?: string | null
+}
+
 export function useUploadDailyLogPhoto(id: string) {
   const qc = useQueryClient()
-  return useMutation<DailyLogPhotoUploadResponse, Error, File>({
-    mutationFn: (file) => uploadDailyLogPhoto(id, file),
+  return useMutation<DailyLogPhotoUploadResponse, Error, File | UseUploadDailyLogPhotoInput>({
+    mutationFn: (input) => {
+      if (input instanceof File) return uploadDailyLogPhoto(id, input)
+      return uploadDailyLogPhoto(id, input.file, {
+        scope_step_id: input.scope_step_id ?? null,
+        scope_step_label: input.scope_step_label ?? null,
+      })
+    },
     onSuccess: (data) => {
       void qc.invalidateQueries({ queryKey: queryKeys.dailyLogs.all() })
       qc.setQueryData(queryKeys.dailyLogs.detail(id), { dailyLog: data.dailyLog })
     },
+  })
+}
+
+export function useDailyLogPhotos(
+  id: string | null | undefined,
+  options?: Partial<UseQueryOptions<DailyLogPhotoListResponse>>,
+) {
+  return useQuery<DailyLogPhotoListResponse>({
+    queryKey: [...queryKeys.dailyLogs.all(), 'photos', id ?? ''],
+    queryFn: () => fetchDailyLogPhotos(id!),
+    enabled: Boolean(id),
+    ...options,
   })
 }
 

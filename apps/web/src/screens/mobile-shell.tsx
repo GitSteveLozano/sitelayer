@@ -61,6 +61,7 @@ import { MobileRentalDispatch } from './mobile/rentals-dispatch.js'
 import { MobileRentalsUtilization } from './mobile/rentals-utilization.js'
 import { MobileRentalScan } from './mobile/rentals-scan.js'
 import { MobileRentalsPortal } from './mobile/rentals-portal.js'
+import { RentalRequestsQueueScreen } from './rentals/rental-requests-queue.js'
 import { MobileQuickInvoice } from './mobile/invoice-quick.js'
 
 export type MobileShellProps = {
@@ -224,6 +225,7 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
             element={<MobileRentalScan bootstrap={bootstrap} companySlug={companySlug} initialMode="return" />}
           />
           <Route path="rentals/portal" element={<MobileRentalsPortal companySlug={companySlug} />} />
+          <Route path="rentals/requests" element={<RentalRequestsQueueScreen />} />
           <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} />} />
           <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
           <Route path="more/*" element={<MoreRoute />} />

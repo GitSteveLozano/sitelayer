@@ -44,12 +44,14 @@ export {
   dailyLogPhotoUrl,
   deleteDailyLogPhoto,
   fetchDailyLog,
+  fetchDailyLogPhotos,
   fetchDailyLogs,
   patchDailyLog,
   submitDailyLog,
   uploadDailyLogPhoto,
   useCreateDailyLog,
   useDailyLog,
+  useDailyLogPhotos,
   useDailyLogs,
   useDeleteDailyLogPhoto,
   usePatchDailyLog,
@@ -61,9 +63,13 @@ export {
   type DailyLogListParams,
   type DailyLogListResponse,
   type DailyLogPatchRequest,
+  type DailyLogPhotoListResponse,
+  type DailyLogPhotoMetadata,
+  type DailyLogPhotoUploadOptions,
   type DailyLogPhotoUploadResponse,
   type DailyLogStatus,
   type DailyLogSubmitRequest,
+  type UseUploadDailyLogPhotoInput,
 } from './daily-logs'
 
 export {
@@ -108,6 +114,18 @@ export {
   type NotificationPreferencesResponse,
   type UpdateNotificationPreferencesRequest,
 } from './prefs'
+
+export {
+  fetchNotifications,
+  markNotificationRead,
+  notificationQueryKeys,
+  useMarkNotificationRead,
+  useUnreadNotifications,
+  type NotificationListParams,
+  type NotificationListResponse,
+  type NotificationReadResponse,
+  type NotificationRow,
+} from './notifications'
 
 export {
   createWorker,
@@ -426,3 +444,17 @@ export {
   type UtilizationRow,
   type UtilizationTotals,
 } from './rentals'
+
+export {
+  useApproveRentalRequest,
+  useDeclineRentalRequest,
+  useRentalRequests,
+  type ApproveRentalRequestInput,
+  type ApproveRentalRequestResponse,
+  type DeclineRentalRequestInput,
+  type DeclineRentalRequestResponse,
+  type RentalRequest,
+  type RentalRequestItem,
+  type RentalRequestListResponse,
+  type RentalRequestStatus,
+} from './rental-requests'

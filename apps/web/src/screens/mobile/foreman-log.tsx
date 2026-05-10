@@ -36,6 +36,7 @@ import {
   useAiInsights,
   useApplyInsight,
   useCreateDailyLog,
+  useDailyLogPhotos,
   useDailyLogs,
   useDismissInsight,
   usePatchDailyLog,
@@ -43,6 +44,7 @@ import {
   useSubmitDailyLog,
   useTriggerVoiceToLog,
   type DailyLog,
+  type DailyLogPhotoMetadata,
   type VoiceToLogProposal,
 } from '../../lib/api/index.js'
 import type { ProjectBriefStep } from '../../lib/api/project-briefs.js'
@@ -267,11 +269,18 @@ function DailyLogEditor({ log, bootstrap, onDone }: DailyLogEditorProps) {
 }
 
 /**
- * Photo timeline grouped by scope step. Photos on a daily log don't
- * carry their step assignment yet — until they do, we render a single
- * "All photos" group plus a stub list of the brief's steps so the
- * foreman can see the timeline shape that will fill in once photos
- * land with `scope_step_id` metadata.
+ * Photo timeline grouped by scope step. Reads per-photo metadata from
+ * `useDailyLogPhotos` (GET /api/daily-logs/:id/photos) — each photo
+ * carries an optional `scope_step_id` set by `wk-log` at capture time.
+ *
+ * Layout:
+ *   - One section per brief step. Filters photos by `scope_step_id`.
+ *     Empty steps still render the title with a quiet placeholder so
+ *     the foreman sees the structure of the day.
+ *   - One trailing "Untagged" section for photos with no step id
+ *     (legacy backfilled rows + uploads without an active step).
+ *   - Falls back to a flat strip when there are no brief steps at all,
+ *     so the screen still works on projects without a brief today.
  */
 function PhotoTimeline({ log, briefs }: { log: DailyLog; briefs: { steps: unknown }[] }) {
   const steps = useMemo<ProjectBriefStep[]>(() => {
@@ -280,49 +289,84 @@ function PhotoTimeline({ log, briefs }: { log: DailyLog; briefs: { steps: unknow
     return Array.isArray(first.steps) ? (first.steps as ProjectBriefStep[]) : []
   }, [briefs])
 
-  if (log.photo_keys.length === 0 && steps.length === 0) return null
+  // Per-photo metadata. The hook stays disabled until the log id is
+  // known; on first load we may render before photos resolve, in
+  // which case we synthesize minimal records from `log.photo_keys`
+  // so the strip never goes blank for newly uploaded photos.
+  const photosQuery = useDailyLogPhotos(log.id)
+  const photos = useMemo<DailyLogPhotoMetadata[]>(() => {
+    if (photosQuery.data?.photos && photosQuery.data.photos.length > 0) {
+      return photosQuery.data.photos
+    }
+    // Fall back to the legacy array — photos that haven't been backfilled
+    // yet, or the brief moment before the photos query resolves.
+    return log.photo_keys.map((key, idx) => ({
+      id: `legacy-${idx}`,
+      storage_key: key,
+      scope_step_id: null,
+      scope_step_label: null,
+      captured_at: log.created_at,
+    }))
+  }, [photosQuery.data, log.photo_keys, log.created_at])
+
+  if (photos.length === 0 && steps.length === 0) return null
+
+  const stepBuckets = steps.map((step, idx) => ({
+    step,
+    idx,
+    photos: photos.filter((p) => p.scope_step_id && step.id && p.scope_step_id === step.id),
+  }))
+  const untagged = photos.filter((p) => {
+    if (!p.scope_step_id) return true
+    // Photo references a step id that is no longer in this brief
+    // (e.g. brief was edited and the step removed). Surface it in
+    // the untagged bucket so the photo never disappears from view.
+    return !steps.some((s) => s.id && s.id === p.scope_step_id)
+  })
 
   return (
     <>
       <MSectionH>Photo timeline</MSectionH>
       {steps.length > 0 ? (
         <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
-          {steps.map((step, idx) => (
+          {stepBuckets.map(({ step, idx, photos: stepPhotos }) => (
             <div key={step.id ?? idx}>
               <div className="m-topbar-eyebrow" style={{ marginBottom: 6 }}>
                 {step.title || `Step ${idx + 1}`}
+                {stepPhotos.length > 0 ? <span style={{ opacity: 0.7 }}> · {stepPhotos.length}</span> : null}
               </div>
-              {/* When photo metadata grows a `scope_step_id`, filter
-                  log.photo_keys here. For now show no items per step so
-                  the foreman sees the structure. */}
-              <div className="m-quiet-sm">No photos tagged to this step yet.</div>
+              {stepPhotos.length > 0 ? (
+                <PhotoStrip logId={log.id} photos={stepPhotos} />
+              ) : (
+                <div className="m-quiet-sm">No photos tagged to this step yet.</div>
+              )}
             </div>
           ))}
-          {log.photo_keys.length > 0 ? (
+          {untagged.length > 0 ? (
             <div>
               <div className="m-topbar-eyebrow" style={{ marginBottom: 6 }}>
-                All photos · {log.photo_keys.length}
+                Untagged · {untagged.length}
               </div>
-              <PhotoStrip log={log} />
+              <PhotoStrip logId={log.id} photos={untagged} />
             </div>
           ) : null}
         </div>
       ) : (
         <div style={{ padding: '0 16px' }}>
-          <PhotoStrip log={log} />
+          <PhotoStrip logId={log.id} photos={photos} />
         </div>
       )}
     </>
   )
 }
 
-function PhotoStrip({ log }: { log: DailyLog }) {
+function PhotoStrip({ logId, photos }: { logId: string; photos: DailyLogPhotoMetadata[] }) {
   return (
     <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-      {log.photo_keys.map((key) => (
+      {photos.map((photo) => (
         <img
-          key={key}
-          src={dailyLogPhotoUrl(log.id, key)}
+          key={photo.id}
+          src={dailyLogPhotoUrl(logId, photo.storage_key)}
           alt="Daily log"
           style={{ width: 96, height: 96, borderRadius: 10, objectFit: 'cover', flexShrink: 0 }}
         />

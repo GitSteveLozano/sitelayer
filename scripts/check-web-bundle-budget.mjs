@@ -11,12 +11,14 @@ const APPS = {
     distDir: 'apps/web/dist',
     initialJsGzipBudget: 160 * 1024,
     eagerChunkGzipBudget: 110 * 1024,
-    // Bumped from 40KB → 44KB on 2026-05-09 when the design-handoff slice
-    // added foreman-blocker-detail + foreman site cards / brief flow / crew
-    // status, worker-issue voice+photo, geofence auto clock-in, and the
-    // foreman field event severity stripes. These all ride in the mobile-shell
-    // bundle (m-*.js) by convention; only the More tab route is lazy.
-    lazyAppChunkGzipBudget: 44 * 1024,
+    // Bumped from 44KB → 48KB on 2026-05-09 (round-2 design audit fixes)
+    // when the mobile shell took on rental-requests-queue, the worker
+    // resolution-display banner stack, the scope_step photo picker on
+    // wk-log, and the wk-issue attachment upload flow. All mobile-shell
+    // screens ride the m-*.js chunk by convention; only the More tab is
+    // lazy. Original 40KB → 44KB bump documented in the design-handoff
+    // chore commit.
+    lazyAppChunkGzipBudget: 48 * 1024,
     nonAppPrefixes: ['vendor-', 'web-vitals-', 'rolldown-runtime-', 'workbox-'],
     requireSentryLazy: false,
   },

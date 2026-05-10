@@ -2,24 +2,25 @@
  * fm-blocker-detail — Resolve a blocker.
  *
  * Routed at `/foreman/blocker/:issueId`. Shows worker context (avatar +
- * name + project + scope), the issue text, optional voice playback (when
- * the worker attached a base64 `voice_data_url`), the photo (if any),
- * and a GPS pin chip. The bottom segmented picker selects a resolution
- * action; the foreman types a reply that becomes `resolution_message`
- * and submits via the field-event xstate machine
+ * name + project + scope), the issue text, persisted voice / photo
+ * attachments fetched from `/api/worker-issues/:id/attachments`, and a
+ * GPS pin chip. The bottom segmented picker selects a resolution action;
+ * the foreman types a reply that becomes `resolution_message` and
+ * submits via the field-event xstate machine
  * (apps/web/src/machines/field-event.ts).
  *
  * Wire shape: PATCH /api/worker-issues/:id with
  *   { event: 'RESOLVE'|'ESCALATE', state_version, action?, message_to_worker?, reason? }
  *
- * The PATCH route is being implemented by a parallel agent. If the call
- * fails because the route isn't there yet (4xx/5xx), the field-event
- * machine surfaces the error via `useFieldEvent.error`. We render that
- * inline so the foreman knows the action was queued but didn't land.
+ * Attachment retrieval:
+ *   GET /api/worker-issues/:id/attachments        → metadata list
+ *   GET /api/worker-issues/:id/attachments/:key/file → bytes (or 302
+ *      to a presigned URL when BLUEPRINT_DOWNLOAD_PRESIGNED=1)
  */
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, type BootstrapResponse } from '../../api-v1-compat.js'
+import { API_URL } from '../../lib/api/client.js'
 import {
   MAvatar,
   MBanner,
@@ -49,12 +50,20 @@ type IssueRow = {
   resolved_at: string | null
   resolved_by_clerk_user_id: string | null
   created_at: string
-  // Optional client-side fields written by `wk-issue` until the worker_issues
-  // schema gets dedicated columns. May or may not appear on a given row.
-  voice_data_url?: string | null
-  photo_data_url?: string | null
+  // Optional GPS fields. Persisted attachments live on the
+  // worker_issue_attachments table and are fetched separately below.
   lat?: string | number | null
   lng?: string | number | null
+}
+
+type AttachmentRow = {
+  id: string
+  worker_issue_id: string
+  kind: 'voice' | 'photo'
+  storage_key: string
+  mime_type: string
+  size_bytes: string | number
+  created_at: string
 }
 
 const RESOLUTION_OPTIONS: ReadonlyArray<{
@@ -85,6 +94,7 @@ export function ForemanBlockerDetail({
   // a direct GET on /api/worker-issues so we still show context.
   const fe = useFieldEvent(issueId, companySlug)
   const [legacyRow, setLegacyRow] = useState<IssueRow | null>(null)
+  const [attachments, setAttachments] = useState<AttachmentRow[]>([])
   useEffect(() => {
     if (fe.snapshot || fe.isLoading) return
     if (!issueId) return
@@ -106,6 +116,30 @@ export function ForemanBlockerDetail({
       cancelled = true
     }
   }, [issueId, companySlug, fe.snapshot, fe.isLoading])
+
+  // Pull persisted attachments — voice + photo — independent of which
+  // path produced the row context. The endpoint scopes to the current
+  // company, so an unknown id just returns an empty list.
+  useEffect(() => {
+    if (!issueId) return
+    let cancelled = false
+    apiGet<{ attachments: AttachmentRow[] }>(
+      `/api/worker-issues/${encodeURIComponent(issueId)}/attachments`,
+      companySlug,
+    )
+      .then((r) => {
+        if (!cancelled) setAttachments(r.attachments ?? [])
+      })
+      .catch(() => {
+        if (!cancelled) setAttachments([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [issueId, companySlug])
+
+  const voiceAttachment = attachments.find((a) => a.kind === 'voice') ?? null
+  const photoAttachments = attachments.filter((a) => a.kind === 'photo')
 
   const ctx = fe.snapshot?.context
   const fallback: IssueRow | null = legacyRow
@@ -203,21 +237,31 @@ export function ForemanBlockerDetail({
             ) : null}
           </div>
           <div style={{ fontSize: 15, lineHeight: 1.5, marginTop: 10 }}>{cleanedMessage}</div>
-          {fallback?.voice_data_url ? (
+          {voiceAttachment ? (
             <div style={{ marginTop: 12 }}>
               <div className="m-topbar-eyebrow" style={{ marginBottom: 4 }}>
                 VOICE NOTE
               </div>
-              <audio src={fallback.voice_data_url} controls style={{ width: '100%' }} />
+              <audio src={attachmentFileUrl(issueId, voiceAttachment.storage_key)} controls style={{ width: '100%' }} />
             </div>
           ) : null}
-          {fallback?.photo_data_url ? (
-            <div style={{ marginTop: 12 }}>
-              <img
-                src={fallback.photo_data_url}
-                alt="Worker photo"
-                style={{ width: '100%', maxHeight: 320, objectFit: 'cover', borderRadius: 10 }}
-              />
+          {photoAttachments.length > 0 ? (
+            <div
+              style={{
+                marginTop: 12,
+                display: 'grid',
+                gridTemplateColumns: photoAttachments.length === 1 ? '1fr' : '1fr 1fr',
+                gap: 8,
+              }}
+            >
+              {photoAttachments.map((p) => (
+                <img
+                  key={p.id}
+                  src={attachmentFileUrl(issueId, p.storage_key)}
+                  alt="Worker photo"
+                  style={{ width: '100%', maxHeight: 320, objectFit: 'cover', borderRadius: 10 }}
+                />
+              ))}
             </div>
           ) : null}
         </div>
@@ -288,6 +332,15 @@ export function ForemanBlockerDetail({
       </MBody>
     </>
   )
+}
+
+/**
+ * Build the GET URL for a worker-issue attachment. The endpoint either
+ * streams bytes back or 302s to a presigned URL; <img src> / <audio src>
+ * follow both transparently.
+ */
+function attachmentFileUrl(issueId: string, storageKey: string): string {
+  return `${API_URL}/api/worker-issues/${encodeURIComponent(issueId)}/attachments/${encodeURIComponent(storageKey)}/file`
 }
 
 function severityFromMessage(message: string): 'question' | 'slowing' | 'stopped' | null {

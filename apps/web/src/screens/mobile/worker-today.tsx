@@ -27,6 +27,7 @@ import { Sheet } from '../../components/mobile/Sheet.js'
 import { formatRunningHours, timeOfDay, todayIso } from './format.js'
 import { useCrewSchedule } from '../../machines/crew-schedule.js'
 import { useAutoGeofenceClock, usePrimaryProjectFence } from '../../lib/geofence.js'
+import { useMarkNotificationRead, useUnreadNotifications, type NotificationRow } from '../../lib/api/notifications.js'
 
 type ClockEvent = {
   id: string
@@ -151,6 +152,15 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
 
   const [confirmTarget, setConfirmTarget] = useState<string | null>(null)
 
+  // Loop 2 (Field Event Escalation) worker-side: foreman replies arrive
+  // here. The drain (apps/worker/src/field-event-notifier.ts) writes a
+  // notifications row with kind='worker_issue_resolved' targeted at
+  // recipient_clerk_user_id = the reporter, so the API query — scoped to
+  // currentUserId — naturally limits this to the active worker.
+  const unreadResolutions = useUnreadNotifications('worker_issue_resolved')
+  const markRead = useMarkNotificationRead()
+  const resolutions = unreadResolutions.data?.notifications ?? []
+
   return (
     <>
       <MTopBar
@@ -163,6 +173,11 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
         <MLargeHead
           title={new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
           right={<MAvatar initials={userInitials} tone="2" />}
+        />
+        <ForemanRepliedStack
+          notifications={resolutions}
+          onAck={(id) => markRead.mutate(id)}
+          ackingId={markRead.isPending ? (markRead.variables ?? null) : null}
         />
         {geofence.error?.kind === 'permission_denied' ? (
           <div style={{ marginTop: 8 }}>
@@ -419,6 +434,49 @@ function FlagIssueButton({ onClick }: { onClick: () => void }) {
       <MI.AlertTri size={18} />
       Flag an issue
     </MButton>
+  )
+}
+
+/**
+ * Renders one MBanner per unread foreman-resolution notification, capped
+ * at three rows + an "N more" line so the queue can't overrun the
+ * screen. Body text is the worker drain's preformatted string —
+ * "Foreman action: <action>\n\n<message>" — surfaced raw so the worker
+ * sees exactly what the foreman wrote without our reformatting.
+ */
+function ForemanRepliedStack({
+  notifications,
+  onAck,
+  ackingId,
+}: {
+  notifications: readonly NotificationRow[]
+  onAck: (id: string) => void
+  ackingId: string | null
+}) {
+  if (notifications.length === 0) return null
+  const visible = notifications.slice(0, 3)
+  const overflow = notifications.length - visible.length
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+      {visible.map((n) => (
+        <MBanner
+          key={n.id}
+          tone="info"
+          title="Foreman replied"
+          body={<span style={{ whiteSpace: 'pre-line' }}>{n.body_text}</span>}
+          action={
+            <MButton variant="quiet" size="sm" onClick={() => onAck(n.id)} disabled={ackingId === n.id}>
+              {ackingId === n.id ? 'Acking…' : 'Got it'}
+            </MButton>
+          }
+        />
+      ))}
+      {overflow > 0 ? (
+        <div className="m-quiet-sm" style={{ paddingLeft: 4 }}>
+          {overflow} more reply{overflow === 1 ? '' : 's'} waiting.
+        </div>
+      ) : null}
+    </div>
   )
 }
 

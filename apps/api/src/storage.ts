@@ -56,6 +56,20 @@ export function buildDailyLogPhotoStorageKey(companyId: string, dailyLogId: stri
   return `${companyId}/daily-logs/${dailyLogId}/${sanitizeFileName(fileName)}`
 }
 
+/**
+ * Storage key for worker-issue voice / photo attachments. Lives under a
+ * `/worker-issues/` prefix in the same bucket — same first-segment
+ * companyId guard as the other helpers, so assertKeyInCompany still
+ * blocks cross-tenant access via path manipulation.
+ */
+export function buildWorkerIssueAttachmentStorageKey(
+  companyId: string,
+  workerIssueId: string,
+  fileName: string,
+): string {
+  return `${companyId}/worker-issues/${workerIssueId}/${sanitizeFileName(fileName)}`
+}
+
 export function formatS3CopySource(bucket: string, key: string): string {
   return `${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`
 }
