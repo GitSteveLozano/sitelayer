@@ -41,6 +41,7 @@ import { handleInventoryUtilizationRoutes } from './inventory-utilization.js'
 import { handleBidAccuracyRoutes } from './bid-accuracy.js'
 import { handleAiInsightRoutes } from './ai-insights.js'
 import { handleTakeoffImportRoutes } from './takeoff-import.js'
+import { handleTakeoffDraftRoutes } from './takeoff-drafts.js'
 import { handleTakeoffMeasurementRoutes } from './takeoff-measurements.js'
 import { handleTakeoffTagRoutes } from './takeoff-tags.js'
 import { handleTakeoffWriteRoutes } from './takeoff-write.js'
@@ -393,6 +394,19 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
   }
 
   // Takeoff measurement read + LWW-gated PATCH/DELETE
+  if (
+    await handleTakeoffDraftRoutes(req, url, {
+      pool,
+      company,
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+      currentUserId: ctx.getCurrentUserId(),
+    })
+  ) {
+    return true
+  }
+
   if (
     await handleTakeoffMeasurementRoutes(req, url, {
       pool,

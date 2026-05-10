@@ -16,6 +16,7 @@ const DOMAIN_ENTITY_TYPES = new Set([
   'labor_entry',
   'blueprint_document',
   'takeoff_measurement',
+  'takeoff_draft',
   'material_bill',
   'integration_connection',
   'integration_mapping',

@@ -185,6 +185,30 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
         action: 'create',
         row,
       })
+      // Auto-create the project's default takeoff draft (Phase A.2). Every
+      // project ships with at least one draft so writes to
+      // /api/projects/:id/takeoff/measurement always have a draft to land
+      // on without lazy-creation races. The 066_takeoff_drafts migration
+      // backfilled existing projects; this keeps the invariant going forward.
+      const defaultDraft = await client.query(
+        `insert into takeoff_drafts (company_id, project_id, name, type, status)
+         values ($1, $2, 'Default', 'measurement', 'active')
+         returning id`,
+        [ctx.company.id, row.id],
+      )
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'takeoff_draft',
+        entityId: defaultDraft.rows[0].id,
+        action: 'create',
+        row: {
+          id: defaultDraft.rows[0].id,
+          project_id: row.id,
+          name: 'Default',
+          type: 'measurement',
+          status: 'active',
+        },
+      })
       return row
     })
     ctx.sendJson(201, created)
