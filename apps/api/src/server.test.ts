@@ -149,6 +149,24 @@ describeIntegration('API Integration Tests', () => {
     expect(result.id).toBeDefined()
   })
 
+  it('GET /api/projects/:id returns the project row by uuid', async () => {
+    const bootstrap = await apiCall<{ customers: Array<{ id: string }> }>('GET', '/api/bootstrap')
+    const customerId = bootstrap.customers[0]?.id
+    const created = await apiCall<{ id: string }>('POST', '/api/projects', {
+      name: `Detail Fetch Test ${Date.now()}`,
+      customer_id: customerId,
+      customer_name: 'Detail Fetch Customer',
+      division_code: 'D1',
+      bid_total: 1234,
+      labor_rate: 25,
+    })
+    expect(created.status).toBe(201)
+
+    const detail = await apiCall<{ project: { id: string; name: string } }>('GET', `/api/projects/${created.id}`)
+    expect(detail.status).toBe(200)
+    expect(detail.project?.id).toBe(created.id)
+  })
+
   // Regression test for the outbox-tx scoping fix: a successful project
   // create must produce both a sync_events row AND a mutation_outbox row in
   // the SAME transaction window as the projects insert. Before the fix the
