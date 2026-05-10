@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
-import { useInventoryItems, useInventoryUtilization, type UtilizationRow } from '@/lib/api'
+import { useInventoryItems, useInventoryUtilization, useRentalRequests, type UtilizationRow } from '@/lib/api'
 
 /**
  * `rnt-list` — Rentals tab home.
@@ -16,6 +16,9 @@ import { useInventoryItems, useInventoryUtilization, type UtilizationRow } from 
 export function RentalsListScreen() {
   const utilization = useInventoryUtilization()
   const items = useInventoryItems()
+  // Pull the pending-request count so admins/office see customer-portal
+  // submissions without having to remember to check the queue manually.
+  const pendingRequests = useRentalRequests('pending', 50)
 
   if (utilization.isPending || items.isPending) {
     return <div className="px-5 pt-8 text-[13px] text-ink-3">Loading rentals…</div>
@@ -24,12 +27,18 @@ export function RentalsListScreen() {
   const totals = utilization.data?.totals
   const rows = utilization.data?.items ?? []
   const totalsCount = items.data?.inventoryItems.length ?? 0
+  const pendingCount = pendingRequests.data?.rentalRequests.length ?? 0
 
   return (
     <div className="flex flex-col">
       <div className="px-5 pt-6 pb-3">
         <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">Rentals</div>
         <h1 className="mt-1 font-display text-[26px] font-bold tracking-tight leading-tight">Catalog</h1>
+        {pendingCount > 0 ? (
+          <Link to="/rentals/requests" className="inline-block mt-2">
+            <Pill tone="warn">Pending requests ({pendingCount})</Pill>
+          </Link>
+        ) : null}
       </div>
 
       <div className="px-4">
