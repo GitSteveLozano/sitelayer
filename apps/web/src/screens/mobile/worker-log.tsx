@@ -20,6 +20,8 @@ import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse } from '../../api-v1-compat.js'
 import { MBody, MButton, MButtonStack, MI, MInput, MTapCard, MTextarea, MTopBar } from '../../components/m/index.js'
 import { fetchDailyLogs, patchDailyLog, useCreateDailyLog, useUploadDailyLogPhoto } from '../../lib/api/daily-logs.js'
+import { useProjectBriefs } from '../../lib/api/projects.js'
+import type { ProjectBriefStep } from '../../lib/api/project-briefs.js'
 import { todayIso } from './format.js'
 
 export function WorkerLog({
@@ -65,6 +67,19 @@ export function WorkerLog({
     }
   }, [projectId])
 
+  // Today's brief steps for the active project. Workers tap a step
+  // chip before capturing so the photo lands in the right timeline
+  // bucket on `fm-log`. Untapped uploads still work — they fall into
+  // the foreman screen's "untagged" bucket.
+  const briefs = useProjectBriefs(projectId ?? null, todayIso())
+  const steps = useMemo<ProjectBriefStep[]>(() => {
+    const first = briefs.data?.briefs?.[0]
+    if (!first) return []
+    return Array.isArray(first.steps) ? (first.steps as ProjectBriefStep[]) : []
+  }, [briefs.data?.briefs])
+  const [activeStepId, setActiveStepId] = useState<string | null>(null)
+  const activeStep = useMemo(() => steps.find((s) => s.id && s.id === activeStepId) ?? null, [steps, activeStepId])
+
   const createDailyLog = useCreateDailyLog()
   const uploadPhoto = useUploadDailyLogPhoto(dailyLogId ?? '')
 
@@ -84,14 +99,18 @@ export function WorkerLog({
         logId = created.dailyLog.id
         setDailyLogId(logId)
       }
+      const photoMeta = {
+        scope_step_id: activeStep?.id ?? null,
+        scope_step_label: activeStep?.title ?? null,
+      }
       // useUploadDailyLogPhoto closes over the id at hook construction;
       // when we lazily created the log above, fall back to the helper
       // function so the upload targets the right id.
       if (logId === dailyLogId) {
-        await uploadPhoto.mutateAsync(file)
+        await uploadPhoto.mutateAsync({ file, ...photoMeta })
       } else {
         const { uploadDailyLogPhoto } = await import('../../lib/api/daily-logs.js')
-        await uploadDailyLogPhoto(logId, file)
+        await uploadDailyLogPhoto(logId, file, photoMeta)
       }
       const trimmed = note.trim()
       if (trimmed) {
@@ -162,8 +181,34 @@ export function WorkerLog({
           >
             <span style={{ width: 6, height: 6, background: '#fff', borderRadius: '50%' }} />
             {projectName} · auto-tagged
+            {activeStep ? <span style={{ opacity: 0.85 }}>· {activeStep.title}</span> : null}
           </div>
         </div>
+        {steps.length > 0 ? (
+          <div
+            style={{
+              padding: '10px 16px 4px',
+              display: 'flex',
+              gap: 8,
+              overflowX: 'auto',
+              borderBottom: '1px solid var(--m-line-2)',
+            }}
+          >
+            <ScopeStepChip label="Untagged" active={activeStepId === null} onClick={() => setActiveStepId(null)} />
+            {steps.map((step, idx) => {
+              const stepId = step.id ?? null
+              return (
+                <ScopeStepChip
+                  key={stepId ?? idx}
+                  label={step.title || `Step ${idx + 1}`}
+                  active={stepId !== null && stepId === activeStepId}
+                  onClick={() => stepId && setActiveStepId(stepId)}
+                  disabled={!stepId}
+                />
+              )
+            })}
+          </div>
+        ) : null}
         <MBody pad>
           <MInput
             ref={inputRef}
@@ -207,5 +252,43 @@ export function WorkerLog({
         </MBody>
       </div>
     </>
+  )
+}
+
+/** Compact pill used in the wk-log step picker. Active steps render in
+ *  the accent tone; disabled (no persisted id) chips hint that the
+ *  brief step is still pending a save and can't be tagged yet. */
+function ScopeStepChip({
+  label,
+  active,
+  disabled,
+  onClick,
+}: {
+  label: string
+  active: boolean
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        flexShrink: 0,
+        padding: '6px 12px',
+        borderRadius: 999,
+        border: '1px solid var(--m-line-2)',
+        background: active ? 'var(--m-accent-1, #d9904a)' : 'var(--m-surf-2, transparent)',
+        color: active ? '#fff' : 'var(--m-ink-2)',
+        fontSize: 12,
+        fontWeight: 600,
+        opacity: disabled ? 0.5 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </button>
   )
 }

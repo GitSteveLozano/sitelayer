@@ -52,6 +52,14 @@ type DailyLogRow = {
   updated_at: string
 }
 
+type DailyLogPhotoRow = {
+  id: string
+  storage_key: string
+  scope_step_id: string | null
+  scope_step_label: string | null
+  captured_at: string
+}
+
 /**
  * Foreman daily logs (Sitemap.html § fm-log).
  *
@@ -385,9 +393,19 @@ export async function handleDailyLogRoutes(
       throw err
     }
 
-    // Append the key to photo_keys, bump version + updated_at.
-    const updated = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query<DailyLogRow>(
+    // Pull scope-step metadata from the multipart fields. Both are
+    // optional — workers may capture before tapping a step, foreman/admin
+    // may upload outside of any step. We persist label denormalized so
+    // the timeline keeps rendering even after a brief step is edited.
+    const rawStepId = typeof upload.fields.scope_step_id === 'string' ? upload.fields.scope_step_id.trim() : ''
+    const scopeStepId = rawStepId && isValidUuid(rawStepId) ? rawStepId : null
+    const rawStepLabel = typeof upload.fields.scope_step_label === 'string' ? upload.fields.scope_step_label.trim() : ''
+    const scopeStepLabel = rawStepLabel ? rawStepLabel.slice(0, 200) : null
+
+    // Append the key to photo_keys (back-compat), bump version, and
+    // insert a row in daily_log_photos with the scope-step metadata.
+    const result = await withMutationTx(async (client: PoolClient) => {
+      const update = await client.query<DailyLogRow>(
         `update daily_logs
            set photo_keys = array_append(photo_keys, $3),
                version = version + 1,
@@ -396,8 +414,19 @@ export async function handleDailyLogRoutes(
          returning ${DAILY_LOG_COLUMNS}`,
         [ctx.company.id, id, upload.storagePath],
       )
-      const updatedRow = result.rows[0]
+      const updatedRow = update.rows[0]
       if (!updatedRow) return null
+      const photoInsert = await client.query<DailyLogPhotoRow>(
+        `insert into daily_log_photos (
+           company_id, daily_log_id, storage_key, scope_step_id, scope_step_label
+         )
+         values ($1, $2, $3, $4, $5)
+         on conflict (daily_log_id, storage_key) do update
+           set scope_step_id = excluded.scope_step_id,
+               scope_step_label = excluded.scope_step_label
+         returning id, storage_key, scope_step_id, scope_step_label, captured_at`,
+        [ctx.company.id, updatedRow.id, upload.storagePath, scopeStepId, scopeStepLabel],
+      )
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'daily_log',
@@ -406,17 +435,58 @@ export async function handleDailyLogRoutes(
         row: updatedRow as unknown as Record<string, unknown>,
         actorUserId: ctx.currentUserId,
       })
-      return updatedRow
+      return { dailyLog: updatedRow, photoRow: photoInsert.rows[0] ?? null }
     })
 
-    if (!updated) {
+    if (!result) {
       ctx.sendJson(409, { error: 'daily log changed during upload — refresh and retry' })
       return true
     }
     ctx.sendJson(201, {
-      dailyLog: updated,
-      photo: { key: upload.storagePath, fileName: upload.fileName, mimeType: upload.mimeType, bytes: upload.bytes },
+      dailyLog: result.dailyLog,
+      photo: {
+        key: upload.storagePath,
+        fileName: upload.fileName,
+        mimeType: upload.mimeType,
+        bytes: upload.bytes,
+        scope_step_id: result.photoRow?.scope_step_id ?? null,
+        scope_step_label: result.photoRow?.scope_step_label ?? null,
+        captured_at: result.photoRow?.captured_at ?? null,
+      },
     })
+    return true
+  }
+
+  // GET /api/daily-logs/:id/photos — list per-photo metadata for the
+  // timeline (scope_step_id / scope_step_label / captured_at).
+  if (req.method === 'GET' && photoUploadMatch) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const id = photoUploadMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
+    const ownership = await ctx.pool.query<{ exists: boolean }>(
+      `select exists(
+         select 1 from daily_logs
+         where company_id = $1 and id = $2
+           and ($3 = '' or foreman_user_id = $3)
+       ) as exists`,
+      [ctx.company.id, id, ownerFilter],
+    )
+    if (!ownership.rows[0]?.exists) {
+      ctx.sendJson(404, { error: 'daily log not found or not yours' })
+      return true
+    }
+    const photos = await ctx.pool.query<DailyLogPhotoRow>(
+      `select id, storage_key, scope_step_id, scope_step_label, captured_at
+       from daily_log_photos
+       where company_id = $1 and daily_log_id = $2
+       order by captured_at asc, id asc`,
+      [ctx.company.id, id],
+    )
+    ctx.sendJson(200, { photos: photos.rows })
     return true
   }
 
@@ -456,6 +526,11 @@ export async function handleDailyLogRoutes(
       )
       const updatedRow = result.rows[0]
       if (!updatedRow) return null
+      await client.query(
+        `delete from daily_log_photos
+         where company_id = $1 and daily_log_id = $2 and storage_key = $3`,
+        [ctx.company.id, updatedRow.id, key],
+      )
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'daily_log',
