@@ -32,6 +32,34 @@ import { request } from '../../lib/api/client.js'
 import type { ProjectBriefListResponse } from '../../lib/api/projects.js'
 import { formatDecimalHours, formatMoney, todayIso } from './format.js'
 
+// Cutoff for "overnight" delta: 5pm local on the previous calendar day.
+// The foreman left the field around then; anything after that and before
+// the morning render is "while they were off the clock."
+function yesterdayCutoffMs(now: Date = new Date()): number {
+  const d = new Date(now)
+  d.setDate(d.getDate() - 1)
+  d.setHours(17, 0, 0, 0)
+  return d.getTime()
+}
+
+function parseTs(s: string | null | undefined): number | null {
+  if (!s) return null
+  const t = Date.parse(s)
+  return Number.isFinite(t) ? t : null
+}
+
+// sessionStorage key namespaced by the cutoff so a new morning gets a
+// fresh stripe even after dismissal the previous day.
+function overnightDismissKey(cutoffMs: number): string {
+  return `fm-today.overnight-dismissed.${cutoffMs}`
+}
+
+// 12-hour clock with no leading zero, e.g. "6:42 PM" — matches the design's
+// example body copy.
+function formatClock(d: Date): string {
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+}
+
 type IssueRow = {
   id: string
   project_id: string | null
@@ -43,6 +71,81 @@ type IssueRow = {
   resolved_by_clerk_user_id: string | null
   created_at: string
 }
+
+export type OvernightDelta = {
+  buckets: string[]
+  total: number
+  scheduleCount: number
+  issueCount: number
+  projectCount: number
+}
+
+/**
+ * Pure-function overnight-delta computation, exported for unit tests.
+ * Counts items whose `created_at`/`updated_at` falls in
+ * `(cutoffMs, firstRenderMs]`. Schedule + project work is filtered to
+ * active projects only; issues count regardless of project (workers can
+ * file issues without a project).
+ */
+export function computeOvernightDelta(args: {
+  bootstrap: BootstrapResponse | null
+  issues: readonly IssueRow[] | null
+  cutoffMs: number
+  firstRenderMs: number
+}): OvernightDelta {
+  const { bootstrap, issues, cutoffMs, firstRenderMs } = args
+  const inWindow = (ts: number | null) => ts !== null && ts > cutoffMs && ts <= firstRenderMs
+
+  const activeIds = new Set(
+    (bootstrap?.projects ?? []).filter((p) => /progress|active/i.test(p.status)).map((p) => p.id),
+  )
+
+  const scheduleChanges = (bootstrap?.schedules ?? []).filter((s) => {
+    if (s.deleted_at) return false
+    if (!activeIds.has(s.project_id)) return false
+    return inWindow(parseTs(s.created_at ?? null))
+  })
+
+  const issuesFiled = (issues ?? []).filter((i) => inWindow(parseTs(i.created_at)))
+
+  // Bootstrap doesn't ship estimate_lines today; the closest available
+  // signal of "estimate revisions on active projects" is a project row
+  // whose updated_at advanced overnight (estimate recompute, brief edits,
+  // status changes all bump it).
+  const projectTouches = (bootstrap?.projects ?? []).filter((p) => {
+    if (!/progress|active/i.test(p.status)) return false
+    const u = parseTs(p.updated_at)
+    const c = parseTs(p.created_at)
+    // updated_at strictly after creation → a real edit, not just an insert.
+    return u !== null && c !== null && u > c && inWindow(u)
+  })
+
+  const buckets: string[] = []
+  if (scheduleChanges.length > 0) {
+    buckets.push(`Crew schedule: ${scheduleChanges.length} ${scheduleChanges.length === 1 ? 'change' : 'changes'}`)
+  }
+  if (issuesFiled.length > 0) {
+    const latestIssueTs = issuesFiled
+      .map((i) => parseTs(i.created_at))
+      .filter((t): t is number => t !== null)
+      .reduce<number | null>((m, t) => (m === null || t > m ? t : m), null)
+    const timePart = latestIssueTs !== null ? ` at ${formatClock(new Date(latestIssueTs))}` : ''
+    buckets.push(`${issuesFiled.length} ${issuesFiled.length === 1 ? 'issue' : 'issues'} filed${timePart}`)
+  }
+  if (projectTouches.length > 0) {
+    buckets.push(`${projectTouches.length} ${projectTouches.length === 1 ? 'project' : 'projects'} updated`)
+  }
+
+  return {
+    buckets,
+    total: scheduleChanges.length + issuesFiled.length + projectTouches.length,
+    scheduleCount: scheduleChanges.length,
+    issueCount: issuesFiled.length,
+    projectCount: projectTouches.length,
+  }
+}
+
+export const __overnightInternals = { yesterdayCutoffMs, overnightDismissKey, parseTs, formatClock }
 
 export function ForemanToday({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
@@ -132,6 +235,46 @@ export function ForemanToday({ bootstrap, companySlug }: { bootstrap: BootstrapR
     return [...activeSites].sort((a, b) => sitePriority(a, b, briefedSet, issuesByProject))
   }, [activeSites, briefedSet, issuesByProject])
 
+  // --- Overnight delta -------------------------------------------------
+  // Lock the cutoff and "first render" wall on first mount so the stripe
+  // doesn't drift as state churns through the morning.
+  const [overnightWindow] = useState(() => {
+    const now = Date.now()
+    return { cutoffMs: yesterdayCutoffMs(new Date(now)), firstRenderMs: now }
+  })
+  const [overnightDismissed, setOvernightDismissed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    try {
+      return window.sessionStorage.getItem(overnightDismissKey(overnightWindow.cutoffMs)) === '1'
+    } catch {
+      return false
+    }
+  })
+
+  const overnight = useMemo(
+    () =>
+      computeOvernightDelta({
+        bootstrap,
+        issues,
+        cutoffMs: overnightWindow.cutoffMs,
+        firstRenderMs: overnightWindow.firstRenderMs,
+      }),
+    [bootstrap, issues, overnightWindow],
+  )
+
+  const showOvernight = !overnightDismissed && overnight.total > 0
+  const dismissOvernight = () => {
+    setOvernightDismissed(true)
+    if (typeof window !== 'undefined') {
+      try {
+        window.sessionStorage.setItem(overnightDismissKey(overnightWindow.cutoffMs), '1')
+      } catch {
+        // sessionStorage can throw in private mode; the in-memory
+        // dismissal is enough for this tab.
+      }
+    }
+  }
+
   return (
     <>
       <MTopBar title="Today" />
@@ -141,6 +284,49 @@ export function ForemanToday({ bootstrap, companySlug }: { bootstrap: BootstrapR
           title={`${activeSites.length} ${activeSites.length === 1 ? 'site' : 'sites'} · ${workers.length} crew`}
           sub={`${formatDecimalHours(totalHours, 1)} crew-hrs · ${formatMoney(todayLaborCost)} live`}
         />
+        {showOvernight ? (
+          <div style={{ padding: '0 16px' }}>
+            <MAiStripe
+              eyebrow="OVERNIGHT"
+              attribution={
+                <>
+                  Based on{' '}
+                  <strong>
+                    {overnight.total} change{overnight.total === 1 ? '' : 's'}
+                  </strong>{' '}
+                  since 5:00 PM yesterday ({overnight.scheduleCount} schedule · {overnight.issueCount} field ·{' '}
+                  {overnight.projectCount} project).
+                </>
+              }
+              action={
+                <MButton
+                  variant="quiet"
+                  size="sm"
+                  onClick={() => {
+                    // Freshest signal is usually a field issue. Route to
+                    // /field when any landed overnight; otherwise scroll
+                    // to the My sites list.
+                    if (overnight.issueCount > 0) {
+                      navigate('/field')
+                    } else if (typeof document !== 'undefined') {
+                      const el = document.getElementById('fm-today-sites')
+                      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                    }
+                  }}
+                >
+                  See changes
+                </MButton>
+              }
+              onDismiss={dismissOvernight}
+            >
+              {overnight.buckets.slice(0, 3).map((label, idx) => (
+                <div key={idx} style={{ marginBottom: 4 }}>
+                  {label}
+                </div>
+              ))}
+            </MAiStripe>
+          </div>
+        ) : null}
         {needYou > 0 ? (
           <div style={{ padding: '0 16px' }}>
             <MAiStripe
@@ -206,6 +392,7 @@ export function ForemanToday({ bootstrap, companySlug }: { bootstrap: BootstrapR
             </div>
           </div>
         </div>
+        <div id="fm-today-sites" />
         <MSectionH>My sites</MSectionH>
         {sortedSites.length === 0 ? (
           <div style={{ padding: 16, color: 'var(--m-ink-3)', fontSize: 13 }}>
