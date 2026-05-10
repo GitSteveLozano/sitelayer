@@ -8,6 +8,7 @@ export default defineConfig({
       '@sitelayer/domain': fileURLToPath(new URL('../../packages/domain/src/index.ts', import.meta.url)),
       '@sitelayer/logger': fileURLToPath(new URL('../../packages/logger/src/index.ts', import.meta.url)),
       '@sitelayer/queue': fileURLToPath(new URL('../../packages/queue/src/index.ts', import.meta.url)),
+      '@sitelayer/workflows': fileURLToPath(new URL('../../packages/workflows/src/index.ts', import.meta.url)),
     },
   },
 })
