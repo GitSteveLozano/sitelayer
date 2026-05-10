@@ -4,6 +4,7 @@ import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import {
   useBlueprintPages,
+  useCaptureTakeoffDraft,
   useCreateMeasurement,
   useCreateTakeoffDraft,
   useDuplicateTakeoffDraft,
@@ -14,6 +15,7 @@ import {
   useUpdateTakeoffDraft,
   type BlueprintDocument,
   type BlueprintPage,
+  type CaptureKind,
   type MeasurementGeometry,
   type ServiceItem,
   type TakeoffDraft,
@@ -75,6 +77,7 @@ export function TakeoffCanvasScreen() {
   const createDraft = useCreateTakeoffDraft(projectId ?? '')
   const updateDraft = useUpdateTakeoffDraft(projectId ?? '')
   const duplicateDraft = useDuplicateTakeoffDraft(projectId ?? '')
+  const captureDraft = useCaptureTakeoffDraft(projectId ?? '')
 
   const draftParam = searchParams.get('draft')
   const draftList = drafts.data?.drafts ?? []
@@ -127,6 +130,60 @@ export function TakeoffCanvasScreen() {
   }
 
   const measurements = useProjectMeasurements(projectId, { draftId: activeDraftId })
+
+  // Phase C.3: capture pipeline runner. Reads the selected file as JSON
+  // for the three offline pipelines (roomplan / photogrammetry / drone),
+  // or sends a dry-run request for blueprint_vision. On success, switches
+  // the active draft to the freshly-captured one so the canvas
+  // immediately reflects the new scope.
+  const runCapture = (kind: CaptureKind, file: File | null) => {
+    setError(null)
+    const dispatch = (payload: Record<string, unknown>, name?: string) => {
+      captureDraft.mutate(
+        {
+          kind,
+          ...(name ? { name } : {}),
+          payload,
+        },
+        {
+          onSuccess: (res) => {
+            setActiveDraft(res.draft.id)
+            if (res.result_summary.review_required) {
+              setError(`Capture done — ${res.result_summary.quantities_count} quantities, but some need review.`)
+            }
+          },
+          onError: (err) => setError(err instanceof Error ? err.message : 'Capture failed'),
+        },
+      )
+    }
+    if (kind === 'blueprint_vision') {
+      // Live blueprint_vision needs server-side pdfPath + ANTHROPIC_API_KEY;
+      // until that path lands, kick the pipeline in dry-run mode so the
+      // operator can preview the layout of the resulting draft.
+      const knownDimRaw = typeof window !== 'undefined' ? window.prompt('Known dimension (ft)?', '30') : '30'
+      const knownDimensionFt = knownDimRaw ? Number(knownDimRaw) : 30
+      dispatch({ dryRun: true, knownDimensionFt }, 'Blueprint capture (dry-run)')
+      return
+    }
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result ?? '{}')) as unknown
+        if (kind === 'roomplan') {
+          dispatch({ capturedRoomJson: parsed, capturedRoomJsonUri: `upload://${file.name}` }, file.name)
+        } else if (kind === 'photogrammetry') {
+          dispatch({ labeledMesh: parsed }, file.name)
+        } else if (kind === 'drone') {
+          dispatch({ sidecar: parsed, sidecarPath: `upload://${file.name}` }, file.name)
+        }
+      } catch (e) {
+        setError(e instanceof Error ? `Invalid JSON: ${e.message}` : 'Invalid JSON')
+      }
+    }
+    reader.onerror = () => setError('Failed to read file')
+    reader.readAsText(file)
+  }
 
   const onArchiveCurrent = () => {
     if (!activeDraft) return
@@ -366,6 +423,78 @@ export function TakeoffCanvasScreen() {
               >
                 Archive
               </button>
+            </div>
+          ) : null}
+
+          {/* Phase C.3: Capture from… — runs one of the four
+              @sitelayer/pipe-* pipelines server-side and lands the result
+              as a new draft. The file inputs accept JSON for the three
+              offline pipelines; blueprint_vision triggers a dry-run that
+              doesn't require a server-side PDF (full live mode lands in
+              a follow-on PR). */}
+          {activeDraft ? (
+            <div className="px-4 pb-2 flex items-center gap-2 text-[11px]">
+              <span className="text-ink-3 font-semibold uppercase tracking-[0.06em] text-[10px]">Capture</span>
+              <label className="px-2 py-1.5 rounded border border-line bg-card-soft text-ink-2 cursor-pointer hover:bg-card">
+                RoomPlan JSON…
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] ?? null
+                    e.target.value = ''
+                    if (f) runCapture('roomplan', f)
+                  }}
+                />
+              </label>
+              <label className="px-2 py-1.5 rounded border border-line bg-card-soft text-ink-2 cursor-pointer hover:bg-card">
+                Photogrammetry…
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] ?? null
+                    e.target.value = ''
+                    if (f) runCapture('photogrammetry', f)
+                  }}
+                />
+              </label>
+              <label className="px-2 py-1.5 rounded border border-line bg-card-soft text-ink-2 cursor-pointer hover:bg-card">
+                Drone sidecar…
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0] ?? null
+                    e.target.value = ''
+                    if (f) runCapture('drone', f)
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => runCapture('blueprint_vision', null)}
+                disabled={captureDraft.isPending}
+                className="px-2 py-1.5 rounded border border-line bg-card-soft text-ink-2 disabled:opacity-50"
+                title="Run blueprint_vision in dry-run mode"
+              >
+                Blueprint (dry-run)
+              </button>
+              {captureDraft.isPending ? <span className="text-ink-3 italic">capturing…</span> : null}
+            </div>
+          ) : null}
+
+          {/* Capture-source + review badges on the current draft. */}
+          {activeDraft && activeDraft.source && activeDraft.source !== 'manual' ? (
+            <div className="px-4 pb-2 flex items-center gap-2 text-[11px]">
+              <Pill tone="info">{activeDraft.source.replace('_', ' ')}</Pill>
+              {activeDraft.pipeline_version ? (
+                <span className="text-ink-3">v{activeDraft.pipeline_version}</span>
+              ) : null}
+              {activeDraft.review_required ? <Pill tone="warn">review needed</Pill> : null}
             </div>
           ) : null}
 

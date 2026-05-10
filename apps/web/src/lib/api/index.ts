@@ -375,11 +375,16 @@ export {
 } from './takeoff'
 
 export {
+  useCaptureTakeoffDraft,
   useCreateTakeoffDraft,
   useDeleteTakeoffDraft,
   useDuplicateTakeoffDraft,
   useTakeoffDrafts,
   useUpdateTakeoffDraft,
+  type CaptureKind,
+  type CaptureRequestBody,
+  type CaptureResponse,
+  type CaptureResultSummary,
   type TakeoffDraft,
 } from './takeoff-drafts'
 
