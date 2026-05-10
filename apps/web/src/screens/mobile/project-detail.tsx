@@ -29,6 +29,7 @@ import {
 } from '../../components/m/index.js'
 import { MAiStripe } from '../../components/m/ai.js'
 import { MEmptyState } from '../../components/m-states/index.js'
+import { BidAccuracyCard } from '../projects/bid-accuracy-card.js'
 import { formatDecimalHours, formatMoney, formatStatusLabel, statusTone } from './format.js'
 
 type TabKey = 'overview' | 'estimate' | 'crew' | 'materials' | 'budget' | 'log' | 'files'
@@ -215,6 +216,12 @@ function Overview({
   return (
     <div style={{ paddingTop: 8 }}>
       <ProjectStatePanel project={project} navigate={navigate} />
+      {/* Bid-accuracy keystone (mirrors the desktop overview hero per
+          `/tmp/sitelayer_design_stuff/ai-keystone.jsx`). Self-hides
+          when no comparable cohort exists yet. */}
+      <div style={{ padding: '0 16px 12px' }}>
+        <BidAccuracyCard projectId={project.id} />
+      </div>
       {pctSpent > 75 ? (
         <div style={{ padding: '0 16px 12px' }}>
           <MAiStripe
