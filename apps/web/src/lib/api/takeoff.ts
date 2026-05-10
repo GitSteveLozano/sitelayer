@@ -152,6 +152,24 @@ export function useRemoveTakeoffTag(measurementId: string) {
   })
 }
 
+export interface UpdateTakeoffTagInput {
+  tagId: string
+  service_item_code?: string
+  quantity?: number
+  unit?: string
+  rate?: number
+  notes?: string | null
+}
+
+export function useUpdateTakeoffTag(measurementId: string) {
+  const qc = useQueryClient()
+  return useMutation<{ tag: TakeoffTag }, Error, UpdateTakeoffTagInput>({
+    mutationFn: ({ tagId, ...input }) =>
+      request(`/api/takeoff/tags/${encodeURIComponent(tagId)}`, { method: 'PATCH', json: input }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: tagKey(measurementId) }),
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Blueprint pages + calibration (3B/C)
 // ---------------------------------------------------------------------------

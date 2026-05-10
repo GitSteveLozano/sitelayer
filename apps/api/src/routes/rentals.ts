@@ -335,5 +335,183 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
     return true
   }
 
+  // POST /api/rentals/:id/return — returns reconciliation (good/damaged/lost)
+  // Body: { qty_good, qty_damaged, qty_lost, damage_photos?: string[],
+  //         damage_charges_cents?: number, original_qty?: number }
+  // Marks the rental returned_on=now() + status='returned' and records the
+  // damage breakdown on the row. Damage charges are recorded but NOT pushed
+  // to billing in this slice; that's the job of the rental-billing workflow.
+  const returnMatch = url.pathname.match(/^\/api\/rentals\/([^/]+)\/return$/)
+  if (req.method === 'POST' && returnMatch) {
+    if (!ctx.requireRole(['admin', 'office'])) {
+      ctx.sendJson(403, { error: 'admin/office only' })
+      return true
+    }
+    const rentalId = returnMatch[1]!
+    const body = await ctx.readBody()
+    const qtyGood = Number(body.qty_good ?? 0)
+    const qtyDamaged = Number(body.qty_damaged ?? 0)
+    const qtyLost = Number(body.qty_lost ?? 0)
+    if (![qtyGood, qtyDamaged, qtyLost].every((n) => Number.isFinite(n) && n >= 0)) {
+      ctx.sendJson(400, { error: 'qty_good/qty_damaged/qty_lost must be non-negative numbers' })
+      return true
+    }
+    const originalQty = Number(body.original_qty ?? NaN)
+    if (Number.isFinite(originalQty) && qtyGood + qtyDamaged + qtyLost !== originalQty) {
+      ctx.sendJson(400, { error: 'qty_good + qty_damaged + qty_lost must equal original_qty' })
+      return true
+    }
+    const damagePhotos = Array.isArray(body.damage_photos)
+      ? (body.damage_photos as unknown[]).filter((p): p is string => typeof p === 'string')
+      : null
+    const damageChargesCents = Number(body.damage_charges_cents ?? 0)
+    if (!Number.isFinite(damageChargesCents) || damageChargesCents < 0) {
+      ctx.sendJson(400, { error: 'damage_charges_cents must be a non-negative number' })
+      return true
+    }
+    const rental = await withMutationTx(async (client: PoolClient) => {
+      const existing = await client.query<RentalRow>(
+        `select ${RENTAL_SELECT_COLUMNS} from rentals where id = $1 and company_id = $2 limit 1`,
+        [rentalId, ctx.company.id],
+      )
+      if (!existing.rows[0]) return null
+      const updated = await client.query<RentalRow>(
+        `update rentals set
+           returned_on = coalesce(returned_on, now()::date),
+           status = 'returned',
+           qty_good = $1,
+           qty_damaged = $2,
+           qty_lost = $3,
+           damage_photos = $4,
+           damage_charges_cents = $5,
+           updated_at = now(),
+           version = version + 1
+         where id = $6 and company_id = $7
+         returning ${RENTAL_SELECT_COLUMNS}`,
+        [qtyGood, qtyDamaged, qtyLost, damagePhotos, damageChargesCents, rentalId, ctx.company.id],
+      )
+      const row = updated.rows[0]!
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'rental',
+        entityId: rentalId,
+        action: 'return',
+        row,
+        syncPayload: {
+          action: 'return',
+          rental_id: rentalId,
+          qty_good: qtyGood,
+          qty_damaged: qtyDamaged,
+          qty_lost: qtyLost,
+          damage_charges_cents: damageChargesCents,
+        },
+        outboxPayload: { rental_id: rentalId, qty_good: qtyGood, qty_damaged: qtyDamaged, qty_lost: qtyLost },
+        idempotencyKey: `rental:return:${rentalId}:${row.version}`,
+      })
+      return row
+    })
+    if (!rental) {
+      ctx.sendJson(404, { error: 'rental not found' })
+      return true
+    }
+    ctx.sendJson(200, { rental })
+    return true
+  }
+
+  // POST /api/rentals/:id/transfer — transfer dispatch to another project.
+  // Body: { to_project_id, transferred_at?: ISO date }
+  // Closes the source rental (status='closed', returned_on=transferred_at)
+  // and creates a new rental row referencing the original via
+  // transferred_from_rental_id. Conserves the rental_billing accumulator
+  // (each side bills against its own project).
+  const transferMatch = url.pathname.match(/^\/api\/rentals\/([^/]+)\/transfer$/)
+  if (req.method === 'POST' && transferMatch) {
+    if (!ctx.requireRole(['admin', 'office'])) {
+      ctx.sendJson(403, { error: 'admin/office only' })
+      return true
+    }
+    const rentalId = transferMatch[1]!
+    const body = await ctx.readBody()
+    const toProjectId = typeof body.to_project_id === 'string' ? body.to_project_id : null
+    if (!toProjectId) {
+      ctx.sendJson(400, { error: 'to_project_id required' })
+      return true
+    }
+    const transferredAtRaw = body.transferred_at
+    const transferredAt = isValidDateInput(transferredAtRaw)
+      ? (transferredAtRaw as string)
+      : new Date().toISOString().slice(0, 10)
+    const result = await withMutationTx(async (client: PoolClient) => {
+      const existing = await client.query<RentalRow>(
+        `select ${RENTAL_SELECT_COLUMNS} from rentals where id = $1 and company_id = $2 limit 1`,
+        [rentalId, ctx.company.id],
+      )
+      const source = existing.rows[0]
+      if (!source) return null
+      // Verify the target project exists and belongs to this company.
+      const proj = await client.query<{ id: string }>(
+        `select id from projects where id = $1 and company_id = $2 limit 1`,
+        [toProjectId, ctx.company.id],
+      )
+      if (!proj.rows[0]) return { error: 'target project not found' as const }
+      const closed = await client.query<RentalRow>(
+        `update rentals set
+           returned_on = $1,
+           status = 'closed',
+           updated_at = now(),
+           version = version + 1
+         where id = $2 and company_id = $3
+         returning ${RENTAL_SELECT_COLUMNS}`,
+        [transferredAt, rentalId, ctx.company.id],
+      )
+      const newRental = await client.query<RentalRow>(
+        `insert into rentals (
+           company_id, project_id, customer_id, sku, description, daily_rate_cents,
+           delivered_on, status, invoice_cadence_days, next_invoice_at,
+           transferred_from_rental_id
+         )
+         select company_id, $1, customer_id, sku, description, daily_rate_cents,
+                $2, 'active', invoice_cadence_days, $3, id
+           from rentals where id = $4 and company_id = $5
+         returning ${RENTAL_SELECT_COLUMNS}`,
+        [
+          toProjectId,
+          transferredAt,
+          initialRentalNextInvoiceAt(transferredAt, source.invoice_cadence_days ?? 30),
+          rentalId,
+          ctx.company.id,
+        ],
+      )
+      const closedRow = closed.rows[0]!
+      const newRow = newRental.rows[0]!
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'rental',
+        entityId: rentalId,
+        action: 'transfer',
+        row: closedRow,
+        syncPayload: {
+          action: 'transfer',
+          source_rental_id: rentalId,
+          new_rental_id: newRow.id,
+          to_project_id: toProjectId,
+        },
+        outboxPayload: { source_rental_id: rentalId, new_rental_id: newRow.id, to_project_id: toProjectId },
+        idempotencyKey: `rental:transfer:${rentalId}:${closedRow.version}`,
+      })
+      return { closed: closedRow, created: newRow }
+    })
+    if (!result) {
+      ctx.sendJson(404, { error: 'rental not found' })
+      return true
+    }
+    if ('error' in result) {
+      ctx.sendJson(400, { error: result.error })
+      return true
+    }
+    ctx.sendJson(200, { closed_rental: result.closed, new_rental: result.created })
+    return true
+  }
+
   return false
 }

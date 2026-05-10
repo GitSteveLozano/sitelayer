@@ -11,6 +11,8 @@ import { backfillCustomerMapping, listIntegrationMappings, upsertIntegrationMapp
 import { assertBlueprintDocumentsBelongToProject } from './routes/takeoff-write.js'
 import { dispatch } from './routes/dispatch.js'
 import { handlePublicRoutes } from './routes/public.js'
+import { handlePublicEstimateShareRoutes } from './routes/estimate-shares.js'
+import { handlePortalRentalRoutes } from './routes/portal-rentals.js'
 import {
   CORS_ALLOW_HEADERS,
   HttpError,
@@ -117,6 +119,15 @@ if (!qboStateSecretCheck.ok) {
   process.exit(1)
 }
 const qboStateSecret = qboStateSecretCheck.stateSecret
+// Estimate share-link HMAC secret (sales loop / client portal). Falls back to
+// QBO_STATE_SECRET in non-prod so dev fixtures keep working without an extra
+// env var; in prod we still accept the fallback but log a warning so it can
+// be rotated independently. See apps/api/src/estimate-share-token.ts.
+const estimateShareSecret = process.env.ESTIMATE_SHARE_SECRET?.trim() || qboStateSecret || ''
+if (appConfig.tier === 'prod' && !process.env.ESTIMATE_SHARE_SECRET?.trim()) {
+  logger.warn('[estimate-share] ESTIMATE_SHARE_SECRET not set; falling back to QBO_STATE_SECRET')
+}
+const portalBaseUrl = process.env.APP_PUBLIC_URL?.trim() || 'https://sitelayer.sandolab.xyz'
 const clerkWebhookSecret = process.env.CLERK_WEBHOOK_SECRET?.trim() || null
 const qboWebhookVerifier = process.env.QBO_WEBHOOK_VERIFIER?.trim() || null
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)
@@ -484,6 +495,31 @@ const server = http.createServer(async (req, res) => {
             })
             if (publicHandled) return
 
+            // Public client-portal routes (sales loop + rentals catalog). No
+            // Clerk auth — recipients hold an HMAC-signed share token. Handled
+            // BEFORE identity resolution so customers without a Clerk session
+            // can land on /portal/estimates/:token and /portal/rentals/:token.
+            const portalEstimateHandled = await handlePublicEstimateShareRoutes(req, url, {
+              pool,
+              shareSecret: estimateShareSecret,
+              resolveClientIp: () => {
+                const xff = req.headers['x-forwarded-for']
+                if (typeof xff === 'string' && xff.length > 0) return xff.split(',')[0]!.trim()
+                if (Array.isArray(xff) && xff.length > 0) return xff[0]!.split(',')[0]!.trim()
+                return req.socket.remoteAddress ?? null
+              },
+              readBody: () => readBody(req),
+              sendJson: (status, body) => sendJson(res, status, body, req),
+            })
+            if (portalEstimateHandled) return
+
+            const portalRentalHandled = await handlePortalRentalRoutes(req, url, {
+              pool,
+              sendJson: (status, body) => sendJson(res, status, body, req),
+              readBody: () => readBody(req),
+            })
+            if (portalRentalHandled) return
+
             const PUBLIC_PATHS = new Set(['/api/integrations/qbo/callback', '/api/webhooks/clerk', '/api/webhooks/qbo'])
             const isPublicPath = PUBLIC_PATHS.has(url.pathname)
             let identity: Identity
@@ -601,6 +637,10 @@ const server = http.createServer(async (req, res) => {
                 successRedirectUri: qboSuccessRedirectUri,
                 stateSecret: qboStateSecret,
                 baseUrl: qboBaseUrl,
+              },
+              estimateShareConfig: {
+                secret: estimateShareSecret,
+                portalBaseUrl: portalBaseUrl,
               },
               backfillCustomerMapping: (companyId, customer, executor) =>
                 backfillCustomerMapping(pool, companyId, customer, executor),

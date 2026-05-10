@@ -9,6 +9,7 @@ import {
   type EstimateLine,
   type ProjectTimelineEvent,
 } from '@/lib/api'
+import { EstimateShareSheet } from './estimate-share-sheet'
 
 /**
  * `est-summary` — Estimate draft for a project. Renders the
@@ -27,6 +28,7 @@ import {
 export function EstimateSummaryScreen({ projectId }: { projectId: string }) {
   const scope = useScopeVsBid(projectId)
   const [shareOpen, setShareOpen] = useState(false)
+  const [clientShareOpen, setClientShareOpen] = useState(false)
 
   if (scope.isPending) {
     return (
@@ -91,14 +93,18 @@ export function EstimateSummaryScreen({ projectId }: { projectId: string }) {
       <Attribution source={`Live from /api/projects/${projectId.slice(0, 8)}…/estimate/scope-vs-bid`} />
 
       <div className="flex gap-2 pt-2">
-        <MobileButton variant="primary" onClick={() => setShareOpen(true)}>
-          Send estimate
+        <MobileButton variant="primary" onClick={() => setClientShareOpen(true)}>
+          Send to client
+        </MobileButton>
+        <MobileButton variant="ghost" onClick={() => setShareOpen(true)}>
+          Share PDF
         </MobileButton>
       </div>
 
       <ProjectTimelineCard projectId={projectId} />
 
       <ShareSheet open={shareOpen} onClose={() => setShareOpen(false)} projectId={projectId} />
+      <EstimateShareSheet open={clientShareOpen} onClose={() => setClientShareOpen(false)} projectId={projectId} />
     </div>
   )
 }

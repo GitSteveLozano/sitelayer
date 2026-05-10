@@ -12,13 +12,17 @@ import {
   useDeleteDailyLogPhoto,
   useDismissInsight,
   usePatchDailyLog,
+  useProjectBriefs,
+  useProjectSummary,
   useSubmitDailyLog,
   useTriggerVoiceToLog,
   useUploadDailyLogPhoto,
+  useWorkers,
   type DailyLog,
   type VoiceToLogProposal,
 } from '@/lib/api'
 import { pairClockSpans, sumHoursInRange } from '@/lib/clock-derive'
+import { assembleDailyLogDefaults, isEmptyDailyLogDraft } from '@/lib/daily-log-assembly'
 
 /**
  * `fm-log` — Daily log composer.
@@ -33,13 +37,22 @@ import { pairClockSpans, sumHoursInRange } from '@/lib/clock-derive'
  *   - Submit button → POST /api/daily-logs/:id/submit (status →
  *     'submitted', server stamps submitted_at).
  *
- * Placeholders (Phase 5):
- *   - The AI-drafted narrative shown as a `<AgentSurface>` placeholder
- *     is the Phase 5 takeoff-to-bid agent's sibling: drafts the day's
- *     narrative from photos + clock-in data + voice memos.
- *   - Weather card needs geocoded weather via OpenWeather (Phase 5).
- *   - Issues use the wk-issue ping path; aggregation comes in Phase 2
- *     when the dashboard surfaces them.
+ * AI surfaces (Phase 5):
+ *   - Voice-to-log AgentSurface lets the foreman dictate or type a
+ *     narrative; the agent (POST /api/ai/agents/voice-to-log) drafts
+ *     a structured narrative + weather + schedule_deviations and writes
+ *     it back as an `ai_insight`. The screen polls
+ *     `/api/ai/insights?kind=voice_to_log&entity_id=…&open=1` and
+ *     renders the draft inside the agent surface; apply patches the
+ *     daily log row with all three proposed fields, dismiss records
+ *     signal via the standard insight dismiss path.
+ *   - Auto-assembly fallback: when the AI worker hasn't run yet, the
+ *     screen still pre-fills `scope_progress` (from the morning brief)
+ *     and `crew_summary` (from labor entries), surfacing a "Pre-filled
+ *     from today's data" pill so the foreman knows the form was
+ *     seeded. See `apps/web/src/lib/daily-log-assembly.ts`.
+ *   - Weather card stays a Phase-5 placeholder: needs geocoded zip +
+ *     OpenWeather. Out of scope for this pass.
  *
  * The screen takes a project_id prop because daily logs are
  * (project, day, foreman)-scoped. The Foreman home will pick the
@@ -125,6 +138,57 @@ function DailyLogEditor({ log }: DailyLogEditorProps) {
     return sumHoursInRange(spans, dayStart, dayEnd, Date.now())
   }, [timeline.data, log.occurred_on, log.project_id])
 
+  // Auto-assembly fallback. When the AI agent hasn't run yet (or isn't
+  // available), pull the morning brief + day's labor entries and
+  // pre-fill scope_progress + crew_summary. This fires once per empty
+  // draft on mount; never clobbers a foreman who's already started
+  // typing. See lib/daily-log-assembly.ts for the pure function.
+  const briefs = useProjectBriefs(log.project_id, log.occurred_on)
+  const summary = useProjectSummary(log.project_id)
+  const workers = useWorkers()
+  const [prefilled, setPrefilled] = useState(false)
+  const prefillAttempted = useRef(false)
+  useEffect(() => {
+    if (prefillAttempted.current) return
+    if (log.status !== 'draft') return
+    // Wait for both feeds before deciding — running on a half-loaded
+    // page would pre-fill an empty crew summary and never re-run.
+    if (briefs.isPending || summary.isPending) return
+    if (!isEmptyDailyLogDraft(log)) {
+      prefillAttempted.current = true
+      return
+    }
+    prefillAttempted.current = true
+    const defaults = assembleDailyLogDefaults({
+      briefs: briefs.data?.briefs ?? [],
+      laborEntries: (summary.data?.laborEntries ?? []).map((entry) => ({
+        worker_id: null,
+        hours: entry.hours,
+        occurred_on: entry.occurred_on,
+        service_item_code: entry.service_item_code,
+      })),
+      workers: workers.data?.workers.map((w) => ({ id: w.id, name: w.name })) ?? [],
+      // Daily-log photos are managed in the photo grid; the assembler
+      // exposes a photos input for callers that surface worker-log
+      // photos but we don't pre-fill them here.
+      photos: [],
+      occurredOn: log.occurred_on,
+    })
+    const hasContent = defaults.scope_progress.length > 0 || defaults.crew_summary.length > 0
+    if (!hasContent) return
+    setPrefilled(true)
+    void patch
+      .mutateAsync({
+        scope_progress: defaults.scope_progress ? defaults.scope_progress : undefined,
+        crew_summary: defaults.crew_summary ? defaults.crew_summary : undefined,
+        expected_version: log.version,
+      })
+      .catch(() => {
+        // Pre-fill is best-effort — a 409 from a concurrent edit just
+        // means the foreman beat us to it. Don't retry; don't surface.
+      })
+  }, [briefs.isPending, briefs.data, summary.isPending, summary.data, workers.data, log])
+
   const [notes, setNotes] = useState(log.notes ?? '')
   const dirtyRef = useRef(false)
   const versionRef = useRef(log.version)
@@ -174,7 +238,7 @@ function DailyLogEditor({ log }: DailyLogEditorProps) {
         <h1 className="mt-1 font-display text-[26px] font-bold tracking-tight leading-tight">
           {formatLogDate(log.occurred_on)}
         </h1>
-        <div className="mt-1 flex items-center gap-2">
+        <div className="mt-1 flex items-center gap-2 flex-wrap">
           <Pill tone={isSubmitted ? 'good' : 'default'} withDot>
             {isSubmitted ? 'submitted' : 'draft'}
           </Pill>
@@ -183,6 +247,11 @@ function DailyLogEditor({ log }: DailyLogEditorProps) {
           ) : (
             <span className="text-[11px] text-ink-3">{patch.isPending ? 'saving…' : 'auto-saves'}</span>
           )}
+          {prefilled ? (
+            <Pill tone="accent">
+              <Spark state="strong" size={10} aria-label="" /> Pre-filled from today's data
+            </Pill>
+          ) : null}
         </div>
       </div>
 
@@ -238,10 +307,35 @@ function DailyLogEditor({ log }: DailyLogEditorProps) {
         <VoiceToLogBlock
           dailyLogId={log.id}
           isSubmitted={isSubmitted}
-          onApplyToNotes={(narrative) => {
-            const next = notes.trim() ? `${notes.trim()}\n\n${narrative}` : narrative
-            setNotes(next)
-            void patch.mutateAsync({ notes: next, expected_version: log.version }).catch(() => {})
+          attributionCounts={{
+            clockEvents: timeline.data?.events.filter((e) => e.project_id === log.project_id).length ?? 0,
+            photos: log.photo_keys.length,
+            fieldEvents:
+              (Array.isArray(log.schedule_deviations) ? log.schedule_deviations.length : 0) +
+              (summary.data?.laborEntries.filter((l) => l.occurred_on === log.occurred_on).length ?? 0),
+          }}
+          onApplyProposal={async (proposal) => {
+            // Apply lands the proposal in three places:
+            //   1. notes (narrative concatenated with whatever the
+            //      foreman has typed so far)
+            //   2. weather (jsonb summary block)
+            //   3. schedule_deviations (jsonb array)
+            // The PATCH is one round-trip with all three so the
+            // optimistic version check covers them atomically.
+            const nextNotes = notes.trim() ? `${notes.trim()}\n\n${proposal.narrative}` : proposal.narrative
+            setNotes(nextNotes)
+            await patch
+              .mutateAsync({
+                notes: nextNotes,
+                weather: proposal.weather_summary ? { summary: proposal.weather_summary } : null,
+                schedule_deviations: proposal.schedule_deviations,
+                expected_version: log.version,
+              })
+              .catch(() => {
+                // PATCH failures bubble up via patch.error; the
+                // notes textarea stays dirty so the next debounce
+                // retries the notes portion.
+              })
           }}
         />
       </div>
@@ -413,10 +507,15 @@ function PhotoGrid({ log }: PhotoGridProps) {
 interface VoiceToLogBlockProps {
   dailyLogId: string
   isSubmitted: boolean
-  onApplyToNotes: (narrative: string) => void
+  /** Apply the full proposal — narrative into notes, weather block,
+   * schedule_deviations array. The caller PATCHes the daily-log row. */
+  onApplyProposal: (proposal: VoiceToLogProposal) => Promise<void>
+  /** Source counts surfaced in the Attribution line so the foreman
+   * sees what the agent looked at. */
+  attributionCounts?: { clockEvents: number; photos: number; fieldEvents: number }
 }
 
-function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLogBlockProps) {
+function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyProposal, attributionCounts }: VoiceToLogBlockProps) {
   const [rejectNode, askReject] = useRejectSheet()
   const trigger = useTriggerVoiceToLog()
   const insights = useAiInsights<VoiceToLogProposal>({
@@ -544,11 +643,11 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLog
               <MobileButton
                 variant="primary"
                 onClick={async () => {
-                  onApplyToNotes(latest.payload.narrative)
+                  await onApplyProposal(latest.payload)
                   await apply.mutateAsync({ id: latest.id }).catch(() => {})
                 }}
               >
-                Paste into notes
+                Apply to log
               </MobileButton>
               <MobileButton
                 variant="ghost"
@@ -570,7 +669,14 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyToNotes }: VoiceToLog
       ) : null}
 
       <div className="mt-3 pt-2 border-t border-dashed border-line-2">
-        <Attribution source="Drafted from foreman dictation by agent:voice_to_log" />
+        <Attribution
+          source="Based on"
+          emphasis={
+            attributionCounts
+              ? `${attributionCounts.clockEvents} clock events, ${attributionCounts.photos} photos, ${attributionCounts.fieldEvents} field events`
+              : 'foreman dictation'
+          }
+        />
       </div>
       {rejectNode}
     </AgentSurface>

@@ -269,6 +269,20 @@ export {
 } from './schedules'
 
 export {
+  crewScheduleQueryKeys,
+  dispatchCrewScheduleEvent,
+  fetchCrewScheduleSnapshot,
+  patchCrewSchedule,
+  useCrewScheduleSnapshot,
+  useDispatchCrewScheduleEvent,
+  type CrewScheduleEventRequest,
+  type CrewScheduleHumanEvent,
+  type CrewSchedulePatchRequest,
+  type CrewScheduleSnapshot,
+  type CrewScheduleState,
+} from './crew-schedules'
+
+export {
   fetchLaborBurdenToday,
   laborBurdenQueryKeys,
   useLaborBurdenToday,
@@ -282,9 +296,12 @@ export {
   fetchProjects,
   projectQueryKeys,
   useProject,
+  useProjectBriefs,
   useProjects,
   useProjectSummary,
   useProjectTimeline,
+  type ProjectBrief,
+  type ProjectBriefListResponse,
   type ProjectDetail,
   type ProjectDetailResponse,
   type ProjectListParams,
@@ -324,6 +341,7 @@ export {
   useQboCustomFields,
   useRemoveTakeoffTag,
   useTakeoffTags,
+  useUpdateTakeoffTag,
   useUpsertQboCustomField,
   type Assembly,
   type AssemblyComponent,
@@ -335,6 +353,7 @@ export {
   type QboCustomFieldMapping,
   type TakeoffMeasurement,
   type TakeoffTag,
+  type UpdateTakeoffTagInput,
 } from './takeoff'
 
 export {
@@ -366,6 +385,7 @@ export {
   useDeleteInventoryLocation,
   useDispatchMovement,
   useGenerateBillingRun,
+  useInventoryForecast,
   useInventoryItems,
   useInventoryLocations,
   useInventoryMovements,
@@ -377,6 +397,8 @@ export {
   usePreviewBillingRun,
   useProjectRentalContracts,
   useRentalContractLines,
+  useRentalReturn,
+  useRentalTransfer,
   type BillingRunPreview,
   type ContractCreateRequest,
   type ContractLineCreateRequest,
@@ -384,6 +406,8 @@ export {
   type ContractLinePatchRequest,
   type ContractListResponse,
   type ContractPatchRequest,
+  type ForecastResponse,
+  type ForecastWeek,
   type InventoryItem,
   type InventoryItemCreateRequest,
   type InventoryItemPatchRequest,
@@ -394,6 +418,10 @@ export {
   type JobRentalContract,
   type MovementListParams,
   type RentalContractLine,
+  type RentalReturnRequest,
+  type RentalRow,
+  type RentalTransferRequest,
+  type RentalTransferResponse,
   type ScanDispatchInput,
   type UtilizationRow,
   type UtilizationTotals,

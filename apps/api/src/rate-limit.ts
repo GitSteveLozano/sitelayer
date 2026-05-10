@@ -109,6 +109,14 @@ export function isRateLimitExempt(pathname: string): boolean {
   // a single shot. Per-IP throttling can't tell a legit redirect from abuse,
   // so we exempt them. /api/integrations/<provider>/callback.
   if (/^\/api\/integrations\/[^/]+\/callback$/.test(pathname)) return true
+  // Public client portals (signed-token-protected). The auth boundary is the
+  // HMAC-verified share_token in the URL itself. Not rate-limit-exempt for
+  // bandwidth — a separate per-IP limiter should be added inline if abuse
+  // becomes an issue, but the global per-user/per-IP `/api/*` bucket would
+  // accidentally lock out a legitimate customer who shares a NAT with API
+  // callers. Path is /api/portal/* so Caddy proxies it to the API container
+  // (Caddyfile only routes /api/* and /health to the API).
+  if (pathname.startsWith('/api/portal/')) return true
   return false
 }
 

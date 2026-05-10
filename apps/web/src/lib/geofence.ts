@@ -24,7 +24,10 @@
 //     small geofences (default accuracy can be off by hundreds of meters
 //     in dense urban areas). Crews accept the cost.
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import type { BootstrapResponse } from '../api-v1-compat.js'
+import { useClockIn, useClockOut, type ClockInRequest, type ClockOutRequest } from './api/clock.js'
 
 export interface GeofencePosition {
   lat: number
@@ -165,4 +168,271 @@ export function isInsideGeofence(args: {
 }): boolean {
   const distance = haversineDistanceMeters({ lat: args.centerLat, lng: args.centerLng }, args.point)
   return distance <= args.radiusMeters
+}
+
+// ---------------------------------------------------------------------------
+// Auto clock-in/out hooks (Phase 2)
+// ---------------------------------------------------------------------------
+
+export type GeofenceShape = {
+  lat: number
+  lng: number
+  radius_m: number
+}
+
+export type GeofenceSample = {
+  inside: boolean
+  distance_m: number
+  lat: number
+  lng: number
+  accuracy_m: number | null
+  at: number
+}
+
+export type GeofenceWatchTransitionError = { kind: 'permission_denied' } | { kind: 'unavailable' } | { kind: 'timeout' }
+
+export type GeofenceWatchOptions = GeofenceShape & {
+  onEnter?: ((sample: GeofenceSample) => void) | undefined
+  onExit?: ((sample: GeofenceSample) => void) | undefined
+  onError?: ((err: GeofenceWatchTransitionError) => void) | undefined
+  disabled?: boolean | undefined
+  exitGraceMs?: number | undefined
+  throttleMs?: number | undefined
+}
+
+export type GeofenceWatchState = {
+  sample: GeofenceSample | null
+  error: GeofenceWatchTransitionError | null
+  ready: boolean
+}
+
+const DEFAULT_EXIT_GRACE_MS = 60_000
+const DEFAULT_THROTTLE_MS = 30_000
+
+/**
+ * Subscribes to `navigator.geolocation.watchPosition` and emits enter/exit
+ * callbacks based on the configured fence. Cleans up on unmount or when
+ * `disabled` flips to true. Exit is debounced for `exitGraceMs` so a
+ * single bad GPS sample doesn't immediately yank a worker off the clock.
+ */
+export function useGeofenceWatch(options: GeofenceWatchOptions): GeofenceWatchState {
+  const {
+    lat,
+    lng,
+    radius_m,
+    onEnter,
+    onExit,
+    onError,
+    disabled = false,
+    exitGraceMs = DEFAULT_EXIT_GRACE_MS,
+    throttleMs = DEFAULT_THROTTLE_MS,
+  } = options
+
+  const [sample, setSample] = useState<GeofenceSample | null>(null)
+  const [error, setError] = useState<GeofenceWatchTransitionError | null>(null)
+  const [ready, setReady] = useState(false)
+
+  const onEnterRef = useRef(onEnter)
+  const onExitRef = useRef(onExit)
+  const onErrorRef = useRef(onError)
+  const lastFiredAtRef = useRef(0)
+  const lastInsideRef = useRef<boolean | null>(null)
+  const exitTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    onEnterRef.current = onEnter
+    onExitRef.current = onExit
+    onErrorRef.current = onError
+  }, [onEnter, onExit, onError])
+
+  useEffect(() => {
+    if (disabled) return
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      const err: GeofenceWatchTransitionError = { kind: 'unavailable' }
+      setError(err)
+      onErrorRef.current?.(err)
+      return
+    }
+
+    const center = { lat, lng }
+
+    const handle = (pos: GeolocationPosition) => {
+      const now = Date.now()
+      const dist = haversineDistanceMeters(center, { lat: pos.coords.latitude, lng: pos.coords.longitude })
+      const inside = dist <= radius_m
+      const next: GeofenceSample = {
+        inside,
+        distance_m: dist,
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy_m: Number.isFinite(pos.coords.accuracy) ? pos.coords.accuracy : null,
+        at: now,
+      }
+      setReady(true)
+      setError(null)
+
+      const wasInside = lastInsideRef.current
+      const stateChanged = wasInside !== inside
+      const throttled = lastFiredAtRef.current && now - lastFiredAtRef.current < throttleMs && !stateChanged
+
+      lastInsideRef.current = inside
+      setSample(next)
+
+      if (throttled) return
+
+      if (inside && wasInside !== true) {
+        if (exitTimerRef.current !== null) {
+          window.clearTimeout(exitTimerRef.current)
+          exitTimerRef.current = null
+        }
+        lastFiredAtRef.current = now
+        onEnterRef.current?.(next)
+        return
+      }
+
+      if (!inside && wasInside === true) {
+        if (exitTimerRef.current !== null) window.clearTimeout(exitTimerRef.current)
+        exitTimerRef.current = window.setTimeout(() => {
+          exitTimerRef.current = null
+          lastFiredAtRef.current = Date.now()
+          onExitRef.current?.(next)
+        }, exitGraceMs)
+      }
+    }
+
+    const fail = (err: GeolocationPositionError) => {
+      let kind: GeofenceWatchTransitionError['kind'] = 'unavailable'
+      if (err.code === err.PERMISSION_DENIED) kind = 'permission_denied'
+      else if (err.code === err.TIMEOUT) kind = 'timeout'
+      const next: GeofenceWatchTransitionError = { kind }
+      setError(next)
+      onErrorRef.current?.(next)
+    }
+
+    const id = navigator.geolocation.watchPosition(handle, fail, {
+      enableHighAccuracy: true,
+      timeout: 15_000,
+      maximumAge: 30_000,
+    })
+    return () => {
+      navigator.geolocation.clearWatch(id)
+      if (exitTimerRef.current !== null) {
+        window.clearTimeout(exitTimerRef.current)
+        exitTimerRef.current = null
+      }
+    }
+  }, [disabled, lat, lng, radius_m, exitGraceMs, throttleMs])
+
+  return { sample, error, ready }
+}
+
+/**
+ * Picks today's primary project — the first active project on bootstrap
+ * with a fence shape — and returns it plus a typed fence shape. Reads
+ * from existing BootstrapResponse fields (site_lat/site_lng/site_radius_m).
+ */
+export function usePrimaryProjectFence(bootstrap: BootstrapResponse | null): {
+  projectId: string | null
+  projectName: string | null
+  fence: GeofenceShape | null
+} {
+  return useMemo(() => {
+    const projects = bootstrap?.projects ?? []
+    const active = projects.find((p) => /progress|active/i.test(p.status)) ?? projects[0] ?? null
+    if (!active) return { projectId: null, projectName: null, fence: null }
+    const lat = active.site_lat != null ? Number(active.site_lat) : NaN
+    const lng = active.site_lng != null ? Number(active.site_lng) : NaN
+    const radius = active.site_radius_m ?? 100
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return { projectId: active.id, projectName: active.name, fence: null }
+    }
+    return { projectId: active.id, projectName: active.name, fence: { lat, lng, radius_m: radius } }
+  }, [bootstrap?.projects])
+}
+
+export type AutoGeofenceClockOptions = {
+  enabled: boolean
+  alreadyClockedIn: boolean
+  fence: GeofenceShape | null
+  projectId: string | null
+  onAutoIn?: (() => void) | undefined
+}
+
+/**
+ * High-level hook: composes useGeofenceWatch with the clock-in/out
+ * mutation hooks from `lib/api/clock.ts` to drive the auto clock-in /
+ * auto clock-out flow. Caller is responsible for surfacing the
+ * permission_denied error from the returned state.
+ */
+export function useAutoGeofenceClock({
+  enabled,
+  alreadyClockedIn,
+  fence,
+  projectId,
+  onAutoIn,
+}: AutoGeofenceClockOptions): GeofenceWatchState {
+  const navigate = useNavigate()
+  const clockIn = useClockIn()
+  const clockOut = useClockOut()
+  const inFlightRef = useRef(false)
+  const alreadyInRef = useRef(alreadyClockedIn)
+  useEffect(() => {
+    alreadyInRef.current = alreadyClockedIn
+  }, [alreadyClockedIn])
+
+  const onEnter = useCallback(
+    async (s: GeofenceSample) => {
+      if (alreadyInRef.current) return
+      if (inFlightRef.current) return
+      inFlightRef.current = true
+      try {
+        const body: ClockInRequest = {
+          lat: s.lat,
+          lng: s.lng,
+          accuracy_m: s.accuracy_m,
+          source: 'auto_geofence',
+          project_id: projectId,
+        }
+        await clockIn.mutateAsync(body)
+        if (onAutoIn) onAutoIn()
+        else navigate('/clockin')
+      } catch {
+        // Surfaced via clockIn.error / clockIn.isError.
+      } finally {
+        inFlightRef.current = false
+      }
+    },
+    [projectId, clockIn, onAutoIn, navigate],
+  )
+
+  const onExit = useCallback(
+    async (s: GeofenceSample) => {
+      if (!alreadyInRef.current) return
+      if (inFlightRef.current) return
+      inFlightRef.current = true
+      try {
+        const body: ClockOutRequest = {
+          lat: s.lat,
+          lng: s.lng,
+          accuracy_m: s.accuracy_m,
+          source: 'auto_geofence',
+        }
+        await clockOut.mutateAsync(body)
+      } catch {
+        // Surfaced via clockOut.error.
+      } finally {
+        inFlightRef.current = false
+      }
+    },
+    [clockOut],
+  )
+
+  return useGeofenceWatch({
+    lat: fence?.lat ?? 0,
+    lng: fence?.lng ?? 0,
+    radius_m: fence?.radius_m ?? 0,
+    onEnter,
+    onExit,
+    disabled: !enabled || !fence || !projectId,
+  })
 }

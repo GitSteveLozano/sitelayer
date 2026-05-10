@@ -26,6 +26,12 @@ import { drainNotifications as drainNotificationsBatch } from './notifications.j
 import { processTakeoffToBidRun, type TakeoffToBidPayload } from './takeoff-to-bid-agent.js'
 import { processVoiceToLogRun, type VoiceToLogPayload } from './voice-to-log-agent.js'
 import {
+  processLaborPayrollPush,
+  processGenerateLaborPayrollRun,
+  selectLaborPayrollPush,
+} from './labor-payroll-push.js'
+import { processFieldEventNotifications } from './field-event-notifier.js'
+import {
   ConsoleChannel,
   DefaultNotificationDispatcher,
   EmailChannel,
@@ -453,6 +459,47 @@ async function drainLockLaborEntries(companyId: string): Promise<LockLaborEntrie
   }
 }
 
+const liveLaborPayrollPushEnabled = process.env.QBO_LIVE_LABOR_PAYROLL === '1'
+const laborPayrollPush = selectLaborPayrollPush()
+if (liveLaborPayrollPushEnabled) {
+  logger.info('[labor-payroll] live QBO TimeActivity push enabled')
+} else {
+  logger.info('[labor-payroll] stub QBO TimeActivity push (set QBO_LIVE_LABOR_PAYROLL=1 to go live)')
+}
+
+async function drainLaborPayrollPushes(companyId: string) {
+  const client = await pool.connect()
+  try {
+    return await processLaborPayrollPush(client, companyId, laborPayrollPush, 5)
+  } finally {
+    client.release()
+  }
+}
+
+async function drainGenerateLaborPayrollRunBridge(companyId: string) {
+  // Bridges time-review APPROVE → labor-payroll without modifying the
+  // time-review reducer. Polls approved time_review_runs whose period has
+  // no payroll run yet and creates one in 'generated' state.
+  const client = await pool.connect()
+  try {
+    return await processGenerateLaborPayrollRun(client, companyId, 10)
+  } finally {
+    client.release()
+  }
+}
+
+async function drainFieldEventNotifications(companyId: string) {
+  // Drains notify_worker_resolution + notify_estimator_escalation outbox
+  // rows emitted by worker_issues PATCH (RESOLVE/ESCALATE workflow events).
+  // Inserts notifications rows; push-channel delivery is a follow-up.
+  const client = await pool.connect()
+  try {
+    return await processFieldEventNotifications(client, companyId)
+  } finally {
+    client.release()
+  }
+}
+
 interface AgentDrainSummary {
   processed: number
   insightsCreated: number
@@ -710,6 +757,21 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     logger.error({ err: error }, '[worker] lock_labor_entries drain failed')
     Sentry.captureException(error, { tags: { scope: 'lock_labor_entries' } })
     return { processed: 0, locked: 0, unlocked: 0, failed: 0 } as LockLaborEntriesSummary
+  })
+
+  await drainGenerateLaborPayrollRunBridge(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] generate_labor_payroll_run drain failed')
+    Sentry.captureException(error, { tags: { scope: 'generate_labor_payroll_run' } })
+  })
+
+  await drainLaborPayrollPushes(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] labor payroll push drain failed')
+    Sentry.captureException(error, { tags: { scope: 'labor_payroll_push' } })
+  })
+
+  await drainFieldEventNotifications(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] field event notification drain failed')
+    Sentry.captureException(error, { tags: { scope: 'field_event_notifications' } })
   })
 
   const takeoffToBidSummary = await drainTakeoffToBid(companyId).catch((error) => {

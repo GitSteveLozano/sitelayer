@@ -18,6 +18,8 @@ import {
   type JobRentalContract,
   type RentalContractLine,
 } from '@/lib/api'
+import { RentalReturnSheet } from '@/screens/rentals/rental-return-sheet'
+import { RentalTransferSheet } from '@/screens/rentals/rental-transfer-sheet'
 
 const RATE_UNITS = ['day', 'cycle', 'week', 'month', 'each']
 
@@ -96,6 +98,12 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
   const [previewData, setPreviewData] = useState<BillingRunPreview | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [editingHeader, setEditingHeader] = useState(false)
+  // Returns reconciliation + transfer entrypoints — operate on the
+  // Avontus-style /api/rentals row (separate ledger from the contract
+  // lines on this page). Paste in a rental id to launch the sheet.
+  const [reconcileRentalId, setReconcileRentalId] = useState<string>('')
+  const [returnSheetOpen, setReturnSheetOpen] = useState(false)
+  const [transferSheetOpen, setTransferSheetOpen] = useState(false)
 
   const onPreview = async () => {
     setError(null)
@@ -224,6 +232,48 @@ function ActiveContractView({ contract }: { contract: JobRentalContract }) {
       <div className="mt-2">
         <Attribution source="POST /api/rental-contracts/:id/billing-runs[/preview] · then approve via Financial tab" />
       </div>
+
+      {/* Returns reconciliation + transfer — operates on the parallel
+          /api/rentals ledger by rental id. Operators reach this surface
+          when the contract-line return path doesn't yet apply (Avontus
+          style rentals, ad-hoc dispatches). */}
+      <Card className="mt-3">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Reconcile rental return</div>
+        <div className="text-[12px] text-ink-3 mt-1">
+          Paste a rental id to record returned counts (good / damaged / lost) or transfer it to another project.
+        </div>
+        <input
+          type="text"
+          value={reconcileRentalId}
+          onChange={(e) => setReconcileRentalId(e.target.value.trim())}
+          placeholder="rental id (uuid)"
+          className="mt-2 w-full text-[13px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
+        />
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          <MobileButton variant="ghost" onClick={() => setReturnSheetOpen(true)} disabled={!reconcileRentalId}>
+            Receive return
+          </MobileButton>
+          <MobileButton variant="ghost" onClick={() => setTransferSheetOpen(true)} disabled={!reconcileRentalId}>
+            Transfer
+          </MobileButton>
+        </div>
+      </Card>
+
+      {reconcileRentalId ? (
+        <>
+          <RentalReturnSheet
+            open={returnSheetOpen}
+            onClose={() => setReturnSheetOpen(false)}
+            rentalId={reconcileRentalId}
+          />
+          <RentalTransferSheet
+            open={transferSheetOpen}
+            onClose={() => setTransferSheetOpen(false)}
+            rentalId={reconcileRentalId}
+            currentProjectId={contract.project_id}
+          />
+        </>
+      ) : null}
 
       {editingLine !== null ? (
         <LineForm
