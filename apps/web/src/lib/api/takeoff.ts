@@ -61,10 +61,21 @@ export function useProjectBlueprints(projectId: string | null | undefined) {
   })
 }
 
-export function useProjectMeasurements(projectId: string | null | undefined) {
+export function useProjectMeasurements(
+  projectId: string | null | undefined,
+  options: { draftId?: string | null } = {},
+) {
+  const draftId = options.draftId ?? null
   return useQuery<{ measurements: TakeoffMeasurement[] }>({
-    queryKey: ['takeoff', 'measurements', 'by-project', projectId ?? ''],
-    queryFn: () => request(`/api/projects/${encodeURIComponent(projectId!)}/takeoff/measurements`),
+    // Draft scope is part of the cache key so switching drafts swaps the
+    // entire result set rather than mixing rows. `'__default'` is a
+    // sentinel for "let the server fall back to the project's default
+    // draft" — distinct from a user-picked uuid.
+    queryKey: ['takeoff', 'measurements', 'by-project', projectId ?? '', draftId ?? '__default'],
+    queryFn: () => {
+      const qs = draftId ? `?draft_id=${encodeURIComponent(draftId)}` : ''
+      return request(`/api/projects/${encodeURIComponent(projectId!)}/takeoff/measurements${qs}`)
+    },
     enabled: Boolean(projectId),
   })
 }
@@ -78,6 +89,8 @@ export interface CreateMeasurementInput {
   elevation?: string | null
   image_thumbnail?: string | null
   geometry: MeasurementGeometry
+  /** Phase A.2: route the measurement to a specific takeoff draft. When omitted, the API falls back to the project's default draft. */
+  draft_id?: string | null
 }
 
 export function useCreateMeasurement(projectId: string) {

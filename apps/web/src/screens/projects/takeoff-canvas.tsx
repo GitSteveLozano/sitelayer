@@ -5,13 +5,18 @@ import { Attribution } from '@/components/ai'
 import {
   useBlueprintPages,
   useCreateMeasurement,
+  useCreateTakeoffDraft,
+  useDuplicateTakeoffDraft,
   useProjectBlueprints,
   useProjectMeasurements,
   useServiceItems,
+  useTakeoffDrafts,
+  useUpdateTakeoffDraft,
   type BlueprintDocument,
   type BlueprintPage,
   type MeasurementGeometry,
   type ServiceItem,
+  type TakeoffDraft,
   type TakeoffMeasurement,
 } from '@/lib/api'
 import { CalibrationBanner, PageCalibrationOverlay } from './page-calibration-overlay'
@@ -47,7 +52,6 @@ export function TakeoffCanvasScreen() {
   const [searchParams, setSearchParams] = useSearchParams()
   const navigate = useNavigate()
   const blueprints = useProjectBlueprints(projectId)
-  const measurements = useProjectMeasurements(projectId)
   const serviceItems = useServiceItems()
   const create = useCreateMeasurement(projectId ?? '')
 
@@ -60,6 +64,89 @@ export function TakeoffCanvasScreen() {
     const sp = new URLSearchParams(searchParams)
     sp.set('blueprint', id)
     setSearchParams(sp, { replace: true })
+  }
+
+  // Phase A.3: multi-draft takeoff picker. The active draft id flows
+  // through the URL (`?draft=<uuid>`), survives reload, and is sticky
+  // per (project, blueprint) in localStorage so opening the canvas after
+  // switching blueprints returns to whatever draft the operator last
+  // worked on in that pair.
+  const drafts = useTakeoffDrafts(projectId)
+  const createDraft = useCreateTakeoffDraft(projectId ?? '')
+  const updateDraft = useUpdateTakeoffDraft(projectId ?? '')
+  const duplicateDraft = useDuplicateTakeoffDraft(projectId ?? '')
+
+  const draftParam = searchParams.get('draft')
+  const draftList = drafts.data?.drafts ?? []
+  const stickyKey = projectId && activeBlueprint ? `takeoff-draft:${projectId}:${activeBlueprint.id}` : null
+  const stickyDraftId = stickyKey
+    ? typeof window !== 'undefined'
+      ? window.localStorage.getItem(stickyKey)
+      : null
+    : null
+  const candidateDraftId = draftParam ?? stickyDraftId ?? null
+  const activeDraft: TakeoffDraft | null = draftList.find((d) => d.id === candidateDraftId) ?? draftList[0] ?? null
+  const activeDraftId = activeDraft?.id ?? null
+
+  const setActiveDraft = (id: string) => {
+    const sp = new URLSearchParams(searchParams)
+    sp.set('draft', id)
+    setSearchParams(sp, { replace: true })
+    if (stickyKey && typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(stickyKey, id)
+      } catch {
+        // Storage quota / disabled — non-fatal; URL is the source of truth.
+      }
+    }
+  }
+
+  const onPickDraftValue = (value: string) => {
+    if (value === '__new__') {
+      const name = typeof window !== 'undefined' ? window.prompt('New draft name')?.trim() : ''
+      if (!name) return
+      createDraft.mutate(
+        { name },
+        {
+          onSuccess: (res) => setActiveDraft(res.draft.id),
+        },
+      )
+      return
+    }
+    setActiveDraft(value)
+  }
+
+  const onDuplicateCurrent = () => {
+    if (!activeDraftId) return
+    duplicateDraft.mutate(
+      { id: activeDraftId },
+      {
+        onSuccess: (res) => setActiveDraft(res.draft.id),
+      },
+    )
+  }
+
+  const measurements = useProjectMeasurements(projectId, { draftId: activeDraftId })
+
+  const onArchiveCurrent = () => {
+    if (!activeDraft) return
+    // Block archiving the last active draft — the canvas can't render
+    // measurements without one and the spec wants archive (not delete)
+    // for keeping old proposals around.
+    if (draftList.length <= 1) {
+      setError('Cannot archive the last active draft. Create another draft first.')
+      return
+    }
+    updateDraft.mutate(
+      { id: activeDraft.id, status: 'archived', expected_version: activeDraft.version },
+      {
+        onSuccess: () => {
+          // Switch to the first remaining active draft.
+          const next = draftList.find((d) => d.id !== activeDraft.id && d.status === 'active')
+          if (next) setActiveDraft(next.id)
+        },
+      },
+    )
   }
 
   const [tool, setTool] = useState<'polygon' | 'lineal' | 'count'>('polygon')
@@ -175,6 +262,9 @@ export function TakeoffCanvasScreen() {
         unit: selectedItem?.unit ?? (tool === 'polygon' ? 'sqft' : tool === 'lineal' ? 'lf' : 'ea'),
         geometry,
         elevation: elevation === 'none' ? null : elevation,
+        // Land the measurement on the currently-selected draft. Falls
+        // back to the project's default server-side when null.
+        draft_id: activeDraftId,
       })
       setDraftPoints([])
     } catch (e) {
@@ -236,6 +326,46 @@ export function TakeoffCanvasScreen() {
                   {b.file_name}
                 </button>
               ))}
+            </div>
+          ) : null}
+
+          {/* Phase A.3: draft picker. Selection is sticky per
+              (project, blueprint) so opening the canvas after switching
+              blueprints lands back on whichever draft the operator was
+              working on for that pair. */}
+          {draftList.length > 0 ? (
+            <div className="px-4 pb-2 flex items-center gap-2 text-[12px]">
+              <span className="text-ink-3 font-semibold uppercase tracking-[0.06em] text-[10px]">Draft</span>
+              <select
+                value={activeDraftId ?? ''}
+                onChange={(e) => onPickDraftValue(e.target.value)}
+                className="flex-1 min-w-0 py-1.5 px-2 rounded border border-line bg-card-soft text-[13px] font-medium"
+              >
+                {draftList.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+                <option value="__new__">+ New draft…</option>
+              </select>
+              <button
+                type="button"
+                onClick={onDuplicateCurrent}
+                disabled={!activeDraftId || duplicateDraft.isPending}
+                className="px-2 py-1.5 rounded border border-line text-[11px] font-medium text-ink-2 disabled:opacity-50"
+                title="Duplicate this draft"
+              >
+                Duplicate
+              </button>
+              <button
+                type="button"
+                onClick={onArchiveCurrent}
+                disabled={!activeDraftId || updateDraft.isPending || draftList.length <= 1}
+                className="px-2 py-1.5 rounded border border-line text-[11px] font-medium text-ink-2 disabled:opacity-50"
+                title="Archive this draft"
+              >
+                Archive
+              </button>
             </div>
           ) : null}
 
