@@ -501,7 +501,7 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
   // daily_budget. List + detail kept in different surfaces so screens
   // can fetch only what they render.
   if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+$/)) {
-    const projectId = url.pathname.split('/')[2] ?? ''
+    const projectId = url.pathname.split('/')[3] ?? ''
     if (!projectId) {
       ctx.sendJson(400, { error: 'project id is required' })
       return true
