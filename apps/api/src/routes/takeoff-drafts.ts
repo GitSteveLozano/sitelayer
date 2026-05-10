@@ -3,6 +3,19 @@ import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid, parseExpectedVersion } from '../http-utils.js'
+import { PIPELINE_VERSION as ROOMPLAN_PIPELINE_VERSION, parseCapturedRoom } from '@sitelayer/pipe-roomplan'
+import {
+  PIPELINE_VERSION as PHOTOGRAMMETRY_PIPELINE_VERSION,
+  buildTakeoffFromLabeledMesh,
+  parseLabeledMesh,
+} from '@sitelayer/pipe-photogrammetry'
+import {
+  PIPELINE_VERSION as DRONE_PIPELINE_VERSION,
+  takeoffFromSidecar,
+  DroneSidecarSchema,
+} from '@sitelayer/pipe-drone'
+import { PIPELINE_VERSION as BLUEPRINT_PIPELINE_VERSION, buildBlueprintTakeoff } from '@sitelayer/pipe-blueprint'
+import { applyReviewFloor, type TakeoffResult } from '@sitelayer/capture-schema'
 
 export type TakeoffDraftRouteCtx = {
   pool: Pool
@@ -14,7 +27,109 @@ export type TakeoffDraftRouteCtx = {
 }
 
 const ALLOWED_STATUS = new Set(['active', 'archived'])
-const RETURNING_COLUMNS = `id, company_id, project_id, name, type, status, version, deleted_at, created_at, updated_at`
+const ALLOWED_CAPTURE_KINDS = new Set(['roomplan', 'photogrammetry', 'drone', 'blueprint_vision'])
+const RETURNING_COLUMNS = `id, company_id, project_id, name, type, status, source, takeoff_result_blob_uri, review_required, pipeline_version, version, deleted_at, created_at, updated_at`
+
+/** Default draft-name fallback when the caller doesn't supply one. */
+function defaultCaptureName(kind: string): string {
+  switch (kind) {
+    case 'roomplan':
+      return 'RoomPlan capture'
+    case 'photogrammetry':
+      return 'Photogrammetry capture'
+    case 'drone':
+      return 'Drone capture'
+    case 'blueprint_vision':
+      return 'Blueprint capture'
+    default:
+      return 'Capture draft'
+  }
+}
+
+/**
+ * Run the requested capture pipeline against its kind-specific payload
+ * and return the resulting `TakeoffResult` with review-floor applied.
+ * Throws on validation / pipeline errors; the caller maps to 400/422.
+ */
+/** Drop keys whose value is undefined so exactOptionalPropertyTypes consumers accept the object. */
+function compact<T extends Record<string, unknown>>(obj: T): T {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v
+  }
+  return out as T
+}
+
+async function dispatchCapturePipeline(
+  kind: string,
+  payload: Record<string, unknown>,
+  projectId: string,
+): Promise<{ result: TakeoffResult; pipelineVersion: string }> {
+  switch (kind) {
+    case 'roomplan': {
+      const capturedRoomJsonUri = String(payload.capturedRoomJsonUri ?? '').trim()
+      if (!capturedRoomJsonUri) {
+        throw new Error('roomplan payload requires capturedRoomJsonUri')
+      }
+      const result = parseCapturedRoom(
+        compact({
+          capturedRoomJson: payload.capturedRoomJson,
+          projectId,
+          capturedRoomJsonUri,
+          deviceModel: typeof payload.deviceModel === 'string' ? payload.deviceModel : undefined,
+          capturedAt: typeof payload.capturedAt === 'string' ? payload.capturedAt : undefined,
+        }),
+      )
+      return { result: applyReviewFloor(result), pipelineVersion: ROOMPLAN_PIPELINE_VERSION }
+    }
+    case 'photogrammetry': {
+      const labeledMesh = parseLabeledMesh(payload.labeledMesh)
+      const result = buildTakeoffFromLabeledMesh(
+        compact({
+          labeledMesh,
+          projectId,
+          meshId: typeof payload.meshId === 'string' ? payload.meshId : undefined,
+          vendorJobId: typeof payload.vendorJobId === 'string' ? payload.vendorJobId : undefined,
+        }),
+      )
+      return { result: applyReviewFloor(result), pipelineVersion: PHOTOGRAMMETRY_PIPELINE_VERSION }
+    }
+    case 'drone': {
+      const sidecar = DroneSidecarSchema.parse(payload.sidecar)
+      const result = takeoffFromSidecar(
+        sidecar,
+        compact({
+          projectId,
+          sidecarPath: typeof payload.sidecarPath === 'string' ? payload.sidecarPath : 'inline',
+        }),
+      )
+      return { result: applyReviewFloor(result), pipelineVersion: DRONE_PIPELINE_VERSION }
+    }
+    case 'blueprint_vision': {
+      // MVP: dry-run only. Live mode requires a server-side PDF path
+      // (or pre-uploaded blueprint_documents reference) plus ANTHROPIC_API_KEY;
+      // a follow-on PR wires the streaming-upload path.
+      const dryRun = payload.dryRun !== false
+      const pdfPath = typeof payload.pdfPath === 'string' ? payload.pdfPath : ''
+      if (!dryRun && !pdfPath) {
+        throw new Error('blueprint_vision live mode requires pdfPath (server-side absolute path)')
+      }
+      const result = await buildBlueprintTakeoff(
+        compact({
+          pdfPath: pdfPath || '/dev/null',
+          projectId,
+          dryRun,
+          knownDimensionFt: typeof payload.knownDimensionFt === 'number' ? payload.knownDimensionFt : undefined,
+          wallHeightFt: typeof payload.wallHeightFt === 'number' ? payload.wallHeightFt : undefined,
+          model: typeof payload.model === 'string' ? payload.model : undefined,
+        }),
+      )
+      return { result: applyReviewFloor(result), pipelineVersion: BLUEPRINT_PIPELINE_VERSION }
+    }
+    default:
+      throw new Error(`unsupported capture kind: ${kind}`)
+  }
+}
 
 /**
  * Resolve the project's active default draft id. The migration backfills
@@ -87,6 +202,129 @@ export async function handleTakeoffDraftRoutes(
   url: URL,
   ctx: TakeoffDraftRouteCtx,
 ): Promise<boolean> {
+  // POST /api/projects/:projectId/takeoff-drafts/capture (Phase C.2)
+  if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/takeoff-drafts\/capture$/)) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project id must be a valid uuid' })
+      return true
+    }
+    const body = await ctx.readBody()
+    const kind = String(body.kind ?? '').trim()
+    if (!ALLOWED_CAPTURE_KINDS.has(kind)) {
+      ctx.sendJson(400, {
+        error: `kind must be one of ${[...ALLOWED_CAPTURE_KINDS].join(', ')}`,
+      })
+      return true
+    }
+    const payload =
+      body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload)
+        ? (body.payload as Record<string, unknown>)
+        : null
+    if (!payload) {
+      ctx.sendJson(400, { error: 'payload (object) is required' })
+      return true
+    }
+    const name = String(body.name ?? '').trim() || defaultCaptureName(kind)
+
+    // Verify project tenancy before kicking the pipeline so a foreign
+    // projectId doesn't waste a Claude/Luma call on the way to a 404.
+    const projectCheck = await ctx.pool.query(
+      `select id from projects
+         where company_id = $1 and id = $2 and deleted_at is null`,
+      [ctx.company.id, projectId],
+    )
+    if (!projectCheck.rows[0]) {
+      ctx.sendJson(404, { error: 'project not found' })
+      return true
+    }
+
+    let dispatchOutcome: { result: TakeoffResult; pipelineVersion: string }
+    try {
+      dispatchOutcome = await dispatchCapturePipeline(kind, payload, projectId)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'pipeline failed'
+      ctx.sendJson(422, { error: message })
+      return true
+    }
+    const { result: takeoffResult, pipelineVersion } = dispatchOutcome
+    const reviewRequired = takeoffResult.quantities.some((q) => q.confidence < 0.5)
+
+    const created = await withMutationTx(async (client) => {
+      const insertResult = await client.query(
+        `insert into takeoff_drafts (
+            company_id, project_id, name, type, status,
+            source, takeoff_result_json, review_required, pipeline_version
+          )
+          values ($1, $2, $3, 'measurement', 'active', $4, $5::jsonb, $6, $7)
+          returning ${RETURNING_COLUMNS}`,
+        [ctx.company.id, projectId, name, kind, JSON.stringify(takeoffResult), reviewRequired, pipelineVersion],
+      )
+      const row = insertResult.rows[0]
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'takeoff_draft',
+        entityId: row.id,
+        action: 'create',
+        row: { ...row, source: kind, pipeline_version: pipelineVersion },
+        actorUserId: ctx.currentUserId ?? null,
+      })
+      return row
+    })
+
+    ctx.sendJson(201, {
+      draft: created,
+      result_summary: {
+        quantities_count: takeoffResult.quantities.length,
+        review_required: reviewRequired,
+        capture_source: takeoffResult.source,
+        geometry: {
+          rooms: takeoffResult.geometry?.rooms?.length ?? 0,
+          surfaces: takeoffResult.geometry?.surfaces?.length ?? 0,
+          objects: takeoffResult.geometry?.objects?.length ?? 0,
+        },
+        pipeline_version: pipelineVersion,
+      },
+    })
+    return true
+  }
+
+  // GET /api/takeoff-drafts/:id/result — return the stashed TakeoffResult JSON
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/takeoff-drafts\/[^/]+\/result$/)) {
+    const draftId = url.pathname.split('/')[3] ?? ''
+    if (!isValidUuid(draftId)) {
+      ctx.sendJson(400, { error: 'draft id must be a valid uuid' })
+      return true
+    }
+    const result = await ctx.pool.query<{
+      takeoff_result_json: unknown
+      source: string
+      review_required: boolean
+      pipeline_version: string | null
+    }>(
+      `select takeoff_result_json, source, review_required, pipeline_version
+         from takeoff_drafts
+        where company_id = $1 and id = $2 and deleted_at is null`,
+      [ctx.company.id, draftId],
+    )
+    if (!result.rows[0]) {
+      ctx.sendJson(404, { error: 'draft not found' })
+      return true
+    }
+    if (!result.rows[0].takeoff_result_json) {
+      ctx.sendJson(404, { error: 'draft has no captured takeoff result (manual draft)' })
+      return true
+    }
+    ctx.sendJson(200, {
+      takeoff_result: result.rows[0].takeoff_result_json,
+      source: result.rows[0].source,
+      review_required: result.rows[0].review_required,
+      pipeline_version: result.rows[0].pipeline_version,
+    })
+    return true
+  }
+
   // GET /api/projects/:projectId/takeoff-drafts
   if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/takeoff-drafts$/)) {
     const projectId = url.pathname.split('/')[3] ?? ''
