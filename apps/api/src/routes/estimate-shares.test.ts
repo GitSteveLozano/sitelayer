@@ -24,9 +24,19 @@ class FakePool {
   shares: EstimateShareRow[] = []
   projects: Row[] = []
   companies: Row[] = []
+  memberships: Array<{ company_id: string; clerk_user_id: string; role: string }> = []
   workflowEvents: Row[] = []
   syncEvents: Row[] = []
   outbox: Row[] = []
+  notifications: Array<{
+    company_id: string
+    recipient_clerk_user_id: string | null
+    recipient_email: string | null
+    kind: string
+    subject: string
+    body_text: string
+    payload: Record<string, unknown>
+  }> = []
   expiredOverride: { token: string; expiresAt: string } | null = null
 
   /** Register this fake pool with the mutation-tx module for the
@@ -182,9 +192,18 @@ class FakePool {
       const row = this.shares.find((s) => s.id === id)
       if (!row) return { rows: [], rowCount: 0 }
       const now = new Date().toISOString()
+      const prevViewedAt = row.viewed_at
       row.viewed_at = row.viewed_at ?? now
       row.view_count += 1
       row.updated_at = now
+      // Route emits a CTE update that returns prev.prev_viewed_at so the
+      // caller can detect "first view" without a separate read; mirror
+      // that shape when the SQL contains the CTE, fall back to the
+      // legacy empty-rows shape for any other queries that hit the same
+      // matcher.
+      if (/prev_viewed_at/.test(sql)) {
+        return { rows: [{ prev_viewed_at: prevViewedAt }], rowCount: 1 }
+      }
       return { rows: [], rowCount: 1 }
     }
 
@@ -205,7 +224,13 @@ class FakePool {
       const company = this.companies.find((c) => c.id === companyId)
       if (!project || !company) return { rows: [], rowCount: 0 }
       return {
-        rows: [{ project_name: project.name, company_name: company.name }],
+        rows: [
+          {
+            project_name: project.name,
+            company_name: company.name,
+            customer_name: project.customer_name ?? null,
+          },
+        ],
         rowCount: 1,
       }
     }
@@ -276,6 +301,41 @@ class FakePool {
       const project = this.projects.find((p) => p.company_id === companyId && p.id === projectId)
       if (!project) return { rows: [], rowCount: 0 }
       return { rows: [{ name: project.name, customer_name: 'Test Customer' }], rowCount: 1 }
+    }
+
+    // ---- company_memberships (operator notification recipients) ----
+    if (/from company_memberships/i.test(sql)) {
+      const [companyId] = params as [string]
+      const roleMatch = sql.match(/role in \(([^)]+)\)/i)
+      const roles = roleMatch ? roleMatch[1]!.split(',').map((r) => r.trim().replace(/^'|'$/g, '')) : ['admin']
+      const rows = this.memberships
+        .filter((m) => m.company_id === companyId && roles.includes(m.role))
+        .map((m) => ({ clerk_user_id: m.clerk_user_id }))
+      return { rows, rowCount: rows.length }
+    }
+
+    // ---- notifications (operator first-view fan-out) ----
+    if (/^\s*insert into notifications/i.test(sql)) {
+      const [companyId, recipientClerkUserId, recipientEmail, kind, subject, bodyText, , payload] = params as [
+        string,
+        string | null,
+        string | null,
+        string,
+        string,
+        string,
+        string | null,
+        string,
+      ]
+      this.notifications.push({
+        company_id: companyId,
+        recipient_clerk_user_id: recipientClerkUserId,
+        recipient_email: recipientEmail,
+        kind,
+        subject,
+        body_text: bodyText,
+        payload: JSON.parse(payload),
+      })
+      return { rows: [{ id: `notif-${this.notifications.length}` }], rowCount: 1 }
     }
 
     throw new Error(`unexpected SQL in fake pool: ${sql.slice(0, 200)}`)
@@ -605,6 +665,87 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     expect(body.project_name).toBe('Riverbend')
     expect(pool.shares[0]?.view_count).toBe(1)
     expect(pool.shares[0]?.viewed_at).not.toBeNull()
+  })
+
+  it('GET first view enqueues an estimate_share_viewed notification for each admin/office member', async () => {
+    const pool = new FakePool()
+    const { token } = await seedShare(pool)
+    pool.memberships.push(
+      { company_id: 'co-1', clerk_user_id: 'user_admin', role: 'admin' },
+      { company_id: 'co-1', clerk_user_id: 'user_office', role: 'office' },
+      // Foremen should NOT receive this sales-loop notification — they
+      // own the field loop, not the funnel.
+      { company_id: 'co-1', clerk_user_id: 'user_foreman', role: 'foreman' },
+    )
+    // Stamp a customer_name on the project so the body uses the project's
+    // customer when the share row doesn't carry a recipient_name.
+    pool.projects[0]!.customer_name = 'Smith Co'
+    // Clear the seeded share's recipient_name so the body falls back to
+    // customer_name (exercises the precedence chain).
+    pool.shares[0]!.recipient_name = null
+
+    const { ctx, responses } = makePublicCtx(pool)
+    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/api/portal/estimates/${token}`), ctx)
+    expect(responses[0]?.status).toBe(200)
+
+    expect(pool.notifications).toHaveLength(2)
+    const adminRow = pool.notifications.find((n) => n.recipient_clerk_user_id === 'user_admin')
+    const officeRow = pool.notifications.find((n) => n.recipient_clerk_user_id === 'user_office')
+    expect(adminRow).toBeDefined()
+    expect(officeRow).toBeDefined()
+    expect(pool.notifications.find((n) => n.recipient_clerk_user_id === 'user_foreman')).toBeUndefined()
+
+    expect(adminRow?.kind).toBe('estimate_share_viewed')
+    expect(adminRow?.subject).toBe('Customer viewed estimate')
+    expect(adminRow?.body_text).toBe('Smith Co opened the estimate for Riverbend')
+    expect(adminRow?.payload).toMatchObject({
+      project_id: 'p-1',
+      project_name: 'Riverbend',
+      customer_name: 'Smith Co',
+      link_target: '/projects/p-1?tab=estimate',
+    })
+  })
+
+  it('GET second view does NOT re-enqueue the notification', async () => {
+    const pool = new FakePool()
+    const { token } = await seedShare(pool)
+    pool.memberships.push({ company_id: 'co-1', clerk_user_id: 'user_admin', role: 'admin' })
+
+    // First hit — emits.
+    const first = makePublicCtx(pool)
+    await handlePublicEstimateShareRoutes(
+      { method: 'GET' } as never,
+      buildUrl(`/api/portal/estimates/${token}`),
+      first.ctx,
+    )
+    expect(pool.notifications).toHaveLength(1)
+    expect(pool.shares[0]?.view_count).toBe(1)
+
+    // Second hit — viewed_at is already set, so prev_viewed_at is non-null
+    // and the fan-out is skipped. view_count keeps incrementing so the
+    // operator timeline still reflects engagement.
+    const second = makePublicCtx(pool)
+    await handlePublicEstimateShareRoutes(
+      { method: 'GET' } as never,
+      buildUrl(`/api/portal/estimates/${token}`),
+      second.ctx,
+    )
+    expect(second.responses[0]?.status).toBe(200)
+    expect(pool.notifications).toHaveLength(1)
+    expect(pool.shares[0]?.view_count).toBe(2)
+  })
+
+  it('GET first view enqueues a single broadcast row when no admin/office members exist', async () => {
+    const pool = new FakePool()
+    const { token } = await seedShare(pool)
+    // No memberships seeded — the company has nobody to ping yet.
+
+    const { ctx } = makePublicCtx(pool)
+    await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/api/portal/estimates/${token}`), ctx)
+
+    expect(pool.notifications).toHaveLength(1)
+    expect(pool.notifications[0]?.recipient_clerk_user_id).toBeNull()
+    expect(pool.notifications[0]?.kind).toBe('estimate_share_viewed')
   })
 
   it('GET returns 401 for an invalid (HMAC mismatch) token', async () => {

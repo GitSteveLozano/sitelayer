@@ -76,3 +76,23 @@ export async function listIssueRecipientUserIds(client: NotificationQueryClient,
   )
   return result.rows.map((row) => row.clerk_user_id)
 }
+
+/**
+ * Operator-facing recipients for sales-loop signals (e.g. customer opened
+ * the estimate-share link). The estimator who sent the link wants to know
+ * the prospect engaged, and admin keeps a backstop view of the funnel, so
+ * the fan-out is admin + office. Foremen are excluded — they have no role
+ * in the sales loop and the goal is to keep their feed scoped to dispatch
+ * + field events.
+ */
+export async function listOperatorRecipientUserIds(
+  client: NotificationQueryClient,
+  companyId: string,
+): Promise<string[]> {
+  const result = await client.query<{ clerk_user_id: string }>(
+    `select cm.clerk_user_id from company_memberships cm
+     where cm.company_id = $1 and cm.role in ('admin', 'office')`,
+    [companyId],
+  )
+  return result.rows.map((row) => row.clerk_user_id)
+}
