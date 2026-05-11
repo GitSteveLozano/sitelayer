@@ -13,8 +13,39 @@
 // payloads directly.
 
 import { Sentry } from '@/instrument'
+import { isClerkConfigured } from '@/lib/auth'
 
 export const API_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:3001') as string
+
+/**
+ * localStorage key the dev-only RoleSwitcher panel writes to. When this
+ * is set AND Clerk is not configured, every outbound request gets a
+ * matching `x-sitelayer-act-as` header so the API resolves the user id
+ * to the chosen role. The API rejects this header in prod regardless of
+ * what's stored locally — see `apps/api/src/auth.ts:resolveActAsOverride`.
+ */
+export const ACT_AS_STORAGE_KEY = 'sitelayer.act-as'
+
+/**
+ * Read the dev act-as override from localStorage. Returns null when:
+ *   - we're SSR / not in a browser
+ *   - the key isn't set
+ *   - the value is an empty string
+ *   - localStorage access throws (sandboxed iframes, private mode)
+ *
+ * The header is only emitted on the wire when `isClerkConfigured()`
+ * is false — once a real Clerk publishable key is wired the SPA is
+ * meant to use real tokens, and the dev override loses authority.
+ */
+export function getActAsUserId(): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const value = window.localStorage.getItem(ACT_AS_STORAGE_KEY)
+    return value && value.trim() ? value.trim() : null
+  } catch {
+    return null
+  }
+}
 
 export class ApiError extends Error {
   readonly status: number
@@ -106,6 +137,13 @@ export async function buildAuthHeaders(opts: { companySlug?: string; requestId?:
     // 401 if it actually needed the token; the registered provider
     // surface in clerk-token-bridge.tsx already reports to Sentry.
   }
+  // Dev-only act-as header. Only emitted when Clerk is not configured —
+  // once a real publishable key is wired the SPA uses real tokens and
+  // this override loses authority on the API side too (auth.ts).
+  if (!isClerkConfigured()) {
+    const actAs = getActAsUserId()
+    if (actAs) headers.set('x-sitelayer-act-as', actAs)
+  }
   return headers
 }
 
@@ -141,6 +179,14 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
       if (token) headers.set('Authorization', `Bearer ${token}`)
     } catch (err) {
       Sentry.captureException(err, { tags: { scope: 'token_provider' } })
+    }
+    // See `buildAuthHeaders` — the dev act-as override only travels on
+    // the wire when Clerk isn't configured. Setting both a real Bearer
+    // token AND the act-as header would be confusing on the API side,
+    // and `auth.ts` already prefers Clerk in that path.
+    if (!isClerkConfigured()) {
+      const actAs = getActAsUserId()
+      if (actAs) headers.set('x-sitelayer-act-as', actAs)
     }
   }
 

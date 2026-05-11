@@ -251,6 +251,52 @@ docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
    the PDF streams straight into Spaces; the JSON-body variant of the
    endpoint stays dry-run.
 
+## Local/preview role testing
+
+The substrate ships a dev-only auth-bypass so QA can exercise RBAC paths
+without standing up a Clerk org. It is structurally impossible to
+activate in production — both the SPA and the API enforce the gate
+independently.
+
+**SPA side (`apps/web`).** When `VITE_CLERK_PUBLISHABLE_KEY` is empty
+and the build is not `MODE === 'production'`, a small `<RoleSwitcher />`
+panel (`apps/web/src/components/dev/RoleSwitcher.tsx`) renders in the
+bottom-right. Tapping a role writes `localStorage['sitelayer.act-as'] =
+e2e-<role>` and reloads the page. From that point on, every outbound
+request from `apps/web/src/lib/api/client.ts:request<T>()` (and
+`buildAuthHeaders`) carries `x-sitelayer-act-as: e2e-<role>`. Once a
+Clerk publishable key is wired, `isClerkConfigured()` flips true, the
+panel un-mounts, and the header stops travelling.
+
+**API side (`apps/api`).** `apps/api/src/auth.ts:resolveActAsOverride`
+reads the header and, when `appConfig.tier !== 'prod'`, overrides every
+other user-id resolution path (Clerk JWT, `x-sitelayer-user-id`,
+`ACTIVE_USER_ID`). Company resolution is unchanged — it still uses
+`x-sitelayer-company-slug` (default `ACTIVE_COMPANY_SLUG`) — and the
+RBAC role is still read from `company_memberships` on every request. In
+`prod` the header is ignored and a `[auth] ignoring x-sitelayer-act-as
+in prod` warning fires so operators can spot misconfigured clients.
+
+**To use locally:**
+
+1. In `.env`, leave both `CLERK_JWT_KEY=` and
+   `VITE_CLERK_PUBLISHABLE_KEY=` empty.
+2. `npm run dev` (or `npm run dev:web` + `npm run dev:api`).
+3. Open the SPA — the dev role-switcher appears in the bottom-right.
+4. Click a role to swap identities; the page reloads with the new
+   `x-sitelayer-act-as` header on every API call.
+
+The five canonical IDs are `e2e-admin`, `e2e-foreman`, `e2e-office`,
+`e2e-member`, `e2e-bookkeeper`. Provision matching rows in
+`company_memberships` (a tier-gated seed migration is the natural follow-on)
+so the API has a role to read.
+
+**Never active in prod.** The API guard (`tier !== 'prod'`) and the
+Vite `MODE !== 'production'` dead-code branch in `App.tsx` are
+redundant on purpose — either alone is sufficient to block the bypass,
+and both have unit-test coverage (`apps/api/src/auth.test.ts`,
+`apps/web/src/components/dev/RoleSwitcher.test.tsx`).
+
 ## Current Infrastructure Snapshot
 
 **Verified with `doctl` and production smoke checks on 2026-04-25.**

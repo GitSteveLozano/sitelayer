@@ -24,6 +24,7 @@ const SENSITIVE_HEADERS = new Set([
   'svix-timestamp',
   'intuit-signature',
   'x-sitelayer-user-id',
+  'x-sitelayer-act-as',
 ])
 
 const SENSITIVE_FIELD_PATTERN =
