@@ -1,8 +1,17 @@
 # Multi-Draft Takeoff Spec
 
-Status: design / not started
+Status: implemented in #266–#270, #272–#274, #281
 Author: Claude Opus 4.7 (1M context)
-Last updated: 2026-04-29
+Last updated: 2026-05-10
+
+## Shipping notes
+
+- Phase A (multi-draft schema, API, UI, per-draft estimates, NOT NULL lock) shipped 2026-05-10 across #266–#270.
+- Phase B/C (capture pipeline: pipe-\* packages ported, `takeoff_capture_artifacts` schema, capture-to-draft endpoint + Capture-from UI on takeoff-canvas) shipped 2026-05-10 across #271–#274.
+- Phase D follow-on: LifecycleBanner mounted on the live mobile project detail (#281, 2026-05-10).
+- In-flight / not yet shipped: live (non-dry-run) `blueprint_vision` mode requires a streaming PDF-upload path + `ANTHROPIC_API_KEY`; promote-to-measurements (draft → committed measurements) is still a follow-on. Both tracked separately.
+
+The rest of this document is the original design spec, kept for historical context. Treat the "Build order" and "Open questions" sections as resolved unless they relate to the in-flight items above.
 
 ## Why
 
