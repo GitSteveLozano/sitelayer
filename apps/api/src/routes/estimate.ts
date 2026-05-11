@@ -5,6 +5,7 @@ import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, recordSyncEvent, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
 import { buildEstimatePdfInputFromSummary, type EstimatePdfInput } from '../pdf.js'
+import { resolvePrices } from '../pricing.js'
 import { summarizeProject } from './projects.js'
 import { listServiceItemProductivity } from './analytics.js'
 import { resolveDefaultDraftId, validateDraftId } from './takeoff-drafts.js'
@@ -75,12 +76,13 @@ export async function createEstimateFromMeasurements(
   const actualExecutor = options.executor ?? pool
   const projectResult = await actualExecutor.query<{
     id: string
+    customer_id: string | null
     bid_total: string | number | null
     labor_rate: string | number | null
     bonus_pool: string | number | null
     division_code: string | null
   }>(
-    'select id, bid_total, labor_rate, bonus_pool, division_code from projects where company_id = $1 and id = $2 limit 1',
+    'select id, customer_id, bid_total, labor_rate, bonus_pool, division_code from projects where company_id = $1 and id = $2 limit 1',
     [companyId, projectId],
   )
   const project = projectResult.rows[0]
@@ -92,29 +94,33 @@ export async function createEstimateFromMeasurements(
   // pipeline draft) survive untouched.
   const draftId = options.draftId ?? (await resolveDefaultDraftId(pool, companyId, projectId))
 
-  const [measurementsResult, serviceItemsResult] = await Promise.all([
-    actualExecutor.query<{
-      service_item_code: string
-      quantity: string | number
-      unit: string
-      notes: string | null
-      division_code: string | null
-    }>(
-      draftId
-        ? 'select service_item_code, quantity, unit, notes, division_code from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
-        : 'select service_item_code, quantity, unit, notes, division_code from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
-      draftId ? [companyId, projectId, draftId] : [companyId, projectId],
-    ),
-    actualExecutor.query<{ code: string; default_rate: string | null; unit: string }>(
-      'select code, default_rate, unit from service_items where company_id = $1',
-      [companyId],
-    ),
-  ])
+  const measurementsResult = await actualExecutor.query<{
+    service_item_code: string
+    quantity: string | number
+    unit: string
+    notes: string | null
+    division_code: string | null
+  }>(
+    draftId
+      ? 'select service_item_code, quantity, unit, notes, division_code from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
+      : 'select service_item_code, quantity, unit, notes, division_code from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
+    draftId ? [companyId, projectId, draftId] : [companyId, projectId],
+  )
 
-  const itemIndex = new Map<string, { default_rate: string | null; unit: string }>()
-  for (const item of serviceItemsResult.rows) {
-    itemIndex.set(item.code, { default_rate: item.default_rate, unit: item.unit })
-  }
+  // Pull each measurement's effective rate through the pricing chain
+  // (project_override → customer → company → qbo → service_items.default_rate)
+  // in one query, instead of the old "snapshot every service_items row
+  // and look up default_rate" path. This both honors per-project and
+  // per-customer overrides and falls back to the same default_rate the
+  // old code used when nothing higher-priority matches.
+  const distinctCodes = Array.from(new Set(measurementsResult.rows.map((row) => row.service_item_code).filter(Boolean)))
+  const priceIndex = await resolvePrices({
+    pool: actualExecutor,
+    company_id: companyId,
+    project_id: projectId,
+    customer_id: project.customer_id,
+    service_item_codes: distinctCodes,
+  })
 
   // Phase A.4: scope the wipe to the target draft so sibling drafts'
   // estimate_lines survive untouched. Null-draft callers (projects with
@@ -154,8 +160,8 @@ export async function createEstimateFromMeasurements(
     const amounts: string[] = []
     const divisions: (string | null)[] = []
     for (const measurement of measurementsResult.rows) {
-      const item = itemIndex.get(measurement.service_item_code)
-      const rate = Number(item?.default_rate ?? 0)
+      const resolved = priceIndex.get(measurement.service_item_code)
+      const rate = resolved?.price ?? 0
       const amount = Number(measurement.quantity) * rate
       // Per WhatsApp:227-229: an estimate line inherits the measurement's
       // division_code when the takeoff captured one, otherwise falls back to
@@ -163,7 +169,7 @@ export async function createEstimateFromMeasurements(
       const effectiveDivisionCode = measurement.division_code ?? projectDivisionCode
       codes.push(measurement.service_item_code)
       quantities.push(String(measurement.quantity))
-      units.push(item?.unit ?? measurement.unit)
+      units.push(resolved?.unit || measurement.unit)
       rates.push(String(rate))
       amounts.push(String(amount))
       divisions.push(effectiveDivisionCode)
