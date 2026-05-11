@@ -104,13 +104,27 @@ export const test = base.extend<Fixtures>({
 
 export const expect = test.expect
 
+// API runs on a separate port from the web dev server (Vite). The web
+// client (apps/web/src/lib/api/client.ts) hard-codes the cross-origin
+// jump via `VITE_API_URL ?? 'http://localhost:3001'`. Playwright's
+// `page.request.get(path)` resolves against the page baseURL (web port)
+// — so an unqualified `/api/foo` would 404 onto the SPA shell. Build
+// an absolute URL against the API host instead.
+const E2E_API_PORT = process.env.E2E_API_PORT ?? '3001'
+const E2E_API_BASE_URL = process.env.E2E_API_BASE_URL ?? `http://localhost:${E2E_API_PORT}`
+
+function apiUrl(path: string): string {
+  if (path.startsWith('http://') || path.startsWith('https://')) return path
+  return `${E2E_API_BASE_URL}${path.startsWith('/') ? path : `/${path}`}`
+}
+
 /**
  * Convenience: pull a workflow snapshot via the page's request context.
  * Header fixtures (act-as + company slug) are already attached, so the
  * caller just supplies the resource path.
  */
 export async function fetchWorkflowSnapshot<T = unknown>(page: Page, path: string): Promise<T> {
-  const response = await page.request.get(path)
+  const response = await page.request.get(apiUrl(path))
   if (!response.ok()) {
     throw new Error(`GET ${path} → ${response.status()}: ${await response.text()}`)
   }
@@ -126,7 +140,7 @@ export async function dispatchWorkflowEvent<T = unknown>(
   path: string,
   body: { event: string; state_version: number; [k: string]: unknown },
 ): Promise<T> {
-  const response = await page.request.post(path, {
+  const response = await page.request.post(apiUrl(path), {
     data: body,
     headers: { 'content-type': 'application/json' },
   })
