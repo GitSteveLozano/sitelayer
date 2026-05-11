@@ -8,13 +8,16 @@ import {
   useCreateMeasurement,
   useCreateTakeoffDraft,
   useDuplicateTakeoffDraft,
+  usePromoteCapturedQuantities,
   useProjectBlueprints,
   useProjectMeasurements,
   useServiceItems,
   useTakeoffDrafts,
+  useTakeoffDraftResult,
   useUpdateTakeoffDraft,
   type BlueprintDocument,
   type BlueprintPage,
+  type CapturedQuantity,
   type CaptureKind,
   type MeasurementGeometry,
   type ServiceItem,
@@ -628,6 +631,13 @@ export function TakeoffCanvasScreen() {
               <Pill tone="default">{tool}</Pill>
             </div>
 
+            {/* Phase C.3 — Promote captured quantities. Only renders for
+                drafts whose source is a capture pipeline; manual drafts
+                have no `takeoff_result_json` and the GET would 404. */}
+            {activeDraft && activeDraft.source && activeDraft.source !== 'manual' ? (
+              <PromotedQuantitiesPanel projectId={projectId} draft={activeDraft} />
+            ) : null}
+
             {blueprintMeasurements.length > 0 ? (
               <Card tight>
                 <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">
@@ -957,6 +967,205 @@ function formatQuantity(n: number): string {
   if (Math.abs(n) >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 })
   if (Number.isInteger(n)) return String(n)
   return n.toLocaleString(undefined, { maximumFractionDigits: 1 })
+}
+
+/**
+ * `PromotedQuantitiesPanel` — operator review surface for the AI-captured
+ * `TakeoffResult.quantities[]` stashed on a draft (Phase C.3). Each
+ * captured quantity gets a checkbox + editable service_item_code override,
+ * a confidence pill, and a "Promote selected" CTA that POSTs the subset
+ * to the new /api/projects/:id/takeoff-drafts/:draftId/promote endpoint.
+ * Once promoted the rows show up in the measurements list above; the
+ * captured result on the draft is left intact so a later operator can
+ * re-promote the same quantities under different codes if needed.
+ */
+interface PromotedQuantitiesPanelProps {
+  projectId: string
+  draft: TakeoffDraft
+}
+
+function PromotedQuantitiesPanel({ projectId, draft }: PromotedQuantitiesPanelProps) {
+  const result = useTakeoffDraftResult(draft.id)
+  const promote = usePromoteCapturedQuantities(projectId, draft.id)
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [overrides, setOverrides] = useState<Record<string, string>>({})
+  const [error, setError] = useState<string | null>(null)
+  const [resultSummary, setResultSummary] = useState<string | null>(null)
+
+  // Pre-fill the override input with the captured code so the operator
+  // only has to type when they actually want to remap. Live updates so
+  // newly-promoted drafts (capture → switch → here) hydrate correctly.
+  useEffect(() => {
+    if (!result.data) return
+    setOverrides((prev) => {
+      const next: Record<string, string> = { ...prev }
+      for (const q of result.data.takeoff_result.quantities) {
+        if (next[q.id] === undefined) {
+          next[q.id] = derivedCodeFor(q) ?? ''
+        }
+      }
+      return next
+    })
+  }, [result.data])
+
+  const quantities = result.data?.takeoff_result.quantities ?? []
+
+  const onTogglePromoted = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const onPromote = () => {
+    setError(null)
+    setResultSummary(null)
+    const ids = Array.from(selected)
+    if (ids.length === 0) {
+      setError('Select at least one quantity to promote.')
+      return
+    }
+    // Only forward overrides that differ from the derived default so the
+    // server falls back to the canonical masterformat/uniformat code when
+    // the operator hasn't actually retyped anything.
+    const overridesToSend: Record<string, string> = {}
+    for (const id of ids) {
+      const candidate = (overrides[id] ?? '').trim()
+      if (candidate.length > 0) overridesToSend[id] = candidate
+    }
+    promote.mutate(
+      {
+        quantity_ids: ids,
+        ...(Object.keys(overridesToSend).length > 0 ? { service_item_code_overrides: overridesToSend } : {}),
+      },
+      {
+        onSuccess: (res) => {
+          setSelected(new Set())
+          const parts = [`Promoted ${res.promoted_count}.`]
+          if (res.skipped_count > 0) parts.push(`Skipped ${res.skipped_count}.`)
+          setResultSummary(parts.join(' '))
+        },
+        onError: (err) => setError(err instanceof Error ? err.message : 'Promote failed'),
+      },
+    )
+  }
+
+  if (result.isLoading) {
+    return (
+      <Card tight>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">
+          Promoted quantities
+        </div>
+        <div className="text-[12px] text-ink-3 italic">Loading captured result…</div>
+      </Card>
+    )
+  }
+
+  if (result.isError || !result.data) {
+    return (
+      <Card tight>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">
+          Promoted quantities
+        </div>
+        <div className="text-[12px] text-ink-3 leading-snug">
+          No captured result yet. Run a capture pipeline above to generate quantities for review.
+        </div>
+      </Card>
+    )
+  }
+
+  if (quantities.length === 0) {
+    return (
+      <Card tight>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-1.5">
+          Promoted quantities
+        </div>
+        <div className="text-[12px] text-ink-3 leading-snug">
+          The capture pipeline returned no quantities. Re-run the capture or escalate to manual takeoff.
+        </div>
+      </Card>
+    )
+  }
+
+  return (
+    <Card tight>
+      <div className="flex items-baseline justify-between mb-1.5">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
+          Promoted quantities · {quantities.length} captured
+        </div>
+        <span className="text-[11px] text-ink-3">{selected.size} selected</span>
+      </div>
+      <ul className="divide-y divide-line">
+        {quantities.map((q) => {
+          const isSelected = selected.has(q.id)
+          const tone = confidenceTone(q.confidence)
+          return (
+            <li key={q.id} className="py-2">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id={`promote-${q.id}`}
+                  checked={isSelected}
+                  onChange={() => onTogglePromoted(q.id)}
+                  className="shrink-0"
+                  aria-label={`Promote ${q.description}`}
+                />
+                <label
+                  htmlFor={`promote-${q.id}`}
+                  className="flex-1 min-w-0 text-[12px] font-semibold truncate cursor-pointer"
+                  title={q.description}
+                >
+                  {q.description}
+                </label>
+                <span className="font-mono tabular-nums text-[12px] text-ink-3 shrink-0">
+                  {Number(q.value).toFixed(2)} {q.unit}
+                </span>
+                <Pill tone={tone}>{Math.round(q.confidence * 100)}%</Pill>
+              </div>
+              <div className="mt-1 flex items-center gap-2">
+                <label htmlFor={`code-${q.id}`} className="text-[10px] uppercase tracking-[0.06em] text-ink-3 shrink-0">
+                  Code
+                </label>
+                <input
+                  id={`code-${q.id}`}
+                  type="text"
+                  value={overrides[q.id] ?? ''}
+                  onChange={(e) => setOverrides((prev) => ({ ...prev, [q.id]: e.target.value }))}
+                  placeholder={derivedCodeFor(q) ?? 'service_item_code'}
+                  className="flex-1 min-w-0 px-2 py-1 rounded border border-line bg-card-soft text-[12px] font-mono"
+                />
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+      <div className="mt-3 flex items-center justify-between gap-2">
+        <div className="text-[11px] text-ink-3 leading-snug">
+          {resultSummary ?? 'Selected quantities are committed as new takeoff measurements on this draft.'}
+        </div>
+        <MobileButton variant="primary" size="sm" fullWidth={false} onClick={onPromote} disabled={promote.isPending}>
+          {promote.isPending ? 'Promoting…' : 'Promote selected'}
+        </MobileButton>
+      </div>
+      {error ? <div className="mt-2 text-[12px] text-warn">{error}</div> : null}
+    </Card>
+  )
+}
+
+/** Prefer MasterFormat (matches sitelayer's curated service_items code
+ * shape), then UniFormat, then OmniClass. Returns null when the quantity
+ * carries no classification at all — the operator must type one before
+ * the promote endpoint will accept it. */
+function derivedCodeFor(q: CapturedQuantity): string | null {
+  return q.masterformatCode ?? q.uniformatCode ?? q.omniclassCode ?? null
+}
+
+function confidenceTone(confidence: number): 'good' | 'warn' | 'bad' {
+  if (confidence >= 0.85) return 'good'
+  if (confidence >= 0.6) return 'warn'
+  return 'bad'
 }
 
 /**
