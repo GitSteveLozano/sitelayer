@@ -402,6 +402,8 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       readBody,
       sendJson,
       currentUserId: ctx.getCurrentUserId(),
+      storage: ctx.storage,
+      maxBlueprintUploadBytes: ctx.maxBlueprintUploadBytes,
     })
   ) {
     return true
