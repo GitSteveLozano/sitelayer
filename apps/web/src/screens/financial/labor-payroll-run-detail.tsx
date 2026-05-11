@@ -118,9 +118,7 @@ export function LaborPayrollRunDetailScreen() {
           </div>
           <div className="flex items-center justify-between text-[12px] py-1">
             <div className="text-ink-3">Total</div>
-            <div className="text-ink-2 num">
-              ${dollars.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-            </div>
+            <div className="text-ink-2 num">${dollars.toLocaleString(undefined, { maximumFractionDigits: 2 })}</div>
           </div>
           {ctx.time_review_run_id ? (
             <div className="flex items-center justify-between text-[12px] py-1">
