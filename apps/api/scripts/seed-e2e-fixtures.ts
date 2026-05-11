@@ -40,21 +40,26 @@ const E2E_COMPANY_NAME = 'E2E Fixtures'
 // Deterministic UUIDs for every workflow seed row. Grouped by entity so
 // future additions follow the same pattern (100s = bootstrap entities,
 // 200s = workflow rows). Tests reference these directly.
+// Deterministic UUIDs with the UUIDv4 version/variant nibbles (`4` at
+// position 14, `8` at position 19). `apps/api/src/http-utils.ts:isValidUuid`
+// requires version 1-5 + variant 8-b, so the original all-zero ids were
+// rejected at route entry with "id must be a valid uuid".
+// Numeric block at the tail: 100s = bootstrap entities, 200s = workflow rows.
 const IDS = {
-  customerA: '00000000-0000-0000-0000-000000000101',
-  customerB: '00000000-0000-0000-0000-000000000102',
-  worker: '00000000-0000-0000-0000-000000000103',
-  inventoryItem: '00000000-0000-0000-0000-000000000104',
-  project: '00000000-0000-0000-0000-000000000201',
-  laborEntry1: '00000000-0000-0000-0000-000000000202',
-  laborEntry2: '00000000-0000-0000-0000-000000000203',
-  timeReviewRun: '00000000-0000-0000-0000-000000000204',
-  laborPayrollRun: '00000000-0000-0000-0000-000000000205',
-  rentalContract: '00000000-0000-0000-0000-000000000206',
-  rentalBillingRun: '00000000-0000-0000-0000-000000000207',
-  estimatePush: '00000000-0000-0000-0000-000000000208',
-  workerIssue: '00000000-0000-0000-0000-000000000209',
-  crewSchedule: '00000000-0000-0000-0000-000000000210',
+  customerA: '00000000-0000-4000-8000-000000000101',
+  customerB: '00000000-0000-4000-8000-000000000102',
+  worker: '00000000-0000-4000-8000-000000000103',
+  inventoryItem: '00000000-0000-4000-8000-000000000104',
+  project: '00000000-0000-4000-8000-000000000201',
+  laborEntry1: '00000000-0000-4000-8000-000000000202',
+  laborEntry2: '00000000-0000-4000-8000-000000000203',
+  timeReviewRun: '00000000-0000-4000-8000-000000000204',
+  laborPayrollRun: '00000000-0000-4000-8000-000000000205',
+  rentalContract: '00000000-0000-4000-8000-000000000206',
+  rentalBillingRun: '00000000-0000-4000-8000-000000000207',
+  estimatePush: '00000000-0000-4000-8000-000000000208',
+  workerIssue: '00000000-0000-4000-8000-000000000209',
+  crewSchedule: '00000000-0000-4000-8000-000000000210',
 } as const
 
 function getPoolConfig(connectionString: string, tier: AppTier) {

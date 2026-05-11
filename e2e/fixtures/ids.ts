@@ -14,29 +14,31 @@ function envOr(key: string, fallback: string): string {
   return (process.env[key] ?? fallback).trim()
 }
 
+// Aligned with `apps/api/scripts/seed-e2e-fixtures.ts` `IDS` block: 200s
+// are workflow rows. A single project anchors both the lifecycle and
+// closeout-summary specs (the seed only creates one). Override via env
+// var if a workflow needs a separate row for an isolation test.
 export const FIXTURE_IDS = {
   // Project in `draft` state — admin walks it through the full lifecycle.
-  lifecycleProjectId: envOr('E2E_LIFECYCLE_PROJECT_ID', '00000000-0000-4000-8000-000000000001'),
+  lifecycleProjectId: envOr('E2E_LIFECYCLE_PROJECT_ID', '00000000-0000-4000-8000-000000000201'),
 
   // Estimate push in `drafted` state — admin advances through reviewed → approved → posted.
-  estimatePushId: envOr('E2E_ESTIMATE_PUSH_ID', '00000000-0000-4000-8000-000000000002'),
+  estimatePushId: envOr('E2E_ESTIMATE_PUSH_ID', '00000000-0000-4000-8000-000000000208'),
 
-  // Worker-issue ("blocker") created by e2e-member, ready for foreman to RESOLVE.
-  fieldEventIssueId: envOr('E2E_FIELD_EVENT_ISSUE_ID', '00000000-0000-4000-8000-000000000003'),
+  // Worker-issue ("blocker") in `open` state, ready for foreman to RESOLVE.
+  fieldEventIssueId: envOr('E2E_FIELD_EVENT_ISSUE_ID', '00000000-0000-4000-8000-000000000209'),
 
   // Time-review run in `pending` state — admin approves to lock labor.
-  timeReviewRunId: envOr('E2E_TIME_REVIEW_RUN_ID', '00000000-0000-4000-8000-000000000004'),
+  timeReviewRunId: envOr('E2E_TIME_REVIEW_RUN_ID', '00000000-0000-4000-8000-000000000204'),
 
-  // Labor-payroll run in `generated` (or seed-equivalent) state — admin
-  // approves and posts. The seed creates it pre-locked from the time
-  // review above so the chain can run in one pass.
-  laborPayrollRunId: envOr('E2E_LABOR_PAYROLL_RUN_ID', '00000000-0000-4000-8000-000000000005'),
+  // Labor-payroll run in `generated` state — admin approves and posts.
+  laborPayrollRunId: envOr('E2E_LABOR_PAYROLL_RUN_ID', '00000000-0000-4000-8000-000000000205'),
 
   // Rental-billing run in `generated` state — office user approves + posts.
-  billingRunId: envOr('E2E_BILLING_RUN_ID', '00000000-0000-4000-8000-000000000006'),
+  billingRunId: envOr('E2E_BILLING_RUN_ID', '00000000-0000-4000-8000-000000000207'),
 
-  // Project with finalized labor + bills so the closeout-summary card has
-  // bid/actual/margin numbers to render. Distinct from the lifecycle
-  // project so the lifecycle spec doesn't pollute its rollup.
-  closeoutProjectId: envOr('E2E_CLOSEOUT_PROJECT_ID', '00000000-0000-4000-8000-000000000007'),
+  // Closeout-summary spec reads the same lifecycle project; numbers render
+  // off of the seed's labor entries + zero materials/rentals (still asserts
+  // bid + variance card).
+  closeoutProjectId: envOr('E2E_CLOSEOUT_PROJECT_ID', '00000000-0000-4000-8000-000000000201'),
 } as const
