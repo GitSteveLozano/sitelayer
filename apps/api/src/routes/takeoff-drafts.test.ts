@@ -70,7 +70,7 @@ class FakePool {
     if (/^select division_code from projects/i.test(sql)) {
       const [companyId, projectId] = params as [string, string]
       const key = `${companyId}|${projectId}`
-      const divisionCode = this.projectDivisions.has(key) ? this.projectDivisions.get(key) ?? null : null
+      const divisionCode = this.projectDivisions.has(key) ? (this.projectDivisions.get(key) ?? null) : null
       return { rows: [{ division_code: divisionCode }], rowCount: 1 }
     }
 
