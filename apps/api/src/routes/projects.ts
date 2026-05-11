@@ -9,11 +9,15 @@ import {
 } from '@sitelayer/domain'
 import { createLogger } from '@sitelayer/logger'
 import {
+  nextProjectCloseoutEvents,
   PROJECT_CLOSEOUT_WORKFLOW_NAME,
   PROJECT_CLOSEOUT_WORKFLOW_SCHEMA_VERSION,
   projectStatusToCloseoutState,
   transitionProjectCloseoutWorkflow,
+  type ProjectCloseoutHumanEventType,
   type ProjectCloseoutWorkflowSnapshot,
+  type ProjectCloseoutWorkflowState,
+  type WorkflowSnapshot,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
 import { enqueueAdminAlert, recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
@@ -122,11 +126,68 @@ export async function summarizeProject(
  * Handle project mutation routes:
  * - POST   /api/projects               — admin/office; create project
  * - PATCH  /api/projects/<id>          — admin/office; versioned update
+ * - GET    /api/projects/<id>/closeout — admin/office; WorkflowSnapshot
+ *                                        of the project-closeout workflow
+ *                                        (state, state_version, context,
+ *                                        next_events)
  * - POST   /api/projects/<id>/closeout — admin/office; mark completed,
  *                                        triggers margin-shortfall alert
  *                                        when closing margin < 10%
  * - GET    /api/projects/<id>/summary  — all roles; project cost summary
  */
+type ProjectCloseoutRow = {
+  id: string
+  company_id: string
+  status: string
+  state_version: number
+  closed_at: string | null
+  closed_by: string | null
+  summary_locked_at: string | null
+  workflow_engine: string
+  workflow_run_id: string | null
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+type ProjectCloseoutSnapshotContext = {
+  id: string
+  company_id: string
+  status: string
+  closed_at: string | null
+  closed_by: string | null
+  summary_locked_at: string | null
+  workflow_engine: string
+  workflow_run_id: string | null
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+function projectCloseoutSnapshotResponse(
+  row: ProjectCloseoutRow,
+): WorkflowSnapshot<ProjectCloseoutWorkflowState, ProjectCloseoutHumanEventType, ProjectCloseoutSnapshotContext> {
+  const state = projectStatusToCloseoutState(row.status)
+  return {
+    state,
+    state_version: row.state_version,
+    next_events: nextProjectCloseoutEvents(state),
+    context: {
+      id: row.id,
+      company_id: row.company_id,
+      status: row.status,
+      closed_at: row.closed_at,
+      closed_by: row.closed_by,
+      summary_locked_at: row.summary_locked_at,
+      workflow_engine: row.workflow_engine,
+      workflow_run_id: row.workflow_run_id,
+      version: row.version,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    },
+  }
+}
+
 export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, ctx: ProjectRouteCtx): Promise<boolean> {
   if (req.method === 'POST' && url.pathname === '/api/projects') {
     if (!ctx.requireRole(['admin', 'office'])) return true
@@ -328,6 +389,30 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
       return true
     }
     ctx.sendJson(200, updated)
+    return true
+  }
+
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/closeout$/)) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!projectId) {
+      ctx.sendJson(400, { error: 'project id is required' })
+      return true
+    }
+    const result = await ctx.pool.query<ProjectCloseoutRow>(
+      `select id, company_id, status, state_version, closed_at, closed_by,
+              summary_locked_at, workflow_engine, workflow_run_id,
+              version, created_at, updated_at
+         from projects
+         where company_id = $1 and id = $2 and deleted_at is null
+         limit 1`,
+      [ctx.company.id, projectId],
+    )
+    if (!result.rows[0]) {
+      ctx.sendJson(404, { error: 'project not found' })
+      return true
+    }
+    ctx.sendJson(200, projectCloseoutSnapshotResponse(result.rows[0]))
     return true
   }
 
