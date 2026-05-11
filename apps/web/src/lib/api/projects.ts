@@ -226,6 +226,31 @@ export function fetchProjectCloseout(projectId: string): Promise<ProjectCloseout
   return request<ProjectCloseoutSnapshot>(`/api/projects/${encodeURIComponent(projectId)}/closeout`)
 }
 
+/**
+ * Dispatch a closeout workflow event. Posts to the legacy
+ * POST /api/projects/:id/closeout route (it predates the
+ * deterministic-workflow event/state_version contract) using the
+ * snapshot's `context.version` for optimistic concurrency, then
+ * re-reads the snapshot so callers receive the post-transition
+ * envelope shape that the XState machine consumes.
+ *
+ * The POST is idempotent on the server, so a double-click is safe.
+ */
+export async function submitProjectCloseoutEvent(
+  projectId: string,
+  event: ProjectCloseoutHumanEvent,
+  expectedVersion: number,
+): Promise<ProjectCloseoutSnapshot> {
+  if (event !== 'CLOSEOUT') {
+    throw new Error(`unsupported project closeout event: ${event}`)
+  }
+  await request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/closeout`, {
+    method: 'POST',
+    json: { expected_version: expectedVersion },
+  })
+  return fetchProjectCloseout(projectId)
+}
+
 export function useProjectCloseout(
   projectId: string | null | undefined,
   options?: Partial<UseQueryOptions<ProjectCloseoutSnapshot>>,

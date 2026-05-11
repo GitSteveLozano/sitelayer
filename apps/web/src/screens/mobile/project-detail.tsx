@@ -31,6 +31,7 @@ import { MAiStripe } from '../../components/m/ai.js'
 import { MEmptyState } from '../../components/m-states/index.js'
 import { BidAccuracyCard } from '../projects/bid-accuracy-card.js'
 import { LifecycleBanner } from '../../components/lifecycle/banner.js'
+import { CloseoutBanner } from '../../components/closeout/banner.js'
 import { useProjectLaborVariance, type LaborVarianceRow } from '../../lib/api/labor-variance.js'
 import { formatDecimalHours, formatMoney, formatStatusLabel, statusTone } from './format.js'
 
@@ -225,6 +226,16 @@ function Overview({
           docs/DETERMINISTIC_WORKFLOWS.md. */}
       <div style={{ padding: '0 16px 12px' }}>
         <LifecycleBanner projectId={project.id} />
+      </div>
+      {/* Project-closeout workflow banner — server-truth state +
+          next_events from the project-closeout reducer
+          (packages/workflows/src/project-closeout.ts) consumed via
+          the headless useProjectCloseoutMachine XState machine
+          (apps/web/src/machines/project-closeout.ts). Self-hides
+          while the project is still active with no pending events
+          so the Overview tab stays calm for early-stage projects. */}
+      <div style={{ padding: '0 16px 12px' }}>
+        <CloseoutBanner projectId={project.id} />
       </div>
       <ProjectStatePanel project={project} navigate={navigate} />
       {/* Bid-accuracy keystone (mirrors the desktop overview hero per
