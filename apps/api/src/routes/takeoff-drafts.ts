@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { randomUUID } from 'node:crypto'
 import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
@@ -16,6 +17,13 @@ import {
 } from '@sitelayer/pipe-drone'
 import { PIPELINE_VERSION as BLUEPRINT_PIPELINE_VERSION, buildBlueprintTakeoff } from '@sitelayer/pipe-blueprint'
 import { applyReviewFloor, type TakeoffResult } from '@sitelayer/capture-schema'
+import {
+  BlueprintUploadError,
+  isMultipartRequest,
+  parseBlueprintMultipart,
+  type BlueprintMultipartResult,
+} from '../blueprint-upload.js'
+import type { BlueprintStorage } from '../storage.js'
 
 export type TakeoffDraftRouteCtx = {
   pool: Pool
@@ -24,6 +32,31 @@ export type TakeoffDraftRouteCtx = {
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   currentUserId?: string | null
+  /** Spaces / local-fs backend. Required for the live blueprint_vision
+   *  capture path (`POST /api/projects/:id/takeoff-drafts/capture` with
+   *  multipart/form-data). Optional for tests that only exercise the
+   *  dry-run JSON path. */
+  storage?: BlueprintStorage
+  /** Hard cap (bytes) on the multipart PDF body. Falls back to
+   *  `MAX_BLUEPRINT_UPLOAD_BYTES` semantics from server.ts. */
+  maxBlueprintUploadBytes?: number
+}
+
+/**
+ * Resolve the blueprint_vision capture mode from env.
+ *   - "live" + ANTHROPIC_API_KEY set ⇒ call Claude vision.
+ *   - any other combination ⇒ dry-run stub.
+ *
+ * Read at request time (not module-init) so tests can flip the env per
+ * case without re-importing the module. The dispatcher cost-cap rule
+ * (control-plane/CLAUDE.md #3) still applies: prefer dry-run unless the
+ * caller explicitly asked for live and the key is present.
+ */
+function resolveBlueprintVisionMode(): 'live' | 'dry-run' {
+  const mode = (process.env.BLUEPRINT_VISION_MODE ?? 'dry-run').trim().toLowerCase()
+  const hasKey = Boolean(process.env.ANTHROPIC_API_KEY?.trim())
+  if (mode === 'live' && hasKey) return 'live'
+  return 'dry-run'
 }
 
 const ALLOWED_STATUS = new Set(['active', 'archived'])
@@ -60,10 +93,23 @@ function compact<T extends Record<string, unknown>>(obj: T): T {
   return out as T
 }
 
+/**
+ * Optional inputs the dispatcher hands to the `blueprint_vision` pipeline
+ * after the request handler has already streamed the PDF to object
+ * storage. Other pipelines ignore these.
+ */
+interface BlueprintLiveInputs {
+  pdfBytes: Buffer
+  /** Spaces / local-fs storage key the bytes were just persisted under.
+   *  Used as the artifact's `sourcePdfPath` for provenance. */
+  storagePath: string
+}
+
 async function dispatchCapturePipeline(
   kind: string,
   payload: Record<string, unknown>,
   projectId: string,
+  blueprintLive?: BlueprintLiveInputs,
 ): Promise<{ result: TakeoffResult; pipelineVersion: string }> {
   switch (kind) {
     case 'roomplan': {
@@ -106,19 +152,37 @@ async function dispatchCapturePipeline(
       return { result: applyReviewFloor(result), pipelineVersion: DRONE_PIPELINE_VERSION }
     }
     case 'blueprint_vision': {
-      // MVP: dry-run only. Live mode requires a server-side PDF path
-      // (or pre-uploaded blueprint_documents reference) plus ANTHROPIC_API_KEY;
-      // a follow-on PR wires the streaming-upload path.
-      const dryRun = payload.dryRun !== false
-      const pdfPath = typeof payload.pdfPath === 'string' ? payload.pdfPath : ''
-      if (!dryRun && !pdfPath) {
-        throw new Error('blueprint_vision live mode requires pdfPath (server-side absolute path)')
+      // Three sub-paths:
+      //   a) caller passed dryRun explicitly ⇒ always dry-run stub.
+      //   b) live multipart upload streamed PDF bytes in (blueprintLive set)
+      //      AND env is configured for live ⇒ real Anthropic call.
+      //   c) anything else ⇒ dry-run stub (safe default; matches the
+      //      cost-cap rule until the operator opts in).
+      const explicitDryRun = payload.dryRun === true
+      const envMode = resolveBlueprintVisionMode()
+      const useLive = !explicitDryRun && envMode === 'live' && blueprintLive != null
+
+      if (useLive) {
+        const result = await buildBlueprintTakeoff(
+          compact({
+            pdfPath: blueprintLive!.storagePath,
+            pdfBytes: blueprintLive!.pdfBytes,
+            projectId,
+            knownDimensionFt: typeof payload.knownDimensionFt === 'number' ? payload.knownDimensionFt : undefined,
+            wallHeightFt: typeof payload.wallHeightFt === 'number' ? payload.wallHeightFt : undefined,
+            model: typeof payload.model === 'string' ? payload.model : undefined,
+          }),
+        )
+        return { result: applyReviewFloor(result), pipelineVersion: BLUEPRINT_PIPELINE_VERSION }
       }
+
+      // Dry-run path. Tolerates a missing pdfPath since we never touch disk.
+      const pdfPath = typeof payload.pdfPath === 'string' ? payload.pdfPath : ''
       const result = await buildBlueprintTakeoff(
         compact({
           pdfPath: pdfPath || '/dev/null',
           projectId,
-          dryRun,
+          dryRun: true,
           knownDimensionFt: typeof payload.knownDimensionFt === 'number' ? payload.knownDimensionFt : undefined,
           wallHeightFt: typeof payload.wallHeightFt === 'number' ? payload.wallHeightFt : undefined,
           model: typeof payload.model === 'string' ? payload.model : undefined,
@@ -210,18 +274,69 @@ export async function handleTakeoffDraftRoutes(
       ctx.sendJson(400, { error: 'project id must be a valid uuid' })
       return true
     }
-    const body = await ctx.readBody()
-    const kind = String(body.kind ?? '').trim()
+
+    // Multipart branch (live blueprint_vision): stream the PDF to Spaces
+    // first, then hand the bytes to the pipeline. JSON branch unchanged.
+    let multipartResult: BlueprintMultipartResult | null = null
+    let body: Record<string, unknown>
+    if (isMultipartRequest(req)) {
+      if (!ctx.storage) {
+        ctx.sendJson(500, { error: 'blueprint storage backend not configured' })
+        return true
+      }
+      const blueprintId = randomUUID()
+      const maxBytes = ctx.maxBlueprintUploadBytes ?? 200 * 1024 * 1024
+      try {
+        multipartResult = await parseBlueprintMultipart(
+          req,
+          ctx.storage,
+          ctx.company.id,
+          blueprintId,
+          'blueprint.pdf',
+          { maxFileBytes: maxBytes },
+        )
+      } catch (err) {
+        if (err instanceof BlueprintUploadError) {
+          ctx.sendJson(err.status, { error: err.message })
+          return true
+        }
+        throw err
+      }
+      body = multipartResult.fields
+      // payload may be smuggled in as a JSON string field on multipart bodies
+      // so the caller can still pass knownDimensionFt etc.
+      const payloadField = typeof body.payload === 'string' ? body.payload : ''
+      if (payloadField) {
+        try {
+          const parsed = JSON.parse(payloadField) as unknown
+          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            body.payload = parsed as Record<string, unknown>
+          }
+        } catch {
+          // Ignore parse failures; the downstream check enforces shape.
+        }
+      }
+    } else {
+      body = await ctx.readBody()
+    }
+
+    const kind = String(body.kind ?? '').trim() || (multipartResult ? 'blueprint_vision' : '')
     if (!ALLOWED_CAPTURE_KINDS.has(kind)) {
       ctx.sendJson(400, {
         error: `kind must be one of ${[...ALLOWED_CAPTURE_KINDS].join(', ')}`,
       })
       return true
     }
+    if (multipartResult && kind !== 'blueprint_vision') {
+      ctx.sendJson(400, { error: 'multipart upload only supported for kind=blueprint_vision' })
+      return true
+    }
     const payload =
       body.payload && typeof body.payload === 'object' && !Array.isArray(body.payload)
         ? (body.payload as Record<string, unknown>)
-        : null
+        : multipartResult
+          ? {}
+          : null
     if (!payload) {
       ctx.sendJson(400, { error: 'payload (object) is required' })
       return true
@@ -240,9 +355,25 @@ export async function handleTakeoffDraftRoutes(
       return true
     }
 
+    let blueprintLive: BlueprintLiveInputs | undefined
+    if (multipartResult && ctx.storage) {
+      // Read bytes back out of storage so the pipeline sees the same
+      // payload that landed in Spaces. Avoids a second buffer in memory
+      // beyond what putStream already required, but keeps the artifact
+      // pdfSha256 anchored on the persisted bytes.
+      try {
+        const persisted = await ctx.storage.get(multipartResult.storagePath)
+        blueprintLive = { pdfBytes: persisted, storagePath: multipartResult.storagePath }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'storage read failed'
+        ctx.sendJson(500, { error: `failed to read uploaded blueprint: ${message}` })
+        return true
+      }
+    }
+
     let dispatchOutcome: { result: TakeoffResult; pipelineVersion: string }
     try {
-      dispatchOutcome = await dispatchCapturePipeline(kind, payload, projectId)
+      dispatchOutcome = await dispatchCapturePipeline(kind, payload, projectId, blueprintLive)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'pipeline failed'
       ctx.sendJson(422, { error: message })

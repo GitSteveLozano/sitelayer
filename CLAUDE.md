@@ -237,6 +237,20 @@ docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
    `BLUEPRINT_DOWNLOAD_PRESIGNED=1` requires Spaces CORS validated for
    the web app origin first.
 
+4. **Blueprint-vision live mode is opt-in via two env vars.** _Why:_
+   `POST /api/projects/:id/takeoff-drafts/capture` (`kind=blueprint_vision`)
+   calls Claude Opus on every drawing page; an accidentally-set key plus
+   a wired multipart upload would otherwise rack up Anthropic spend on
+   the first request. The dispatcher checks `BLUEPRINT_VISION_MODE=live`
+   AND a non-empty `ANTHROPIC_API_KEY` together — either missing falls
+   back to the deterministic dry-run stub. _How to apply:_ set both env
+   vars in the `production` GitHub environment (never commit the key;
+   `.env.example` only documents placeholders), and verify live behaviour
+   against a single sheet PDF before flipping the mode for the fleet.
+   The live path requires the multipart form (`blueprint_file` part) so
+   the PDF streams straight into Spaces; the JSON-body variant of the
+   endpoint stays dry-run.
+
 ## Current Infrastructure Snapshot
 
 **Verified with `doctl` and production smoke checks on 2026-04-25.**
@@ -407,6 +421,8 @@ ACTIVE_USER_ID=demo-user                 # Hardcoded user
 QBO_CLIENT_ID / QBO_CLIENT_SECRET / QBO_REDIRECT_URI
 QBO_ENVIRONMENT=sandbox|production
 BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
+BLUEPRINT_VISION_MODE=dry-run|live   # blueprint takeoff dispatcher mode; live also needs ANTHROPIC_API_KEY
+ANTHROPIC_API_KEY=<set-outside-git>  # Claude Opus key for blueprint vision; placeholder in .env.example only
 ALLOWED_ORIGINS=http://localhost:5173,...
 ```
 

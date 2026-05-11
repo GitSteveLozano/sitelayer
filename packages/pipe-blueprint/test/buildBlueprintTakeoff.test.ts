@@ -151,6 +151,89 @@ describe('buildBlueprintTakeoff (mocked Anthropic)', () => {
     expect(result.units).toBe('imperial')
     expect(result.quantities.length).toBeGreaterThan(0)
   })
+
+  it('live path: accepts in-memory pdfBytes (multipart upload flow) and hashes them identically to the on-disk pdfPath case', async () => {
+    // Multipart-streaming dispatcher hands the pipeline (a) the storage
+    // key as a logical label and (b) the persisted bytes directly. The
+    // pipeline must hash + base64 the bytes, never touch the filesystem.
+    const classify = await loadJson<unknown>('mock-claude-classify-response.json')
+    const extract = await loadJson<unknown>('mock-claude-extract-response.json')
+    const { client, callLog } = makeFakeClient([JSON.stringify(classify), JSON.stringify(extract)])
+    const sha = await pdfSha256()
+    const bytes = await readFile(PDF_PATH)
+    const logicalKey = 'company-1/blueprint-abc/uploaded.pdf'
+    const capturedAt = '2026-05-10T12:00:00.000Z'
+
+    const result = await buildBlueprintTakeoff({
+      pdfPath: logicalKey,
+      pdfBytes: bytes,
+      capturedAt,
+      projectId: 'live-project',
+      anthropicClient: client as unknown as never,
+    })
+
+    // SHA matches the on-disk bytes, the artifact records the Spaces key
+    // as the source path (not a local filesystem path), and the override
+    // capturedAt comes through verbatim.
+    expect(result.capturedAt).toBe(capturedAt)
+    const artifact = result.sourceArtifact as {
+      kind: 'blueprint'
+      blueprint: { pdfSha256: string; sourcePdfPath: string }
+    }
+    expect(artifact.kind).toBe('blueprint')
+    expect(artifact.blueprint.pdfSha256).toBe(sha)
+    expect(artifact.blueprint.sourcePdfPath).toBe(logicalKey)
+    // Two real Anthropic calls were dispatched (classify + extract).
+    expect(callLog).toHaveLength(2)
+    expect(result.quantities.length).toBeGreaterThan(0)
+  })
+
+  it('live path: passes the PDF as a base64 document block to Anthropic and parses strict JSON back', async () => {
+    // This is the explicit "wired to Anthropic" assertion: capture the
+    // request the SDK saw and verify the document block payload + media
+    // type, plus the strict-JSON parse round-trip.
+    const classify = await loadJson<unknown>('mock-claude-classify-response.json')
+    const extract = await loadJson<unknown>('mock-claude-extract-response.json')
+    const bytes = await readFile(PDF_PATH)
+    const expectedBase64 = bytes.toString('base64')
+
+    const capturedRequests: Array<Record<string, unknown>> = []
+    const client = {
+      messages: {
+        create: async (args: unknown) => {
+          capturedRequests.push(args as Record<string, unknown>)
+          const isFirst = capturedRequests.length === 1
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: JSON.stringify(isFirst ? classify : extract),
+              },
+            ],
+          }
+        },
+      },
+    }
+
+    await buildBlueprintTakeoff({
+      pdfPath: 'company-1/blueprint-xyz/sheet.pdf',
+      pdfBytes: bytes,
+      projectId: 'live-project',
+      anthropicClient: client as unknown as never,
+    })
+
+    expect(capturedRequests).toHaveLength(2)
+    for (const req of capturedRequests) {
+      const messages = req.messages as Array<{ content: Array<Record<string, unknown>> }>
+      const doc = messages[0]!.content[0]!
+      expect(doc.type).toBe('document')
+      const source = doc.source as { type: string; media_type: string; data: string }
+      expect(source.type).toBe('base64')
+      expect(source.media_type).toBe('application/pdf')
+      expect(source.data).toBe(expectedBase64)
+      expect(req.model).toBe('claude-opus-4-7')
+    }
+  })
 })
 
 // ─── helpers ───────────────────────────────────────────────────────────────

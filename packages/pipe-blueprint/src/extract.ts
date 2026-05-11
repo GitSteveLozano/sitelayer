@@ -76,7 +76,19 @@ export class NoDrawingsFoundError extends Error {
 }
 
 export interface BuildBlueprintTakeoffOptions {
+  /** Filesystem path to the PDF. Mutually exclusive with `pdfBytes` —
+   *  exactly one must be provided. When `pdfBytes` is set, `pdfPath` is
+   *  treated as a logical label only (e.g. a Spaces storage key) and is
+   *  recorded into the BlueprintArtifact for provenance. */
   pdfPath: string
+  /** In-memory PDF bytes. Use this when the PDF was streamed from a
+   *  multipart upload and is already in memory (or fetched from object
+   *  storage). When supplied, the pipeline skips disk I/O. `pdfPath`
+   *  still labels the artifact for provenance. */
+  pdfBytes?: Buffer
+  /** Optional captured-at override for the case where the bytes came
+   *  from an upload (no filesystem mtime). ISO-8601 with offset. */
+  capturedAt?: string
   projectId: string
   /** A real-world dimension (in feet) the user knows is on the sheet. Used
    *  to calibrate scale by matching against extracted dimension strings. */
@@ -121,12 +133,22 @@ export async function buildBlueprintTakeoff(opts: BuildBlueprintTakeoffOptions):
   const wallHeightFt = opts.wallHeightFt ?? DEFAULT_WALL_HEIGHT_FT
   const assumedDpi = opts.assumedDpi ?? DEFAULT_ASSUMED_DPI
 
-  // 1. Read PDF and hash it.
-  const pdfBytes = await readFile(opts.pdfPath)
+  // 1. Resolve PDF bytes either from in-memory buffer (multipart upload
+  //    path) or from disk (CLI / fixture path). The hash + base64 payload
+  //    are identical regardless of source.
+  const pdfBytes = opts.pdfBytes ?? (await readFile(opts.pdfPath))
   const pdfBase64 = pdfBytes.toString('base64')
   const pdfSha256 = createHash('sha256').update(pdfBytes).digest('hex')
-  const stats = await stat(opts.pdfPath)
-  const capturedAt = stats.mtime.toISOString()
+  let capturedAt: string
+  if (opts.capturedAt) {
+    capturedAt = opts.capturedAt
+  } else if (opts.pdfBytes) {
+    // Bytes provided directly — no filesystem mtime to lean on. Stamp now.
+    capturedAt = new Date().toISOString()
+  } else {
+    const stats = await stat(opts.pdfPath)
+    capturedAt = stats.mtime.toISOString()
+  }
 
   // 2. Classify every page.
   const classifyRaw = await runClassify(opts, model, pdfBase64)
