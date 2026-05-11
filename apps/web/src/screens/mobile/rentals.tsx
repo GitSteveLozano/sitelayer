@@ -5,7 +5,12 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { listInventoryItems, type InventoryItemRow } from '../../api-v1-compat.js'
+import {
+  fetchInventoryUtilizationSummary,
+  listInventoryItems,
+  type InventoryItemRow,
+  type InventoryUtilizationSummary,
+} from '../../api-v1-compat.js'
 import {
   MBody,
   MChip,
@@ -13,6 +18,8 @@ import {
   MFab,
   MI,
   MInput,
+  MKpi,
+  MKpiRow,
   MPill,
   MQuickAction,
   MQuickActionGrid,
@@ -29,9 +36,11 @@ type Filter = 'all' | 'out' | 'available' | 'service'
 export function MobileRentals({ companySlug }: { companySlug: string }) {
   const navigate = useNavigate()
   const [items, setItems] = useState<readonly InventoryItemRow[] | null>(null)
+  const [utilization, setUtilization] = useState<InventoryUtilizationSummary | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [query, setQuery] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [showTopUtilized, setShowTopUtilized] = useState(false)
 
   useEffect(() => {
     let cancelled = false
@@ -43,6 +52,20 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
       .catch((err) => {
         if (cancelled) return
         setError(err instanceof Error ? err.message : String(err))
+      })
+    // Fire the utilization rollup in parallel — its empty-state and the
+    // catalog's empty-state can resolve independently, and the card stays
+    // hidden until both numbers land.
+    fetchInventoryUtilizationSummary(companySlug)
+      .then((u) => {
+        if (cancelled) return
+        setUtilization(u)
+      })
+      .catch(() => {
+        // Soft-fail: don't blow up the catalog if the rollup endpoint
+        // is unavailable. The card simply won't render.
+        if (cancelled) return
+        setUtilization(null)
       })
     return () => {
       cancelled = true
@@ -135,6 +158,11 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
           <MStat label="Daily revenue" value={formatMoney(dailyRevenue)} />
           <MStat label="Util" value={`${utilizationPct}%`} />
         </MStatStrip>
+        <UtilizationCard
+          utilization={utilization}
+          showTopUtilized={showTopUtilized}
+          onToggleTopUtilized={() => setShowTopUtilized((s) => !s)}
+        />
         <MSectionH>Rental yard</MSectionH>
         <MQuickActionGrid>
           <MQuickAction Icon={MI.Truck} label="Dispatch" onClick={() => navigate('/rentals/dispatch')} />
@@ -211,6 +239,124 @@ function ItemCard({ item }: { item: InventoryItemRow }) {
           {out ? 'out' : 'in'}
         </MPill>
       </div>
+    </div>
+  )
+}
+
+/**
+ * Deployment rollup card — answers the owner's "% of equipment currently
+ * deployed" question at a glance. Sits above the dispatch / return action
+ * grid so it is the first thing an admin / office user sees.
+ *
+ * Empty state ("Add inventory to track utilization.") fires when the
+ * tenant has no inventory_items at all. While the rollup is still loading
+ * the card renders nothing (the catalog skeleton already covers visual
+ * stand-in needs).
+ */
+function UtilizationCard({
+  utilization,
+  showTopUtilized,
+  onToggleTopUtilized,
+}: {
+  utilization: InventoryUtilizationSummary | null
+  showTopUtilized: boolean
+  onToggleTopUtilized: () => void
+}) {
+  if (utilization === null) return null
+
+  const fmtQty = (n: number) => (Number.isInteger(n) ? String(n) : n.toFixed(1))
+  const deployed = fmtQty(utilization.on_rent_count)
+  const total = fmtQty(utilization.total_quantity_owned)
+  const pct = Number.isInteger(utilization.utilization_pct)
+    ? utilization.utilization_pct
+    : Math.round(utilization.utilization_pct * 10) / 10
+  const isEmpty = utilization.total_items === 0
+
+  return (
+    <div
+      style={{
+        margin: '12px 16px 4px',
+        background: 'var(--m-card)',
+        border: '1px solid var(--m-line)',
+        borderRadius: 12,
+        padding: '14px 14px 12px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <MPill tone="accent" dot>
+          Utilization
+        </MPill>
+        {!isEmpty && utilization.top_utilized.length > 0 ? (
+          <button
+            type="button"
+            onClick={onToggleTopUtilized}
+            style={{
+              border: 'none',
+              background: 'transparent',
+              color: 'var(--m-ink-3)',
+              fontSize: 12,
+              cursor: 'pointer',
+              padding: 0,
+            }}
+          >
+            {showTopUtilized ? 'Hide top' : 'Top items'}
+          </button>
+        ) : null}
+      </div>
+
+      {isEmpty ? (
+        <div className="m-quiet-sm" style={{ paddingTop: 2 }}>
+          Add inventory to track utilization.
+        </div>
+      ) : (
+        <>
+          <MKpiRow cols={2}>
+            <MKpi label="Total" value={fmtQty(utilization.total_quantity_owned)} />
+            <MKpi label="On rent" value={fmtQty(utilization.on_rent_count)} />
+            <MKpi label="Available" value={fmtQty(utilization.in_yard_count)} />
+            <MKpi label="Service" value={fmtQty(utilization.out_for_service_count)} />
+          </MKpiRow>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, paddingTop: 4 }}>
+            <span className="num" style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.01em' }}>
+              {pct}%
+            </span>
+            <span className="m-quiet-sm">utilization</span>
+          </div>
+          <div className="m-quiet-sm">
+            {deployed} item{deployed === '1' ? '' : 's'} deployed of {total} total
+          </div>
+          {showTopUtilized && utilization.top_utilized.length > 0 ? (
+            <div
+              style={{
+                marginTop: 4,
+                borderTop: '1px solid var(--m-line)',
+                paddingTop: 8,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 6,
+              }}
+            >
+              <div className="m-quiet-sm" style={{ fontWeight: 600 }}>
+                Top utilized
+              </div>
+              {utilization.top_utilized.map((row) => (
+                <div
+                  key={row.inventory_item_id}
+                  style={{ display: 'flex', justifyContent: 'space-between', gap: 8, fontSize: 13 }}
+                >
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {row.code} · {row.name}
+                  </span>
+                  <span className="num">{row.utilization_pct}%</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </>
+      )}
     </div>
   )
 }
