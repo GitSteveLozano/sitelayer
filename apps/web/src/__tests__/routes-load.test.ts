@@ -20,6 +20,8 @@ const ROUTES: ReadonlyArray<readonly [string, () => Promise<{ default: unknown }
   ['bid-accuracy', () => import('@/routes/bid-accuracy')],
   ['financial', () => import('@/routes/financial')],
   ['onboarding', () => import('@/routes/onboarding')],
+  ['permissions-location', () => import('@/routes/permissions-location')],
+  ['permissions-notifications', () => import('@/routes/permissions-notifications')],
 ]
 
 describe('apps/web lazy routes', () => {

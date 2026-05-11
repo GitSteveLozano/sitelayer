@@ -4,7 +4,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SignedIn, SignedOut, SignIn, SignUp } from '@clerk/clerk-react'
 import { AuthProvider, isClerkConfigured } from '@/lib/auth'
 import { ColdStartSplash } from '@/components/shell/ColdStartSplash'
-import { SafariLandingScreen, useShouldShowSafariLanding } from '@/screens/onboarding'
+import {
+  InstallPromptSheet,
+  PostInstallSplash,
+  SafariLandingScreen,
+  useShouldShowSafariLanding,
+} from '@/screens/onboarding'
 
 // Canonical mobile shell from PR #229. Promoted from /m/* to the app
 // root on 2026-05-05 (Option A) when the desktop AppShell was retired —
@@ -85,7 +90,17 @@ function FirstRunGate({ children }: { children: React.ReactNode }) {
   const landing = useShouldShowSafariLanding()
   if (!landing.ready) return <ColdStartSplash />
   if (landing.show) return <SafariLandingScreen onSkip={landing.skip} />
-  return <>{children}</>
+  // Once past the iOS gate the install + post-install surfaces sit on
+  // top of the running shell. Both are self-gated (no-op when the
+  // user has already seen them), so it's safe to mount them
+  // unconditionally above the rest of the app.
+  return (
+    <>
+      {children}
+      <InstallPromptSheet />
+      <PostInstallSplash />
+    </>
+  )
 }
 
 /**
