@@ -74,6 +74,19 @@ export default defineConfig({
         navigateFallback: `${baseNoTrailing}/index.html`,
         navigateFallbackDenylist: [/^\/api\//],
         globPatterns: ['**/*.{js,css,html,svg,woff2}'],
+        // 2026-05-10: a redirect response got baked into the precache during
+        // a deploy cutover. The SW served it on navigations, and Chrome
+        // rejected it ("a redirected response was used for a request whose
+        // redirect mode is not 'follow'"), which made /projects, /financial,
+        // etc. show "This site can't be reached" until the user did a manual
+        // reload. The three flags below evict that bad state on the next
+        // deploy and on every subsequent deploy: cleanupOutdatedCaches drops
+        // the stale precache, skipWaiting + clientsClaim take over open tabs
+        // immediately instead of waiting for the next page-close, and
+        // disableDevLogs keeps the console clean in prod.
+        cleanupOutdatedCaches: true,
+        skipWaiting: true,
+        clientsClaim: true,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\//,
