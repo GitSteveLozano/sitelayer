@@ -618,6 +618,132 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     return true
   }
 
+  // GET /api/projects/:id/labor-variance — per-service-item estimate-vs-
+  // actual variance. Closes the foreman/owner feedback loop on "are we
+  // ahead or behind on labor for this scope code?" by joining
+  // estimate_lines (planned quantity) against labor_entries.sqft_done
+  // (realized quantity) per service_item_code.
+  //
+  // Single FULL OUTER JOIN on two per-code aggregates so a code with no
+  // labor yet still shows up (negative variance) and a code logged
+  // without an estimate also surfaces (estimated_quantity=0). Rows where
+  // both sides are zero are filtered out — the UI doesn't need to render
+  // empty-on-both lines.
+  //
+  // Sort: worst-offender first by absolute hours_variance_pct so the
+  // mobile card can show the top 5 without further client-side work.
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/labor-variance$/)) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!projectId) {
+      ctx.sendJson(400, { error: 'project id is required' })
+      return true
+    }
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project id must be a valid uuid' })
+      return true
+    }
+
+    // Confirm the project exists + belongs to the active company before
+    // running the variance query. Keeps tenant-isolation errors as 404
+    // (matching /summary, /closeout, /timeline) rather than returning
+    // an empty array for projects the caller can't see.
+    const projectCheck = await ctx.pool.query<{ target_sqft_per_hr: string | null }>(
+      `select target_sqft_per_hr from projects
+       where company_id = $1 and id = $2 and deleted_at is null
+       limit 1`,
+      [ctx.company.id, projectId],
+    )
+    if (!projectCheck.rows[0]) {
+      ctx.sendJson(404, { error: 'project not found' })
+      return true
+    }
+    const projectTargetSqftPerHr = Number(projectCheck.rows[0].target_sqft_per_hr ?? 0) || 0
+
+    const result = await ctx.pool.query<{
+      service_item_code: string
+      division_code: string | null
+      unit: string | null
+      estimated_quantity: string
+      actual_quantity: string
+      actual_hours: string
+    }>(
+      `
+      with est as (
+        select
+          service_item_code,
+          max(division_code) as division_code,
+          max(unit) as unit,
+          coalesce(sum(quantity), 0) as estimated_quantity
+        from estimate_lines
+        where company_id = $1 and project_id = $2
+        group by service_item_code
+      ),
+      act as (
+        select
+          service_item_code,
+          max(division_code) as division_code,
+          coalesce(sum(sqft_done), 0) as actual_quantity,
+          coalesce(sum(hours), 0) as actual_hours
+        from labor_entries
+        where company_id = $1 and project_id = $2 and deleted_at is null
+        group by service_item_code
+      )
+      select
+        coalesce(est.service_item_code, act.service_item_code) as service_item_code,
+        coalesce(est.division_code, act.division_code) as division_code,
+        est.unit as unit,
+        coalesce(est.estimated_quantity, 0)::text as estimated_quantity,
+        coalesce(act.actual_quantity, 0)::text as actual_quantity,
+        coalesce(act.actual_hours, 0)::text as actual_hours
+      from est
+      full outer join act on est.service_item_code = act.service_item_code
+      where coalesce(est.service_item_code, act.service_item_code) is not null
+      `,
+      [ctx.company.id, projectId],
+    )
+
+    const variance = result.rows
+      .map((row) => {
+        const estimatedQuantity = Number(row.estimated_quantity) || 0
+        const actualQuantity = Number(row.actual_quantity) || 0
+        const actualHours = Number(row.actual_hours) || 0
+
+        // Estimated hours derive from the project's target_sqft_per_hr
+        // (the only target-rate signal we have today; per-service-item
+        // targets are a future enhancement). When the project has no
+        // target rate, estimated_hours is 0 and hours_variance_pct
+        // falls through to the actual-only branch below.
+        const estimatedHours = projectTargetSqftPerHr > 0 ? estimatedQuantity / projectTargetSqftPerHr : 0
+
+        // Variance percentages: undefined when the denominator is 0, but
+        // the response contract says number. Convention: 0 when there's
+        // no estimate to compare against (the UI surfaces this via the
+        // estimated_quantity=0 sentinel).
+        const quantityVariancePct =
+          estimatedQuantity > 0 ? ((actualQuantity - estimatedQuantity) / estimatedQuantity) * 100 : 0
+        const hoursVariancePct = estimatedHours > 0 ? ((actualHours - estimatedHours) / estimatedHours) * 100 : 0
+
+        return {
+          service_item_code: row.service_item_code,
+          division_code: row.division_code,
+          unit: row.unit ?? '',
+          estimated_quantity: estimatedQuantity,
+          actual_quantity: actualQuantity,
+          estimated_hours: estimatedHours,
+          actual_hours: actualHours,
+          quantity_variance_pct: Number(quantityVariancePct.toFixed(2)),
+          hours_variance_pct: Number(hoursVariancePct.toFixed(2)),
+        }
+      })
+      // Skip rows where both sides are zero — nothing to surface.
+      .filter((row) => row.estimated_quantity > 0 || row.actual_quantity > 0)
+      .sort((a, b) => Math.abs(b.hours_variance_pct) - Math.abs(a.hours_variance_pct))
+
+    ctx.sendJson(200, { variance })
+    return true
+  }
+
   // GET /api/projects/:id — project detail metadata. Used by the Phase 2B
   // prj-detail shell. The /summary endpoint above is the cost-rollup;
   // this is the bare project row + customer name + geofence policy +

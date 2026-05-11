@@ -19,6 +19,25 @@ import { handleProjectRoutes, type ProjectRouteCtx } from './projects.js'
 
 type Row = Record<string, unknown>
 
+type EstimateLineRow = {
+  company_id: string
+  project_id: string
+  service_item_code: string
+  division_code: string | null
+  unit: string
+  quantity: number
+}
+
+type LaborEntryRow = {
+  company_id: string
+  project_id: string
+  service_item_code: string
+  division_code: string | null
+  hours: number
+  sqft_done: number
+  deleted_at: string | null
+}
+
 class FakePool {
   projects: Row[] = []
   workflowEvents: Row[] = []
@@ -26,6 +45,8 @@ class FakePool {
   outbox: Row[] = []
   auditEvents: Row[] = []
   notifications: Row[] = []
+  estimateLines: EstimateLineRow[] = []
+  laborEntries: LaborEntryRow[] = []
 
   attach() {
     attachMutationTx({
@@ -49,6 +70,68 @@ class FakePool {
     const sql = sqlRaw.trim()
     if (sql.startsWith('begin') || sql.startsWith('commit') || sql.startsWith('rollback')) {
       return { rows: [], rowCount: 0 }
+    }
+
+    // ---- projects: labor-variance project guard (target_sqft_per_hr only) ----
+    if (/select target_sqft_per_hr from projects/i.test(sql)) {
+      const [companyId, projectId] = params as [string, string]
+      const project = this.projects.find((p) => p.company_id === companyId && p.id === projectId)
+      return {
+        rows: project ? [{ target_sqft_per_hr: project.target_sqft_per_hr ?? null }] : [],
+        rowCount: project ? 1 : 0,
+      }
+    }
+
+    // ---- projects: labor-variance aggregation (FULL OUTER JOIN on
+    //      per-service-item-code sums of estimate_lines + labor_entries) ----
+    if (/with est as/i.test(sql) && /from estimate_lines/i.test(sql) && /from labor_entries/i.test(sql)) {
+      const [companyId, projectId] = params as [string, string]
+      const estRows = this.estimateLines.filter((r) => r.company_id === companyId && r.project_id === projectId)
+      const actRows = this.laborEntries.filter(
+        (r) => r.company_id === companyId && r.project_id === projectId && !r.deleted_at,
+      )
+      const estByCode = new Map<string, { division_code: string | null; unit: string; estimated_quantity: number }>()
+      for (const r of estRows) {
+        const bucket = estByCode.get(r.service_item_code) ?? {
+          division_code: r.division_code,
+          unit: r.unit,
+          estimated_quantity: 0,
+        }
+        bucket.estimated_quantity += r.quantity
+        if (r.division_code) bucket.division_code = r.division_code
+        if (r.unit) bucket.unit = r.unit
+        estByCode.set(r.service_item_code, bucket)
+      }
+      const actByCode = new Map<
+        string,
+        { division_code: string | null; actual_quantity: number; actual_hours: number }
+      >()
+      for (const r of actRows) {
+        const bucket = actByCode.get(r.service_item_code) ?? {
+          division_code: r.division_code,
+          actual_quantity: 0,
+          actual_hours: 0,
+        }
+        bucket.actual_quantity += r.sqft_done
+        bucket.actual_hours += r.hours
+        if (r.division_code) bucket.division_code = r.division_code
+        actByCode.set(r.service_item_code, bucket)
+      }
+      const codes = new Set<string>([...estByCode.keys(), ...actByCode.keys()])
+      const rows: Array<Record<string, unknown>> = []
+      for (const code of codes) {
+        const e = estByCode.get(code)
+        const a = actByCode.get(code)
+        rows.push({
+          service_item_code: code,
+          division_code: e?.division_code ?? a?.division_code ?? null,
+          unit: e?.unit ?? null,
+          estimated_quantity: String(e?.estimated_quantity ?? 0),
+          actual_quantity: String(a?.actual_quantity ?? 0),
+          actual_hours: String(a?.actual_hours ?? 0),
+        })
+      }
+      return { rows, rowCount: rows.length }
     }
 
     // ---- projects: snapshot select (GET handler) ----
@@ -330,5 +413,215 @@ describe('handleProjectRoutes — GET /api/projects/:id/closeout', () => {
     expect(afterSnap.next_events).toEqual([])
     expect(afterSnap.context.closed_at).toBeTruthy()
     expect(afterSnap.context.closed_by).toBe('u-1')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GET /api/projects/:id/labor-variance
+// Per-service-item planned-vs-actual rollup. The endpoint hits the
+// fake pool through the variance regex above; the route's own filter
+// + sort happens in JS after the SQL aggregate. These tests exercise
+// that JS path against shaped fixtures.
+// ---------------------------------------------------------------------------
+
+type VarianceRow = {
+  service_item_code: string
+  division_code: string | null
+  unit: string
+  estimated_quantity: number
+  actual_quantity: number
+  estimated_hours: number
+  actual_hours: number
+  quantity_variance_pct: number
+  hours_variance_pct: number
+}
+
+function seedEstimateLine(
+  pool: FakePool,
+  overrides: Partial<EstimateLineRow> & {
+    service_item_code: string
+    quantity: number
+  },
+) {
+  pool.estimateLines.push({
+    company_id: 'co-1',
+    project_id: PROJECT_ID,
+    service_item_code: overrides.service_item_code,
+    division_code: overrides.division_code ?? null,
+    unit: overrides.unit ?? 'sqft',
+    quantity: overrides.quantity,
+  })
+}
+
+function seedLaborEntry(
+  pool: FakePool,
+  overrides: Partial<LaborEntryRow> & {
+    service_item_code: string
+    hours: number
+    sqft_done: number
+  },
+) {
+  pool.laborEntries.push({
+    company_id: 'co-1',
+    project_id: PROJECT_ID,
+    service_item_code: overrides.service_item_code,
+    division_code: overrides.division_code ?? null,
+    hours: overrides.hours,
+    sqft_done: overrides.sqft_done,
+    deleted_at: overrides.deleted_at ?? null,
+  })
+}
+
+describe('handleProjectRoutes — GET /api/projects/:id/labor-variance', () => {
+  it('returns an empty variance array for a project with no estimate or labor data', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { target_sqft_per_hr: 100 })
+    const { ctx, responses } = makeCtx(pool)
+
+    const handled = await handleProjectRoutes(
+      { method: 'GET' } as never,
+      buildUrl(`/api/projects/${PROJECT_ID}/labor-variance`),
+      ctx,
+    )
+    expect(handled).toBe(true)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    expect((responses[0]?.body as { variance: VarianceRow[] }).variance).toEqual([])
+  })
+
+  it('computes variance for a code with matching estimate + labor entries', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { target_sqft_per_hr: 100 })
+    seedEstimateLine(pool, { service_item_code: 'D4-PAINT', division_code: 'D4', unit: 'sqft', quantity: 1000 })
+    seedLaborEntry(pool, { service_item_code: 'D4-PAINT', division_code: 'D4', hours: 12, sqft_done: 1200 })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/${PROJECT_ID}/labor-variance`), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    const variance = (responses[0]?.body as { variance: VarianceRow[] }).variance
+    expect(variance).toHaveLength(1)
+    const row = variance[0]
+    expect(row?.service_item_code).toBe('D4-PAINT')
+    expect(row?.division_code).toBe('D4')
+    expect(row?.unit).toBe('sqft')
+    expect(row?.estimated_quantity).toBe(1000)
+    expect(row?.actual_quantity).toBe(1200)
+    // 1000 sqft / 100 sqft-per-hr = 10 estimated hours.
+    expect(row?.estimated_hours).toBe(10)
+    expect(row?.actual_hours).toBe(12)
+    // (1200 − 1000) / 1000 × 100 = 20.
+    expect(row?.quantity_variance_pct).toBe(20)
+    // (12 − 10) / 10 × 100 = 20.
+    expect(row?.hours_variance_pct).toBe(20)
+  })
+
+  it('returns estimate-only rows with actual=0 and negative variance', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { target_sqft_per_hr: 50 })
+    seedEstimateLine(pool, { service_item_code: 'D4-PRIME', division_code: 'D4', unit: 'sqft', quantity: 500 })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/${PROJECT_ID}/labor-variance`), ctx)
+    expect(responses[0]?.status).toBe(200)
+    const variance = (responses[0]?.body as { variance: VarianceRow[] }).variance
+    expect(variance).toHaveLength(1)
+    const row = variance[0]
+    expect(row?.service_item_code).toBe('D4-PRIME')
+    expect(row?.estimated_quantity).toBe(500)
+    expect(row?.actual_quantity).toBe(0)
+    expect(row?.actual_hours).toBe(0)
+    // 500 / 50 = 10 estimated hours; actual 0 ⇒ -100% on both.
+    expect(row?.estimated_hours).toBe(10)
+    expect(row?.quantity_variance_pct).toBe(-100)
+    expect(row?.hours_variance_pct).toBe(-100)
+  })
+
+  it('returns labor-only rows (no matching estimate_lines) with estimated_quantity sentinel of 0', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { target_sqft_per_hr: 100 })
+    seedLaborEntry(pool, { service_item_code: 'D4-CAULK', division_code: 'D4', hours: 4, sqft_done: 80 })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/${PROJECT_ID}/labor-variance`), ctx)
+    expect(responses[0]?.status).toBe(200)
+    const variance = (responses[0]?.body as { variance: VarianceRow[] }).variance
+    expect(variance).toHaveLength(1)
+    const row = variance[0]
+    expect(row?.service_item_code).toBe('D4-CAULK')
+    expect(row?.estimated_quantity).toBe(0)
+    expect(row?.actual_quantity).toBe(80)
+    expect(row?.estimated_hours).toBe(0)
+    expect(row?.actual_hours).toBe(4)
+    // No estimate basis — variance pcts fall through to 0.
+    expect(row?.quantity_variance_pct).toBe(0)
+    expect(row?.hours_variance_pct).toBe(0)
+    // unit is null on the labor-only branch (no estimate_lines row to
+    // pull it from); the route normalizes that to empty string.
+    expect(row?.unit).toBe('')
+  })
+
+  it('does not leak rows from another company (tenant isolation)', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { target_sqft_per_hr: 100 })
+    // Belongs to a different company on the same project_id (extremely
+    // unlikely with uuids, but the dispatcher guards on company_id so we
+    // assert it explicitly).
+    pool.estimateLines.push({
+      company_id: 'co-other',
+      project_id: PROJECT_ID,
+      service_item_code: 'D4-PAINT',
+      division_code: 'D4',
+      unit: 'sqft',
+      quantity: 999,
+    })
+    pool.laborEntries.push({
+      company_id: 'co-other',
+      project_id: PROJECT_ID,
+      service_item_code: 'D4-PAINT',
+      division_code: 'D4',
+      hours: 50,
+      sqft_done: 999,
+      deleted_at: null,
+    })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/${PROJECT_ID}/labor-variance`), ctx)
+    expect(responses[0]?.status).toBe(200)
+    expect((responses[0]?.body as { variance: VarianceRow[] }).variance).toEqual([])
+  })
+
+  it('sorts worst-offender first by absolute hours_variance_pct', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { target_sqft_per_hr: 100 })
+    // 1000 estimate / 100 = 10 hr est, 11 hr act → +10%.
+    seedEstimateLine(pool, { service_item_code: 'A', quantity: 1000 })
+    seedLaborEntry(pool, { service_item_code: 'A', hours: 11, sqft_done: 1000 })
+    // 1000 estimate / 100 = 10 hr est, 30 hr act → +200%.
+    seedEstimateLine(pool, { service_item_code: 'B', quantity: 1000 })
+    seedLaborEntry(pool, { service_item_code: 'B', hours: 30, sqft_done: 1000 })
+    // 1000 estimate / 100 = 10 hr est, 5 hr act → -50%.
+    seedEstimateLine(pool, { service_item_code: 'C', quantity: 1000 })
+    seedLaborEntry(pool, { service_item_code: 'C', hours: 5, sqft_done: 1000 })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/${PROJECT_ID}/labor-variance`), ctx)
+    const variance = (responses[0]?.body as { variance: VarianceRow[] }).variance
+    expect(variance.map((r) => r.service_item_code)).toEqual(['B', 'C', 'A'])
+  })
+
+  it('returns 404 when the project does not belong to the current company', async () => {
+    const pool = new FakePool()
+    // No seedProject call — projects table empty for co-1.
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/${PROJECT_ID}/labor-variance`), ctx)
+    expect(responses[0]?.status).toBe(404)
+  })
+
+  it('rejects non-uuid project ids with 400', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/not-a-uuid/labor-variance`), ctx)
+    expect(responses[0]?.status).toBe(400)
   })
 })

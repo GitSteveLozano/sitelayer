@@ -328,6 +328,14 @@ export {
 } from './labor-burden'
 
 export {
+  fetchProjectLaborVariance,
+  laborVarianceQueryKeys,
+  useProjectLaborVariance,
+  type LaborVarianceResponse,
+  type LaborVarianceRow,
+} from './labor-variance'
+
+export {
   fetchProject,
   fetchProjects,
   projectQueryKeys,

@@ -31,6 +31,7 @@ import { MAiStripe } from '../../components/m/ai.js'
 import { MEmptyState } from '../../components/m-states/index.js'
 import { BidAccuracyCard } from '../projects/bid-accuracy-card.js'
 import { LifecycleBanner } from '../../components/lifecycle/banner.js'
+import { useProjectLaborVariance, type LaborVarianceRow } from '../../lib/api/labor-variance.js'
 import { formatDecimalHours, formatMoney, formatStatusLabel, statusTone } from './format.js'
 
 type TabKey = 'overview' | 'estimate' | 'crew' | 'materials' | 'budget' | 'log' | 'files'
@@ -509,6 +510,11 @@ function BudgetTab({
   const tone = pctSpent < 60 ? 'green' : pctSpent < 90 ? 'amber' : 'red'
   return (
     <div style={{ paddingTop: 8 }}>
+      {/* Estimate-vs-actual variance per service_item_code — the closing
+          half of the foreman/owner feedback loop. Sits above the KPI
+          strip so the worst-offender code is the first thing the eye
+          lands on when the Budget tab opens. Self-hides on empty. */}
+      <LaborVariancePanel projectId={project.id} />
       <MKpiRow cols={2}>
         <MKpi label="Spent" value={formatMoney(spent)} meta={`of ${formatMoney(bid)}`} metaTone={tone} />
         <MKpi label="Pace" value={formatDecimalHours(totalHours, 1)} meta={`@ $${project.labor_rate}/hr`} />
@@ -531,6 +537,216 @@ function BudgetTab({
       </div>
     </div>
   )
+}
+
+/**
+ * Per-service-item planned-vs-actual variance card. Wraps
+ * GET /api/projects/:id/labor-variance.
+ *
+ * Surfaces the top 5 worst-offender codes (already sorted by absolute
+ * hours_variance_pct on the server) so the foreman can see "are we
+ * ahead or behind on labor for this scope code?" without scrolling.
+ * Each row shows actual / estimated quantity in the line's unit and an
+ * MPill in the variance tone (green < 10%, amber 10–25%, red > 25%).
+ *
+ * Empty state is a calm hint rather than an error — the panel is
+ * useless until `sqft_done` lands on labor entries, which only happens
+ * after a job is in progress.
+ */
+function LaborVariancePanel({ projectId }: { projectId: string }) {
+  const variance = useProjectLaborVariance(projectId)
+
+  if (variance.isPending) {
+    return (
+      <div
+        style={{
+          margin: '0 16px 12px',
+          padding: 14,
+          fontSize: 12,
+          color: 'var(--m-ink-3)',
+          border: '1px solid var(--m-line)',
+          borderRadius: 12,
+          background: 'var(--m-card-soft)',
+        }}
+      >
+        Loading scope variance…
+      </div>
+    )
+  }
+
+  if (variance.isError) {
+    return (
+      <div
+        style={{
+          margin: '0 16px 12px',
+          padding: 14,
+          fontSize: 12,
+          color: 'var(--m-red)',
+          border: '1px solid var(--m-line)',
+          borderRadius: 12,
+        }}
+      >
+        Could not load scope variance.
+      </div>
+    )
+  }
+
+  const rows = variance.data?.variance ?? []
+  if (rows.length === 0) {
+    return (
+      <div style={{ padding: '0 16px 12px' }}>
+        <div
+          style={{
+            padding: '14px 16px',
+            border: '1px solid var(--m-line)',
+            borderRadius: 12,
+            background: 'var(--m-card-soft)',
+          }}
+        >
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+              marginBottom: 4,
+            }}
+          >
+            Labor variance
+          </div>
+          <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.45 }}>
+            No variance data yet — labor entries with sqft_done populate this once jobs are in progress.
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const topRows = rows.slice(0, 5)
+  const hasMore = rows.length > topRows.length
+
+  return (
+    <div style={{ padding: '0 16px 12px' }}>
+      <div
+        style={{
+          border: '1px solid var(--m-line)',
+          borderRadius: 12,
+          overflow: 'hidden',
+          background: 'var(--m-card)',
+        }}
+      >
+        <div
+          style={{
+            padding: '10px 14px',
+            borderBottom: '1px solid var(--m-line)',
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: 'var(--m-ink-3)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          <span>Labor variance · worst offenders</span>
+          <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0, color: 'var(--m-ink-3)' }}>
+            {rows.length} {rows.length === 1 ? 'code' : 'codes'}
+          </span>
+        </div>
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+          {topRows.map((row, idx) => (
+            <LaborVarianceRowItem key={row.service_item_code} row={row} isLast={idx === topRows.length - 1} />
+          ))}
+        </ul>
+        {hasMore ? (
+          <div
+            style={{
+              padding: '8px 14px',
+              borderTop: '1px solid var(--m-line)',
+              fontSize: 11,
+              color: 'var(--m-ink-3)',
+            }}
+          >
+            {rows.length - topRows.length} more code{rows.length - topRows.length === 1 ? '' : 's'} · full breakdown
+            coming soon
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function LaborVarianceRowItem({ row, isLast }: { row: LaborVarianceRow; isLast: boolean }) {
+  const pct = row.hours_variance_pct
+  const absPct = Math.abs(pct)
+  const tone: 'green' | 'amber' | 'red' = absPct < 10 ? 'green' : absPct <= 25 ? 'amber' : 'red'
+  const sign = pct > 0 ? '+' : pct < 0 ? '−' : ''
+  const pillTone: 'green' | 'amber' | 'red' = tone
+
+  return (
+    <li
+      style={{
+        padding: '10px 14px',
+        borderBottom: isLast ? 'none' : '1px solid var(--m-line)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+      }}
+    >
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: 'var(--m-ink)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {row.service_item_code}
+          </div>
+          {row.division_code ? (
+            <span
+              style={{
+                fontSize: 10,
+                fontWeight: 600,
+                letterSpacing: '0.04em',
+                color: 'var(--m-ink-3)',
+                background: 'var(--m-card-soft)',
+                border: '1px solid var(--m-line)',
+                borderRadius: 999,
+                padding: '1px 6px',
+                lineHeight: 1.3,
+              }}
+            >
+              {row.division_code}
+            </span>
+          ) : null}
+        </div>
+        <div className="num" style={{ fontSize: 11.5, color: 'var(--m-ink-3)', fontVariantNumeric: 'tabular-nums' }}>
+          {formatVarianceQty(row.actual_quantity)} / {formatVarianceQty(row.estimated_quantity)} {row.unit || 'sqft'}
+        </div>
+      </div>
+      <MPill tone={pillTone}>
+        <span className="num" style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
+          {row.estimated_quantity > 0 || row.estimated_hours > 0 ? `${sign}${absPct.toFixed(0)}%` : 'no est.'}
+        </span>
+      </MPill>
+    </li>
+  )
+}
+
+function formatVarianceQty(n: number): string {
+  if (!Number.isFinite(n)) return '0'
+  // sqft/lf are typically whole numbers at the foreman level; for very
+  // small values keep one decimal so we don't render "0" when there's
+  // partial progress.
+  if (Math.abs(n) >= 10) return Math.round(n).toLocaleString()
+  return n.toFixed(1)
 }
 
 function LogTab({ project, navigate }: { project: ProjectRow; navigate: (path: string) => void }) {
