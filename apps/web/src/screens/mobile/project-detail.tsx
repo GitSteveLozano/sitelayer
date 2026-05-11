@@ -30,6 +30,7 @@ import {
 import { MAiStripe } from '../../components/m/ai.js'
 import { MEmptyState } from '../../components/m-states/index.js'
 import { BidAccuracyCard } from '../projects/bid-accuracy-card.js'
+import { LifecycleBanner } from '../../components/lifecycle/banner.js'
 import { formatDecimalHours, formatMoney, formatStatusLabel, statusTone } from './format.js'
 
 type TabKey = 'overview' | 'estimate' | 'crew' | 'materials' | 'budget' | 'log' | 'files'
@@ -215,6 +216,15 @@ function Overview({
 
   return (
     <div style={{ paddingTop: 8 }}>
+      {/* Project-lifecycle workflow banner — server-truth state +
+          next_events from the project-lifecycle reducer
+          (packages/workflows/src/project-lifecycle.ts) consumed via
+          the headless useProjectLifecycle XState machine
+          (apps/web/src/machines/project-lifecycle.ts). See
+          docs/DETERMINISTIC_WORKFLOWS.md. */}
+      <div style={{ padding: '0 16px 12px' }}>
+        <LifecycleBanner projectId={project.id} />
+      </div>
       <ProjectStatePanel project={project} navigate={navigate} />
       {/* Bid-accuracy keystone (mirrors the desktop overview hero per
           `/tmp/sitelayer_design_stuff/ai-keystone.jsx`). Self-hides
