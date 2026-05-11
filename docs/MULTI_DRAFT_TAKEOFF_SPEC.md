@@ -1,17 +1,18 @@
 # Multi-Draft Takeoff Spec
 
-Status: implemented in #266–#270, #272–#274, #281
+Status: implemented in #266–#270, #272–#274, #281, #287, #289
 Author: Claude Opus 4.7 (1M context)
-Last updated: 2026-05-10
+Last updated: 2026-05-11
 
 ## Shipping notes
 
 - Phase A (multi-draft schema, API, UI, per-draft estimates, NOT NULL lock) shipped 2026-05-10 across #266–#270.
 - Phase B/C (capture pipeline: pipe-\* packages ported, `takeoff_capture_artifacts` schema, capture-to-draft endpoint + Capture-from UI on takeoff-canvas) shipped 2026-05-10 across #271–#274.
 - Phase D follow-on: LifecycleBanner mounted on the live mobile project detail (#281, 2026-05-10).
-- In-flight / not yet shipped: live (non-dry-run) `blueprint_vision` mode requires a streaming PDF-upload path + `ANTHROPIC_API_KEY`; promote-to-measurements (draft → committed measurements) is still a follow-on. Both tracked separately.
+- Live (non-dry-run) `blueprint_vision` mode shipped 2026-05-10 in #287. Streaming multipart PDF upload + `ANTHROPIC_API_KEY` are wired through `apps/api/src/routes/dispatch.ts`; flip `BLUEPRINT_VISION_MODE=live` to enable.
+- Promote-to-measurements (draft → committed measurements) shipped 2026-05-10 in #289 (`POST /api/projects/:id/takeoff-drafts/:draftId/promote`). The service-item catalog guard on the promote-override path landed in #291.
 
-The rest of this document is the original design spec, kept for historical context. Treat the "Build order" and "Open questions" sections as resolved unless they relate to the in-flight items above.
+The rest of this document is the original design spec, kept for historical context. Treat the "Build order" and "Open questions" sections as resolved.
 
 ## Why
 

@@ -10,7 +10,7 @@ Construction operations platform: blueprint takeoff, estimation, crew scheduling
 
 - **Frontend orchestration** lives in **XState** machines under `apps/web/src/machines/`: `bootstrap-refresh`, `offline-replay`, `project-selection`, `estimate-push`, `billing-review`. These own long-lived UI state (offline queue, role/company switching, multi-step approval flows).
 - **Frontend data fetching/caching** lives in **TanStack Query** (`apps/web/src/lib/api/`). Resource-shaped hooks (`useProjects`, `useClockIn`, `useEstimatePush`, etc.).
-- **Backend workflows** are **temporal.io-style** deterministic state machines in `packages/workflows/` (rental-billing, estimate-push, project-closeout, crew-schedule, time-review, rental). See `docs/DETERMINISTIC_WORKFLOWS.md`.
+- **Backend workflows** are **temporal.io-style** deterministic state machines in `packages/workflows/` (rental-billing, estimate-push, project-closeout, crew-schedule, time-review, labor-payroll, project-lifecycle, field-event, rental). See `docs/DETERMINISTIC_WORKFLOWS.md` and the "Workflow Inventory" section below.
 - **Single HTTP client** = `apps/web/src/lib/api/client.ts:request<T>()`. `api-v1-compat.ts` is a name-bridge for the migrated XState machines and delegates to the same `request<T>()` underneath.
 
 Where new code goes:
@@ -47,7 +47,7 @@ Domain language lives in `CONTEXT.md` when present; durable architectural decisi
 
 ## Agent Coordination Source of Truth
 
-**Last reconciled:** 2026-04-25
+**Last reconciled:** 2026-05-11
 
 **Mesh project:** `sitelayer` / project ID `282`
 
@@ -492,6 +492,22 @@ Background job processor:
 - Calls `@sitelayer/queue` for the shared Postgres queue lease/transaction behavior.
 - Marks simulated local queue work as `applied`. The QBO material-bill push path is now exercised in CI by `apps/api/src/qbo-material-bill-sync.test.ts` against a localhost HTTP mock; before flipping the `qbo-live` flag in prod, run `scripts/qbo-sandbox-smoke.sh` against a real QBO sandbox.
 
+### Workflow Inventory
+
+Each deterministic workflow has a registered reducer in `packages/workflows/src/` (see `docs/DETERMINISTIC_WORKFLOWS.md` for the design rules). Canonical, more-detailed table lives there; this is the at-a-glance summary.
+
+| Workflow             | Status                                                                                                                                               | Schema | States                                                                   | Side effects                                              |
+| -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------ | --------------------------------------------------------- |
+| `rental_billing_run` | Live in API + worker; event log enabled in both human and worker paths                                                                               | v1     | generated, approved, posting, posted, failed, voided                     | `post_qbo_invoice`                                        |
+| `estimate_push`      | Live in API + worker (stub QBO push until `qbo-estimate-push.ts` ships and `QBO_LIVE_ESTIMATE_PUSH=1`)                                               | v1     | drafted, reviewed, approved, posting, posted, failed, voided             | `post_qbo_estimate`                                       |
+| `crew_schedule`      | Live in API + web (XState wires `routes/schedules.ts` confirmation through the reducer)                                                              | v1     | draft, confirmed                                                         | none                                                      |
+| `project_closeout`   | Shipped — GET `/api/projects/:id/closeout` snapshot added in #293                                                                                    | v1     | active, completed                                                        | none                                                      |
+| `time_review_run`    | Live in API + web (`useTimeReview` XState added in #294); worker emits `lock_labor_entries` and chains to `generate_labor_payroll_run` after APPROVE | v1     | pending, approved, rejected                                              | `lock_labor_entries`                                      |
+| `labor_payroll_run`  | Live in API + worker (stub QBO TimeActivity push unless `QBO_LIVE_LABOR_PAYROLL=1`); financial hub list/detail screens shipped in #285/#292          | v1     | generated, approved, posting, posted, failed, voided                     | `post_qbo_time_activities`                                |
+| `project_lifecycle`  | Live in API + web (`useProjectLifecycle` XState mounted on project detail in #276/#281)                                                              | v1     | draft, estimating, sent, accepted, declined, in_progress, done, archived | `notify_foreman_assignment`                               |
+| `field_event`        | Live in API + worker; "Flag a problem" → foreman triage → estimator escalation                                                                       | v1     | open, resolved, escalated, dismissed                                     | `notify_worker_resolution`, `notify_estimator_escalation` |
+| `rental`             | Phase 1 — reducer registered (replay sweep wired) but `routes/rentals.ts` writes have not yet been switched over to dispatch through the event API   | v1     | active, returned, invoiced_pending, closed                               | none                                                      |
+
 ### Database Schema
 
 **Core Tables** (canonical source: `docker/postgres/init/*.sql`):
@@ -501,10 +517,14 @@ Background job processor:
 - `customers` — per-company customer roster
 - `projects` — construction projects
 - `blueprint_documents` — uploaded PDF/image documents with storage path (local FS or DO Spaces key) and revision lineage
-- `takeoff_measurements` — polygon/manual measurements with persisted geometry
-- `estimate_lines` — per-project estimate line items (no separate `estimates` parent table)
+- `takeoff_drafts` — per-project measurement drafts (multi-draft takeoff); each draft owns its own measurements + estimate and may declare a capture pipeline `source` (`manual` / `blueprint_vision` / `photogrammetry` / `drone`). Schema in `066_takeoff_drafts.sql`, NOT NULL lock in `068_takeoff_drafts_not_null.sql`, capture-pipeline columns added by `069_takeoff_capture_artifacts.sql`.
+- `takeoff_capture_artifacts` — one row per uploaded capture input (PDF, CapturedRoom JSON, labeled mesh, drone sidecar) tied to a draft. Allows multiple artifacts per draft without bloating `takeoff_drafts`. Schema in `069_takeoff_capture_artifacts.sql`.
+- `takeoff_measurements` — polygon/manual measurements with persisted geometry; `draft_id` is NOT NULL post-#270
+- `estimate_lines` — per-project estimate line items (no separate `estimates` parent table); `draft_id` threaded through recompute/scope-vs-bid/PDF
 - `service_items`, `service_item_divisions`, `divisions`, `pricing_profiles`, `bonus_rules` — reference data
+- `project_pricing_overrides`, `customer_pricing_overrides`, `company_pricing_overrides` — per-scope service-item rate overrides feeding the pricing chain resolver (`project → customer → company → QBO item rate → service_items.default_rate`). Each row carries its own `unit` so an override can flip the billing unit (e.g. negotiated "per hour" vs catalog default "per sqft"). Schema in `071_pricing_overrides.sql`.
 - `workers`, `labor_entries`, `crew_schedules`, `clock_events` — crew + time tracking
+- `labor_payroll_runs` — payroll batches materialized after `time_review_run` APPROVE locks `labor_entries`. Walks the same `generated → approved → posting → posted | failed → voided` pipeline as `rental_billing_runs`; QBO push translates each covered `labor_entry` into a `TimeActivity`. Schema in `051_labor_payroll_runs.sql`.
 - `material_bills`, `rentals` — material spend and rental ledger per project
 - `integration_connections` — QBO/etc. OAuth tokens, refresh state, webhook secrets
 - `integration_mappings` — external refs per `(provider, entity_type)` (customer/project/item)

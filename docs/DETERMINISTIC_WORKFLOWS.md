@@ -279,7 +279,7 @@ Every reducer self-registers via `registerWorkflow({ name, schemaVersion, initia
 
 The registry refuses double-registration with a different `schemaVersion`. Bumping `schemaVersion` is the explicit signal that the reducer's transition table has changed.
 
-Currently registered: `rental_billing_run` (v1), `estimate_push` (v1).
+Currently registered: `rental_billing_run` (v1), `estimate_push` (v1), `crew_schedule` (v1), `project_closeout` (v1), `time_review_run` (v1), `labor_payroll_run` (v1), `project_lifecycle` (v1), `field_event` (v1), `rental` (v1).
 
 ### Append-Only Event Log — `workflow_event_log` table
 
@@ -351,15 +351,19 @@ The `schema_version` column already exists on `workflow_event_log`; multi-versio
 
 ## Workflow Inventory
 
-| Workflow             | Status                                                                                                                    | Schema | States                                                       | Side effects        |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------ | ------------------- |
-| `rental_billing_run` | Live in API + worker, event log enabled in both human and worker paths                                                    | v1     | generated, approved, posting, posted, failed, voided         | `post_qbo_invoice`  |
-| `estimate_push`      | Live in API + worker (worker uses stub QBO push until `qbo-estimate-push.ts` ships and `QBO_LIVE_ESTIMATE_PUSH=1` is set) | v1     | drafted, reviewed, approved, posting, posted, failed, voided | `post_qbo_estimate` |
+| Workflow             | Status                                                                                                                                                  | Schema | States                                                                   | Side effects                                              |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------ | --------------------------------------------------------- |
+| `rental_billing_run` | Live in API + worker, event log enabled in both human and worker paths                                                                                  | v1     | generated, approved, posting, posted, failed, voided                     | `post_qbo_invoice`                                        |
+| `estimate_push`      | Live in API + worker (worker uses stub QBO push until `qbo-estimate-push.ts` ships and `QBO_LIVE_ESTIMATE_PUSH=1` is set)                               | v1     | drafted, reviewed, approved, posting, posted, failed, voided             | `post_qbo_estimate`                                       |
+| `crew_schedule`      | Live in API + web (XState wires `routes/schedules.ts` confirmation flow through the reducer)                                                            | v1     | draft, confirmed                                                         | none                                                      |
+| `project_closeout`   | Live in API + web; GET snapshot endpoint added in #293 (`/api/projects/:id/closeout`)                                                                   | v1     | active, completed                                                        | none                                                      |
+| `time_review_run`    | Live in API + web (`useTimeReview` XState added in #294); worker emits `lock_labor_entries` and chains to `generate_labor_payroll_run` after APPROVE    | v1     | pending, approved, rejected                                              | `lock_labor_entries`                                      |
+| `labor_payroll_run`  | Live in API + worker (worker uses stub QBO TimeActivity push unless `QBO_LIVE_LABOR_PAYROLL=1`); financial hub list/detail screens shipped in #285/#292 | v1     | generated, approved, posting, posted, failed, voided                     | `post_qbo_time_activities`                                |
+| `project_lifecycle`  | Live in API + web (`useProjectLifecycle` XState mounted on project detail in #276/#281)                                                                 | v1     | draft, estimating, sent, accepted, declined, in_progress, done, archived | `notify_foreman_assignment`                               |
+| `field_event`        | Live in API + worker; "Flag a problem" → foreman triage → estimator escalation                                                                          | v1     | open, resolved, escalated, dismissed                                     | `notify_worker_resolution`, `notify_estimator_escalation` |
+| `rental`             | Phase 1 — reducer registered (replay sweep wired) but `routes/rentals.ts` writes have not yet been switched over to dispatch through the event API      | v1     | active, returned, invoiced_pending, closed                               | none                                                      |
 
-Implicit state machines that are next on the workflow-ization list (today they live as `set status = '...'` in scattered handlers):
+Implicit state machines that have not yet been lifted into deterministic workflows (they still live as `set status = '...'` in scattered handlers):
 
-- `crew_schedules` — `routes/schedules.ts:97`
-- `projects` closeout — `routes/projects.ts:270`
-- `rentals` — `routes/rentals.ts:32-40` (active / returned / invoiced_pending / closed)
 - `integration_connections` / QBO sync runs — implicit retry state
 - `blueprint_documents` revisions
