@@ -25,7 +25,14 @@ import { attachMutationTx } from './mutation-tx.js'
 import { createBlueprintStorage, readStorageEnv, type BlueprintStorage } from './storage.js'
 import { BlueprintUploadError } from './blueprint-upload.js'
 import { renderEstimatePdf } from './pdf.js'
-import { AuthConfigError, AuthError, loadAuthConfig, resolveIdentity, type Identity } from './auth.js'
+import {
+  AuthConfigError,
+  AuthError,
+  loadAuthConfig,
+  resolveActAsOverride,
+  resolveIdentity,
+  type Identity,
+} from './auth.js'
 import { attachPool, observeRequest } from './metrics.js'
 import { loadEmailConfig } from './email.js'
 import { applyRateLimit, createRateLimiter, isRateLimitExempt, loadRateLimitConfig } from './rate-limit.js'
@@ -310,6 +317,12 @@ function getHeaderValue(req: http.IncomingMessage | undefined, key: string): str
 }
 
 function getCurrentUserId(req?: http.IncomingMessage): string {
+  // Dev-only `x-sitelayer-act-as` override wins over every other path so
+  // the RoleSwitcher panel in `apps/web` (Clerk-not-configured mode) can
+  // flip identities without touching `ACTIVE_USER_ID`. `resolveActAsOverride`
+  // returns null in prod — never accept the header there.
+  const actAs = resolveActAsOverride(req, appConfig.tier, (msg, ctx) => logger.warn(ctx, msg))
+  if (actAs) return actAs
   const ctxUser = getRequestContext()?.actorUserId
   if (ctxUser) return ctxUser
   return getHeaderValue(req, 'x-sitelayer-user-id') ?? activeUserId

@@ -7,6 +7,38 @@ export type Identity = {
   role?: string
 }
 
+/**
+ * Dev-only identity override. When `x-sitelayer-act-as: <user_id>` is
+ * present on a request AND the running tier is not `prod`, the returned
+ * user id wins over every other resolution path (Clerk JWT,
+ * `x-sitelayer-user-id`, `ACTIVE_USER_ID`). This is the auth-bypass
+ * primitive the RoleSwitcher panel in `apps/web` writes to so QA can flip
+ * between admin/foreman/office/member/bookkeeper without standing up a
+ * full Clerk org.
+ *
+ * In prod the header is treated as a hostile signal: ignored entirely
+ * and logged via the supplied `warn` callback so operators can see if a
+ * misconfigured client is leaking dev headers into production traffic.
+ * Never returns a value when `tier === 'prod'`.
+ */
+export function resolveActAsOverride(
+  req: IncomingMessage | undefined,
+  tier: string,
+  warn: (msg: string, ctx: Record<string, unknown>) => void = defaultWarn,
+): string | null {
+  const headerValue = readHeader(req, 'x-sitelayer-act-as')
+  if (!headerValue) return null
+  if (tier === 'prod') {
+    warn('[auth] ignoring x-sitelayer-act-as in prod', { tier, header_value: headerValue })
+    return null
+  }
+  return headerValue
+}
+
+function defaultWarn(msg: string, ctx: Record<string, unknown>): void {
+  console.warn(msg, ctx)
+}
+
 export type AuthConfig = {
   clerkJwtKey?: string | null
   clerkIssuer?: string | null
@@ -126,8 +158,8 @@ function readBearer(req: IncomingMessage): string | null {
   return match ? match[1].trim() : null
 }
 
-function readHeader(req: IncomingMessage, key: string): string | null {
-  const value = req.headers[key]
+function readHeader(req: IncomingMessage | undefined, key: string): string | null {
+  const value = req?.headers[key]
   if (Array.isArray(value)) return value[0]?.trim() || null
   return typeof value === 'string' && value.trim() ? value.trim() : null
 }

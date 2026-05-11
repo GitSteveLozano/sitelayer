@@ -1,7 +1,7 @@
 import http from 'node:http'
 
 export const CORS_ALLOW_HEADERS =
-  'content-type, authorization, baggage, sentry-trace, traceparent, x-request-id, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id'
+  'content-type, authorization, baggage, sentry-trace, traceparent, x-request-id, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id, x-sitelayer-act-as'
 export const CORS_EXPOSE_HEADERS = 'x-request-id, etag'
 
 export class HttpError extends Error {

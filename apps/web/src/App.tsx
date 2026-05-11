@@ -4,12 +4,25 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SignedIn, SignedOut, SignIn, SignUp } from '@clerk/clerk-react'
 import { AuthProvider, isClerkConfigured } from '@/lib/auth'
 import { ColdStartSplash } from '@/components/shell/ColdStartSplash'
+import { RoleSwitcher } from '@/components/dev/RoleSwitcher'
 import {
   InstallPromptSheet,
   PostInstallSplash,
   SafariLandingScreen,
   useShouldShowSafariLanding,
 } from '@/screens/onboarding'
+
+/**
+ * The dev role-switcher is gated by two independent checks so it
+ * never escapes into a real deployment:
+ *   1. `!isClerkConfigured()` — once a Clerk publishable key is wired
+ *      the SPA is on real auth and the override loses authority.
+ *   2. `import.meta.env.MODE !== 'production'` — Vite drops this branch
+ *      from the production bundle entirely (dead-code elimination on
+ *      the `false` literal).
+ * The API enforces the matching guarantee on its side (auth.ts).
+ */
+const SHOW_ROLE_SWITCHER = !isClerkConfigured() && import.meta.env.MODE !== 'production'
 
 // Canonical mobile shell from PR #229. Promoted from /m/* to the app
 // root on 2026-05-05 (Option A) when the desktop AppShell was retired —
@@ -173,6 +186,7 @@ export default function App() {
               />
             </Routes>
           </Suspense>
+          {SHOW_ROLE_SWITCHER ? <RoleSwitcher /> : null}
         </BrowserRouter>
       </QueryClientProvider>
     </AuthProvider>
