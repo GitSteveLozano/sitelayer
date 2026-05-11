@@ -45,6 +45,7 @@ import { MobileEstimateReview } from './mobile/estimate-review.js'
 import { MobileEstimatePush } from './mobile/estimate-push.js'
 import { MobileSchedule } from './mobile/schedule.js'
 import { MobileTimeReview } from './mobile/time-review.js'
+import { MobileForemanTimeEntry } from './mobile/foreman-time-entry.js'
 import { WorkerToday } from './mobile/worker-today.js'
 import { WorkerClockinConfirm } from './mobile/worker-clockin.js'
 import { WorkerScope } from './mobile/worker-scope.js'
@@ -254,6 +255,7 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
             }
           />
           <Route path="time" element={<MobileTimeReview bootstrap={bootstrap} />} />
+          <Route path="time/new" element={<MobileForemanTimeEntry bootstrap={bootstrap} />} />
           <Route path="time/*" element={<MobileTimeReview bootstrap={bootstrap} />} />
           <Route path="scope/*" element={<WorkerScope bootstrap={bootstrap} />} />
           <Route path="hours" element={<WorkerHours bootstrap={bootstrap} />} />

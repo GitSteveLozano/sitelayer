@@ -157,6 +157,14 @@ export {
 export { divisionQueryKeys, fetchDivisions, useDivisions, type Division, type DivisionListResponse } from './divisions'
 
 export {
+  createLaborEntry,
+  laborEntryQueryKeys,
+  useCreateLaborEntry,
+  type LaborEntry,
+  type LaborEntryCreateRequest,
+} from './labor-entries'
+
+export {
   fetchServiceItems,
   serviceItemQueryKeys,
   useCreateServiceItem,

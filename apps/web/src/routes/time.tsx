@@ -1,7 +1,7 @@
 import { Route, Routes } from 'react-router-dom'
 import { useRole } from '@/lib/role'
 import { WorkerHoursScreen } from '@/screens/worker'
-import { ApprovalQueueScreen, ForemanBatchEntryScreen } from '@/screens/foreman'
+import { ApprovalQueueScreen, ForemanBatchEntryScreen, ForemanManualTimeEntryScreen } from '@/screens/foreman'
 import { OwnerLaborBurdenScreen, OwnerLiveVsBudgetScreen, OwnerTimeAnomaliesScreen } from '@/screens/owner'
 
 /**
@@ -31,6 +31,7 @@ export default function TimeRoute() {
   return (
     <Routes>
       <Route index element={<TimeIndex />} />
+      <Route path="new" element={<ForemanManualTimeEntryScreen />} />
       <Route path="anomalies" element={<OwnerTimeAnomaliesScreen />} />
       <Route path="burden" element={<OwnerLaborBurdenScreen />} />
       <Route path="vs" element={<OwnerLiveVsBudgetScreen />} />
