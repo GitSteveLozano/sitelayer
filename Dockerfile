@@ -76,6 +76,26 @@ COPY --from=builder /app/packages/queue/package.json /app/packages/queue/package
 COPY --from=builder /app/packages/queue/dist /app/packages/queue/dist
 COPY --from=builder /app/packages/workflows/package.json /app/packages/workflows/package.json
 COPY --from=builder /app/packages/workflows/dist /app/packages/workflows/dist
+# Phase B capture packages — apps/api imports @sitelayer/pipe-* via the
+# takeoff-drafts capture endpoint (Phase C.2). Each needs its
+# package.json (so the workspace symlink in node_modules resolves)
+# plus its built dist/. Missing these caused the production API
+# container to crash at module load with "Cannot find module
+# '@sitelayer/pipe-roomplan'" on the 585ec96 deploy (rolled back to
+# 429d9b6 was no longer in the registry).
+COPY --from=builder /app/packages/capture-schema/package.json /app/packages/capture-schema/package.json
+COPY --from=builder /app/packages/capture-schema/dist /app/packages/capture-schema/dist
+COPY --from=builder /app/packages/capture-catalog/package.json /app/packages/capture-catalog/package.json
+COPY --from=builder /app/packages/capture-catalog/dist /app/packages/capture-catalog/dist
+COPY --from=builder /app/packages/capture-catalog/src/seed.yaml /app/packages/capture-catalog/src/seed.yaml
+COPY --from=builder /app/packages/pipe-blueprint/package.json /app/packages/pipe-blueprint/package.json
+COPY --from=builder /app/packages/pipe-blueprint/dist /app/packages/pipe-blueprint/dist
+COPY --from=builder /app/packages/pipe-roomplan/package.json /app/packages/pipe-roomplan/package.json
+COPY --from=builder /app/packages/pipe-roomplan/dist /app/packages/pipe-roomplan/dist
+COPY --from=builder /app/packages/pipe-photogrammetry/package.json /app/packages/pipe-photogrammetry/package.json
+COPY --from=builder /app/packages/pipe-photogrammetry/dist /app/packages/pipe-photogrammetry/dist
+COPY --from=builder /app/packages/pipe-drone/package.json /app/packages/pipe-drone/package.json
+COPY --from=builder /app/packages/pipe-drone/dist /app/packages/pipe-drone/dist
 
 # Run as the unprivileged `node` user (uid 1000) baked into node:20-alpine.
 # The blueprint_storage volume mounts at /app/storage/blueprints — pre-create
