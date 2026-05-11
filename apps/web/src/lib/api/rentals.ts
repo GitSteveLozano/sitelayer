@@ -165,10 +165,27 @@ export interface UtilizationRow {
   idle_revenue_per_day_cents: number
 }
 
+export interface UtilizationTopItem {
+  inventory_item_id: string
+  code: string
+  name: string
+  on_rent_quantity: string
+  total_quantity: string
+  utilization_pct: number
+}
+
 export interface UtilizationTotals {
   total_idle_revenue_per_day_cents: number
   total_on_rent: number
   total_available: number
+  // Deployment rollup — owner persona "% of equipment currently deployed".
+  total_items: number
+  total_quantity_owned: number
+  on_rent_count: number
+  in_yard_count: number
+  out_for_service_count: number
+  utilization_pct: number
+  top_utilized: UtilizationTopItem[]
   generated_at: string
 }
 

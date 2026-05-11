@@ -489,6 +489,7 @@ export {
   type RentalTransferResponse,
   type ScanDispatchInput,
   type UtilizationRow,
+  type UtilizationTopItem,
   type UtilizationTotals,
 } from './rentals'
 

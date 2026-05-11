@@ -248,6 +248,41 @@ export async function listInventoryItems(companySlug: string): Promise<{ invento
   return apiGet<{ inventoryItems: InventoryItemRow[] }>('/api/inventory/items', companySlug)
 }
 
+/**
+ * Headline deployment rollup for the rentals dashboard. Mirrors the shape
+ * documented in apps/api/src/routes/inventory-utilization.ts so the owner
+ * persona can see what fraction of the fleet is currently deployed.
+ *
+ * Per-item `items[]` and the legacy idle-revenue totals are omitted from
+ * the typed surface here; mobile consumers only need the deployment
+ * headline. Pull the full payload through `useInventoryUtilization()` in
+ * apps/web/src/lib/api/rentals.ts when more detail is needed.
+ */
+export type InventoryUtilizationTopItem = {
+  inventory_item_id: string
+  code: string
+  name: string
+  on_rent_quantity: string
+  total_quantity: string
+  utilization_pct: number
+}
+
+export type InventoryUtilizationSummary = {
+  total_items: number
+  total_quantity_owned: number
+  on_rent_count: number
+  in_yard_count: number
+  out_for_service_count: number
+  utilization_pct: number
+  top_utilized: InventoryUtilizationTopItem[]
+  generated_at: string
+}
+
+export async function fetchInventoryUtilizationSummary(companySlug: string): Promise<InventoryUtilizationSummary> {
+  const body = await apiGet<{ totals: InventoryUtilizationSummary }>('/api/inventory/utilization', companySlug)
+  return body.totals
+}
+
 export type InventoryLocationRow = {
   id: string
   company_id: string
