@@ -31,6 +31,7 @@ export type EstimateShareCreateResponse = {
 const KEYS = {
   all: () => ['estimate-shares'] as const,
   byProject: (projectId: string) => [...KEYS.all(), 'project', projectId] as const,
+  companyTimeline: () => [...KEYS.all(), 'company-timeline'] as const,
 }
 
 export const estimateShareQueryKeys = KEYS
@@ -89,6 +90,46 @@ export function useRevokeEstimateShare(projectId: string) {
     mutationFn: (shareId) => revokeEstimateShare(shareId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: KEYS.byProject(projectId) })
+      qc.invalidateQueries({ queryKey: KEYS.companyTimeline() })
     },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Company-wide "estimates sent" timeline — one row per project (latest
+// share). Surfaced under the Projects tab as the destination for the
+// est-sent gap from the sitemap audit (Sitemap.html §02).
+// ---------------------------------------------------------------------------
+
+export type EstimateShareTimelineStatus = 'sent' | 'viewed' | 'accepted' | 'declined' | 'expired'
+
+export type EstimateShareTimelineRow = {
+  id: string
+  project_id: string
+  project_name: string
+  customer_name: string | null
+  bid_total: number
+  recipient_email: string | null
+  recipient_name: string | null
+  sent_at: string
+  expires_at: string
+  accepted_at: string | null
+  declined_at: string | null
+  decline_reason: string | null
+  viewed_at: string | null
+  view_count: number
+  signer_name: string | null
+  status: EstimateShareTimelineStatus
+}
+
+export function fetchEstimateShareTimeline(): Promise<{ shares: EstimateShareTimelineRow[] }> {
+  return request<{ shares: EstimateShareTimelineRow[] }>('/api/estimate-shares')
+}
+
+export function useEstimateShareTimeline(options?: Partial<UseQueryOptions<{ shares: EstimateShareTimelineRow[] }>>) {
+  return useQuery<{ shares: EstimateShareTimelineRow[] }>({
+    queryKey: KEYS.companyTimeline(),
+    queryFn: fetchEstimateShareTimeline,
+    ...options,
   })
 }
