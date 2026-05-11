@@ -24,6 +24,7 @@ import {
   type BlueprintMultipartResult,
 } from '../blueprint-upload.js'
 import type { BlueprintStorage } from '../storage.js'
+import { loadServiceItemCatalogIndex, rejectionMessageForCatalog } from '../catalog.js'
 
 export type TakeoffDraftRouteCtx = {
   pool: Pool
@@ -642,6 +643,13 @@ export async function handleTakeoffDraftRoutes(
       unit: string
       geometryJson: string
       notes: string | null
+      /** True when the service_item_code came from `service_item_code_overrides`
+       *  rather than from the AI-derived MasterFormat/UniFormat/OmniClass field.
+       *  Drives catalog enforcement below: operator-typed codes must match the
+       *  curated `service_item_divisions` catalog (same gate as takeoff-write.ts),
+       *  while AI proposals continue to bypass that gate so the review queue can
+       *  surface them. */
+      fromOverride: boolean
     }
     const prepared: Prepared[] = []
 
@@ -678,6 +686,7 @@ export async function handleTakeoffDraftRoutes(
         unit: unitRaw,
         geometryJson: JSON.stringify(geometry),
         notes: buildPromotedNotes(q),
+        fromOverride: override !== null,
       })
     }
 
@@ -687,6 +696,49 @@ export async function handleTakeoffDraftRoutes(
         skipped,
       })
       return true
+    }
+
+    // Catalog enforcement, override path only. AI-proposed `service_item_code`
+    // values (those derived from MasterFormat/UniFormat/OmniClass on the
+    // captured quantity) intentionally bypass `service_item_divisions` so
+    // pre-review records can be promoted into the operator's queue. When the
+    // operator types in an explicit override though, treat it like a direct
+    // takeoff write: it has to clear the same curated-catalog gate that
+    // `takeoff-write.ts` enforces, otherwise an out-of-band typo would land
+    // an uncurated code in `takeoff_measurements`.
+    const overrideRows = prepared.filter((p) => p.fromOverride)
+    if (overrideRows.length > 0) {
+      const projectDivisionResult = await ctx.pool.query<{ division_code: string | null }>(
+        'select division_code from projects where company_id = $1 and id = $2',
+        [ctx.company.id, projectId],
+      )
+      const projectDivisionCode = projectDivisionResult.rows[0]?.division_code ?? null
+      const catalogIndex = await loadServiceItemCatalogIndex(
+        ctx.pool,
+        ctx.company.id,
+        overrideRows.map((p) => p.serviceItemCode),
+      )
+      const rejected: Array<{ quantity_id: string; service_item_code: string; reason: string }> = []
+      for (const row of overrideRows) {
+        const status = catalogIndex.check(row.serviceItemCode, projectDivisionCode)
+        if (!status.ok) {
+          rejected.push({
+            quantity_id: row.quantityId,
+            service_item_code: row.serviceItemCode,
+            reason: rejectionMessageForCatalog(status.reason),
+          })
+        }
+      }
+      if (rejected.length > 0) {
+        ctx.sendJson(422, {
+          error: 'service_item_code_overrides include codes not in curated catalog',
+          rejected,
+          // Surface the offending codes as a flat list too so the UI can
+          // highlight inputs without re-walking the rejected[] objects.
+          rejected_codes: Array.from(new Set(rejected.map((r) => r.service_item_code))),
+        })
+        return true
+      }
     }
 
     const inserted = await withMutationTx(async (client) => {

@@ -27,6 +27,20 @@ class FakePool {
   syncEvents: Row[] = []
   outbox: Row[] = []
   auditEvents: Row[] = []
+  /** (company_id, project_id) -> division_code. Used by the catalog
+   *  enforcement path on overrides. */
+  projectDivisions = new Map<string, string | null>()
+  /** Curated (company_id, service_item_code, division_code) tuples backing
+   *  service_item_divisions for the override-catalog enforcement check. */
+  serviceItemDivisions: Array<{ company_id: string; service_item_code: string; division_code: string }> = []
+
+  setProjectDivision(companyId: string, projectId: string, divisionCode: string | null) {
+    this.projectDivisions.set(`${companyId}|${projectId}`, divisionCode)
+  }
+
+  seedCatalog(companyId: string, code: string, divisionCode: string) {
+    this.serviceItemDivisions.push({ company_id: companyId, service_item_code: code, division_code: divisionCode })
+  }
 
   attach() {
     attachMutationTx({
@@ -50,6 +64,23 @@ class FakePool {
     const sql = sqlRaw.trim()
     if (sql.startsWith('begin') || sql.startsWith('commit') || sql.startsWith('rollback')) {
       return { rows: [], rowCount: 0 }
+    }
+
+    // ---- projects: division_code lookup for catalog enforcement ----
+    if (/^select division_code from projects/i.test(sql)) {
+      const [companyId, projectId] = params as [string, string]
+      const key = `${companyId}|${projectId}`
+      const divisionCode = this.projectDivisions.has(key) ? (this.projectDivisions.get(key) ?? null) : null
+      return { rows: [{ division_code: divisionCode }], rowCount: 1 }
+    }
+
+    // ---- service_item_divisions: batch lookup via loadServiceItemCatalogIndex ----
+    if (/from service_item_divisions/i.test(sql)) {
+      const [companyId, codes] = params as [string, string[]]
+      const rows = this.serviceItemDivisions.filter(
+        (row) => row.company_id === companyId && codes.includes(row.service_item_code),
+      )
+      return { rows, rowCount: rows.length }
     }
 
     // ---- takeoff_drafts: ownership + stored-result lookup ----
@@ -301,13 +332,15 @@ describe('handleTakeoffDraftRoutes — POST /promote', () => {
   it('honors per-quantity service_item_code overrides', async () => {
     const pool = new FakePool()
     seedDraftWithResult(pool)
+    // Override codes must exist in the curated catalog now (matches takeoff-write).
+    pool.seedCatalog(COMPANY_ID, '09 29 00.10', 'D9')
     const { ctx, responses } = makeCtx(pool, {
       quantity_ids: ['q-floor'],
       service_item_code_overrides: { 'q-floor': '09 29 00.10' },
     })
 
     await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
-    expect(responses[0]?.status).toBe(201)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
     const body = responses[0]?.body as { measurements: Array<Record<string, unknown>> }
     expect(body.measurements[0]?.service_item_code).toBe('09 29 00.10')
   })
@@ -333,13 +366,14 @@ describe('handleTakeoffDraftRoutes — POST /promote', () => {
   it('skipped quantities can be salvaged via an override', async () => {
     const pool = new FakePool()
     seedDraftWithResult(pool)
+    pool.seedCatalog(COMPANY_ID, '01 00 00', 'D1')
     const { ctx, responses } = makeCtx(pool, {
       quantity_ids: ['q-orphan'],
       service_item_code_overrides: { 'q-orphan': '01 00 00' },
     })
 
     await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
-    expect(responses[0]?.status).toBe(201)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
     const body = responses[0]?.body as { promoted_count: number; skipped_count: number }
     expect(body.promoted_count).toBe(1)
     expect(body.skipped_count).toBe(0)
@@ -434,5 +468,61 @@ describe('handleTakeoffDraftRoutes — POST /promote', () => {
 
     await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
     expect(responses[0]?.status).toBe(400)
+  })
+
+  // ---- override-path curated catalog enforcement (PR follow-up) ------------
+  // The AI-derived quantity codes intentionally bypass the
+  // service_item_divisions gate so capture proposals can flow into the review
+  // queue. An explicit operator override is the inverse case: treat it as if
+  // it had been typed straight into takeoff-write.ts and reject anything that
+  // isn't in the curated catalog.
+  it('promotes when override matches a curated catalog code', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    pool.seedCatalog(COMPANY_ID, '09 29 00.10', 'D9')
+    const { ctx, responses } = makeCtx(pool, {
+      quantity_ids: ['q-floor'],
+      service_item_code_overrides: { 'q-floor': '09 29 00.10' },
+    })
+
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
+    const body = responses[0]?.body as {
+      measurements: Array<Record<string, unknown>>
+      promoted_count: number
+    }
+    expect(body.promoted_count).toBe(1)
+    expect(body.measurements[0]?.service_item_code).toBe('09 29 00.10')
+    expect(pool.measurements).toHaveLength(1)
+  })
+
+  it('returns 422 when override targets a code missing from the curated catalog', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    // Catalog deliberately empty — the override must be rejected before any
+    // insert lands in takeoff_measurements.
+    const { ctx, responses } = makeCtx(pool, {
+      quantity_ids: ['q-floor'],
+      service_item_code_overrides: { 'q-floor': 'BOGUS 99 99' },
+    })
+
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(responses[0]?.status).toBe(422)
+    const body = responses[0]?.body as {
+      error: string
+      rejected: Array<{ quantity_id: string; service_item_code: string; reason: string }>
+      rejected_codes: string[]
+    }
+    expect(body.error).toMatch(/curated catalog/i)
+    expect(body.rejected).toHaveLength(1)
+    expect(body.rejected[0]?.quantity_id).toBe('q-floor')
+    expect(body.rejected[0]?.service_item_code).toBe('BOGUS 99 99')
+    expect(body.rejected_codes).toEqual(['BOGUS 99 99'])
+    // No measurements written and no ledger entries fired — the rejection
+    // happens before the mutation tx.
+    expect(pool.measurements).toHaveLength(0)
+    expect(pool.syncEvents).toHaveLength(0)
+    expect(pool.outbox).toHaveLength(0)
+    expect(pool.auditEvents).toHaveLength(0)
   })
 })
