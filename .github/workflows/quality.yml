@@ -42,9 +42,14 @@ jobs:
 
       - run: npm run typecheck
 
-      - run: npm run test
-
+      # Build must come before test because the capture/pipe-* packages
+      # expose their entry points via `exports → ./dist/...`. Vitest
+      # tests in dependent workspaces (capture-catalog, pipe-blueprint,
+      # etc.) cannot resolve `@sitelayer/capture-schema` until those
+      # dist artifacts exist on disk.
       - run: npm run build
+
+      - run: npm run test
 
       - run: npm run web:bundle-budget
 
