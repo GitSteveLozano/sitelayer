@@ -16,7 +16,6 @@ import {
   droneConfidenceFromGsd,
   validateTakeoffResult,
   type DroneArtifact,
-  type GeoJSONPolygon,
   type TakeoffGeometry,
   type TakeoffProvenance,
   type TakeoffQuantity,
@@ -26,7 +25,7 @@ import {
 } from '@sitelayer/capture-schema'
 
 import { DroneSidecarSchema, type DroneSidecar } from './sidecar-types.js'
-import { segmentMultiplePlanes, planeAreaFromInliers, type Plane, type Vec3 } from './ransac.js'
+import { segmentMultiplePlanes, planeAreaFromInliers, type Vec3 } from './ransac.js'
 import {
   nodeOdmCommitTask,
   nodeOdmCreateTask,

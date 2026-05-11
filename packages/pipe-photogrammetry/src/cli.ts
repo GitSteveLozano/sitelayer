@@ -44,10 +44,9 @@ program
     const out = JSON.stringify(takeoff, null, 2)
     if (opts.out) {
       await writeFile(resolveUserPath(opts.out), out)
-      // eslint-disable-next-line no-console
+
       console.error(`wrote ${opts.out}`)
     } else {
-      // eslint-disable-next-line no-console
       console.log(out)
     }
   })
@@ -61,7 +60,6 @@ program
   .action(async (videoPath: string, opts: { projectId: string; title?: string }) => {
     const apiKey = process.env.LUMA_API_KEY
     if (!apiKey) {
-      // eslint-disable-next-line no-console
       console.error('LUMA_API_KEY not set')
       process.exit(2)
     }
@@ -72,7 +70,7 @@ program
     }
     if (opts.title !== undefined) submitOpts.title = opts.title
     const result = await submitPhotogrammetryJob(submitOpts)
-    // eslint-disable-next-line no-console
+
     console.log(JSON.stringify(result, null, 2))
   })
 
@@ -85,7 +83,6 @@ program
   .action(async (jobId: string, opts: { projectId: string; out?: string }) => {
     const apiKey = process.env.LUMA_API_KEY
     if (!apiKey) {
-      // eslint-disable-next-line no-console
       console.error('LUMA_API_KEY not set')
       process.exit(2)
     }
@@ -95,16 +92,14 @@ program
     const out = JSON.stringify(takeoff, null, 2)
     if (opts.out) {
       await writeFile(resolveUserPath(opts.out), out)
-      // eslint-disable-next-line no-console
+
       console.error(`wrote ${opts.out}`)
     } else {
-      // eslint-disable-next-line no-console
       console.log(out)
     }
   })
 
 program.parseAsync(process.argv).catch((err) => {
-  // eslint-disable-next-line no-console
   console.error(err instanceof Error ? err.message : String(err))
   process.exit(1)
 })
