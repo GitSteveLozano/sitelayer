@@ -228,6 +228,24 @@ export {
 } from './billing-runs'
 
 export {
+  createLaborPayrollRun,
+  fetchLaborPayrollRun,
+  fetchLaborPayrollRuns,
+  laborPayrollRunQueryKeys,
+  previewLaborPayrollCoverage,
+  useDispatchLaborPayrollRunEvent,
+  useLaborPayrollRun,
+  useLaborPayrollRuns,
+  type LaborPayrollHumanEvent,
+  type LaborPayrollPreviewResponse,
+  type LaborPayrollRunListParams,
+  type LaborPayrollRunListResponse,
+  type LaborPayrollRunRow,
+  type LaborPayrollSnapshot,
+  type LaborPayrollState,
+} from './labor-payroll-runs'
+
+export {
   fetchQboAuthUrl,
   fetchQboConnection,
   fetchQboMappings,
