@@ -4,6 +4,7 @@ import {
   enqueueNotificationRow,
   listCompanyAdminIds,
   listIssueRecipientUserIds,
+  listOperatorRecipientUserIds,
   type NotificationQueryClient,
 } from './notifications.js'
 
@@ -107,5 +108,17 @@ describe('listIssueRecipientUserIds', () => {
     expect(ids).toEqual(['user_foreman', 'user_admin', 'user_office'])
     const [sqlArg] = querySpy.mock.calls[0]!
     expect(sqlArg).toMatch(/role in \('foreman', 'admin', 'office'\)/)
+  })
+})
+
+describe('listOperatorRecipientUserIds', () => {
+  it('returns clerk_user_ids for admin/office roles only', async () => {
+    const client = stubClient([{ clerk_user_id: 'user_admin' }, { clerk_user_id: 'user_office' }])
+    const querySpy = client.query as unknown as ReturnType<typeof vi.fn>
+    const ids = await listOperatorRecipientUserIds(client, 'company-1')
+    expect(ids).toEqual(['user_admin', 'user_office'])
+    const [sqlArg] = querySpy.mock.calls[0]!
+    expect(sqlArg).toMatch(/role in \('admin', 'office'\)/)
+    expect(sqlArg).not.toMatch(/foreman/)
   })
 })

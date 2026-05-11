@@ -3,7 +3,8 @@ import type { Pool, PoolClient } from 'pg'
 import { createLogger } from '@sitelayer/logger'
 import type { ActiveCompany } from '../auth-types.js'
 import { generateShareToken, verifyShareToken, type VerifyShareTokenResult } from '../estimate-share-token.js'
-import { recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
+import { enqueueNotification, recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
+import { listOperatorRecipientUserIds } from '../notifications.js'
 
 const logger = createLogger('api:estimate-shares')
 
@@ -393,18 +394,37 @@ export async function handlePublicEstimateShareRoutes(
     const { row } = lookup
     // Lazy first-view stamp + view_count bump. Don't bump for terminal
     // states — once a customer has accepted/declined the link is mostly
-    // a record, not an active funnel step.
+    // a record, not an active funnel step. The CTE captures the previous
+    // viewed_at atomically so we can fan a "first view" operator
+    // notification exactly once even under concurrent portal hits — the
+    // first writer sees prev_viewed_at = NULL, every racing writer sees
+    // the timestamp the first writer just stamped.
+    let firstView = false
     if (!row.accepted_at && !row.declined_at) {
-      await ctx.pool.query(
-        `update estimate_share_links
+      const updateResult = await ctx.pool.query<{ prev_viewed_at: string | null }>(
+        `with prev as (
+           select viewed_at as prev_viewed_at
+           from estimate_share_links
+           where id = $1
+           for update
+         )
+         update estimate_share_links
            set viewed_at = coalesce(viewed_at, now()),
                view_count = view_count + 1,
                updated_at = now()
-         where id = $1`,
+         where id = $1
+         returning (select prev_viewed_at from prev) as prev_viewed_at`,
         [row.id],
       )
+      firstView = updateResult.rows[0]?.prev_viewed_at == null
     }
     const meta = await loadProjectAndCompanyForShare(ctx.pool, row)
+    if (firstView) {
+      // Best-effort operator notification — failures are swallowed by
+      // enqueueNotification (logged via mutation-tx) so the customer's
+      // portal load is never blocked by a notification hiccup.
+      await fanOutFirstViewNotification(ctx.pool, row, meta).catch(() => undefined)
+    }
     ctx.sendJson(200, buildPortalView(row, meta))
     return true
   }
@@ -738,9 +758,13 @@ async function loadShareByTokenForUpdate(
 async function loadProjectAndCompanyForShare(
   pool: Pool,
   row: EstimateShareRow,
-): Promise<{ project_name: string; company_name: string }> {
-  const result = await pool.query<{ project_name: string; company_name: string }>(
-    `select p.name as project_name, c.name as company_name
+): Promise<{ project_name: string; company_name: string; customer_name: string | null }> {
+  const result = await pool.query<{
+    project_name: string
+    company_name: string
+    customer_name: string | null
+  }>(
+    `select p.name as project_name, c.name as company_name, p.customer_name
      from projects p
      join companies c on c.id = p.company_id
      where p.company_id = $1 and p.id = $2
@@ -751,6 +775,62 @@ async function loadProjectAndCompanyForShare(
   return {
     project_name: out?.project_name ?? 'Estimate',
     company_name: out?.company_name ?? 'Sitelayer',
+    customer_name: out?.customer_name ?? null,
+  }
+}
+
+/**
+ * Best-effort operator notification fan-out triggered when a customer
+ * opens an estimate share link for the FIRST time. Subsequent views
+ * silently update view_count + viewed_at without re-notifying — the
+ * caller establishes "first view" via the prev_viewed_at CTE so this
+ * helper just delivers.
+ *
+ * We don't await individual enqueue failures because the parent
+ * function already wraps the fan-out in a `.catch(() => undefined)`:
+ * the share view succeeds even if every notification fails. Per-row
+ * errors are logged through `enqueueNotification` (mutation-tx).
+ */
+async function fanOutFirstViewNotification(
+  pool: Pool,
+  row: EstimateShareRow,
+  meta: { project_name: string; customer_name: string | null },
+): Promise<void> {
+  const customerLabel =
+    row.recipient_name?.trim() || meta.customer_name?.trim() || row.recipient_email?.trim() || 'A customer'
+  const subject = 'Customer viewed estimate'
+  const bodyText = `${customerLabel} opened the estimate for ${meta.project_name}`
+  const payload = {
+    estimate_share_id: row.id,
+    project_id: row.project_id,
+    project_name: meta.project_name,
+    customer_name: meta.customer_name,
+    recipient_email: row.recipient_email,
+    recipient_name: row.recipient_name,
+    link_target: `/projects/${row.project_id}?tab=estimate`,
+  }
+  const recipients = await listOperatorRecipientUserIds(pool, row.company_id)
+  if (recipients.length === 0) {
+    // Broadcast row — worker logs via the console provider. Keeps the
+    // signal visible even on a company that hasn't seated admin/office.
+    await enqueueNotification({
+      companyId: row.company_id,
+      kind: 'estimate_share_viewed',
+      subject,
+      text: bodyText,
+      payload,
+    })
+    return
+  }
+  for (const recipientUserId of recipients) {
+    await enqueueNotification({
+      companyId: row.company_id,
+      recipientUserId,
+      kind: 'estimate_share_viewed',
+      subject,
+      text: bodyText,
+      payload,
+    })
   }
 }
 
