@@ -424,7 +424,7 @@ function minConfidence(surfaces: LabeledSurface[]): number {
   return m
 }
 
-function roomLabel(room: { id: string; label?: string }, what: string): string {
+function roomLabel(room: { id: string; label?: string | undefined }, what: string): string {
   const name = room.label ?? room.id
   return `${name} — ${what}`
 }
@@ -438,7 +438,7 @@ function inferMeshFormat(url: string): 'obj' | 'glb' | 'usdz' {
 
 function buildGeometry(
   labeled: LabeledMesh,
-  labeledRooms: Map<string, { label?: string; ceilingHeightM?: number }>,
+  labeledRooms: Map<string, { label?: string | undefined; ceilingHeightM?: number | undefined }>,
 ): TakeoffResult['geometry'] {
   const rooms = labeled.rooms.map((r) => ({
     id: r.id,

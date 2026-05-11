@@ -64,6 +64,20 @@ const round = (x: number, decimals = 4) => {
   return Math.round(x * f) / f
 }
 
+/**
+ * Drop keys whose value is undefined so exactOptionalPropertyTypes consumers
+ * accept the object. The return type strips `undefined` from each value so the
+ * resulting object is assignable to a target with `prop?: T` (which under
+ * exactOptionalPropertyTypes does not accept explicit `undefined`).
+ */
+function compact<T extends Record<string, unknown>>(obj: T): { [K in keyof T]: Exclude<T[K], undefined> } {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v
+  }
+  return out as { [K in keyof T]: Exclude<T[K], undefined> }
+}
+
 // ─── Per-room arithmetic (kept in meters internally, emit imperial) ────────
 
 interface WallComputed {
@@ -226,7 +240,7 @@ function computeRoom(room: CapturedRoom): RoomComputed {
 
   const { label, category } = pickSectionLabel(room.sections)
 
-  return {
+  return compact({
     id: room.identifier ?? randomUUID(),
     label: label ?? category,
     story: room.story,
@@ -237,7 +251,7 @@ function computeRoom(room: CapturedRoom): RoomComputed {
     fixtures,
     floorAreaSource: floorInfo.source,
     floorConfidence: floorInfo.confidence,
-  }
+  })
 }
 
 // ─── MasterFormat / fixture mapping ─────────────────────────────────────────
@@ -290,7 +304,7 @@ function emitRoomQuantities(
   const geomSurfaces: NonNullable<TakeoffGeometry['surfaces']> = []
   const geomObjects: NonNullable<TakeoffGeometry['objects']> = []
 
-  const roomCommon: ProvenanceCommon = { capturedRoomId, deviceModel }
+  const roomCommon: ProvenanceCommon = compact({ capturedRoomId, deviceModel })
 
   // ── Geometry: room
   geomRooms.push({
