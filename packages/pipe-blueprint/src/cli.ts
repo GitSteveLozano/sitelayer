@@ -13,6 +13,20 @@ import { writeFile } from 'node:fs/promises'
 import { Command } from 'commander'
 import { buildBlueprintTakeoff, NoDrawingsFoundError } from './extract.js'
 
+/**
+ * Drop keys whose value is undefined so exactOptionalPropertyTypes consumers
+ * accept the object. The return type strips `undefined` from each value so the
+ * resulting object is assignable to a target with `prop?: T` (which under
+ * exactOptionalPropertyTypes does not accept explicit `undefined`).
+ */
+function compact<T extends Record<string, unknown>>(obj: T): { [K in keyof T]: Exclude<T[K], undefined> } {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v
+  }
+  return out as { [K in keyof T]: Exclude<T[K], undefined> }
+}
+
 interface CliOpts {
   knownDim?: string
   wallHeight?: string
@@ -56,15 +70,17 @@ async function main(): Promise<void> {
       }
 
       try {
-        const takeoff = await buildBlueprintTakeoff({
-          pdfPath,
-          projectId: opts.projectId,
-          knownDimensionFt,
-          wallHeightFt,
-          assumedDpi,
-          model: opts.model,
-          dryRun: opts.dryRun,
-        })
+        const takeoff = await buildBlueprintTakeoff(
+          compact({
+            pdfPath,
+            projectId: opts.projectId,
+            knownDimensionFt,
+            wallHeightFt,
+            assumedDpi,
+            model: opts.model,
+            dryRun: opts.dryRun,
+          }),
+        )
         const json = JSON.stringify(takeoff, null, 2)
         if (opts.out) {
           await writeFile(opts.out, json + '\n', 'utf8')

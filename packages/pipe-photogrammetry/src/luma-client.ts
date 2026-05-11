@@ -108,7 +108,10 @@ function pickArtifactUrls(artifacts: LumaCaptureArtifact[] | undefined): {
     if (!previewImageUrl && previewTypes.has(t)) previewImageUrl = a.url
   }
   // Fallback: if no preview but the mesh is a .glb/.usdz/.obj URL, leave it.
-  return { meshUrl, previewImageUrl }
+  const out: { meshUrl?: string; previewImageUrl?: string } = {}
+  if (meshUrl !== undefined) out.meshUrl = meshUrl
+  if (previewImageUrl !== undefined) out.previewImageUrl = previewImageUrl
+  return out
 }
 
 async function defaultFileLoader(videoPath: string): Promise<Blob> {

@@ -12,6 +12,20 @@ import { Command } from 'commander'
 import { parseCapturedRoom } from './index.js'
 
 /**
+ * Drop keys whose value is undefined so exactOptionalPropertyTypes consumers
+ * accept the object. The return type strips `undefined` from each value so the
+ * resulting object is assignable to a target with `prop?: T` (which under
+ * exactOptionalPropertyTypes does not accept explicit `undefined`).
+ */
+function compact<T extends Record<string, unknown>>(obj: T): { [K in keyof T]: Exclude<T[K], undefined> } {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(obj)) {
+    if (v !== undefined) out[k] = v
+  }
+  return out as { [K in keyof T]: Exclude<T[K], undefined> }
+}
+
+/**
  * Resolve the input path. Tries (in order):
  *   1. Absolute path (if provided)
  *   2. Relative to current working directory
@@ -80,13 +94,15 @@ program
         process.exit(2)
       }
 
-      const result = parseCapturedRoom({
-        capturedRoomJson: json,
-        projectId: opts.projectId,
-        deviceModel: opts.device,
-        capturedAt: opts.capturedAt,
-        capturedRoomJsonUri: opts.capturedRoomUri ?? `file://${absInput}`,
-      })
+      const result = parseCapturedRoom(
+        compact({
+          capturedRoomJson: json,
+          projectId: opts.projectId,
+          deviceModel: opts.device,
+          capturedAt: opts.capturedAt,
+          capturedRoomJsonUri: opts.capturedRoomUri ?? `file://${absInput}`,
+        }),
+      )
 
       const out = JSON.stringify(result, null, 2)
       if (opts.out) {

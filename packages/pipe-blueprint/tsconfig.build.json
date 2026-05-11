@@ -8,8 +8,7 @@
     "declarationMap": true,
     "sourceMap": true,
     "paths": {},
-    "types": ["node"],
-    "exactOptionalPropertyTypes": false
+    "types": ["node"]
   },
   "exclude": ["src/**/*.test.ts", "test/**/*"]
 }
