@@ -1,0 +1,438 @@
+import { describe, expect, it } from 'vitest'
+import type { Pool } from 'pg'
+import type pino from 'pino'
+import { attachMutationTx } from '../mutation-tx.js'
+import { handleTakeoffDraftRoutes, type TakeoffDraftRouteCtx } from './takeoff-drafts.js'
+
+// ---------------------------------------------------------------------------
+// In-memory pg double — covers what the new
+// POST /api/projects/:id/takeoff-drafts/:draftId/promote route reads and
+// writes. Mirrors the simple stubs other route tests (daily-logs,
+// rental-requests) use rather than spinning the dockerised Postgres for a
+// pure unit-level path.
+//
+// Scope: the promote handler issues exactly one `select` against
+// takeoff_drafts (gated by company_id + project_id + soft-delete), an
+// `insert into takeoff_measurements` per promoted quantity, then the
+// recordMutationLedger fan-out (sync_events / mutation_outbox / audit_events).
+// Everything else (capture POST, draft CRUD) is exercised by integration
+// tests against the real DB.
+// ---------------------------------------------------------------------------
+
+type Row = Record<string, unknown>
+
+class FakePool {
+  drafts: Row[] = []
+  measurements: Row[] = []
+  syncEvents: Row[] = []
+  outbox: Row[] = []
+  auditEvents: Row[] = []
+
+  attach() {
+    attachMutationTx({
+      pool: this as unknown as Pool,
+      logger: { warn: () => undefined, info: () => undefined, error: () => undefined } as unknown as pino.Logger,
+    })
+  }
+
+  async query(sql: string, params: unknown[] = []) {
+    return this.dispatch(sql, params)
+  }
+
+  async connect() {
+    return {
+      query: (sql: string, params: unknown[] = []) => this.dispatch(sql, params),
+      release: () => undefined,
+    }
+  }
+
+  private dispatch(sqlRaw: string, params: unknown[]) {
+    const sql = sqlRaw.trim()
+    if (sql.startsWith('begin') || sql.startsWith('commit') || sql.startsWith('rollback')) {
+      return { rows: [], rowCount: 0 }
+    }
+
+    // ---- takeoff_drafts: ownership + stored-result lookup ----
+    if (/^select id, takeoff_result_json, source[\s\S]+from takeoff_drafts/i.test(sql)) {
+      const [companyId, projectId, draftId] = params as [string, string, string]
+      const row = this.drafts.find(
+        (d) => d.company_id === companyId && d.project_id === projectId && d.id === draftId && d.deleted_at === null,
+      )
+      return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
+    }
+
+    // ---- takeoff_measurements: insert (promote path) ----
+    if (/^insert into takeoff_measurements/i.test(sql)) {
+      const [companyId, projectId, serviceItemCode, quantity, unit, notes, geometry, draftId] = params as [
+        string,
+        string,
+        string,
+        number,
+        string,
+        string | null,
+        string,
+        string,
+      ]
+      const row: Row = {
+        id: `m-${this.measurements.length + 1}`,
+        project_id: projectId,
+        blueprint_document_id: null,
+        service_item_code: serviceItemCode,
+        quantity: String(quantity),
+        unit,
+        notes,
+        geometry: JSON.parse(geometry),
+        division_code: null,
+        elevation: null,
+        image_thumbnail: null,
+        draft_id: draftId,
+        version: 1,
+        deleted_at: null,
+        created_at: '2026-05-10T00:00:00.000Z',
+        company_id: companyId,
+      }
+      this.measurements.push(row)
+      return { rows: [row], rowCount: 1 }
+    }
+
+    // ---- ledger fan-out (recordMutationLedger) ----
+    if (/^\s*insert into sync_events/i.test(sql)) {
+      this.syncEvents.push({ params })
+      return { rows: [], rowCount: 1 }
+    }
+    if (/^\s*insert into mutation_outbox/i.test(sql)) {
+      this.outbox.push({ params })
+      return { rows: [], rowCount: 1 }
+    }
+    if (/^\s*insert into audit_events/i.test(sql)) {
+      this.auditEvents.push({ params })
+      return { rows: [], rowCount: 1 }
+    }
+
+    throw new Error(`unexpected SQL in fake pool: ${sql.slice(0, 200)}`)
+  }
+}
+
+const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
+const OTHER_COMPANY_ID = '22222222-2222-4222-8222-222222222222'
+const PROJECT_ID = '33333333-3333-4333-8333-333333333333'
+const DRAFT_ID = '44444444-4444-4444-8444-444444444444'
+
+type Role = 'admin' | 'foreman' | 'office' | 'member'
+
+function makeCtx(
+  pool: FakePool,
+  body: Record<string, unknown> = {},
+  role: Role = 'foreman',
+  currentUserId = 'user-1',
+): { ctx: TakeoffDraftRouteCtx; responses: Array<{ status: number; body: unknown }> } {
+  pool.attach()
+  const responses: Array<{ status: number; body: unknown }> = []
+  return {
+    responses,
+    ctx: {
+      pool: pool as unknown as Pool,
+      company: { id: COMPANY_ID, slug: 'co', name: 'Co', created_at: '', role },
+      currentUserId,
+      requireRole: (allowed) => {
+        if (allowed.includes(role)) return true
+        responses.push({ status: 403, body: { error: 'forbidden' } })
+        return false
+      },
+      readBody: async () => body,
+      sendJson: (status, response) => {
+        responses.push({ status, body: response })
+      },
+    },
+  }
+}
+
+function seedDraftWithResult(
+  pool: FakePool,
+  overrides: Partial<Row> = {},
+  takeoffResultOverrides: Record<string, unknown> = {},
+) {
+  // Minimal shape — only the fields the promote handler actually reads.
+  // (The capture path validates the full TakeoffResult schema before we
+  // reach this row, so we lean on that contract.)
+  const takeoffResultJson = {
+    schemaVersion: '1.0.0',
+    takeoffId: '99999999-9999-4999-8999-999999999999',
+    projectId: PROJECT_ID,
+    capturedAt: '2026-05-10T00:00:00.000Z',
+    producedAt: '2026-05-10T00:00:00.000Z',
+    source: 'blueprint.vision',
+    pipelineVersion: '0.1.0',
+    units: 'imperial',
+    quantities: [
+      {
+        id: 'q-floor',
+        description: 'Gypsum board ceiling',
+        masterformatCode: '09 29 00',
+        unit: 'sqft',
+        value: 240.5,
+        confidence: 0.82,
+        provenance: {
+          kind: 'blueprint',
+          pdfSha256: 'a'.repeat(64),
+          pageIndex: 0,
+          bbox: [0, 0, 10, 10],
+          detector: 'd',
+          detectorVersion: '1',
+        },
+        geometryRefs: ['surface-1'],
+      },
+      {
+        id: 'q-door',
+        description: 'Wood door (generic)',
+        masterformatCode: '08 14 00',
+        unit: 'ea',
+        value: 3,
+        confidence: 0.65,
+        provenance: {
+          kind: 'blueprint',
+          pdfSha256: 'b'.repeat(64),
+          pageIndex: 0,
+          bbox: [0, 0, 10, 10],
+          detector: 'd',
+          detectorVersion: '1',
+        },
+      },
+      // No masterformat/uniformat/omniclass — must be skipped without override.
+      {
+        id: 'q-orphan',
+        description: 'Unclassified',
+        unit: 'sqft',
+        value: 12,
+        confidence: 0.55,
+        provenance: { kind: 'manual', userId: 'u' },
+      },
+    ],
+    geometry: {
+      surfaces: [
+        {
+          id: 'surface-1',
+          kind: 'floor',
+          polygon: [
+            [0, 0],
+            [10, 0],
+            [10, 10],
+            [0, 10],
+          ],
+        },
+      ],
+    },
+    ...takeoffResultOverrides,
+  }
+  pool.drafts.push({
+    id: DRAFT_ID,
+    company_id: COMPANY_ID,
+    project_id: PROJECT_ID,
+    name: 'Capture #1',
+    type: 'measurement',
+    status: 'active',
+    source: 'blueprint_vision',
+    review_required: true,
+    pipeline_version: '0.1.0',
+    takeoff_result_json: takeoffResultJson,
+    version: 1,
+    deleted_at: null,
+    created_at: '2026-05-09T08:00:00.000Z',
+    updated_at: '2026-05-09T08:00:00.000Z',
+    ...overrides,
+  })
+}
+
+function buildUrl(path: string): URL {
+  return new URL(`http://localhost${path}`)
+}
+
+const PROMOTE_PATH = `/api/projects/${PROJECT_ID}/takeoff-drafts/${DRAFT_ID}/promote`
+
+describe('handleTakeoffDraftRoutes — POST /promote', () => {
+  it('promotes selected quantities into takeoff_measurements rows with derived service_item_code', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    const { ctx, responses } = makeCtx(pool, { quantity_ids: ['q-floor', 'q-door'] })
+
+    const handled = await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(handled).toBe(true)
+    expect(responses).toHaveLength(1)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
+
+    const body = responses[0]?.body as {
+      measurements: Array<Record<string, unknown>>
+      promoted_count: number
+      skipped_count: number
+      skipped: Array<{ quantity_id: string; reason: string }>
+    }
+    expect(body.promoted_count).toBe(2)
+    expect(body.skipped_count).toBe(0)
+    expect(body.measurements).toHaveLength(2)
+    expect(body.measurements[0]?.service_item_code).toBe('09 29 00')
+    expect(body.measurements[0]?.quantity).toBe('240.5')
+    expect(body.measurements[0]?.unit).toBe('sqft')
+    expect(body.measurements[0]?.draft_id).toBe(DRAFT_ID)
+    // Geometry resolves through the captured surface so the canvas can
+    // render the promoted polygon without a follow-up fetch.
+    const firstGeo = body.measurements[0]?.geometry as Record<string, unknown>
+    expect(firstGeo.kind).toBe('capture')
+    expect(firstGeo.surfaceId).toBe('surface-1')
+    expect(firstGeo.polygon).toEqual([
+      [0, 0],
+      [10, 0],
+      [10, 10],
+      [0, 10],
+    ])
+    // Notes embed a provenance trail.
+    expect(String(body.measurements[0]?.notes)).toMatch(/promoted from blueprint/i)
+    expect(String(body.measurements[0]?.notes)).toMatch(/confidence=0\.82/)
+    expect(body.measurements[1]?.service_item_code).toBe('08 14 00')
+
+    // takeoff_result_json on the draft is unchanged — promotion is additive.
+    expect(pool.drafts[0]?.takeoff_result_json).toBeTruthy()
+    expect(pool.measurements).toHaveLength(2)
+    // Mutation ledger fans out once per promoted measurement.
+    expect(pool.syncEvents).toHaveLength(2)
+    expect(pool.outbox).toHaveLength(2)
+    expect(pool.auditEvents).toHaveLength(2)
+  })
+
+  it('honors per-quantity service_item_code overrides', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    const { ctx, responses } = makeCtx(pool, {
+      quantity_ids: ['q-floor'],
+      service_item_code_overrides: { 'q-floor': '09 29 00.10' },
+    })
+
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(responses[0]?.status).toBe(201)
+    const body = responses[0]?.body as { measurements: Array<Record<string, unknown>> }
+    expect(body.measurements[0]?.service_item_code).toBe('09 29 00.10')
+  })
+
+  it('skips quantities with no derivable service_item_code and reports them', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    const { ctx, responses } = makeCtx(pool, { quantity_ids: ['q-floor', 'q-orphan'] })
+
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(responses[0]?.status).toBe(201)
+    const body = responses[0]?.body as {
+      promoted_count: number
+      skipped_count: number
+      skipped: Array<{ quantity_id: string; reason: string }>
+    }
+    expect(body.promoted_count).toBe(1)
+    expect(body.skipped_count).toBe(1)
+    expect(body.skipped[0]?.quantity_id).toBe('q-orphan')
+    expect(body.skipped[0]?.reason).toMatch(/no service_item_code/i)
+  })
+
+  it('skipped quantities can be salvaged via an override', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    const { ctx, responses } = makeCtx(pool, {
+      quantity_ids: ['q-orphan'],
+      service_item_code_overrides: { 'q-orphan': '01 00 00' },
+    })
+
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(responses[0]?.status).toBe(201)
+    const body = responses[0]?.body as { promoted_count: number; skipped_count: number }
+    expect(body.promoted_count).toBe(1)
+    expect(body.skipped_count).toBe(0)
+  })
+
+  it('returns 400 when quantity_ids is missing or empty', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    const { ctx, responses } = makeCtx(pool, {})
+
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(responses[0]?.status).toBe(400)
+    expect((responses[0]?.body as { error: string }).error).toMatch(/quantity_ids/i)
+  })
+
+  it('returns 400 when quantity_ids contains only blank strings', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    const { ctx, responses } = makeCtx(pool, { quantity_ids: ['', '   '] })
+
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(responses[0]?.status).toBe(400)
+  })
+
+  it('returns 400 when project id is not a uuid', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    const { ctx, responses } = makeCtx(pool, { quantity_ids: ['q-floor'] })
+
+    await handleTakeoffDraftRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/projects/not-a-uuid/takeoff-drafts/${DRAFT_ID}/promote`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(400)
+  })
+
+  it('returns 404 when draft is missing or hidden by tenant isolation', async () => {
+    const pool = new FakePool()
+    // Seed under a *different* company — same project/draft ids must
+    // resolve to 404 for our requester.
+    seedDraftWithResult(pool, { company_id: OTHER_COMPANY_ID })
+    const { ctx, responses } = makeCtx(pool, { quantity_ids: ['q-floor'] })
+
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(responses[0]?.status).toBe(404)
+    expect((responses[0]?.body as { error: string }).error).toMatch(/draft not found/i)
+    expect(pool.measurements).toHaveLength(0)
+  })
+
+  it('returns 404 when the draft exists but has no captured TakeoffResult', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool, { takeoff_result_json: null })
+    const { ctx, responses } = makeCtx(pool, { quantity_ids: ['q-floor'] })
+
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(responses[0]?.status).toBe(404)
+    expect((responses[0]?.body as { error: string }).error).toMatch(/no captured/i)
+    expect(pool.measurements).toHaveLength(0)
+  })
+
+  it('returns 422 when every selected quantity has to be skipped', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    const { ctx, responses } = makeCtx(pool, { quantity_ids: ['q-orphan', 'q-missing'] })
+
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(responses[0]?.status).toBe(422)
+    const body = responses[0]?.body as { skipped: Array<{ quantity_id: string; reason: string }> }
+    expect(body.skipped.map((s) => s.quantity_id).sort()).toEqual(['q-missing', 'q-orphan'])
+    // No measurements written because no row prepared cleanly.
+    expect(pool.measurements).toHaveLength(0)
+  })
+
+  it('forbids requesters whose role is not admin/foreman/office', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    const { ctx, responses } = makeCtx(pool, { quantity_ids: ['q-floor'] }, 'member')
+
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(responses[0]?.status).toBe(403)
+    expect(pool.measurements).toHaveLength(0)
+  })
+
+  it('rejects malformed service_item_code_overrides (non-object)', async () => {
+    const pool = new FakePool()
+    seedDraftWithResult(pool)
+    const { ctx, responses } = makeCtx(pool, {
+      quantity_ids: ['q-floor'],
+      service_item_code_overrides: ['09 29 00'],
+    })
+
+    await handleTakeoffDraftRoutes({ method: 'POST' } as never, buildUrl(PROMOTE_PATH), ctx)
+    expect(responses[0]?.status).toBe(400)
+  })
+})

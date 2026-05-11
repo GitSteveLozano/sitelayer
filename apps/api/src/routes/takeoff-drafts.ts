@@ -29,6 +29,128 @@ export type TakeoffDraftRouteCtx = {
 const ALLOWED_STATUS = new Set(['active', 'archived'])
 const ALLOWED_CAPTURE_KINDS = new Set(['roomplan', 'photogrammetry', 'drone', 'blueprint_vision'])
 const RETURNING_COLUMNS = `id, company_id, project_id, name, type, status, source, takeoff_result_blob_uri, review_required, pipeline_version, version, deleted_at, created_at, updated_at`
+const PROMOTED_MEASUREMENT_COLUMNS = `id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at`
+
+/**
+ * Resolve the canonical `service_item_code` for a captured `TakeoffQuantity`.
+ * The capture schema emits MasterFormat / UniFormat / OmniClass codes (any
+ * one of which is required by the zod refine); sitelayer's `service_items`
+ * catalog is keyed on MasterFormat-shaped codes, so we prefer that and fall
+ * back to the others rather than silently dropping the quantity. Returns
+ * `null` when nothing usable is on the record — caller skips with a reason.
+ */
+function deriveServiceItemCodeFromQuantity(
+  quantity: { masterformatCode?: unknown; uniformatCode?: unknown; omniclassCode?: unknown } | null | undefined,
+): string | null {
+  if (!quantity) return null
+  const candidates = [quantity.masterformatCode, quantity.uniformatCode, quantity.omniclassCode]
+  for (const candidate of candidates) {
+    if (typeof candidate === 'string' && candidate.trim().length > 0) {
+      return candidate.trim()
+    }
+  }
+  return null
+}
+
+/**
+ * Shape-check the JSON pulled out of `takeoff_drafts.takeoff_result_json`
+ * just enough to walk `quantities[]` without throwing. The capture writer
+ * (POST /capture above) already ran the full zod schema on the way in, so
+ * a stored value with the wrong shape is a forensic indicator the row was
+ * mutated out-of-band; treat it like "no quantities" rather than 500.
+ */
+function readQuantitiesFromStoredResult(raw: unknown): Array<{
+  id: unknown
+  value?: unknown
+  unit?: unknown
+  description?: unknown
+  confidence?: unknown
+  masterformatCode?: unknown
+  uniformatCode?: unknown
+  omniclassCode?: unknown
+  provenance?: unknown
+  geometryRefs?: unknown
+}> {
+  if (!raw || typeof raw !== 'object') return []
+  const quantities = (raw as { quantities?: unknown }).quantities
+  if (!Array.isArray(quantities)) return []
+  return quantities.filter((q) => q && typeof q === 'object' && 'id' in (q as Record<string, unknown>)) as Array<{
+    id: unknown
+    value?: unknown
+    unit?: unknown
+    description?: unknown
+    confidence?: unknown
+    masterformatCode?: unknown
+    uniformatCode?: unknown
+    omniclassCode?: unknown
+    provenance?: unknown
+    geometryRefs?: unknown
+  }>
+}
+
+/**
+ * Map a captured quantity's `geometryRefs` (lookup keys into the draft's
+ * shared geometry section) into the JSONB blob we persist on the new
+ * `takeoff_measurements` row. The shape mirrors what the polygon canvas
+ * writes today (kind: polygon | lineal | volume | count) so downstream
+ * code (calculateGeometryQuantity, takeoff-summary) doesn't fork. When
+ * we can't find a usable reference we emit `{}` — the column is NOT
+ * NULL — which preserves the quantity number on the row.
+ */
+function resolveCapturedGeometry(quantity: { geometryRefs?: unknown }, result: unknown): Record<string, unknown> {
+  if (!quantity.geometryRefs || !Array.isArray(quantity.geometryRefs) || quantity.geometryRefs.length === 0) {
+    return {}
+  }
+  const refs = quantity.geometryRefs.filter((r): r is string => typeof r === 'string')
+  if (refs.length === 0) return {}
+  const geometry = result && typeof result === 'object' ? (result as { geometry?: unknown }).geometry : undefined
+  if (!geometry || typeof geometry !== 'object') {
+    return { kind: 'capture', refs }
+  }
+  // Surface the polygon for the first referenced surface (if any) so the
+  // canvas can render the promoted measurement immediately. Falls back to
+  // a `capture` placeholder shape with the original refs preserved so
+  // operators can trace back to the captured artifact.
+  const surfaces = (geometry as { surfaces?: unknown }).surfaces
+  if (Array.isArray(surfaces)) {
+    for (const ref of refs) {
+      const match = surfaces.find((s) => s && typeof s === 'object' && (s as { id?: unknown }).id === ref) as
+        | { polygon?: unknown }
+        | undefined
+      if (match?.polygon && Array.isArray(match.polygon) && match.polygon.length >= 3) {
+        return { kind: 'capture', surfaceId: ref, polygon: match.polygon, refs }
+      }
+    }
+  }
+  return { kind: 'capture', refs }
+}
+
+/** Build the notes blob for a promoted measurement so we keep a trail
+ * back to the capture pipeline that proposed it. */
+function buildPromotedNotes(quantity: {
+  description?: unknown
+  confidence?: unknown
+  provenance?: unknown
+}): string | null {
+  const parts: string[] = []
+  if (typeof quantity.description === 'string' && quantity.description.trim().length > 0) {
+    parts.push(quantity.description.trim())
+  }
+  const provenanceKind =
+    quantity.provenance && typeof quantity.provenance === 'object'
+      ? (quantity.provenance as { kind?: unknown }).kind
+      : undefined
+  if (typeof provenanceKind === 'string' && provenanceKind.length > 0) {
+    parts.push(`promoted from ${provenanceKind}`)
+  } else {
+    parts.push('promoted from capture')
+  }
+  if (typeof quantity.confidence === 'number' && Number.isFinite(quantity.confidence)) {
+    parts.push(`confidence=${quantity.confidence.toFixed(2)}`)
+  }
+  const joined = parts.join(' · ')
+  return joined.length > 0 ? joined : null
+}
 
 /** Default draft-name fallback when the caller doesn't supply one. */
 function defaultCaptureName(kind: string): string {
@@ -286,6 +408,189 @@ export async function handleTakeoffDraftRoutes(
         },
         pipeline_version: pipelineVersion,
       },
+    })
+    return true
+  }
+
+  // POST /api/projects/:projectId/takeoff-drafts/:draftId/promote — turn
+  // selected captured quantities into real `takeoff_measurements` rows.
+  //
+  // Body: { quantity_ids: string[], service_item_code_overrides?: {<id>: <code>} }
+  //
+  // Operators review AI-generated quantities in the canvas, optionally
+  // remap a quantity onto a different curated service item, and PROMOTE
+  // the subset they want as committed scope. Promotion is additive: it
+  // never mutates the draft's takeoff_result_json — that stays as the
+  // immutable audit trail of what the pipeline proposed. Skipped quantities
+  // (missing id, no derivable service_item_code) come back in the response
+  // so the client can flag them rather than silently dropping rows.
+  if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/takeoff-drafts\/[^/]+\/promote$/)) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const segments = url.pathname.split('/')
+    const projectId = segments[3] ?? ''
+    const draftId = segments[5] ?? ''
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project id must be a valid uuid' })
+      return true
+    }
+    if (!isValidUuid(draftId)) {
+      ctx.sendJson(400, { error: 'draft id must be a valid uuid' })
+      return true
+    }
+
+    const body = await ctx.readBody()
+    const rawIds = Array.isArray(body.quantity_ids) ? body.quantity_ids : null
+    if (!rawIds || rawIds.length === 0) {
+      ctx.sendJson(400, { error: 'quantity_ids (non-empty array) is required' })
+      return true
+    }
+    const quantityIds = rawIds
+      .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+      .map((id) => id.trim())
+    if (quantityIds.length === 0) {
+      ctx.sendJson(400, { error: 'quantity_ids must contain at least one non-empty string' })
+      return true
+    }
+
+    // service_item_code_overrides: optional per-quantity remap so the
+    // operator can route a low-confidence "08 14 00 wood door" onto the
+    // company's curated catalog code without touching the source result.
+    const overridesRaw = body.service_item_code_overrides
+    const overrides = new Map<string, string>()
+    if (overridesRaw !== undefined && overridesRaw !== null) {
+      if (typeof overridesRaw !== 'object' || Array.isArray(overridesRaw)) {
+        ctx.sendJson(400, { error: 'service_item_code_overrides must be an object map' })
+        return true
+      }
+      for (const [k, v] of Object.entries(overridesRaw as Record<string, unknown>)) {
+        if (typeof k !== 'string' || k.trim().length === 0) continue
+        if (typeof v !== 'string' || v.trim().length === 0) {
+          ctx.sendJson(400, { error: `service_item_code_overrides[${k}] must be a non-empty string` })
+          return true
+        }
+        overrides.set(k.trim(), v.trim())
+      }
+    }
+
+    // Pull the draft + its stored TakeoffResult. The tenant filter prevents
+    // a foreign company from promoting another tenant's draft even with a
+    // guessed uuid; the project_id check ties the promotion to the URL.
+    const draftQuery = await ctx.pool.query<{
+      id: string
+      takeoff_result_json: unknown
+      source: string
+    }>(
+      `select id, takeoff_result_json, source
+         from takeoff_drafts
+        where company_id = $1 and project_id = $2 and id = $3 and deleted_at is null`,
+      [ctx.company.id, projectId, draftId],
+    )
+    const draftRow = draftQuery.rows[0]
+    if (!draftRow) {
+      ctx.sendJson(404, { error: 'draft not found' })
+      return true
+    }
+    if (!draftRow.takeoff_result_json) {
+      ctx.sendJson(404, { error: 'draft has no captured takeoff result to promote' })
+      return true
+    }
+
+    const storedResult = draftRow.takeoff_result_json
+    const storedQuantities = readQuantitiesFromStoredResult(storedResult)
+    const quantitiesById = new Map<string, (typeof storedQuantities)[number]>()
+    for (const q of storedQuantities) {
+      if (typeof q.id === 'string') quantitiesById.set(q.id, q)
+    }
+
+    type Skip = { quantity_id: string; reason: string }
+    const skipped: Skip[] = []
+    type Prepared = {
+      quantityId: string
+      serviceItemCode: string
+      quantity: number
+      unit: string
+      geometryJson: string
+      notes: string | null
+    }
+    const prepared: Prepared[] = []
+
+    for (const id of quantityIds) {
+      const q = quantitiesById.get(id)
+      if (!q) {
+        skipped.push({ quantity_id: id, reason: 'quantity_id not present in draft result' })
+        continue
+      }
+      const override = overrides.get(id) ?? null
+      const serviceItemCode = override ?? deriveServiceItemCodeFromQuantity(q)
+      if (!serviceItemCode) {
+        skipped.push({
+          quantity_id: id,
+          reason: 'no service_item_code on quantity (supply an override)',
+        })
+        continue
+      }
+      const unitRaw = typeof q.unit === 'string' ? q.unit.trim() : ''
+      if (!unitRaw) {
+        skipped.push({ quantity_id: id, reason: 'quantity is missing unit' })
+        continue
+      }
+      const valueNumber = typeof q.value === 'number' ? q.value : Number(q.value ?? NaN)
+      if (!Number.isFinite(valueNumber) || valueNumber < 0) {
+        skipped.push({ quantity_id: id, reason: 'quantity value is not a finite non-negative number' })
+        continue
+      }
+      const geometry = resolveCapturedGeometry(q, storedResult)
+      prepared.push({
+        quantityId: id,
+        serviceItemCode,
+        quantity: valueNumber,
+        unit: unitRaw,
+        geometryJson: JSON.stringify(geometry),
+        notes: buildPromotedNotes(q),
+      })
+    }
+
+    if (prepared.length === 0) {
+      ctx.sendJson(422, {
+        error: 'no quantities could be promoted',
+        skipped,
+      })
+      return true
+    }
+
+    const inserted = await withMutationTx(async (client) => {
+      const rows: Array<Record<string, unknown>> = []
+      for (const p of prepared) {
+        const insertResult = await client.query(
+          `insert into takeoff_measurements (
+              company_id, project_id, service_item_code, quantity, unit, notes,
+              geometry, version, draft_id
+            )
+            values ($1, $2, $3, $4, $5, $6, $7::jsonb, 1, $8)
+            returning ${PROMOTED_MEASUREMENT_COLUMNS}`,
+          [ctx.company.id, projectId, p.serviceItemCode, p.quantity, p.unit, p.notes, p.geometryJson, draftId],
+        )
+        const row = insertResult.rows[0]
+        rows.push(row)
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'takeoff_measurement',
+          entityId: row.id as string,
+          action: 'create',
+          row,
+          syncPayload: { action: 'create', measurement: row },
+          outboxPayload: { measurement: row },
+          actorUserId: ctx.currentUserId ?? null,
+        })
+      }
+      return rows
+    })
+
+    ctx.sendJson(201, {
+      measurements: inserted,
+      promoted_count: inserted.length,
+      skipped_count: skipped.length,
+      skipped,
     })
     return true
   }
