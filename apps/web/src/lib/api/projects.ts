@@ -190,6 +190,55 @@ export function useProjectSummary(
 }
 
 /**
+ * Project closeout workflow snapshot. Wraps GET /api/projects/:id/closeout
+ * (apps/api/src/routes/projects.ts) returning the deterministic-workflow
+ * envelope { state, state_version, context, next_events } so screens can
+ * render the closeout affordance from a single read instead of
+ * reconstructing the state from `status='completed'` checks.
+ *
+ * Round-trips with the existing POST /api/projects/:id/closeout fire-and-
+ * forget mutation; that POST has no snapshot return today, so callers
+ * should invalidate this query after a successful closeout.
+ */
+export type ProjectCloseoutState = 'active' | 'completed'
+export type ProjectCloseoutHumanEvent = 'CLOSEOUT'
+
+export interface ProjectCloseoutSnapshot {
+  state: ProjectCloseoutState
+  state_version: number
+  next_events: Array<{ type: ProjectCloseoutHumanEvent; label: string; disabled_reason?: string }>
+  context: {
+    id: string
+    company_id: string
+    status: string
+    closed_at: string | null
+    closed_by: string | null
+    summary_locked_at: string | null
+    workflow_engine: string
+    workflow_run_id: string | null
+    version: number
+    created_at: string
+    updated_at: string
+  }
+}
+
+export function fetchProjectCloseout(projectId: string): Promise<ProjectCloseoutSnapshot> {
+  return request<ProjectCloseoutSnapshot>(`/api/projects/${encodeURIComponent(projectId)}/closeout`)
+}
+
+export function useProjectCloseout(
+  projectId: string | null | undefined,
+  options?: Partial<UseQueryOptions<ProjectCloseoutSnapshot>>,
+) {
+  return useQuery<ProjectCloseoutSnapshot>({
+    queryKey: ['projects', 'closeout', projectId ?? ''],
+    queryFn: () => fetchProjectCloseout(projectId!),
+    enabled: Boolean(projectId),
+    ...options,
+  })
+}
+
+/**
  * Foreman morning briefs for a project (`fm-brief`). Wraps GET
  * /api/projects/:id/briefs?date=YYYY-MM-DD. Used by the daily-log
  * auto-assembly fallback to seed `scope_progress` from the morning
