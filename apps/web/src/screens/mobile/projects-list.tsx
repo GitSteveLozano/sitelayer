@@ -109,6 +109,9 @@ export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse
           <MChip active={filter === 'all'} onClick={() => setFilter('all')} count={counts.all}>
             All
           </MChip>
+          <MChip outline onClick={() => navigate('/projects/sent')}>
+            Sent estimates
+          </MChip>
         </MChipRow>
         {projects.length === 0 ? (
           <MEmptyState

@@ -72,6 +72,43 @@ class FakePool {
         .map((s) => this.serializeShare(s))
       return { rows, rowCount: rows.length }
     }
+    // GET /api/estimate-shares — company-wide timeline. The route emits
+    // a CTE that projects one row per project_id (latest sent_at) joined
+    // against projects. Emulate the same shape: pick the latest share per
+    // project, then attach project name / customer / bid_total.
+    if (/with latest as/i.test(sql) && /from estimate_share_links/i.test(sql)) {
+      const [companyId] = params as [string]
+      const byProject = new Map<string, EstimateShareRow>()
+      for (const share of this.shares.filter((s) => s.company_id === companyId)) {
+        const current = byProject.get(share.project_id)
+        if (!current || new Date(share.sent_at).getTime() > new Date(current.sent_at).getTime()) {
+          byProject.set(share.project_id, share)
+        }
+      }
+      const rows = Array.from(byProject.values())
+        .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime())
+        .map((share) => {
+          const project = this.projects.find((p) => p.company_id === companyId && p.id === share.project_id)
+          return {
+            id: share.id,
+            project_id: share.project_id,
+            project_name: project?.name ?? 'Unknown',
+            customer_name: project?.customer_name ?? null,
+            bid_total: project?.bid_total ?? 0,
+            recipient_email: share.recipient_email,
+            recipient_name: share.recipient_name,
+            sent_at: share.sent_at,
+            expires_at: share.expires_at,
+            accepted_at: share.accepted_at,
+            declined_at: share.declined_at,
+            decline_reason: share.decline_reason,
+            viewed_at: share.viewed_at,
+            view_count: share.view_count,
+            signer_name: share.signer_name,
+          }
+        })
+      return { rows, rowCount: rows.length }
+    }
     if (/insert into estimate_share_links/i.test(sql)) {
       const [companyId, projectId, snapshot, token, email, name, expiresInDays] = params as [
         string,
@@ -404,6 +441,118 @@ describe('handleEstimateShareRoutes — POST /api/projects/:id/estimate/share', 
     expect(project.lifecycle_state).toBe('sent')
     // No SEND workflow event written this run because the helper short-circuited.
     expect(pool.workflowEvents.find((e) => e.event_type === 'SEND')).toBeUndefined()
+  })
+})
+
+describe('handleEstimateShareRoutes — GET /api/estimate-shares (company-wide timeline)', () => {
+  it('returns an empty list when no shares exist', async () => {
+    const pool = new FakePool()
+    seedProject(pool)
+    const { ctx, responses } = makeAuthCtx(pool)
+    await handleEstimateShareRoutes({ method: 'GET' } as never, buildUrl('/api/estimate-shares'), ctx)
+    expect(responses[0]?.status).toBe(200)
+    expect(responses[0]?.body).toEqual({ shares: [] })
+  })
+
+  it('returns one row per project (latest share) with project + customer + bid_total + status', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { id: 'p-1', name: 'Riverbend', customer_name: 'Smith Co' })
+    seedProject(pool, { id: 'p-2', name: 'Oakridge', customer_name: 'Jones LLC', bid_total: 9000 })
+
+    // Two shares on p-1 (latest wins), one share on p-2.
+    const createOnProject = async (projectId: string, email: string) => {
+      const { ctx, reads } = makeAuthCtx(pool)
+      reads.push({ recipient_email: email })
+      await handleEstimateShareRoutes(
+        { method: 'POST' } as never,
+        buildUrl(`/api/projects/${projectId}/estimate/share`),
+        ctx,
+      )
+    }
+    await createOnProject('p-1', 'old@example.com')
+    await createOnProject('p-1', 'new@example.com')
+    await createOnProject('p-2', 'oak@example.com')
+
+    // Force a deterministic ordering — the SUTs sort by sent_at desc,
+    // but the in-memory pool's `now()` resolution can collapse the two
+    // p-1 shares into the same millisecond. Re-stamp them so the "new"
+    // share has a strictly later sent_at than the "old" one.
+    const p1All = pool.shares.filter((s) => s.project_id === 'p-1')
+    const newer = p1All.find((s) => s.recipient_email === 'new@example.com')!
+    const older = p1All.find((s) => s.recipient_email === 'old@example.com')!
+    older.sent_at = new Date(Date.now() - 60_000).toISOString()
+    newer.sent_at = new Date().toISOString()
+
+    // Hand-roll the latest share on p-1 to have a viewed_at so we can
+    // verify the timeline status surfaces 'viewed' (vs. 'sent').
+    newer.viewed_at = new Date().toISOString()
+
+    const { ctx, responses } = makeAuthCtx(pool)
+    await handleEstimateShareRoutes({ method: 'GET' } as never, buildUrl('/api/estimate-shares'), ctx)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as {
+      shares: Array<{
+        project_id: string
+        project_name: string
+        customer_name: string
+        bid_total: number
+        recipient_email: string
+        status: string
+      }>
+    }
+    expect(body.shares).toHaveLength(2)
+    const byProject = Object.fromEntries(body.shares.map((s) => [s.project_id, s]))
+    expect(byProject.p1 ?? byProject['p-1']).toBeDefined()
+    expect(byProject['p-1']?.recipient_email).toBe('new@example.com')
+    expect(byProject['p-1']?.status).toBe('viewed')
+    expect(byProject['p-1']?.project_name).toBe('Riverbend')
+    expect(byProject['p-1']?.customer_name).toBe('Smith Co')
+    expect(byProject['p-2']?.bid_total).toBe(9000)
+    expect(byProject['p-2']?.status).toBe('sent')
+  })
+
+  it('surfaces accepted/declined/expired statuses correctly', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { id: 'p-a', name: 'Alpha', customer_name: 'A' })
+    seedProject(pool, { id: 'p-d', name: 'Delta', customer_name: 'D' })
+    seedProject(pool, { id: 'p-x', name: 'Xpired', customer_name: 'X' })
+
+    const create = async (projectId: string) => {
+      const { ctx, reads } = makeAuthCtx(pool)
+      reads.push({ recipient_email: 'c@example.com' })
+      await handleEstimateShareRoutes(
+        { method: 'POST' } as never,
+        buildUrl(`/api/projects/${projectId}/estimate/share`),
+        ctx,
+      )
+    }
+    await create('p-a')
+    await create('p-d')
+    await create('p-x')
+
+    pool.shares.find((s) => s.project_id === 'p-a')!.accepted_at = new Date().toISOString()
+    pool.shares.find((s) => s.project_id === 'p-d')!.declined_at = new Date().toISOString()
+    pool.shares.find((s) => s.project_id === 'p-x')!.expires_at = new Date(Date.now() - 1000).toISOString()
+
+    const { ctx, responses } = makeAuthCtx(pool)
+    await handleEstimateShareRoutes({ method: 'GET' } as never, buildUrl('/api/estimate-shares'), ctx)
+    const body = responses[0]?.body as { shares: Array<{ project_id: string; status: string }> }
+    const byProject = Object.fromEntries(body.shares.map((s) => [s.project_id, s.status]))
+    expect(byProject['p-a']).toBe('accepted')
+    expect(byProject['p-d']).toBe('declined')
+    expect(byProject['p-x']).toBe('expired')
+  })
+
+  it('rejects callers without admin/office role', async () => {
+    const pool = new FakePool()
+    seedProject(pool)
+    const { ctx, responses } = makeAuthCtx(pool, { requireRole: () => false })
+    await handleEstimateShareRoutes({ method: 'GET' } as never, buildUrl('/api/estimate-shares'), ctx)
+    // requireRole returning false is the route's signal to abort — it's
+    // the dispatcher's job to have already written a 403 in that case,
+    // so we just assert the handler did not write a 200 success.
+    const ok = responses.find((r) => r.status === 200)
+    expect(ok).toBeUndefined()
   })
 })
 

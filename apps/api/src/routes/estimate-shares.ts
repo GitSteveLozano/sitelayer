@@ -252,6 +252,79 @@ export async function handleEstimateShareRoutes(
     return true
   }
 
+  // GET /api/estimate-shares — company-scoped timeline of "estimates sent"
+  // (one row per project, latest share). Powers the Estimates · Sent
+  // screen surfaced from the Projects tab. Admin/office-only because it
+  // exposes recipient_email + signer_name across every project in the
+  // company.
+  if (req.method === 'GET' && url.pathname === '/api/estimate-shares') {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const result = await ctx.pool.query<{
+      id: string
+      project_id: string
+      project_name: string
+      customer_name: string | null
+      bid_total: string | number | null
+      recipient_email: string | null
+      recipient_name: string | null
+      sent_at: string
+      expires_at: string
+      accepted_at: string | null
+      declined_at: string | null
+      decline_reason: string | null
+      viewed_at: string | null
+      view_count: number
+      signer_name: string | null
+    }>(
+      `with latest as (
+         select distinct on (project_id)
+           id, project_id, recipient_email, recipient_name, sent_at,
+           expires_at, accepted_at, declined_at, decline_reason,
+           viewed_at, view_count, signer_name
+         from estimate_share_links
+         where company_id = $1
+         order by project_id, sent_at desc
+       )
+       select l.id, l.project_id,
+              p.name as project_name,
+              p.customer_name,
+              p.bid_total,
+              l.recipient_email, l.recipient_name,
+              l.sent_at, l.expires_at,
+              l.accepted_at, l.declined_at, l.decline_reason,
+              l.viewed_at, l.view_count, l.signer_name
+       from latest l
+       join projects p on p.id = l.project_id and p.company_id = $1
+       order by l.sent_at desc
+       limit 200`,
+      [ctx.company.id],
+    )
+    ctx.sendJson(200, {
+      shares: result.rows.map((row) => {
+        const status = computeTimelineStatus(row)
+        return {
+          id: row.id,
+          project_id: row.project_id,
+          project_name: row.project_name,
+          customer_name: row.customer_name,
+          bid_total: Number(row.bid_total ?? 0),
+          recipient_email: row.recipient_email,
+          recipient_name: row.recipient_name,
+          sent_at: row.sent_at,
+          expires_at: row.expires_at,
+          accepted_at: row.accepted_at,
+          declined_at: row.declined_at,
+          decline_reason: row.decline_reason,
+          viewed_at: row.viewed_at,
+          view_count: row.view_count,
+          signer_name: row.signer_name,
+          status,
+        }
+      }),
+    })
+    return true
+  }
+
   // POST /api/estimate-shares/:id/revoke — invalidate a share
   const revokeMatch = url.pathname.match(/^\/api\/estimate-shares\/([^/]+)\/revoke$/)
   if (req.method === 'POST' && revokeMatch) {
@@ -686,6 +759,28 @@ function shareStatus(row: EstimateShareRow): 'accepted' | 'declined' | 'expired'
   if (row.declined_at) return 'declined'
   if (new Date(row.expires_at).getTime() <= Date.now()) return 'expired'
   return 'pending'
+}
+
+/**
+ * Funnel status surfaced in the company-wide "estimates sent" timeline.
+ * Distinct from `shareStatus` because the timeline cares about the
+ * intermediate "viewed but not yet decided" state — the per-recipient
+ * portal payload collapses that into `pending` (the customer doesn't
+ * need to know about their own view bump).
+ */
+type TimelineStatus = 'accepted' | 'declined' | 'expired' | 'viewed' | 'sent'
+
+function computeTimelineStatus(row: {
+  accepted_at: string | null
+  declined_at: string | null
+  expires_at: string
+  viewed_at: string | null
+}): TimelineStatus {
+  if (row.accepted_at) return 'accepted'
+  if (row.declined_at) return 'declined'
+  if (new Date(row.expires_at).getTime() <= Date.now()) return 'expired'
+  if (row.viewed_at) return 'viewed'
+  return 'sent'
 }
 
 function buildPortalView(row: EstimateShareRow, meta: { project_name: string; company_name: string }) {

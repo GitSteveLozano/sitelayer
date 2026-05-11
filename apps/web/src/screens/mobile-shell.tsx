@@ -37,6 +37,7 @@ import { PushDeniedBanner } from '../components/shell/PushDeniedBanner.js'
 import { UpdateBanner } from '../components/shell/UpdateBanner.js'
 import { AdminHome } from './mobile/admin-home.js'
 import { MobileProjectsList } from './mobile/projects-list.js'
+import { MobileEstimatesSent } from './mobile/estimates-sent.js'
 import { MobileProjectDetail } from './mobile/project-detail.js'
 import { MobileProjectNew } from './mobile/project-new.js'
 import { MobileTakeoffList } from './mobile/takeoff-list.js'
@@ -199,6 +200,7 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
           <Route path="scope" element={<WorkerScope bootstrap={bootstrap} />} />
           <Route path="issue" element={<WorkerIssue bootstrap={bootstrap} companySlug={companySlug} />} />
           <Route path="projects" element={<MobileProjectsList bootstrap={bootstrap} />} />
+          <Route path="projects/sent" element={<MobileEstimatesSent />} />
           <Route path="projects/new" element={<MobileProjectNew companySlug={companySlug} />} />
           <Route path="projects/:projectId" element={<MobileProjectDetail bootstrap={bootstrap} />} />
           <Route path="projects/:projectId/takeoff" element={<MobileTakeoffList companySlug={companySlug} />} />
