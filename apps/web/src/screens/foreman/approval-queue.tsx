@@ -57,7 +57,16 @@ export function ApprovalQueueScreen() {
   return (
     <div className="flex flex-col">
       <div className="px-5 pt-6 pb-3">
-        <h1 className="font-display text-[28px] font-bold tracking-tight leading-tight">Time</h1>
+        <div className="flex items-baseline justify-between gap-3">
+          <h1 className="font-display text-[28px] font-bold tracking-tight leading-tight">Time</h1>
+          <Link
+            to="/time/new"
+            className="text-[12px] font-semibold text-accent shrink-0"
+            data-testid="add-manual-entry"
+          >
+            + Add entry
+          </Link>
+        </div>
         <div className="text-[12px] text-ink-3 mt-1 flex items-center justify-between gap-2">
           <span>
             <span className="num font-medium">{pendingEntryTotal}</span> entr{pendingEntryTotal === 1 ? 'y' : 'ies'}{' '}

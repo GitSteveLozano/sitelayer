@@ -17,8 +17,9 @@ const APPS = {
     // wk-log, and the wk-issue attachment upload flow. All mobile-shell
     // screens ride the m-*.js chunk by convention; only the More tab is
     // lazy. Original 40KB → 44KB bump documented in the design-handoff
-    // chore commit.
-    lazyAppChunkGzipBudget: 48 * 1024,
+    // chore commit. 48KB → 50KB on 2026-05-11 to fit the foreman manual
+    // time-entry form (#303) + PWA onboarding screens (#300).
+    lazyAppChunkGzipBudget: 50 * 1024,
     nonAppPrefixes: ['vendor-', 'web-vitals-', 'rolldown-runtime-', 'workbox-'],
     requireSentryLazy: false,
   },

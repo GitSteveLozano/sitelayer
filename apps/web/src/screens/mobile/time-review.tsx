@@ -8,10 +8,11 @@
  * shells out to /api/labor-entries/:id PATCH via the existing client.
  */
 import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import type { BootstrapResponse, LaborRow } from '../../api-v1-compat.js'
 import {
   MAvatar,
+  MBanner,
   MBody,
   MButton,
   MButtonRow,
@@ -35,6 +36,8 @@ import { formatDecimalHours, formatMoney, timeOfDay, todayIso } from './format.j
 
 export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const navigate = useNavigate()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const justCreated = searchParams.get('created') === '1'
   const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
   const workers = useMemo(() => bootstrap?.workers ?? [], [bootstrap?.workers])
   const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
@@ -60,8 +63,36 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
 
   return (
     <>
-      <MTopBar title="Time" sub={today} />
+      <MTopBar
+        title="Time"
+        sub={today}
+        actionLabel="Add entry"
+        actionIcon={<MI.Plus size={20} />}
+        onAction={() => navigate('/time/new')}
+      />
       <MBody>
+        {justCreated ? (
+          <div style={{ padding: '12px 16px 0' }}>
+            <MBanner
+              tone="ok"
+              title="Time entry saved"
+              body="It will land in the next approval roll-up."
+              action={
+                <MButton
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    const next = new URLSearchParams(searchParams)
+                    next.delete('created')
+                    setSearchParams(next, { replace: true })
+                  }}
+                >
+                  Dismiss
+                </MButton>
+              }
+            />
+          </div>
+        ) : null}
         <MStatStrip>
           <MStat label="Crew-hrs" value={formatDecimalHours(totalHours, 1)} />
           <MStat label="Labor cost" value={formatMoney(laborCost)} />
