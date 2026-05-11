@@ -528,11 +528,11 @@ GIT_SHA=$(cat .last_successful_deployed_sha) docker compose -f docker-compose.pr
 
 ## Post-Deployment Checklist
 
-- [ ] SSL certificate installed and auto-renewal configured
+- [x] SSL certificate installed and auto-renewal configured (Caddy auto-issued + auto-renews Let's Encrypt cert for `sitelayer.sandolab.xyz`; live since initial bring-up)
 - [x] Database schema applied successfully
 - [x] API responding on health check endpoint
 - [x] Frontend loading without errors
-- [ ] QBO integration credentials configured
+- [x] QBO integration credentials configured — _Status as of 2026-05-11:_ OAuth client + sandbox creds wired through GitHub `production` env; `scripts/qbo-sandbox-smoke.sh` exists and has been exercised. `QBO_LIVE_RENTAL_INVOICE` / `QBO_LIVE_ESTIMATE_PUSH` / `QBO_LIVE_LABOR_PAYROLL` remain at `0` pending the first real-customer sandbox/prod validation pass.
 - [x] Clerk authentication working
 - [x] DO Spaces credentials configured
 - [x] Local blueprint storage volume configured as fallback

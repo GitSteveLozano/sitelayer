@@ -1,7 +1,7 @@
 # Sitelayer Infrastructure Ready
 
-**Date:** 2026-04-25
-**Status:** Live DigitalOcean state reconciled; prod/preview smoke-tested; Spaces blueprint storage, immutable registry, off-host DB backup, timer monitor, and restore drill verified; secrets redacted from repo
+**Date:** 2026-05-11
+**Status:** Live DigitalOcean state reconciled; prod/preview smoke-tested; Spaces blueprint storage, immutable registry, off-host DB backup, timer monitor, and restore drill verified; secrets redacted from repo. TLS auto-renewal via Caddy is live; QBO sandbox smoke script (`scripts/qbo-sandbox-smoke.sh`) exists and has been exercised, but `QBO_LIVE_*` flags remain at `0` pending first-customer validation.
 
 This document is infrastructure inventory only. Deployment procedure lives in `DEPLOYMENT.md`. Planning/runtime state must also be mirrored into Mesh under project `sitelayer`.
 
@@ -310,7 +310,7 @@ _(Plus free tier: Clerk, Sentry, UptimeRobot, Intuit)_
 - ✅ Local blueprint storage volume
 - ✅ Clerk auth credentials in prod
 - ✅ Spaces bucket and scoped prod credentials
-- ⏳ QBO optional service credentials
-- ✅ TLS enablement
+- ✅ QBO optional service credentials — _Status as of 2026-05-11:_ sandbox creds wired through GitHub `production` env; `scripts/qbo-sandbox-smoke.sh` exists and has been exercised. `QBO_LIVE_*` flags remain at `0` pending the first real-customer sandbox/prod validation pass.
+- ✅ TLS enablement (Caddy Let's Encrypt cert auto-renewing for `sitelayer.sandolab.xyz`)
 
 **Total:** ~27 minutes to full deployment
