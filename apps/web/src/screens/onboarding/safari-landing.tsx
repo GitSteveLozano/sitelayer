@@ -50,7 +50,7 @@ export function SafariLandingScreen({ onSkip }: SafariLandingProps) {
             // iOS doesn't expose a programmatic install — we point users
             // at the share sheet hint below, then drop into the app.
             const hint = document.getElementById('safari-share-hint')
-            hint?.classList.remove('opacity-50')
+            hint?.classList.remove('opacity-60')
             hint?.classList.add('opacity-100', 'ring-2', 'ring-accent')
           }}
           className="block w-full h-[52px] rounded-[14px] bg-accent text-white text-[16px] font-semibold inline-flex items-center justify-center"
@@ -58,27 +58,51 @@ export function SafariLandingScreen({ onSkip }: SafariLandingProps) {
           Add to Home Screen
         </a>
 
-        <div
+        <ol
           id="safari-share-hint"
-          className="text-[12px] text-[#aea69a] text-center px-4 py-2.5 rounded-[10px] border border-[#3a342d] opacity-50 transition-all"
+          aria-label="Add to Home Screen instructions"
+          className="text-[12px] text-[#aea69a] px-4 py-3 rounded-[10px] border border-[#3a342d] opacity-60 transition-all space-y-1.5"
         >
-          Tap{' '}
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            width="14"
-            height="14"
-            className="inline-block align-text-bottom mx-0.5"
-            aria-hidden="true"
-          >
-            <path d="M12 3v13M7 8l5-5 5 5M5 21h14" />
-          </svg>{' '}
-          in Safari, then <span className="font-semibold text-[#f3ecdf]">"Add to Home Screen"</span>
-        </div>
+          <li className="flex items-center gap-2">
+            <span className="inline-flex w-4 h-4 items-center justify-center rounded-full bg-[#3a342d] text-[10px] font-semibold text-[#f3ecdf] shrink-0">
+              1
+            </span>
+            <span>
+              Tap the Share button{' '}
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                width="14"
+                height="14"
+                className="inline-block align-text-bottom mx-0.5"
+                aria-hidden="true"
+              >
+                <path d="M12 3v13M7 8l5-5 5 5M5 21h14" />
+              </svg>{' '}
+              in the Safari toolbar
+            </span>
+          </li>
+          <li className="flex items-center gap-2">
+            <span className="inline-flex w-4 h-4 items-center justify-center rounded-full bg-[#3a342d] text-[10px] font-semibold text-[#f3ecdf] shrink-0">
+              2
+            </span>
+            <span>
+              Choose <span className="font-semibold text-[#f3ecdf]">Add to Home Screen</span>
+            </span>
+          </li>
+          <li className="flex items-center gap-2">
+            <span className="inline-flex w-4 h-4 items-center justify-center rounded-full bg-[#3a342d] text-[10px] font-semibold text-[#f3ecdf] shrink-0">
+              3
+            </span>
+            <span>
+              Tap <span className="font-semibold text-[#f3ecdf]">Add</span> — then open Sitelayer from your home screen
+            </span>
+          </li>
+        </ol>
 
         <button
           type="button"
