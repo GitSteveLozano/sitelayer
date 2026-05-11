@@ -25,6 +25,18 @@ import { isValidUuid, parseExpectedVersion, parseOptionalNumber } from '../http-
 
 const logger = createLogger('api:projects')
 
+/**
+ * Round to 2 decimal places. Used for the closeout-summary rollup so
+ * `numeric(12,2)` sums survive the float trip back through JSON without
+ * surfacing artifacts like 1234.5600000001. We compute on JS numbers
+ * (cents-precise on this scale) and pin the boundary to 2 places at the
+ * response layer — same shape `formatMoney` expects on the client.
+ */
+function round2(n: number): number {
+  if (!Number.isFinite(n)) return 0
+  return Math.round(n * 100) / 100
+}
+
 export type ProjectRouteCtx = {
   pool: Pool
   company: ActiveCompany
@@ -741,6 +753,132 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
       .sort((a, b) => Math.abs(b.hours_variance_pct) - Math.abs(a.hours_variance_pct))
 
     ctx.sendJson(200, { variance })
+    return true
+  }
+
+  // GET /api/projects/:id/closeout-summary — bid → actual rollup across all
+  // cost buckets (labor / materials / rentals) plus the computed margin. This
+  // is the strategic centerpiece of the merged platform: the single view per
+  // project that answers "did we make money?" by combining estimate
+  // (planned), labor entries (logged), material bills (recorded), and posted
+  // rental invoices (billed) against the bid.
+  //
+  // Single CTE-stack so the response is one round-trip. Per-bucket sub-CTEs
+  // keep each aggregation pinned to its own table — easier to reason about
+  // and to mirror in the in-memory test pool than a five-way join.
+  //
+  // Rental filter: only `posted` rental_billing_runs count. Generated /
+  // approved / failed / voided are excluded because they represent
+  // in-flight or aborted billing — counting them would inflate "actual
+  // rentals" before the invoice is committed to QBO. The subline note
+  // in the UI calls this out.
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/closeout-summary$/)) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!projectId) {
+      ctx.sendJson(400, { error: 'project id is required' })
+      return true
+    }
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project id must be a valid uuid' })
+      return true
+    }
+
+    // Project existence + bid/labor_rate gate. Keeps tenant-isolation
+    // failures as 404 instead of returning an all-zero rollup for a
+    // project the caller can't actually see.
+    const projectResult = await ctx.pool.query<{
+      id: string
+      name: string
+      bid_total: string | null
+      labor_rate: string | null
+    }>(
+      `select id, name, bid_total, labor_rate
+         from projects
+         where company_id = $1 and id = $2 and deleted_at is null
+         limit 1`,
+      [ctx.company.id, projectId],
+    )
+    const project = projectResult.rows[0]
+    if (!project) {
+      ctx.sendJson(404, { error: 'project not found' })
+      return true
+    }
+    const bid = Number(project.bid_total ?? 0) || 0
+    const laborRate = Number(project.labor_rate ?? 0) || 0
+
+    // Each bucket is its own sub-CTE so an empty bucket returns 0 instead
+    // of NULL (coalesce on the SUM) and the LEFT JOIN against a single-
+    // row anchor lets us emit one row even when every table is empty.
+    const rollupResult = await ctx.pool.query<{
+      estimate_total: string
+      labor_hours: string
+      materials_total: string
+      rentals_total: string
+    }>(
+      `
+      with est as (
+        select coalesce(sum(amount), 0) as estimate_total
+        from estimate_lines
+        where company_id = $1 and project_id = $2
+      ),
+      lab as (
+        select coalesce(sum(hours), 0) as labor_hours
+        from labor_entries
+        where company_id = $1 and project_id = $2 and deleted_at is null
+      ),
+      mat as (
+        select coalesce(sum(amount), 0) as materials_total
+        from material_bills
+        where company_id = $1 and project_id = $2 and deleted_at is null
+      ),
+      rent as (
+        select coalesce(sum(subtotal), 0) as rentals_total
+        from rental_billing_runs
+        where company_id = $1 and project_id = $2 and deleted_at is null and status = 'posted'
+      )
+      select
+        est.estimate_total::text as estimate_total,
+        lab.labor_hours::text as labor_hours,
+        mat.materials_total::text as materials_total,
+        rent.rentals_total::text as rentals_total
+      from est, lab, mat, rent
+      `,
+      [ctx.company.id, projectId],
+    )
+    const rollup = rollupResult.rows[0] ?? {
+      estimate_total: '0',
+      labor_hours: '0',
+      materials_total: '0',
+      rentals_total: '0',
+    }
+
+    const estimateTotal = Number(rollup.estimate_total) || 0
+    const laborHours = Number(rollup.labor_hours) || 0
+    const laborActual = round2(laborHours * laborRate)
+    const materialsActual = round2(Number(rollup.materials_total) || 0)
+    const rentalsActual = round2(Number(rollup.rentals_total) || 0)
+    const totalActual = round2(laborActual + materialsActual + rentalsActual)
+    const margin = round2(bid - totalActual)
+    // Margin % undefined when bid is 0 (avoid divide-by-zero); convention
+    // is 0 so the UI can render "0%" without special-casing nulls. The
+    // empty state in the card hides this row entirely when there's no
+    // bid or actuals to compare.
+    const marginPct = bid > 0 ? round2((margin / bid) * 100) : 0
+
+    ctx.sendJson(200, {
+      project: { id: project.id, name: project.name },
+      bid,
+      estimate_total: estimateTotal,
+      labor_hours: laborHours,
+      labor_rate: laborRate,
+      labor_actual: laborActual,
+      materials_actual: materialsActual,
+      rentals_actual: rentalsActual,
+      total_actual: totalActual,
+      margin,
+      margin_pct: marginPct,
+    })
     return true
   }
 

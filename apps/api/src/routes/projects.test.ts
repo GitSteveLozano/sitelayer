@@ -26,6 +26,7 @@ type EstimateLineRow = {
   division_code: string | null
   unit: string
   quantity: number
+  amount?: number
 }
 
 type LaborEntryRow = {
@@ -38,6 +39,22 @@ type LaborEntryRow = {
   deleted_at: string | null
 }
 
+type MaterialBillRow = {
+  company_id: string
+  project_id: string
+  amount: number
+  bill_type: string
+  deleted_at: string | null
+}
+
+type RentalBillingRunRow = {
+  company_id: string
+  project_id: string
+  subtotal: number
+  status: string
+  deleted_at: string | null
+}
+
 class FakePool {
   projects: Row[] = []
   workflowEvents: Row[] = []
@@ -47,6 +64,8 @@ class FakePool {
   notifications: Row[] = []
   estimateLines: EstimateLineRow[] = []
   laborEntries: LaborEntryRow[] = []
+  materialBills: MaterialBillRow[] = []
+  rentalBillingRuns: RentalBillingRunRow[] = []
 
   attach() {
     attachMutationTx({
@@ -79,6 +98,58 @@ class FakePool {
       return {
         rows: project ? [{ target_sqft_per_hr: project.target_sqft_per_hr ?? null }] : [],
         rowCount: project ? 1 : 0,
+      }
+    }
+
+    // ---- projects: closeout-summary project guard (bid_total + labor_rate) ----
+    if (/select id, name, bid_total, labor_rate/i.test(sql) && /from\s+projects/i.test(sql)) {
+      const [companyId, projectId] = params as [string, string]
+      const project = this.projects.find((p) => p.company_id === companyId && p.id === projectId)
+      return {
+        rows: project
+          ? [
+              {
+                id: project.id,
+                name: project.name,
+                bid_total: project.bid_total ?? 0,
+                labor_rate: project.labor_rate ?? 0,
+              },
+            ]
+          : [],
+        rowCount: project ? 1 : 0,
+      }
+    }
+
+    // ---- projects: closeout-summary CTE rollup (four per-bucket sub-CTEs
+    //      keyed by company_id + project_id). Detected via the
+    //      rental_billing_runs reference, which the labor-variance CTE
+    //      doesn't touch. ----
+    if (/with est as/i.test(sql) && /from rental_billing_runs/i.test(sql)) {
+      const [companyId, projectId] = params as [string, string]
+      const estimateTotal = this.estimateLines
+        .filter((r) => r.company_id === companyId && r.project_id === projectId)
+        .reduce((sum, r) => sum + (Number(r.amount ?? 0) || 0), 0)
+      const laborHours = this.laborEntries
+        .filter((r) => r.company_id === companyId && r.project_id === projectId && !r.deleted_at)
+        .reduce((sum, r) => sum + r.hours, 0)
+      const materialsTotal = this.materialBills
+        .filter((r) => r.company_id === companyId && r.project_id === projectId && !r.deleted_at)
+        .reduce((sum, r) => sum + r.amount, 0)
+      const rentalsTotal = this.rentalBillingRuns
+        .filter(
+          (r) => r.company_id === companyId && r.project_id === projectId && !r.deleted_at && r.status === 'posted',
+        )
+        .reduce((sum, r) => sum + r.subtotal, 0)
+      return {
+        rows: [
+          {
+            estimate_total: String(estimateTotal),
+            labor_hours: String(laborHours),
+            materials_total: String(materialsTotal),
+            rentals_total: String(rentalsTotal),
+          },
+        ],
+        rowCount: 1,
       }
     }
 
@@ -623,5 +694,244 @@ describe('handleProjectRoutes — GET /api/projects/:id/labor-variance', () => {
 
     await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/not-a-uuid/labor-variance`), ctx)
     expect(responses[0]?.status).toBe(400)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GET /api/projects/:id/closeout-summary
+// Bid → actual rollup across labor / materials / rentals + computed margin.
+// Single round-trip; the route runs four sub-CTEs and folds them in JS.
+// These tests exercise the fold (labor_hours × labor_rate, margin math)
+// and the tenant / posted-only filters that the SQL clauses enforce.
+// ---------------------------------------------------------------------------
+
+type CloseoutSummaryResponse = {
+  project: { id: string; name: string }
+  bid: number
+  estimate_total: number
+  labor_hours: number
+  labor_rate: number
+  labor_actual: number
+  materials_actual: number
+  rentals_actual: number
+  total_actual: number
+  margin: number
+  margin_pct: number
+}
+
+function seedEstimateLineAmount(
+  pool: FakePool,
+  overrides: { service_item_code: string; quantity: number; amount: number; unit?: string },
+) {
+  pool.estimateLines.push({
+    company_id: 'co-1',
+    project_id: PROJECT_ID,
+    service_item_code: overrides.service_item_code,
+    division_code: null,
+    unit: overrides.unit ?? 'sqft',
+    quantity: overrides.quantity,
+    amount: overrides.amount,
+  })
+}
+
+function seedMaterialBill(pool: FakePool, overrides: Partial<MaterialBillRow> & { amount: number }) {
+  pool.materialBills.push({
+    company_id: 'co-1',
+    project_id: PROJECT_ID,
+    amount: overrides.amount,
+    bill_type: overrides.bill_type ?? 'material',
+    deleted_at: overrides.deleted_at ?? null,
+  })
+}
+
+function seedRentalBillingRun(
+  pool: FakePool,
+  overrides: Partial<RentalBillingRunRow> & { subtotal: number; status: string },
+) {
+  pool.rentalBillingRuns.push({
+    company_id: 'co-1',
+    project_id: PROJECT_ID,
+    subtotal: overrides.subtotal,
+    status: overrides.status,
+    deleted_at: overrides.deleted_at ?? null,
+  })
+}
+
+describe('handleProjectRoutes — GET /api/projects/:id/closeout-summary', () => {
+  it('returns all zeros and 0% margin for an empty project (no bid, no actuals)', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { bid_total: 0, labor_rate: 0 })
+    const { ctx, responses } = makeCtx(pool)
+
+    const handled = await handleProjectRoutes(
+      { method: 'GET' } as never,
+      buildUrl(`/api/projects/${PROJECT_ID}/closeout-summary`),
+      ctx,
+    )
+    expect(handled).toBe(true)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+
+    const body = responses[0]?.body as CloseoutSummaryResponse
+    expect(body.bid).toBe(0)
+    expect(body.estimate_total).toBe(0)
+    expect(body.labor_hours).toBe(0)
+    expect(body.labor_actual).toBe(0)
+    expect(body.materials_actual).toBe(0)
+    expect(body.rentals_actual).toBe(0)
+    expect(body.total_actual).toBe(0)
+    expect(body.margin).toBe(0)
+    expect(body.margin_pct).toBe(0)
+  })
+
+  it('computes labor + materials + rentals actuals + margin for a project with each bucket', async () => {
+    const pool = new FakePool()
+    // bid 10000, labor_rate 50.
+    seedProject(pool, { bid_total: 10000, labor_rate: 50 })
+    // Estimate baseline: 2 lines summing to 9500.
+    seedEstimateLineAmount(pool, { service_item_code: 'A', quantity: 100, amount: 5000 })
+    seedEstimateLineAmount(pool, { service_item_code: 'B', quantity: 50, amount: 4500 })
+    // Labor: 40 hours × $50/hr = $2000 actual labor.
+    pool.laborEntries.push({
+      company_id: 'co-1',
+      project_id: PROJECT_ID,
+      service_item_code: 'A',
+      division_code: null,
+      hours: 25,
+      sqft_done: 0,
+      deleted_at: null,
+    })
+    pool.laborEntries.push({
+      company_id: 'co-1',
+      project_id: PROJECT_ID,
+      service_item_code: 'B',
+      division_code: null,
+      hours: 15,
+      sqft_done: 0,
+      deleted_at: null,
+    })
+    // Materials: $1500 + $250 = $1750.
+    seedMaterialBill(pool, { amount: 1500, bill_type: 'material' })
+    seedMaterialBill(pool, { amount: 250, bill_type: 'sub' })
+    // Rentals: one posted ($800), one generated ($999 — must NOT count).
+    seedRentalBillingRun(pool, { subtotal: 800, status: 'posted' })
+    seedRentalBillingRun(pool, { subtotal: 999, status: 'generated' })
+
+    const { ctx, responses } = makeCtx(pool)
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout-summary`), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    const body = responses[0]?.body as CloseoutSummaryResponse
+    expect(body.bid).toBe(10000)
+    expect(body.estimate_total).toBe(9500)
+    expect(body.labor_hours).toBe(40)
+    expect(body.labor_rate).toBe(50)
+    expect(body.labor_actual).toBe(2000)
+    expect(body.materials_actual).toBe(1750)
+    expect(body.rentals_actual).toBe(800)
+    expect(body.total_actual).toBe(4550)
+    expect(body.margin).toBe(5450)
+    // 5450 / 10000 = 54.5%.
+    expect(body.margin_pct).toBe(54.5)
+  })
+
+  it('only counts posted rental_billing_runs (generated / approved / failed / voided excluded)', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { bid_total: 5000, labor_rate: 0 })
+    // One run in every non-posted state — none should count.
+    seedRentalBillingRun(pool, { subtotal: 100, status: 'generated' })
+    seedRentalBillingRun(pool, { subtotal: 200, status: 'approved' })
+    seedRentalBillingRun(pool, { subtotal: 300, status: 'posting' })
+    seedRentalBillingRun(pool, { subtotal: 400, status: 'failed' })
+    seedRentalBillingRun(pool, { subtotal: 500, status: 'voided' })
+    // And one posted that should count.
+    seedRentalBillingRun(pool, { subtotal: 750, status: 'posted' })
+
+    const { ctx, responses } = makeCtx(pool)
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout-summary`), ctx)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as CloseoutSummaryResponse
+    expect(body.rentals_actual).toBe(750)
+    expect(body.total_actual).toBe(750)
+    expect(body.margin).toBe(4250)
+  })
+
+  it('does not leak rows from another company (tenant isolation)', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { bid_total: 1000, labor_rate: 0 })
+    // All belong to co-other — the route's company_id filter should
+    // strip them.
+    pool.estimateLines.push({
+      company_id: 'co-other',
+      project_id: PROJECT_ID,
+      service_item_code: 'X',
+      division_code: null,
+      unit: 'sqft',
+      quantity: 100,
+      amount: 9999,
+    })
+    pool.materialBills.push({
+      company_id: 'co-other',
+      project_id: PROJECT_ID,
+      amount: 8888,
+      bill_type: 'material',
+      deleted_at: null,
+    })
+    pool.rentalBillingRuns.push({
+      company_id: 'co-other',
+      project_id: PROJECT_ID,
+      subtotal: 7777,
+      status: 'posted',
+      deleted_at: null,
+    })
+
+    const { ctx, responses } = makeCtx(pool)
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout-summary`), ctx)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as CloseoutSummaryResponse
+    expect(body.estimate_total).toBe(0)
+    expect(body.materials_actual).toBe(0)
+    expect(body.rentals_actual).toBe(0)
+    expect(body.total_actual).toBe(0)
+  })
+
+  it('returns 404 when the project does not belong to the current company', async () => {
+    const pool = new FakePool()
+    // No seedProject — empty projects table.
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout-summary`), ctx)
+    expect(responses[0]?.status).toBe(404)
+  })
+
+  it('rejects non-uuid project ids with 400', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/not-a-uuid/closeout-summary`), ctx)
+    expect(responses[0]?.status).toBe(400)
+  })
+
+  it('skips deleted material bills and labor entries (soft-delete filter)', async () => {
+    const pool = new FakePool()
+    seedProject(pool, { bid_total: 1000, labor_rate: 100 })
+    pool.laborEntries.push({
+      company_id: 'co-1',
+      project_id: PROJECT_ID,
+      service_item_code: 'A',
+      division_code: null,
+      hours: 5,
+      sqft_done: 0,
+      deleted_at: '2026-05-01T00:00:00.000Z',
+    })
+    seedMaterialBill(pool, { amount: 200, bill_type: 'material', deleted_at: '2026-05-01T00:00:00.000Z' })
+
+    const { ctx, responses } = makeCtx(pool)
+    await handleProjectRoutes({ method: 'GET' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout-summary`), ctx)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as CloseoutSummaryResponse
+    expect(body.labor_hours).toBe(0)
+    expect(body.labor_actual).toBe(0)
+    expect(body.materials_actual).toBe(0)
+    expect(body.margin).toBe(1000)
+    expect(body.margin_pct).toBe(100)
   })
 })
