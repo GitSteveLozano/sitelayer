@@ -158,7 +158,7 @@ export async function buildBlueprintTakeoff(opts: BuildBlueprintTakeoffOptions):
   const extractByPage = new Map<number, ExtractedPage>()
   for (const ep of extractedPages) extractByPage.set(ep.pageIndex, ep)
 
-  let pageSizesPts: Array<{ w: number; h: number }> = []
+  const pageSizesPts: Array<{ w: number; h: number }> = []
 
   for (const page of allPages) {
     const ep = extractByPage.get(page.pageIndex)

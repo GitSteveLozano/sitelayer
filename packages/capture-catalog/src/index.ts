@@ -76,6 +76,7 @@ export function loadCatalog(yamlPath?: string): CatalogItem[] {
         row && typeof row === 'object' && 'sku' in row ? String((row as { sku: unknown }).sku) : `<row ${idx}>`
       throw new Error(
         `Catalog row ${idx} (${sku}) failed validation: ${err instanceof Error ? err.message : String(err)}`,
+        { cause: err },
       )
     }
   })
