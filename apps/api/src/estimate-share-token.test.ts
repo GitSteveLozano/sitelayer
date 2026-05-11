@@ -35,7 +35,11 @@ describe('generateShareToken / verifyShareToken', () => {
     const secret = 'estimate-share-secret-abc'
     const { token } = generateShareToken(secret)
     const [id, sig] = token.split('.')
-    const tampered = `${id!.slice(0, -1)}X.${sig}`
+    // Replace the final char with one guaranteed to differ — if we
+    // hardcoded e.g. 'X' the test would flake every time the random
+    // id happened to end in X.
+    const lastChar = id!.slice(-1)
+    const tampered = `${id!.slice(0, -1)}${lastChar === 'A' ? 'B' : 'A'}.${sig}`
     expect(verifyShareToken(tampered, secret)).toEqual({ ok: false })
   })
 
@@ -43,7 +47,8 @@ describe('generateShareToken / verifyShareToken', () => {
     const secret = 'estimate-share-secret-abc'
     const { token } = generateShareToken(secret)
     const [id, sig] = token.split('.')
-    const tampered = `${id}.${sig!.slice(0, -1)}X`
+    const lastChar = sig!.slice(-1)
+    const tampered = `${id}.${sig!.slice(0, -1)}${lastChar === 'A' ? 'B' : 'A'}`
     expect(verifyShareToken(tampered, secret)).toEqual({ ok: false })
   })
 
