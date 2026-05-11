@@ -1,8 +1,9 @@
-import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
-import { useBillingRun, useDispatchBillingRunEvent, type RentalBillingHumanEvent } from '@/lib/api'
+import { getActiveCompanySlug } from '@/lib/api/client'
+import { useBillingReview } from '@/machines/billing-review'
+import type { RentalBillingHumanEvent } from '@/lib/api'
 
 const TONE_BY_STATE: Record<string, 'good' | 'warn' | 'default'> = {
   generated: 'default',
@@ -15,9 +16,13 @@ const TONE_BY_STATE: Record<string, 'good' | 'warn' | 'default'> = {
 
 export function BillingRunDetailScreen() {
   const { id } = useParams<{ id: string }>()
-  const snapshot = useBillingRun(id)
-  const dispatch = useDispatchBillingRunEvent(id ?? '')
-  const [error, setError] = useState<string | null>(null)
+  const companySlug = getActiveCompanySlug()
+  // Empty-string runId is harmless — the machine's load actor would 404
+  // immediately and the early-return below guards the rest of the render.
+  const { snapshot, error, outOfSync, isLoading, isSubmitting, dispatch, dismissError } = useBillingReview(
+    id ?? '',
+    companySlug,
+  )
 
   if (!id) {
     return (
@@ -29,10 +34,10 @@ export function BillingRunDetailScreen() {
     )
   }
 
-  if (snapshot.isPending) {
+  if (isLoading && !snapshot) {
     return <div className="px-5 pt-8 text-[13px] text-ink-3">Loading run…</div>
   }
-  if (!snapshot.data) {
+  if (!snapshot) {
     return (
       <div className="px-5 pt-8">
         <h1 className="font-display text-[22px] font-bold tracking-tight">Run not found</h1>
@@ -43,16 +48,11 @@ export function BillingRunDetailScreen() {
     )
   }
 
-  const ctx = snapshot.data.context
+  const ctx = snapshot.context
   const lines = ctx.lines ?? []
 
-  const onEvent = async (event: RentalBillingHumanEvent) => {
-    setError(null)
-    try {
-      await dispatch.mutateAsync({ event, state_version: snapshot.data.state_version })
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Event failed')
-    }
+  const onEvent = (event: RentalBillingHumanEvent) => {
+    dispatch(event)
   }
 
   return (
@@ -66,16 +66,39 @@ export function BillingRunDetailScreen() {
             ${Number(ctx.subtotal).toLocaleString()}
           </h1>
           <div className="text-[11px] text-ink-3 mt-1">
-            {ctx.period_start} → {ctx.period_end} · v{snapshot.data.state_version}
+            {ctx.period_start} → {ctx.period_end} · v{snapshot.state_version}
             {ctx.qbo_invoice_id ? ` · QBO inv #${ctx.qbo_invoice_id}` : ''}
           </div>
         </div>
-        <Pill tone={TONE_BY_STATE[snapshot.data.state] ?? 'default'}>{snapshot.data.state}</Pill>
+        <Pill tone={TONE_BY_STATE[snapshot.state] ?? 'default'}>{snapshot.state}</Pill>
       </div>
+
+      {outOfSync ? (
+        <Card tight className="mt-4">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Stale state</div>
+          <div className="text-[12px] text-ink-2 mt-1">
+            Run state moved on the server. Reloaded — pick the next action again.
+          </div>
+        </Card>
+      ) : null}
+
+      {error && !outOfSync ? (
+        <Card tight className="mt-4">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Error</div>
+              <div className="text-[12px] text-ink-2 mt-1">{error}</div>
+            </div>
+            <button type="button" onClick={dismissError} className="text-[11px] text-ink-3 underline">
+              dismiss
+            </button>
+          </div>
+        </Card>
+      ) : null}
 
       {ctx.error ? (
         <Card tight className="mt-4">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Error</div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Run error</div>
           <div className="text-[12px] text-ink-2 mt-1">{ctx.error}</div>
         </Card>
       ) : null}
@@ -115,17 +138,17 @@ export function BillingRunDetailScreen() {
 
       <div className="mt-4 space-y-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Actions</div>
-        {snapshot.data.next_events.length === 0 ? (
+        {snapshot.next_events.length === 0 ? (
           <Card tight>
             <div className="text-[12px] text-ink-3">Terminal state — no further actions.</div>
           </Card>
         ) : (
           <div className="grid grid-cols-2 gap-2">
-            {snapshot.data.next_events.map((ev) => (
+            {snapshot.next_events.map((ev) => (
               <MobileButton
                 key={ev.type}
                 variant={ev.type === 'VOID' ? 'ghost' : 'primary'}
-                disabled={dispatch.isPending}
+                disabled={isSubmitting}
                 onClick={() => onEvent(ev.type)}
               >
                 {ev.label}
@@ -133,11 +156,10 @@ export function BillingRunDetailScreen() {
             ))}
           </div>
         )}
-        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
       </div>
 
       <div className="mt-4">
-        <Attribution source="GET /api/rental-billing-runs/:id · POST /:id/events" />
+        <Attribution source="GET /api/rental-billing-runs/:id · POST /:id/events (billing-review XState machine)" />
       </div>
     </div>
   )
