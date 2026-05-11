@@ -98,6 +98,12 @@ jobs:
           npm run build --workspace @sitelayer/logger
           npm run build --workspace @sitelayer/queue
           npm run build --workspace @sitelayer/workflows
+          npm run build --workspace @sitelayer/capture-schema
+          npm run build --workspace @sitelayer/capture-catalog
+          npm run build --workspace @sitelayer/pipe-blueprint
+          npm run build --workspace @sitelayer/pipe-roomplan
+          npm run build --workspace @sitelayer/pipe-photogrammetry
+          npm run build --workspace @sitelayer/pipe-drone
           npm run build --workspace @sitelayer/api
 
       - name: Start API server

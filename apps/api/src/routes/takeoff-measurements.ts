@@ -61,7 +61,7 @@ export async function handleTakeoffMeasurementRoutes(
     // draft via psql — in which case we return an empty set rather than
     // silently surfacing rows from a deleted draft.
     const explicitDraftId = url.searchParams.get('draft_id')
-    let draftFilter = ''
+    let draftFilter: string
     const params: unknown[] = [ctx.company.id, projectId]
     if (explicitDraftId !== null) {
       if (!isValidUuid(explicitDraftId)) {

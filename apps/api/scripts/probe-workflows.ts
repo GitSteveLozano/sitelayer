@@ -239,7 +239,7 @@ function renderTable(rows: RowReport[]): string {
 
 async function main(): Promise<void> {
   const args = parseArgs()
-  // eslint-disable-next-line no-console
+   
   console.error(
     `probe target=${args.base} slug=${args.slug} transition=${args.transition} authed=${Boolean(args.token)}`,
   )
@@ -247,18 +247,18 @@ async function main(): Promise<void> {
   for (const s of SURFACES) {
     rows.push(await probeSurface(s, args))
   }
-  // eslint-disable-next-line no-console
+   
   console.log(renderTable(rows))
   const broken = rows.filter((r) => /5\d\d/.test(r.list) || r.list === '0')
   if (broken.length > 0) {
-    // eslint-disable-next-line no-console
+     
     console.error(`\n${broken.length} workflow surface(s) returned 5xx/timeout — see table above`)
     process.exit(1)
   }
 }
 
 main().catch((err) => {
-  // eslint-disable-next-line no-console
+   
   console.error('probe-workflows: fatal', err)
   process.exit(1)
 })
