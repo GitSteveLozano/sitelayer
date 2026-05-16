@@ -36,6 +36,16 @@ export interface LaborEntryCreateRequest {
   expected_version?: number
 }
 
+export interface LaborEntryPatchRequest {
+  worker_id?: string | null
+  service_item_code?: string | null
+  hours?: number
+  sqft_done?: number | null
+  status?: string
+  occurred_on?: string
+  division_code?: string | null
+}
+
 const KEYS = {
   all: () => ['labor-entries'] as const,
   list: () => [...KEYS.all(), 'list'] as const,
@@ -55,6 +65,23 @@ export function useCreateLaborEntry() {
       // Bootstrap + project summaries embed the labor roll-up, so kick
       // every related cache. Bootstrap query keys are slug-scoped so we
       // invalidate the family rather than guess the active slug here.
+      void qc.invalidateQueries({ queryKey: KEYS.all() })
+      void qc.invalidateQueries({ queryKey: ['bootstrap'] })
+      void qc.invalidateQueries({ queryKey: ['projects', 'summary'] })
+      void qc.invalidateQueries({ queryKey: ['time-review-runs'] })
+    },
+  })
+}
+
+export function patchLaborEntry(id: string, input: LaborEntryPatchRequest): Promise<LaborEntry> {
+  return request<LaborEntry>(`/api/labor-entries/${encodeURIComponent(id)}`, { method: 'PATCH', json: input })
+}
+
+export function usePatchLaborEntry() {
+  const qc = useQueryClient()
+  return useMutation<LaborEntry, Error, { id: string; patch: LaborEntryPatchRequest }>({
+    mutationFn: ({ id, patch }) => patchLaborEntry(id, patch),
+    onSuccess: () => {
       void qc.invalidateQueries({ queryKey: KEYS.all() })
       void qc.invalidateQueries({ queryKey: ['bootstrap'] })
       void qc.invalidateQueries({ queryKey: ['projects', 'summary'] })

@@ -10,6 +10,7 @@ import { useEstimateBuilder } from '@/machines/estimate-builder'
 import { BidAccuracyCard } from './bid-accuracy-card'
 import { EstimateLineAssembly } from './estimate-line-assembly'
 import { EstimateMarkupBreakdown } from './estimate-markup-breakdown'
+import { EstimateShareSheet } from './estimate-share-sheet'
 import { PricingProfilePicker } from './pricing-profile-picker'
 
 /**
@@ -32,7 +33,7 @@ const COMPACT_KEYSTONE_LINE_THRESHOLD = 10
  *   │             │                       │                   │
  *   └─────────────┴───────────────────────┴───────────────────┘
  *   ┌─ Footer ────────────────────────────────────────────────┐
- *   │  "Send to client" → opens estimate-share-sheet (TODO)   │
+ *   │  "Send to client" → opens EstimateShareSheet            │
  *   └─────────────────────────────────────────────────────────┘
  *
  * Patterns inherited from `estimate-summary.tsx`:
@@ -103,6 +104,7 @@ export function EstimateBuilderScreen() {
   // expands a Sheet with the full keystone when tapped.
   const isCompactKeystone = lines.length > 0 && lines.length < COMPACT_KEYSTONE_LINE_THRESHOLD
   const [keystoneSheetOpen, setKeystoneSheetOpen] = useState(false)
+  const [shareSheetOpen, setShareSheetOpen] = useState(false)
 
   return (
     <div className="px-5 pt-6 pb-12 max-w-[1280px] mx-auto">
@@ -254,22 +256,12 @@ export function EstimateBuilderScreen() {
 
       {/* Footer. */}
       <div className="mt-6 flex items-center justify-end gap-2 pt-4 border-t border-line">
-        <MobileButton
-          variant="primary"
-          disabled={lines.length === 0}
-          onClick={() => {
-            // INTEGRATION TODO: open the `estimate-share-sheet` from the
-            // sales-loop slice. The Phase 2C share sheet currently lives
-            // inside `estimate-summary.tsx` (`ShareSheet`). When the
-            // sales-loop slice extracts it into a standalone component,
-            // import + render here. For now the user can still send via
-            // the Estimate sub-tab on project detail.
-            window.location.href = `/projects/${projectId}?tab=estimate`
-          }}
-        >
+        <MobileButton variant="primary" disabled={lines.length === 0} onClick={() => setShareSheetOpen(true)}>
           Send to client
         </MobileButton>
       </div>
+
+      <EstimateShareSheet open={shareSheetOpen} onClose={() => setShareSheetOpen(false)} projectId={projectId} />
     </div>
   )
 }

@@ -10,6 +10,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import type { BootstrapResponse, LaborRow } from '../../api-v1-compat.js'
+import { usePatchLaborEntry } from '../../lib/api/labor-entries.js'
 import {
   MAvatar,
   MBanner,
@@ -47,6 +48,14 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
   // here so the inline editor works against the bootstrap state without
   // forcing a refetch when the foreman is reviewing offline.
   const [edits, setEdits] = useState<Record<string, { in?: string; out?: string; break?: string; note?: string }>>({})
+
+  // Per-row PATCH /api/labor-entries/:id. TanStack mutation (not XState)
+  // matches the codebase convention from CLAUDE.md: data/cache layer is
+  // TanStack, XState is reserved for multi-step orchestration. The hook
+  // invalidates bootstrap + time-review-runs so the row moves from
+  // Pending → Approved without a manual refresh.
+  const patchLabor = usePatchLaborEntry()
+  const pendingRowId = patchLabor.isPending ? (patchLabor.variables?.id ?? null) : null
 
   const today = todayIso()
   const todayLabor = useMemo(() => labor.filter((l) => l.occurred_on === today && !l.deleted_at), [labor, today])
@@ -142,19 +151,42 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
                           <PendingInlineEditor
                             labor={l}
                             edit={edits[l.id] ?? {}}
+                            isSubmitting={pendingRowId === l.id}
+                            error={patchLabor.error && pendingRowId === null ? patchLabor.error.message : null}
                             onEdit={(patch) =>
                               setEdits((cur) => ({ ...cur, [l.id]: { ...(cur[l.id] ?? {}), ...patch } }))
                             }
                             onApprove={async () => {
-                              // TODO: wire to PATCH /api/labor-entries/:id
-                              // when an "approve" mutation hook lands —
-                              // pattern is the same as useEstimatePush. The
-                              // time-review-runs workflow already exposes
-                              // APPROVE; that's batch-level, this is row-level.
-                              setExpandedId(null)
+                              const e = edits[l.id]
+                              const patch: { status: 'approved'; hours?: number } = { status: 'approved' }
+                              const adjustedHours = adjustedHoursFromEdit(l, e)
+                              if (adjustedHours !== null) patch.hours = adjustedHours
+                              try {
+                                await patchLabor.mutateAsync({ id: l.id, patch })
+                                setExpandedId(null)
+                                setEdits((cur) => {
+                                  const next = { ...cur }
+                                  delete next[l.id]
+                                  return next
+                                })
+                              } catch {
+                                // patchLabor.error renders inline; keep the
+                                // editor open so the foreman can retry or
+                                // adjust.
+                              }
                             }}
                             onReject={async () => {
-                              setExpandedId(null)
+                              try {
+                                await patchLabor.mutateAsync({ id: l.id, patch: { status: 'rejected' } })
+                                setExpandedId(null)
+                                setEdits((cur) => {
+                                  const next = { ...cur }
+                                  delete next[l.id]
+                                  return next
+                                })
+                              } catch {
+                                // see above
+                              }
                             }}
                           />
                         ) : null}
@@ -210,12 +242,16 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
 function PendingInlineEditor({
   labor,
   edit,
+  isSubmitting,
+  error,
   onEdit,
   onApprove,
   onReject,
 }: {
   labor: LaborRow
   edit: { in?: string; out?: string; break?: string; note?: string }
+  isSubmitting: boolean
+  error: string | null
   onEdit: (patch: { in?: string; out?: string; break?: string; note?: string }) => void
   onApprove: () => void | Promise<void>
   onReject: () => void | Promise<void>
@@ -260,19 +296,65 @@ function PendingInlineEditor({
         onChange={(e) => onEdit({ note: e.currentTarget.value })}
         style={{ minHeight: 60 }}
       />
+      {error ? (
+        <MBanner tone="error" title="Couldn't update" body={error} />
+      ) : null}
       <MButtonRow>
-        <MButton size="sm" variant="primary" onClick={() => void onApprove()}>
-          Approve
+        <MButton size="sm" variant="primary" onClick={() => void onApprove()} disabled={isSubmitting}>
+          {isSubmitting ? 'Saving…' : 'Approve'}
         </MButton>
-        <MButton size="sm" variant="ghost" onClick={() => void onApprove()}>
+        <MButton size="sm" variant="ghost" onClick={() => void onApprove()} disabled={isSubmitting}>
           Adjust
         </MButton>
-        <MButton size="sm" variant="ghost" onClick={() => void onReject()}>
+        <MButton size="sm" variant="ghost" onClick={() => void onReject()} disabled={isSubmitting}>
           Reject
         </MButton>
       </MButtonRow>
     </div>
   )
+}
+
+/** Compute the adjusted hours from the foreman's clock-in/out/break
+ *  edits, if any. Returns null when the editor's three time fields are
+ *  empty (the foreman approved without changing the times) — the API
+ *  PATCH then leaves hours unchanged via its coalesce(null, hours)
+ *  pattern. */
+function adjustedHoursFromEdit(
+  labor: LaborRow,
+  edit: { in?: string; out?: string; break?: string; note?: string } | undefined,
+): number | null {
+  if (!edit) return null
+  if (!edit.in && !edit.out && !edit.break) return null
+  const inTime = edit.in ?? guessInTime(labor)
+  const outTime = edit.out ?? guessOutTime(labor)
+  const breakMins = parseBreakMinutes(edit.break ?? '0')
+  const inMs = parseHHmm(inTime)
+  const outMs = parseHHmm(outTime)
+  if (inMs === null || outMs === null) return null
+  const minutes = Math.max(0, (outMs - inMs) / 60_000 - breakMins)
+  return Math.round((minutes / 60) * 100) / 100
+}
+
+function parseHHmm(value: string): number | null {
+  const m = value.match(/^([0-9]{1,2}):([0-9]{2})$/)
+  if (!m || !m[1] || !m[2]) return null
+  const h = Number(m[1])
+  const mm = Number(m[2])
+  if (!Number.isFinite(h) || !Number.isFinite(mm)) return null
+  return (h * 60 + mm) * 60_000
+}
+
+function parseBreakMinutes(value: string): number {
+  const trimmed = value.trim()
+  if (!trimmed) return 0
+  // Accept "0:30" or "30" (raw minutes) or "1h" formats.
+  const colon = trimmed.match(/^([0-9]+):([0-9]{1,2})$/)
+  if (colon && colon[1] && colon[2]) {
+    return Number(colon[1]) * 60 + Number(colon[2])
+  }
+  const n = Number(trimmed)
+  if (Number.isFinite(n)) return n
+  return 0
 }
 
 /** Best-effort: backfill a clock-in time-of-day from the labor row's
