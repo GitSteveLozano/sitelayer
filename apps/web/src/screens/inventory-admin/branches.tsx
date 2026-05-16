@@ -19,10 +19,7 @@ export function BranchesAdminScreen() {
     if (editing === 'new') {
       create.mutate({ code, name, address, is_default: isDefault }, { onSuccess: () => setEditing(null) })
     } else if (editing) {
-      patch.mutate(
-        { id: editing.id, name, address, is_default: isDefault },
-        { onSuccess: () => setEditing(null) },
-      )
+      patch.mutate({ id: editing.id, name, address, is_default: isDefault }, { onSuccess: () => setEditing(null) })
     }
   }
 
@@ -36,8 +33,8 @@ export function BranchesAdminScreen() {
           <h1 className="font-display text-[24px] font-bold tracking-tight leading-tight">Branches</h1>
           <p className="text-[12px] text-ink-3 mt-1">{rows.length} active</p>
           <p className="text-[12px] text-ink-3 mt-1">
-            Locations / yards / jobsites roll up into a branch. The default branch is used when an
-            inventory location is created without one specified.
+            Locations / yards / jobsites roll up into a branch. The default branch is used when an inventory location is
+            created without one specified.
           </p>
         </div>
         <MobileButton variant="primary" onClick={() => setEditing('new')}>
@@ -75,11 +72,7 @@ export function BranchesAdminScreen() {
       </div>
 
       {editing !== null ? (
-        <Sheet
-          open
-          onClose={() => setEditing(null)}
-          title={editing === 'new' ? 'New branch' : `Edit ${editing.name}`}
-        >
+        <Sheet open onClose={() => setEditing(null)} title={editing === 'new' ? 'New branch' : `Edit ${editing.name}`}>
           <form
             onSubmit={(e) => {
               e.preventDefault()
@@ -115,11 +108,7 @@ export function BranchesAdminScreen() {
               />
             </label>
             <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                name="is_default"
-                defaultChecked={editing !== 'new' && editing.is_default}
-              />
+              <input type="checkbox" name="is_default" defaultChecked={editing !== 'new' && editing.is_default} />
               <span className="text-[13px]">Make default branch</span>
             </label>
             <div className="flex justify-end gap-2 pt-2">

@@ -424,6 +424,8 @@ export async function handleRentalInventoryCrudRoutes(
       return true
     }
 
+    const normalizedMovementType = normalizeEnum(body.movement_type, MOVEMENT_TYPES, 'adjustment')
+
     const movement = await withMutationTx(async (client: PoolClient) => {
       const result = await client.query<InventoryMovementRow>(
         `
@@ -441,7 +443,7 @@ export async function handleRentalInventoryCrudRoutes(
           fromLocationId,
           toLocationId,
           projectId,
-          normalizeEnum(body.movement_type, MOVEMENT_TYPES, 'adjustment'),
+          normalizedMovementType,
           quantity,
           occurredOn,
           optionalString(body.ticket_number),
@@ -464,6 +466,71 @@ export async function handleRentalInventoryCrudRoutes(
         action: 'create',
         row,
       })
+
+      // Auto-bill replacement cost on damage / loss reconciliation —
+      // Avontus parity. When a `damaged` or `lost` movement lands on a
+      // project AND the inventory item has a `replacement_value > 0`,
+      // open a damage_charges row (status='open') that the office can
+      // approve/waive. The existing damage-charge-push worker handles
+      // the QBO invoice push on approval. Skips silently if the
+      // item has no replacement_value (the item type isn't billable for
+      // damage — e.g. consumables) or the movement isn't project-bound
+      // (yard adjustments don't bill to a customer).
+      if ((normalizedMovementType === 'damaged' || normalizedMovementType === 'lost') && projectId) {
+        const item = await client.query<{
+          replacement_value: string | null
+          description: string | null
+          code: string | null
+        }>(
+          `select replacement_value, description, code from inventory_items
+           where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+          [ctx.company.id, itemId],
+        )
+        const replacementValue = Number(item.rows[0]?.replacement_value ?? 0)
+        if (item.rows[0] && replacementValue > 0) {
+          const proj = await client.query<{ customer_id: string | null }>(
+            `select customer_id from projects where company_id = $1 and id = $2 limit 1`,
+            [ctx.company.id, projectId],
+          )
+          const customerId = proj.rows[0]?.customer_id ?? null
+          const itemLabel =
+            [item.rows[0].code, item.rows[0].description].filter(Boolean).join(' - ') || 'Inventory item'
+          const totalAmount = Number((quantity * replacementValue).toFixed(2))
+          const charge = await client.query<{ id: string }>(
+            `insert into damage_charges (
+               company_id, project_id, customer_id, inventory_item_id, kind,
+               quantity, unit_amount, total_amount, description, status, notes
+             )
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'open', $10)
+             returning id`,
+            [
+              ctx.company.id,
+              projectId,
+              customerId,
+              itemId,
+              normalizedMovementType === 'damaged' ? 'damage' : 'loss',
+              quantity,
+              replacementValue,
+              totalAmount,
+              `${normalizedMovementType === 'damaged' ? 'Damaged' : 'Lost'} ${itemLabel} (qty ${quantity})`,
+              `Auto-opened from inventory_movement ${row.id}`,
+            ],
+          )
+          await recordMutationLedger(client, {
+            companyId: ctx.company.id,
+            entityType: 'damage_charge',
+            entityId: charge.rows[0]!.id,
+            action: 'create',
+            row: {
+              source: 'inventory_movement_auto',
+              source_movement_id: row.id,
+              kind: normalizedMovementType === 'damaged' ? 'damage' : 'loss',
+              total_amount: totalAmount,
+            },
+          })
+        }
+      }
+
       return row
     })
     ctx.sendJson(201, movement)

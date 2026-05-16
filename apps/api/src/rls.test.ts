@@ -38,8 +38,9 @@ describeIntegration('row-level security (migration 066)', () => {
       'RLS Test B',
     ])
     await pool.query(
-      `insert into projects (id, company_id, name, status)
-       values ($1, $2, 'A project', 'planning'), ($3, $4, 'B project', 'planning')`,
+      `insert into projects (id, company_id, name, customer_name, division_code, status)
+       values ($1, $2, 'A project', 'A customer', 'D1', 'planning'),
+              ($3, $4, 'B project', 'B customer', 'D1', 'planning')`,
       [projectA, companyA, projectB, companyB],
     )
     await pool.query('alter table projects enable row level security')
@@ -77,30 +78,27 @@ describeIntegration('row-level security (migration 066)', () => {
 
   it('sees only company A rows when app.company_id = A', async () => {
     await withSetting(companyA, async (c) => {
-      const result = await c.query<{ id: string }>(
-        'select id from projects where id = any($1::uuid[])',
-        [[projectA, projectB]],
-      )
+      const result = await c.query<{ id: string }>('select id from projects where id = any($1::uuid[])', [
+        [projectA, projectB],
+      ])
       expect(result.rows.map((r) => r.id)).toEqual([projectA])
     })
   })
 
   it('sees only company B rows when app.company_id = B', async () => {
     await withSetting(companyB, async (c) => {
-      const result = await c.query<{ id: string }>(
-        'select id from projects where id = any($1::uuid[])',
-        [[projectA, projectB]],
-      )
+      const result = await c.query<{ id: string }>('select id from projects where id = any($1::uuid[])', [
+        [projectA, projectB],
+      ])
       expect(result.rows.map((r) => r.id)).toEqual([projectB])
     })
   })
 
   it('is permissive when app.company_id is unset (shadow-mode fallback)', async () => {
     await withSetting(null, async (c) => {
-      const result = await c.query<{ id: string }>(
-        'select id from projects where id = any($1::uuid[]) order by name',
-        [[projectA, projectB]],
-      )
+      const result = await c.query<{ id: string }>('select id from projects where id = any($1::uuid[]) order by name', [
+        [projectA, projectB],
+      ])
       expect(result.rows.map((r) => r.id).sort()).toEqual([projectA, projectB].sort())
     })
   })
@@ -109,10 +107,11 @@ describeIntegration('row-level security (migration 066)', () => {
     const orphanId = randomUUID()
     await expect(
       withSetting(companyA, async (c) => {
-        await c.query("insert into projects (id, company_id, name, status) values ($1, $2, 'X', 'planning')", [
-          orphanId,
-          companyB,
-        ])
+        await c.query(
+          `insert into projects (id, company_id, name, customer_name, division_code, status)
+           values ($1, $2, 'X', 'X cust', 'D1', 'planning')`,
+          [orphanId, companyB],
+        )
       }),
     ).rejects.toThrow(/row-level security/i)
   })

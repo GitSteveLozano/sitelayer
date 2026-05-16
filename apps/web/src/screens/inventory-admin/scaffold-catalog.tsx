@@ -83,9 +83,7 @@ export function ScaffoldCatalogAdminScreen() {
       <Link to="/more/inventory" className="text-[12px] text-ink-3">
         ← Inventory admin
       </Link>
-      <h1 className="mt-2 font-display text-[24px] font-bold tracking-tight leading-tight">
-        Scaffold catalog
-      </h1>
+      <h1 className="mt-2 font-display text-[24px] font-bold tracking-tight leading-tight">Scaffold catalog</h1>
       <p className="text-[12px] text-ink-3 mt-1">
         Physical scaffold parts indexed by manufacturer + system. BOMs (per-project) reference these.
       </p>
@@ -169,9 +167,9 @@ export function ScaffoldCatalogAdminScreen() {
       {importOpen ? (
         <Sheet open onClose={() => setImportOpen(false)} title="Import catalog parts (CSV)">
           <p className="text-[12px] text-ink-3">
-            Paste CSV with header row. Required columns: <span className="font-mono">sku, description</span>.
-            Optional: <span className="font-mono">unit, weight_kg</span>. If manufacturer and system are
-            selected above, those are applied to every row.
+            Paste CSV with header row. Required columns: <span className="font-mono">sku, description</span>. Optional:{' '}
+            <span className="font-mono">unit, weight_kg</span>. If manufacturer and system are selected above, those are
+            applied to every row.
           </p>
           <textarea
             value={importText}
@@ -180,9 +178,7 @@ export function ScaffoldCatalogAdminScreen() {
             placeholder={'sku,description,unit,weight_kg\nKWS-STD-2.0,Standard 2.0m,ea,12.5'}
             className="mt-2 w-full rounded-md border border-line bg-base p-2 text-[12px] font-mono"
           />
-          {importError ? (
-            <div className="text-[12px] text-danger mt-2">{importError}</div>
-          ) : null}
+          {importError ? <div className="text-[12px] text-danger mt-2">{importError}</div> : null}
           {importResult ? (
             <div className="text-[12px] text-good mt-2">
               Inserted {importResult.inserted}, updated {importResult.updated}.

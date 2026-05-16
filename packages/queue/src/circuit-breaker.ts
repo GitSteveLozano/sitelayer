@@ -122,11 +122,7 @@ export class CircuitOpenError extends Error {
  * call: success closes the circuit, tripping errors increment the
  * failure count, non-tripping errors propagate without affecting state.
  */
-export async function withCircuitBreaker<T>(
-  breaker: CircuitBreaker,
-  key: string,
-  fn: () => Promise<T>,
-): Promise<T> {
+export async function withCircuitBreaker<T>(breaker: CircuitBreaker, key: string, fn: () => Promise<T>): Promise<T> {
   if (breaker.isOpen(key)) {
     throw new CircuitOpenError(key)
   }

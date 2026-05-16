@@ -29,9 +29,7 @@ export function DamageChargesAdminScreen() {
   const [waivingId, setWaivingId] = useState<string | null>(null)
 
   const rows = damage.data?.charges ?? []
-  const openTotal = rows
-    .filter((c) => c.status === 'open')
-    .reduce((sum, c) => sum + Number(c.total_amount), 0)
+  const openTotal = rows.filter((c) => c.status === 'open').reduce((sum, c) => sum + Number(c.total_amount), 0)
 
   function onCreateSubmit(form: FormData) {
     const kind = String(form.get('kind') ?? 'damage') as DamageCharge['kind']
@@ -115,11 +113,7 @@ export function DamageChargesAdminScreen() {
                         {c.qbo_invoice_id ? <> · QBO #{c.qbo_invoice_id}</> : null}
                       </div>
                     </div>
-                    <Pill
-                      tone={
-                        c.status === 'invoiced' ? 'good' : c.status === 'waived' ? 'default' : 'warn'
-                      }
-                    >
+                    <Pill tone={c.status === 'invoiced' ? 'good' : c.status === 'waived' ? 'default' : 'warn'}>
                       {c.status}
                     </Pill>
                   </div>

@@ -17,14 +17,7 @@ import { registerWorkflow } from './registry.js'
  * separately).
  */
 
-export type ShipmentWorkflowState =
-  | 'planned'
-  | 'picking'
-  | 'shipped'
-  | 'delivered'
-  | 'returning'
-  | 'closed'
-  | 'voided'
+export type ShipmentWorkflowState = 'planned' | 'picking' | 'shipped' | 'delivered' | 'returning' | 'closed' | 'voided'
 
 export const SHIPMENT_WORKFLOW_NAME = 'shipment'
 export const SHIPMENT_WORKFLOW_SCHEMA_VERSION = 1
@@ -119,18 +112,12 @@ export function transitionShipmentWorkflow(
         confirmed_by: event.confirmed_by ?? snapshot.confirmed_by ?? null,
       }
     case 'VOID':
-      assertTransition(
-        snapshot.state,
-        ['planned', 'picking', 'shipped', 'delivered', 'returning'],
-        event.type,
-      )
+      assertTransition(snapshot.state, ['planned', 'picking', 'shipped', 'delivered', 'returning'], event.type)
       return { ...snapshot, state: 'voided', state_version: nextVersion }
   }
 }
 
-export function nextShipmentEvents(
-  state: ShipmentWorkflowState,
-): Array<WorkflowNextEvent<ShipmentHumanEventType>> {
+export function nextShipmentEvents(state: ShipmentWorkflowState): Array<WorkflowNextEvent<ShipmentHumanEventType>> {
   switch (state) {
     case 'planned':
       return [
@@ -198,9 +185,7 @@ export function parseShipmentEventRequest(
   body: unknown,
 ): { ok: true; value: ShipmentEventRequest } | { ok: false; error: string } {
   const normalized: Record<string, unknown> =
-    body && typeof body === 'object' && !Array.isArray(body)
-      ? { ...(body as Record<string, unknown>) }
-      : {}
+    body && typeof body === 'object' && !Array.isArray(body) ? { ...(body as Record<string, unknown>) } : {}
   if (typeof normalized.state_version === 'string') {
     const numeric = Number(normalized.state_version)
     if (Number.isFinite(numeric)) normalized.state_version = numeric

@@ -73,7 +73,8 @@ export async function handleDamageChargeRoutes(
     }
     const quantity = num(body.quantity)
     const unitAmount = num(body.unit_amount)
-    const totalAmount = body.total_amount != null ? num(body.total_amount) : Math.round(quantity * unitAmount * 100) / 100
+    const totalAmount =
+      body.total_amount != null ? num(body.total_amount) : Math.round(quantity * unitAmount * 100) / 100
     const result = await ctx.pool.query(
       `insert into damage_charges (
         company_id, project_id, customer_id, shipment_id, shipment_line_id,

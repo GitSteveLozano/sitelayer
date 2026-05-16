@@ -4,10 +4,7 @@ import {
   type RentalBillingHumanEvent,
   type RentalBillingWorkflowSnapshotResponse,
 } from '../api-v1-compat'
-import {
-  createHeadlessWorkflowMachine,
-  type HeadlessWorkflowHookResult,
-} from './headless-workflow'
+import { createHeadlessWorkflowMachine, type HeadlessWorkflowHookResult } from './headless-workflow'
 
 /**
  * Headless billing-review state machine. The full machine shape lives in

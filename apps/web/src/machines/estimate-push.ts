@@ -4,10 +4,7 @@ import {
   type EstimatePushHumanEvent,
   type EstimatePushWorkflowSnapshotResponse,
 } from '../api-v1-compat'
-import {
-  createHeadlessWorkflowMachine,
-  type HeadlessWorkflowHookResult,
-} from './headless-workflow'
+import { createHeadlessWorkflowMachine, type HeadlessWorkflowHookResult } from './headless-workflow'
 
 /**
  * Headless estimate-push state machine. The full machine shape lives in

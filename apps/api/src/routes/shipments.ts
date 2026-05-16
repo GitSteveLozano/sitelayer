@@ -207,7 +207,7 @@ export async function handleShipmentRoutes(
       // wants fully-typed events, the wire format only carries `event`
       // + optional payload.
       const now = new Date().toISOString()
-      const payload = (body.payload && typeof body.payload === 'object' ? (body.payload as Record<string, unknown>) : {})
+      const payload = body.payload && typeof body.payload === 'object' ? (body.payload as Record<string, unknown>) : {}
       let event: ShipmentWorkflowEvent
       switch (parsed.value.event) {
         case 'START_PICKING':
@@ -218,17 +218,14 @@ export async function handleShipmentRoutes(
             type: 'SHIP',
             shipped_at: typeof payload.shipped_at === 'string' ? payload.shipped_at : now,
             ...(typeof payload.driver === 'string' ? { driver: payload.driver } : {}),
-            ...(typeof payload.ticket_number === 'string'
-              ? { ticket_number: payload.ticket_number }
-              : {}),
+            ...(typeof payload.ticket_number === 'string' ? { ticket_number: payload.ticket_number } : {}),
           }
           break
         case 'CONFIRM_DELIVERY':
           event = {
             type: 'CONFIRM_DELIVERY',
             delivered_at: typeof payload.delivered_at === 'string' ? payload.delivered_at : now,
-            confirmed_by:
-              typeof payload.confirmed_by === 'string' ? payload.confirmed_by : ctx.currentUserId,
+            confirmed_by: typeof payload.confirmed_by === 'string' ? payload.confirmed_by : ctx.currentUserId,
           }
           break
         case 'OPEN_RETURN':
@@ -237,8 +234,7 @@ export async function handleShipmentRoutes(
         case 'CLOSE':
           event = {
             type: 'CLOSE',
-            confirmed_by:
-              typeof payload.confirmed_by === 'string' ? payload.confirmed_by : ctx.currentUserId,
+            confirmed_by: typeof payload.confirmed_by === 'string' ? payload.confirmed_by : ctx.currentUserId,
           }
           break
         case 'VOID':
@@ -249,7 +245,7 @@ export async function handleShipmentRoutes(
       try {
         nextSnapshot = transitionShipmentWorkflow(snapshot, event)
       } catch (err) {
-        return { error: err instanceof Error ? err.message : 'illegal transition' as const, code: 400 }
+        return { error: err instanceof Error ? err.message : ('illegal transition' as const), code: 400 }
       }
       const updated = await client.query(
         `update shipments

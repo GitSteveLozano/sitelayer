@@ -1,10 +1,6 @@
 import { Link, useParams } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
-import {
-  useShipment,
-  useTransitionShipment,
-  type ShipmentStatus,
-} from '@/lib/api/shipments'
+import { useShipment, useTransitionShipment, type ShipmentStatus } from '@/lib/api/shipments'
 
 const STATUS_TONE: Record<ShipmentStatus, 'default' | 'good' | 'warn' | 'bad' | 'info'> = {
   planned: 'default',
@@ -155,7 +151,10 @@ export function ShipmentDetailScreen() {
             <Card key={ev.id} tight>
               <div className="text-[12px]">
                 <span className="font-semibold">{ev.event_type}</span>
-                <span className="text-ink-3"> · {ev.state_before ?? '—'} → {ev.state_after ?? '—'}</span>
+                <span className="text-ink-3">
+                  {' '}
+                  · {ev.state_before ?? '—'} → {ev.state_after ?? '—'}
+                </span>
               </div>
               <div className="text-[11px] text-ink-3 mt-0.5">
                 {new Date(ev.created_at).toLocaleString()} · by {ev.produced_by}

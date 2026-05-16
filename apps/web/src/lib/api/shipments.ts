@@ -4,14 +4,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { request } from './client'
 
-export type ShipmentStatus =
-  | 'planned'
-  | 'picking'
-  | 'shipped'
-  | 'delivered'
-  | 'returning'
-  | 'closed'
-  | 'voided'
+export type ShipmentStatus = 'planned' | 'picking' | 'shipped' | 'delivered' | 'returning' | 'closed' | 'voided'
 
 export interface Shipment {
   id: string
@@ -73,8 +66,7 @@ export function useProjectShipments(projectId: string) {
   return useQuery<{ shipments: Shipment[] }>({
     queryKey: ['project', projectId, 'shipments'],
     enabled: !!projectId,
-    queryFn: () =>
-      request<{ shipments: Shipment[] }>(`/api/projects/${encodeURIComponent(projectId)}/shipments`),
+    queryFn: () => request<{ shipments: Shipment[] }>(`/api/projects/${encodeURIComponent(projectId)}/shipments`),
   })
 }
 

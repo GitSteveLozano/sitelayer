@@ -49,8 +49,7 @@ export function useScaffoldTags(projectId: string) {
   return useQuery<{ tags: ScaffoldTag[] }>({
     queryKey: ['project', projectId, 'scaffold-tags'],
     enabled: !!projectId,
-    queryFn: () =>
-      request<{ tags: ScaffoldTag[] }>(`/api/projects/${encodeURIComponent(projectId)}/scaffold-tags`),
+    queryFn: () => request<{ tags: ScaffoldTag[] }>(`/api/projects/${encodeURIComponent(projectId)}/scaffold-tags`),
   })
 }
 

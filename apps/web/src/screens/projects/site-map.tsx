@@ -46,7 +46,10 @@ export function ProjectSiteMapScreen() {
   // Recent clock events with coordinates — keep the latest event per worker
   // and filter to this project.
   const livePoints = useMemo(() => {
-    const byWorker = new Map<string, { worker_id: string; lat: number; lng: number; occurred_at: string; inside: boolean | null }>()
+    const byWorker = new Map<
+      string,
+      { worker_id: string; lat: number; lng: number; occurred_at: string; inside: boolean | null }
+    >()
     for (const ev of timeline.data?.events ?? []) {
       if (ev.event_type !== 'in') continue
       if (ev.voided_at) continue
@@ -95,8 +98,8 @@ export function ProjectSiteMapScreen() {
       </Link>
       <h1 className="mt-2 font-display text-[24px] font-bold tracking-tight leading-tight">Site map</h1>
       <p className="text-[12px] text-ink-3 mt-1">
-        Geofence, scaffold-tag inspection status, and recent crew clock-ins. SVG projection — drop a tile
-        basemap behind it when a customer asks.
+        Geofence, scaffold-tag inspection status, and recent crew clock-ins. SVG projection — drop a tile basemap behind
+        it when a customer asks.
       </p>
 
       <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -148,8 +151,8 @@ export function ProjectSiteMapScreen() {
         ) : rows.length === 0 ? (
           <Card tight>
             <div className="text-[12px] text-ink-3">
-              No scaffolds tagged on this project yet. Print a QR sticker and add one from the foreman
-              inspection screen.
+              No scaffolds tagged on this project yet. Print a QR sticker and add one from the foreman inspection
+              screen.
             </div>
           </Card>
         ) : (
@@ -207,7 +210,7 @@ function SiteMapSvg(props: {
   crew: ReadonlyArray<{ worker_id: string; lat: number; lng: number; occurred_at: string; inside: boolean | null }>
 }) {
   const { centerLat, centerLng, radiusM, extentM, tags, crew } = props
-  const scale = (SVG_SIZE / 2) / extentM
+  const scale = SVG_SIZE / 2 / extentM
   const project = (lat: number, lng: number): [number, number] => {
     const dx = metersEastward(centerLat, centerLng, lng) * scale
     const dy = metersNorthward(centerLat, lat) * scale
@@ -305,7 +308,7 @@ const EARTH_R_M = 6_371_000
 function metersBetween(lat1: number, lng1: number, lat2: number, lng2: number): number {
   const dLat = ((lat2 - lat1) * Math.PI) / 180
   const dLng = ((lng2 - lng1) * Math.PI) / 180
-  const meanLat = ((lat1 + lat2) / 2) * Math.PI / 180
+  const meanLat = (((lat1 + lat2) / 2) * Math.PI) / 180
   const x = dLng * Math.cos(meanLat)
   const y = dLat
   return Math.sqrt(x * x + y * y) * EARTH_R_M

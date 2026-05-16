@@ -31,15 +31,7 @@ const COLUMNS = `
   presigned_expires_at, byte_size, row_count, status, error,
   requested_by_user_id, requested_at, completed_at, origin
 `
-export const ALLOWED_FORMATS = new Set([
-  'xlsx',
-  'csv',
-  'xero_csv',
-  'payworks_csv',
-  'gusto_csv',
-  'adp_csv',
-  'json',
-])
+export const ALLOWED_FORMATS = new Set(['xlsx', 'csv', 'xero_csv', 'payworks_csv', 'gusto_csv', 'adp_csv', 'json'])
 
 export async function handlePayrollExportRoutes(
   req: http.IncomingMessage,

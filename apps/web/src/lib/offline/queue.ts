@@ -117,11 +117,7 @@ function validatePayloadBlobs(kind: OfflineMutationKind, payload: Record<string,
       // Top-level blob in an allowed slot is fine.
       const isTopLevelAllowed = !path.includes('.') && allowed.has(path)
       if (isTopLevelAllowed) return
-      throw new OfflineQueuePayloadError(
-        kind,
-        path,
-        `offline kind ${kind} does not accept a Blob/File at ${path}`,
-      )
+      throw new OfflineQueuePayloadError(kind, path, `offline kind ${kind} does not accept a Blob/File at ${path}`)
     }
     if (value === null || typeof value !== 'object') return
     if (Array.isArray(value)) {

@@ -58,9 +58,7 @@ describe('payroll-exports', () => {
     })
 
     it('lower-cases the worker email for stable file-number lookup', () => {
-      const out = renderPayrollExport('adp_csv', run, [
-        entry({ worker_email: 'Alex@Example.com', hours: '4' }),
-      ])
+      const out = renderPayrollExport('adp_csv', run, [entry({ worker_email: 'Alex@Example.com', hours: '4' })])
       expect(String(out.body)).toMatch(/alex@example\.com/)
       expect(String(out.body)).not.toMatch(/Alex@Example\.com/)
     })

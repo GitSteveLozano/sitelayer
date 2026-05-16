@@ -465,8 +465,7 @@ const stubEstimatePush: EstimatePushFn = async ({ pushId }) => {
 
 const liveEstimatePushEnabled = process.env.QBO_LIVE_ESTIMATE_PUSH === '1'
 const estimatePushBase: EstimatePushFn = liveEstimatePushEnabled ? createQboEstimatePush() : stubEstimatePush
-const estimatePush: EstimatePushFn = (input) =>
-  withCircuitBreaker(qboCircuit, 'qbo', () => estimatePushBase(input))
+const estimatePush: EstimatePushFn = (input) => withCircuitBreaker(qboCircuit, 'qbo', () => estimatePushBase(input))
 
 if (liveEstimatePushEnabled) {
   logger.info('[estimate-push] live QBO estimate push enabled')
@@ -773,7 +772,10 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     try {
       const dead = await deadLetterStaleOutbox(deadClient, companyId, mutationMaxRetries)
       if (dead > 0) {
-        logger.warn({ company_id: companyId, dead, cap: mutationMaxRetries }, '[worker] dead-lettered stale outbox rows')
+        logger.warn(
+          { company_id: companyId, dead, cap: mutationMaxRetries },
+          '[worker] dead-lettered stale outbox rows',
+        )
         Sentry.captureMessage('outbox rows dead-lettered', {
           level: 'warning',
           tags: { scope: 'mutation_outbox_dead_letter' },
@@ -890,10 +892,7 @@ async function heartbeat(): Promise<{ idle: boolean }> {
       })
       await client.query('commit')
       if (summary.escalated > 0 || summary.failed > 0) {
-        logger.info(
-          { company_id: companyId, ...summary },
-          '[worker] field-event auto-escalation tick',
-        )
+        logger.info({ company_id: companyId, ...summary }, '[worker] field-event auto-escalation tick')
       }
     } catch (err) {
       await client.query('rollback').catch(() => undefined)

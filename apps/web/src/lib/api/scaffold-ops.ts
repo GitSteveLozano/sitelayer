@@ -140,11 +140,7 @@ export function useCreateBranch() {
 
 export function usePatchBranch() {
   const qc = useQueryClient()
-  return useMutation<
-    Branch,
-    Error,
-    { id: string; name?: string; address?: string | null; is_default?: boolean }
-  >({
+  return useMutation<Branch, Error, { id: string; name?: string; address?: string | null; is_default?: boolean }>({
     mutationFn: ({ id, ...input }) =>
       request<Branch>(`/api/branches/${encodeURIComponent(id)}`, { method: 'PATCH', json: input }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['branches'] }),
@@ -206,11 +202,7 @@ export function useCreateExternalRental() {
 
 export function useReturnExternalRental() {
   const qc = useQueryClient()
-  return useMutation<
-    ExternalRental,
-    Error,
-    { id: string; returned_quantity: number; off_rent_date?: string }
-  >({
+  return useMutation<ExternalRental, Error, { id: string; returned_quantity: number; off_rent_date?: string }>({
     mutationFn: ({ id, ...input }) =>
       request<ExternalRental>(`/api/external-rentals/${encodeURIComponent(id)}/return`, {
         method: 'POST',
@@ -270,11 +262,7 @@ export function useProjectBoms(projectId: string) {
 }
 export function useCreateBom(projectId: string) {
   const qc = useQueryClient()
-  return useMutation<
-    Bom,
-    Error,
-    { name: string; source?: string; source_ref?: string; notes?: string }
-  >({
+  return useMutation<Bom, Error, { name: string; source?: string; source_ref?: string; notes?: string }>({
     mutationFn: (input) =>
       request<Bom>(`/api/projects/${encodeURIComponent(projectId)}/boms`, { method: 'POST', json: input }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['project', projectId, 'boms'] }),

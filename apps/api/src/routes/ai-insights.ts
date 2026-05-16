@@ -373,16 +373,7 @@ export async function handleAiInsightRoutes(
             confidence, attribution, source_run_id, produced_by
           ) values ($1, $2, 'project', $3, $4::jsonb, $5, $6, $7, $8)
           returning id`,
-          [
-            ctx.company.id,
-            kind,
-            projectId,
-            JSON.stringify(payload),
-            confidence,
-            attribution,
-            sourceRunId,
-            producedBy,
-          ],
+          [ctx.company.id, kind, projectId, JSON.stringify(payload), confidence, attribution, sourceRunId, producedBy],
         )
         if (result.rows[0]) inserted += 1
       }

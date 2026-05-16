@@ -113,10 +113,7 @@ export interface ClockEventPhotoUploadResponse {
  * `photo_verification_status` to `'pending'`; foremen/office review
  * via the photo verification queue (see migration 068).
  */
-export async function uploadClockEventPhoto(
-  clockEventId: string,
-  file: File,
-): Promise<ClockEventPhotoUploadResponse> {
+export async function uploadClockEventPhoto(clockEventId: string, file: File): Promise<ClockEventPhotoUploadResponse> {
   const form = new FormData()
   form.append('file', file, file.name || 'clock-photo.jpg')
   const headers = await buildAuthHeaders()

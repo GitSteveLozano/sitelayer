@@ -100,8 +100,7 @@ export async function processDamageChargeInvoicePush(
     throw new Error(`qbo connection status is ${connection.status}, refusing to push`)
   }
 
-  const incomeAccountId =
-    process.env.QBO_DAMAGE_INCOME_ACCOUNT_ID ?? process.env.QBO_RENTAL_INCOME_ACCOUNT_ID ?? ''
+  const incomeAccountId = process.env.QBO_DAMAGE_INCOME_ACCOUNT_ID ?? process.env.QBO_RENTAL_INCOME_ACCOUNT_ID ?? ''
   const baseUrl = process.env.QBO_BASE_URL ?? 'https://sandbox-quickbooks.api.intuit.com'
 
   // Resolve inventory_item → QBO item; otherwise fall back to the income

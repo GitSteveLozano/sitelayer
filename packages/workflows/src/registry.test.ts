@@ -11,7 +11,11 @@ import {
 type S = 'open' | 'closed'
 type E = { type: 'CLOSE' }
 
-function makeDef(name: string, schemaVersion: number, marker: string): WorkflowDefinition<S, E, 'CLOSE', { state: S; state_version: number; marker?: string }> {
+function makeDef(
+  name: string,
+  schemaVersion: number,
+  marker: string,
+): WorkflowDefinition<S, E, 'CLOSE', { state: S; state_version: number; marker?: string }> {
   return {
     name,
     schemaVersion,
@@ -20,7 +24,8 @@ function makeDef(name: string, schemaVersion: number, marker: string): WorkflowD
     allStates: ['open', 'closed'],
     allEventTypes: ['CLOSE'],
     reduce: (snapshot, event) => {
-      if (event.type === 'CLOSE') return { ...snapshot, state: 'closed', state_version: snapshot.state_version + 1, marker }
+      if (event.type === 'CLOSE')
+        return { ...snapshot, state: 'closed', state_version: snapshot.state_version + 1, marker }
       return snapshot
     },
     nextEvents: () => [],

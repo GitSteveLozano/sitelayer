@@ -45,10 +45,7 @@ type Context<TSnapshot> = {
   outOfSync: boolean
 }
 
-type Event<TEvent> =
-  | { type: 'LOAD' }
-  | { type: 'DISPATCH'; event: TEvent }
-  | { type: 'DISMISS_ERROR' }
+type Event<TEvent> = { type: 'LOAD' } | { type: 'DISPATCH'; event: TEvent } | { type: 'DISMISS_ERROR' }
 
 type LoadInput = { entityId: string; companySlug: string }
 type SubmitInput<TEvent> = {
@@ -83,12 +80,7 @@ export type HeadlessWorkflowConfig<TSnapshot extends WorkflowSnapshotLike, TEven
    * factory detects 409s heuristically (status text or message) and
    * reloads the snapshot rather than surfacing an opaque error.
    */
-  submit: (
-    entityId: string,
-    event: TEvent,
-    stateVersion: number,
-    companySlug: string,
-  ) => Promise<TSnapshot>
+  submit: (entityId: string, event: TEvent, stateVersion: number, companySlug: string) => Promise<TSnapshot>
 }
 
 const CONFLICT_RE = /\b409\b|state_version|not allowed|illegal/i

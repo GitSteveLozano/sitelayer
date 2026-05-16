@@ -62,11 +62,7 @@ export function buildDailyLogPhotoStorageKey(companyId: string, dailyLogId: stri
  * policy still covers it. companyId first segment is the
  * assertKeyInCompany guard.
  */
-export function buildClockEventPhotoStorageKey(
-  companyId: string,
-  clockEventId: string,
-  fileName: string,
-): string {
+export function buildClockEventPhotoStorageKey(companyId: string, clockEventId: string, fileName: string): string {
   return `${companyId}/clock-events/${clockEventId}/${sanitizeFileName(fileName)}`
 }
 

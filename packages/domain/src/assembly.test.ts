@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  resolveAssembly,
-  selectActiveAssembly,
-  type AssemblyComponent,
-  type AssemblyHeader,
-} from './assembly.js'
+import { resolveAssembly, selectActiveAssembly, type AssemblyComponent, type AssemblyHeader } from './assembly.js'
 
 const baseAssembly: AssemblyHeader = {
   id: 'a-1',

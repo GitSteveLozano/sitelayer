@@ -75,7 +75,8 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       return true
     }
     const body = await readBody()
-    const modulesPatch = body.modules && typeof body.modules === 'object' ? (body.modules as Record<string, unknown>) : null
+    const modulesPatch =
+      body.modules && typeof body.modules === 'object' ? (body.modules as Record<string, unknown>) : null
     const portalPatch =
       body.portal_settings && typeof body.portal_settings === 'object'
         ? (body.portal_settings as Record<string, unknown>)

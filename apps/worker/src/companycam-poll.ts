@@ -123,11 +123,7 @@ async function pollProject(
         [companyId, externalId],
       )
       if (existing.rows[0]) continue
-      const uri =
-        photo.uri ??
-        photo.uris?.find((u) => u.type === 'web')?.uri ??
-        photo.uris?.[0]?.uri ??
-        null
+      const uri = photo.uri ?? photo.uris?.find((u) => u.type === 'web')?.uri ?? photo.uris?.[0]?.uri ?? null
       // Insert the dedupe row first so a failure further down doesn't
       // double-import next tick.
       await client.query(

@@ -10,9 +10,9 @@ import { OfflineQueuePayloadError, enqueueOfflineMutation } from './queue'
 describe('enqueueOfflineMutation — Blob safety', () => {
   it('rejects a Blob at a non-allow-listed top-level slot', async () => {
     const blob = new Blob(['hello'], { type: 'text/plain' })
-    await expect(
-      enqueueOfflineMutation('clock_in', { project_id: 'p1', evidence: blob }),
-    ).rejects.toBeInstanceOf(OfflineQueuePayloadError)
+    await expect(enqueueOfflineMutation('clock_in', { project_id: 'p1', evidence: blob })).rejects.toBeInstanceOf(
+      OfflineQueuePayloadError,
+    )
   })
 
   it('rejects a nested Blob even in a kind that allows top-level Blobs', async () => {

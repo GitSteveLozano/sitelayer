@@ -87,7 +87,10 @@ export function parseClockEventPhotoMultipart(
       earlyError =
         err instanceof ClockEventPhotoUploadError
           ? err
-          : new ClockEventPhotoUploadError(500, `clock-event photo upload failed: ${(err as Error).message ?? 'unknown'}`)
+          : new ClockEventPhotoUploadError(
+              500,
+              `clock-event photo upload failed: ${(err as Error).message ?? 'unknown'}`,
+            )
     }
 
     busboy.on('file', (fieldName, fileStream, info) => {

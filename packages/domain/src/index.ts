@@ -995,18 +995,17 @@ export interface RentalRateTier {
  * constraint allows but is a data-quality issue), the lowest sort_order
  * wins so the order entered in the admin UI is the order applied.
  */
-export function pickRentalTier(
-  billableDays: number,
-  tiers: readonly RentalRateTier[],
-): RentalRateTier | null {
+export function pickRentalTier(billableDays: number, tiers: readonly RentalRateTier[]): RentalRateTier | null {
   const matching = tiers.filter(
     (t) => billableDays >= t.min_days && (t.max_days === null || billableDays <= t.max_days),
   )
   if (matching.length === 0) return null
-  return matching.slice().sort((a, b) => {
-    if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order
-    return a.min_days - b.min_days
-  })[0] ?? null
+  return (
+    matching.slice().sort((a, b) => {
+      if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order
+      return a.min_days - b.min_days
+    })[0] ?? null
+  )
 }
 
 function calculateJobRentalLineAmount(input: {
