@@ -1,0 +1,317 @@
+import { useCallback } from 'react'
+import { useMachine } from '@xstate/react'
+import { assign, setup } from 'xstate'
+
+/**
+ * Pure-UI orchestration machine for the onboarding wizard
+ * (`apps/web/src/screens/onboarding/wizard.tsx`).
+ *
+ * The original screen kept its step + form state in 6+ `useState`
+ * hooks across the parent and child step components. Tab order /
+ * back-navigation / inline-error recovery were all hand-rolled.
+ *
+ * This machine owns ONLY UI orchestration:
+ *   - the active step
+ *   - per-step form drafts (`companyForm`, `teamForm`, `seedOptions`)
+ *   - error string for the current step
+ *
+ * The TanStack mutations themselves still live in the parent component
+ * — the machine emits `SUBMIT` and the parent kicks off the network
+ * call, then `MARK_SUBMITTED` / `MARK_FAILED` to advance or surface an
+ * error. This keeps the machine framework-free and unit-testable
+ * without standing up MSW or query clients.
+ *
+ * State graph:
+ *
+ *   company_step ──NEXT (guard: slug + name non-empty)──▶ team_step
+ *                ──SUBMIT──▶ submitting (parent calls createCompany)
+ *   submitting ──MARK_SUBMITTED──▶ team_step
+ *              ──MARK_FAILED──▶ error (preserves form so user can retry)
+ *   team_step ──NEXT──▶ seed_step
+ *             ──BACK──▶ company_step
+ *   seed_step ──NEXT/SUBMIT──▶ done
+ *             ──BACK──▶ team_step
+ *   error ──RETRY──▶ submitting
+ *         ──BACK──▶ company_step
+ *
+ * Guards:
+ *   - `NEXT` from `company_step` requires `companyForm.slug` and
+ *     `companyForm.name` to be non-empty (trimmed) — matches the
+ *     original screen's `disabled={!slug.trim() || !companyName.trim()}`.
+ */
+
+export interface CompanyForm {
+  slug: string
+  name: string
+  seedDefaults: boolean
+}
+
+export interface InvitedTeamMember {
+  clerkUserId: string
+  role: string
+}
+
+export interface TeamForm {
+  pendingClerkUserId: string
+  pendingRole: string
+  invited: InvitedTeamMember[]
+}
+
+export interface SeedOptions {
+  customerName: string
+  workerName: string
+  yardName: string
+}
+
+type Context = {
+  companyForm: CompanyForm
+  teamForm: TeamForm
+  seedOptions: SeedOptions
+  error: string | null
+}
+
+export type OnboardingWizardEvent =
+  | { type: 'NEXT' }
+  | { type: 'BACK' }
+  | { type: 'SUBMIT' }
+  | { type: 'RETRY' }
+  | { type: 'MARK_SUBMITTED' }
+  | { type: 'MARK_FAILED'; error: string }
+  | { type: 'SET_COMPANY_FIELD'; field: keyof CompanyForm; value: string | boolean }
+  | { type: 'SET_TEAM_FIELD'; field: 'pendingClerkUserId' | 'pendingRole'; value: string }
+  | { type: 'APPEND_INVITED'; member: InvitedTeamMember }
+  | { type: 'CLEAR_PENDING_INVITE' }
+  | { type: 'SET_SEED_FIELD'; field: keyof SeedOptions; value: string }
+  | { type: 'DISMISS_ERROR' }
+
+const DEFAULT_TEAM_FORM: TeamForm = {
+  pendingClerkUserId: '',
+  pendingRole: 'foreman',
+  invited: [],
+}
+
+const DEFAULT_SEED_OPTIONS: SeedOptions = {
+  customerName: '',
+  workerName: '',
+  yardName: 'Main yard',
+}
+
+const DEFAULT_COMPANY_FORM: CompanyForm = {
+  slug: '',
+  name: '',
+  seedDefaults: true,
+}
+
+export const onboardingWizardMachine = setup({
+  types: {
+    context: {} as Context,
+    input: {} as { companyForm?: Partial<CompanyForm>; seedOptions?: Partial<SeedOptions> },
+    events: {} as OnboardingWizardEvent,
+  },
+  guards: {
+    companyFormValid: ({ context }) =>
+      context.companyForm.slug.trim().length > 0 && context.companyForm.name.trim().length > 0,
+  },
+  actions: {
+    clearError: assign({ error: () => null }),
+    setError: assign({
+      error: ({ context, event }) => (event.type === 'MARK_FAILED' ? event.error : context.error),
+    }),
+    setCompanyField: assign({
+      companyForm: ({ context, event }) => {
+        if (event.type !== 'SET_COMPANY_FIELD') return context.companyForm
+        return { ...context.companyForm, [event.field]: event.value } as CompanyForm
+      },
+    }),
+    setTeamField: assign({
+      teamForm: ({ context, event }) => {
+        if (event.type !== 'SET_TEAM_FIELD') return context.teamForm
+        return { ...context.teamForm, [event.field]: event.value }
+      },
+    }),
+    appendInvited: assign({
+      teamForm: ({ context, event }) => {
+        if (event.type !== 'APPEND_INVITED') return context.teamForm
+        return {
+          ...context.teamForm,
+          invited: [...context.teamForm.invited, event.member],
+          pendingClerkUserId: '',
+        }
+      },
+    }),
+    clearPendingInvite: assign({
+      teamForm: ({ context }) => ({ ...context.teamForm, pendingClerkUserId: '' }),
+    }),
+    setSeedField: assign({
+      seedOptions: ({ context, event }) => {
+        if (event.type !== 'SET_SEED_FIELD') return context.seedOptions
+        return { ...context.seedOptions, [event.field]: event.value }
+      },
+    }),
+  },
+}).createMachine({
+  id: 'onboardingWizard',
+  initial: 'company_step',
+  context: ({ input }) => ({
+    companyForm: { ...DEFAULT_COMPANY_FORM, ...(input.companyForm ?? {}) },
+    teamForm: { ...DEFAULT_TEAM_FORM },
+    seedOptions: { ...DEFAULT_SEED_OPTIONS, ...(input.seedOptions ?? {}) },
+    error: null,
+  }),
+  // Form-field mutations and error dismissal are valid in any state.
+  on: {
+    SET_COMPANY_FIELD: { actions: 'setCompanyField' },
+    SET_TEAM_FIELD: { actions: 'setTeamField' },
+    APPEND_INVITED: { actions: 'appendInvited' },
+    CLEAR_PENDING_INVITE: { actions: 'clearPendingInvite' },
+    SET_SEED_FIELD: { actions: 'setSeedField' },
+    DISMISS_ERROR: { actions: 'clearError' },
+  },
+  states: {
+    company_step: {
+      on: {
+        SUBMIT: {
+          target: 'submitting',
+          guard: 'companyFormValid',
+          actions: 'clearError',
+        },
+        NEXT: {
+          target: 'submitting',
+          guard: 'companyFormValid',
+          actions: 'clearError',
+        },
+      },
+    },
+    submitting: {
+      on: {
+        MARK_SUBMITTED: {
+          target: 'team_step',
+          actions: 'clearError',
+        },
+        MARK_FAILED: {
+          target: 'error',
+          actions: 'setError',
+        },
+      },
+    },
+    error: {
+      on: {
+        RETRY: {
+          target: 'submitting',
+          guard: 'companyFormValid',
+          actions: 'clearError',
+        },
+        BACK: {
+          target: 'company_step',
+          actions: 'clearError',
+        },
+      },
+    },
+    team_step: {
+      on: {
+        NEXT: 'seed_step',
+        BACK: 'company_step',
+      },
+    },
+    seed_step: {
+      on: {
+        SUBMIT: 'done',
+        NEXT: 'done',
+        BACK: 'team_step',
+      },
+    },
+    done: {
+      type: 'final',
+    },
+  },
+})
+
+export type OnboardingWizardState = 'company_step' | 'submitting' | 'error' | 'team_step' | 'seed_step' | 'done'
+
+export interface OnboardingWizardHookResult {
+  state: OnboardingWizardState
+  companyForm: CompanyForm
+  teamForm: TeamForm
+  seedOptions: SeedOptions
+  error: string | null
+  isCompanyStep: boolean
+  isTeamStep: boolean
+  isSeedStep: boolean
+  isSubmitting: boolean
+  isError: boolean
+  isDone: boolean
+  canAdvanceFromCompany: boolean
+  next: () => void
+  back: () => void
+  submit: () => void
+  retry: () => void
+  markSubmitted: () => void
+  markFailed: (error: string) => void
+  setCompanyField: (field: keyof CompanyForm, value: string | boolean) => void
+  setTeamField: (field: 'pendingClerkUserId' | 'pendingRole', value: string) => void
+  appendInvited: (member: InvitedTeamMember) => void
+  clearPendingInvite: () => void
+  setSeedField: (field: keyof SeedOptions, value: string) => void
+  dismissError: () => void
+}
+
+export function useOnboardingWizard(
+  options: { companyForm?: Partial<CompanyForm>; seedOptions?: Partial<SeedOptions> } = {},
+): OnboardingWizardHookResult {
+  const input: { companyForm?: Partial<CompanyForm>; seedOptions?: Partial<SeedOptions> } = {}
+  if (options.companyForm !== undefined) input.companyForm = options.companyForm
+  if (options.seedOptions !== undefined) input.seedOptions = options.seedOptions
+  const [state, send] = useMachine(onboardingWizardMachine, { input })
+
+  const next = useCallback(() => send({ type: 'NEXT' }), [send])
+  const back = useCallback(() => send({ type: 'BACK' }), [send])
+  const submit = useCallback(() => send({ type: 'SUBMIT' }), [send])
+  const retry = useCallback(() => send({ type: 'RETRY' }), [send])
+  const markSubmitted = useCallback(() => send({ type: 'MARK_SUBMITTED' }), [send])
+  const markFailed = useCallback((err: string) => send({ type: 'MARK_FAILED', error: err }), [send])
+  const setCompanyField = useCallback(
+    (field: keyof CompanyForm, value: string | boolean) => send({ type: 'SET_COMPANY_FIELD', field, value }),
+    [send],
+  )
+  const setTeamField = useCallback(
+    (field: 'pendingClerkUserId' | 'pendingRole', value: string) => send({ type: 'SET_TEAM_FIELD', field, value }),
+    [send],
+  )
+  const appendInvited = useCallback((member: InvitedTeamMember) => send({ type: 'APPEND_INVITED', member }), [send])
+  const clearPendingInvite = useCallback(() => send({ type: 'CLEAR_PENDING_INVITE' }), [send])
+  const setSeedField = useCallback(
+    (field: keyof SeedOptions, value: string) => send({ type: 'SET_SEED_FIELD', field, value }),
+    [send],
+  )
+  const dismissError = useCallback(() => send({ type: 'DISMISS_ERROR' }), [send])
+
+  const currentState = (state.value as OnboardingWizardState) ?? 'company_step'
+
+  return {
+    state: currentState,
+    companyForm: state.context.companyForm,
+    teamForm: state.context.teamForm,
+    seedOptions: state.context.seedOptions,
+    error: state.context.error,
+    isCompanyStep: currentState === 'company_step',
+    isTeamStep: currentState === 'team_step',
+    isSeedStep: currentState === 'seed_step',
+    isSubmitting: currentState === 'submitting',
+    isError: currentState === 'error',
+    isDone: currentState === 'done',
+    canAdvanceFromCompany:
+      state.context.companyForm.slug.trim().length > 0 && state.context.companyForm.name.trim().length > 0,
+    next,
+    back,
+    submit,
+    retry,
+    markSubmitted,
+    markFailed,
+    setCompanyField,
+    setTeamField,
+    appendInvited,
+    clearPendingInvite,
+    setSeedField,
+    dismissError,
+  }
+}
