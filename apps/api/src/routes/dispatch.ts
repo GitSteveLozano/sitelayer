@@ -657,6 +657,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     await handleRentalRoutes(req, url, {
       pool,
       company,
+      currentUserId: ctx.getCurrentUserId(),
       requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
       readBody,
       sendJson,

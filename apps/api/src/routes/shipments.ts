@@ -1,11 +1,13 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
-import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import {
   parseShipmentEventRequest,
   transitionShipmentWorkflow,
   nextShipmentEvents,
+  SHIPMENT_WORKFLOW_NAME,
+  SHIPMENT_WORKFLOW_SCHEMA_VERSION,
   type ShipmentWorkflowEvent,
   type ShipmentWorkflowState,
   type ShipmentWorkflowSnapshot,
@@ -277,6 +279,11 @@ export async function handleShipmentRoutes(
           nextSnapshot.ticket_number ?? null,
         ],
       )
+      // shipment_events keeps the human-readable per-shipment audit
+      // trail (state_before/state_after); workflow_event_log is the
+      // cross-workflow replay corpus consumed by scripts/replay-workflow.ts
+      // and the periodic sweep. Both write inside the same tx as the
+      // state update, so a crash between them is impossible.
       await client.query(
         `insert into shipment_events (
           company_id, shipment_id, event_type, payload, state_before, state_after, state_version, produced_by
@@ -292,6 +299,21 @@ export async function handleShipmentRoutes(
           ctx.currentUserId,
         ],
       )
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: SHIPMENT_WORKFLOW_NAME,
+        schemaVersion: SHIPMENT_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'shipment',
+        entityId: id,
+        // state_version BEFORE the transition — matches the convention
+        // used by rental_billing_state (see comment on the unique
+        // (entity_id, state_version) constraint in 020_workflow_event_log).
+        stateVersion: snapshot.state_version,
+        eventType: parsed.value.event,
+        eventPayload: event as unknown as Record<string, unknown>,
+        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        actorUserId: ctx.currentUserId,
+      })
       return { shipment: updated.rows[0], snapshot: nextSnapshot }
     })
     if ('error' in result) {
