@@ -248,6 +248,54 @@ against representative production rows. Exit code `2` means the reducer
 output disagrees with the persisted state — that's a regression you
 need to investigate before merging the change.
 
+### RLS rollout — 073 ↔ 078 FORCE reversal
+
+Phase-2 RLS shipped in two migrations a few days apart, and the
+intermediate state turned out to be production-incompatible. Document
+this here so restore drills and migration replays don't trip on it.
+
+- **073 (`073_rls_enable_phase_2.sql`)** enables RLS _and_ `FORCE ROW
+LEVEL SECURITY` on `audit_events`, `workflow_event_log`,
+  `mutation_outbox`, and `sync_events`. FORCE was intended to make the
+  table owner subject to the company-isolation policy too. In practice
+  it broke `pg_dump` (the pre-deploy backup step), because `pg_dump`
+  connects _as the owner_ and FORCE applied the policy to that
+  connection — which has no `app.company_id` set — silently dumping
+  zero rows for the affected tables.
+- **078 (`078_rls_no_force_for_owner_dumps.sql`)** is the corrective.
+  It runs `ALTER TABLE … NO FORCE ROW LEVEL SECURITY` on the same four
+  tables. The application path is unaffected: API routes and worker
+  drains still go through `withCompanyClient`, which sets
+  `app.company_id` _and_ uses a non-owner role, so the policy
+  enforces tenant isolation as designed.
+- Both migrations are **idempotent** (`ENABLE` / `NO FORCE` are
+  no-ops on an already-correct state). Re-running the ledger is safe.
+- **The intermediate state (post-073, pre-078) is production-
+  incompatible.** Restore drills that materialise a database at a
+  commit between those two migrations must either (a) replay forward
+  through 078 before running `pg_dump`, or (b) `ALTER ROLE … BYPASSRLS`
+  on the dump role for the duration of the drill. Recording this
+  explicitly so future drill operators don't conclude their backup is
+  silently broken.
+
+### Cosmetic: 074–077 header-comment off-by-one
+
+Migrations `074`–`077` were renumbered late in their PR cycle but the
+leading `-- NNN_*.sql` header comment inside each file still references
+the original numbering (`-- 073_notifications_delivery_retry.sql`,
+`-- 074_qbo_sync_runs.sql`, etc.). The file _names_ on disk are correct
+and that is what `schema_migrations.name` records, so the runtime
+ledger is consistent.
+
+Do **not** edit the leading comment to "fix" the cosmetic mismatch.
+Migrations are checksum-immutable once applied (`schema_migrations`
+records a SHA-256 over the file body — the comment block included).
+Editing any pre-existing migration body — even just the leading comment
+— flips the checksum and the next `scripts/migrate-db.sh` run will
+refuse to apply further migrations until the original content is
+restored. If the comments must be corrected for clarity, do it in a
+new no-op migration documenting the prior off-by-one.
+
 ## Who can deploy
 
 Production deploys are gated by GitHub Actions environment
