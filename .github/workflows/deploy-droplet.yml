@@ -471,6 +471,22 @@ jobs:
             $COMPOSE -f docker-compose.prod.yml pull api web worker
             docker image inspect "$APP_IMAGE" >/dev/null
 
+            # RLS phase-2 (migration 073) ENABLE + FORCE'd row-level security
+            # on audit_events / mutation_outbox / sync_events / workflow_event_log.
+            # The deploy user IS the table owner — FORCE blocks even the owner,
+            # which breaks pg_dump downstream. Migration 078 drops FORCE, but
+            # it only applies AFTER the backup step. Idempotently drop FORCE
+            # here before the backup so the chicken-and-egg loop resolves. Safe
+            # to run repeatedly; safe on pre-073 databases (table-missing skip).
+            DB_URL="$(grep -E '^DATABASE_URL=' /app/sitelayer/.env | sed 's/^DATABASE_URL=//')"
+            if [ -n "$DB_URL" ]; then
+              docker run --rm --network host postgres:18-alpine psql "$DB_URL" -v ON_ERROR_STOP=0 \
+                -c "ALTER TABLE IF EXISTS audit_events NO FORCE ROW LEVEL SECURITY;" \
+                -c "ALTER TABLE IF EXISTS mutation_outbox NO FORCE ROW LEVEL SECURITY;" \
+                -c "ALTER TABLE IF EXISTS sync_events NO FORCE ROW LEVEL SECURITY;" \
+                -c "ALTER TABLE IF EXISTS workflow_event_log NO FORCE ROW LEVEL SECURITY;" || true
+            fi
+
             # Take a logical backup before any schema migration.
             BACKUP_DIR="${BACKUP_DIR:-/app/backups/postgres}" \
               DATABASE_URL_FILE=/app/sitelayer/.env \
