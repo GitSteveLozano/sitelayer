@@ -54,28 +54,15 @@ import { registerWorkflow } from './registry.js'
  *                                 fans out to estimator-role members
  *                                 of the company.
  *
- * AUTO-ESCALATION TODO (integration point):
- * When `severity='stopped'` and the ticket is older than 15 minutes
- * without a RESOLVE landing, an automated ESCALATE should fire so the
- * estimator queue is the safety net for crews that are blocked.
- *
- * Implementation plan (follow-up slice, not this one):
- *   1. A periodic task `field_event_escalation_check` claims open
- *      worker_issues rows where severity='stopped' AND
- *      created_at < now() - interval '15 minutes' AND
- *      escalated_to_estimator_at is null.
- *   2. For each row, the worker constructs an ESCALATE event with
- *      reason='auto_15min_stopped' and the system actor id, runs it
- *      through `transitionFieldEventWorkflow`, and persists the
- *      transition through the same PATCH path the foreman uses (so
- *      the workflow_event_log row carries the full trail).
- *   3. The route guard already enforces state_version, so a foreman
- *      RESOLVE that races the auto-escalator wins or loses cleanly
- *      via the usual 409 path — no special-casing in the reducer.
- *
- * The reducer is intentionally identical for human and automated
- * ESCALATE events; the only difference is the actor id on the event
- * payload. That keeps replay deterministic regardless of trigger.
+ * Auto-escalation: when `severity='stopped'` and the ticket is older
+ * than 15 minutes without a RESOLVE, the worker fires an ESCALATE with
+ * `reason='auto_15min_stopped'` and `escalator_user_id='system:auto-escalation'`.
+ * Implementation is in `apps/worker/src/field-event-escalation.ts` and
+ * runs once per worker heartbeat. The reducer is intentionally identical
+ * for human and automated ESCALATE events; only the actor id differs.
+ * The route guard's `state_version` check serializes a racing human
+ * RESOLVE against the auto-escalator via the usual 409 path — no
+ * special-casing in the reducer.
  */
 
 export type FieldEventWorkflowState = 'open' | 'resolved' | 'escalated' | 'dismissed'

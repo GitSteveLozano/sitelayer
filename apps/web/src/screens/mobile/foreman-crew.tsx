@@ -11,6 +11,7 @@ import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse, WorkerRow } from '../../api-v1-compat.js'
 import {
   MAvatar,
+  MBanner,
   MBody,
   MButton,
   MChip,
@@ -20,10 +21,12 @@ import {
   MListRow,
   MPill,
   MSectionH,
+  MTextarea,
   MTopBar,
   avatarToneFor,
   initialsFor,
 } from '../../components/m/index.js'
+import { useSendWorkerMessage } from '../../lib/api/workers.js'
 import { formatDecimalHours, todayIso } from './format.js'
 
 type GroupBy = 'site' | 'person' | 'map'
@@ -233,12 +236,6 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
         <CrewQuickActions
           worker={actionWorker}
           onClose={() => setActionWorker(null)}
-          onMessage={() => {
-            // TODO: wire to a worker-message endpoint when one exists.
-            // For now the foreman writes the message inside the issue
-            // detail surface. Surfaced as a TODO so reviewers see this.
-            setActionWorker(null)
-          }}
           onAdjustHours={() => {
             navigate('/time')
             setActionWorker(null)
@@ -320,17 +317,33 @@ function CrewPersonRow({
   )
 }
 
-function CrewQuickActions({
+export function CrewQuickActions({
   worker,
   onClose,
-  onMessage,
   onAdjustHours,
 }: {
   worker: WorkerRow
   onClose: () => void
-  onMessage: () => void
   onAdjustHours: () => void
 }) {
+  // Local mode: 'menu' shows the action buttons; 'compose' shows the
+  // textarea to type a message. The mutation state (pending/error/data)
+  // lives in useSendWorkerMessage so the sheet renders directly from it.
+  const [mode, setMode] = useState<'menu' | 'compose' | 'sent'>('menu')
+  const [body, setBody] = useState('')
+  const sendMessage = useSendWorkerMessage()
+
+  const handleSend = async () => {
+    const trimmed = body.trim()
+    if (!trimmed) return
+    try {
+      await sendMessage.mutateAsync({ workerId: worker.id, input: { body: trimmed } })
+      setMode('sent')
+    } catch {
+      // sendMessage.error renders inline below; stay in compose mode.
+    }
+  }
+
   return (
     <div
       role="dialog"
@@ -364,15 +377,61 @@ function CrewQuickActions({
         <div className="m-quiet-sm" style={{ marginBottom: 8 }}>
           {worker.role ?? 'Crew'}
         </div>
-        <MButton variant="ghost" onClick={onMessage}>
-          <MI.Mic size={16} /> Send message · TODO endpoint
-        </MButton>
-        <MButton variant="ghost" onClick={onAdjustHours}>
-          <MI.Clock size={16} /> Adjust hours
-        </MButton>
-        <MButton variant="quiet" onClick={onClose}>
-          Cancel
-        </MButton>
+
+        {mode === 'menu' ? (
+          <>
+            <MButton variant="ghost" onClick={() => setMode('compose')}>
+              <MI.Mic size={16} /> Send message
+            </MButton>
+            <MButton variant="ghost" onClick={onAdjustHours}>
+              <MI.Clock size={16} /> Adjust hours
+            </MButton>
+            <MButton variant="quiet" onClick={onClose}>
+              Cancel
+            </MButton>
+          </>
+        ) : null}
+
+        {mode === 'compose' ? (
+          <>
+            <MTextarea
+              value={body}
+              onChange={(e) => setBody(e.currentTarget.value)}
+              placeholder={`Message to ${worker.name}…`}
+              maxLength={2000}
+              style={{ minHeight: 100 }}
+              autoFocus
+            />
+            {sendMessage.error ? (
+              <MBanner
+                tone="error"
+                title="Couldn't send"
+                body={
+                  // 422 = no clerk mapping. Surface the server's hint so the
+                  // foreman knows the worker needs to onboard first.
+                  /422|associated user account/i.test(sendMessage.error.message)
+                    ? `${worker.name} hasn't signed in to the app yet — ask them to clock in or file an issue, then try again.`
+                    : sendMessage.error.message
+                }
+              />
+            ) : null}
+            <MButton variant="primary" onClick={handleSend} disabled={sendMessage.isPending || !body.trim()}>
+              {sendMessage.isPending ? 'Sending…' : 'Send'}
+            </MButton>
+            <MButton variant="quiet" onClick={() => setMode('menu')} disabled={sendMessage.isPending}>
+              Back
+            </MButton>
+          </>
+        ) : null}
+
+        {mode === 'sent' ? (
+          <>
+            <MBanner tone="ok" title="Message sent" body={`${worker.name} will see it in their notifications.`} />
+            <MButton variant="primary" onClick={onClose}>
+              Done
+            </MButton>
+          </>
+        ) : null}
       </div>
     </div>
   )

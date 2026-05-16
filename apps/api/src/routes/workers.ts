@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
+import { enqueueNotificationRow } from '../notifications.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { parseExpectedVersion } from '../http-utils.js'
 
@@ -13,6 +14,7 @@ import { parseExpectedVersion } from '../http-utils.js'
 export type WorkerRouteCtx = {
   pool: Pool
   company: ActiveCompany
+  currentUserId: string
   requireRole: (allowed: readonly string[]) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
@@ -115,6 +117,79 @@ export async function handleWorkerRoutes(req: http.IncomingMessage, url: URL, ct
       return true
     }
     ctx.sendJson(200, updated)
+    return true
+  }
+
+  if (req.method === 'POST' && url.pathname.match(/^\/api\/workers\/[^/]+\/messages$/)) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const workerId = url.pathname.split('/')[3] ?? ''
+    if (!workerId) {
+      ctx.sendJson(400, { error: 'worker id is required' })
+      return true
+    }
+    const body = await ctx.readBody()
+    const messageText = typeof body.body === 'string' ? body.body.trim() : ''
+    if (!messageText) {
+      ctx.sendJson(400, { error: 'body is required' })
+      return true
+    }
+    if (messageText.length > 2000) {
+      ctx.sendJson(400, { error: 'body must be 2000 characters or fewer' })
+      return true
+    }
+    const subjectRaw = typeof body.subject === 'string' ? body.subject.trim() : ''
+    const subject = subjectRaw.length > 0 ? subjectRaw.slice(0, 200) : 'Message from foreman'
+
+    // Resolve worker → clerk_user_id. Workers don't store this directly,
+    // so we look it up from the two sources that capture it as a
+    // side-effect of normal worker activity:
+    //   1. worker_issues.reporter_clerk_user_id (workers who've filed a
+    //      problem signed in to do it — most reliable mapping)
+    //   2. clock_events.clerk_user_id (worker self-clock-in)
+    // If neither source has it, the worker hasn't onboarded yet and we
+    // can't address a notification to them. Return 422 with a clear
+    // error rather than silently dropping the message.
+    const lookup = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ clerk_user_id: string }>(
+        `
+        select clerk_user_id from (
+          select reporter_clerk_user_id as clerk_user_id, created_at
+            from worker_issues
+            where company_id = $1 and worker_id = $2 and reporter_clerk_user_id is not null
+          union all
+          select clerk_user_id, occurred_at as created_at
+            from clock_events
+            where company_id = $1 and worker_id = $2 and clerk_user_id is not null
+        ) sources
+        order by created_at desc
+        limit 1
+        `,
+        [ctx.company.id, workerId],
+      ),
+    )
+    const recipientClerkUserId = lookup.rows[0]?.clerk_user_id ?? null
+    if (!recipientClerkUserId) {
+      ctx.sendJson(422, {
+        error: 'worker has no associated user account yet — ask them to clock in or file an issue first',
+        worker_id: workerId,
+      })
+      return true
+    }
+
+    const inserted = await withMutationTx(async (client: PoolClient) =>
+      enqueueNotificationRow(client, {
+        companyId: ctx.company.id,
+        recipientUserId: recipientClerkUserId,
+        kind: 'foreman_message',
+        subject,
+        text: messageText,
+        payload: {
+          worker_id: workerId,
+          from_clerk_user_id: ctx.currentUserId,
+        },
+      }),
+    )
+    ctx.sendJson(201, { notification_id: inserted.id, recipient_clerk_user_id: recipientClerkUserId })
     return true
   }
 
