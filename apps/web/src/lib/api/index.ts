@@ -296,13 +296,16 @@ export {
 
 export {
   useCompanyModules,
+  useCompanySettings,
   useCreateCompany,
   useInviteMember,
   usePatchCompanyModules,
+  usePatchCompanySettings,
   type Company,
   type CompanyModules,
   type CompanyModulesResponse,
   type CompanyPortalSettings,
+  type CompanySettings,
   type CreateCompanyRequest,
   type CreateCompanyResponse,
   type CreateMembershipRequest,

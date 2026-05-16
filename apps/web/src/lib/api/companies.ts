@@ -83,6 +83,30 @@ export function usePatchCompanyModules(companyId: string) {
   })
 }
 
+export interface CompanySettings {
+  ot_service_item_code: string | null
+}
+
+export function useCompanySettings(companyId: string | null | undefined) {
+  return useQuery<CompanySettings>({
+    queryKey: ['companies', companyId ?? '', 'settings'],
+    enabled: Boolean(companyId),
+    queryFn: () => request<CompanySettings>(`/api/companies/${encodeURIComponent(companyId!)}/settings`),
+  })
+}
+
+export function usePatchCompanySettings(companyId: string) {
+  const qc = useQueryClient()
+  return useMutation<CompanySettings, Error, { ot_service_item_code: string | null }>({
+    mutationFn: (input) =>
+      request<CompanySettings>(`/api/companies/${encodeURIComponent(companyId)}/settings`, {
+        method: 'PATCH',
+        json: input,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['companies', companyId, 'settings'] }),
+  })
+}
+
 export function useInviteMember(companyId: string) {
   const qc = useQueryClient()
   return useMutation<unknown, Error, CreateMembershipRequest>({

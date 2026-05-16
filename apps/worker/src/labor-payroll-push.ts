@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg'
 import { appendWorkflowEvent, type QueueClient } from '@sitelayer/queue'
+import { splitStraightAndOt } from '@sitelayer/domain'
 import { withFreshToken, type IntegrationConnectionTokens, type RefreshDeps } from './qbo-token-refresh.js'
 
 // QBO TimeActivity push for the labor-payroll workflow.
@@ -37,6 +38,15 @@ import { withFreshToken, type IntegrationConnectionTokens, type RefreshDeps } fr
 // Idempotency: see point 3 — the qbo_payroll_batch_ref column is the
 // authoritative "we already pushed this batch" marker. Worker retries
 // against the same idempotency key are safe.
+//
+// OT-typed push: when companies.ot_service_item_code is set, each
+// labor_entry whose hours exceed splitStraightAndOt's 8h/day threshold
+// produces TWO TimeActivities — one for straight hours against the
+// entry's existing service_item_code, one for OT hours against the
+// company's OT ItemRef. When the column is NULL (default) the worker
+// posts one TimeActivity per entry with the full hours value — today's
+// pre-OT behavior. See decideTimeActivityPayloads() for the split
+// decision logic (unit-tested in labor-payroll-push.test.ts).
 
 export type LaborPayrollPushInput = {
   client: QueueClient
@@ -259,6 +269,92 @@ function n(value: unknown): number {
 }
 
 /**
+ * Per-TimeActivity payload values needed to construct a QBO POST body.
+ *
+ * Kind 'straight' uses the labor_entry's existing service_item_code
+ * (resolved to the QBO Item id by the caller). Kind 'ot' uses the
+ * company-level ot_service_item_code (only emitted when both the
+ * company has the column set AND splitStraightAndOt produces
+ * ot_hours > 0).
+ */
+export type DecidedTimeActivityPayload = {
+  kind: 'straight' | 'ot'
+  hours: number
+  /**
+   * service_items.code to resolve to a QBO Item external_id. Null for
+   * straight payloads when the entry has no service_item_code (today's
+   * behavior — caller decides how to handle).
+   */
+  serviceItemCode: string | null
+}
+
+/**
+ * Pure helper deciding whether to emit one or two QBO TimeActivity
+ * payloads for a single labor_entry.
+ *
+ * Two-payload (OT-typed) path requires BOTH:
+ *   - otServiceItemCode is a non-empty string (per-company opt-in)
+ *   - splitStraightAndOt(hours) produces ot_hours > 0
+ *
+ * Otherwise: one-payload path. The caller posts a single TimeActivity
+ * with the full hours value against the entry's existing
+ * service_item_code (today's pre-OT-split behavior).
+ *
+ * Edge cases worth pinning in tests:
+ *   - hours <= 0 → empty payload list (caller skips the entry; QBO
+ *     rejects 0-hour TimeActivities anyway)
+ *   - hours below 8h threshold → single 'straight' payload regardless
+ *     of OT opt-in (no OT hours produced)
+ *   - hours above threshold but otServiceItemCode null → single
+ *     payload with full hours, no split (opt-out path)
+ */
+export function decideTimeActivityPayloads(
+  entry: { hours: number; service_item_code: string | null },
+  otServiceItemCode: string | null,
+): DecidedTimeActivityPayload[] {
+  const totalHours = n(entry.hours)
+  if (totalHours <= 0) return []
+
+  // Opt-out path: no per-company OT mapping → single payload with full
+  // hours against the entry's existing service_item_code.
+  if (!otServiceItemCode) {
+    return [
+      {
+        kind: 'straight',
+        hours: totalHours,
+        serviceItemCode: entry.service_item_code,
+      },
+    ]
+  }
+
+  const { straight_hours, ot_hours } = splitStraightAndOt(totalHours)
+  if (ot_hours <= 0) {
+    return [
+      {
+        kind: 'straight',
+        hours: totalHours,
+        serviceItemCode: entry.service_item_code,
+      },
+    ]
+  }
+
+  const payloads: DecidedTimeActivityPayload[] = []
+  if (straight_hours > 0) {
+    payloads.push({
+      kind: 'straight',
+      hours: straight_hours,
+      serviceItemCode: entry.service_item_code,
+    })
+  }
+  payloads.push({
+    kind: 'ot',
+    hours: ot_hours,
+    serviceItemCode: otServiceItemCode,
+  })
+  return payloads
+}
+
+/**
  * Build the live QBO TimeActivity push fn for the labor-payroll workflow.
  * Returned fn loads the connection + employee mappings via the supplied tx
  * client (so the row locks held during the worker tx apply), then POSTs
@@ -299,6 +395,37 @@ export function createQboLaborPayrollPush(refreshDeps: RefreshDeps = {}): LaborP
       throw new Error('qbo connection has neither access_token nor refresh_token; operator must reconnect')
     }
 
+    // 1b. Load the per-company OT mapping. NULL = no OT split (fall
+    // back to today's single-TimeActivity behavior). When set, the
+    // worker will emit two TimeActivities for any entry whose hours
+    // exceed splitStraightAndOt's 8h threshold.
+    const settingsResult = await client.query<{ ot_service_item_code: string | null }>(
+      `select ot_service_item_code from companies where id = $1 limit 1`,
+      [companyId],
+    )
+    const otServiceItemCode = settingsResult.rows[0]?.ot_service_item_code ?? null
+
+    // 1c. Pre-resolve the OT service item's QBO Item id (once per
+    // batch). Throwing here rather than mid-loop keeps the error
+    // surface narrow: "configure the mapping" is one fix, not a
+    // retry-with-partial-batch puzzle.
+    let otQboItemId: string | null = null
+    if (otServiceItemCode) {
+      const otItemMap = await client.query<{ external_id: string }>(
+        `select external_id from integration_mappings
+         where company_id = $1 and provider = 'qbo' and entity_type = 'service_item'
+           and local_ref = $2 and deleted_at is null
+         limit 1`,
+        [companyId, otServiceItemCode],
+      )
+      if (!otItemMap.rows[0]) {
+        throw new Error(
+          `companies.ot_service_item_code is set to "${otServiceItemCode}" but no QBO service_item mapping exists for that code — map it via /api/integrations/qbo/mappings or clear the OT setting before retrying`,
+        )
+      }
+      otQboItemId = otItemMap.rows[0].external_id
+    }
+
     // 2. Load every covered labor_entry. Re-read from the table inside
     // the worker tx rather than trusting payload.covered_labor_entry_ids
     // alone, so any concurrent edits (admin justification + PATCH) land
@@ -325,6 +452,27 @@ export function createQboLaborPayrollPush(refreshDeps: RefreshDeps = {}): LaborP
     const url = `${baseUrl}/v3/company/${connection.provider_account_id}/timeactivity`
     const postedIds: string[] = []
 
+    // Cache for per-entry service_item_code → QBO Item id lookups. The
+    // OT code's id is already resolved above; non-OT codes are
+    // resolved on first sight.
+    const itemIdCache = new Map<string, string | null>()
+    if (otServiceItemCode && otQboItemId) itemIdCache.set(otServiceItemCode, otQboItemId)
+
+    const resolveItemId = async (code: string | null): Promise<string | null> => {
+      if (!code) return null
+      if (itemIdCache.has(code)) return itemIdCache.get(code) ?? null
+      const row = await client.query<{ external_id: string }>(
+        `select external_id from integration_mappings
+         where company_id = $1 and provider = 'qbo' and entity_type = 'service_item'
+           and local_ref = $2 and deleted_at is null
+         limit 1`,
+        [companyId, code],
+      )
+      const external = row.rows[0]?.external_id ?? null
+      itemIdCache.set(code, external)
+      return external
+    }
+
     // 3. Per-entry POST. Each call is its own withFreshToken block so a
     // 401 in the middle of the batch refreshes once and continues.
     for (const entry of entries.rows) {
@@ -349,51 +497,79 @@ export function createQboLaborPayrollPush(refreshDeps: RefreshDeps = {}): LaborP
         )
       }
 
-      const hours = n(entry.hours)
-      const wholeHours = Math.floor(hours)
-      const minutes = Math.round((hours - wholeHours) * 60)
-
-      const timeActivityPayload = {
-        NameOf: 'Employee',
-        EmployeeRef: employeeRef,
-        TxnDate: entry.occurred_on,
-        Hours: wholeHours,
-        Minutes: minutes,
-        Description: `Sitelayer labor entry ${entry.id} (run ${runId})`,
-      }
-
-      const parsed = await withFreshToken<QboTimeActivityCreateResponse>(
-        connection,
-        client,
-        async (token) => {
-          const response = await fetchImpl(url, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${token}`,
-              Accept: 'application/json',
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(timeActivityPayload),
-          })
-          if (response.status === 401) {
-            await response.text().catch(() => '')
-            return { unauthorized: true }
-          }
-          if (!response.ok) {
-            const errBody = await response.text()
-            throw new Error(
-              `qbo timeactivity POST returned ${response.status}: ${errBody.slice(0, 500)} (entry ${entry.id})`,
-            )
-          }
-          return { unauthorized: false, value: (await response.json()) as QboTimeActivityCreateResponse }
-        },
-        refreshDeps,
+      const decided = decideTimeActivityPayloads(
+        { hours: n(entry.hours), service_item_code: entry.service_item_code },
+        otServiceItemCode,
       )
-      const taId = parsed.TimeActivity?.Id
-      if (!taId) {
-        throw new Error(`qbo timeactivity POST succeeded but TimeActivity.Id missing for entry ${entry.id}`)
+      if (decided.length === 0) continue
+
+      for (const part of decided) {
+        const wholeHours = Math.floor(part.hours)
+        const minutes = Math.round((part.hours - wholeHours) * 60)
+
+        // ItemRef resolution: OT parts always hit the pre-resolved id;
+        // straight parts only need an ItemRef when service_item_code
+        // is set on the entry (today's path tolerated missing codes —
+        // QBO accepts a TimeActivity without ItemRef as long as the
+        // EmployeeRef is present, so we preserve that behavior).
+        let itemRef: { value: string } | undefined
+        if (part.kind === 'ot') {
+          itemRef = otQboItemId ? { value: otQboItemId } : undefined
+        } else if (part.serviceItemCode) {
+          const external = await resolveItemId(part.serviceItemCode)
+          if (external) itemRef = { value: external }
+        }
+
+        const description =
+          part.kind === 'ot'
+            ? `Sitelayer labor entry ${entry.id} OT (run ${runId})`
+            : `Sitelayer labor entry ${entry.id} (run ${runId})`
+
+        const timeActivityPayload: Record<string, unknown> = {
+          NameOf: 'Employee',
+          EmployeeRef: employeeRef,
+          TxnDate: entry.occurred_on,
+          Hours: wholeHours,
+          Minutes: minutes,
+          Description: description,
+        }
+        if (itemRef) timeActivityPayload.ItemRef = itemRef
+
+        const parsed = await withFreshToken<QboTimeActivityCreateResponse>(
+          connection,
+          client,
+          async (token) => {
+            const response = await fetchImpl(url, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(timeActivityPayload),
+            })
+            if (response.status === 401) {
+              await response.text().catch(() => '')
+              return { unauthorized: true }
+            }
+            if (!response.ok) {
+              const errBody = await response.text()
+              throw new Error(
+                `qbo timeactivity POST returned ${response.status}: ${errBody.slice(0, 500)} (entry ${entry.id}, kind ${part.kind})`,
+              )
+            }
+            return { unauthorized: false, value: (await response.json()) as QboTimeActivityCreateResponse }
+          },
+          refreshDeps,
+        )
+        const taId = parsed.TimeActivity?.Id
+        if (!taId) {
+          throw new Error(
+            `qbo timeactivity POST succeeded but TimeActivity.Id missing for entry ${entry.id} (kind ${part.kind})`,
+          )
+        }
+        postedIds.push(taId)
       }
-      postedIds.push(taId)
     }
     return { qbo_timeactivity_ids: postedIds }
   }
