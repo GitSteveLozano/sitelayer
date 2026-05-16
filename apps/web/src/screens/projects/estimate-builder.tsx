@@ -1,14 +1,16 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { EmptyState } from '@/components/shell/EmptyState'
 import { SkeletonRows } from '@/components/shell/LoadingSkeleton'
 import { getActiveCompanySlug } from '@/lib/api/client'
-import { useProject, useServiceItems, type EstimateLine, type ServiceItem } from '@/lib/api'
+import { useProject, useServiceItems, type EstimateLine, type PricingProfile, type ServiceItem } from '@/lib/api'
 import { useEstimateBuilder } from '@/machines/estimate-builder'
 import { BidAccuracyCard } from './bid-accuracy-card'
 import { EstimateLineAssembly } from './estimate-line-assembly'
+import { EstimateMarkupBreakdown } from './estimate-markup-breakdown'
+import { PricingProfilePicker } from './pricing-profile-picker'
 
 /**
  * Density threshold for the bid-accuracy keystone. Below this line count we
@@ -87,6 +89,14 @@ export function EstimateBuilderScreen() {
   const status = builder.snapshot?.status ?? 'ok'
   const lifecycle = project.data?.project.status ?? 'draft'
 
+  // Active pricing profile feeds the per-line markup breakdown panel.
+  // The PricingProfilePicker owns the localStorage pin; this screen just
+  // captures the resolved row so every line-row can render its breakdown
+  // without re-running the profiles query.
+  const [activeProfile, setActiveProfile] = useState<PricingProfile | null>(null)
+  const handleProfileResolved = useCallback((p: PricingProfile | null) => setActiveProfile(p), [])
+  const activeProfileConfig = activeProfile?.config ?? null
+
   // Density rule (`estimator/README.md` § estimate-builder): collapse the
   // right rail's bid-accuracy keystone to a single chip when the estimate
   // has fewer than 10 lines. The chip lives in the header strip and
@@ -124,6 +134,7 @@ export function EstimateBuilderScreen() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <PricingProfilePicker onProfileResolved={handleProfileResolved} />
           {isCompactKeystone ? (
             // Density-aware: when the estimate is small (<10 lines) the right
             // rail's keystone collapses into this single header chip. Tap to
@@ -197,6 +208,7 @@ export function EstimateBuilderScreen() {
             onEdit={builder.editLine}
             pending={builder.pendingEdits}
             status={status}
+            pricingProfileConfig={activeProfileConfig}
           />
           {isCompactKeystone ? null : (
             <div className="space-y-3">
@@ -365,9 +377,10 @@ interface LineItemsPaneProps {
   onEdit: (edit: { service_item_code: string; quantity?: number; override_rate?: number | null }) => void
   pending: Record<string, { quantity?: number; override_rate?: number | null }>
   status: string
+  pricingProfileConfig: unknown
 }
 
-function LineItemsPane({ lines, items, selectedCategory, onEdit, pending }: LineItemsPaneProps) {
+function LineItemsPane({ lines, items, selectedCategory, onEdit, pending, pricingProfileConfig }: LineItemsPaneProps) {
   const itemIndex = useMemo(() => {
     const map = new Map<string, ServiceItem>()
     for (const i of items) map.set(i.code, i)
@@ -400,6 +413,7 @@ function LineItemsPane({ lines, items, selectedCategory, onEdit, pending }: Line
                 item={itemIndex.get(line.service_item_code) ?? null}
                 pending={pending[line.service_item_code] ?? null}
                 onEdit={onEdit}
+                pricingProfileConfig={pricingProfileConfig}
               />
             </li>
           ))}
@@ -414,9 +428,10 @@ interface LineItemRowProps {
   item: ServiceItem | null
   pending: { quantity?: number; override_rate?: number | null } | null
   onEdit: (edit: { service_item_code: string; quantity?: number; override_rate?: number | null }) => void
+  pricingProfileConfig: unknown
 }
 
-function LineItemRow({ line, item, pending, onEdit }: LineItemRowProps) {
+function LineItemRow({ line, item, pending, onEdit, pricingProfileConfig }: LineItemRowProps) {
   const [expanded, setExpanded] = useState(false)
   const [qtyDraft, setQtyDraft] = useState<string>(() => formatQty(line.quantity))
   const [rateDraft, setRateDraft] = useState<string>(() => formatRate(line.rate))
@@ -497,6 +512,28 @@ function LineItemRow({ line, item, pending, onEdit }: LineItemRowProps) {
           />
         </div>
       ) : null}
+      {/*
+       * Transparent markup breakdown — collapsed by default. Uses native
+       * <details> so it adds zero visual noise for users who don't care
+       * about the math. Opening reveals the labor/material × multiplier
+       * → final-amount table from `applyMarkup` against the active
+       * pricing profile.
+       */}
+      <details className="mt-1.5 group">
+        <summary className="list-none cursor-pointer text-[10.5px] text-ink-3 hover:text-accent select-none flex items-center gap-1">
+          <span aria-hidden="true" className="group-open:rotate-90 inline-block transition-transform">
+            ▸
+          </span>
+          <span>Markup breakdown</span>
+        </summary>
+        <div className="mt-1.5 pl-3 border-l-2 border-line">
+          <EstimateMarkupBreakdown
+            serviceItemCode={line.service_item_code}
+            lineAmount={amount}
+            pricingProfileConfig={pricingProfileConfig}
+          />
+        </div>
+      </details>
     </div>
   )
 }

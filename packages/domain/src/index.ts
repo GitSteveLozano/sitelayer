@@ -1257,3 +1257,13 @@ export {
   type AssemblyResolution,
   type AssemblyResolutionLine,
 } from './assembly.js'
+
+export {
+  DEFAULT_MARKUP_CONFIG,
+  applyMarkup,
+  normalizeMarkupConfig,
+  type MarkupBreakdown,
+  type MarkupBreakdownRow,
+  type MarkupProfileConfig,
+  type SubtotalsByKind,
+} from './markup.js'
