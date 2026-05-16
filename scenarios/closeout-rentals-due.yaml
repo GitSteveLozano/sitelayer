@@ -1,0 +1,107 @@
+# Closeout blocker — project at lifecycle=done with 3 unbilled rentals.
+#
+# What this exercises:
+#   - GET /api/projects/:id/closeout (`project_closeout` workflow): the
+#     summary should refuse to mark the project closed because rentals
+#     remain in non-terminal billing states.
+#   - rental_billing_run reducer with multiple entities in mixed states
+#     (one `generated`, one `approved`, one `failed`) — the closeout
+#     check needs to walk all three.
+#
+# Expectation: the closeout endpoint returns a blocker list including
+# the three rental_billing_run ids. Resolving each (manual VOID or
+# successful POST) clears the blocker.
+#
+# How to use:
+#   npx tsx scripts/seed-scenario.ts scenarios/closeout-rentals-due.yaml
+#   # Then hit GET /api/projects/<project-id>/closeout and inspect the
+#   # `blockers` array.
+
+company:
+  slug: acme-closeout
+  name: Acme Closeout
+
+members:
+  - clerk_user_id: e2e-admin
+    role: admin
+  - clerk_user_id: e2e-office
+    role: office
+
+customers:
+  - ref: customer-bigco
+    name: Big Customer Co.
+
+inventory:
+  - ref: scaffold-a
+    code: SCAF-CLOSE-A
+    description: Closeout Scaffold A
+    default_rental_rate: 1.50
+    replacement_value: 250.00
+  - ref: scaffold-b
+    code: SCAF-CLOSE-B
+    description: Closeout Scaffold B
+    default_rental_rate: 2.00
+    replacement_value: 300.00
+  - ref: scaffold-c
+    code: SCAF-CLOSE-C
+    description: Closeout Scaffold C
+    default_rental_rate: 1.75
+    replacement_value: 275.00
+
+projects:
+  - ref: project-done
+    name: Closeout Block — Phase 4
+    customer_ref: customer-bigco
+    division_code: D4
+    status: completed
+    bid_total: 200000.00
+    # Lifecycle=done; closeout check should run.
+    lifecycle_state: done
+    lifecycle_state_version: 5
+
+rentals:
+  # Rental 1: still in `generated` state (nothing approved yet).
+  - ref: rental-gen
+    project_ref: project-done
+    customer_ref: customer-bigco
+    inventory_ref: scaffold-a
+    quantity: 30
+    billing_cycle_days: 25
+    agreed_rate: 1.50
+    period_start: '2026-01-01'
+    period_end: '2026-01-25'
+    subtotal: 1125.00
+  # Rental 2: approved but not yet posted.
+  - ref: rental-approved
+    project_ref: project-done
+    customer_ref: customer-bigco
+    inventory_ref: scaffold-b
+    quantity: 20
+    billing_cycle_days: 25
+    agreed_rate: 2.00
+    period_start: '2026-01-01'
+    period_end: '2026-01-25'
+    subtotal: 1000.00
+    billing_event_log:
+      - type: APPROVE
+        approved_at: '2026-01-26T10:00:00.000Z'
+        approved_by: e2e-office
+  # Rental 3: tried to post and failed (QBO 500).
+  - ref: rental-failed
+    project_ref: project-done
+    customer_ref: customer-bigco
+    inventory_ref: scaffold-c
+    quantity: 15
+    billing_cycle_days: 25
+    agreed_rate: 1.75
+    period_start: '2026-01-01'
+    period_end: '2026-01-25'
+    subtotal: 656.25
+    billing_event_log:
+      - type: APPROVE
+        approved_at: '2026-01-26T10:00:00.000Z'
+        approved_by: e2e-office
+      - type: POST_REQUESTED
+      - type: POST_FAILED
+        failed_at: '2026-01-26T10:05:00.000Z'
+        error: 'QBO 500 — simulated'

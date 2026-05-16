@@ -49,6 +49,14 @@ export {
 export { applyEventLog, type WorkflowEventLogEntry, type ReplayResult } from './replay.js'
 
 export {
+  applyEventSequence,
+  type ApplyEventSequenceArgs,
+  type ApplyEventSequenceResult,
+  type ApplyEventSequenceStep,
+  type QueryExecutor,
+} from './test-replay.js'
+
+export {
   CREW_SCHEDULE_ALL_STATES,
   CREW_SCHEDULE_EVENT_TYPES,
   CREW_SCHEDULE_TERMINAL_STATES,
