@@ -1,4 +1,5 @@
 import type { QueueClient } from '@sitelayer/queue'
+import { Sentry } from './instrument.js'
 
 // QBO access-token refresh-on-401 + proactive expiry refresh.
 //
@@ -118,18 +119,36 @@ export async function refreshAccessToken(
 
   let response: Response
   try {
-    response = await fetchImpl(QBO_REFRESH_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Basic ${auth}`,
-        Accept: 'application/json',
+    response = await Sentry.startSpan(
+      {
+        name: 'qbo.request',
+        op: 'http.client',
+        attributes: {
+          'http.url': QBO_REFRESH_URL,
+          'http.method': 'POST',
+          'qbo.attempt': 0,
+          'qbo.kind': 'token_refresh',
+          connection_id: connection.id,
+        },
       },
-      body: new URLSearchParams({
-        grant_type: 'refresh_token',
-        refresh_token: connection.refresh_token,
-      }).toString(),
-    })
+      async (span) => {
+        const r = await fetchImpl(QBO_REFRESH_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Authorization: `Basic ${auth}`,
+            Accept: 'application/json',
+          },
+          body: new URLSearchParams({
+            grant_type: 'refresh_token',
+            refresh_token: connection.refresh_token ?? '',
+          }).toString(),
+        })
+        span?.setAttribute('http.status_code', r.status)
+        if (!r.ok) span?.setStatus({ code: 2, message: `qbo_${r.status}` })
+        return r
+      },
+    )
   } catch (err) {
     throw new QboTokenRefreshError(
       `qbo token refresh fetch failed: ${err instanceof Error ? err.message : String(err)}`,

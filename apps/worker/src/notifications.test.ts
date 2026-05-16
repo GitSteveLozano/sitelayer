@@ -28,6 +28,7 @@ function makeRow(overrides: Partial<PendingNotificationRow> = {}): PendingNotifi
     body_html: null,
     payload: null,
     attempt_count: 0,
+    delivery_attempts: 0,
     ...overrides,
   }
 }

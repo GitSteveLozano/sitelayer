@@ -1,4 +1,4 @@
-import { Sentry } from '../instrument.js'
+import { Sentry, captureWithEntityContext } from '../instrument.js'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import type http from 'node:http'
 import type { Pool } from 'pg'
@@ -70,8 +70,31 @@ function qboShouldRetry(status: number): boolean {
 async function qboFetch<T>(url: string, init: RequestInit): Promise<T> {
   let lastStatus = 0
   let lastStatusText = ''
+  const method = (init.method ?? 'GET').toUpperCase()
   for (let attempt = 0; attempt <= QBO_RETRY_DELAYS_MS.length; attempt += 1) {
-    const response = await fetch(url, init)
+    // Wrap each fetch attempt in a Sentry span so QBO calls show up as
+    // `http.client` children of the originating HTTP request. We tag
+    // the response status when the call returns (success or failure)
+    // and mark span status accordingly.
+    const response = await Sentry.startSpan(
+      {
+        name: 'qbo.request',
+        op: 'http.client',
+        attributes: {
+          'http.url': url,
+          'http.method': method,
+          'qbo.attempt': attempt,
+        },
+      },
+      async (span) => {
+        const r = await fetch(url, init)
+        span?.setAttribute('http.status_code', r.status)
+        if (!r.ok) {
+          span?.setStatus({ code: 2, message: `qbo_${r.status}` })
+        }
+        return r
+      },
+    )
     if (response.ok) return (await response.json()) as T
     lastStatus = response.status
     lastStatusText = response.statusText
@@ -522,18 +545,36 @@ export async function handleQboRoutes(req: http.IncomingMessage, url: URL, ctx: 
       return true
     }
     const auth = Buffer.from(`${clientId}:${clientSecret}`).toString('base64')
-    const tokenResponse = await fetch('https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Basic ${auth}`,
+    const tokenUrl = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer'
+    const tokenResponse = await Sentry.startSpan(
+      {
+        name: 'qbo.request',
+        op: 'http.client',
+        attributes: {
+          'http.url': tokenUrl,
+          'http.method': 'POST',
+          'qbo.attempt': 0,
+          'qbo.kind': 'oauth_token_exchange',
+        },
       },
-      body: new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: redirectUri,
-      }).toString(),
-    })
+      async (span) => {
+        const r = await fetch(tokenUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Authorization: `Basic ${auth}`,
+          },
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: redirectUri,
+          }).toString(),
+        })
+        span?.setAttribute('http.status_code', r.status)
+        if (!r.ok) span?.setStatus({ code: 2, message: `qbo_${r.status}` })
+        return r
+      },
+    )
     if (!tokenResponse.ok) {
       sendJson(400, { error: 'token exchange failed' })
       return true
@@ -735,7 +776,11 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
         qboCustomers = customerResponse.QueryResponse?.Customer ?? []
       } catch (e) {
         logger.error({ err: e, scope: 'qbo_customers' }, 'Failed to sync customers from QBO')
-        Sentry.captureException(e, { tags: { scope: 'qbo_customers' } })
+        captureWithEntityContext(e, {
+          scope: 'qbo_customers',
+          entity_type: 'customer',
+          company_id: company.id,
+        })
       }
 
       const customerExternalIds: string[] = []
@@ -804,7 +849,11 @@ do update set
         qboItemsRaw = itemResponse.QueryResponse?.Item ?? []
       } catch (e) {
         logger.error({ err: e, scope: 'qbo_items' }, 'Failed to sync items from QBO')
-        Sentry.captureException(e, { tags: { scope: 'qbo_items' } })
+        captureWithEntityContext(e, {
+          scope: 'qbo_items',
+          entity_type: 'service_item',
+          company_id: company.id,
+        })
       }
 
       const itemCodes: string[] = []
@@ -818,7 +867,11 @@ do update set
         } catch (e) {
           if (e instanceof QboParseError) {
             logger.error({ err: e, scope: 'qbo_items_parse' }, 'QBO item parse failed')
-            Sentry.captureException(e, { tags: { scope: 'qbo_items_parse' } })
+            captureWithEntityContext(e, {
+              scope: 'qbo_items_parse',
+              entity_type: 'service_item',
+              company_id: company.id,
+            })
             await recordSyncEvent(
               company.id,
               'service_item',
@@ -887,7 +940,11 @@ do update set
         qboClassesRaw = classResponse.QueryResponse?.Class ?? []
       } catch (e) {
         logger.error({ err: e, scope: 'qbo_classes' }, 'Failed to sync classes from QBO')
-        Sentry.captureException(e, { tags: { scope: 'qbo_classes' } })
+        captureWithEntityContext(e, {
+          scope: 'qbo_classes',
+          entity_type: 'division',
+          company_id: company.id,
+        })
       }
 
       const divisionsResult = await pool.query(
@@ -905,7 +962,11 @@ do update set
         } catch (e) {
           if (e instanceof QboParseError) {
             logger.error({ err: e, scope: 'qbo_classes_parse' }, 'QBO class parse failed')
-            Sentry.captureException(e, { tags: { scope: 'qbo_classes_parse' } })
+            captureWithEntityContext(e, {
+              scope: 'qbo_classes_parse',
+              entity_type: 'division',
+              company_id: company.id,
+            })
             await recordSyncEvent(
               company.id,
               'division',
@@ -979,7 +1040,11 @@ do update set
         }
       } catch (e) {
         logger.error({ err: e, scope: 'qbo_time_activities' }, 'Failed to pull time activities from QBO')
-        Sentry.captureException(e, { tags: { scope: 'qbo_time_activities' } })
+        captureWithEntityContext(e, {
+          scope: 'qbo_time_activities',
+          entity_type: 'qbo_time_activity',
+          company_id: company.id,
+        })
       }
 
       let pulledBills = 0
@@ -1003,7 +1068,11 @@ do update set
         }
       } catch (e) {
         logger.error({ err: e, scope: 'qbo_bills' }, 'Failed to pull bills from QBO')
-        Sentry.captureException(e, { tags: { scope: 'qbo_bills' } })
+        captureWithEntityContext(e, {
+          scope: 'qbo_bills',
+          entity_type: 'qbo_bill',
+          company_id: company.id,
+        })
       }
 
       const qboSnapshot = {
@@ -1042,7 +1111,11 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
       })
     } catch (error) {
       logger.error({ err: error, scope: 'qbo_sync' }, 'QBO sync error')
-      Sentry.captureException(error, { tags: { scope: 'qbo_sync' } })
+      captureWithEntityContext(error, {
+        scope: 'qbo_sync',
+        entity_type: 'integration_connection',
+        company_id: company.id,
+      })
       await upsertIntegrationConnection(pool, company.id, 'qbo', { status: 'error' })
       sendJson(500, { error: 'sync failed' })
     }
@@ -1202,7 +1275,12 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
       } catch (err) {
         const message = err instanceof Error ? err.message : 'unknown error'
         logger.error({ err, scope: 'qbo_material_bill_push', bill_id: bill.id }, 'material bill push failed')
-        Sentry.captureException(err, { tags: { scope: 'qbo_material_bill_push' } })
+        captureWithEntityContext(err, {
+          scope: 'qbo_material_bill_push',
+          entity_type: 'material_bill',
+          entity_id: bill.id,
+          company_id: company.id,
+        })
         errors.push({ bill_id: bill.id, error: message })
       }
     }
@@ -1281,7 +1359,13 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
       } catch (e) {
         if (e instanceof QboParseError) {
           logger.error({ err: e, scope: 'qbo_push_estimate_parse' }, 'QBO estimate response parse failed')
-          Sentry.captureException(e, { tags: { scope: 'qbo_push_estimate_parse' } })
+          captureWithEntityContext(e, {
+            scope: 'qbo_push_estimate_parse',
+            entity_type: 'project',
+            entity_id: projectId,
+            company_id: company.id,
+            workflow_name: 'estimate_push',
+          })
           await recordSyncEvent(
             company.id,
             'project',
@@ -1306,7 +1390,13 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
       sendJson(200, { success: true, result })
     } catch (error) {
       logger.error({ err: error, scope: 'qbo_push_estimate' }, 'Failed to push estimate to QBO')
-      Sentry.captureException(error, { tags: { scope: 'qbo_push_estimate' } })
+      captureWithEntityContext(error, {
+        scope: 'qbo_push_estimate',
+        entity_type: 'project',
+        entity_id: projectId,
+        company_id: company.id,
+        workflow_name: 'estimate_push',
+      })
       sendJson(500, { error: 'failed to push estimate to qbo' })
     }
     return true

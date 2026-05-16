@@ -32,6 +32,12 @@ export type PendingNotificationRow = {
   body_html: string | null
   payload: Record<string, unknown> | null
   attempt_count: number
+  /**
+   * Per-delivery counter (migration 073). Separate from the
+   * row-lifecycle `attempt_count` so hydration/preference deferrals
+   * don't burn the cap that governs actual channel sends.
+   */
+  delivery_attempts: number
 }
 
 // Minimal subset of pg's PoolClient/Client surface used here. Lets tests pass
@@ -104,7 +110,8 @@ async function markFailedWithReason(
     `update notifications
      set status = 'failed',
          attempt_count = $2,
-         error = $3
+         error = $3,
+         last_delivery_error = $3
      where id = $1`,
     [id, attemptCount, reason],
   )
@@ -169,21 +176,29 @@ async function applySendFailure(
   row: PendingNotificationRow,
   errorMessage: string,
   maxAttempts: number,
-): Promise<{ status: 'pending' | 'failed' }> {
+): Promise<{ status: 'pending' | 'failed'; exhausted: boolean; deliveryAttempts: number }> {
   const nextAttempt = row.attempt_count + 1
-  const exceeded = nextAttempt >= maxAttempts
-  const nextStatus = exceeded ? 'failed' : 'pending'
-  const backoff = backoffSecondsFor(nextAttempt)
+  const nextDeliveryAttempts = (row.delivery_attempts ?? 0) + 1
+  // Exhaust the row when its dedicated *delivery* counter crosses the cap,
+  // not the legacy row-lifecycle attempt counter — those are mixed up with
+  // hydration/preference deferrals.
+  const exhausted = nextDeliveryAttempts >= maxAttempts
+  const nextStatus = exhausted ? 'failed' : 'pending'
+  const backoff = backoffSecondsFor(nextDeliveryAttempts)
+  const truncated = errorMessage.slice(0, 2000)
   await client.query(
     `update notifications
      set status = $2,
          attempt_count = $3,
          next_attempt_at = now() + ($4 || ' seconds')::interval,
-         error = $5
+         error = $5,
+         delivery_attempts = $6,
+         next_delivery_at = now() + ($4 || ' seconds')::interval,
+         last_delivery_error = $5
      where id = $1`,
-    [row.id, nextStatus, nextAttempt, backoff, errorMessage.slice(0, 2000)],
+    [row.id, nextStatus, nextAttempt, backoff, truncated, nextDeliveryAttempts],
   )
-  return { status: nextStatus }
+  return { status: nextStatus, exhausted, deliveryAttempts: nextDeliveryAttempts }
 }
 
 /**

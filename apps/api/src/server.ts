@@ -728,7 +728,11 @@ const server = http.createServer(async (req, res) => {
             sendJson(res, 404, { error: 'not found' })
           } catch (error) {
             logger.error({ err: error }, 'unhandled request error')
-            Sentry.captureException(error)
+            // Scope tags (route, request_id, company_id) are already set on
+            // the Sentry isolation scope above; adding scope='unhandled' so
+            // it shares the same captureWithEntityContext taxonomy as the
+            // sub-handlers.
+            Sentry.captureException(error, { tags: { scope: 'unhandled' } })
             const status =
               error instanceof HttpError ? error.status : error instanceof BlueprintUploadError ? error.status : 500
             if (rootSpan) {
