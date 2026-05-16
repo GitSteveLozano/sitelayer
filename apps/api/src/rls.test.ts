@@ -29,18 +29,22 @@ describeIntegration('row-level security (migration 066)', () => {
     companyB = randomUUID()
     projectA = randomUUID()
     projectB = randomUUID()
-    await pool.query('insert into companies (id, slug, name) values ($1, $2, $3), ($4, $5, $6)', [
-      companyA,
-      `rls-test-a-${companyA.slice(0, 8)}`,
-      'RLS Test A',
-      companyB,
-      `rls-test-b-${companyB.slice(0, 8)}`,
-      'RLS Test B',
-    ])
+    await pool.query(
+      'insert into companies (id, slug, name) values ($1, $2, $3), ($4, $5, $6) on conflict (id) do nothing',
+      [
+        companyA,
+        `rls-test-a-${companyA.slice(0, 8)}`,
+        'RLS Test A',
+        companyB,
+        `rls-test-b-${companyB.slice(0, 8)}`,
+        'RLS Test B',
+      ],
+    )
     await pool.query(
       `insert into projects (id, company_id, name, customer_name, division_code, status)
        values ($1, $2, 'A project', 'A customer', 'D1', 'planning'),
-              ($3, $4, 'B project', 'B customer', 'D1', 'planning')`,
+              ($3, $4, 'B project', 'B customer', 'D1', 'planning')
+       on conflict (id) do nothing`,
       [projectA, companyA, projectB, companyB],
     )
     await pool.query('alter table projects enable row level security')
@@ -49,14 +53,25 @@ describeIntegration('row-level security (migration 066)', () => {
 
   afterAll(async () => {
     if (!pool) return
-    try {
-      await pool.query('alter table projects no force row level security')
-      await pool.query('alter table projects disable row level security')
-      await pool.query('delete from projects where id = any($1::uuid[])', [[projectA, projectB]])
-      await pool.query('delete from companies where id = any($1::uuid[])', [[companyA, companyB]])
-    } finally {
-      await pool.end()
+    // Cleanup is best-effort — a teardown failure should never mask a
+    // test assertion failure. Each step is independently try/caught so a
+    // half-rolled-back state still drains as much as possible.
+    const swallow = async (sql: string, params: unknown[] = []) => {
+      try {
+        await pool.query(sql, params)
+      } catch {
+        // best-effort
+      }
     }
+    await swallow('alter table projects no force row level security')
+    await swallow('alter table projects disable row level security')
+    // Drop the bootstrap-state rows our fixtures created so the projects
+    // DELETE trigger doesn't fail FK if companies are wiped by an
+    // adjacent test before our cleanup runs.
+    await swallow('delete from company_bootstrap_state where company_id = any($1::uuid[])', [[companyA, companyB]])
+    await swallow('delete from projects where id = any($1::uuid[])', [[projectA, projectB]])
+    await swallow('delete from companies where id = any($1::uuid[])', [[companyA, companyB]])
+    await pool.end()
   })
 
   async function withSetting(companyId: string | null, fn: (c: PoolClient) => Promise<void>) {

@@ -5,6 +5,7 @@ import { LA_TEMPLATE, WORKFLOW_STAGES } from '@sitelayer/domain'
 import { createLogger } from '@sitelayer/logger'
 import type { AppTier } from '@sitelayer/config'
 import type { ActiveCompany } from '../auth-types.js'
+import { withCompanyClient } from '../mutation-tx.js'
 import {
   authorizeDebugTraceRequest,
   DebugTraceError,
@@ -129,7 +130,11 @@ export async function handleSystemRoutes(req: http.IncomingMessage, url: URL, ct
  * `callerUserId` drives the user-scoped slice of the response (currently
  * just `projectAssignments`); company-scoped data ignores it.
  */
-async function loadBootstrap(pool: Pool, companyId: string, callerUserId: string) {
+async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: string) {
+  // Every query runs through withCompanyClient so RLS sees the right
+  // company_id when migration 066's policies get enabled. Parallelism is
+  // preserved — each Promise checks out its own pooled connection, sets
+  // SET LOCAL app.company_id inside its read-only tx, runs, and releases.
   const [
     divisions,
     serviceItems,
@@ -144,70 +149,94 @@ async function loadBootstrap(pool: Pool, companyId: string, callerUserId: string
     laborEntries,
     projectAssignments,
   ] = await Promise.all([
-    pool.query('select code, name, sort_order from divisions where company_id = $1 order by sort_order asc', [
-      companyId,
-    ]),
-    pool.query(
-      'select code, name, category, unit, default_rate, source, version from service_items where company_id = $1 and deleted_at is null order by name asc',
-      [companyId],
+    withCompanyClient(companyId, (c) =>
+      c.query('select code, name, sort_order from divisions where company_id = $1 order by sort_order asc', [
+        companyId,
+      ]),
     ),
-    pool.query(
-      'select id, external_id, name, source, created_at from customers where company_id = $1 and deleted_at is null order by name asc',
-      [companyId],
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        'select code, name, category, unit, default_rate, source, version from service_items where company_id = $1 and deleted_at is null order by name asc',
+        [companyId],
+      ),
     ),
-    pool.query(
-      'select id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at from projects where company_id = $1 order by updated_at desc',
-      [companyId],
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        'select id, external_id, name, source, created_at from customers where company_id = $1 and deleted_at is null order by name asc',
+        [companyId],
+      ),
     ),
-    pool.query('select id, name, role, created_at from workers where company_id = $1 order by name asc', [companyId]),
-    pool.query(
-      'select id, name, is_default, config, version, created_at from pricing_profiles where company_id = $1 order by created_at asc',
-      [companyId],
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        'select id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at from projects where company_id = $1 order by updated_at desc',
+        [companyId],
+      ),
     ),
-    pool.query(
-      'select id, name, config, is_active, version, created_at from bonus_rules where company_id = $1 order by created_at asc',
-      [companyId],
+    withCompanyClient(companyId, (c) =>
+      c.query('select id, name, role, created_at from workers where company_id = $1 order by name asc', [companyId]),
     ),
-    pool.query(
-      'select id, provider, provider_account_id, sync_cursor, last_synced_at, status, version from integration_connections where company_id = $1 order by created_at asc',
-      [companyId],
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        'select id, name, is_default, config, version, created_at from pricing_profiles where company_id = $1 order by created_at asc',
+        [companyId],
+      ),
     ),
-    pool.query(
-      `
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        'select id, name, config, is_active, version, created_at from bonus_rules where company_id = $1 order by created_at asc',
+        [companyId],
+      ),
+    ),
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        'select id, provider, provider_account_id, sync_cursor, last_synced_at, status, version from integration_connections where company_id = $1 order by created_at asc',
+        [companyId],
+      ),
+    ),
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        `
         select id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
         from integration_mappings
         where company_id = $1 and deleted_at is null
         order by entity_type asc, created_at asc
         `,
-      [companyId],
+        [companyId],
+      ),
     ),
-    pool.query(
-      'select id, project_id, scheduled_for, crew, status from crew_schedules where company_id = $1 order by scheduled_for desc',
-      [companyId],
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        'select id, project_id, scheduled_for, crew, status from crew_schedules where company_id = $1 order by scheduled_for desc',
+        [companyId],
+      ),
     ),
     // Bootstrap returns recent labor history only — capped to the last year
     // and 1000 rows so the response stays bounded as company history grows.
     // Older entries are still readable through GET /api/labor-entries with
     // explicit filters.
-    pool.query(
-      `select id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, version, deleted_at
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        `select id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, version, deleted_at
          from labor_entries
         where company_id = $1
           and occurred_on >= (now() - interval '365 days')::date
         order by occurred_on desc, created_at desc
         limit 1000`,
-      [companyId],
+        [companyId],
+      ),
     ),
     // Caller's own active project assignments. Drives the role-aware shell
     // selector on the web client (see docs/MOBILE_DESIGN_ROADMAP.md § Phase 2).
-    pool.query(
-      `select id, project_id, role, assigned_by_clerk_user_id, created_at
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        `select id, project_id, role, assigned_by_clerk_user_id, created_at
          from project_assignments
         where company_id = $1
           and clerk_user_id = $2
           and deleted_at is null
         order by created_at asc`,
-      [companyId, callerUserId],
+        [companyId, callerUserId],
+      ),
     ),
   ])
 
