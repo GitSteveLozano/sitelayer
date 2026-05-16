@@ -2,17 +2,130 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { initialRentalNextInvoiceAt } from '@sitelayer/domain'
 import { processRentalInvoice, RENTAL_SELECT_COLUMNS, type RentalRow } from '@sitelayer/queue'
+import {
+  RENTAL_WORKFLOW_NAME,
+  RENTAL_WORKFLOW_SCHEMA_VERSION,
+  transitionRentalWorkflow,
+  type RentalWorkflowEvent,
+  type RentalWorkflowSnapshot,
+  type RentalWorkflowState,
+} from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput, parseExpectedVersion } from '../http-utils.js'
 
 export type RentalRouteCtx = {
   pool: Pool
   company: ActiveCompany
+  currentUserId: string
   requireRole: (allowed: readonly string[]) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
+}
+
+/**
+ * Dispatch a rental workflow event in the same tx as the row mutation:
+ *   1. Read the locked rental row.
+ *   2. Run the pure reducer against the persisted snapshot.
+ *   3. UPDATE rentals with the reducer output, including state_version.
+ *   4. Append a workflow_event_log row keyed on (entity_id, state_version).
+ *
+ * This is the Phase 2 wiring (CLAUDE.md "rental" workflow). Replaces the
+ * direct `status='returned'` / `status='closed'` writes that previously
+ * bypassed the reducer.
+ */
+async function applyRentalWorkflowTransition(
+  client: PoolClient,
+  args: {
+    companyId: string
+    rentalId: string
+    event: RentalWorkflowEvent
+    eventType: string
+    actorUserId: string
+  },
+): Promise<
+  | { kind: 'ok'; row: RentalRow & { state_version: number }; nextSnapshot: RentalWorkflowSnapshot }
+  | { kind: 'not_found' }
+  | { kind: 'illegal_transition'; message: string; row: RentalRow & { state_version: number } }
+> {
+  const lockedResult = await client.query<
+    RentalRow & {
+      state_version: number
+      returned_at: string | null
+      returned_by: string | null
+      closed_at: string | null
+      closed_by: string | null
+    }
+  >(
+    `select ${RENTAL_SELECT_COLUMNS}, state_version, returned_at, returned_by, closed_at, closed_by
+     from rentals
+     where company_id = $1 and id = $2 and deleted_at is null
+     for update`,
+    [args.companyId, args.rentalId],
+  )
+  const current = lockedResult.rows[0]
+  if (!current) return { kind: 'not_found' as const }
+
+  const currentSnapshot: RentalWorkflowSnapshot = {
+    state: (current.status as RentalWorkflowState) ?? 'active',
+    state_version: current.state_version ?? 1,
+    returned_at: current.returned_at ?? null,
+    returned_by: current.returned_by ?? null,
+    closed_at: current.closed_at ?? null,
+    closed_by: current.closed_by ?? null,
+  }
+
+  let nextSnapshot: RentalWorkflowSnapshot
+  try {
+    nextSnapshot = transitionRentalWorkflow(currentSnapshot, args.event)
+  } catch (err) {
+    return {
+      kind: 'illegal_transition' as const,
+      message: err instanceof Error ? err.message : String(err),
+      row: current,
+    }
+  }
+
+  const updated = await client.query<RentalRow & { state_version: number }>(
+    `update rentals
+       set status = $3,
+           state_version = $4,
+           returned_on = case when $3 = 'returned' then coalesce(returned_on, now()::date) else returned_on end,
+           returned_at = $5,
+           returned_by = $6,
+           closed_at = $7,
+           closed_by = $8,
+           version = version + 1,
+           updated_at = now()
+     where company_id = $1 and id = $2
+     returning ${RENTAL_SELECT_COLUMNS}, state_version`,
+    [
+      args.companyId,
+      args.rentalId,
+      nextSnapshot.state,
+      nextSnapshot.state_version,
+      nextSnapshot.returned_at ?? null,
+      nextSnapshot.returned_by ?? null,
+      nextSnapshot.closed_at ?? null,
+      nextSnapshot.closed_by ?? null,
+    ],
+  )
+
+  await recordWorkflowEvent(client, {
+    companyId: args.companyId,
+    workflowName: RENTAL_WORKFLOW_NAME,
+    schemaVersion: RENTAL_WORKFLOW_SCHEMA_VERSION,
+    entityType: 'rental',
+    entityId: args.rentalId,
+    stateVersion: currentSnapshot.state_version,
+    eventType: args.eventType,
+    eventPayload: args.event as unknown as Record<string, unknown>,
+    snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+    actorUserId: args.actorUserId,
+  })
+
+  return { kind: 'ok' as const, row: updated.rows[0]!, nextSnapshot }
 }
 
 /**
@@ -154,6 +267,25 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
       ctx.sendJson(400, { error: 'returned_on must be YYYY-MM-DD' })
       return true
     }
+    // The rental workflow owns status transitions. PATCH may NOT set
+    // status directly; callers wanting to mark a rental returned must
+    // POST /api/rentals/:id/return, and CLOSE must come through the
+    // workflow events surface. We also reject the implicit
+    // "PATCH returned_on=YYYY-MM-DD triggers status='returned'" path
+    // that the legacy PATCH supported — clients should hit /return.
+    if (body.status !== undefined && body.status !== null) {
+      ctx.sendJson(409, {
+        error:
+          'rental status is owned by the rental workflow — use POST /api/rentals/:id/return or /transfer instead of PATCH status',
+      })
+      return true
+    }
+    if (body.returned_on !== undefined && body.returned_on !== null && body.returned_on !== '__clear__') {
+      ctx.sendJson(409, {
+        error: 'rental returned_on is owned by the rental workflow — use POST /api/rentals/:id/return instead',
+      })
+      return true
+    }
     const updated = await withMutationTx(async (client: PoolClient) => {
       const result = await client.query<RentalRow>(
         `
@@ -163,21 +295,19 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
           daily_rate = coalesce($4, daily_rate),
           delivered_on = coalesce($5::date, delivered_on),
           returned_on = case when $6::text = '__clear__' then null
-                             when $6::text is null then returned_on
-                             else $6::date end,
+                             else returned_on end,
           invoice_cadence_days = coalesce($7, invoice_cadence_days),
-          status = coalesce($8, status),
-          notes = coalesce($9, notes),
-          project_id = case when $10::text = '__clear__' then null
-                            when $10::text is null then project_id
-                            else $10::uuid end,
-          customer_id = case when $11::text = '__clear__' then null
-                             when $11::text is null then customer_id
-                             else $11::uuid end,
+          notes = coalesce($8, notes),
+          project_id = case when $9::text = '__clear__' then null
+                            when $9::text is null then project_id
+                            else $9::uuid end,
+          customer_id = case when $10::text = '__clear__' then null
+                             when $10::text is null then customer_id
+                             else $10::uuid end,
           version = version + 1,
           updated_at = now()
         where company_id = $1 and id = $2 and deleted_at is null
-          and ($12::int is null or version = $12)
+          and ($11::int is null or version = $11)
         returning ${RENTAL_SELECT_COLUMNS}
         `,
         [
@@ -186,9 +316,8 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
           body.item_description ?? null,
           body.daily_rate ?? null,
           body.delivered_on ?? null,
-          body.returned_on === null ? '__clear__' : (body.returned_on ?? null),
+          body.returned_on === null ? '__clear__' : null,
           body.invoice_cadence_days ?? null,
-          body.status ?? (body.returned_on ? 'returned' : null),
           body.notes ?? null,
           body.project_id === null ? '__clear__' : (body.project_id ?? null),
           body.customer_id === null ? '__clear__' : (body.customer_id ?? null),
@@ -371,28 +500,47 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
       ctx.sendJson(400, { error: 'damage_charges_cents must be a non-negative number' })
       return true
     }
-    const rental = await withMutationTx(async (client: PoolClient) => {
-      const existing = await client.query<RentalRow>(
-        `select ${RENTAL_SELECT_COLUMNS} from rentals where id = $1 and company_id = $2 limit 1`,
-        [rentalId, ctx.company.id],
-      )
-      if (!existing.rows[0]) return null
-      const updated = await client.query<RentalRow>(
+    const result = await withMutationTx(async (client: PoolClient) => {
+      // Dispatch the RETURN workflow event in the same tx. The reducer
+      // is the single source of truth for the active → returned
+      // transition; the additional return-reconciliation columns
+      // (qty_good/qty_damaged/qty_lost/damage_photos/damage_charges_cents)
+      // are written as part of the same UPDATE so a crash between
+      // reducer dispatch and reconciliation persistence is impossible.
+      const nowIso = new Date().toISOString()
+      const event: RentalWorkflowEvent = {
+        type: 'RETURN',
+        returned_at: nowIso,
+        returned_by: ctx.currentUserId,
+      }
+      const transition = await applyRentalWorkflowTransition(client, {
+        companyId: ctx.company.id,
+        rentalId,
+        event,
+        eventType: 'RETURN',
+        actorUserId: ctx.currentUserId,
+      })
+      if (transition.kind === 'not_found') return { kind: 'not_found' as const }
+      if (transition.kind === 'illegal_transition') {
+        return { kind: 'illegal_transition' as const, message: transition.message }
+      }
+      // Apply return-reconciliation columns on the same row. These are
+      // additive to what the workflow transition already wrote; they
+      // are not part of the reducer because they're business data, not
+      // state-machine data.
+      const reconciled = await client.query<RentalRow>(
         `update rentals set
-           returned_on = coalesce(returned_on, now()::date),
-           status = 'returned',
            qty_good = $1,
            qty_damaged = $2,
            qty_lost = $3,
            damage_photos = $4,
            damage_charges_cents = $5,
-           updated_at = now(),
-           version = version + 1
+           updated_at = now()
          where id = $6 and company_id = $7
          returning ${RENTAL_SELECT_COLUMNS}`,
         [qtyGood, qtyDamaged, qtyLost, damagePhotos, damageChargesCents, rentalId, ctx.company.id],
       )
-      const row = updated.rows[0]!
+      const row = reconciled.rows[0] ?? transition.row
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'rental',
@@ -410,13 +558,17 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
         outboxPayload: { rental_id: rentalId, qty_good: qtyGood, qty_damaged: qtyDamaged, qty_lost: qtyLost },
         idempotencyKey: `rental:return:${rentalId}:${row.version}`,
       })
-      return row
+      return { kind: 'ok' as const, row }
     })
-    if (!rental) {
+    if (result.kind === 'not_found') {
       ctx.sendJson(404, { error: 'rental not found' })
       return true
     }
-    ctx.sendJson(200, { rental })
+    if (result.kind === 'illegal_transition') {
+      ctx.sendJson(409, { error: result.message })
+      return true
+    }
+    ctx.sendJson(200, { rental: result.row })
     return true
   }
 
@@ -456,12 +608,31 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
         [toProjectId, ctx.company.id],
       )
       if (!proj.rows[0]) return { error: 'target project not found' as const }
+      // Dispatch the source rental's CLOSE through the workflow before
+      // applying the transfer-specific returned_on date. The reducer is
+      // the single source of truth for the closed status flip; the
+      // returned_on is additive bookkeeping.
+      const nowIso = new Date().toISOString()
+      const closeEvent: RentalWorkflowEvent = {
+        type: 'CLOSE',
+        closed_at: nowIso,
+        closed_by: ctx.currentUserId,
+      }
+      const closeTransition = await applyRentalWorkflowTransition(client, {
+        companyId: ctx.company.id,
+        rentalId,
+        event: closeEvent,
+        eventType: 'CLOSE',
+        actorUserId: ctx.currentUserId,
+      })
+      if (closeTransition.kind === 'not_found') return null
+      if (closeTransition.kind === 'illegal_transition') {
+        return { error: closeTransition.message as string }
+      }
       const closed = await client.query<RentalRow>(
         `update rentals set
            returned_on = $1,
-           status = 'closed',
-           updated_at = now(),
-           version = version + 1
+           updated_at = now()
          where id = $2 and company_id = $3
          returning ${RENTAL_SELECT_COLUMNS}`,
         [transferredAt, rentalId, ctx.company.id],
