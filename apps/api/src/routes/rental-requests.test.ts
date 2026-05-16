@@ -25,6 +25,7 @@ interface RentalRequestSeed {
   contact_phone: string | null
   notes: string | null
   status: 'pending' | 'approved' | 'declined'
+  state_version: number
   approved_at: string | null
   approved_by: string | null
   approved_by_user_id: string | null
@@ -57,6 +58,7 @@ class FakePool {
   customers: CustomerSeed[] = []
   syncEvents: Row[] = []
   outbox: Row[] = []
+  workflowEvents: Row[] = []
 
   attach() {
     attachMutationTx({
@@ -117,26 +119,48 @@ class FakePool {
       const row = this.rentalRequests.find((r) => r.id === id && r.company_id === companyId) ?? null
       return { rows: row ? [{ ...row }] : [], rowCount: row ? 1 : 0 }
     }
-    if (/^update rental_requests/i.test(sql) && /status = 'approved'/i.test(sql)) {
-      const [id, companyId, userId, rentalId] = params as [string, string, string, string]
+    // Post-#325 follow-up: status + state_version are now parametric
+    // because the route dispatches through the rental_request_approval
+    // reducer. Match the UPDATEs by the distinctive SET column shape
+    // (not RETURNING — both queries return the full row, so the
+    // regex must anchor on the SET clause to distinguish them).
+    if (/^update rental_requests[\s\S]+set[\s\S]+converted_rental_id = /i.test(sql)) {
+      const [id, companyId, userId, rentalId, nextStatus, nextStateVersion, nextApprovedAt] = params as [
+        string,
+        string,
+        string,
+        string,
+        'approved',
+        number,
+        string,
+      ]
       const row = this.rentalRequests.find((r) => r.id === id && r.company_id === companyId)
       if (!row) return { rows: [], rowCount: 0 }
-      row.status = 'approved'
-      row.approved_at = new Date().toISOString()
+      row.status = nextStatus
+      row.state_version = nextStateVersion
+      row.approved_at = nextApprovedAt
       row.approved_by = userId
       row.approved_by_user_id = userId
       row.converted_rental_id = rentalId
-      row.updated_at = row.approved_at
+      row.updated_at = nextApprovedAt
       return { rows: [{ ...row }], rowCount: 1 }
     }
-    if (/^update rental_requests/i.test(sql) && /status = 'declined'/i.test(sql)) {
-      const [id, companyId, reason] = params as [string, string, string | null]
+    if (/^update rental_requests[\s\S]+set[\s\S]+decline_reason = /i.test(sql)) {
+      const [id, companyId, reason, nextStatus, nextStateVersion, nextDeclinedAt] = params as [
+        string,
+        string,
+        string | null,
+        'declined',
+        number,
+        string,
+      ]
       const row = this.rentalRequests.find((r) => r.id === id && r.company_id === companyId)
       if (!row) return { rows: [], rowCount: 0 }
-      row.status = 'declined'
-      row.declined_at = new Date().toISOString()
+      row.status = nextStatus
+      row.state_version = nextStateVersion
+      row.declined_at = nextDeclinedAt
       row.decline_reason = reason
-      row.updated_at = row.declined_at
+      row.updated_at = nextDeclinedAt
       return { rows: [{ ...row }], rowCount: 1 }
     }
 
@@ -180,13 +204,17 @@ class FakePool {
       return { rows: [row], rowCount: 1 }
     }
 
-    // ---- ledger inserts (sync_events + mutation_outbox) ----
+    // ---- ledger inserts (sync_events + mutation_outbox + workflow_event_log) ----
     if (/^\s*insert into sync_events/i.test(sql)) {
       this.syncEvents.push({ params })
       return { rows: [], rowCount: 1 }
     }
     if (/^\s*insert into mutation_outbox/i.test(sql)) {
       this.outbox.push({ params })
+      return { rows: [], rowCount: 1 }
+    }
+    if (/^\s*insert into workflow_event_log/i.test(sql)) {
+      this.workflowEvents.push({ params })
       return { rows: [], rowCount: 1 }
     }
 
@@ -237,6 +265,7 @@ function seedRequest(pool: FakePool, overrides: Partial<RentalRequestSeed> = {})
     contact_phone: null,
     notes: null,
     status: 'pending',
+    state_version: 1,
     approved_at: null,
     approved_by: null,
     approved_by_user_id: null,

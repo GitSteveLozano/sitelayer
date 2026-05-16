@@ -1,6 +1,14 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
-import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import {
+  SCAFFOLD_OPS_APPROVAL_WORKFLOW_NAME,
+  SCAFFOLD_OPS_APPROVAL_WORKFLOW_SCHEMA_VERSION,
+  transitionScaffoldOpsApprovalWorkflow,
+  type ScaffoldOpsApprovalWorkflowEvent,
+  type ScaffoldOpsApprovalWorkflowSnapshot,
+  type ScaffoldOpsApprovalWorkflowState,
+} from '@sitelayer/workflows'
+import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
 /**
@@ -45,7 +53,8 @@ const CATALOG_PART_COLUMNS = `
 `
 const BOM_COLUMNS = `
   id, company_id, project_id, source, source_ref, name, notes, status,
-  approved_at, approved_by, superseded_by, total_weight_kg, total_lines,
+  state_version, approved_at, approved_by, superseded_by,
+  total_weight_kg, total_lines,
   version, deleted_at, created_at, updated_at
 `
 const BOM_LINE_COLUMNS = `id, company_id, bom_id, catalog_part_id, quantity, notes, attrs, created_at, updated_at`
@@ -561,24 +570,95 @@ export async function handleScaffoldOpsRoutes(
     return true
   }
 
+  // POST /api/boms/:id/approve — dispatch APPROVE through the
+  // scaffold_ops_approval reducer in the same tx as the row UPDATE and
+  // append a workflow_event_log row. Replaces the direct
+  // status='approved' write that the original #325 left untouched
+  // (caught in the 2026-05-16 verification audit).
   const bomApproveMatch = url.pathname.match(/^\/api\/boms\/([^/]+)\/approve$/)
   if (req.method === 'POST' && bomApproveMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = bomApproveMatch[1]!
-    const result = await withMutationTx(ctx.company.id, (c) =>
-      c.query(
+    const outcome = await withMutationTx(async (client: PoolClient) => {
+      const locked = await client.query<{
+        id: string
+        status: ScaffoldOpsApprovalWorkflowState
+        state_version: number
+        approved_at: string | null
+        approved_by: string | null
+        version: number
+      }>(
+        `select id, status, state_version, approved_at, approved_by, version
+           from boms
+           where company_id = $1 and id = $2 and deleted_at is null
+           for update`,
+        [ctx.company.id, id],
+      )
+      const current = locked.rows[0]
+      if (!current) return { kind: 'not_found' as const }
+      const currentSnapshot: ScaffoldOpsApprovalWorkflowSnapshot = {
+        state: (current.status as ScaffoldOpsApprovalWorkflowState) ?? 'draft',
+        state_version: current.state_version ?? 1,
+        approved_at: current.approved_at ?? null,
+        approved_by: current.approved_by ?? null,
+      }
+      const nowIso = new Date().toISOString()
+      const event: ScaffoldOpsApprovalWorkflowEvent = {
+        type: 'APPROVE',
+        approved_at: nowIso,
+        approved_by: ctx.currentUserId,
+      }
+      let nextSnapshot: ScaffoldOpsApprovalWorkflowSnapshot
+      try {
+        nextSnapshot = transitionScaffoldOpsApprovalWorkflow(currentSnapshot, event)
+      } catch (err) {
+        return {
+          kind: 'illegal_transition' as const,
+          message: err instanceof Error ? err.message : String(err),
+        }
+      }
+      const updated = await client.query(
         `update boms
-         set status = 'approved', approved_at = now(), approved_by = $3, version = version + 1, updated_at = now()
-       where company_id = $1 and id = $2 and deleted_at is null and status = 'draft'
-       returning ${BOM_COLUMNS}`,
-        [ctx.company.id, id, ctx.currentUserId],
-      ),
-    )
-    if (!result.rows[0]) {
-      ctx.sendJson(409, { error: 'bom not in draft or not found' })
+           set status = $3,
+               state_version = $4,
+               approved_at = $5,
+               approved_by = $6,
+               version = version + 1,
+               updated_at = now()
+         where company_id = $1 and id = $2 and deleted_at is null
+         returning ${BOM_COLUMNS}`,
+        [
+          ctx.company.id,
+          id,
+          nextSnapshot.state,
+          nextSnapshot.state_version,
+          nextSnapshot.approved_at ?? nowIso,
+          nextSnapshot.approved_by ?? ctx.currentUserId,
+        ],
+      )
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: SCAFFOLD_OPS_APPROVAL_WORKFLOW_NAME,
+        schemaVersion: SCAFFOLD_OPS_APPROVAL_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'bom',
+        entityId: id,
+        stateVersion: currentSnapshot.state_version,
+        eventType: 'APPROVE',
+        eventPayload: event as unknown as Record<string, unknown>,
+        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        actorUserId: ctx.currentUserId,
+      })
+      return { kind: 'ok' as const, row: updated.rows[0] }
+    })
+    if (outcome.kind === 'not_found') {
+      ctx.sendJson(404, { error: 'bom not found' })
       return true
     }
-    ctx.sendJson(200, result.rows[0])
+    if (outcome.kind === 'illegal_transition') {
+      ctx.sendJson(409, { error: outcome.message })
+      return true
+    }
+    ctx.sendJson(200, outcome.row)
     return true
   }
 
