@@ -69,3 +69,4 @@ CREATE INDEX IF NOT EXISTS qbo_sync_runs_company_status_idx
 CREATE INDEX IF NOT EXISTS qbo_sync_runs_connection_idx
   ON qbo_sync_runs (integration_connection_id, created_at DESC)
   WHERE deleted_at IS NULL;
+
