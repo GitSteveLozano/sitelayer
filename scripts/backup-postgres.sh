@@ -20,14 +20,24 @@ if [ -z "$DATABASE_URL" ]; then
   exit 1
 fi
 
+# pg_dump must read row-security-protected tables (audit_events,
+# mutation_outbox, sync_events, workflow_event_log — RLS ENABLED via
+# migration 073). Postgres requires `SET row_security = off` for the
+# dump session; superuser / BYPASSRLS roles are allowed to set it.
+# DO Managed Postgres provisions the deploy user with the required
+# privileges. PGOPTIONS is the standard way to inject the GUC into
+# the pg_dump connection. Without this, pg_dump fails on the first
+# RLS-protected table mid-dump (post-073 prod symptom).
+PG_DUMP_PGOPTIONS="${PG_DUMP_PGOPTIONS:--c row_security=off}"
+
 if [ -n "$PG_DUMP_DOCKER_IMAGE" ]; then
   if ! command -v docker >/dev/null 2>&1; then
     echo "ERROR: docker is required when PG_DUMP_DOCKER_IMAGE is set" >&2
     exit 1
   fi
-  pg_dump_cmd=(docker run --rm --network host "$PG_DUMP_DOCKER_IMAGE" pg_dump)
+  pg_dump_cmd=(docker run --rm --network host -e "PGOPTIONS=$PG_DUMP_PGOPTIONS" "$PG_DUMP_DOCKER_IMAGE" pg_dump)
 elif command -v pg_dump >/dev/null 2>&1; then
-  pg_dump_cmd=(pg_dump)
+  pg_dump_cmd=(env "PGOPTIONS=$PG_DUMP_PGOPTIONS" pg_dump)
 else
   echo "ERROR: pg_dump is required" >&2
   exit 1
