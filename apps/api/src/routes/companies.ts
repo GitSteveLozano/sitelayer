@@ -113,6 +113,103 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
     return true
   }
 
+  // PATCH /api/companies/:id/settings — admin-only company-level
+  // settings (currently: ot_service_item_code for the QBO labor-payroll
+  // OT split). Kept separate from /modules so the body shape stays a
+  // narrow whitelist; new settings land here rather than expanding the
+  // modules JSONB.
+  const settingsMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/settings$/)
+  if (req.method === 'GET' && settingsMatch) {
+    const companyId = settingsMatch[1]!
+    const member = await pool.query<{ role: string }>(
+      'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+      [companyId, userId],
+    )
+    if (!member.rows[0]) {
+      sendJson(403, { error: 'not a member of this company' })
+      return true
+    }
+    const result = await pool.query<{ ot_service_item_code: string | null }>(
+      'select ot_service_item_code from companies where id = $1 limit 1',
+      [companyId],
+    )
+    if (!result.rows[0]) {
+      sendJson(404, { error: 'company not found' })
+      return true
+    }
+    sendJson(200, { ot_service_item_code: result.rows[0].ot_service_item_code })
+    return true
+  }
+  if (req.method === 'PATCH' && settingsMatch) {
+    const companyId = settingsMatch[1]!
+    const adminCheck = await pool.query<{ role: string }>(
+      'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+      [companyId, userId],
+    )
+    if (!adminCheck.rows[0] || adminCheck.rows[0].role !== 'admin') {
+      sendJson(403, { error: 'admin role required' })
+      return true
+    }
+    const body = await readBody()
+    if (!Object.prototype.hasOwnProperty.call(body, 'ot_service_item_code')) {
+      sendJson(400, { error: 'ot_service_item_code is required (string or null)' })
+      return true
+    }
+    const raw = body.ot_service_item_code
+    let nextCode: string | null
+    if (raw === null) {
+      nextCode = null
+    } else if (typeof raw === 'string') {
+      const trimmed = raw.trim()
+      nextCode = trimmed === '' ? null : trimmed
+    } else {
+      sendJson(400, { error: 'ot_service_item_code must be string or null' })
+      return true
+    }
+    // Validate the code exists in service_items for the company so a
+    // typo can't silently disable OT push downstream. NULL writes
+    // (the "no OT split" opt-out) skip the lookup.
+    if (nextCode !== null) {
+      const existsResult = await pool.query<{ code: string }>(
+        `select code from service_items
+         where company_id = $1 and code = $2 and deleted_at is null
+         limit 1`,
+        [companyId, nextCode],
+      )
+      if (!existsResult.rows[0]) {
+        sendJson(400, {
+          error: `service_items.code "${nextCode}" not found for company; create it via /api/service-items first`,
+        })
+        return true
+      }
+    }
+    const before = await pool.query<{ ot_service_item_code: string | null }>(
+      'select ot_service_item_code from companies where id = $1 limit 1',
+      [companyId],
+    )
+    if (!before.rows[0]) {
+      sendJson(404, { error: 'company not found' })
+      return true
+    }
+    const updated = await pool.query<{ ot_service_item_code: string | null }>(
+      `update companies set ot_service_item_code = $2 where id = $1
+       returning ot_service_item_code`,
+      [companyId, nextCode],
+    )
+    await recordAudit(pool, {
+      companyId,
+      actorUserId: userId,
+      entityType: 'company',
+      entityId: companyId,
+      action: 'update_settings',
+      before: before.rows[0],
+      after: updated.rows[0],
+    })
+    observeAudit('company', 'update_settings')
+    sendJson(200, { ot_service_item_code: updated.rows[0]!.ot_service_item_code })
+    return true
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/companies') {
     const body = await readBody()
     const slug = String(body.slug ?? '')

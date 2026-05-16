@@ -1,8 +1,16 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
-import { fetchQboAuthUrl, useQboConnection, useTriggerQboSync } from '@/lib/api'
+import {
+  fetchQboAuthUrl,
+  useActiveCompanyId,
+  useCompanySettings,
+  usePatchCompanySettings,
+  useQboConnection,
+  useServiceItems,
+  useTriggerQboSync,
+} from '@/lib/api'
 
 export function QboConnectionScreen() {
   const qbo = useQboConnection()
@@ -121,9 +129,105 @@ export function QboConnectionScreen() {
           </Card>
         </Link>
 
+        <QboOvertimeMappingCard />
+
         {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <Attribution source="GET /api/integrations/qbo · POST /api/integrations/qbo/sync" />
       </div>
     </div>
+  )
+}
+
+/**
+ * QBO Overtime mapping — admin-only card for the per-company
+ * `ot_service_item_code` setting that drives the worker's split-vs-
+ * merged TimeActivity push.
+ *
+ * Empty state: "Configure to enable OT-typed payroll pushes." When
+ * unset, the worker posts ONE TimeActivity per labor_entry against
+ * the entry's existing service_item_code (today's pre-OT behavior).
+ *
+ * When set, each entry whose hours exceed splitStraightAndOt's 8h
+ * threshold produces TWO TimeActivities — one straight against the
+ * entry's code, one OT against the company's OT code.
+ *
+ * Backed by GET/PATCH /api/companies/:id/settings. The PATCH
+ * validates the code exists in service_items before accepting; the
+ * dropdown filters to labor-category items as a UX hint.
+ */
+function QboOvertimeMappingCard() {
+  const companyId = useActiveCompanyId()
+  const settings = useCompanySettings(companyId)
+  const patch = usePatchCompanySettings(companyId ?? '')
+  const items = useServiceItems()
+  const [selected, setSelected] = useState<string>('')
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  // Sync the dropdown to the server value when the query resolves.
+  useEffect(() => {
+    if (settings.data) setSelected(settings.data.ot_service_item_code ?? '')
+  }, [settings.data])
+
+  const currentCode = settings.data?.ot_service_item_code ?? null
+  const labels = items.data?.serviceItems ?? []
+  const dirty = selected !== (currentCode ?? '')
+
+  const save = async () => {
+    if (!companyId) return
+    setSaveError(null)
+    setSaved(false)
+    try {
+      await patch.mutateAsync({ ot_service_item_code: selected === '' ? null : selected })
+      setSaved(true)
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Save failed')
+    }
+  }
+
+  return (
+    <Card>
+      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">QBO Overtime mapping</div>
+      {settings.isPending || items.isPending ? (
+        <div className="text-[12px] text-ink-3 mt-2">Loading…</div>
+      ) : (
+        <>
+          <div className="text-[12px] text-ink-2 mt-1">
+            {currentCode ? (
+              <>
+                Hours above 8/day post against <span className="font-mono">{currentCode}</span> as a second
+                TimeActivity.
+              </>
+            ) : (
+              <>Configure to enable OT-typed payroll pushes.</>
+            )}
+          </div>
+          <label className="block mt-3">
+            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
+              Overtime service item
+            </div>
+            <select
+              value={selected}
+              onChange={(e) => setSelected(e.target.value)}
+              className="mt-1 w-full text-[15px] py-2 bg-transparent border-b border-line focus:outline-none focus:border-accent"
+            >
+              <option value="">— None (single TimeActivity, no OT split) —</option>
+              {labels.map((item) => (
+                <option key={item.code} value={item.code}>
+                  {item.code} · {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          {saveError ? <div className="text-[12px] text-warn mt-2">{saveError}</div> : null}
+          {saved && !dirty ? <div className="text-[12px] text-good mt-2">Saved.</div> : null}
+          <div className="mt-3">
+            <MobileButton variant="primary" onClick={save} disabled={!dirty || patch.isPending || !companyId}>
+              {patch.isPending ? 'Saving…' : 'Save'}
+            </MobileButton>
+          </div>
+        </>
+      )}
+    </Card>
   )
 }
