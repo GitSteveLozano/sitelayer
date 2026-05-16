@@ -57,16 +57,19 @@ BEGIN
       CONTINUE;
     END IF;
 
-    -- Defense-in-depth: re-assert the policy in case a follow-up migration
-    -- ever drops it. migration 066's DO block also drops + recreates it.
-    IF NOT EXISTS (
-      SELECT 1 FROM pg_policies
-      WHERE schemaname = 'public'
-        AND tablename = scoped_table
-        AND policyname = 'company_isolation'
-    ) THEN
-      RAISE EXCEPTION 'rls phase 2: company_isolation policy missing on %', scoped_table;
-    END IF;
+    -- Self-contained: ensure the policy exists (idempotent) before
+    -- enabling. Preview/dev DBs that pre-existed migration 066 may
+    -- not have the policy on every table; recreate it here for the
+    -- four target tables so this migration doesn't depend on 066's
+    -- side-effects having reached the row.
+    EXECUTE format('DROP POLICY IF EXISTS company_isolation ON %I', scoped_table);
+    EXECUTE format(
+      'CREATE POLICY company_isolation ON %I
+         FOR ALL
+         USING (app_current_company_id() IS NULL OR company_id = app_current_company_id())
+         WITH CHECK (app_current_company_id() IS NULL OR company_id = app_current_company_id())',
+      scoped_table
+    );
 
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', scoped_table);
     EXECUTE format('ALTER TABLE %I FORCE ROW LEVEL SECURITY', scoped_table);
