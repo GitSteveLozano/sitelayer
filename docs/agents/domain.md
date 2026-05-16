@@ -20,6 +20,18 @@ If a document does not exist, proceed silently. Create domain docs lazily when a
 
 Use terms from `CONTEXT.md` in task titles, tests, refactor proposals, hypotheses, and summaries. If a concept needs a name and the glossary lacks it, either reuse existing project language or update `CONTEXT.md`.
 
+## Test scenarios
+
+When a reproducer or perf smoke needs a tenant in a specific state
+(rental stuck mid-flight, project at closeout with unbilled rentals,
+500-takeoff perf bulk, ...), reach for the YAML-driven fixture builder
+at `scripts/seed-scenario.ts`. Per-scenario YAMLs live in `scenarios/`;
+the full grammar + starter list is in `docs/TEST_SCENARIOS.md`. The
+seeder walks deterministic-workflow event sequences through the
+registered reducers in `@sitelayer/workflows`, so the resulting
+`workflow_event_log` rows match what production would have written —
+`scripts/replay-workflow.ts` will pass against any seeded entity.
+
 ## ADRs
 
 Add an ADR only when all are true:

@@ -16,6 +16,7 @@
     "db:check": "scripts/check-db-schema.sh",
     "seed:dev": "tsx apps/api/scripts/seed-dev.ts",
     "seed:e2e": "tsx apps/api/scripts/seed-e2e-fixtures.ts",
+    "seed:scenario": "tsx scripts/seed-scenario.ts",
     "probe:workflows": "tsx apps/api/scripts/probe-workflows.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
