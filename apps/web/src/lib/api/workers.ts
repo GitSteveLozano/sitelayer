@@ -81,3 +81,26 @@ export function useDeleteWorker() {
     onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
   })
 }
+
+export interface WorkerMessageRequest {
+  body: string
+  subject?: string
+}
+
+export interface WorkerMessageResponse {
+  notification_id: string
+  recipient_clerk_user_id: string
+}
+
+export function sendWorkerMessage(workerId: string, input: WorkerMessageRequest): Promise<WorkerMessageResponse> {
+  return request<WorkerMessageResponse>(`/api/workers/${encodeURIComponent(workerId)}/messages`, {
+    method: 'POST',
+    json: input,
+  })
+}
+
+export function useSendWorkerMessage() {
+  return useMutation<WorkerMessageResponse, Error, { workerId: string; input: WorkerMessageRequest }>({
+    mutationFn: ({ workerId, input }) => sendWorkerMessage(workerId, input),
+  })
+}
