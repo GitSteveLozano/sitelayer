@@ -1,0 +1,50 @@
+# Damage charge invoiced — damage_charge_settlement workflow end-to-end.
+#
+# What this exercises:
+#   - damage_charge_settlement reducer walked through INVOICE so the row
+#     lands in state=invoiced with state_version=2.
+#   - workflow_event_log carries one row (INVOICE) so
+#     scripts/replay-workflow.ts can verify reducer ↔ persisted row
+#     alignment.
+#
+# How to use:
+#   DATABASE_URL=postgres://... \
+#     npx tsx scripts/seed-scenario.ts scenarios/damage-charge-invoiced.yaml
+#   # Then hit GET /api/damage-charges/<id> and confirm:
+#   #   { status: 'invoiced', state_version: 2, ... }
+
+company:
+  slug: acme-damage
+  name: Acme Damage
+
+members:
+  - clerk_user_id: e2e-admin
+    role: admin
+  - clerk_user_id: e2e-office
+    role: office
+
+customers:
+  - ref: customer-bigco
+    name: Big Customer Co.
+
+projects:
+  - ref: project-damage
+    name: Damage Charge Project
+    customer_ref: customer-bigco
+    division_code: D4
+    status: active
+    bid_total: 50000.00
+
+damage_charges:
+  - ref: damage-frame-bent
+    project_ref: project-damage
+    customer_ref: customer-bigco
+    kind: damage
+    quantity: 1
+    unit_amount: 250.00
+    total_amount: 250.00
+    description: 'Bent scaffold frame returned from site'
+    settlement_event_log:
+      - type: INVOICE
+        invoiced_at: '2026-01-15T10:00:00.000Z'
+        invoiced_by: e2e-office

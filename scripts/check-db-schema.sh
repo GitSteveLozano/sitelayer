@@ -47,7 +47,10 @@ with expected_tables(table_name) as (
     ('rental_billing_run_lines'),
     ('clock_events'),
     ('support_debug_packets'),
-    ('schema_migrations')
+    ('schema_migrations'),
+    ('rental_rate_tiers'),
+    ('takeoff_capture_artifacts'),
+    ('qbo_sync_runs')
 ),
 expected_origin_columns(table_name) as (
   values
@@ -94,6 +97,9 @@ expected_required_columns(table_name, column_name) as (
     ('audit_events', 'sentry_trace'),
     ('notifications', 'next_attempt_at'),
     ('notifications', 'attempt_count'),
+    ('notifications', 'delivery_attempts'),
+    ('notifications', 'next_delivery_at'),
+    ('notifications', 'last_delivery_error'),
     ('rentals', 'next_invoice_at'),
     ('rentals', 'invoice_cadence_days'),
     ('inventory_items', 'tracking_mode'),

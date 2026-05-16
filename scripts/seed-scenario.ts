@@ -116,6 +116,49 @@
  *     count: 500
  *     service_item_code: EPS
  *
+ *   damage_charges:             # exercises damage_charge_settlement workflow
+ *     - ref: damage-frame-bent
+ *       project_ref: project-alpha
+ *       customer_ref: customer-a
+ *       kind: damage
+ *       quantity: 1
+ *       unit_amount: 250.00
+ *       total_amount: 250.00
+ *       description: 'Bent frame returned from site'
+ *       settlement_event_log:
+ *         - type: INVOICE
+ *           invoiced_at: '2026-01-15T10:00:00.000Z'
+ *           invoiced_by: e2e-office
+ *
+ *   rental_requests:            # exercises rental_request_approval workflow
+ *     - ref: req-portal-1
+ *       customer_ref: customer-a
+ *       contact_email: foo@bar.com
+ *       approval_event_log:
+ *         - type: APPROVE
+ *           approved_at: '2026-01-15T10:00:00.000Z'
+ *           approved_by: e2e-office
+ *
+ *   qbo_sync_runs:              # exercises qbo_sync_run workflow
+ *     - ref: sync-failed
+ *       triggered_by: e2e-admin
+ *       sync_event_log:
+ *         - type: START_SYNC
+ *           started_at: '2026-01-15T10:00:00.000Z'
+ *           triggered_by: e2e-admin
+ *         - type: SYNC_FAILED
+ *           failed_at: '2026-01-15T10:00:15.000Z'
+ *           error: 'Intuit 503'
+ *
+ *   boms:                       # exercises scaffold_ops_approval workflow
+ *     - ref: bom-elev-east
+ *       project_ref: project-alpha
+ *       name: 'East elevation scaffold'
+ *       approval_event_log:
+ *         - type: APPROVE
+ *           approved_at: '2026-01-15T10:00:00.000Z'
+ *           approved_by: e2e-admin
+ *
  * Exit codes:
  *   0  success (idempotent)
  *   1  bad arguments / config / scenario parse failure
@@ -138,12 +181,24 @@ import {
   projectLifecycleWorkflow as _projectLifecycle,
   crewScheduleWorkflow as _crewSchedule,
   rentalWorkflow as _rental,
+  damageChargeSettlementWorkflow as _damageChargeSettlement,
+  rentalRequestApprovalWorkflow as _rentalRequestApproval,
+  qboSyncRunWorkflow as _qboSyncRun,
+  scaffoldOpsApprovalWorkflow as _scaffoldOpsApproval,
   type RentalBillingWorkflowEvent,
   type RentalBillingWorkflowSnapshot,
   type EstimatePushWorkflowEvent,
   type EstimatePushWorkflowSnapshot,
   type FieldEventWorkflowEvent,
   type FieldEventWorkflowSnapshot,
+  type DamageChargeSettlementWorkflowEvent,
+  type DamageChargeSettlementWorkflowSnapshot,
+  type RentalRequestApprovalWorkflowEvent,
+  type RentalRequestApprovalWorkflowSnapshot,
+  type QboSyncRunWorkflowEvent,
+  type QboSyncRunWorkflowSnapshot,
+  type ScaffoldOpsApprovalWorkflowEvent,
+  type ScaffoldOpsApprovalWorkflowSnapshot,
 } from '@sitelayer/workflows'
 import { loadAppConfig, TierConfigError, type AppTier } from '../apps/api/src/tier.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from '../apps/api/src/onboarding.js'
@@ -154,6 +209,10 @@ void _fieldEvent
 void _projectLifecycle
 void _crewSchedule
 void _rental
+void _damageChargeSettlement
+void _rentalRequestApproval
+void _qboSyncRun
+void _scaffoldOpsApproval
 
 // ---------- YAML schema (TypeScript-side) ----------
 
@@ -237,6 +296,46 @@ interface ScenarioYaml {
     service_item_code?: string
     unit?: string
   }
+  damage_charges?: Array<{
+    ref: string
+    project_ref: string
+    customer_ref?: string
+    kind?: string
+    quantity?: number
+    unit_amount?: number
+    total_amount?: number
+    description: string
+    settlement_event_log?: Array<Record<string, unknown>>
+  }>
+  rental_requests?: Array<{
+    ref: string
+    customer_ref?: string
+    contact_name?: string
+    contact_email?: string
+    contact_phone?: string
+    requested_start?: string
+    requested_end?: string
+    notes?: string
+    items?: Array<Record<string, unknown>>
+    approval_event_log?: Array<Record<string, unknown>>
+  }>
+  qbo_sync_runs?: Array<{
+    ref: string
+    provider?: string
+    triggered_by?: string
+    sync_event_log?: Array<Record<string, unknown>>
+  }>
+  boms?: Array<{
+    ref: string
+    project_ref: string
+    name: string
+    source?: string
+    source_ref?: string
+    notes?: string
+    total_weight_kg?: number
+    total_lines?: number
+    approval_event_log?: Array<Record<string, unknown>>
+  }>
 }
 
 // ---------- Deterministic UUIDs ----------
@@ -323,6 +422,10 @@ interface RefMaps {
   rentalBillingRuns: Map<string, string>
   estimates: Map<string, string>
   workerIssues: Map<string, string>
+  damageCharges: Map<string, string>
+  rentalRequests: Map<string, string>
+  qboSyncRuns: Map<string, string>
+  boms: Map<string, string>
 }
 
 function newRefMaps(): RefMaps {
@@ -335,6 +438,10 @@ function newRefMaps(): RefMaps {
     rentalBillingRuns: new Map(),
     estimates: new Map(),
     workerIssues: new Map(),
+    damageCharges: new Map(),
+    rentalRequests: new Map(),
+    qboSyncRuns: new Map(),
+    boms: new Map(),
   }
 }
 
@@ -814,6 +921,298 @@ async function ensureTakeoffMeasurements(
   }
 }
 
+// ---------- Damage charges (damage_charge_settlement workflow) ----------
+
+async function ensureDamageCharges(
+  client: PoolClient,
+  companyId: string,
+  charges: ScenarioYaml['damage_charges'],
+  refs: RefMaps,
+): Promise<void> {
+  if (!charges) return
+  for (const c of charges) {
+    const id = refUuid('damage_charge', c.ref)
+    refs.damageCharges.set(c.ref, id)
+    const projectId = mustResolve('project', c.project_ref, refs.projects)
+    const customerId = c.customer_ref ? (refs.customers.get(c.customer_ref) ?? null) : null
+    const kind = c.kind ?? 'damage'
+    const quantity = c.quantity ?? 1
+    const unitAmount = c.unit_amount ?? 0
+    const totalAmount = c.total_amount ?? quantity * unitAmount
+
+    await client.query(
+      `insert into damage_charges
+         (id, company_id, project_id, customer_id, kind, quantity, unit_amount, total_amount,
+          description, status, state_version)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'open', 1)
+       on conflict (id) do nothing`,
+      [id, companyId, projectId, customerId, kind, quantity, unitAmount, totalAmount, c.description],
+    )
+
+    if (c.settlement_event_log && c.settlement_event_log.length > 0) {
+      const events = c.settlement_event_log as DamageChargeSettlementWorkflowEvent[]
+      const initial: DamageChargeSettlementWorkflowSnapshot = { state: 'open', state_version: 1 }
+      const result = await applyEventSequence<
+        DamageChargeSettlementWorkflowSnapshot,
+        DamageChargeSettlementWorkflowEvent
+      >(client, {
+        workflowName: 'damage_charge_settlement',
+        entityType: 'damage_charge',
+        entityId: id,
+        companyId,
+        initialSnapshot: initial as unknown as Record<string, unknown> & {
+          state: string
+          state_version: number
+        },
+        events,
+      })
+      const final = result.finalSnapshot
+      await client.query(
+        `update damage_charges
+           set status = $1,
+               state_version = $2,
+               invoiced_at = $3,
+               invoiced_by = $4,
+               waived_at = $5,
+               waived_by = $6,
+               waive_reason = $7,
+               updated_at = now()
+         where id = $8 and company_id = $9`,
+        [
+          final.state,
+          final.state_version,
+          final.invoiced_at ?? null,
+          final.invoiced_by ?? null,
+          final.waived_at ?? null,
+          final.waived_by ?? null,
+          final.waive_reason ?? null,
+          id,
+          companyId,
+        ],
+      )
+    }
+  }
+}
+
+// ---------- Rental requests (rental_request_approval workflow) ----------
+
+async function ensureRentalRequests(
+  client: PoolClient,
+  companyId: string,
+  requests: ScenarioYaml['rental_requests'],
+  refs: RefMaps,
+): Promise<void> {
+  if (!requests) return
+  for (const r of requests) {
+    const id = refUuid('rental_request', r.ref)
+    refs.rentalRequests.set(r.ref, id)
+    const customerId = r.customer_ref ? (refs.customers.get(r.customer_ref) ?? null) : null
+
+    await client.query(
+      `insert into rental_requests
+         (id, company_id, customer_id, items, requested_start, requested_end,
+          contact_name, contact_email, contact_phone, notes, status, state_version)
+       values ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, 'pending', 1)
+       on conflict (id) do nothing`,
+      [
+        id,
+        companyId,
+        customerId,
+        JSON.stringify(r.items ?? []),
+        r.requested_start ?? null,
+        r.requested_end ?? null,
+        r.contact_name ?? null,
+        r.contact_email ?? null,
+        r.contact_phone ?? null,
+        r.notes ?? null,
+      ],
+    )
+
+    if (r.approval_event_log && r.approval_event_log.length > 0) {
+      const events = r.approval_event_log as RentalRequestApprovalWorkflowEvent[]
+      const initial: RentalRequestApprovalWorkflowSnapshot = { state: 'pending', state_version: 1 }
+      const result = await applyEventSequence<
+        RentalRequestApprovalWorkflowSnapshot,
+        RentalRequestApprovalWorkflowEvent
+      >(client, {
+        workflowName: 'rental_request_approval',
+        entityType: 'rental_request',
+        entityId: id,
+        companyId,
+        initialSnapshot: initial as unknown as Record<string, unknown> & {
+          state: string
+          state_version: number
+        },
+        events,
+      })
+      const final = result.finalSnapshot
+      await client.query(
+        `update rental_requests
+           set status = $1,
+               state_version = $2,
+               approved_at = $3,
+               approved_by = $4,
+               rejected_at = $5,
+               updated_at = now()
+         where id = $6 and company_id = $7`,
+        [
+          final.state,
+          final.state_version,
+          final.approved_at ?? null,
+          final.approved_by ?? null,
+          final.declined_at ?? null,
+          id,
+          companyId,
+        ],
+      )
+    }
+  }
+}
+
+// ---------- QBO sync runs (qbo_sync_run workflow) ----------
+
+async function ensureQboSyncRuns(
+  client: PoolClient,
+  companyId: string,
+  runs: ScenarioYaml['qbo_sync_runs'],
+  refs: RefMaps,
+): Promise<void> {
+  if (!runs) return
+  for (const r of runs) {
+    const id = refUuid('qbo_sync_run', r.ref)
+    refs.qboSyncRuns.set(r.ref, id)
+    const provider = r.provider ?? 'qbo'
+
+    // Ensure an integration_connections row exists for this provider.
+    // qbo_sync_runs.integration_connection_id is NOT NULL, so we create
+    // a stub connection for the scenario tenant if none exists yet.
+    const connectionId = refUuid('integration_connection', `${provider}:${r.ref}`)
+    await client.query(
+      `insert into integration_connections (id, company_id, provider, status)
+       values ($1, $2, $3, 'connecting')
+       on conflict (id) do nothing`,
+      [connectionId, companyId, provider],
+    )
+
+    await client.query(
+      `insert into qbo_sync_runs
+         (id, company_id, integration_connection_id, status, state_version, triggered_by)
+       values ($1, $2, $3, 'pending', 1, $4)
+       on conflict (id) do nothing`,
+      [id, companyId, connectionId, r.triggered_by ?? null],
+    )
+
+    if (r.sync_event_log && r.sync_event_log.length > 0) {
+      const events = r.sync_event_log as QboSyncRunWorkflowEvent[]
+      const initial: QboSyncRunWorkflowSnapshot = { state: 'pending', state_version: 1 }
+      const result = await applyEventSequence<QboSyncRunWorkflowSnapshot, QboSyncRunWorkflowEvent>(client, {
+        workflowName: 'qbo_sync_run',
+        entityType: 'qbo_sync_run',
+        entityId: id,
+        companyId,
+        initialSnapshot: initial as unknown as Record<string, unknown> & {
+          state: string
+          state_version: number
+        },
+        events,
+      })
+      const final = result.finalSnapshot
+      await client.query(
+        `update qbo_sync_runs
+           set status = $1,
+               state_version = $2,
+               started_at = $3,
+               succeeded_at = $4,
+               failed_at = $5,
+               retried_at = $6,
+               error = $7,
+               snapshot = coalesce($8::jsonb, snapshot),
+               triggered_by = coalesce($9, triggered_by),
+               updated_at = now()
+         where id = $10 and company_id = $11`,
+        [
+          final.state,
+          final.state_version,
+          final.started_at ?? null,
+          final.succeeded_at ?? null,
+          final.failed_at ?? null,
+          final.retried_at ?? null,
+          final.error ?? null,
+          final.snapshot ? JSON.stringify(final.snapshot) : null,
+          final.triggered_by ?? null,
+          id,
+          companyId,
+        ],
+      )
+    }
+  }
+}
+
+// ---------- BOMs (scaffold_ops_approval workflow) ----------
+
+async function ensureBoms(
+  client: PoolClient,
+  companyId: string,
+  boms: ScenarioYaml['boms'],
+  refs: RefMaps,
+): Promise<void> {
+  if (!boms) return
+  for (const b of boms) {
+    const id = refUuid('bom', b.ref)
+    refs.boms.set(b.ref, id)
+    const projectId = mustResolve('project', b.project_ref, refs.projects)
+
+    await client.query(
+      `insert into boms
+         (id, company_id, project_id, source, source_ref, name, notes,
+          status, state_version, total_weight_kg, total_lines)
+       values ($1, $2, $3, $4, $5, $6, $7, 'draft', 1, $8, $9)
+       on conflict (id) do nothing`,
+      [
+        id,
+        companyId,
+        projectId,
+        b.source ?? 'manual',
+        b.source_ref ?? null,
+        b.name,
+        b.notes ?? null,
+        b.total_weight_kg ?? 0,
+        b.total_lines ?? 0,
+      ],
+    )
+
+    if (b.approval_event_log && b.approval_event_log.length > 0) {
+      const events = b.approval_event_log as ScaffoldOpsApprovalWorkflowEvent[]
+      const initial: ScaffoldOpsApprovalWorkflowSnapshot = { state: 'draft', state_version: 1 }
+      const result = await applyEventSequence<ScaffoldOpsApprovalWorkflowSnapshot, ScaffoldOpsApprovalWorkflowEvent>(
+        client,
+        {
+          workflowName: 'scaffold_ops_approval',
+          entityType: 'bom',
+          entityId: id,
+          companyId,
+          initialSnapshot: initial as unknown as Record<string, unknown> & {
+            state: string
+            state_version: number
+          },
+          events,
+        },
+      )
+      const final = result.finalSnapshot
+      await client.query(
+        `update boms
+           set status = $1,
+               state_version = $2,
+               approved_at = $3,
+               approved_by = $4,
+               updated_at = now()
+         where id = $5 and company_id = $6`,
+        [final.state, final.state_version, final.approved_at ?? null, final.approved_by ?? null, id, companyId],
+      )
+    }
+  }
+}
+
 // ---------- Helpers ----------
 
 function mustResolve(scope: string, ref: string, map: Map<string, string>): string {
@@ -834,6 +1233,10 @@ interface SeedSummary {
   rentals: Array<{ ref: string; contract_id: string; billing_run_id: string }>
   estimates: Array<{ ref: string; id: string }>
   worker_issues: Array<{ ref: string; id: string }>
+  damage_charges: Array<{ ref: string; id: string }>
+  rental_requests: Array<{ ref: string; id: string }>
+  qbo_sync_runs: Array<{ ref: string; id: string }>
+  boms: Array<{ ref: string; id: string }>
 }
 
 function summarize(scenario: ScenarioYaml, companyId: string, refs: RefMaps): SeedSummary {
@@ -851,6 +1254,10 @@ function summarize(scenario: ScenarioYaml, companyId: string, refs: RefMaps): Se
     })),
     estimates: Array.from(refs.estimates.entries()).map(([ref, id]) => ({ ref, id })),
     worker_issues: Array.from(refs.workerIssues.entries()).map(([ref, id]) => ({ ref, id })),
+    damage_charges: Array.from(refs.damageCharges.entries()).map(([ref, id]) => ({ ref, id })),
+    rental_requests: Array.from(refs.rentalRequests.entries()).map(([ref, id]) => ({ ref, id })),
+    qbo_sync_runs: Array.from(refs.qboSyncRuns.entries()).map(([ref, id]) => ({ ref, id })),
+    boms: Array.from(refs.boms.entries()).map(([ref, id]) => ({ ref, id })),
   }
 }
 
@@ -889,6 +1296,10 @@ export async function seedScenario(scenarioPath: string): Promise<SeedSummary> {
       await ensureWorkerIssues(client, companyId, scenario.worker_issues, refs)
       await ensureClockEvents(client, companyId, scenario.clock_events, refs)
       await ensureTakeoffMeasurements(client, companyId, scenario.takeoff_measurements, refs)
+      await ensureDamageCharges(client, companyId, scenario.damage_charges, refs)
+      await ensureRentalRequests(client, companyId, scenario.rental_requests, refs)
+      await ensureQboSyncRuns(client, companyId, scenario.qbo_sync_runs, refs)
+      await ensureBoms(client, companyId, scenario.boms, refs)
       await client.query('commit')
       return summarize(scenario, companyId, refs)
     } catch (err) {

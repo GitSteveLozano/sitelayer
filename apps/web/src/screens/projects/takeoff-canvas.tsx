@@ -24,7 +24,6 @@ import {
   type TakeoffDraft,
   type TakeoffMeasurement,
 } from '@/lib/api'
-// TODO: wire useTakeoffCanvasEditor from '@/machines/takeoff-canvas-editor' — extracted but not yet plumbed
 import { CalibrationBanner, PageCalibrationOverlay } from './page-calibration-overlay'
 import { PageStrip } from './page-strip'
 import { RevisionCompareStub } from './revision-compare-stub'
