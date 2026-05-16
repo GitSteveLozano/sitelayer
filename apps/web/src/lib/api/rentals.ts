@@ -581,3 +581,69 @@ export function useInventoryForecast(itemId: string | null | undefined, weeks = 
     enabled: Boolean(itemId),
   })
 }
+
+// ---------------------------------------------------------------------------
+// Rental rate tiers (per-line tiered pricing — migration 067)
+// ---------------------------------------------------------------------------
+
+export type RentalRateUnit = 'day' | 'week' | 'month' | 'cycle' | 'each'
+
+export interface RentalRateTier {
+  id: string
+  job_rental_line_id: string
+  rate_unit: RentalRateUnit
+  min_days: number
+  max_days: number | null
+  rate: string
+  sort_order: number
+}
+
+export interface RentalRateTierListResponse {
+  rateTiers: RentalRateTier[]
+}
+
+export interface RentalRateTierCreateRequest {
+  rate_unit: RentalRateUnit
+  min_days: number
+  max_days: number | null
+  rate: number
+  sort_order?: number
+}
+
+export function useRentalRateTiers(lineId: string | null | undefined) {
+  return useQuery<RentalRateTierListResponse>({
+    queryKey: ['rental-rate-tiers', lineId ?? ''],
+    queryFn: () =>
+      request<RentalRateTierListResponse>(`/api/rental-contract-lines/${encodeURIComponent(lineId!)}/rate-tiers`),
+    enabled: Boolean(lineId),
+  })
+}
+
+export function useCreateRentalRateTier(lineId: string) {
+  const qc = useQueryClient()
+  return useMutation<RentalRateTier, Error, RentalRateTierCreateRequest>({
+    mutationFn: (input) =>
+      request<RentalRateTier>(`/api/rental-contract-lines/${encodeURIComponent(lineId)}/rate-tiers`, {
+        method: 'POST',
+        json: input,
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['rental-rate-tiers', lineId] })
+      qc.invalidateQueries({ queryKey: ['rental-contracts'] })
+    },
+  })
+}
+
+export function useDeleteRentalRateTier(lineId: string) {
+  const qc = useQueryClient()
+  return useMutation<unknown, Error, { tierId: string }>({
+    mutationFn: ({ tierId }) =>
+      request(`/api/rental-contract-lines/${encodeURIComponent(lineId)}/rate-tiers/${encodeURIComponent(tierId)}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['rental-rate-tiers', lineId] })
+      qc.invalidateQueries({ queryKey: ['rental-contracts'] })
+    },
+  })
+}

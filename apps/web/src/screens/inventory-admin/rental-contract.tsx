@@ -5,7 +5,9 @@ import { Attribution } from '@/components/ai'
 import {
   useCreateContractLine,
   useCreateRentalContract,
+  useCreateRentalRateTier,
   useDeleteContractLine,
+  useDeleteRentalRateTier,
   useGenerateBillingRun,
   useInventoryItems,
   usePatchContractLine,
@@ -14,9 +16,11 @@ import {
   useProject,
   useProjectRentalContracts,
   useRentalContractLines,
+  useRentalRateTiers,
   type BillingRunPreview,
   type JobRentalContract,
   type RentalContractLine,
+  type RentalRateUnit,
 } from '@/lib/api'
 import { RentalReturnSheet } from '@/screens/rentals/rental-return-sheet'
 import { RentalTransferSheet } from '@/screens/rentals/rental-transfer-sheet'
@@ -499,6 +503,7 @@ function LineForm({
         <Field label="On-rent date" value={onRent} onChange={setOnRent} type="date" />
         <Field label="Off-rent date (optional)" value={offRent} onChange={setOffRent} type="date" />
         {error ? <div className="text-[12px] text-warn">{error}</div> : null}
+        {line ? <RateTierPanel lineId={line.id} /> : null}
         <div className={line ? 'grid grid-cols-2 gap-2' : ''}>
           <MobileButton
             variant="primary"
@@ -516,6 +521,94 @@ function LineForm({
       </div>
       {confirmNode}
     </Sheet>
+  )
+}
+
+/**
+ * Per-line tiered pricing editor (migration 067 + audit follow-up).
+ * Tiers are append/remove — to "edit" a tier, delete + re-create. This
+ * keeps the audit trail simple and matches how rental shops actually
+ * negotiate tier structures (whole-table revisions, not line-edits).
+ */
+function RateTierPanel({ lineId }: { lineId: string }) {
+  const tiers = useRentalRateTiers(lineId)
+  const create = useCreateRentalRateTier(lineId)
+  const del = useDeleteRentalRateTier(lineId)
+  const [minDays, setMinDays] = useState('1')
+  const [maxDays, setMaxDays] = useState('')
+  const [rate, setRate] = useState('')
+  const [rateUnit, setRateUnit] = useState<RentalRateUnit>('day')
+  const [err, setErr] = useState<string | null>(null)
+
+  const addTier = async () => {
+    setErr(null)
+    const minN = Number(minDays)
+    const maxN = maxDays.trim() === '' ? null : Number(maxDays)
+    const rateN = Number(rate)
+    if (!Number.isFinite(minN) || minN < 1) return setErr('min days must be ≥ 1')
+    if (maxN !== null && (!Number.isFinite(maxN) || maxN < minN)) return setErr('max days must be ≥ min or blank')
+    if (!Number.isFinite(rateN) || rateN < 0) return setErr('rate must be a non-negative number')
+    try {
+      const existing = tiers.data?.rateTiers.length ?? 0
+      await create.mutateAsync({
+        rate_unit: rateUnit,
+        min_days: minN,
+        max_days: maxN,
+        rate: rateN,
+        sort_order: existing + 1,
+      })
+      setMinDays('1')
+      setMaxDays('')
+      setRate('')
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Failed to add tier')
+    }
+  }
+
+  return (
+    <div className="border-t border-line pt-3 mt-1">
+      <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 mb-2">
+        Rate tiers (overrides agreed rate when billable days fall in window)
+      </div>
+      {(tiers.data?.rateTiers ?? []).length === 0 ? (
+        <div className="text-[11px] text-ink-3">No tiers — billing uses the line's agreed rate for all durations.</div>
+      ) : (
+        <ul className="space-y-1 mb-2">
+          {tiers.data!.rateTiers.map((t) => (
+            <li key={t.id} className="flex items-center justify-between gap-2 text-[12px]">
+              <span>
+                {t.min_days}
+                {'–'}
+                {t.max_days ?? '∞'} days @ ${Number(t.rate).toFixed(2)}/{t.rate_unit}
+              </span>
+              <button
+                type="button"
+                onClick={() => void del.mutateAsync({ tierId: t.id })}
+                className="text-[11px] text-warn hover:underline"
+                disabled={del.isPending}
+              >
+                remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="grid grid-cols-4 gap-1">
+        <Field label="Min" value={minDays} onChange={setMinDays} placeholder="1" />
+        <Field label="Max" value={maxDays} onChange={setMaxDays} placeholder="∞" />
+        <Field label="Rate" value={rate} onChange={setRate} placeholder="0.00" />
+        <Select
+          label="Unit"
+          value={rateUnit}
+          onChange={(v) => setRateUnit(v as RentalRateUnit)}
+          options={RATE_UNITS.map((u) => ({ value: u, label: u }))}
+        />
+      </div>
+      {err ? <div className="text-[11px] text-warn mt-1">{err}</div> : null}
+      <MobileButton variant="ghost" onClick={addTier} disabled={create.isPending}>
+        Add tier
+      </MobileButton>
+    </div>
   )
 }
 
