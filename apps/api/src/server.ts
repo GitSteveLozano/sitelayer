@@ -731,8 +731,24 @@ const server = http.createServer(async (req, res) => {
             // Scope tags (route, request_id, company_id) are already set on
             // the Sentry isolation scope above; adding scope='unhandled' so
             // it shares the same captureWithEntityContext taxonomy as the
-            // sub-handlers.
-            Sentry.captureException(error, { tags: { scope: 'unhandled' } })
+            // sub-handlers. We ALSO pass request_id + route + method
+            // explicitly so the captured event keeps these dimensions
+            // even if the isolation scope is somehow swapped (e.g. an
+            // integration cleared the active scope before the catch
+            // fired). Defensive: bare Sentry.captureException dropped
+            // request_id in the 2026-05-16 verification audit, so we
+            // belt-and-suspenders the load-bearing fields here. Entity
+            // context (company_id / entity_id) intentionally NOT set —
+            // the top-level catch may fire BEFORE getCompany() resolves
+            // and inventing tags would be misleading.
+            Sentry.captureException(error, {
+              tags: {
+                scope: 'unhandled',
+                request_id: requestId,
+                route: requestContext.route ?? initialRoute,
+                method,
+              },
+            })
             const status =
               error instanceof HttpError ? error.status : error instanceof BlueprintUploadError ? error.status : 500
             if (rootSpan) {
