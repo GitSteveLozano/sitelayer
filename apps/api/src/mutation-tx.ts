@@ -361,16 +361,20 @@ export async function recordWorkflowEvent(
     actorUserId?: string | null
   },
 ): Promise<void> {
-  const { sentryTrace } = currentTraceHeaders()
+  // Pull both halves of the W3C trace propagation pair. Migration 079
+  // added sentry_baggage so the workflow event log carries the full
+  // sentry-trace + baggage context every other ledger table already
+  // persists.
+  const { sentryTrace, baggage } = currentTraceHeaders()
   const requestId = getRequestContext()?.requestId ?? null
   await executor.query(
     `
     insert into workflow_event_log (
       company_id, workflow_name, schema_version, entity_type, entity_id,
       state_version, event_type, event_payload, snapshot_after,
-      actor_user_id, request_id, sentry_trace
+      actor_user_id, request_id, sentry_trace, sentry_baggage
     )
-    values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12)
+    values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
     `,
     [
       args.companyId,
@@ -385,6 +389,7 @@ export async function recordWorkflowEvent(
       args.actorUserId ?? null,
       requestId,
       sentryTrace,
+      baggage,
     ],
   )
 }

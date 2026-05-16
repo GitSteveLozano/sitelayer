@@ -120,6 +120,48 @@ export function nextRequestId(): string {
 }
 
 /**
+ * Pull the active W3C Sentry trace headers (`sentry-trace` + `baggage`)
+ * so every authenticated request to the API joins the SPA's current
+ * trace tree. The API mirrors these into `request_context`, the worker
+ * lifts them off the outbox row, and the workflow_event_log row keeps
+ * the same trace id — meaning a single Sentry trace can be followed
+ * from the React button click all the way to the QBO push.
+ *
+ * Sentry's web SDK is loaded eagerly via `instrument.ts`, but
+ * `getTraceData()` legitimately returns an empty object before a trace
+ * has been started (early app boot, network calls fired in error
+ * boundaries, etc.). In that case we just don't set the headers and
+ * the API will start a fresh server-side trace as before. Failures
+ * (Sentry not initialized at all when the env DSN is missing) fall
+ * through to the empty-object branch via the try/catch.
+ */
+function readTraceHeaders(): { sentryTrace: string | null; baggage: string | null } {
+  try {
+    const getTraceData = (Sentry as unknown as { getTraceData?: () => Record<string, string | undefined> }).getTraceData
+    const data = typeof getTraceData === 'function' ? getTraceData() : undefined
+    if (!data) return { sentryTrace: null, baggage: null }
+    return {
+      sentryTrace: data['sentry-trace'] ?? null,
+      baggage: data.baggage ?? null,
+    }
+  } catch {
+    return { sentryTrace: null, baggage: null }
+  }
+}
+
+/**
+ * Set `sentry-trace` / `baggage` on `headers` if Sentry has live trace
+ * data. Exposed so multipart blueprint uploads (which build their own
+ * Headers via `buildAuthHeaders`) share the same propagation path.
+ */
+export function applyTraceHeaders(headers: Headers): void {
+  if (headers.has('sentry-trace')) return
+  const { sentryTrace, baggage } = readTraceHeaders()
+  if (sentryTrace) headers.set('sentry-trace', sentryTrace)
+  if (baggage) headers.set('baggage', baggage)
+}
+
+/**
  * Build the auth headers (company slug + Bearer token + request id)
  * that every authenticated call needs. Exposed so the multipart upload
  * helpers can reuse the same plumbing without going through `request()`.
@@ -129,6 +171,9 @@ export async function buildAuthHeaders(opts: { companySlug?: string; requestId?:
   const slug = opts.companySlug ?? activeCompanySlug
   headers.set('x-sitelayer-company-slug', slug)
   headers.set('x-request-id', opts.requestId ?? nextRequestId())
+  // W3C trace context — forwarded on every request so the API +
+  // worker + workflow_event_log all share the SPA's trace id.
+  applyTraceHeaders(headers)
   try {
     const token = await tokenProvider()
     if (token) headers.set('Authorization', `Bearer ${token}`)
@@ -170,6 +215,11 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     headers.set('x-request-id', options.requestId ?? nextRequestId())
   }
   const requestId = headers.get('x-request-id')
+
+  // Forward sentry-trace + baggage even on skipAuth public endpoints —
+  // the trace context is independent of authentication and the API's
+  // root span continues whatever the SPA started.
+  applyTraceHeaders(headers)
 
   if (!options.skipAuth) {
     const slug = options.companySlug ?? activeCompanySlug

@@ -119,6 +119,13 @@ export const DEDICATED_HANDLER_MUTATION_TYPES = [
  * duplicate writes if a worker tx retries after partial commit. A
  * caller that hits the constraint should treat the event as already
  * recorded and continue.
+ *
+ * The `trace` param carries the W3C sentry-trace/baggage + request_id
+ * that the originating API request stamped on the outbox row. The
+ * dedicated handlers below pull these fields off the claimed outbox row
+ * and pass them through so the worker-emitted POST_SUCCEEDED row is
+ * linked to the same trace as the SPA → API → outbox → worker chain.
+ * Migration 079 adds sentry_baggage so the full W3C pair lands here.
  */
 export async function appendWorkflowEvent(
   client: QueueClient,
@@ -134,15 +141,20 @@ export async function appendWorkflowEvent(
     eventPayload: Record<string, unknown>
     snapshotAfter: Record<string, unknown>
     actorUserId?: string | null
+    trace?: TraceContext
   },
 ): Promise<void> {
+  const sentryTrace = args.trace?.sentry_trace ?? null
+  const sentryBaggage = args.trace?.sentry_baggage ?? null
+  const requestId = args.trace?.request_id ?? null
   await client.query(
     `
     insert into workflow_event_log (
       company_id, workflow_name, schema_version, entity_type, entity_id,
-      state_version, event_type, event_payload, snapshot_after, actor_user_id
+      state_version, event_type, event_payload, snapshot_after, actor_user_id,
+      request_id, sentry_trace, sentry_baggage
     )
-    values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10)
+    values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
     on conflict (entity_id, state_version) do nothing
     `,
     [
@@ -156,6 +168,9 @@ export async function appendWorkflowEvent(
       JSON.stringify(args.eventPayload),
       JSON.stringify(args.snapshotAfter),
       args.actorUserId ?? null,
+      requestId,
+      sentryTrace,
+      sentryBaggage,
     ],
   )
 }
@@ -337,6 +352,9 @@ type ClaimedInvoicePushRow = {
   entity_id: string
   payload: Record<string, unknown>
   attempt_count: number
+  sentry_trace: string | null
+  sentry_baggage: string | null
+  request_id: string | null
 }
 
 type RentalBillingRunStateRow = {
@@ -356,6 +374,7 @@ async function applyWorkerEmittedEvent(
   companyId: string,
   runId: string,
   outcome: { kind: 'succeeded'; qbo_invoice_id: string } | { kind: 'failed'; error: string },
+  trace?: TraceContext,
 ): Promise<RentalBillingRunStateRow | null> {
   const lockResult = await client.query<RentalBillingRunStateRow>(
     `select id, status, state_version, qbo_invoice_id,
@@ -414,6 +433,7 @@ async function applyWorkerEmittedEvent(
           error: row.error,
           qbo_invoice_id: row.qbo_invoice_id,
         },
+        ...(trace ? { trace } : {}),
       })
     }
     return row
@@ -444,6 +464,7 @@ async function applyWorkerEmittedEvent(
       stateVersion: beforeVersion,
       eventType: 'POST_FAILED',
       eventPayload: { type: 'POST_FAILED', failed_at: failedAt, error: errorMessage },
+      ...(trace ? { trace } : {}),
       snapshotAfter: {
         state: row.status,
         state_version: row.state_version,
@@ -538,7 +559,7 @@ export async function processRentalBillingInvoicePush(
         limit $2
         for update skip locked
       )
-      returning id, entity_id, payload, attempt_count
+      returning id, entity_id, payload, attempt_count, sentry_trace, sentry_baggage, request_id
       `,
       [companyId, limit],
     )
@@ -558,6 +579,16 @@ export async function processRentalBillingInvoicePush(
   // row commits or rolls back independently.
   for (const row of claimed.rows) {
     const runId = row.entity_id
+    // Propagate the originating sentry-trace + baggage + request_id from the
+    // outbox row (set by the API request that emitted POST_REQUESTED) into
+    // the worker-emitted workflow_event_log row. Without this, the worker-
+    // side POST_SUCCEEDED/POST_FAILED transitions are orphaned from the
+    // human trace.
+    const rowTrace: TraceContext = {
+      sentry_trace: row.sentry_trace,
+      sentry_baggage: row.sentry_baggage,
+      request_id: row.request_id,
+    }
     await client.query('begin')
     try {
       // Idempotency check: if QBO invoice id already exists, skip the push
@@ -583,10 +614,16 @@ export async function processRentalBillingInvoicePush(
         // Already pushed in a prior attempt that crashed before marking the
         // outbox row applied. Emit POST_SUCCEEDED with the existing id and
         // mark the outbox row applied — no second QBO push.
-        await applyWorkerEmittedEvent(client, companyId, runId, {
-          kind: 'succeeded',
-          qbo_invoice_id: existingRow.qbo_invoice_id,
-        })
+        await applyWorkerEmittedEvent(
+          client,
+          companyId,
+          runId,
+          {
+            kind: 'succeeded',
+            qbo_invoice_id: existingRow.qbo_invoice_id,
+          },
+          rowTrace,
+        )
         await recordInvoicePushSyncEvent(client, companyId, runId, {
           action: 'post_succeeded',
           provider: 'qbo',
@@ -604,10 +641,16 @@ export async function processRentalBillingInvoicePush(
       }
 
       const result = await push({ client, companyId, runId, payload: row.payload })
-      const updated = await applyWorkerEmittedEvent(client, companyId, runId, {
-        kind: 'succeeded',
-        qbo_invoice_id: result.qbo_invoice_id,
-      })
+      const updated = await applyWorkerEmittedEvent(
+        client,
+        companyId,
+        runId,
+        {
+          kind: 'succeeded',
+          qbo_invoice_id: result.qbo_invoice_id,
+        },
+        rowTrace,
+      )
       await recordInvoicePushSyncEvent(client, companyId, runId, {
         action: 'post_succeeded',
         provider: 'qbo',
@@ -634,10 +677,16 @@ export async function processRentalBillingInvoicePush(
       // step for un-sticking the queue.
       try {
         await client.query('begin')
-        await applyWorkerEmittedEvent(client, companyId, row.entity_id, {
-          kind: 'failed',
-          error: message,
-        })
+        await applyWorkerEmittedEvent(
+          client,
+          companyId,
+          row.entity_id,
+          {
+            kind: 'failed',
+            error: message,
+          },
+          rowTrace,
+        )
         await recordInvoicePushSyncEvent(client, companyId, row.entity_id, {
           action: 'post_failed',
           provider: 'qbo',
@@ -732,6 +781,7 @@ async function applyEstimatePushWorkerEvent(
   companyId: string,
   pushId: string,
   outcome: { kind: 'succeeded'; qbo_estimate_id: string } | { kind: 'failed'; error: string },
+  trace?: TraceContext,
 ): Promise<EstimatePushStateRow | null> {
   const lockResult = await client.query<EstimatePushStateRow>(
     `select id, status, state_version, qbo_estimate_id,
@@ -779,6 +829,7 @@ async function applyEstimatePushWorkerEvent(
         eventType: 'POST_SUCCEEDED',
         eventPayload: { type: 'POST_SUCCEEDED', posted_at: postedAt, qbo_estimate_id: outcome.qbo_estimate_id },
         snapshotAfter: rowToWorkflowSnapshot(row),
+        ...(trace ? { trace } : {}),
       })
     }
     return row
@@ -811,6 +862,7 @@ async function applyEstimatePushWorkerEvent(
       eventType: 'POST_FAILED',
       eventPayload: { type: 'POST_FAILED', failed_at: failedAt, error: errorMessage },
       snapshotAfter: rowToWorkflowSnapshot(row),
+      ...(trace ? { trace } : {}),
     })
   }
   return row
@@ -854,16 +906,25 @@ export async function processEstimatePush(
   // for the structural rationale; same shape applies here.
   await client.query('begin')
   let claimed: {
-    rows: Array<{ id: string; entity_id: string; payload: Record<string, unknown>; attempt_count: number }>
+    rows: Array<
+      {
+        id: string
+        entity_id: string
+        payload: Record<string, unknown>
+        attempt_count: number
+      } & TraceContext
+    >
     rowCount: number | null
   }
   try {
-    const result = await client.query<{
-      id: string
-      entity_id: string
-      payload: Record<string, unknown>
-      attempt_count: number
-    }>(
+    const result = await client.query<
+      {
+        id: string
+        entity_id: string
+        payload: Record<string, unknown>
+        attempt_count: number
+      } & TraceContext
+    >(
       `
       update mutation_outbox
       set
@@ -885,7 +946,7 @@ export async function processEstimatePush(
         limit $2
         for update skip locked
       )
-      returning id, entity_id, payload, attempt_count
+      returning id, entity_id, payload, attempt_count, sentry_trace, sentry_baggage, request_id
       `,
       [companyId, limit],
     )
@@ -903,6 +964,14 @@ export async function processEstimatePush(
   // Phase 2: per-row work in its own tx.
   for (const row of claimed.rows) {
     const pushId = row.entity_id
+    // Propagate the originating sentry-trace + baggage + request_id from the
+    // outbox row into the worker-emitted workflow_event_log row. See
+    // processRentalBillingInvoicePush for the same wiring.
+    const rowTrace: TraceContext = {
+      sentry_trace: row.sentry_trace,
+      sentry_baggage: row.sentry_baggage,
+      request_id: row.request_id,
+    }
     await client.query('begin')
     try {
       const existing = await client.query<{ qbo_estimate_id: string | null; status: string }>(
@@ -924,10 +993,16 @@ export async function processEstimatePush(
       if (existingRow.qbo_estimate_id && existingRow.status === 'posting') {
         // Replay-safe: previous push succeeded but outbox row never marked
         // applied. Emit POST_SUCCEEDED with the existing id, no second QBO call.
-        await applyEstimatePushWorkerEvent(client, companyId, pushId, {
-          kind: 'succeeded',
-          qbo_estimate_id: existingRow.qbo_estimate_id,
-        })
+        await applyEstimatePushWorkerEvent(
+          client,
+          companyId,
+          pushId,
+          {
+            kind: 'succeeded',
+            qbo_estimate_id: existingRow.qbo_estimate_id,
+          },
+          rowTrace,
+        )
         await recordEstimatePushSyncEvent(client, companyId, pushId, {
           action: 'post_succeeded',
           provider: 'qbo',
@@ -945,10 +1020,16 @@ export async function processEstimatePush(
       }
 
       const result = await push({ client, companyId, pushId, payload: row.payload })
-      const updated = await applyEstimatePushWorkerEvent(client, companyId, pushId, {
-        kind: 'succeeded',
-        qbo_estimate_id: result.qbo_estimate_id,
-      })
+      const updated = await applyEstimatePushWorkerEvent(
+        client,
+        companyId,
+        pushId,
+        {
+          kind: 'succeeded',
+          qbo_estimate_id: result.qbo_estimate_id,
+        },
+        rowTrace,
+      )
       await recordEstimatePushSyncEvent(client, companyId, pushId, {
         action: 'post_succeeded',
         provider: 'qbo',
@@ -970,10 +1051,16 @@ export async function processEstimatePush(
       // processRentalBillingInvoicePush.
       try {
         await client.query('begin')
-        await applyEstimatePushWorkerEvent(client, companyId, row.entity_id, {
-          kind: 'failed',
-          error: message,
-        })
+        await applyEstimatePushWorkerEvent(
+          client,
+          companyId,
+          row.entity_id,
+          {
+            kind: 'failed',
+            error: message,
+          },
+          rowTrace,
+        )
         await recordEstimatePushSyncEvent(client, companyId, row.entity_id, {
           action: 'post_failed',
           provider: 'qbo',
