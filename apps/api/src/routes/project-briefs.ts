@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { withMutationTx } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 
 /**
  * Foreman morning brief routes (`fm-brief`). The brief is a write-only
@@ -90,9 +90,11 @@ export async function handleProjectBriefRoutes(
     const materials = parseJsonArray(body.materials)
 
     // Verify the project exists in this company.
-    const projectCheck = await ctx.pool.query<{ id: string }>(
-      `select id from projects where company_id = $1 and id = $2 limit 1`,
-      [ctx.company.id, projectId],
+    const projectCheck = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string }>(`select id from projects where company_id = $1 and id = $2 limit 1`, [
+        ctx.company.id,
+        projectId,
+      ]),
     )
     if (!projectCheck.rows[0]) {
       ctx.sendJson(404, { error: 'project not found' })
@@ -142,20 +144,24 @@ export async function handleProjectBriefRoutes(
       return true
     }
     const result = dateParam
-      ? await ctx.pool.query<BriefRow>(
-          `select ${BRIEF_COLUMNS}
+      ? await withCompanyClient(ctx.company.id, (c) =>
+          c.query<BriefRow>(
+            `select ${BRIEF_COLUMNS}
            from project_briefs
            where company_id = $1 and project_id = $2 and effective_date = $3
            order by created_at desc`,
-          [ctx.company.id, projectId, dateParam],
+            [ctx.company.id, projectId, dateParam],
+          ),
         )
-      : await ctx.pool.query<BriefRow>(
-          `select ${BRIEF_COLUMNS}
+      : await withCompanyClient(ctx.company.id, (c) =>
+          c.query<BriefRow>(
+            `select ${BRIEF_COLUMNS}
            from project_briefs
            where company_id = $1 and project_id = $2
            order by effective_date desc, created_at desc
            limit 30`,
-          [ctx.company.id, projectId],
+            [ctx.company.id, projectId],
+          ),
         )
     ctx.sendJson(200, { briefs: result.rows })
     return true

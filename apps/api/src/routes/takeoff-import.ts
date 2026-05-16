@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid } from '../http-utils.js'
 
 export type TakeoffImportRouteCtx = {
@@ -94,9 +94,11 @@ export async function handleTakeoffImportRoutes(
   }
 
   // Project ownership check.
-  const projectCheck = await ctx.pool.query<{ exists: boolean }>(
-    `select exists(select 1 from projects where company_id = $1 and id = $2 and deleted_at is null) as exists`,
-    [ctx.company.id, projectId],
+  const projectCheck = await withCompanyClient(ctx.company.id, (c) =>
+    c.query<{ exists: boolean }>(
+      `select exists(select 1 from projects where company_id = $1 and id = $2 and deleted_at is null) as exists`,
+      [ctx.company.id, projectId],
+    ),
   )
   if (!projectCheck.rows[0]?.exists) {
     ctx.sendJson(404, { error: 'project not found' })
@@ -105,9 +107,11 @@ export async function handleTakeoffImportRoutes(
   // Page ownership check — without this, a caller could associate
   // imported measurements with a blueprint page from another company.
   if (pageId) {
-    const pageCheck = await ctx.pool.query<{ exists: boolean }>(
-      `select exists(select 1 from blueprint_pages where company_id = $1 and id = $2) as exists`,
-      [ctx.company.id, pageId],
+    const pageCheck = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ exists: boolean }>(
+        `select exists(select 1 from blueprint_pages where company_id = $1 and id = $2) as exists`,
+        [ctx.company.id, pageId],
+      ),
     )
     if (!pageCheck.rows[0]?.exists) {
       ctx.sendJson(404, { error: 'page not found' })

@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import {
   calculateWorkerBurden,
@@ -64,17 +65,18 @@ export async function handleLaborBurdenRoutes(
   // Pull today's clock events with the worker's burden columns joined
   // in. Voided rows excluded. Ordered chronologically so the pair-up
   // works deterministically.
-  const events = await ctx.pool.query<{
-    worker_id: string | null
-    project_id: string | null
-    event_type: string
-    occurred_at: string
-    base_hourly_cents: number
-    insurance_pct: string
-    benefits_pct: string
-    ot_premium_pct: string
-  }>(
-    `select e.worker_id, e.project_id, e.event_type, e.occurred_at,
+  const events = await withCompanyClient(ctx.company.id, (c) =>
+    c.query<{
+      worker_id: string | null
+      project_id: string | null
+      event_type: string
+      occurred_at: string
+      base_hourly_cents: number
+      insurance_pct: string
+      benefits_pct: string
+      ot_premium_pct: string
+    }>(
+      `select e.worker_id, e.project_id, e.event_type, e.occurred_at,
             w.base_hourly_cents, w.insurance_pct, w.benefits_pct, w.ot_premium_pct
      from clock_events e
      left join workers w on w.id = e.worker_id and w.company_id = e.company_id
@@ -85,7 +87,8 @@ export async function handleLaborBurdenRoutes(
        and e.occurred_at >= ($2::date)
        and e.occurred_at < ($2::date + interval '1 day')
      order by e.worker_id, e.occurred_at asc`,
-    [ctx.company.id, targetDate, projectIdParam],
+      [ctx.company.id, targetDate, projectIdParam],
+    ),
   )
 
   // Pair events into spans per worker, then split straight + ot.
@@ -150,9 +153,11 @@ export async function handleLaborBurdenRoutes(
   // (or the single explicit project filter).
   let totalBudgetCents = 0
   if (projectIdParam) {
-    const single = await ctx.pool.query<{ daily_budget_cents: number }>(
-      `select daily_budget_cents from projects where company_id = $1 and id = $2`,
-      [ctx.company.id, projectIdParam],
+    const single = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ daily_budget_cents: number }>(
+        `select daily_budget_cents from projects where company_id = $1 and id = $2`,
+        [ctx.company.id, projectIdParam],
+      ),
     )
     totalBudgetCents = Number(single.rows[0]?.daily_budget_cents ?? 0) || 0
   } else {
@@ -160,9 +165,11 @@ export async function handleLaborBurdenRoutes(
       new Set(events.rows.map((r) => r.project_id).filter((id): id is string => Boolean(id))),
     )
     if (projectIds.length > 0) {
-      const budgets = await ctx.pool.query<{ daily_budget_cents: number }>(
-        `select daily_budget_cents from projects where company_id = $1 and id = any($2::uuid[])`,
-        [ctx.company.id, projectIds],
+      const budgets = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{ daily_budget_cents: number }>(
+          `select daily_budget_cents from projects where company_id = $1 and id = any($2::uuid[])`,
+          [ctx.company.id, projectIds],
+        ),
       )
       totalBudgetCents = budgets.rows.reduce((sum, r) => sum + (Number(r.daily_budget_cents) || 0), 0)
     }

@@ -2,7 +2,13 @@ import type http from 'node:http'
 import type { Pool } from 'pg'
 import { compareBidVsScope } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, recordSyncEvent, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
+import {
+  recordMutationLedger,
+  recordSyncEvent,
+  withCompanyClient,
+  withMutationTx,
+  type LedgerExecutor,
+} from '../mutation-tx.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
 import { buildEstimatePdfInputFromSummary, type EstimatePdfInput } from '../pdf.js'
 import { resolvePrices } from '../pricing.js'
@@ -519,21 +525,25 @@ export async function handleEstimateRoutes(
       )
       // Verify the service item exists for this company so we can
       // return a clean 404 rather than a FK error.
-      const serviceItemExists = await ctx.pool.query<{ exists: boolean }>(
-        `select exists(
+      const serviceItemExists = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{ exists: boolean }>(
+          `select exists(
            select 1 from service_items
             where company_id = $1 and code = $2 and deleted_at is null
          ) as exists`,
-        [ctx.company.id, code],
+          [ctx.company.id, code],
+        ),
       )
       if (!serviceItemExists.rows[0]?.exists) {
         ctx.sendJson(404, { error: 'service item not found' })
         return true
       }
       if (divisionCodes.length > 0) {
-        const validDivisions = await ctx.pool.query<{ code: string }>(
-          `select code from divisions where company_id = $1 and code = any($2::text[])`,
-          [ctx.company.id, divisionCodes],
+        const validDivisions = await withCompanyClient(ctx.company.id, (c) =>
+          c.query<{ code: string }>(`select code from divisions where company_id = $1 and code = any($2::text[])`, [
+            ctx.company.id,
+            divisionCodes,
+          ]),
         )
         const validSet = new Set(validDivisions.rows.map((row) => row.code))
         const unknown = divisionCodes.filter((value) => !validSet.has(value))

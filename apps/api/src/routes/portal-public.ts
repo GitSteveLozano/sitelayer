@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 
 /**
@@ -143,15 +144,17 @@ export async function handlePublicPortalRoutes(
       ctx.sendJson(403, { error: 'project not allowed' })
       return true
     }
-    const photos = await ctx.pool.query(
-      `select dlp.id, dlp.storage_key, dlp.captured_at, dlp.scope_step_label
+    const photos = await withCompanyClient(resolved.link.company_id, (c) =>
+      c.query(
+        `select dlp.id, dlp.storage_key, dlp.captured_at, dlp.scope_step_label
        from daily_log_photos dlp
        join daily_logs dl on dl.company_id = dlp.company_id and dl.id = dlp.daily_log_id
        where dlp.company_id = $1 and dl.project_id = $2
          and dl.status in ('submitted', 'approved')
        order by dlp.captured_at desc, dlp.created_at desc
        limit 200`,
-      [resolved.link.company_id, projectId],
+        [resolved.link.company_id, projectId],
+      ),
     )
     ctx.sendJson(200, { photos: photos.rows })
     return true
@@ -173,15 +176,17 @@ export async function handlePublicPortalRoutes(
       ctx.sendJson(403, { error: 'project not allowed' })
       return true
     }
-    const inspections = await ctx.pool.query(
-      `select i.id, i.tag_id, t.label as tag_label, i.status, i.signed_at,
+    const inspections = await withCompanyClient(resolved.link.company_id, (c) =>
+      c.query(
+        `select i.id, i.tag_id, t.label as tag_label, i.status, i.signed_at,
               to_char(i.next_due_on, 'YYYY-MM-DD') as next_due_on,
               i.inspector_name, i.defects
        from scaffold_inspections i
        join scaffold_tags t on t.company_id = i.company_id and t.id = i.tag_id
        where i.company_id = $1 and i.project_id = $2
        order by i.signed_at desc limit 100`,
-      [resolved.link.company_id, projectId],
+        [resolved.link.company_id, projectId],
+      ),
     )
     ctx.sendJson(200, { inspections: inspections.rows })
     return true
@@ -199,14 +204,16 @@ export async function handlePublicPortalRoutes(
       ctx.sendJson(403, { error: 'project not allowed' })
       return true
     }
-    const shipments = await ctx.pool.query(
-      `select id, direction, status,
+    const shipments = await withCompanyClient(resolved.link.company_id, (c) =>
+      c.query(
+        `select id, direction, status,
               to_char(scheduled_for, 'YYYY-MM-DD') as scheduled_for,
               shipped_at, delivered_at, ticket_number
        from shipments
        where company_id = $1 and project_id = $2 and deleted_at is null
        order by coalesce(scheduled_for, created_at::date) desc limit 50`,
-      [resolved.link.company_id, projectId],
+        [resolved.link.company_id, projectId],
+      ),
     )
     ctx.sendJson(200, { shipments: shipments.rows })
     return true

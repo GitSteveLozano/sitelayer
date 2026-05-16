@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
-import { withMutationTx } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
 /**
@@ -59,11 +59,13 @@ export async function handleScaffoldTagRoutes(
   const projectTagsMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/scaffold-tags$/)
   if (req.method === 'GET' && projectTagsMatch) {
     const projectId = projectTagsMatch[1]!
-    const result = await ctx.pool.query(
-      `select ${TAG_COLUMNS} from scaffold_tags
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${TAG_COLUMNS} from scaffold_tags
        where company_id = $1 and project_id = $2 and deleted_at is null
        order by created_at desc`,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     ctx.sendJson(200, { tags: result.rows })
     return true
@@ -79,25 +81,27 @@ export async function handleScaffoldTagRoutes(
       return true
     }
     const qrToken = s(body.qr_token) ?? makeToken()
-    const result = await ctx.pool.query(
-      `insert into scaffold_tags (
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `insert into scaffold_tags (
         company_id, project_id, qr_token, label, structure_type,
         erected_on, height_m, load_class, lat, lng, notes
       ) values ($1, $2, $3, $4, coalesce($5, 'scaffold'), $6, $7, $8, $9, $10, $11)
       returning ${TAG_COLUMNS}`,
-      [
-        ctx.company.id,
-        projectId,
-        qrToken,
-        label,
-        s(body.structure_type),
-        s(body.erected_on),
-        n(body.height_m),
-        s(body.load_class),
-        n(body.lat),
-        n(body.lng),
-        s(body.notes),
-      ],
+        [
+          ctx.company.id,
+          projectId,
+          qrToken,
+          label,
+          s(body.structure_type),
+          s(body.erected_on),
+          n(body.height_m),
+          s(body.load_class),
+          n(body.lat),
+          n(body.lng),
+          s(body.notes),
+        ],
+      ),
     )
     ctx.sendJson(201, result.rows[0])
     return true
@@ -107,19 +111,23 @@ export async function handleScaffoldTagRoutes(
   const tagByTokenMatch = url.pathname.match(/^\/api\/scaffold-tags\/by-token\/([^/]+)$/)
   if (req.method === 'GET' && tagByTokenMatch) {
     const token = tagByTokenMatch[1]!
-    const tag = await ctx.pool.query(
-      `select ${TAG_COLUMNS} from scaffold_tags
+    const tag = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${TAG_COLUMNS} from scaffold_tags
        where company_id = $1 and qr_token = $2 and deleted_at is null`,
-      [ctx.company.id, token],
+        [ctx.company.id, token],
+      ),
     )
     if (!tag.rows[0]) {
       ctx.sendJson(404, { error: 'tag not found' })
       return true
     }
-    const inspections = await ctx.pool.query(
-      `select ${INSPECTION_COLUMNS} from scaffold_inspections
+    const inspections = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${INSPECTION_COLUMNS} from scaffold_inspections
        where company_id = $1 and tag_id = $2 order by signed_at desc limit 10`,
-      [ctx.company.id, tag.rows[0].id],
+        [ctx.company.id, tag.rows[0].id],
+      ),
     )
     ctx.sendJson(200, { tag: tag.rows[0], inspections: inspections.rows })
     return true

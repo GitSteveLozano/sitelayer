@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid } from '../http-utils.js'
 
 export type AssemblyRouteCtx = {
@@ -73,14 +73,16 @@ export async function handleAssemblyRoutes(
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/assemblies') {
     const serviceItem = String(url.searchParams.get('service_item_code') ?? '').trim()
-    const result = await ctx.pool.query<AssemblyRow>(
-      `select ${ASSEMBLY_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<AssemblyRow>(
+        `select ${ASSEMBLY_COLUMNS}
        from service_item_assemblies
        where company_id = $1
          and deleted_at is null
          and ($2 = '' or service_item_code = $2)
        order by service_item_code asc, created_at desc`,
-      [ctx.company.id, serviceItem],
+        [ctx.company.id, serviceItem],
+      ),
     )
     ctx.sendJson(200, { assemblies: result.rows })
     return true
@@ -132,23 +134,27 @@ export async function handleAssemblyRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const headerResult = await ctx.pool.query<AssemblyRow>(
-      `select ${ASSEMBLY_COLUMNS}
+    const headerResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<AssemblyRow>(
+        `select ${ASSEMBLY_COLUMNS}
        from service_item_assemblies
        where company_id = $1 and id = $2 and deleted_at is null
        limit 1`,
-      [ctx.company.id, id],
+        [ctx.company.id, id],
+      ),
     )
     if (!headerResult.rows[0]) {
       ctx.sendJson(404, { error: 'assembly not found' })
       return true
     }
-    const componentsResult = await ctx.pool.query<ComponentRow>(
-      `select ${COMPONENT_COLUMNS}
+    const componentsResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<ComponentRow>(
+        `select ${COMPONENT_COLUMNS}
        from service_item_assembly_components
        where company_id = $1 and assembly_id = $2
        order by sort_order asc, created_at asc`,
-      [ctx.company.id, id],
+        [ctx.company.id, id],
+      ),
     )
     ctx.sendJson(200, { assembly: headerResult.rows[0], components: componentsResult.rows })
     return true

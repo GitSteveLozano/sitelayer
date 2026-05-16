@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid } from '../http-utils.js'
 
 export type AiInsightRouteCtx = {
@@ -64,8 +64,9 @@ export async function handleAiInsightRoutes(
       ctx.sendJson(400, { error: 'entity_id must be a valid uuid' })
       return true
     }
-    const result = await ctx.pool.query<InsightRow>(
-      `select ${INSIGHT_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<InsightRow>(
+        `select ${INSIGHT_COLUMNS}
        from ai_insights
        where company_id = $1
          and ($2 = '' or kind = $2)
@@ -73,7 +74,8 @@ export async function handleAiInsightRoutes(
          and ($4::boolean is false or (applied_at is null and dismissed_at is null))
        order by created_at desc
        limit 200`,
-      [ctx.company.id, kind, entityId, open],
+        [ctx.company.id, kind, entityId, open],
+      ),
     )
     ctx.sendJson(200, { insights: result.rows })
     return true
@@ -166,9 +168,11 @@ export async function handleAiInsightRoutes(
       ctx.sendJson(400, { error: 'project_id is required and must be a valid uuid' })
       return true
     }
-    const projectExists = await ctx.pool.query<{ id: string }>(
-      `select id from projects where company_id = $1 and id = $2 and deleted_at is null limit 1`,
-      [ctx.company.id, projectId],
+    const projectExists = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string }>(
+        `select id from projects where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+        [ctx.company.id, projectId],
+      ),
     )
     if (!projectExists.rows[0]) {
       ctx.sendJson(404, { error: 'project not found' })
@@ -224,12 +228,14 @@ export async function handleAiInsightRoutes(
     // Foreman ownership: a foreman can only trigger the agent on their
     // own draft. Admin/office can trigger anywhere.
     const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
-    const exists = await ctx.pool.query<{ id: string }>(
-      `select id from daily_logs
+    const exists = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string }>(
+        `select id from daily_logs
        where company_id = $1 and id = $2 and status = 'draft'
          and ($3 = '' or foreman_user_id = $3)
        limit 1`,
-      [ctx.company.id, dailyLogId, ownerFilter],
+        [ctx.company.id, dailyLogId, ownerFilter],
+      ),
     )
     if (!exists.rows[0]) {
       ctx.sendJson(404, { error: 'daily log not found, already submitted, or not yours' })
@@ -274,14 +280,15 @@ export async function handleAiInsightRoutes(
     // age_days without going to 'completed' or 'closed'. One ai_insight
     // per stale project; idempotency key per (project, week-bucket) so
     // reruns within the same week don't pile up.
-    const stale = await ctx.pool.query<{
-      id: string
-      name: string
-      customer_name: string | null
-      bid_total: string
-      created_at: string
-    }>(
-      `select id, name, customer_name, bid_total, created_at
+    const stale = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        id: string
+        name: string
+        customer_name: string | null
+        bid_total: string
+        created_at: string
+      }>(
+        `select id, name, customer_name, bid_total, created_at
        from projects
        where company_id = $1
          and deleted_at is null
@@ -290,7 +297,8 @@ export async function handleAiInsightRoutes(
          and created_at < now() - ($2 || ' days')::interval
        order by created_at asc
        limit 50`,
-      [ctx.company.id, String(ageDays)],
+        [ctx.company.id, String(ageDays)],
+      ),
     )
     if (stale.rows.length === 0) {
       ctx.sendJson(200, { proposals_created: 0, scanned: 0 })
@@ -307,21 +315,23 @@ export async function handleAiInsightRoutes(
     for (const project of stale.rows) {
       const key = `bid_follow_up:${project.id}:${bucket}`
       const draft = composeFollowUpDraft(project)
-      const result = await ctx.pool.query<{ id: string }>(
-        `insert into ai_insights
+      const result = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{ id: string }>(
+          `insert into ai_insights
            (company_id, kind, entity_type, entity_id, payload, confidence,
             attribution, source_run_id, produced_by)
          values ($1, 'bid_follow_up', 'project', $2, $3::jsonb, $4, $5, $6, 'agent:bid_follow_up')
          on conflict (company_id, source_run_id) where source_run_id is not null do nothing
          returning id`,
-        [
-          ctx.company.id,
-          project.id,
-          JSON.stringify(draft),
-          draft.confidence,
-          `Bid issued ${draft.days_outstanding}d ago, no status change recorded`,
-          key,
-        ],
+          [
+            ctx.company.id,
+            project.id,
+            JSON.stringify(draft),
+            draft.confidence,
+            `Bid issued ${draft.days_outstanding}d ago, no status change recorded`,
+            key,
+          ],
+        ),
       )
       if ((result.rowCount ?? 0) > 0) created++
     }

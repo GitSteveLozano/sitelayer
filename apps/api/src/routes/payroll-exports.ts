@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { renderXlsxSingleSheet, type XlsxCell } from '../xlsx-writer.js'
@@ -41,11 +42,13 @@ export async function handlePayrollExportRoutes(
   const listMatch = url.pathname.match(/^\/api\/labor-payroll-runs\/([^/]+)\/exports$/)
   if (req.method === 'GET' && listMatch) {
     const runId = listMatch[1]!
-    const result = await ctx.pool.query(
-      `select ${COLUMNS} from payroll_exports
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${COLUMNS} from payroll_exports
        where company_id = $1 and payroll_run_id = $2
        order by requested_at desc`,
-      [ctx.company.id, runId],
+        [ctx.company.id, runId],
+      ),
     )
     ctx.sendJson(200, { exports: result.rows })
     return true
@@ -61,13 +64,15 @@ export async function handlePayrollExportRoutes(
     }
     // De-dupe: if a pending or ready row exists for (run, format) within
     // the last hour, return that instead of stacking up duplicates.
-    const existing = await ctx.pool.query(
-      `select ${COLUMNS} from payroll_exports
+    const existing = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${COLUMNS} from payroll_exports
        where company_id = $1 and payroll_run_id = $2 and format = $3
          and status in ('pending', 'ready')
          and requested_at > now() - interval '1 hour'
        order by requested_at desc limit 1`,
-      [ctx.company.id, runId, format],
+        [ctx.company.id, runId, format],
+      ),
     )
     if (existing.rows[0]) {
       ctx.sendJson(200, existing.rows[0])
@@ -75,11 +80,13 @@ export async function handlePayrollExportRoutes(
     }
     // Render is on demand at the download endpoint. The row goes straight
     // to 'ready' so the consumer knows the artifact exists.
-    const result = await ctx.pool.query(
-      `insert into payroll_exports (company_id, payroll_run_id, format, requested_by_user_id, status, completed_at)
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `insert into payroll_exports (company_id, payroll_run_id, format, requested_by_user_id, status, completed_at)
        values ($1, $2, $3, $4, 'ready', now())
        returning ${COLUMNS}`,
-      [ctx.company.id, runId, format, ctx.currentUserId],
+        [ctx.company.id, runId, format, ctx.currentUserId],
+      ),
     )
     ctx.sendJson(201, result.rows[0])
     return true
@@ -91,30 +98,34 @@ export async function handlePayrollExportRoutes(
     const runId = downloadMatch[1]!
     const exportId = downloadMatch[2]!
 
-    const exportRow = await ctx.pool.query<{ format: string; status: string }>(
-      `select format, status from payroll_exports
+    const exportRow = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ format: string; status: string }>(
+        `select format, status from payroll_exports
        where company_id = $1 and id = $2 and payroll_run_id = $3 limit 1`,
-      [ctx.company.id, exportId, runId],
+        [ctx.company.id, exportId, runId],
+      ),
     )
     if (!exportRow.rows[0]) {
       ctx.sendJson(404, { error: 'export not found' })
       return true
     }
     const format = exportRow.rows[0].format
-    const run = await ctx.pool.query<{
-      period_start: string
-      period_end: string
-      state: string
-      total_hours: string
-      total_cents: string
-      covered_labor_entry_ids: string[]
-    }>(
-      `select to_char(period_start, 'YYYY-MM-DD') as period_start,
+    const run = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        period_start: string
+        period_end: string
+        state: string
+        total_hours: string
+        total_cents: string
+        covered_labor_entry_ids: string[]
+      }>(
+        `select to_char(period_start, 'YYYY-MM-DD') as period_start,
               to_char(period_end, 'YYYY-MM-DD') as period_end,
               state, total_hours, total_cents, covered_labor_entry_ids
        from labor_payroll_runs
        where company_id = $1 and id = $2 and deleted_at is null limit 1`,
-      [ctx.company.id, runId],
+        [ctx.company.id, runId],
+      ),
     )
     if (!run.rows[0]) {
       ctx.sendJson(404, { error: 'payroll run not found' })
@@ -122,17 +133,18 @@ export async function handlePayrollExportRoutes(
     }
     const entryIds = run.rows[0].covered_labor_entry_ids ?? []
     const entries = entryIds.length
-      ? await ctx.pool.query<{
-          worker_id: string | null
-          worker_name: string | null
-          worker_email: string | null
-          project_name: string
-          service_item_code: string
-          hours: string
-          sqft_done: string
-          occurred_on: string
-        }>(
-          `select le.worker_id,
+      ? await withCompanyClient(ctx.company.id, (c) =>
+          c.query<{
+            worker_id: string | null
+            worker_name: string | null
+            worker_email: string | null
+            project_name: string
+            service_item_code: string
+            hours: string
+            sqft_done: string
+            occurred_on: string
+          }>(
+            `select le.worker_id,
                   w.name as worker_name,
                   w.email as worker_email,
                   p.name as project_name,
@@ -145,7 +157,8 @@ export async function handlePayrollExportRoutes(
              left join workers w on w.company_id = le.company_id and w.id = le.worker_id
             where le.company_id = $1 and le.id = ANY($2::uuid[]) and le.deleted_at is null
             order by le.occurred_on asc, le.id asc`,
-          [ctx.company.id, entryIds],
+            [ctx.company.id, entryIds],
+          ),
         )
       : { rows: [] }
 

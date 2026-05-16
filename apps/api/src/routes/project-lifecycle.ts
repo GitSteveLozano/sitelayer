@@ -12,7 +12,7 @@ import {
   type ProjectLifecycleWorkflowState,
 } from '@sitelayer/workflows'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit } from '../metrics.js'
 import { isValidUuid } from '../http-utils.js'
@@ -183,12 +183,14 @@ export async function handleProjectLifecycleRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const result = await ctx.pool.query<ProjectLifecycleRow>(
-      `select ${PROJECT_LIFECYCLE_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<ProjectLifecycleRow>(
+        `select ${PROJECT_LIFECYCLE_COLUMNS}
        from projects
        where company_id = $1 and id = $2 and deleted_at is null
        limit 1`,
-      [ctx.company.id, id],
+        [ctx.company.id, id],
+      ),
     )
     if (!result.rows[0]) {
       ctx.sendJson(404, { error: 'project not found' })

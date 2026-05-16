@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
@@ -47,16 +48,17 @@ export async function handleBidAccuracyRoutes(
   if (url.pathname !== '/api/ai/bid-accuracy') return false
   if (!ctx.requireRole(['admin', 'office'])) return true
 
-  const result = await ctx.pool.query<{
-    project_id: string
-    project_name: string
-    customer_name: string | null
-    status: string
-    bid_total: string
-    actual_material_cents: string
-    actual_labor_cents: string
-  }>(
-    `
+  const result = await withCompanyClient(ctx.company.id, (c) =>
+    c.query<{
+      project_id: string
+      project_name: string
+      customer_name: string | null
+      status: string
+      bid_total: string
+      actual_material_cents: string
+      actual_labor_cents: string
+    }>(
+      `
     select
       p.id as project_id,
       p.name as project_name,
@@ -84,7 +86,8 @@ export async function handleBidAccuracyRoutes(
     order by p.created_at desc
     limit 100
     `,
-    [ctx.company.id],
+      [ctx.company.id],
+    ),
   )
 
   const rows: AccuracyRow[] = result.rows.map((r) => {

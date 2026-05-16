@@ -14,7 +14,7 @@ import {
   type WorkflowSnapshot,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit } from '../metrics.js'
 
@@ -362,13 +362,15 @@ export async function handleEstimatePushRoutes(
       params.push(stateFilter)
       where += ` and status = $${params.length}`
     }
-    const result = await ctx.pool.query<EstimatePushRow>(
-      `select ${ESTIMATE_PUSH_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<EstimatePushRow>(
+        `select ${ESTIMATE_PUSH_COLUMNS}
        from estimate_pushes
        where ${where}
        order by created_at desc
        limit 200`,
-      params,
+        params,
+      ),
     )
     ctx.sendJson(200, { estimatePushes: result.rows })
     return true
@@ -380,12 +382,14 @@ export async function handleEstimatePushRoutes(
   const snapshotMatch = url.pathname.match(/^\/api\/estimate-pushes\/([^/]+)$/)
   if (req.method === 'GET' && snapshotMatch) {
     const pushId = snapshotMatch[1]!
-    const result = await ctx.pool.query<EstimatePushRow>(
-      `select ${ESTIMATE_PUSH_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<EstimatePushRow>(
+        `select ${ESTIMATE_PUSH_COLUMNS}
        from estimate_pushes
        where company_id = $1 and id = $2 and deleted_at is null
        limit 1`,
-      [ctx.company.id, pushId],
+        [ctx.company.id, pushId],
+      ),
     )
     const row = result.rows[0]
     if (!row) {

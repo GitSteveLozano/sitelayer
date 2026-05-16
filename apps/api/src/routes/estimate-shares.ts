@@ -3,7 +3,13 @@ import type { Pool, PoolClient } from 'pg'
 import { createLogger } from '@sitelayer/logger'
 import type { ActiveCompany } from '../auth-types.js'
 import { generateShareToken, verifyShareToken, type VerifyShareTokenResult } from '../estimate-share-token.js'
-import { enqueueNotification, recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
+import {
+  enqueueNotification,
+  recordMutationLedger,
+  recordWorkflowEvent,
+  withCompanyClient,
+  withMutationTx,
+} from '../mutation-tx.js'
 import { listOperatorRecipientUserIds } from '../notifications.js'
 
 const logger = createLogger('api:estimate-shares')
@@ -225,13 +231,15 @@ export async function handleEstimateShareRoutes(
   const listMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/estimate\/shares$/)
   if (req.method === 'GET' && listMatch) {
     const projectId = listMatch[1] ?? ''
-    const rows = await ctx.pool.query<EstimateShareRow>(
-      `select ${SHARE_COLUMNS}
+    const rows = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<EstimateShareRow>(
+        `select ${SHARE_COLUMNS}
        from estimate_share_links
        where company_id = $1 and project_id = $2
        order by sent_at desc
        limit 100`,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     ctx.sendJson(200, {
       shares: rows.rows.map((row) => ({
@@ -260,24 +268,25 @@ export async function handleEstimateShareRoutes(
   // company.
   if (req.method === 'GET' && url.pathname === '/api/estimate-shares') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const result = await ctx.pool.query<{
-      id: string
-      project_id: string
-      project_name: string
-      customer_name: string | null
-      bid_total: string | number | null
-      recipient_email: string | null
-      recipient_name: string | null
-      sent_at: string
-      expires_at: string
-      accepted_at: string | null
-      declined_at: string | null
-      decline_reason: string | null
-      viewed_at: string | null
-      view_count: number
-      signer_name: string | null
-    }>(
-      `with latest as (
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        id: string
+        project_id: string
+        project_name: string
+        customer_name: string | null
+        bid_total: string | number | null
+        recipient_email: string | null
+        recipient_name: string | null
+        sent_at: string
+        expires_at: string
+        accepted_at: string | null
+        declined_at: string | null
+        decline_reason: string | null
+        viewed_at: string | null
+        view_count: number
+        signer_name: string | null
+      }>(
+        `with latest as (
          select distinct on (project_id)
            id, project_id, recipient_email, recipient_name, sent_at,
            expires_at, accepted_at, declined_at, decline_reason,
@@ -298,7 +307,8 @@ export async function handleEstimateShareRoutes(
        join projects p on p.id = l.project_id and p.company_id = $1
        order by l.sent_at desc
        limit 200`,
-      [ctx.company.id],
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, {
       shares: result.rows.map((row) => {
@@ -331,12 +341,14 @@ export async function handleEstimateShareRoutes(
   if (req.method === 'POST' && revokeMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = revokeMatch[1] ?? ''
-    const result = await ctx.pool.query<EstimateShareRow>(
-      `update estimate_share_links
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<EstimateShareRow>(
+        `update estimate_share_links
          set expires_at = now(), updated_at = now()
        where company_id = $1 and id = $2
        returning ${SHARE_COLUMNS}`,
-      [ctx.company.id, id],
+        [ctx.company.id, id],
+      ),
     )
     const row = result.rows[0]
     if (!row) {
@@ -401,8 +413,9 @@ export async function handlePublicEstimateShareRoutes(
     // the timestamp the first writer just stamped.
     let firstView = false
     if (!row.accepted_at && !row.declined_at) {
-      const updateResult = await ctx.pool.query<{ prev_viewed_at: string | null }>(
-        `with prev as (
+      const updateResult = await withCompanyClient(row.company_id, (c) =>
+        c.query<{ prev_viewed_at: string | null }>(
+          `with prev as (
            select viewed_at as prev_viewed_at
            from estimate_share_links
            where id = $1
@@ -414,7 +427,8 @@ export async function handlePublicEstimateShareRoutes(
                updated_at = now()
          where id = $1
          returning (select prev_viewed_at from prev) as prev_viewed_at`,
-        [row.id],
+          [row.id],
+        ),
       )
       firstView = updateResult.rows[0]?.prev_viewed_at == null
     }

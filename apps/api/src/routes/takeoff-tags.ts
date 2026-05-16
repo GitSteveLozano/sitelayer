@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid } from '../http-utils.js'
 
 export type TakeoffTagRouteCtx = {
@@ -62,20 +62,24 @@ export async function handleTakeoffTagRoutes(
     // Confirm the measurement belongs to this company before exposing
     // tags. Defense in depth — the WHERE on the tags query also has
     // company_id but a 404 here is clearer than an empty list.
-    const owner = await ctx.pool.query<{ exists: boolean }>(
-      `select exists(select 1 from takeoff_measurements where company_id = $1 and id = $2) as exists`,
-      [ctx.company.id, measurementId],
+    const owner = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ exists: boolean }>(
+        `select exists(select 1 from takeoff_measurements where company_id = $1 and id = $2) as exists`,
+        [ctx.company.id, measurementId],
+      ),
     )
     if (!owner.rows[0]?.exists) {
       ctx.sendJson(404, { error: 'measurement not found' })
       return true
     }
-    const result = await ctx.pool.query<TagRow>(
-      `select ${TAG_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<TagRow>(
+        `select ${TAG_COLUMNS}
        from takeoff_measurement_tags
        where company_id = $1 and measurement_id = $2
        order by sort_order asc, created_at asc`,
-      [ctx.company.id, measurementId],
+        [ctx.company.id, measurementId],
+      ),
     )
     ctx.sendJson(200, { tags: result.rows })
     return true
@@ -107,9 +111,11 @@ export async function handleTakeoffTagRoutes(
     const unit = typeof body.unit === 'string' && body.unit.trim() ? body.unit.trim() : 'sqft'
     const notes = typeof body.notes === 'string' ? body.notes.slice(0, 1024) : null
 
-    const ownership = await ctx.pool.query<{ exists: boolean }>(
-      `select exists(select 1 from takeoff_measurements where company_id = $1 and id = $2) as exists`,
-      [ctx.company.id, measurementId],
+    const ownership = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ exists: boolean }>(
+        `select exists(select 1 from takeoff_measurements where company_id = $1 and id = $2) as exists`,
+        [ctx.company.id, measurementId],
+      ),
     )
     if (!ownership.rows[0]?.exists) {
       ctx.sendJson(404, { error: 'measurement not found' })

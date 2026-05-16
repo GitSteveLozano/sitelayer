@@ -1,6 +1,6 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
-import { withMutationTx } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
 /**
@@ -34,19 +34,23 @@ export async function handleCompanyCamRoutes(
   ctx: CompanyCamRouteCtx,
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/integrations/companycam') {
-    const conn = await ctx.pool.query(
-      `select id, status, last_synced_at, sync_cursor, retry_state
+    const conn = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select id, status, last_synced_at, sync_cursor, retry_state
        from integration_connections
        where company_id = $1 and provider = 'companycam' and deleted_at is null
        order by created_at desc limit 1`,
-      [ctx.company.id],
+        [ctx.company.id],
+      ),
     )
-    const lastImports = await ctx.pool.query(
-      `select external_photo_id, project_id, daily_log_photo_id, imported_at, error
+    const lastImports = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select external_photo_id, project_id, daily_log_photo_id, imported_at, error
        from companycam_photo_imports
        where company_id = $1
        order by imported_at desc limit 25`,
-      [ctx.company.id],
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, {
       connection: conn.rows[0] ?? null,
@@ -66,15 +70,17 @@ export async function handleCompanyCamRoutes(
       ctx.sendJson(400, { error: 'external_project_id and project_id are required' })
       return true
     }
-    const result = await ctx.pool.query(
-      `insert into integration_mappings (
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `insert into integration_mappings (
         company_id, provider, entity_type, local_ref, external_id, label, status
       ) values ($1, 'companycam', 'project', $2, $3, $4, 'active')
       on conflict (company_id, provider, entity_type, local_ref) do update
         set external_id = excluded.external_id, label = excluded.label, status = 'active',
             version = integration_mappings.version + 1
       returning id, company_id, provider, entity_type, local_ref, external_id, label, status`,
-      [ctx.company.id, projectId, externalProjectId, s(body.label)],
+        [ctx.company.id, projectId, externalProjectId, s(body.label)],
+      ),
     )
     ctx.sendJson(201, result.rows[0])
     return true

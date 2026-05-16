@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { PoolClient } from 'pg'
 import { calculateJobRentalBillingRun, initialJobRentalNextBillingDate } from '@sitelayer/domain'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput, parseExpectedVersion } from '../http-utils.js'
 import {
   JOB_RENTAL_CONTRACT_COLUMNS,
@@ -54,14 +54,16 @@ export async function handleRentalContractsCrudRoutes(
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/rental-contracts$/)) {
     const projectId = url.pathname.split('/')[3] ?? ''
-    const result = await ctx.pool.query<JobRentalContractRow>(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<JobRentalContractRow>(
+        `
       select ${JOB_RENTAL_CONTRACT_COLUMNS}
       from job_rental_contracts
       where company_id = $1 and project_id = $2 and deleted_at is null
       order by created_at desc
       `,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     ctx.sendJson(200, { rentalContracts: result.rows })
     return true
@@ -195,15 +197,17 @@ export async function handleRentalContractsCrudRoutes(
 
   if (req.method === 'GET' && url.pathname.match(/^\/api\/rental-contracts\/[^/]+\/lines$/)) {
     const contractId = url.pathname.split('/')[3] ?? ''
-    const result = await ctx.pool.query<JobRentalLineRow>(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<JobRentalLineRow>(
+        `
       select ${JOB_RENTAL_LINE_COLUMNS}
       from job_rental_lines l
       join inventory_items i on i.company_id = l.company_id and i.id = l.inventory_item_id
       where l.company_id = $1 and l.contract_id = $2 and l.deleted_at is null
       order by l.created_at asc
       `,
-      [ctx.company.id, contractId],
+        [ctx.company.id, contractId],
+      ),
     )
     ctx.sendJson(200, { rentalLines: result.rows })
     return true
@@ -223,9 +227,11 @@ export async function handleRentalContractsCrudRoutes(
       ctx.sendJson(400, { error: 'inventory_item_id not found for company' })
       return true
     }
-    const contractResult = await ctx.pool.query<JobRentalContractRow>(
-      `select ${JOB_RENTAL_CONTRACT_COLUMNS} from job_rental_contracts where company_id = $1 and id = $2 and deleted_at is null`,
-      [ctx.company.id, contractId],
+    const contractResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<JobRentalContractRow>(
+        `select ${JOB_RENTAL_CONTRACT_COLUMNS} from job_rental_contracts where company_id = $1 and id = $2 and deleted_at is null`,
+        [ctx.company.id, contractId],
+      ),
     )
     const contract = contractResult.rows[0]
     if (!contract) {
@@ -415,20 +421,22 @@ export async function handleRentalContractsCrudRoutes(
   const tierBaseMatch = url.pathname.match(/^\/api\/rental-contract-lines\/([^/]+)\/rate-tiers$/)
   if (req.method === 'GET' && tierBaseMatch) {
     const lineId = tierBaseMatch[1]!
-    const result = await ctx.pool.query<{
-      id: string
-      job_rental_line_id: string
-      rate_unit: string
-      min_days: number
-      max_days: number | null
-      rate: string
-      sort_order: number
-    }>(
-      `select id, job_rental_line_id, rate_unit, min_days, max_days, rate, sort_order
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        id: string
+        job_rental_line_id: string
+        rate_unit: string
+        min_days: number
+        max_days: number | null
+        rate: string
+        sort_order: number
+      }>(
+        `select id, job_rental_line_id, rate_unit, min_days, max_days, rate, sort_order
        from rental_rate_tiers
        where company_id = $1 and job_rental_line_id = $2
        order by sort_order asc, min_days asc`,
-      [ctx.company.id, lineId],
+        [ctx.company.id, lineId],
+      ),
     )
     ctx.sendJson(200, { rateTiers: result.rows })
     return true
@@ -463,9 +471,11 @@ export async function handleRentalContractsCrudRoutes(
     }
 
     // Confirm the line belongs to the company before opening the tx.
-    const lineCheck = await ctx.pool.query<{ id: string }>(
-      `select id from job_rental_lines where company_id = $1 and id = $2 and deleted_at is null limit 1`,
-      [ctx.company.id, lineId],
+    const lineCheck = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string }>(
+        `select id from job_rental_lines where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+        [ctx.company.id, lineId],
+      ),
     )
     if (!lineCheck.rows[0]) {
       ctx.sendJson(404, { error: 'rental line not found' })
@@ -557,14 +567,16 @@ export async function handleRentalContractsCrudRoutes(
 
   if (req.method === 'GET' && url.pathname.match(/^\/api\/rental-contracts\/[^/]+\/billing-runs$/)) {
     const contractId = url.pathname.split('/')[3] ?? ''
-    const runs = await ctx.pool.query<RentalBillingRunRow>(
-      `
+    const runs = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<RentalBillingRunRow>(
+        `
       select ${RENTAL_BILLING_RUN_COLUMNS}
       from rental_billing_runs
       where company_id = $1 and contract_id = $2 and deleted_at is null
       order by period_start desc
       `,
-      [ctx.company.id, contractId],
+        [ctx.company.id, contractId],
+      ),
     )
     ctx.sendJson(200, { billingRuns: runs.rows })
     return true
@@ -597,14 +609,16 @@ export async function handleRentalContractsCrudRoutes(
       ctx.sendJson(400, { error: 'no billable rental lines for this period', preview })
       return true
     }
-    const duplicate = await ctx.pool.query(
-      `
+    const duplicate = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `
       select 1 from rental_billing_runs
       where company_id = $1 and contract_id = $2 and period_start = $3::date and period_end = $4::date
         and deleted_at is null
       limit 1
       `,
-      [ctx.company.id, contractId, preview.period_start, preview.period_end],
+        [ctx.company.id, contractId, preview.period_start, preview.period_end],
+      ),
     )
     if (duplicate.rows[0]) {
       ctx.sendJson(409, { error: 'billing run already exists for this period', preview })

@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid } from '../http-utils.js'
 
 export type BlueprintPageRouteCtx = {
@@ -65,12 +65,14 @@ export async function handleBlueprintPageRoutes(
       ctx.sendJson(400, { error: 'document id must be a valid uuid' })
       return true
     }
-    const result = await ctx.pool.query<PageRow>(
-      `select ${PAGE_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<PageRow>(
+        `select ${PAGE_COLUMNS}
        from blueprint_pages
        where company_id = $1 and blueprint_document_id = $2
        order by page_number asc`,
-      [ctx.company.id, docId],
+        [ctx.company.id, docId],
+      ),
     )
     ctx.sendJson(200, { pages: result.rows })
     return true
@@ -91,9 +93,11 @@ export async function handleBlueprintPageRoutes(
     }
     const storagePath = typeof body.storage_path === 'string' ? body.storage_path : null
 
-    const docCheck = await ctx.pool.query<{ exists: boolean }>(
-      `select exists(select 1 from blueprint_documents where company_id = $1 and id = $2) as exists`,
-      [ctx.company.id, docId],
+    const docCheck = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ exists: boolean }>(
+        `select exists(select 1 from blueprint_documents where company_id = $1 and id = $2) as exists`,
+        [ctx.company.id, docId],
+      ),
     )
     if (!docCheck.rows[0]?.exists) {
       ctx.sendJson(404, { error: 'blueprint document not found' })

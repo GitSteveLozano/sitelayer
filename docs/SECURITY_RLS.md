@@ -2,12 +2,25 @@
 
 ## Status
 
-**Phase 1 — shadow mode (current).** Migration `066_row_level_security.sql`
-defines `company_isolation` policies on every company-scoped table, but RLS
-is **not enabled** on those tables. The policy uses
-`app_current_company_id() IS NULL OR company_id = app_current_company_id()`,
-so when the GUC is unset the policy is permissive — existing tooling
-(`psql`, replay scripts, dev queries) keeps working.
+**Phase 2 — append-only tables enforced (current).** Migration
+`073_rls_enable_phase_2.sql` flips RLS ENABLED + FORCED on the four
+append-only / queue tables: `audit_events`, `workflow_event_log`,
+`mutation_outbox`, `sync_events`. The policy still permits NULL GUC
+(`app_current_company_id() IS NULL OR company_id = ...`), so any code
+path that forgets to bind `app.company_id` still works — but writes are
+checked under WITH CHECK once the GUC is set, so accidental cross-company
+inserts now fail loudly.
+
+The remaining 60+ tables (`projects`, `customers`, `takeoff_*`,
+`estimate_*`, etc.) are still shadow-mode (policy defined, RLS not yet
+enabled). Phase 3 will extend the enforcement after staging soak time.
+
+**Phase 1 — shadow mode (historical).** Migration `066_row_level_security.sql`
+defines `company_isolation` policies on every company-scoped table. The
+policy uses `app_current_company_id() IS NULL OR company_id =
+app_current_company_id()`, so when the GUC is unset the policy is
+permissive — existing tooling (`psql`, replay scripts, dev queries) keeps
+working.
 
 What is wired:
 
@@ -20,15 +33,20 @@ What is wired:
   every BEGIN/COMMIT block. The `true` argument means SET LOCAL — scoped
   to this transaction only; the pool client returns clean.
 - `apps/api/src/mutation-tx.ts:withCompanyClient()` is the read-side analog
-  for multi-statement reads (e.g. `/api/bootstrap` fan-out).
+  for multi-statement reads (e.g. `/api/bootstrap` fan-out). As of Phase 2
+  (#NNN), every `ctx.pool.query(...)` hot-path reader in `apps/api/src/routes/*.ts`
+  has been wrapped in `withCompanyClient(ctx.company.id, (c) => c.query(...))`.
+- `apps/worker/src/worker.ts:setCompanyGuc()` sets the same GUC inside the
+  worker's BEGIN/COMMIT blocks so drain queries against company-scoped
+  tables (including the 4 RLS-enforced ones) pass the policy.
 
 What is **not** wired:
 
-- Individual `pool.query()` reads still go straight at the pool. They
-  bypass RLS today even if it were enabled, because the connection has no
-  `app.company_id` set. Phase 2 moves the hot reads to `withCompanyClient`.
-- RLS is not enabled on any table. Enabling it now would break every
-  unmigrated route.
+- Cross-company admin endpoints (`/api/webhooks/qbo`, the share-token
+  portal routes, `/api/debug/traces/:id`) deliberately query without
+  binding the GUC. They rely on the permissive `IS NULL OR` clause and
+  filter explicitly in SQL. These are documented in-code with a comment
+  per call site.
 
 ## How RLS is enabled (Phase 2 — when ready)
 
@@ -46,9 +64,9 @@ app never actually sees.
 
 Recommended sequence (smallest blast radius first):
 
-1. `audit_events` — append-only, no reads from app
-2. `mutation_outbox`, `sync_events` — worker-only, well-bounded
-3. `workflow_event_log` — append-only
+1. `audit_events` — append-only, no reads from app **(done in Phase 2)**
+2. `mutation_outbox`, `sync_events` — worker-only, well-bounded **(done in Phase 2)**
+3. `workflow_event_log` — append-only **(done in Phase 2)**
 4. `clock_events`, `labor_entries`, `daily_logs` — high-volume per-tenant data
 5. `projects`, `blueprint_documents`, `takeoff_measurements`,
    `estimate_lines` — the core takeoff loop
@@ -95,11 +113,15 @@ Do **not** edit migration 066; it is immutable per `CLAUDE.md` deploy rules.
 
 ## Open work
 
-- Migrate hot-path `pool.query()` reads to `withCompanyClient` (see
-  `apps/api/src/routes/projects-query.ts`, `bootstrap`, `analytics`).
-- Add a CI check that greps for direct `pool.query(` in route handlers and
-  warns if the call isn't inside `withMutationTx` / `withCompanyClient`.
-- Enable+force RLS table-by-table per the sequence above.
+- Enable+force RLS on the remaining tables per the sequence above
+  (`clock_events`, `labor_entries`, `daily_logs`, then projects/blueprint/
+  takeoff/estimate, then reference data).
+- Add a CI check that greps for direct `ctx.pool.query(` in route
+  handlers and fails if the call isn't inside `withMutationTx` /
+  `withCompanyClient` (the audit done in Phase 2 was manual).
 - Drop the `app_current_company_id() IS NULL OR ...` permissive clause
   once every read goes through a scoped client; tighten the policy to a
   strict equality check.
+- Provision a non-superuser app role in CI so the integration test suite
+  actually exercises RLS enforcement (currently `sitelayer` is BYPASSRLS
+  per `.github/workflows/quality.yml`).

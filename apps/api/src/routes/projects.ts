@@ -20,7 +20,13 @@ import {
   type WorkflowSnapshot,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
-import { enqueueAdminAlert, recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
+import {
+  enqueueAdminAlert,
+  recordMutationLedger,
+  recordWorkflowEvent,
+  withCompanyClient,
+  withMutationTx,
+} from '../mutation-tx.js'
 import { isValidUuid, parseExpectedVersion, parseOptionalNumber } from '../http-utils.js'
 
 const logger = createLogger('api:projects')
@@ -411,14 +417,16 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
       ctx.sendJson(400, { error: 'project id is required' })
       return true
     }
-    const result = await ctx.pool.query<ProjectCloseoutRow>(
-      `select id, company_id, status, state_version, closed_at, closed_by,
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<ProjectCloseoutRow>(
+        `select id, company_id, status, state_version, closed_at, closed_by,
               summary_locked_at, workflow_engine, workflow_run_id,
               version, created_at, updated_at
          from projects
          where company_id = $1 and id = $2 and deleted_at is null
          limit 1`,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     if (!result.rows[0]) {
       ctx.sendJson(404, { error: 'project not found' })
@@ -601,15 +609,17 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     // unlike /api/audit-events the per-project filter scopes the data
     // tightly enough that a foreman seeing their own project lifecycle
     // is fine. Cross-tenant leakage is blocked by company_id.
-    const result = await ctx.pool.query(
-      `select id, actor_user_id, actor_role, entity_type, entity_id, action, before, after, created_at
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select id, actor_user_id, actor_role, entity_type, entity_id, action, before, after, created_at
          from audit_events
         where company_id = $1
           and entity_type = 'project'
           and entity_id = $2
         order by created_at desc
         limit 200`,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     ctx.sendJson(200, { events: result.rows })
     return true
@@ -660,11 +670,13 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     // running the variance query. Keeps tenant-isolation errors as 404
     // (matching /summary, /closeout, /timeline) rather than returning
     // an empty array for projects the caller can't see.
-    const projectCheck = await ctx.pool.query<{ target_sqft_per_hr: string | null }>(
-      `select target_sqft_per_hr from projects
+    const projectCheck = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ target_sqft_per_hr: string | null }>(
+        `select target_sqft_per_hr from projects
        where company_id = $1 and id = $2 and deleted_at is null
        limit 1`,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     if (!projectCheck.rows[0]) {
       ctx.sendJson(404, { error: 'project not found' })
@@ -672,15 +684,16 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     }
     const projectTargetSqftPerHr = Number(projectCheck.rows[0].target_sqft_per_hr ?? 0) || 0
 
-    const result = await ctx.pool.query<{
-      service_item_code: string
-      division_code: string | null
-      unit: string | null
-      estimated_quantity: string
-      actual_quantity: string
-      actual_hours: string
-    }>(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        service_item_code: string
+        division_code: string | null
+        unit: string | null
+        estimated_quantity: string
+        actual_quantity: string
+        actual_hours: string
+      }>(
+        `
       with est as (
         select
           service_item_code,
@@ -712,7 +725,8 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
       full outer join act on est.service_item_code = act.service_item_code
       where coalesce(est.service_item_code, act.service_item_code) is not null
       `,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
 
     const variance = result.rows
@@ -787,17 +801,19 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     // Project existence + bid/labor_rate gate. Keeps tenant-isolation
     // failures as 404 instead of returning an all-zero rollup for a
     // project the caller can't actually see.
-    const projectResult = await ctx.pool.query<{
-      id: string
-      name: string
-      bid_total: string | null
-      labor_rate: string | null
-    }>(
-      `select id, name, bid_total, labor_rate
+    const projectResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        id: string
+        name: string
+        bid_total: string | null
+        labor_rate: string | null
+      }>(
+        `select id, name, bid_total, labor_rate
          from projects
          where company_id = $1 and id = $2 and deleted_at is null
          limit 1`,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     const project = projectResult.rows[0]
     if (!project) {
@@ -810,13 +826,14 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
     // Each bucket is its own sub-CTE so an empty bucket returns 0 instead
     // of NULL (coalesce on the SUM) and the LEFT JOIN against a single-
     // row anchor lets us emit one row even when every table is empty.
-    const rollupResult = await ctx.pool.query<{
-      estimate_total: string
-      labor_hours: string
-      materials_total: string
-      rentals_total: string
-    }>(
-      `
+    const rollupResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        estimate_total: string
+        labor_hours: string
+        materials_total: string
+        rentals_total: string
+      }>(
+        `
       with est as (
         select coalesce(sum(amount), 0) as estimate_total
         from estimate_lines
@@ -844,7 +861,8 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
         rent.rentals_total::text as rentals_total
       from est, lab, mat, rent
       `,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     const rollup = rollupResult.rows[0] ?? {
       estimate_total: '0',
@@ -893,8 +911,9 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
       ctx.sendJson(400, { error: 'project id is required' })
       return true
     }
-    const result = await ctx.pool.query(
-      `select p.id, p.name, p.status, p.division_code, p.customer_id, p.bid_total,
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select p.id, p.name, p.status, p.division_code, p.customer_id, p.bid_total,
               p.labor_rate, p.target_sqft_per_hr, p.bonus_pool, p.closed_at,
               p.summary_locked_at, p.site_lat, p.site_lng, p.site_radius_m,
               p.auto_clock_in_enabled, p.auto_clock_out_grace_seconds,
@@ -905,7 +924,8 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
          left join customers c on c.id = p.customer_id and c.company_id = p.company_id
          where p.company_id = $1 and p.id = $2 and p.deleted_at is null
          limit 1`,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     if (!result.rows[0]) {
       ctx.sendJson(404, { error: 'project not found' })

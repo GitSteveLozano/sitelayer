@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { parseExpectedVersion } from '../http-utils.js'
 
 export type MaterialBillRouteCtx = {
@@ -35,14 +35,16 @@ export async function handleMaterialBillRoutes(
       ctx.sendJson(400, { error: 'project id is required' })
       return true
     }
-    const result = await ctx.pool.query(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `
       select id, project_id, vendor_name as vendor, amount, bill_type, description, occurred_on, version, deleted_at, created_at
       from material_bills
       where company_id = $1 and project_id = $2 and deleted_at is null
       order by occurred_on desc, created_at desc
       `,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     ctx.sendJson(200, { materialBills: result.rows })
     return true
@@ -62,9 +64,8 @@ export async function handleMaterialBillRoutes(
     }
     const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
     if (expectedVersion !== null) {
-      const projectVersionResult = await ctx.pool.query(
-        'select version from projects where company_id = $1 and id = $2',
-        [ctx.company.id, projectId],
+      const projectVersionResult = await withCompanyClient(ctx.company.id, (c) =>
+        c.query('select version from projects where company_id = $1 and id = $2', [ctx.company.id, projectId]),
       )
       const currentProject = projectVersionResult.rows[0]
       if (!currentProject) {

@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { parseExpectedVersion } from '../http-utils.js'
 
 /**
@@ -26,9 +26,11 @@ export type WorkerRouteCtx = {
  */
 export async function handleWorkerRoutes(req: http.IncomingMessage, url: URL, ctx: WorkerRouteCtx): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/workers') {
-    const result = await ctx.pool.query(
-      'select id, name, role, version, deleted_at, created_at from workers where company_id = $1 and deleted_at is null order by name asc',
-      [ctx.company.id],
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        'select id, name, role, version, deleted_at, created_at from workers where company_id = $1 and deleted_at is null order by name asc',
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, { workers: result.rows })
     return true

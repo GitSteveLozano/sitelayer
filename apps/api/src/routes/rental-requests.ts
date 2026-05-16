@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import { initialRentalNextInvoiceAt } from '@sitelayer/domain'
 import { RENTAL_SELECT_COLUMNS, type RentalRow } from '@sitelayer/queue'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 
 /**
  * Operator-side approval queue for rental requests submitted by customers
@@ -127,8 +127,9 @@ export async function handleRentalRequestRoutes(
     }
     values.push(limit)
     const limitParam = `$${values.length}`
-    const result = await ctx.pool.query<RentalRequestRow>(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<RentalRequestRow>(
+        `
       select
         rr.id, rr.company_id, rr.share_link_id, rr.customer_id, rr.items,
         rr.requested_start, rr.requested_end,
@@ -143,7 +144,8 @@ export async function handleRentalRequestRoutes(
       order by rr.created_at desc
       limit ${limitParam}
       `,
-      values,
+        values,
+      ),
     )
     ctx.sendJson(200, { rentalRequests: result.rows.map(shapeRow) })
     return true

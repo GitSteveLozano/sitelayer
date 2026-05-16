@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { resolveShareSecret, verifyShareToken } from '../estimate-share-token.js'
-import { withMutationTx } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 
 /**
  * Public, unauthenticated routes for the customer rental portal. These run
@@ -79,22 +79,24 @@ export async function handlePortalRentalRoutes(
       ctx.sendJson(resolution.status, { error: resolution.error })
       return true
     }
-    const items = await ctx.pool.query<{
-      id: string
-      code: string
-      description: string
-      category: string
-      unit: string
-      default_rental_rate: string
-      replacement_value: string | null
-    }>(
-      `
+    const items = await withCompanyClient(resolution.link.company_id, (c) =>
+      c.query<{
+        id: string
+        code: string
+        description: string
+        category: string
+        unit: string
+        default_rental_rate: string
+        replacement_value: string | null
+      }>(
+        `
       select id, code, description, category, unit, default_rental_rate, replacement_value
       from inventory_items
       where company_id = $1 and deleted_at is null and active = true
       order by category, code
       `,
-      [resolution.link.company_id],
+        [resolution.link.company_id],
+      ),
     )
     ctx.sendJson(200, {
       company_id: resolution.link.company_id,

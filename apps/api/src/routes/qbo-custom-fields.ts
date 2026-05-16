@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { isValidUuid } from '../http-utils.js'
@@ -48,12 +49,14 @@ export async function handleQboCustomFieldRoutes(
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/qbo/custom-fields') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const result = await ctx.pool.query<FieldRow>(
-      `select ${FIELD_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<FieldRow>(
+        `select ${FIELD_COLUMNS}
        from qbo_custom_field_mappings
        where company_id = $1
        order by entity_type asc, field_name asc`,
-      [ctx.company.id],
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, { mappings: result.rows })
     return true
@@ -81,8 +84,9 @@ export async function handleQboCustomFieldRoutes(
       return true
     }
 
-    const result = await ctx.pool.query<FieldRow>(
-      `insert into qbo_custom_field_mappings
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<FieldRow>(
+        `insert into qbo_custom_field_mappings
          (company_id, entity_type, field_name, qbo_definition_id, qbo_label, notes)
        values ($1, $2, $3, $4, $5, $6)
        on conflict (company_id, entity_type, field_name) do update
@@ -91,7 +95,8 @@ export async function handleQboCustomFieldRoutes(
              notes = excluded.notes,
              updated_at = now()
        returning ${FIELD_COLUMNS}`,
-      [ctx.company.id, entityType, fieldName, definitionId, label, notes],
+        [ctx.company.id, entityType, fieldName, definitionId, label, notes],
+      ),
     )
     ctx.sendJson(200, { mapping: result.rows[0] })
     return true
@@ -105,9 +110,11 @@ export async function handleQboCustomFieldRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const result = await ctx.pool.query(
-      `delete from qbo_custom_field_mappings where company_id = $1 and id = $2 returning id`,
-      [ctx.company.id, id],
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(`delete from qbo_custom_field_mappings where company_id = $1 and id = $2 returning id`, [
+        ctx.company.id,
+        id,
+      ]),
     )
     if (result.rowCount === 0) {
       ctx.sendJson(404, { error: 'mapping not found' })

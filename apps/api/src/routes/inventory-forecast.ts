@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient } from '../mutation-tx.js'
 import type { RentalInventoryRouteCtx } from './rental-inventory.types.js'
 
 /**
@@ -34,21 +35,24 @@ export async function handleInventoryForecastRoutes(
 
   // Confirm the item exists for this company before running the projection so
   // a typo doesn't get a misleading "all zeros" response.
-  const itemCheck = await ctx.pool.query<{ id: string }>(
-    `select id from inventory_items where company_id = $1 and id = $2 and deleted_at is null`,
-    [ctx.company.id, itemId],
+  const itemCheck = await withCompanyClient(ctx.company.id, (c) =>
+    c.query<{ id: string }>(`select id from inventory_items where company_id = $1 and id = $2 and deleted_at is null`, [
+      ctx.company.id,
+      itemId,
+    ]),
   )
   if (!itemCheck.rows[0]) {
     ctx.sendJson(404, { error: 'inventory_item not found' })
     return true
   }
 
-  const result = await ctx.pool.query<{
-    week_start: string
-    projected_on_rent_qty: string
-    projected_idle_qty: string
-  }>(
-    `
+  const result = await withCompanyClient(ctx.company.id, (c) =>
+    c.query<{
+      week_start: string
+      projected_on_rent_qty: string
+      projected_idle_qty: string
+    }>(
+      `
     with weeks as (
       select
         gs::int as week_index,
@@ -119,7 +123,8 @@ export async function handleInventoryForecastRoutes(
     group by w.week_index, w.week_start
     order by w.week_index asc
     `,
-    [ctx.company.id, itemId, weeks],
+      [ctx.company.id, itemId, weeks],
+    ),
   )
 
   ctx.sendJson(200, {

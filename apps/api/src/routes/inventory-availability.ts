@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient } from '../mutation-tx.js'
 import type { RentalInventoryRouteCtx } from './rental-inventory.types.js'
 
 /**
@@ -20,16 +21,17 @@ export async function handleInventoryAvailabilityRoutes(
   ctx: RentalInventoryRouteCtx,
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/inventory/items/availability') {
-    const result = await ctx.pool.query<{
-      inventory_item_id: string
-      total_stock_quantity: string
-      available_quantity: string
-      yard_quantity: string
-      on_rent_quantity: string
-      on_rent_lines: number
-      on_rent_projects: number
-    }>(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        inventory_item_id: string
+        total_stock_quantity: string
+        available_quantity: string
+        yard_quantity: string
+        on_rent_quantity: string
+        on_rent_lines: number
+        on_rent_projects: number
+      }>(
+        `
       with active_rentals as (
         select
           l.inventory_item_id,
@@ -87,7 +89,8 @@ export async function handleInventoryAvailabilityRoutes(
       where i.company_id = $1 and i.deleted_at is null
       order by i.code asc
       `,
-      [ctx.company.id],
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, { availability: result.rows })
     return true

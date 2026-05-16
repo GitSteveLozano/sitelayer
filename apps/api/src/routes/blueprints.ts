@@ -10,7 +10,7 @@ import {
 } from '../storage.js'
 import { isMultipartRequest, parseBlueprintMultipart, type BlueprintMultipartResult } from '../blueprint-upload.js'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, parseExpectedVersion } from '../http-utils.js'
 
 type BlueprintDocumentRow = {
@@ -187,9 +187,11 @@ export async function handleBlueprintRoutes(
       ctx.sendJson(400, { error: 'file_name, file_contents_base64, or multipart upload is required' })
       return true
     }
-    const versionResult = await ctx.pool.query<{ version: number }>(
-      'select coalesce(max(version), 0) + 1 as version from blueprint_documents where company_id = $1 and project_id = $2',
-      [ctx.company.id, projectId],
+    const versionResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ version: number }>(
+        'select coalesce(max(version), 0) + 1 as version from blueprint_documents where company_id = $1 and project_id = $2',
+        [ctx.company.id, projectId],
+      ),
     )
     const version = Number(body.version ?? versionResult.rows[0]?.version ?? 1)
     const resolvedFileName = fileName || multipartResult?.fileName || 'blueprint.pdf'
@@ -347,14 +349,16 @@ export async function handleBlueprintRoutes(
       ctx.sendJson(400, { error: 'blueprint id is required' })
       return true
     }
-    const sourceResult = await ctx.pool.query(
-      `
+    const sourceResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `
       select id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, deleted_at
       from blueprint_documents
       where company_id = $1 and id = $2 and deleted_at is null
       limit 1
       `,
-      [ctx.company.id, sourceBlueprintId],
+        [ctx.company.id, sourceBlueprintId],
+      ),
     )
     const source = sourceResult.rows[0]
     if (!source) {
@@ -380,9 +384,11 @@ export async function handleBlueprintRoutes(
     const copyMeasurements = body.copy_measurements !== false
     const fileName = String(body.file_name ?? multipartResult?.fileName ?? source.file_name ?? 'blueprint.pdf').trim()
     const fileContentsBase64 = String(body.file_contents_base64 ?? body.file_contents ?? '').trim()
-    const versionResult = await ctx.pool.query<{ version: number }>(
-      'select coalesce(max(version), 0) + 1 as version from blueprint_documents where company_id = $1 and project_id = $2',
-      [ctx.company.id, source.project_id],
+    const versionResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ version: number }>(
+        'select coalesce(max(version), 0) + 1 as version from blueprint_documents where company_id = $1 and project_id = $2',
+        [ctx.company.id, source.project_id],
+      ),
     )
     const version = Number(body.version ?? versionResult.rows[0]?.version ?? 1)
     const requestedStoragePath = body.storage_path === undefined ? null : String(body.storage_path)
@@ -478,9 +484,11 @@ export async function handleBlueprintRoutes(
       ctx.sendJson(400, { error: 'blueprint id is required' })
       return true
     }
-    const result = await ctx.pool.query(
-      'select file_name, storage_path from blueprint_documents where company_id = $1 and id = $2 and deleted_at is null limit 1',
-      [ctx.company.id, blueprintId],
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        'select file_name, storage_path from blueprint_documents where company_id = $1 and id = $2 and deleted_at is null limit 1',
+        [ctx.company.id, blueprintId],
+      ),
     )
     const blueprint = result.rows[0]
     if (!blueprint) {

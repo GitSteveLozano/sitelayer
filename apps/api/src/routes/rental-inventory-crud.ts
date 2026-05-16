@@ -1,6 +1,6 @@
 import type http from 'node:http'
 import type { PoolClient } from 'pg'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput, parseExpectedVersion } from '../http-utils.js'
 import {
   INVENTORY_ITEM_COLUMNS,
@@ -47,14 +47,16 @@ export async function handleRentalInventoryCrudRoutes(
   ctx: RentalInventoryRouteCtx,
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/inventory/items') {
-    const result = await ctx.pool.query<InventoryItemRow>(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<InventoryItemRow>(
+        `
       select ${INVENTORY_ITEM_COLUMNS}
       from inventory_items
       where company_id = $1 and deleted_at is null
       order by active desc, code asc
       `,
-      [ctx.company.id],
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, { inventoryItems: result.rows })
     return true
@@ -231,14 +233,16 @@ export async function handleRentalInventoryCrudRoutes(
   }
 
   if (req.method === 'GET' && url.pathname === '/api/inventory/locations') {
-    const result = await ctx.pool.query<InventoryLocationRow>(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<InventoryLocationRow>(
+        `
       select ${INVENTORY_LOCATION_COLUMNS}
       from inventory_locations
       where company_id = $1 and deleted_at is null
       order by is_default desc, name asc
       `,
-      [ctx.company.id],
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, { inventoryLocations: result.rows })
     return true
@@ -307,16 +311,17 @@ export async function handleRentalInventoryCrudRoutes(
       values.push(movementType)
       clauses.push(`m.movement_type = $${values.length}`)
     }
-    const result = await ctx.pool.query<
-      InventoryMovementRow & {
-        item_code: string | null
-        item_description: string | null
-        from_location_name: string | null
-        to_location_name: string | null
-        project_name: string | null
-      }
-    >(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<
+        InventoryMovementRow & {
+          item_code: string | null
+          item_description: string | null
+          from_location_name: string | null
+          to_location_name: string | null
+          project_name: string | null
+        }
+      >(
+        `
       select
         m.id,
         m.company_id,
@@ -345,7 +350,8 @@ export async function handleRentalInventoryCrudRoutes(
       order by m.occurred_on desc, m.created_at desc
       limit 500
       `,
-      values,
+        values,
+      ),
     )
     ctx.sendJson(200, { inventoryMovements: result.rows })
     return true

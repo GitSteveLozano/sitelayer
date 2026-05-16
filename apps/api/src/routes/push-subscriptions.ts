@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { isValidUuid } from '../http-utils.js'
@@ -70,8 +71,9 @@ export async function handlePushSubscriptionRoutes(
       return true
     }
 
-    const upsert = await ctx.pool.query<PushSubscriptionRow>(
-      `insert into push_subscriptions
+    const upsert = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<PushSubscriptionRow>(
+        `insert into push_subscriptions
          (company_id, clerk_user_id, endpoint, p256dh, auth, user_agent)
        values ($1, $2, $3, $4, $5, $6)
        on conflict (clerk_user_id, endpoint) do update
@@ -81,7 +83,8 @@ export async function handlePushSubscriptionRoutes(
              last_seen_at = now()
        returning id, company_id, clerk_user_id, endpoint, p256dh, auth,
                  user_agent, created_at, last_seen_at`,
-      [ctx.company.id, ctx.currentUserId, endpoint, p256dh, auth, userAgent],
+        [ctx.company.id, ctx.currentUserId, endpoint, p256dh, auth, userAgent],
+      ),
     )
     ctx.sendJson(201, { subscription: upsert.rows[0] })
     return true
@@ -94,11 +97,13 @@ export async function handlePushSubscriptionRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const deleted = await ctx.pool.query(
-      `delete from push_subscriptions
+    const deleted = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `delete from push_subscriptions
          where company_id = $1 and id = $2 and clerk_user_id = $3
          returning id`,
-      [ctx.company.id, id, ctx.currentUserId],
+        [ctx.company.id, id, ctx.currentUserId],
+      ),
     )
     if (deleted.rowCount === 0) {
       ctx.sendJson(404, { error: 'subscription not found' })

@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { parseConfigPayload, parseExpectedVersion } from '../http-utils.js'
 
 export type BonusRuleRouteCtx = {
@@ -23,9 +23,11 @@ export async function handleBonusRuleRoutes(
   ctx: BonusRuleRouteCtx,
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/bonus-rules') {
-    const result = await ctx.pool.query(
-      'select id, name, config, is_active, version, created_at from bonus_rules where company_id = $1 order by created_at asc',
-      [ctx.company.id],
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        'select id, name, config, is_active, version, created_at from bonus_rules where company_id = $1 order by created_at asc',
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, { bonusRules: result.rows })
     return true
