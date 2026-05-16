@@ -1,4 +1,5 @@
 import type { RentalBillingInvoicePushFn } from '@sitelayer/queue'
+import { Sentry } from './instrument.js'
 import { withFreshToken, type IntegrationConnectionTokens, type RefreshDeps } from './qbo-token-refresh.js'
 
 // QBO REST integration for rental-billing invoice push. Mirrors the existing
@@ -172,29 +173,49 @@ export function createQboRentalInvoicePush(refreshDeps: RefreshDeps = {}): Renta
 
     const url = `${baseUrl}/v3/company/${connection.provider_account_id}/invoice`
     const fetchImpl = refreshDeps.fetchImpl ?? fetch
+    let qboAttempt = 0
     const parsed = await withFreshToken<QboInvoiceCreateResponse>(
       connection,
       client,
       async (token) => {
-        const response = await fetchImpl(url, {
-          method: 'POST',
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: 'application/json',
-            'Content-Type': 'application/json',
+        const attempt = qboAttempt++
+        return Sentry.startSpan(
+          {
+            name: 'qbo.request',
+            op: 'http.client',
+            attributes: {
+              'http.url': url,
+              'http.method': 'POST',
+              'qbo.attempt': attempt,
+              'qbo.kind': 'invoice_push',
+              run_id: runId,
+              company_id: companyId,
+            },
           },
-          body: JSON.stringify(invoicePayload),
-        })
-        if (response.status === 401) {
-          // Drain the body so the caller can decide whether to retry.
-          await response.text().catch(() => '')
-          return { unauthorized: true }
-        }
-        if (!response.ok) {
-          const errBody = await response.text()
-          throw new Error(`qbo invoice POST returned ${response.status}: ${errBody.slice(0, 500)}`)
-        }
-        return { unauthorized: false, value: (await response.json()) as QboInvoiceCreateResponse }
+          async (span) => {
+            const response = await fetchImpl(url, {
+              method: 'POST',
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: 'application/json',
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify(invoicePayload),
+            })
+            span?.setAttribute('http.status_code', response.status)
+            if (!response.ok) span?.setStatus({ code: 2, message: `qbo_${response.status}` })
+            if (response.status === 401) {
+              // Drain the body so the caller can decide whether to retry.
+              await response.text().catch(() => '')
+              return { unauthorized: true as const }
+            }
+            if (!response.ok) {
+              const errBody = await response.text()
+              throw new Error(`qbo invoice POST returned ${response.status}: ${errBody.slice(0, 500)}`)
+            }
+            return { unauthorized: false as const, value: (await response.json()) as QboInvoiceCreateResponse }
+          },
+        )
       },
       refreshDeps,
     )

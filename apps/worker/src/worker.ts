@@ -1,4 +1,4 @@
-import { Sentry } from './instrument.js'
+import { Sentry, captureMessageWithEntityContext, captureWithEntityContext } from './instrument.js'
 import { loadAppConfig, postgresOptionsForTier, TierConfigError } from '@sitelayer/config'
 import { createLogger } from '@sitelayer/logger'
 import {
@@ -222,7 +222,12 @@ async function drainRentalInvoices(companyId: string): Promise<{
       } catch (error) {
         await client.query('rollback')
         logger.error({ err: error, rental_id: rental.id }, '[worker] rental invoice failed')
-        Sentry.captureException(error, { tags: { scope: 'rental_invoice' } })
+        captureWithEntityContext(error, {
+          scope: 'rental_invoice',
+          entity_type: 'rental',
+          entity_id: rental.id,
+          company_id: rental.company_id,
+        })
       }
     }
     return { processed: due.length, billed, skipped, amount }
@@ -429,21 +434,59 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
 // attempt_count. One success closes the circuit.
 const qboCircuitThreshold = Number(process.env.QBO_CIRCUIT_THRESHOLD ?? 3)
 const qboCircuitCooldownMs = Number(process.env.QBO_CIRCUIT_COOLDOWN_MS ?? 5 * 60_000)
+/**
+ * Persist circuit-breaker state to `integration_circuit_state` so the
+ * API's /api/metrics endpoint can publish the
+ * `sitelayer_circuit_breaker_state{integration}` gauge. Best-effort:
+ * a DB hiccup mustn't block the breaker transition.
+ */
+async function persistCircuitState(
+  integration: string,
+  state: 'open' | 'closed',
+  info?: { failureCount?: number; lastError?: string | null },
+): Promise<void> {
+  try {
+    await pool.query(
+      `insert into integration_circuit_state (integration, state, failure_count, last_error, opened_at, updated_at)
+         values ($1, $2, coalesce($3, 0), $4, case when $2 = 'open' then now() else null end, now())
+       on conflict (integration) do update set
+         state = excluded.state,
+         failure_count = coalesce(excluded.failure_count, integration_circuit_state.failure_count),
+         last_error = coalesce(excluded.last_error, integration_circuit_state.last_error),
+         opened_at = case when excluded.state = 'open' then coalesce(integration_circuit_state.opened_at, now()) else null end,
+         updated_at = now()`,
+      [integration, state, info?.failureCount ?? null, info?.lastError ?? null],
+    )
+  } catch (err) {
+    logger.warn({ err, integration, state }, '[circuit-breaker] failed to persist state')
+  }
+}
+
 const qboCircuit = new CircuitBreaker({
   threshold: qboCircuitThreshold,
   cooldownMs: qboCircuitCooldownMs,
   onOpen: (key, info) => {
     logger.warn({ key, ...info }, '[circuit-breaker] open — halting QBO drain')
-    Sentry.captureMessage(`circuit breaker open: ${key}`, {
+    captureMessageWithEntityContext(`circuit breaker open: ${key}`, {
       level: 'warning',
-      tags: { scope: 'circuit_breaker', integration: key },
+      scope: 'circuit_breaker',
+      extra_tags: { integration: key },
       extra: { failureCount: info.failureCount, lastError: info.lastError },
     })
+    void persistCircuitState(key, 'open', { failureCount: info.failureCount, lastError: info.lastError })
   },
   onClose: (key) => {
     logger.info({ key }, '[circuit-breaker] closed — resuming drain')
+    void persistCircuitState(key, 'closed', { failureCount: 0, lastError: null })
   },
 })
+
+// Seed the row at boot so the gauge is non-absent even before the
+// breaker ever trips. Wrapped in try/catch — migration 074 may not
+// yet be applied on older deployments and we shouldn't block startup.
+void (async () => {
+  await persistCircuitState('qbo', 'closed', { failureCount: 0, lastError: null })
+})()
 
 // Drop outbox rows once attempt_count crosses this cap. Prevents a permanently
 // broken row (bad payload, dead idempotency target) from hammering QBO forever.
@@ -636,7 +679,11 @@ async function drainAgentMutations<TPayload>(
             [row.id, message],
           )
           .catch(() => {})
-        Sentry.captureException(err, { tags: { scope, outbox_id: row.id } })
+        captureWithEntityContext(err, {
+          scope,
+          company_id: companyId,
+          extra_tags: { outbox_id: row.id, mutation_type: mutationType },
+        })
       }
     }
   } finally {
@@ -763,7 +810,8 @@ function fireStuckPostingAlert(workflow: string, companyId: string, row: StuckWo
     level: 'error',
     tags: {
       scope: 'workflow_stuck_posting',
-      workflow,
+      workflow_name: workflow,
+      entity_type: workflow,
       entity_id: row.id,
       company_id: companyId,
     },
@@ -798,10 +846,12 @@ async function heartbeat(): Promise<{ idle: boolean }> {
           { company_id: companyId, dead, cap: mutationMaxRetries },
           '[worker] dead-lettered stale outbox rows',
         )
-        Sentry.captureMessage('outbox rows dead-lettered', {
+        captureMessageWithEntityContext('outbox rows dead-lettered', {
           level: 'warning',
-          tags: { scope: 'mutation_outbox_dead_letter' },
-          extra: { dead, cap: mutationMaxRetries, company_id: companyId },
+          scope: 'mutation_outbox_dead_letter',
+          entity_type: 'mutation_outbox',
+          company_id: companyId,
+          extra: { dead, cap: mutationMaxRetries },
         })
       }
     } finally {
@@ -844,7 +894,11 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     ),
     drainNotifications().catch((error) => {
       logger.error({ err: error }, '[worker] notification drain failed')
-      Sentry.captureException(error)
+      captureWithEntityContext(error, {
+        scope: 'notification_drain',
+        entity_type: 'notification',
+        company_id: companyId,
+      })
       return { processed: 0, sent: 0, failed: 0, shortCircuited: false, deferred: 0, hydrated: 0 }
     }),
   ])
@@ -854,7 +908,11 @@ async function heartbeat(): Promise<{ idle: boolean }> {
 
   const rentalSummary = await drainRentalInvoices(companyId).catch((error) => {
     logger.error({ err: error }, '[worker] rental drain failed')
-    Sentry.captureException(error, { tags: { scope: 'rental_drain' } })
+    captureWithEntityContext(error, {
+      scope: 'rental_drain',
+      entity_type: 'rental',
+      company_id: companyId,
+    })
     return { processed: 0, billed: 0, skipped: 0, amount: 0 }
   })
 
@@ -864,7 +922,12 @@ async function heartbeat(): Promise<{ idle: boolean }> {
       return { processed: 0, posted: 0, failed: 0, skipped: 0 }
     }
     logger.error({ err: error }, '[worker] rental billing invoice push drain failed')
-    Sentry.captureException(error, { tags: { scope: 'rental_billing_invoice_push' } })
+    captureWithEntityContext(error, {
+      scope: 'rental_billing_invoice_push',
+      entity_type: 'rental_billing_run',
+      company_id: companyId,
+      workflow_name: 'rental_billing_run',
+    })
     return { processed: 0, posted: 0, failed: 0, skipped: 0 }
   })
 
@@ -874,29 +937,54 @@ async function heartbeat(): Promise<{ idle: boolean }> {
       return { processed: 0, posted: 0, failed: 0, skipped: 0 }
     }
     logger.error({ err: error }, '[worker] estimate push drain failed')
-    Sentry.captureException(error, { tags: { scope: 'estimate_push' } })
+    captureWithEntityContext(error, {
+      scope: 'estimate_push',
+      entity_type: 'estimate_push',
+      company_id: companyId,
+      workflow_name: 'estimate_push',
+    })
     return { processed: 0, posted: 0, failed: 0, skipped: 0 }
   })
 
   const lockLaborSummary = await drainLockLaborEntries(companyId).catch((error) => {
     logger.error({ err: error }, '[worker] lock_labor_entries drain failed')
-    Sentry.captureException(error, { tags: { scope: 'lock_labor_entries' } })
+    captureWithEntityContext(error, {
+      scope: 'lock_labor_entries',
+      entity_type: 'labor_entry',
+      company_id: companyId,
+      workflow_name: 'time_review_run',
+    })
     return { processed: 0, locked: 0, unlocked: 0, failed: 0 } as LockLaborEntriesSummary
   })
 
   await drainGenerateLaborPayrollRunBridge(companyId).catch((error) => {
     logger.error({ err: error }, '[worker] generate_labor_payroll_run drain failed')
-    Sentry.captureException(error, { tags: { scope: 'generate_labor_payroll_run' } })
+    captureWithEntityContext(error, {
+      scope: 'generate_labor_payroll_run',
+      entity_type: 'labor_payroll_run',
+      company_id: companyId,
+      workflow_name: 'labor_payroll_run',
+    })
   })
 
   await drainLaborPayrollPushes(companyId).catch((error) => {
     logger.error({ err: error }, '[worker] labor payroll push drain failed')
-    Sentry.captureException(error, { tags: { scope: 'labor_payroll_push' } })
+    captureWithEntityContext(error, {
+      scope: 'labor_payroll_push',
+      entity_type: 'labor_payroll_run',
+      company_id: companyId,
+      workflow_name: 'labor_payroll_run',
+    })
   })
 
   await drainFieldEventNotifications(companyId).catch((error) => {
     logger.error({ err: error }, '[worker] field event notification drain failed')
-    Sentry.captureException(error, { tags: { scope: 'field_event_notifications' } })
+    captureWithEntityContext(error, {
+      scope: 'field_event_notifications',
+      entity_type: 'field_event',
+      company_id: companyId,
+      workflow_name: 'field_event',
+    })
   })
 
   // Durable-timer pattern — auto-escalate worker_issues stuck open at
@@ -919,7 +1007,12 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     } catch (err) {
       await client.query('rollback').catch(() => undefined)
       logger.error({ err }, '[worker] field-event auto-escalation failed')
-      Sentry.captureException(err, { tags: { scope: 'field_event_auto_escalation' } })
+      captureWithEntityContext(err, {
+        scope: 'field_event_auto_escalation',
+        entity_type: 'field_event',
+        company_id: companyId,
+        workflow_name: 'field_event',
+      })
     } finally {
       client.release()
     }
@@ -927,25 +1020,41 @@ async function heartbeat(): Promise<{ idle: boolean }> {
 
   const takeoffToBidSummary = await drainTakeoffToBid(companyId).catch((error) => {
     logger.error({ err: error }, '[worker] takeoff_to_bid drain failed')
-    Sentry.captureException(error, { tags: { scope: 'takeoff_to_bid' } })
+    captureWithEntityContext(error, {
+      scope: 'takeoff_to_bid',
+      entity_type: 'ai_insight',
+      company_id: companyId,
+    })
     return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
   })
 
   const damageChargePushSummary = await drainDamageChargeInvoicePushes(companyId).catch((error) => {
     logger.error({ err: error }, '[worker] damage_charge_invoice_push drain failed')
-    Sentry.captureException(error, { tags: { scope: 'damage_charge_invoice_push' } })
+    captureWithEntityContext(error, {
+      scope: 'damage_charge_invoice_push',
+      entity_type: 'damage_charge',
+      company_id: companyId,
+    })
     return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
   })
 
   const companyCamSummary = await drainCompanyCamPolls(pool, companyId).catch((error) => {
     logger.error({ err: error }, '[worker] companycam poll failed')
-    Sentry.captureException(error, { tags: { scope: 'companycam_poll' } })
+    captureWithEntityContext(error, {
+      scope: 'companycam_poll',
+      entity_type: 'companycam_import',
+      company_id: companyId,
+    })
     return { processed: 0, imported: 0, skipped: 0, failed: 0 }
   })
 
   const voiceToLogSummary = await drainVoiceToLog(companyId).catch((error) => {
     logger.error({ err: error }, '[worker] voice_to_log drain failed')
-    Sentry.captureException(error, { tags: { scope: 'voice_to_log' } })
+    captureWithEntityContext(error, {
+      scope: 'voice_to_log',
+      entity_type: 'ai_insight',
+      company_id: companyId,
+    })
     return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
   })
 
@@ -955,7 +1064,10 @@ async function heartbeat(): Promise<{ idle: boolean }> {
   // a human can investigate.
   const stuckSummary = await checkStuckPostingWorkflows(companyId).catch((error) => {
     logger.error({ err: error }, '[worker] stuck-posting check failed')
-    Sentry.captureException(error, { tags: { scope: 'workflow_stuck_check' } })
+    captureWithEntityContext(error, {
+      scope: 'workflow_stuck_check',
+      company_id: companyId,
+    })
     return { rentalBillingStuck: 0, estimatePushStuck: 0 }
   })
 
@@ -1095,7 +1207,7 @@ async function runHeartbeat(): Promise<{ idle: boolean } | undefined> {
   heartbeatInFlight = heartbeat()
     .catch((error) => {
       logger.error({ err: error }, '[worker] heartbeat failed')
-      Sentry.captureException(error)
+      captureWithEntityContext(error, { scope: 'worker_heartbeat' })
       return undefined
     })
     .finally(() => {
@@ -1151,7 +1263,7 @@ async function shutdown(signal: NodeJS.Signals) {
   } catch (error) {
     clearTimeout(forceExit)
     logger.error({ err: error, signal }, '[worker] shutdown failed')
-    Sentry.captureException(error)
+    captureWithEntityContext(error, { scope: 'worker_shutdown' })
     process.exit(1)
   }
 }
