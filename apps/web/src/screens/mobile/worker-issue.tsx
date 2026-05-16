@@ -23,8 +23,12 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
-import { API_URL, buildAuthHeaders } from '../../lib/api/client.js'
+import { type BootstrapResponse } from '../../api-v1-compat.js'
+import {
+  type PendingAttachment,
+  type WorkerIssueCreateBody,
+  useWorkerIssueSubmit,
+} from '../../machines/worker-issue-submit.js'
 import {
   MBanner,
   MBody,
@@ -98,23 +102,14 @@ const CATEGORIES: ReadonlyArray<IssueCategory> = [
   { label: 'Other', sub: 'Type it out', kind: 'other', designKind: 'other', Icon: MI.Alert, tone: 'accent' },
 ]
 
-type UploadStage = 'idle' | 'creating' | 'uploading-voice' | 'uploading-photo' | 'done'
-
-type WorkerIssueCreateResponse = {
-  worker_issue: { id: string }
-}
-
 export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const [category, setCategory] = useState<IssueCategory | null>(null)
   const [message, setMessage] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [attachmentWarning, setAttachmentWarning] = useState<string | null>(null)
   const [severity, setSeverity] = useState<Severity>('question')
   const [voice, setVoice] = useState<{ blob: Blob; url: string; durationMs: number } | null>(null)
   const [photo, setPhoto] = useState<{ file: File; url: string } | null>(null)
-  const [stage, setStage] = useState<UploadStage>('idle')
+  const submission = useWorkerIssueSubmit()
 
   const projectId = bootstrap?.projects.find((p) => /progress|active/i.test(p.status))?.id ?? null
 
@@ -125,63 +120,26 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
     if (category.kind === 'safety') setSeverity('stopped')
   }, [category])
 
-  const handleSend = async () => {
-    if (!category) return
-    setBusy(true)
-    setError(null)
-    setAttachmentWarning(null)
-    try {
-      const trimmed = message.trim() || `${category.label}: ${category.sub}`
-      const tags = [`[${category.designKind}]`, `[severity:${severity}]`].filter(Boolean).join(' ')
-      const body: Record<string, unknown> = {
-        kind: category.kind,
-        message: `${tags} ${trimmed}`.trim(),
-      }
-      if (projectId) body.project_id = projectId
-      // The deprecated `voice_data_url` / `photo_data_url` JSON fields
-      // (silently dropped by the server) are gone — attachments are now
-      // sent via multipart POST /api/worker-issues/:id/attachments below.
+  // Once everything succeeded the screen navigates away. This stays in
+  // an effect because the machine is the source of truth for "are we
+  // done" — the form just renders state.
+  useEffect(() => {
+    if (submission.isDone) navigate('/today')
+  }, [submission.isDone, navigate])
 
-      setStage('creating')
-      const resp = await apiPost<WorkerIssueCreateResponse>('/api/worker-issues', body, companySlug)
-      const issueId = resp?.worker_issue?.id
-      // Best-effort attachment upload — issue ping itself succeeded; if
-      // either part fails we surface the failure but still navigate so
-      // the foreman sees the ticket. The worker can retry from
-      // fm-blocker-detail (TODO: actual retry surface — for v1 this
-      // banner prints the error and the foreman can ask for a re-send).
-      const failures: string[] = []
-      if (issueId && voice) {
-        setStage('uploading-voice')
-        try {
-          await uploadWorkerIssueAttachment(issueId, 'voice', voice.blob, fileNameForVoice(voice.blob))
-        } catch (err) {
-          failures.push(`voice: ${err instanceof Error ? err.message : String(err)}`)
-        }
-      }
-      if (issueId && photo) {
-        setStage('uploading-photo')
-        try {
-          await uploadWorkerIssueAttachment(issueId, 'photo', photo.file, photo.file.name || 'photo.jpg')
-        } catch (err) {
-          failures.push(`photo: ${err instanceof Error ? err.message : String(err)}`)
-        }
-      }
-      setStage('done')
-      if (failures.length > 0) {
-        // Issue landed but attachments didn't — keep the user on the
-        // form so they can see the warning.
-        setAttachmentWarning(`Issue sent. Attachment upload failed — ${failures.join('; ')}`)
-        return
-      }
-      navigate('/today')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setBusy(false)
-      // Leave `stage` at 'done' or whichever step failed; the buttons key
-      // off `busy` for disabled state.
+  const handleSend = () => {
+    if (!category) return
+    const trimmed = message.trim() || `${category.label}: ${category.sub}`
+    const tags = [`[${category.designKind}]`, `[severity:${severity}]`].filter(Boolean).join(' ')
+    const body: WorkerIssueCreateBody = {
+      kind: category.kind,
+      message: `${tags} ${trimmed}`.trim(),
+      ...(projectId ? { project_id: projectId } : {}),
     }
+    const attachments: PendingAttachment[] = []
+    if (voice) attachments.push({ kind: 'voice', payload: voice.blob, fileName: fileNameForVoice(voice.blob) })
+    if (photo) attachments.push({ kind: 'photo', payload: photo.file, fileName: photo.file.name || 'photo.jpg' })
+    submission.submit({ companySlug, body, attachments })
   }
 
   if (category) {
@@ -207,24 +165,45 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
             placeholder="Describe the issue — short is fine."
             style={{ width: '100%', minHeight: 120 }}
           />
-          <VoiceRecorder value={voice} onChange={setVoice} onError={(msg) => setError(msg)} />
+          <VoiceRecorder value={voice} onChange={setVoice} onError={() => {}} />
           <PhotoAttach value={photo} onChange={setPhoto} />
-          {error ? (
+          {submission.error ? (
             <div style={{ marginTop: 12 }}>
-              <MBanner tone="error" title="Couldn't send the issue" body={error} />
+              <MBanner tone="error" title="Couldn't send the issue" body={submission.error} />
             </div>
           ) : null}
-          {attachmentWarning ? (
+          {submission.isPartial && submission.failed.length > 0 ? (
             <div style={{ marginTop: 12 }}>
-              <MBanner tone="warn" title="Attachment didn't upload" body={attachmentWarning} />
+              <MBanner
+                tone="warn"
+                title="Attachment didn't upload"
+                body={`Issue sent. Failed: ${submission.failed.map((f) => `${f.kind}: ${f.message}`).join('; ')}`}
+              />
             </div>
           ) : null}
           <div style={{ marginTop: 16 }}>
             <MButtonStack>
-              <MButton variant="primary" onClick={handleSend} disabled={busy}>
-                {busy ? buttonLabelForStage(stage) : 'Send to foreman'}
-              </MButton>
-              <MButton variant="ghost" onClick={() => setCategory(null)}>
+              {submission.isPartial ? (
+                <MButton variant="primary" onClick={submission.retryAttachments} disabled={submission.isBusy}>
+                  {submission.isBusy ? buttonLabelForStage(submission.stage) : 'Retry attachments'}
+                </MButton>
+              ) : (
+                <MButton variant="primary" onClick={handleSend} disabled={submission.isBusy}>
+                  {submission.isBusy ? buttonLabelForStage(submission.stage) : 'Send to foreman'}
+                </MButton>
+              )}
+              {submission.isPartial ? (
+                <MButton
+                  variant="ghost"
+                  onClick={() => {
+                    submission.dismissError()
+                    navigate('/today')
+                  }}
+                >
+                  Skip and continue
+                </MButton>
+              ) : null}
+              <MButton variant="ghost" onClick={() => setCategory(null)} disabled={submission.isBusy}>
                 Pick a different category
               </MButton>
             </MButtonStack>
@@ -456,7 +435,7 @@ function PhotoAttach({
   )
 }
 
-function buttonLabelForStage(stage: UploadStage): string {
+function buttonLabelForStage(stage: 'idle' | 'creating' | 'uploading-voice' | 'uploading-photo' | 'done'): string {
   if (stage === 'creating') return 'Sending…'
   if (stage === 'uploading-voice') return 'Uploading voice note…'
   if (stage === 'uploading-photo') return 'Uploading photo…'
@@ -471,45 +450,4 @@ function fileNameForVoice(blob: Blob): string {
   if (type.includes('mpeg')) return 'voice.mp3'
   if (type.includes('wav')) return 'voice.wav'
   return 'voice.webm'
-}
-
-/**
- * POST /api/worker-issues/:id/attachments — multipart upload for a
- * single voice note or photo. Mirrors the daily-log photo upload helper
- * (apps/web/src/lib/api/daily-logs.ts: uploadDailyLogPhoto).
- */
-async function uploadWorkerIssueAttachment(
-  issueId: string,
-  kind: 'voice' | 'photo',
-  payload: Blob | File,
-  fileName: string,
-): Promise<void> {
-  const form = new FormData()
-  form.append('kind', kind)
-  // Note: append `kind` BEFORE the file part. Busboy delivers fields in
-  // wire order; the server reads `fields.kind` inside its `file` handler
-  // so the field has to land first.
-  form.append('file', payload, fileName)
-  const headers = await buildAuthHeaders()
-  const path = `/api/worker-issues/${encodeURIComponent(issueId)}/attachments`
-  const response = await fetch(`${API_URL}${path}`, {
-    method: 'POST',
-    headers,
-    body: form,
-  })
-  if (!response.ok) {
-    const ct = response.headers.get('content-type') ?? ''
-    let detail: string
-    try {
-      if (ct.includes('application/json')) {
-        const body = (await response.json()) as { error?: string }
-        detail = body?.error ?? ''
-      } else {
-        detail = await response.text()
-      }
-    } catch {
-      detail = ''
-    }
-    throw new Error(detail || `attachment upload failed (${response.status})`)
-  }
 }

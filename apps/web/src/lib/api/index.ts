@@ -159,9 +159,12 @@ export { divisionQueryKeys, fetchDivisions, useDivisions, type Division, type Di
 export {
   createLaborEntry,
   laborEntryQueryKeys,
+  patchLaborEntry,
   useCreateLaborEntry,
+  usePatchLaborEntry,
   type LaborEntry,
   type LaborEntryCreateRequest,
+  type LaborEntryPatchRequest,
 } from './labor-entries'
 
 export {
