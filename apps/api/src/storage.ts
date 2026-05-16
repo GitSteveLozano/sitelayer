@@ -57,6 +57,20 @@ export function buildDailyLogPhotoStorageKey(companyId: string, dailyLogId: stri
 }
 
 /**
+ * Storage key for clock-event verification photos. Lives under a
+ * `/clock-events/` prefix in the same bucket so the single bucket
+ * policy still covers it. companyId first segment is the
+ * assertKeyInCompany guard.
+ */
+export function buildClockEventPhotoStorageKey(
+  companyId: string,
+  clockEventId: string,
+  fileName: string,
+): string {
+  return `${companyId}/clock-events/${clockEventId}/${sanitizeFileName(fileName)}`
+}
+
+/**
  * Storage key for worker-issue voice / photo attachments. Lives under a
  * `/worker-issues/` prefix in the same bucket — same first-segment
  * companyId guard as the other helpers, so assertKeyInCompany still

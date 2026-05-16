@@ -23,6 +23,7 @@ import {
   type OfflineMutationKind,
 } from './queue'
 import { uploadDailyLogPhoto } from '@/lib/api/daily-logs'
+import { uploadClockEventPhoto } from '@/lib/api/clock'
 
 let replayInFlight = false
 let intervalId: ReturnType<typeof setInterval> | null = null
@@ -137,6 +138,25 @@ async function dispatchHandler(row: OfflineMutation): Promise<void> {
         method: 'POST',
         json: { reason },
       })
+      return
+    }
+    case 'clock_event_photo_upload': {
+      const id = String(row.payload.id ?? '')
+      const file = row.payload.file
+      if (!(file instanceof File) && !(file instanceof Blob)) {
+        throw new ApiError({
+          status: 400,
+          path: `/api/clock/events/${id}/photo`,
+          method: 'POST',
+          requestId: null,
+          body: { error: 'queued clock-event photo blob lost on serialization' },
+        })
+      }
+      const asFile =
+        file instanceof File
+          ? file
+          : new File([file], typeof row.payload.fileName === 'string' ? row.payload.fileName : 'clock-photo.jpg')
+      await uploadClockEventPhoto(id, asFile)
       return
     }
     case 'daily_log_patch': {

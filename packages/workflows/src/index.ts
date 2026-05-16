@@ -211,3 +211,22 @@ export {
   type LaborPayrollWorkflowSnapshot,
   type LaborPayrollWorkflowState,
 } from './labor-payroll.js'
+
+export {
+  SHIPMENT_ALL_STATES,
+  SHIPMENT_EVENT_TYPES,
+  SHIPMENT_TERMINAL_STATES,
+  SHIPMENT_WORKFLOW_NAME,
+  SHIPMENT_WORKFLOW_SCHEMA_VERSION,
+  ShipmentEventRequestSchema,
+  isHumanShipmentEvent,
+  nextShipmentEvents,
+  parseShipmentEventRequest,
+  shipmentWorkflow,
+  transitionShipmentWorkflow,
+  type ShipmentEventRequest,
+  type ShipmentHumanEventType,
+  type ShipmentWorkflowEvent,
+  type ShipmentWorkflowSnapshot,
+  type ShipmentWorkflowState,
+} from './shipment.js'

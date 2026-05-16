@@ -45,11 +45,30 @@ export function currentTraceHeaders(): { sentryTrace: string | null; baggage: st
  * recordSyncEvent / recordMutationOutbox writes that ledger it, so a crash
  * between the mutation and the ledger row cannot orphan the mutation. Pass the
  * `client` to the helpers via their executor parameter.
+ *
+ * Pass `companyId` to bind `app.company_id` for the lifetime of the
+ * transaction. Migration 066 reads this GUC in row-level security policies
+ * so the database itself rejects cross-company writes once RLS is enabled.
+ * `withMutationTx` is the canonical scoped-write seam; routes wired through
+ * RouteContext.withMutationTx pass the active company automatically.
  */
-export async function withMutationTx<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+export async function withMutationTx<T>(
+  fnOrCompanyId: string | ((client: PoolClient) => Promise<T>),
+  maybeFn?: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const explicitCompanyId = typeof fnOrCompanyId === 'string' ? fnOrCompanyId : null
+  const fn = typeof fnOrCompanyId === 'string' ? maybeFn! : fnOrCompanyId
+  // Fall back to the request-scoped company id stashed by server.ts after
+  // getCompany() resolves. This keeps existing call sites (which call
+  // withMutationTx(fn) with no company arg) compatible with the new RLS path.
+  const companyId = explicitCompanyId ?? getRequestContext()?.companyId ?? null
   const client = await requirePool().connect()
   try {
     await client.query('begin')
+    if (companyId) {
+      // SET LOCAL is scoped to this tx; the connection returns to the pool clean.
+      await client.query('select set_config($1, $2, true)', ['app.company_id', companyId])
+    }
     const result = await fn(client)
     await client.query('commit')
     return result
@@ -58,6 +77,43 @@ export async function withMutationTx<T>(fn: (client: PoolClient) => Promise<T>):
       await client.query('rollback')
     } catch {
       // best-effort: rollback failure shouldn't mask the original error
+    }
+    throw err
+  } finally {
+    client.release()
+  }
+}
+
+/**
+ * Read-side analog of withMutationTx: checks out a PoolClient, binds
+ * `app.company_id` via SET LOCAL inside a read-only tx, runs `fn`, and
+ * releases. Use this for any multi-statement read that should be scoped
+ * to a single company under RLS (e.g. /api/bootstrap fan-out). Single
+ * `pool.query()` calls don't need this — they go through the read-pool
+ * helper wired in apps/api/src/lib/company-pool.ts.
+ */
+export async function withCompanyClient<T>(
+  companyIdOrFn: string | ((client: PoolClient) => Promise<T>),
+  maybeFn?: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  const explicitCompanyId = typeof companyIdOrFn === 'string' ? companyIdOrFn : null
+  const fn = typeof companyIdOrFn === 'string' ? maybeFn! : companyIdOrFn
+  const companyId = explicitCompanyId ?? getRequestContext()?.companyId ?? null
+  if (!companyId) {
+    throw new Error('withCompanyClient: companyId required (no request context)')
+  }
+  const client = await requirePool().connect()
+  try {
+    await client.query('begin read only')
+    await client.query('select set_config($1, $2, true)', ['app.company_id', companyId])
+    const result = await fn(client)
+    await client.query('commit')
+    return result
+  } catch (err) {
+    try {
+      await client.query('rollback')
+    } catch {
+      // best-effort
     }
     throw err
   } finally {

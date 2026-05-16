@@ -890,6 +890,89 @@ describe('domain functions', () => {
       expect(result.lines[0]?.billable_days).toBe(5)
       expect(result.lines[0]?.amount).toBe(75)
     })
+
+    it('applies a tiered rate when billable_days falls into a tier window', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+        },
+        [
+          {
+            id: 'line-1',
+            quantity: 1,
+            agreed_rate: 10, // daily fallback
+            rate_unit: 'day',
+            on_rent_date: '2026-04-01',
+            rate_tiers: [
+              { id: 't1', job_rental_line_id: 'line-1', min_days: 1, max_days: 7, rate: 10, rate_unit: 'day', sort_order: 1 },
+              { id: 't2', job_rental_line_id: 'line-1', min_days: 8, max_days: 30, rate: 50, rate_unit: 'week', sort_order: 2 },
+            ],
+          },
+        ],
+        '2026-04-26',
+      )
+
+      // 25 billable days falls into the 8-30 tier, so the weekly $50 rate
+      // applies: 25 days × $50/wk × (25/7) = $178.57; the rate_unit on the
+      // result line reflects the tier override.
+      expect(result.lines[0]?.rate_unit).toBe('week')
+      expect(result.lines[0]?.agreed_rate).toBe(50)
+      expect(result.lines[0]?.amount).toBeCloseTo(178.57, 2)
+      expect(result.lines[0]?.description).toMatch(/tier 8-30/)
+    })
+
+    it('falls back to agreed_rate when no tier matches the billable_days', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+        },
+        [
+          {
+            id: 'line-1',
+            quantity: 1,
+            agreed_rate: 10,
+            rate_unit: 'day',
+            on_rent_date: '2026-04-01',
+            rate_tiers: [
+              // Tier starts at day 30 — billable_days=25 doesn't qualify.
+              { id: 't1', job_rental_line_id: 'line-1', min_days: 30, max_days: null, rate: 1, rate_unit: 'day', sort_order: 1 },
+            ],
+          },
+        ],
+        '2026-04-26',
+      )
+
+      expect(result.lines[0]?.agreed_rate).toBe(10)
+      expect(result.lines[0]?.rate_unit).toBe('day')
+      expect(result.lines[0]?.amount).toBe(250)
+    })
+
+    it('picks the tier with the lowest sort_order when multiple match (overlap)', () => {
+      const result = calculateJobRentalBillingRun(
+        {
+          billing_cycle_days: 25,
+          billing_start_date: '2026-04-01',
+        },
+        [
+          {
+            id: 'line-1',
+            quantity: 1,
+            agreed_rate: 99,
+            rate_unit: 'day',
+            on_rent_date: '2026-04-01',
+            rate_tiers: [
+              { id: 't2', job_rental_line_id: 'line-1', min_days: 1, max_days: 30, rate: 20, rate_unit: 'day', sort_order: 2 },
+              { id: 't1', job_rental_line_id: 'line-1', min_days: 1, max_days: 30, rate: 5, rate_unit: 'day', sort_order: 1 },
+            ],
+          },
+        ],
+        '2026-04-26',
+      )
+
+      expect(result.lines[0]?.agreed_rate).toBe(5)
+    })
   })
 
   describe('initialJobRentalNextBillingDate', () => {

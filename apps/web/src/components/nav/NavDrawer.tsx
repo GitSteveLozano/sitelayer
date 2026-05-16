@@ -38,6 +38,7 @@ const ROLE_LABEL: Record<Role, string> = {
   owner: 'Owner',
   foreman: 'Foreman',
   worker: 'Worker',
+  bookkeeper: 'Bookkeeper',
 }
 
 export function NavDrawer({ open, onClose, onAvatarTap, displayName, subline, initials }: NavDrawerProps) {

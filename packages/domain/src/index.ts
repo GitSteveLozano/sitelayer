@@ -925,6 +925,13 @@ export interface JobRentalLineForBilling {
   billable?: boolean | null
   taxable?: boolean | null
   status?: string | null
+  /**
+   * Optional tiered pricing. When present and one tier matches the
+   * computed billable_days, the tier's (rate, rate_unit) overrides the
+   * line's (agreed_rate, rate_unit) for that billing run. Absence is
+   * equivalent to "single tier" behavior — backwards-compatible.
+   */
+  rate_tiers?: readonly RentalRateTier[]
 }
 
 export interface JobRentalBillingLineResult {
@@ -963,6 +970,43 @@ function minISODate(values: readonly string[]): string {
 function normalizeRentalRateUnit(value: string): JobRentalRateUnit {
   if (value === 'cycle' || value === 'week' || value === 'month' || value === 'each') return value
   return 'day'
+}
+
+/**
+ * Tiered pricing entry on a job rental line — see migration 067.
+ * `max_days = null` means unbounded (matches all longer rentals).
+ * Tiers should be non-overlapping; `pickRentalTier` resolves overlap
+ * by taking the lowest `sort_order` then the tightest min_days bound.
+ */
+export interface RentalRateTier {
+  id: string
+  job_rental_line_id: string
+  rate_unit: JobRentalRateUnit
+  min_days: number
+  max_days: number | null
+  rate: number
+  sort_order: number
+}
+
+/**
+ * Pick the tier whose [min_days, max_days] window contains `billableDays`.
+ * Returns null when no tier matches (caller falls back to the line's
+ * single agreed_rate). When multiple tiers match (overlap, which the DB
+ * constraint allows but is a data-quality issue), the lowest sort_order
+ * wins so the order entered in the admin UI is the order applied.
+ */
+export function pickRentalTier(
+  billableDays: number,
+  tiers: readonly RentalRateTier[],
+): RentalRateTier | null {
+  const matching = tiers.filter(
+    (t) => billableDays >= t.min_days && (t.max_days === null || billableDays <= t.max_days),
+  )
+  if (matching.length === 0) return null
+  return matching.slice().sort((a, b) => {
+    if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order
+    return a.min_days - b.min_days
+  })[0] ?? null
 }
 
 function calculateJobRentalLineAmount(input: {
@@ -1036,11 +1080,14 @@ export function calculateJobRentalBillingRun(
     if (parseISODate(effectiveEnd).getTime() < parseISODate(effectiveStart).getTime()) continue
 
     const billableDays = diffDaysUtc(effectiveEnd, effectiveStart) + 1
-    const rateUnit = normalizeRentalRateUnit(String(line.rate_unit ?? 'day'))
+    const baseRateUnit = normalizeRentalRateUnit(String(line.rate_unit ?? 'day'))
+    const tier = line.rate_tiers ? pickRentalTier(billableDays, line.rate_tiers) : null
+    const effectiveRate = tier ? tier.rate : agreedRate
+    const effectiveRateUnit: JobRentalRateUnit = tier ? tier.rate_unit : baseRateUnit
     const amount = calculateJobRentalLineAmount({
       quantity,
-      agreedRate,
-      rateUnit,
+      agreedRate: effectiveRate,
+      rateUnit: effectiveRateUnit,
       billableDays,
       cycleDays,
     })
@@ -1052,8 +1099,8 @@ export function calculateJobRentalBillingRun(
       line_id: line.id,
       inventory_item_id: line.inventory_item_id ?? null,
       quantity,
-      agreed_rate: agreedRate,
-      rate_unit: rateUnit,
+      agreed_rate: effectiveRate,
+      rate_unit: effectiveRateUnit,
       billable_days: billableDays,
       period_start: effectiveStart,
       period_end: effectiveEnd,
@@ -1061,7 +1108,7 @@ export function calculateJobRentalBillingRun(
       taxable: line.taxable !== false,
       description: `${label} (${effectiveStart} to ${effectiveEnd}, ${billableDays} day${
         billableDays === 1 ? '' : 's'
-      }, qty ${quantity})`,
+      }, qty ${quantity}${tier ? `, tier ${tier.min_days}-${tier.max_days ?? '∞'}` : ''})`,
     })
   }
 
@@ -1201,3 +1248,13 @@ export function splitStraightAndOt(
   if (totalHours <= threshold) return { straight_hours: totalHours, ot_hours: 0 }
   return { straight_hours: threshold, ot_hours: totalHours - threshold }
 }
+
+export {
+  resolveAssembly,
+  selectActiveAssembly,
+  type AssemblyComponent,
+  type AssemblyHeader,
+  type AssemblyKind,
+  type AssemblyResolution,
+  type AssemblyResolutionLine,
+} from './assembly.js'

@@ -32,6 +32,7 @@ export type OfflineMutationKind =
   | 'clock_in'
   | 'clock_out'
   | 'clock_void'
+  | 'clock_event_photo_upload'
   | 'daily_log_patch'
   | 'daily_log_submit'
   | 'daily_log_photo_upload'
@@ -57,6 +58,83 @@ export interface OfflineMutation {
   /** Last error message captured during a failed replay attempt. */
   last_error?: string | null
   attempt_count: number
+}
+
+/**
+ * Thrown by enqueueOfflineMutation when the payload structure violates the
+ * kind's contract — most commonly a File/Blob in a slot that isn't allowed
+ * for that kind. IndexedDB stores Blobs natively, but if a future change
+ * pipes payloads through `JSON.stringify` (Sentry breadcrumbs, network
+ * tracing, replay re-serialization) the Blob is silently lost and the
+ * replayed request 400s. Catch the foot-gun at enqueue time instead.
+ */
+export class OfflineQueuePayloadError extends Error {
+  constructor(
+    readonly kind: OfflineMutationKind,
+    readonly path: string,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'OfflineQueuePayloadError'
+  }
+}
+
+/**
+ * Per-kind contract: which top-level slots may legally hold a File/Blob.
+ * Anything else with a Blob value (including nested) is rejected. Kinds
+ * that don't carry binary data list an empty set.
+ */
+const BLOB_SLOTS: Record<OfflineMutationKind, readonly string[]> = {
+  clock_in: [],
+  clock_out: [],
+  clock_void: [],
+  clock_event_photo_upload: ['file'],
+  daily_log_patch: [],
+  daily_log_submit: [],
+  daily_log_photo_upload: ['file'],
+  daily_log_photo_delete: [],
+  time_review_event: [],
+  notification_pref_save: [],
+}
+
+function isBlobLike(value: unknown): value is Blob {
+  // File extends Blob; either is structured-cloneable into IndexedDB.
+  return typeof Blob !== 'undefined' && value instanceof Blob
+}
+
+/**
+ * Walk the payload and reject any Blob/File that doesn't live at a slot
+ * allow-listed for this kind. Returns silently when the structure is fine.
+ *
+ * Allowed Blob slots are always top-level (the replay handler reads them
+ * via `row.payload.<slot>`); nested Blobs are a sign of misuse and are
+ * rejected outright.
+ */
+function validatePayloadBlobs(kind: OfflineMutationKind, payload: Record<string, unknown>): void {
+  const allowed = new Set(BLOB_SLOTS[kind] ?? [])
+  function walk(value: unknown, path: string): void {
+    if (isBlobLike(value)) {
+      // Top-level blob in an allowed slot is fine.
+      const isTopLevelAllowed = !path.includes('.') && allowed.has(path)
+      if (isTopLevelAllowed) return
+      throw new OfflineQueuePayloadError(
+        kind,
+        path,
+        `offline kind ${kind} does not accept a Blob/File at ${path}`,
+      )
+    }
+    if (value === null || typeof value !== 'object') return
+    if (Array.isArray(value)) {
+      value.forEach((v, i) => walk(v, `${path}[${i}]`))
+      return
+    }
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      walk(v, path ? `${path}.${k}` : k)
+    }
+  }
+  for (const [k, v] of Object.entries(payload)) {
+    walk(v, k)
+  }
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null
@@ -93,6 +171,7 @@ export async function enqueueOfflineMutation(
   kind: OfflineMutationKind,
   payload: Record<string, unknown>,
 ): Promise<OfflineMutation> {
+  validatePayloadBlobs(kind, payload)
   const db = await openDb()
   const mutation: OfflineMutation = {
     id: nextMutationId(),

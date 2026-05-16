@@ -319,6 +319,34 @@ Until the smoke is run with real credentials, the live flags should
 stay unset. The first customer's first billing run is currently the
 first live test if you skip the smoke — don't.
 
+### QBO circuit breaker + retry cap (post-2026-05-16)
+
+The worker wraps every QBO push (`rental_billing`, `estimate_push`,
+`labor_payroll`) with a shared circuit breaker keyed `qbo`. Behavior:
+
+- `QBO_CIRCUIT_THRESHOLD` (default `3`) consecutive 5xx or network
+  errors open the circuit.
+- `QBO_CIRCUIT_COOLDOWN_MS` (default `300000` = 5 min) is how long the
+  circuit stays open before half-opening (next call passes through).
+- While open, every QBO push throws `CircuitOpenError` immediately
+  (without calling Intuit). The worker logs a single info-level line
+  per drain pass and bumps `next_attempt_at` on the pending QBO outbox
+  rows so they don't claim-and-fail every heartbeat.
+- On open: one Sentry warning is sent (tags
+  `scope:circuit_breaker integration:qbo`). On close (after a
+  successful push), one info log line.
+
+The retry cap is `MUTATION_MAX_RETRIES` (default `10`). At the start of
+every heartbeat the worker runs `deadLetterStaleOutbox()` which marks
+any `mutation_outbox` row whose `attempt_count >= MUTATION_MAX_RETRIES`
+as `status='dead'`. Dead rows are visible via
+`/api/system/mutation-outbox?status=dead` and are never re-claimed.
+Investigate before tweaking the cap — the row is usually broken.
+
+To force-close the breaker mid-incident: restart the worker (state is
+in-memory). To inspect: the breaker exposes a `.snapshot('qbo')`
+helper, surfaced indirectly via Sentry alerts.
+
 ## Pilot-readiness checklist
 
 Before the first paying customer is on prod:

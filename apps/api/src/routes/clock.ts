@@ -4,6 +4,8 @@ import { haversineDistanceMeters, isInsideGeofence } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid, parseOptionalNumber } from '../http-utils.js'
+import { parseClockEventPhotoMultipart, ClockEventPhotoUploadError } from '../clock-event-photo-upload.js'
+import type { BlueprintStorage } from '../storage.js'
 
 export type ClockRouteCtx = {
   pool: Pool
@@ -16,6 +18,10 @@ export type ClockRouteCtx = {
   requireRole: (allowed: readonly string[]) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
+  /** Shared blueprint storage instance — also serves clock-event photos under a clock-events/ prefix. */
+  storage: BlueprintStorage
+  /** Cap on photo size; falls back to the daily-log photo cap. */
+  maxPhotoBytes: number
 }
 
 /** Sources of a clock event — see migration 029_geofence_policy.sql. */
@@ -576,6 +582,95 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     )
     if (!updated.rows[0]) {
       ctx.sendJson(409, { error: 'clock event already voided' })
+      return true
+    }
+    ctx.sendJson(200, { clockEvent: updated.rows[0] })
+    return true
+  }
+
+  // POST /api/clock/events/:id/photo — attach a verification photo.
+  // Multipart with field `file`. Sets photo_storage_path +
+  // photo_uploaded_at; flips photo_verification_status to 'pending' so
+  // the foreman/office review queue surfaces it.
+  const photoMatch = url.pathname.match(/^\/api\/clock\/events\/([^/]+)\/photo$/)
+  if (req.method === 'POST' && photoMatch) {
+    const id = photoMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const exists = await ctx.pool.query<{ id: string; voided_at: string | null }>(
+      `select id, voided_at from clock_events where company_id = $1 and id = $2 limit 1`,
+      [ctx.company.id, id],
+    )
+    if (!exists.rows[0]) {
+      ctx.sendJson(404, { error: 'clock event not found' })
+      return true
+    }
+    if (exists.rows[0].voided_at) {
+      ctx.sendJson(409, { error: 'clock event already voided' })
+      return true
+    }
+
+    let upload
+    try {
+      upload = await parseClockEventPhotoMultipart(req, ctx.storage, ctx.company.id, id, {
+        maxFileBytes: ctx.maxPhotoBytes,
+      })
+    } catch (err) {
+      if (err instanceof ClockEventPhotoUploadError) {
+        ctx.sendJson(err.status, { error: err.message })
+        return true
+      }
+      throw err
+    }
+
+    const updated = await ctx.pool.query(
+      `update clock_events
+         set photo_storage_path = $3,
+             photo_uploaded_at = now(),
+             photo_verification_status = 'pending'
+       where company_id = $1 and id = $2
+       returning id, company_id, worker_id, project_id, clerk_user_id,
+                 event_type, occurred_at, lat, lng, accuracy_m,
+                 inside_geofence, notes, source, correctible_until,
+                 voided_at, voided_by, photo_storage_path,
+                 photo_uploaded_at, photo_verified_at, photo_verified_by,
+                 photo_verification_status, created_at`,
+      [ctx.company.id, id, upload.storagePath],
+    )
+    ctx.sendJson(200, { clockEvent: updated.rows[0] })
+    return true
+  }
+
+  // PATCH /api/clock/events/:id/photo — foreman/office review. Sets
+  // photo_verification_status to approved/rejected + stamps the
+  // reviewer. Body: { status: 'approved'|'rejected', note?: string }.
+  const reviewMatch = url.pathname.match(/^\/api\/clock\/events\/([^/]+)\/photo$/)
+  if (req.method === 'PATCH' && reviewMatch) {
+    const id = reviewMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const status = body.status === 'approved' || body.status === 'rejected' ? body.status : null
+    if (!status) {
+      ctx.sendJson(400, { error: 'status must be "approved" or "rejected"' })
+      return true
+    }
+    const updated = await ctx.pool.query<{ id: string; photo_verification_status: string | null }>(
+      `update clock_events
+         set photo_verification_status = $3,
+             photo_verified_at = now(),
+             photo_verified_by = $4
+       where company_id = $1 and id = $2 and photo_storage_path is not null
+       returning id, photo_verification_status, photo_verified_at, photo_verified_by`,
+      [ctx.company.id, id, status, ctx.currentUserId],
+    )
+    if (!updated.rows[0]) {
+      ctx.sendJson(404, { error: 'clock event has no photo to review' })
       return true
     }
     ctx.sendJson(200, { clockEvent: updated.rows[0] })

@@ -3,9 +3,9 @@
  * its own module so route extractions don't have to circular-import
  * server.ts.
  */
-export type CompanyRole = 'admin' | 'foreman' | 'office' | 'member'
+export type CompanyRole = 'admin' | 'foreman' | 'office' | 'member' | 'bookkeeper'
 
-export const COMPANY_ROLES: readonly CompanyRole[] = ['admin', 'foreman', 'office', 'member']
+export const COMPANY_ROLES: readonly CompanyRole[] = ['admin', 'foreman', 'office', 'member', 'bookkeeper']
 
 // 'office' is retained in the union (and in `requireRole(['admin', 'office'])`
 // allow-lists across the route modules) but normalizes to 'admin' on read —

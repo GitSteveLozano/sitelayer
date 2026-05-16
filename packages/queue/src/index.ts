@@ -12,6 +12,42 @@ export {
 export { recordLedger, type RecordLedgerArgs, type LedgerTraceContext } from './ledger.js'
 
 export {
+  CircuitBreaker,
+  CircuitOpenError,
+  DEFAULT_CIRCUIT_BREAKER_CONFIG,
+  isTrippingError,
+  withCircuitBreaker,
+  type CircuitBreakerConfig,
+} from './circuit-breaker.js'
+
+/**
+ * Mark outbox rows whose attempt_count has reached the retry cap as
+ * 'dead'. Run once per heartbeat at the start of the drain so a stuck
+ * row never gets re-claimed. Returns the number of rows dead-lettered.
+ *
+ * Pairs with the MUTATION_MAX_RETRIES env knob in worker.ts.
+ */
+export async function deadLetterStaleOutbox(
+  client: QueueClient,
+  companyId: string,
+  maxRetries: number,
+): Promise<number> {
+  const result = await client.query<{ count: number }>(
+    `with d as (
+       update mutation_outbox
+         set status = 'dead', applied_at = now()
+         where company_id = $1
+           and status in ('pending', 'processing')
+           and attempt_count >= $2
+         returning 1
+     )
+     select count(*)::int as count from d`,
+    [companyId, maxRetries],
+  )
+  return result.rows[0]?.count ?? 0
+}
+
+export {
   processLockLaborEntries,
   type LockLaborEntriesAction,
   type LockLaborEntriesPayload,

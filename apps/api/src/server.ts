@@ -13,6 +13,7 @@ import { dispatch } from './routes/dispatch.js'
 import { handlePublicRoutes } from './routes/public.js'
 import { handlePublicEstimateShareRoutes } from './routes/estimate-shares.js'
 import { handlePortalRentalRoutes } from './routes/portal-rentals.js'
+import { handlePublicPortalRoutes } from './routes/portal-public.js'
 import {
   CORS_ALLOW_HEADERS,
   HttpError,
@@ -533,6 +534,12 @@ const server = http.createServer(async (req, res) => {
             })
             if (portalRentalHandled) return
 
+            const publicPortalHandled = await handlePublicPortalRoutes(req, url, {
+              pool,
+              sendJson: (status, body) => sendJson(res, status, body, req),
+            })
+            if (publicPortalHandled) return
+
             const PUBLIC_PATHS = new Set(['/api/integrations/qbo/callback', '/api/webhooks/clerk', '/api/webhooks/qbo'])
             const isPublicPath = PUBLIC_PATHS.has(url.pathname)
             let identity: Identity
@@ -618,6 +625,13 @@ const server = http.createServer(async (req, res) => {
               })
               return
             }
+
+            // Bind the resolved company id into the AsyncLocalStorage request
+            // context. mutation-tx.ts reads this to `SET LOCAL app.company_id`
+            // on every withMutationTx() and withCompanyClient() tx, which the
+            // RLS policies created by migration 066 use to scope rows.
+            requestContext.companyId = company.id
+            scope.setTag('company_id', company.id)
 
             // Post-auth route cascade (system + entity routes + debug trace).
             // Order matches the pre-extraction inline cascade so behaviour is

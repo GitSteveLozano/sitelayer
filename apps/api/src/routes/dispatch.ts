@@ -27,6 +27,13 @@ import { handlePushSubscriptionRoutes } from './push-subscriptions.js'
 import { handleQboMappingRoutes } from './qbo-mappings.js'
 import { handleQboRoutes, type IntegrationMappingRow } from './qbo.js'
 import { handleRentalInventoryRoutes } from './rental-inventory.js'
+import { handleScaffoldOpsRoutes } from './scaffold-ops.js'
+import { handleScaffoldTagRoutes } from './scaffold-tags.js'
+import { handleDamageChargeRoutes } from './damage-charges.js'
+import { handleShipmentRoutes } from './shipments.js'
+import { handlePayrollExportRoutes } from './payroll-exports.js'
+import { handleCustomerPortalRoutes } from './customer-portal-links.js'
+import { handleCompanyCamRoutes } from './companycam.js'
 import { handleRentalRequestRoutes } from './rental-requests.js'
 import { handleRentalRoutes } from './rentals.js'
 import { handleScheduleRoutes } from './schedules.js'
@@ -546,6 +553,105 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     return true
   }
 
+  // Branches, cross-hire, scaffold catalog + BOM bridge
+  if (
+    await handleScaffoldOpsRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // QR scaffold tags + inspections
+  if (
+    await handleScaffoldTagRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Damage / loss / late-return billing
+  if (
+    await handleDamageChargeRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Shipments: estimate-to-fulfillment workflow
+  if (
+    await handleShipmentRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // Payroll exports: XLSX / Xero / Payworks
+  if (
+    await handlePayrollExportRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+      res: ctx.res,
+    })
+  ) {
+    return true
+  }
+
+  // Customer portal links
+  if (
+    await handleCustomerPortalRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
+  // CompanyCam one-way photo mirror
+  if (
+    await handleCompanyCamRoutes(req, url, {
+      pool,
+      company,
+      currentUserId: ctx.getCurrentUserId(),
+      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
+      readBody,
+      sendJson,
+    })
+  ) {
+    return true
+  }
+
   // Avontus-style rentals
   if (
     await handleRentalRoutes(req, url, {
@@ -629,6 +735,9 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
       readBody,
       sendJson,
+      storage: ctx.storage,
+      // Reuse the blueprint upload cap until ops asks for a separate knob.
+      maxPhotoBytes: ctx.maxBlueprintUploadBytes,
     })
   ) {
     return true

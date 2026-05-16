@@ -2,7 +2,7 @@
 // Wraps the routes in apps/api/src/routes/clock.ts.
 
 import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query'
-import { request } from './client'
+import { API_URL, ApiError, buildAuthHeaders, request } from './client'
 import { queryKeys } from './keys'
 
 export type ClockEventType = 'in' | 'out' | 'auto_out_geo' | 'auto_out_idle'
@@ -97,6 +97,47 @@ export function fetchClockTimeline(params: ClockTimelineParams = {}): Promise<Cl
   if (params.date) search.set('date', params.date)
   const qs = search.toString()
   return request<ClockTimelineResponse>(`/api/clock/timeline${qs ? `?${qs}` : ''}`)
+}
+
+export interface ClockEventPhotoUploadResponse {
+  clockEvent: ClockEvent
+}
+
+/**
+ * Upload a verification photo for a clock event (in or out). Mirrors
+ * the multipart pattern used by `uploadDailyLogPhoto` — FormData body,
+ * standard auth headers from buildAuthHeaders, browser sets the
+ * multipart boundary.
+ *
+ * Sets `clock_events.photo_storage_path` and flips
+ * `photo_verification_status` to `'pending'`; foremen/office review
+ * via the photo verification queue (see migration 068).
+ */
+export async function uploadClockEventPhoto(
+  clockEventId: string,
+  file: File,
+): Promise<ClockEventPhotoUploadResponse> {
+  const form = new FormData()
+  form.append('file', file, file.name || 'clock-photo.jpg')
+  const headers = await buildAuthHeaders()
+  const path = `/api/clock/events/${encodeURIComponent(clockEventId)}/photo`
+  const response = await fetch(`${API_URL}${path}`, {
+    method: 'POST',
+    headers,
+    body: form,
+  })
+  if (!response.ok) {
+    const requestId = response.headers.get('x-request-id')
+    let body: unknown
+    try {
+      const ct = response.headers.get('content-type') ?? ''
+      body = ct.includes('application/json') ? await response.json() : await response.text()
+    } catch {
+      body = null
+    }
+    throw new ApiError({ status: response.status, path, method: 'POST', requestId, body })
+  }
+  return (await response.json()) as ClockEventPhotoUploadResponse
 }
 
 export function voidClockEvent(id: string, input: ClockEventVoidRequest = {}): Promise<ClockEventVoidResponse> {

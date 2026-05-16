@@ -22,6 +22,7 @@ const ROLE_LABEL: Record<Role, string> = {
   owner: 'Owner / PM',
   foreman: 'Foreman',
   worker: 'Worker',
+  bookkeeper: 'Bookkeeper',
 }
 
 /**

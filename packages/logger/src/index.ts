@@ -4,6 +4,7 @@ import pino, { type Logger, type LoggerOptions } from 'pino'
 export interface RequestContext {
   requestId: string
   companySlug?: string
+  companyId?: string
   userId?: string
   actorUserId?: string
   actorRole?: string

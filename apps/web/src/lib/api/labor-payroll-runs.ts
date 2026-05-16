@@ -154,3 +154,55 @@ export function useDispatchLaborPayrollRunEvent(id: string) {
     },
   })
 }
+
+// ---- payroll exports -------------------------------------------------------
+
+export type PayrollExportFormat = 'xlsx' | 'csv' | 'xero_csv' | 'payworks_csv' | 'json'
+
+export interface PayrollExportRow {
+  id: string
+  company_id: string
+  payroll_run_id: string
+  format: PayrollExportFormat
+  storage_path: string | null
+  download_url: string | null
+  presigned_expires_at: string | null
+  byte_size: number | null
+  row_count: number | null
+  status: 'pending' | 'ready' | 'failed' | 'expired'
+  error: string | null
+  requested_by_user_id: string | null
+  requested_at: string
+  completed_at: string | null
+}
+
+export function usePayrollExports(runId: string) {
+  return useQuery<{ exports: PayrollExportRow[] }>({
+    queryKey: ['labor-payroll-runs', 'exports', runId],
+    enabled: !!runId,
+    queryFn: () =>
+      request<{ exports: PayrollExportRow[] }>(`/api/labor-payroll-runs/${encodeURIComponent(runId)}/exports`),
+  })
+}
+
+export function useRequestPayrollExport(runId: string) {
+  const qc = useQueryClient()
+  return useMutation<PayrollExportRow, Error, { format: PayrollExportFormat }>({
+    mutationFn: (input) =>
+      request<PayrollExportRow>(`/api/labor-payroll-runs/${encodeURIComponent(runId)}/exports`, {
+        method: 'POST',
+        json: input,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['labor-payroll-runs', 'exports', runId] }),
+  })
+}
+
+/**
+ * Build the URL the browser should navigate to for a payroll export
+ * download. The endpoint streams the rendered bytes back; callers should
+ * window.open() this rather than fetching, so the browser handles
+ * Content-Disposition naturally.
+ */
+export function payrollExportDownloadUrl(runId: string, exportId: string): string {
+  return `/api/labor-payroll-runs/${encodeURIComponent(runId)}/exports/${encodeURIComponent(exportId)}/download`
+}
