@@ -42,6 +42,77 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
     return true
   }
 
+  const modulesMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/modules$/)
+  if (req.method === 'GET' && modulesMatch) {
+    const companyId = modulesMatch[1]!
+    const member = await pool.query<{ role: string }>(
+      'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+      [companyId, userId],
+    )
+    if (!member.rows[0]) {
+      sendJson(403, { error: 'not a member of this company' })
+      return true
+    }
+    const result = await pool.query<{ modules: Record<string, boolean>; portal_settings: Record<string, boolean> }>(
+      'select modules, portal_settings from companies where id = $1 limit 1',
+      [companyId],
+    )
+    if (!result.rows[0]) {
+      sendJson(404, { error: 'company not found' })
+      return true
+    }
+    sendJson(200, { modules: result.rows[0].modules, portal_settings: result.rows[0].portal_settings })
+    return true
+  }
+  if (req.method === 'PATCH' && modulesMatch) {
+    const companyId = modulesMatch[1]!
+    const adminCheck = await pool.query<{ role: string }>(
+      'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+      [companyId, userId],
+    )
+    if (!adminCheck.rows[0] || adminCheck.rows[0].role !== 'admin') {
+      sendJson(403, { error: 'admin role required' })
+      return true
+    }
+    const body = await readBody()
+    const modulesPatch =
+      body.modules && typeof body.modules === 'object' ? (body.modules as Record<string, unknown>) : null
+    const portalPatch =
+      body.portal_settings && typeof body.portal_settings === 'object'
+        ? (body.portal_settings as Record<string, unknown>)
+        : null
+    if (!modulesPatch && !portalPatch) {
+      sendJson(400, { error: 'modules or portal_settings is required' })
+      return true
+    }
+    const updated = await pool.query<{ modules: Record<string, boolean>; portal_settings: Record<string, boolean> }>(
+      `
+      update companies
+      set
+        modules = case when $2::jsonb is null then modules else modules || $2::jsonb end,
+        portal_settings = case when $3::jsonb is null then portal_settings else portal_settings || $3::jsonb end
+      where id = $1
+      returning modules, portal_settings
+      `,
+      [companyId, modulesPatch ? JSON.stringify(modulesPatch) : null, portalPatch ? JSON.stringify(portalPatch) : null],
+    )
+    if (!updated.rows[0]) {
+      sendJson(404, { error: 'company not found' })
+      return true
+    }
+    await recordAudit(pool, {
+      companyId,
+      actorUserId: userId,
+      entityType: 'company_modules',
+      entityId: companyId,
+      action: 'update',
+      after: updated.rows[0],
+    })
+    observeAudit('company_modules', 'update')
+    sendJson(200, { modules: updated.rows[0].modules, portal_settings: updated.rows[0].portal_settings })
+    return true
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/companies') {
     const body = await readBody()
     const slug = String(body.slug ?? '')
@@ -118,8 +189,8 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       sendJson(400, { error: 'clerk_user_id is required' })
       return true
     }
-    if (!['admin', 'member', 'foreman', 'office'].includes(role)) {
-      sendJson(400, { error: 'role must be admin, member, foreman, or office' })
+    if (!['admin', 'member', 'foreman', 'office', 'bookkeeper'].includes(role)) {
+      sendJson(400, { error: 'role must be admin, member, foreman, office, or bookkeeper' })
       return true
     }
     const inserted = await pool.query<{

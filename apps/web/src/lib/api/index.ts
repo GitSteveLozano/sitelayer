@@ -295,13 +295,20 @@ export {
 } from './issues'
 
 export {
+  useCompanyModules,
   useCreateCompany,
   useInviteMember,
+  usePatchCompanyModules,
   type Company,
+  type CompanyModules,
+  type CompanyModulesResponse,
+  type CompanyPortalSettings,
   type CreateCompanyRequest,
   type CreateCompanyResponse,
   type CreateMembershipRequest,
 } from './companies'
+
+export { useActiveCompanyId, useActiveCompanyModules } from './active-company'
 
 export {
   fetchSchedules,

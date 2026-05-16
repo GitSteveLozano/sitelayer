@@ -1,16 +1,48 @@
 import { Link } from 'react-router-dom'
 import { Card } from '@/components/mobile'
-import { useInventoryItems, useInventoryLocations } from '@/lib/api'
+import { useActiveCompanyModules, useInventoryItems, useInventoryLocations } from '@/lib/api'
+import type { CompanyModules } from '@/lib/api'
 
-const ENTRIES: ReadonlyArray<{ to: string; label: string; detail: string }> = [
+type Entry = {
+  to: string
+  label: string
+  detail: string
+  /** Module flag the entry requires; omitted entries are always visible. */
+  requires?: keyof CompanyModules
+}
+
+const ENTRIES: ReadonlyArray<Entry> = [
   { to: 'items', label: 'Items', detail: 'Catalog of rentable assets — code, rate, replacement value.' },
   { to: 'locations', label: 'Locations', detail: 'Yards, vendor pickup points, project-tied storage.' },
+  { to: 'branches', label: 'Branches', detail: 'Branch / yard / staging hierarchy locations roll up into.' },
   { to: 'movements', label: 'Movements', detail: 'Deliver / return / transfer ledger.' },
+  {
+    to: 'scaffold-catalog',
+    label: 'Scaffold catalog',
+    detail: 'Manufacturers, systems, and per-part scaffold catalog.',
+    requires: 'scaffold_bom',
+  },
+  {
+    to: 'damage-charges',
+    label: 'Damage charges',
+    detail: 'Per-project damage / loss / late-return queue.',
+    requires: 'rental_ops',
+  },
 ]
 
 export function InventoryAdminHubScreen() {
   const items = useInventoryItems()
   const locations = useInventoryLocations()
+  const moduleFlags = useActiveCompanyModules()?.modules
+
+  const visibleEntries = ENTRIES.filter((e) => {
+    if (!e.requires) return true
+    // While modules are still loading, default to visible so admins don't
+    // see a flickering empty hub. The route is hard-gated server-side via
+    // requireRole + module-aware UI gates layered below as needed.
+    if (!moduleFlags) return true
+    return moduleFlags[e.requires]
+  })
 
   return (
     <div className="px-5 pt-6 pb-12 max-w-2xl">
@@ -26,7 +58,7 @@ export function InventoryAdminHubScreen() {
       </p>
 
       <div className="mt-6 space-y-3">
-        {ENTRIES.map((e) => (
+        {visibleEntries.map((e) => (
           <Link key={e.to} to={e.to} className="block">
             <Card>
               <div className="flex items-center justify-between gap-3">

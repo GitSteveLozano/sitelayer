@@ -2,6 +2,9 @@ import { Sentry } from './instrument.js'
 import { loadAppConfig, postgresOptionsForTier, TierConfigError } from '@sitelayer/config'
 import { createLogger } from '@sitelayer/logger'
 import {
+  CircuitBreaker,
+  CircuitOpenError,
+  deadLetterStaleOutbox,
   fetchDueRentals,
   processEstimatePush,
   processLockLaborEntries,
@@ -9,6 +12,7 @@ import {
   processRentalBillingInvoicePush,
   processRentalInvoice,
   recordLedger,
+  withCircuitBreaker,
   type EstimatePushFn,
   type EstimatePushSummary,
   type LockLaborEntriesSummary,
@@ -19,6 +23,8 @@ import { Pool, type PoolClient, type PoolConfig } from 'pg'
 import { spanForAppliedRow } from './trace.js'
 import { loadEmailConfig, sendEmail } from './email.js'
 import { createQboRentalInvoicePush } from './qbo-invoice-push.js'
+import { processDamageChargeInvoicePush } from './damage-charge-push.js'
+import { drainCompanyCamPolls } from './companycam-poll.js'
 import { createQboEstimatePush } from './qbo-estimate-push.js'
 import { createClerkClient } from '@clerk/backend'
 import { clerkUserFetcherFromClient, createClerkResolver, type ClerkResolver } from './clerk-hydrate.js'
@@ -31,6 +37,7 @@ import {
   selectLaborPayrollPush,
 } from './labor-payroll-push.js'
 import { processFieldEventNotifications } from './field-event-notifier.js'
+import { processFieldEventAutoEscalation, DEFAULT_AUTO_ESCALATE_CONFIG } from './field-event-escalation.js'
 import {
   ConsoleChannel,
   DefaultNotificationDispatcher,
@@ -395,14 +402,43 @@ async function drainNotifications(limit = notificationBatchLimit): Promise<{
 // queries integration_connections + integration_mappings via the same tx
 // client, POSTs /invoice to QBO, and returns the new Invoice.Id. See
 // apps/worker/src/qbo-invoice-push.ts.
+// QBO circuit breaker. Three consecutive 5xx (or network) failures on any
+// QBO push open the circuit for QBO_CIRCUIT_COOLDOWN_MS (default 5 min);
+// while open, push wrappers throw CircuitOpenError immediately and the
+// worker defers the row's next_attempt_at instead of incrementing
+// attempt_count. One success closes the circuit.
+const qboCircuitThreshold = Number(process.env.QBO_CIRCUIT_THRESHOLD ?? 3)
+const qboCircuitCooldownMs = Number(process.env.QBO_CIRCUIT_COOLDOWN_MS ?? 5 * 60_000)
+const qboCircuit = new CircuitBreaker({
+  threshold: qboCircuitThreshold,
+  cooldownMs: qboCircuitCooldownMs,
+  onOpen: (key, info) => {
+    logger.warn({ key, ...info }, '[circuit-breaker] open — halting QBO drain')
+    Sentry.captureMessage(`circuit breaker open: ${key}`, {
+      level: 'warning',
+      tags: { scope: 'circuit_breaker', integration: key },
+      extra: { failureCount: info.failureCount, lastError: info.lastError },
+    })
+  },
+  onClose: (key) => {
+    logger.info({ key }, '[circuit-breaker] closed — resuming drain')
+  },
+})
+
+// Drop outbox rows once attempt_count crosses this cap. Prevents a permanently
+// broken row (bad payload, dead idempotency target) from hammering QBO forever.
+const mutationMaxRetries = Number(process.env.MUTATION_MAX_RETRIES ?? 10)
+
 const stubRentalBillingInvoicePush: RentalBillingInvoicePushFn = async ({ runId }) => {
   return { qbo_invoice_id: `STUB-INV-${runId.slice(0, 8)}-${Date.now()}` }
 }
 
 const liveRentalBillingInvoicePushEnabled = process.env.QBO_LIVE_RENTAL_INVOICE === '1'
-const rentalBillingInvoicePush: RentalBillingInvoicePushFn = liveRentalBillingInvoicePushEnabled
+const rentalBillingInvoiceBasePush: RentalBillingInvoicePushFn = liveRentalBillingInvoicePushEnabled
   ? createQboRentalInvoicePush()
   : stubRentalBillingInvoicePush
+const rentalBillingInvoicePush: RentalBillingInvoicePushFn = (input) =>
+  withCircuitBreaker(qboCircuit, 'qbo', () => rentalBillingInvoiceBasePush(input))
 
 if (liveRentalBillingInvoicePushEnabled) {
   logger.info('[rental-billing] live QBO invoice push enabled')
@@ -428,7 +464,8 @@ const stubEstimatePush: EstimatePushFn = async ({ pushId }) => {
 }
 
 const liveEstimatePushEnabled = process.env.QBO_LIVE_ESTIMATE_PUSH === '1'
-const estimatePush: EstimatePushFn = liveEstimatePushEnabled ? createQboEstimatePush() : stubEstimatePush
+const estimatePushBase: EstimatePushFn = liveEstimatePushEnabled ? createQboEstimatePush() : stubEstimatePush
+const estimatePush: EstimatePushFn = (input) => withCircuitBreaker(qboCircuit, 'qbo', () => estimatePushBase(input))
 
 if (liveEstimatePushEnabled) {
   logger.info('[estimate-push] live QBO estimate push enabled')
@@ -460,7 +497,9 @@ async function drainLockLaborEntries(companyId: string): Promise<LockLaborEntrie
 }
 
 const liveLaborPayrollPushEnabled = process.env.QBO_LIVE_LABOR_PAYROLL === '1'
-const laborPayrollPush = selectLaborPayrollPush()
+const laborPayrollPushBase = selectLaborPayrollPush()
+const laborPayrollPush: typeof laborPayrollPushBase = (input) =>
+  withCircuitBreaker(qboCircuit, 'qbo', () => laborPayrollPushBase(input))
 if (liveLaborPayrollPushEnabled) {
   logger.info('[labor-payroll] live QBO TimeActivity push enabled')
 } else {
@@ -588,6 +627,18 @@ async function drainTakeoffToBid(companyId: string): Promise<AgentDrainSummary> 
   return drainAgentMutations<TakeoffToBidPayload>('takeoff_to_bid', companyId, 'takeoff_to_bid', processTakeoffToBidRun)
 }
 
+async function drainDamageChargeInvoicePushes(companyId: string): Promise<AgentDrainSummary> {
+  return drainAgentMutations<Record<string, unknown>>(
+    'damage_charge_invoice_push',
+    companyId,
+    'damage_charge_invoice_push',
+    async (client, cid, payload) => {
+      await processDamageChargeInvoicePush(client, cid, payload as Parameters<typeof processDamageChargeInvoicePush>[2])
+      return { insightsCreated: 0 }
+    },
+  )
+}
+
 async function drainVoiceToLog(companyId: string): Promise<AgentDrainSummary> {
   return drainAgentMutations<VoiceToLogPayload>('voice_to_log', companyId, 'voice_to_log', processVoiceToLogRun)
 }
@@ -713,6 +764,50 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     return { idle: true }
   }
 
+  // Dead-letter outbox rows whose attempt_count has crossed the retry cap.
+  // Runs before any drain so a broken row never gets re-claimed. Logs the
+  // count when non-zero — operators can investigate via /api/system/mutation-outbox.
+  try {
+    const deadClient = await pool.connect()
+    try {
+      const dead = await deadLetterStaleOutbox(deadClient, companyId, mutationMaxRetries)
+      if (dead > 0) {
+        logger.warn(
+          { company_id: companyId, dead, cap: mutationMaxRetries },
+          '[worker] dead-lettered stale outbox rows',
+        )
+        Sentry.captureMessage('outbox rows dead-lettered', {
+          level: 'warning',
+          tags: { scope: 'mutation_outbox_dead_letter' },
+          extra: { dead, cap: mutationMaxRetries, company_id: companyId },
+        })
+      }
+    } finally {
+      deadClient.release()
+    }
+  } catch (err) {
+    // Dead-letter is best-effort; a transient DB hiccup shouldn't halt the heartbeat.
+    logger.warn({ err }, '[worker] dead-letter sweep failed')
+  }
+
+  // If the QBO circuit is open, defer all pending QBO-bound outbox rows by
+  // the cooldown window. Otherwise their next_attempt_at fires every 5min
+  // and burns failures (and attempt_count) at the breaker.
+  if (qboCircuit.isOpen('qbo')) {
+    try {
+      await pool.query(
+        `update mutation_outbox
+           set next_attempt_at = greatest(next_attempt_at, now() + ($2 || ' milliseconds')::interval)
+           where company_id = $1
+             and mutation_type in ('post_qbo_invoice', 'post_qbo_estimate', 'post_qbo_time_activity')
+             and status in ('pending', 'processing')`,
+        [companyId, String(qboCircuitCooldownMs)],
+      )
+    } catch (err) {
+      logger.warn({ err }, '[worker] failed to defer QBO outbox under open circuit')
+    }
+  }
+
   // Run queue polling and notification draining in parallel. Notifications are
   // company-agnostic (worker pulls across all tenants) so they don't depend on
   // the active company slug.
@@ -742,12 +837,20 @@ async function heartbeat(): Promise<{ idle: boolean }> {
   })
 
   const rentalBillingPushSummary = await drainRentalBillingInvoicePushes(companyId).catch((error) => {
+    if (error instanceof CircuitOpenError) {
+      logger.info({ key: error.key }, '[worker] rental billing push skipped — circuit open')
+      return { processed: 0, posted: 0, failed: 0, skipped: 0 }
+    }
     logger.error({ err: error }, '[worker] rental billing invoice push drain failed')
     Sentry.captureException(error, { tags: { scope: 'rental_billing_invoice_push' } })
     return { processed: 0, posted: 0, failed: 0, skipped: 0 }
   })
 
   const estimatePushSummary = await drainEstimatePushes(companyId).catch((error) => {
+    if (error instanceof CircuitOpenError) {
+      logger.info({ key: error.key }, '[worker] estimate push skipped — circuit open')
+      return { processed: 0, posted: 0, failed: 0, skipped: 0 }
+    }
     logger.error({ err: error }, '[worker] estimate push drain failed')
     Sentry.captureException(error, { tags: { scope: 'estimate_push' } })
     return { processed: 0, posted: 0, failed: 0, skipped: 0 }
@@ -774,10 +877,48 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     Sentry.captureException(error, { tags: { scope: 'field_event_notifications' } })
   })
 
+  // Durable-timer pattern — auto-escalate worker_issues stuck open at
+  // severity='stopped' beyond the configured threshold. Each heartbeat
+  // claims a small batch with FOR UPDATE SKIP LOCKED so it's safe under
+  // multiple worker replicas. The reducer's ESCALATE event is the same
+  // path a foreman would trigger; only the actor id differs.
+  await (async () => {
+    const client = await pool.connect()
+    try {
+      await client.query('begin')
+      const summary = await processFieldEventAutoEscalation(client, companyId, {
+        ...DEFAULT_AUTO_ESCALATE_CONFIG,
+        ageMinutes: Number(process.env.FIELD_EVENT_AUTO_ESCALATE_AGE_MIN ?? DEFAULT_AUTO_ESCALATE_CONFIG.ageMinutes),
+      })
+      await client.query('commit')
+      if (summary.escalated > 0 || summary.failed > 0) {
+        logger.info({ company_id: companyId, ...summary }, '[worker] field-event auto-escalation tick')
+      }
+    } catch (err) {
+      await client.query('rollback').catch(() => undefined)
+      logger.error({ err }, '[worker] field-event auto-escalation failed')
+      Sentry.captureException(err, { tags: { scope: 'field_event_auto_escalation' } })
+    } finally {
+      client.release()
+    }
+  })()
+
   const takeoffToBidSummary = await drainTakeoffToBid(companyId).catch((error) => {
     logger.error({ err: error }, '[worker] takeoff_to_bid drain failed')
     Sentry.captureException(error, { tags: { scope: 'takeoff_to_bid' } })
     return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
+  })
+
+  const damageChargePushSummary = await drainDamageChargeInvoicePushes(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] damage_charge_invoice_push drain failed')
+    Sentry.captureException(error, { tags: { scope: 'damage_charge_invoice_push' } })
+    return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
+  })
+
+  const companyCamSummary = await drainCompanyCamPolls(pool, companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] companycam poll failed')
+    Sentry.captureException(error, { tags: { scope: 'companycam_poll' } })
+    return { processed: 0, imported: 0, skipped: 0, failed: 0 }
   })
 
   const voiceToLogSummary = await drainVoiceToLog(companyId).catch((error) => {
@@ -830,6 +971,11 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         voice_to_log_processed: voiceToLogSummary.processed,
         voice_to_log_insights_created: voiceToLogSummary.insightsCreated,
         voice_to_log_failed: voiceToLogSummary.failed,
+        damage_charge_push_processed: damageChargePushSummary.processed,
+        damage_charge_push_failed: damageChargePushSummary.failed,
+        companycam_processed: companyCamSummary.processed,
+        companycam_imported: companyCamSummary.imported,
+        companycam_failed: companyCamSummary.failed,
         rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
         estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
       },
@@ -845,7 +991,9 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     estimatePushSummary.processed > 0 ||
     lockLaborSummary.processed > 0 ||
     takeoffToBidSummary.processed > 0 ||
-    voiceToLogSummary.processed > 0
+    voiceToLogSummary.processed > 0 ||
+    damageChargePushSummary.processed > 0 ||
+    companyCamSummary.processed > 0
   ) {
     logger.info(
       {
@@ -875,6 +1023,11 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         voice_to_log_processed: voiceToLogSummary.processed,
         voice_to_log_insights_created: voiceToLogSummary.insightsCreated,
         voice_to_log_failed: voiceToLogSummary.failed,
+        damage_charge_push_processed: damageChargePushSummary.processed,
+        damage_charge_push_failed: damageChargePushSummary.failed,
+        companycam_processed: companyCamSummary.processed,
+        companycam_imported: companyCamSummary.imported,
+        companycam_failed: companyCamSummary.failed,
         rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
         estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
       },

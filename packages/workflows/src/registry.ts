@@ -42,10 +42,23 @@ export interface WorkflowDefinition<
   sideEffectTypes: readonly string[]
 }
 
-const REGISTRY = new Map<
-  string,
-  WorkflowDefinition<string, { type: string }, string, { state: string; state_version: number }>
->()
+type AnyDefinition = WorkflowDefinition<string, { type: string }, string, { state: string; state_version: number }>
+
+/**
+ * Registry is keyed by `${name}@${schemaVersion}` so multiple reducer
+ * versions of the same workflow can coexist. Replay tooling uses
+ * `getWorkflow(name, persistedSchemaVersion)` to feed each persisted
+ * event through the reducer that wrote it — bumping a workflow's
+ * schemaVersion no longer breaks the event_log of older entities.
+ *
+ * `getWorkflow(name)` (no version) returns the highest-version
+ * registered reducer, which is the path the API uses for new events.
+ */
+const REGISTRY = new Map<string, AnyDefinition>()
+
+function registryKey(name: string, schemaVersion: number): string {
+  return `${name}@${schemaVersion}`
+}
 
 export function registerWorkflow<
   State extends string,
@@ -55,36 +68,47 @@ export function registerWorkflow<
 >(
   definition: WorkflowDefinition<State, Event, HumanEventType, Snapshot>,
 ): WorkflowDefinition<State, Event, HumanEventType, Snapshot> {
-  if (REGISTRY.has(definition.name)) {
-    const existing = REGISTRY.get(definition.name)!
-    if (existing.schemaVersion !== definition.schemaVersion) {
-      throw new Error(
-        `workflow "${definition.name}" already registered at schema_version=${existing.schemaVersion}; refusing to overwrite with ${definition.schemaVersion}`,
-      )
-    }
+  const key = registryKey(definition.name, definition.schemaVersion)
+  if (REGISTRY.has(key)) {
+    // Same name + same version — idempotent re-import (e.g. hot reload).
     return definition
   }
-  REGISTRY.set(
-    definition.name,
-    definition as unknown as WorkflowDefinition<
-      string,
-      { type: string },
-      string,
-      { state: string; state_version: number }
-    >,
-  )
+  REGISTRY.set(key, definition as unknown as AnyDefinition)
   return definition
 }
 
-export function getWorkflow(
-  name: string,
-): WorkflowDefinition<string, { type: string }, string, { state: string; state_version: number }> | undefined {
-  return REGISTRY.get(name)
+/**
+ * Look up a workflow. With `schemaVersion` omitted, returns the
+ * highest-version registered reducer (canonical "current" path). With
+ * a version supplied, returns the exact match or undefined — replay
+ * tooling and per-entity dispatch use this form.
+ */
+export function getWorkflow(name: string, schemaVersion?: number): AnyDefinition | undefined {
+  if (schemaVersion !== undefined) {
+    return REGISTRY.get(registryKey(name, schemaVersion))
+  }
+  let latest: AnyDefinition | undefined
+  for (const def of REGISTRY.values()) {
+    if (def.name !== name) continue
+    if (!latest || def.schemaVersion > latest.schemaVersion) latest = def
+  }
+  return latest
 }
 
-export function listWorkflows(): ReadonlyArray<
-  WorkflowDefinition<string, { type: string }, string, { state: string; state_version: number }>
-> {
+/**
+ * Reducer-only lookup. Equivalent to `getWorkflow(name, version)?.reduce`
+ * with a typed throw on miss. Useful for replay code that wants a clear
+ * error path when an event log references a reducer that's been deleted.
+ */
+export function getReducerByName(name: string, schemaVersion: number): AnyDefinition['reduce'] {
+  const def = getWorkflow(name, schemaVersion)
+  if (!def) {
+    throw new Error(`no reducer registered for ${name}@${schemaVersion}`)
+  }
+  return def.reduce
+}
+
+export function listWorkflows(): ReadonlyArray<AnyDefinition> {
   return Array.from(REGISTRY.values())
 }
 

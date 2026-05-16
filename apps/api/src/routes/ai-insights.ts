@@ -329,6 +329,59 @@ export async function handleAiInsightRoutes(
     return true
   }
 
+  // AI takeoff suggestion intake.
+  //
+  // External CV pipelines (Auto-Count, Auto-Scale, Auto-Bookmark,
+  // Auto-Takeoff) POST suggestions here; rows land in ai_insights with
+  // kind = auto_count|auto_scale|auto_bookmark|auto_takeoff and the
+  // existing apply/dismiss surface drives the human-in-the-loop review.
+  // The endpoint accepts an array so a pipeline run pushes one batch.
+  const takeoffSuggestionsMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/takeoff\/ai-suggestions$/)
+  if (req.method === 'POST' && takeoffSuggestionsMatch) {
+    if (!ctx.requireRole(['admin', 'office', 'foreman'])) return true
+    const projectId = takeoffSuggestionsMatch[1]!
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project_id must be a valid uuid' })
+      return true
+    }
+    const body = await ctx.readBody()
+    const suggestions = Array.isArray(body.suggestions) ? (body.suggestions as Array<Record<string, unknown>>) : null
+    if (!suggestions || suggestions.length === 0) {
+      ctx.sendJson(400, { error: 'suggestions[] required' })
+      return true
+    }
+    const allowedKinds = new Set(['auto_count', 'auto_scale', 'auto_bookmark', 'auto_takeoff'])
+    const allowedConfidence = new Set(['low', 'med', 'high'])
+    const sourceRunId = typeof body.source_run_id === 'string' ? body.source_run_id : null
+    const producedBy = typeof body.produced_by === 'string' ? body.produced_by : 'takeoff_cv_v1'
+    let inserted = 0
+    await withMutationTx(async (client: PoolClient) => {
+      for (const suggestion of suggestions) {
+        const kind = String(suggestion.kind ?? '').trim()
+        if (!allowedKinds.has(kind)) continue
+        const confidence = allowedConfidence.has(String(suggestion.confidence ?? ''))
+          ? String(suggestion.confidence)
+          : 'med'
+        const attribution =
+          typeof suggestion.attribution === 'string' && suggestion.attribution.trim()
+            ? suggestion.attribution
+            : `${producedBy} on ${projectId}`
+        const payload = suggestion.payload ?? {}
+        const result = await client.query(
+          `insert into ai_insights (
+            company_id, kind, entity_type, entity_id, payload,
+            confidence, attribution, source_run_id, produced_by
+          ) values ($1, $2, 'project', $3, $4::jsonb, $5, $6, $7, $8)
+          returning id`,
+          [ctx.company.id, kind, projectId, JSON.stringify(payload), confidence, attribution, sourceRunId, producedBy],
+        )
+        if (result.rows[0]) inserted += 1
+      }
+    })
+    ctx.sendJson(201, { inserted })
+    return true
+  }
+
   return false
 }
 

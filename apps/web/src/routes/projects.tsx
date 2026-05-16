@@ -6,6 +6,8 @@ import { TakeoffSummaryScreen } from '@/screens/projects/takeoff-summary'
 import { TakeoffDetailScreen } from '@/screens/projects/takeoff-detail'
 import { PhotoMeasureScreen } from '@/screens/projects/photo-measure'
 import { ProjectRentalContractScreen } from '@/screens/inventory-admin'
+import { ProjectSiteMapScreen } from '@/screens/projects/site-map'
+import { ShipmentDetailScreen } from '@/screens/projects/shipment-detail'
 
 /**
  * Projects tab — nested routes under /projects.
@@ -33,6 +35,8 @@ export default function ProjectsRoute() {
       <Route path=":id/takeoff-summary" element={<TakeoffSummaryScreen />} />
       <Route path=":id/photo-measure" element={<PhotoMeasureScreen />} />
       <Route path=":id/rental-contract" element={<ProjectRentalContractScreen />} />
+      <Route path=":projectId/site-map" element={<ProjectSiteMapScreen />} />
+      <Route path=":projectId/shipments/:shipmentId" element={<ShipmentDetailScreen />} />
     </Routes>
   )
 }

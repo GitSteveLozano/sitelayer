@@ -13,10 +13,13 @@ import {
 } from '@/screens/settings'
 import { IntegrationsHubScreen, QboConnectionScreen, QboMappingsScreen } from '@/screens/integrations'
 import {
+  BranchesAdminScreen,
+  DamageChargesAdminScreen,
   InventoryAdminHubScreen,
   InventoryItemsAdminScreen,
   InventoryLocationsAdminScreen,
   InventoryMovementsAdminScreen,
+  ScaffoldCatalogAdminScreen,
 } from '@/screens/inventory-admin'
 
 export default function MoreRoute() {
@@ -37,6 +40,9 @@ export default function MoreRoute() {
       <Route path="inventory/items" element={<InventoryItemsAdminScreen />} />
       <Route path="inventory/locations" element={<InventoryLocationsAdminScreen />} />
       <Route path="inventory/movements" element={<InventoryMovementsAdminScreen />} />
+      <Route path="inventory/branches" element={<BranchesAdminScreen />} />
+      <Route path="inventory/scaffold-catalog" element={<ScaffoldCatalogAdminScreen />} />
+      <Route path="inventory/damage-charges" element={<DamageChargesAdminScreen />} />
       <Route path="bonus-sim" element={<BonusSimulatorScreen />} />
       <Route path="audit" element={<AuditLogScreen />} />
     </Routes>

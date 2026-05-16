@@ -158,9 +158,42 @@ All `applied`, zero `error` populated → green.
 
 ---
 
-## Bulk-onboard script (example — not committed)
+## Bulk-onboard script
 
-For concierge onboarding when you already have the company name + crew list. The script below is an **example, not a committed file** — copy it into a local `onboard-company.sh`, make it executable, and run it. Run from a local machine with `JWT` set to a Sitelayer admin token (issued out-of-band from Clerk dashboard's "Impersonate" or a service-token Clerk JWT).
+For concierge onboarding when you already have the company name + admin Clerk user id, use the committed CLI `scripts/onboard-company.ts`. It runs against the database directly (no API JWT needed), so it works even on a tier where Clerk JWT enforcement is on and you don't have the customer's bearer token.
+
+```bash
+DATABASE_URL=postgres://sitelayer:sitelayer@localhost:5432/sitelayer \
+  npx tsx scripts/onboard-company.ts \
+  --slug acme-construction \
+  --name "ACME Construction Inc" \
+  --admin-user-id user_2abcXYZ \
+  --admin-email taylor@acme.example \
+  --clerk-org-id org_2xyz
+```
+
+What it does (idempotent):
+
+1. Insert `companies` row if the slug is new; otherwise reuse the existing id.
+2. Upsert `company_memberships` for the admin Clerk user id with role `admin`.
+3. Run `seedCompanyDefaults` — the same helper the API uses — to provision LA-template divisions, service items, the default pricing profile, and the default bonus rule. Skip with `--skip-seed` for tests.
+
+Outputs a single-line JSON record (`company_id`, `slug`, `admin_user_id`, optional `clerk_org_id` / `admin_email`, `seeded`) on success, suitable for piping into another tool. Returns non-zero on any failure with rollback applied.
+
+Add additional crew members via the API after onboarding:
+
+```bash
+curl -X POST "$API/api/companies/$COMPANY_ID/memberships" \
+  -H "authorization: Bearer $JWT" \
+  -H "content-type: application/json" \
+  -d '{ "clerk_user_id": "user_2B...", "role": "foreman" }'
+```
+
+QBO is not touched by the CLI — the customer connects their Intuit account in the SPA after sign-in (`GET /api/integrations/qbo/auth`).
+
+## (legacy) Bulk-onboard via HTTP — example, not committed
+
+For reference. The script below is an **example, not a committed file** — copy it into a local `onboard-company.sh`, make it executable, and run it. Run from a local machine with `JWT` set to a Sitelayer admin token (issued out-of-band from Clerk dashboard's "Impersonate" or a service-token Clerk JWT).
 
 ```bash
 #!/usr/bin/env bash

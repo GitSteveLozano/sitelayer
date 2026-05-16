@@ -400,17 +400,31 @@ export async function loadProject(
   return result.rows[0] ?? null
 }
 
+export type RentalRateTierRow = {
+  id: string
+  job_rental_line_id: string
+  rate_unit: string
+  min_days: number
+  max_days: number | null
+  rate: string
+  sort_order: number
+}
+
 export async function loadContractBillingData(
   executor: DbExecutor,
   companyId: string,
   contractId: string,
-): Promise<{ contract: JobRentalContractRow | null; lines: JobRentalLineRow[] }> {
+): Promise<{
+  contract: JobRentalContractRow | null
+  lines: JobRentalLineRow[]
+  tiersByLineId: Map<string, RentalRateTierRow[]>
+}> {
   const contractResult = await executor.query<JobRentalContractRow>(
     `select ${JOB_RENTAL_CONTRACT_COLUMNS} from job_rental_contracts where company_id = $1 and id = $2 and deleted_at is null`,
     [companyId, contractId],
   )
   const contract = contractResult.rows[0] ?? null
-  if (!contract) return { contract: null, lines: [] }
+  if (!contract) return { contract: null, lines: [], tiersByLineId: new Map() }
 
   const lineResult = await executor.query<JobRentalLineRow>(
     `
@@ -422,7 +436,25 @@ export async function loadContractBillingData(
     `,
     [companyId, contractId],
   )
-  return { contract, lines: lineResult.rows }
+
+  const lineIds = lineResult.rows.map((r) => r.id)
+  const tiersByLineId = new Map<string, RentalRateTierRow[]>()
+  if (lineIds.length > 0) {
+    const tierResult = await executor.query<RentalRateTierRow>(
+      `select id, job_rental_line_id, rate_unit, min_days, max_days, rate, sort_order
+       from rental_rate_tiers
+       where company_id = $1 and job_rental_line_id = any($2::uuid[])
+       order by sort_order asc, min_days asc`,
+      [companyId, lineIds],
+    )
+    for (const row of tierResult.rows) {
+      const list = tiersByLineId.get(row.job_rental_line_id) ?? []
+      list.push(row)
+      tiersByLineId.set(row.job_rental_line_id, list)
+    }
+  }
+
+  return { contract, lines: lineResult.rows, tiersByLineId }
 }
 
 export async function selectJobRentalLineById(
@@ -451,7 +483,10 @@ export function toBillingContract(row: JobRentalContractRow): JobRentalContractF
   }
 }
 
-export function toBillingLine(row: JobRentalLineRow): JobRentalLineForBilling {
+export function toBillingLine(
+  row: JobRentalLineRow,
+  tiers: readonly RentalRateTierRow[] = [],
+): JobRentalLineForBilling {
   return {
     id: row.id,
     inventory_item_id: row.inventory_item_id,
@@ -466,6 +501,20 @@ export function toBillingLine(row: JobRentalLineRow): JobRentalLineForBilling {
     billable: row.billable,
     taxable: row.taxable,
     status: row.status,
+    rate_tiers: tiers.map((t) => {
+      const unit = t.rate_unit
+      const normalizedUnit: 'day' | 'cycle' | 'week' | 'month' | 'each' =
+        unit === 'cycle' || unit === 'week' || unit === 'month' || unit === 'each' ? unit : 'day'
+      return {
+        id: t.id,
+        job_rental_line_id: t.job_rental_line_id,
+        rate_unit: normalizedUnit,
+        min_days: t.min_days,
+        max_days: t.max_days,
+        rate: Number(t.rate),
+        sort_order: t.sort_order,
+      }
+    }),
   }
 }
 

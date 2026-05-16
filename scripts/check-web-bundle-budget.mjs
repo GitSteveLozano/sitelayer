@@ -18,8 +18,12 @@ const APPS = {
     // screens ride the m-*.js chunk by convention; only the More tab is
     // lazy. Original 40KB → 44KB bump documented in the design-handoff
     // chore commit. 48KB → 50KB on 2026-05-11 to fit the foreman manual
-    // time-entry form (#303) + PWA onboarding screens (#300).
-    lazyAppChunkGzipBudget: 50 * 1024,
+    // time-entry form (#303) + PWA onboarding screens (#300). 50KB → 56KB
+    // on 2026-05-16 for the audit-follow-up bundle (#316): the headless
+    // workflow factory, offline-queue Blob safety, clock-event photo
+    // upload helper, and the scaffold-catalog + companycam screens that
+    // landed via rebase from main.
+    lazyAppChunkGzipBudget: 56 * 1024,
     nonAppPrefixes: ['vendor-', 'web-vitals-', 'rolldown-runtime-', 'workbox-'],
     requireSentryLazy: false,
   },
