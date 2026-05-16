@@ -1,5 +1,5 @@
 import type http from 'node:http'
-import { withCompanyClient } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { isValidUuid } from '../http-utils.js'
@@ -84,7 +84,7 @@ export async function handleQboCustomFieldRoutes(
       return true
     }
 
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query<FieldRow>(
         `insert into qbo_custom_field_mappings
          (company_id, entity_type, field_name, qbo_definition_id, qbo_label, notes)
@@ -110,7 +110,7 @@ export async function handleQboCustomFieldRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(`delete from qbo_custom_field_mappings where company_id = $1 and id = $2 returning id`, [
         ctx.company.id,
         id,

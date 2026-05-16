@@ -1,5 +1,5 @@
 import type http from 'node:http'
-import { withCompanyClient } from '../mutation-tx.js'
+import { withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { isValidUuid } from '../http-utils.js'
@@ -71,7 +71,7 @@ export async function handlePushSubscriptionRoutes(
       return true
     }
 
-    const upsert = await withCompanyClient(ctx.company.id, (c) =>
+    const upsert = await withMutationTx(ctx.company.id, (c) =>
       c.query<PushSubscriptionRow>(
         `insert into push_subscriptions
          (company_id, clerk_user_id, endpoint, p256dh, auth, user_agent)
@@ -97,7 +97,7 @@ export async function handlePushSubscriptionRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const deleted = await withCompanyClient(ctx.company.id, (c) =>
+    const deleted = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `delete from push_subscriptions
          where company_id = $1 and id = $2 and clerk_user_id = $3

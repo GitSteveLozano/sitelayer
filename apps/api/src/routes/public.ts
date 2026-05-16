@@ -1,5 +1,5 @@
 import type http from 'node:http'
-import { withCompanyClient } from '../mutation-tx.js'
+import { withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import { createLogger } from '@sitelayer/logger'
 import { formatMoney } from '@sitelayer/domain'
@@ -251,7 +251,7 @@ export async function handlePublicRoutes(
       }
       // sync_events insert is scoped to the connection's resolved company.
       // Bind app.company_id explicitly so the row passes RLS once enforced.
-      await withCompanyClient(conn.companyId, (c) =>
+      await withMutationTx(conn.companyId, (c) =>
         c.query(
           `insert into sync_events (
            company_id, integration_connection_id, direction, entity_type, entity_id, payload, status

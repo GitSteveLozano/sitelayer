@@ -262,7 +262,7 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     const occurredAt = new Date().toISOString()
     const correctibleUntil = computeCorrectibleUntil(source, occurredAt, correctionWindowSeconds)
 
-    const inserted = await withCompanyClient(ctx.company.id, (c) =>
+    const inserted = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `
       insert into clock_events (
@@ -414,7 +414,7 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     const occurredAt = new Date().toISOString()
     const correctibleUntil = computeCorrectibleUntil(source, occurredAt, correctionWindowSeconds)
 
-    const inserted = await withCompanyClient(ctx.company.id, (c) =>
+    const inserted = await withMutationTx(ctx.company.id, (c) =>
       c.query<{
         id: string
         worker_id: string | null
@@ -588,7 +588,7 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       }
     }
 
-    const updated = await withCompanyClient(ctx.company.id, (c) =>
+    const updated = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `update clock_events
          set voided_at = now(),
@@ -653,7 +653,7 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       throw err
     }
 
-    const updated = await withCompanyClient(ctx.company.id, (c) =>
+    const updated = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `update clock_events
          set photo_storage_path = $3,
@@ -690,7 +690,7 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       ctx.sendJson(400, { error: 'status must be "approved" or "rejected"' })
       return true
     }
-    const updated = await withCompanyClient(ctx.company.id, (c) =>
+    const updated = await withMutationTx(ctx.company.id, (c) =>
       c.query<{ id: string; photo_verification_status: string | null }>(
         `update clock_events
          set photo_verification_status = $3,

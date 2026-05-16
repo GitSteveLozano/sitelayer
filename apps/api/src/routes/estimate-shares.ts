@@ -341,7 +341,7 @@ export async function handleEstimateShareRoutes(
   if (req.method === 'POST' && revokeMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = revokeMatch[1] ?? ''
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query<EstimateShareRow>(
         `update estimate_share_links
          set expires_at = now(), updated_at = now()
@@ -413,7 +413,7 @@ export async function handlePublicEstimateShareRoutes(
     // the timestamp the first writer just stamped.
     let firstView = false
     if (!row.accepted_at && !row.declined_at) {
-      const updateResult = await withCompanyClient(row.company_id, (c) =>
+      const updateResult = await withMutationTx(row.company_id, (c) =>
         c.query<{ prev_viewed_at: string | null }>(
           `with prev as (
            select viewed_at as prev_viewed_at

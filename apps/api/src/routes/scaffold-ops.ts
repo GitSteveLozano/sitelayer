@@ -126,7 +126,7 @@ export async function handleScaffoldOpsRoutes(
       updates.push(`address = $${params.length}`)
     }
     if (body.is_default !== undefined && body.is_default) {
-      await withCompanyClient(ctx.company.id, (c) =>
+      await withMutationTx(ctx.company.id, (c) =>
         c.query('update branches set is_default = false where company_id = $1', [ctx.company.id]),
       )
       updates.push('is_default = true')
@@ -136,7 +136,7 @@ export async function handleScaffoldOpsRoutes(
       return true
     }
     updates.push('version = version + 1', 'updated_at = now()')
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `update branches set ${updates.join(', ')} where company_id = $1 and id = $2 and deleted_at is null returning ${BRANCH_COLUMNS}`,
         params,
@@ -170,7 +170,7 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'code and name are required' })
       return true
     }
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into rental_vendors (company_id, code, name, contact_email, contact_phone, notes)
        values ($1, $2, $3, $4, $5, $6) returning ${RENTAL_VENDOR_COLUMNS}`,
@@ -217,7 +217,7 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'vendor_id, inventory_item_id, quantity, on_rent_date are required' })
       return true
     }
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into external_rentals (
         company_id, vendor_id, inventory_item_id, project_id, branch_id,
@@ -252,7 +252,7 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'returned_quantity must be a non-negative number' })
       return true
     }
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `update external_rentals
        set returned_quantity = returned_quantity + $3,
@@ -294,7 +294,7 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'code and name are required' })
       return true
     }
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into scaffold_manufacturers (company_id, code, name, website, notes)
        values ($1, $2, $3, $4, $5) returning ${MANUFACTURER_COLUMNS}`,
@@ -327,7 +327,7 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'code and name are required' })
       return true
     }
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into scaffold_systems (company_id, manufacturer_id, code, name, description)
        values ($1, $2, $3, $4, $5) returning ${SYSTEM_COLUMNS}`,
@@ -367,7 +367,7 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'sku and description are required' })
       return true
     }
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into catalog_parts (
         company_id, manufacturer_id, scaffold_system_id, inventory_item_id,
@@ -480,7 +480,7 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'name is required' })
       return true
     }
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into boms (company_id, project_id, source, source_ref, name, notes)
        values ($1, $2, coalesce($3, 'manual'), $4, $5, $6) returning ${BOM_COLUMNS}`,
@@ -565,7 +565,7 @@ export async function handleScaffoldOpsRoutes(
   if (req.method === 'POST' && bomApproveMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = bomApproveMatch[1]!
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `update boms
          set status = 'approved', approved_at = now(), approved_by = $3, version = version + 1, updated_at = now()

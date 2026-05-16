@@ -1,5 +1,5 @@
 import type http from 'node:http'
-import { withCompanyClient } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { renderXlsxSingleSheet, type XlsxCell } from '../xlsx-writer.js'
@@ -80,7 +80,7 @@ export async function handlePayrollExportRoutes(
     }
     // Render is on demand at the download endpoint. The row goes straight
     // to 'ready' so the consumer knows the artifact exists.
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into payroll_exports (company_id, payroll_run_id, format, requested_by_user_id, status, completed_at)
        values ($1, $2, $3, $4, 'ready', now())

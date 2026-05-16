@@ -1,5 +1,5 @@
 import type http from 'node:http'
-import { withCompanyClient } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { getRequestContext } from '@sitelayer/logger'
 import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
@@ -400,7 +400,7 @@ async function createSupportPacket(ctx: SupportPacketRouteCtx) {
   const route = readClientRoute(client)
   const retentionDays = Math.max(1, Math.min(90, Number(process.env.SUPPORT_PACKET_RETENTION_DAYS ?? 30)))
   const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString()
-  const result = await withCompanyClient(ctx.company.id, (c) =>
+  const result = await withMutationTx(ctx.company.id, (c) =>
     c.query<{ id: string; created_at: string; expires_at: string | null }>(
       `insert into support_debug_packets (
        company_id, actor_user_id, request_id, route, build_sha, problem, client, server_context, expires_at, redaction_version

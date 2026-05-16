@@ -1,5 +1,5 @@
 import type http from 'node:http'
-import { withCompanyClient } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import { randomBytes } from 'node:crypto'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
@@ -72,7 +72,7 @@ export async function handleCustomerPortalRoutes(
     }
     const rawAllows = Array.isArray(body.allows) ? (body.allows as unknown[]) : []
     const allows = rawAllows.map((v) => String(v)).filter((v) => ALLOWED_KINDS.has(v))
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into customer_portal_links (
         company_id, customer_id, project_id, portal_token, recipient_email,
@@ -98,7 +98,7 @@ export async function handleCustomerPortalRoutes(
   if (req.method === 'POST' && revokeMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = revokeMatch[1]!
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `update customer_portal_links
          set revoked_at = now(), updated_at = now()

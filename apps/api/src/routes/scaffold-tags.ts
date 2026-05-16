@@ -81,7 +81,7 @@ export async function handleScaffoldTagRoutes(
       return true
     }
     const qrToken = s(body.qr_token) ?? makeToken()
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into scaffold_tags (
         company_id, project_id, qr_token, label, structure_type,

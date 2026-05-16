@@ -78,7 +78,7 @@ export async function handleShipmentRoutes(
     if (!ctx.requireRole(['admin', 'office', 'foreman'])) return true
     const projectId = projectShipmentsMatch[1]!
     const body = await ctx.readBody()
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into shipments (
         company_id, project_id, bom_id, source_branch_id, destination_location_id,

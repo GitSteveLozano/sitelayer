@@ -315,7 +315,7 @@ export async function handleAiInsightRoutes(
     for (const project of stale.rows) {
       const key = `bid_follow_up:${project.id}:${bucket}`
       const draft = composeFollowUpDraft(project)
-      const result = await withCompanyClient(ctx.company.id, (c) =>
+      const result = await withMutationTx(ctx.company.id, (c) =>
         c.query<{ id: string }>(
           `insert into ai_insights
            (company_id, kind, entity_type, entity_id, payload, confidence,

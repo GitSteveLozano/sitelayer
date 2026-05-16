@@ -1,5 +1,5 @@
 import type http from 'node:http'
-import { withCompanyClient } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
@@ -129,7 +129,7 @@ export async function handleNotificationPreferenceRoutes(
       return true
     }
 
-    const upsert = await withCompanyClient(ctx.company.id, (c) =>
+    const upsert = await withMutationTx(ctx.company.id, (c) =>
       c.query<NotificationPreferenceRow>(
         `insert into notification_preferences (
          company_id, clerk_user_id,

@@ -77,7 +77,7 @@ export async function handleDamageChargeRoutes(
     const unitAmount = num(body.unit_amount)
     const totalAmount =
       body.total_amount != null ? num(body.total_amount) : Math.round(quantity * unitAmount * 100) / 100
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into damage_charges (
         company_id, project_id, customer_id, shipment_id, shipment_line_id,
@@ -150,7 +150,7 @@ export async function handleDamageChargeRoutes(
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = waiveMatch[1]!
     const body = await ctx.readBody()
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `update damage_charges
          set status = 'waived', waived_at = now(), waived_by = $3,

@@ -70,7 +70,7 @@ export async function handleCompanyCamRoutes(
       ctx.sendJson(400, { error: 'external_project_id and project_id are required' })
       return true
     }
-    const result = await withCompanyClient(ctx.company.id, (c) =>
+    const result = await withMutationTx(ctx.company.id, (c) =>
       c.query(
         `insert into integration_mappings (
         company_id, provider, entity_type, local_ref, external_id, label, status
