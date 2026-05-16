@@ -408,6 +408,131 @@ export async function handleRentalContractsCrudRoutes(
     return true
   }
 
+  // Rental rate tiers (migration 067). Per-line tiered pricing windows
+  // referenced by `pickRentalTier` during billing-run calculation. Tiers
+  // are append/remove (no PATCH) — callers rebuild rather than mutate to
+  // keep audit trail simple.
+  const tierBaseMatch = url.pathname.match(/^\/api\/rental-contract-lines\/([^/]+)\/rate-tiers$/)
+  if (req.method === 'GET' && tierBaseMatch) {
+    const lineId = tierBaseMatch[1]!
+    const result = await ctx.pool.query<{
+      id: string
+      job_rental_line_id: string
+      rate_unit: string
+      min_days: number
+      max_days: number | null
+      rate: string
+      sort_order: number
+    }>(
+      `select id, job_rental_line_id, rate_unit, min_days, max_days, rate, sort_order
+       from rental_rate_tiers
+       where company_id = $1 and job_rental_line_id = $2
+       order by sort_order asc, min_days asc`,
+      [ctx.company.id, lineId],
+    )
+    ctx.sendJson(200, { rateTiers: result.rows })
+    return true
+  }
+
+  if (req.method === 'POST' && tierBaseMatch) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const lineId = tierBaseMatch[1]!
+    const body = await ctx.readBody()
+    const rateUnit = String(body.rate_unit ?? '').trim()
+    const minDays = Number(body.min_days)
+    const maxDaysRaw = body.max_days
+    const maxDays = maxDaysRaw === null || maxDaysRaw === undefined || maxDaysRaw === '' ? null : Number(maxDaysRaw)
+    const rate = Number(body.rate)
+    const sortOrder = Number(body.sort_order ?? 0)
+
+    if (!['day', 'week', 'month', 'cycle', 'each'].includes(rateUnit)) {
+      ctx.sendJson(400, { error: 'rate_unit must be one of day, week, month, cycle, each' })
+      return true
+    }
+    if (!Number.isFinite(minDays) || minDays < 1) {
+      ctx.sendJson(400, { error: 'min_days must be a positive integer' })
+      return true
+    }
+    if (maxDays !== null && (!Number.isFinite(maxDays) || maxDays < minDays)) {
+      ctx.sendJson(400, { error: 'max_days must be >= min_days or null' })
+      return true
+    }
+    if (!Number.isFinite(rate) || rate < 0) {
+      ctx.sendJson(400, { error: 'rate must be a non-negative number' })
+      return true
+    }
+
+    // Confirm the line belongs to the company before opening the tx.
+    const lineCheck = await ctx.pool.query<{ id: string }>(
+      `select id from job_rental_lines where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+      [ctx.company.id, lineId],
+    )
+    if (!lineCheck.rows[0]) {
+      ctx.sendJson(404, { error: 'rental line not found' })
+      return true
+    }
+
+    const created = await withMutationTx(async (client: PoolClient) => {
+      const result = await client.query<{
+        id: string
+        job_rental_line_id: string
+        rate_unit: string
+        min_days: number
+        max_days: number | null
+        rate: string
+        sort_order: number
+      }>(
+        `insert into rental_rate_tiers
+           (company_id, job_rental_line_id, rate_unit, min_days, max_days, rate, sort_order)
+         values ($1, $2, $3, $4, $5, $6, $7)
+         returning id, job_rental_line_id, rate_unit, min_days, max_days, rate, sort_order`,
+        [ctx.company.id, lineId, rateUnit, minDays, maxDays, rate, sortOrder],
+      )
+      const row = result.rows[0]!
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'rental_rate_tier',
+        entityId: row.id,
+        action: 'create',
+        row,
+      })
+      return row
+    })
+    ctx.sendJson(201, created)
+    return true
+  }
+
+  const tierDeleteMatch = url.pathname.match(/^\/api\/rental-contract-lines\/([^/]+)\/rate-tiers\/([^/]+)$/)
+  if (req.method === 'DELETE' && tierDeleteMatch) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const lineId = tierDeleteMatch[1]!
+    const tierId = tierDeleteMatch[2]!
+    const deleted = await withMutationTx(async (client: PoolClient) => {
+      const result = await client.query<{ id: string }>(
+        `delete from rental_rate_tiers
+         where company_id = $1 and job_rental_line_id = $2 and id = $3
+         returning id`,
+        [ctx.company.id, lineId, tierId],
+      )
+      const row = result.rows[0]
+      if (!row) return null
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'rental_rate_tier',
+        entityId: tierId,
+        action: 'delete',
+        row: { id: tierId, job_rental_line_id: lineId },
+      })
+      return row
+    })
+    if (!deleted) {
+      ctx.sendJson(404, { error: 'rental rate tier not found' })
+      return true
+    }
+    ctx.sendJson(200, { id: tierId })
+    return true
+  }
+
   if (req.method === 'POST' && url.pathname.match(/^\/api\/rental-contracts\/[^/]+\/billing-runs\/preview$/)) {
     const contractId = url.pathname.split('/')[3] ?? ''
     const body = await ctx.readBody()
@@ -416,12 +541,16 @@ export async function handleRentalContractsCrudRoutes(
       ctx.sendJson(400, { error: 'reference_date must be YYYY-MM-DD' })
       return true
     }
-    const { contract, lines } = await loadContractBillingData(ctx.pool, ctx.company.id, contractId)
+    const { contract, lines, tiersByLineId } = await loadContractBillingData(ctx.pool, ctx.company.id, contractId)
     if (!contract) {
       ctx.sendJson(404, { error: 'rental contract not found' })
       return true
     }
-    const preview = calculateJobRentalBillingRun(toBillingContract(contract), lines.map(toBillingLine), referenceDate)
+    const preview = calculateJobRentalBillingRun(
+      toBillingContract(contract),
+      lines.map((l) => toBillingLine(l, tiersByLineId.get(l.id) ?? [])),
+      referenceDate,
+    )
     ctx.sendJson(200, { contract, preview })
     return true
   }
@@ -457,7 +586,7 @@ export async function handleRentalContractsCrudRoutes(
     }
     const preview = calculateJobRentalBillingRun(
       toBillingContract(current.contract),
-      current.lines.map(toBillingLine),
+      current.lines.map((l) => toBillingLine(l, current.tiersByLineId.get(l.id) ?? [])),
       referenceDate,
     )
     if (!preview.is_due && body.force !== true) {
@@ -487,7 +616,7 @@ export async function handleRentalContractsCrudRoutes(
       if (!fresh.contract) throw new Error('rental contract disappeared during billing run')
       const calculation = calculateJobRentalBillingRun(
         toBillingContract(fresh.contract),
-        fresh.lines.map(toBillingLine),
+        fresh.lines.map((l) => toBillingLine(l, fresh.tiersByLineId.get(l.id) ?? [])),
         referenceDate,
       )
       const runResult = await client.query<RentalBillingRunRow>(

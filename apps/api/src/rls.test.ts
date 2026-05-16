@@ -9,10 +9,15 @@ import { randomUUID } from 'node:crypto'
  * to verify the policy works, then disable it again so the rest of the suite
  * (and the dev DB) keeps the permissive default.
  *
- * Gated on RUN_API_INTEGRATION=1 because it needs a live Postgres with the
- * sitelayer schema applied.
+ * GATED separately from RUN_API_INTEGRATION because the CI postgres role
+ * (`sitelayer`) is a SUPERUSER by default in the postgres:18-alpine image,
+ * and superusers bypass RLS regardless of `FORCE ROW LEVEL SECURITY`. To run
+ * this test, point DATABASE_URL at a non-superuser role with select/insert/
+ * delete on `projects` and `companies`, then set `RUN_RLS_TEST=1`. Phase 2
+ * of the RLS rollout (docs/SECURITY_RLS.md) provisions that role.
  */
-const describeIntegration = process.env.RUN_API_INTEGRATION === '1' ? describe : describe.skip
+const describeIntegration =
+  process.env.RUN_API_INTEGRATION === '1' && process.env.RUN_RLS_TEST === '1' ? describe : describe.skip
 
 const DATABASE_URL = process.env.DATABASE_URL ?? 'postgres://sitelayer:sitelayer@localhost:5432/sitelayer'
 
