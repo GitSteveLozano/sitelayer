@@ -2,8 +2,22 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { initialRentalNextInvoiceAt } from '@sitelayer/domain'
 import { RENTAL_SELECT_COLUMNS, type RentalRow } from '@sitelayer/queue'
+import {
+  RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
+  RENTAL_REQUEST_APPROVAL_WORKFLOW_SCHEMA_VERSION,
+  transitionRentalRequestApprovalWorkflow,
+  type RentalRequestApprovalWorkflowEvent,
+  type RentalRequestApprovalWorkflowSnapshot,
+  type RentalRequestApprovalWorkflowState,
+} from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import {
+  recordMutationLedger,
+  recordMutationOutbox,
+  recordWorkflowEvent,
+  withCompanyClient,
+  withMutationTx,
+} from '../mutation-tx.js'
 
 /**
  * Operator-side approval queue for rental requests submitted by customers
@@ -69,6 +83,7 @@ type RentalRequestRow = {
   contact_phone: string | null
   notes: string | null
   status: string
+  state_version: number
   approved_at: string | null
   approved_by: string | null
   approved_by_user_id: string | null
@@ -134,7 +149,8 @@ export async function handleRentalRequestRoutes(
         rr.id, rr.company_id, rr.share_link_id, rr.customer_id, rr.items,
         rr.requested_start, rr.requested_end,
         rr.contact_name, rr.contact_email, rr.contact_phone, rr.notes,
-        rr.status, rr.approved_at, rr.approved_by, rr.approved_by_user_id,
+        rr.status, rr.state_version,
+        rr.approved_at, rr.approved_by, rr.approved_by_user_id,
         rr.rejected_at, rr.declined_at, rr.decline_reason,
         rr.converted_rental_id, rr.created_at, rr.updated_at,
         c.name as customer_name, c.external_id as customer_external_id
@@ -169,7 +185,8 @@ export async function handleRentalRequestRoutes(
         select id, company_id, share_link_id, customer_id, items,
                requested_start, requested_end,
                contact_name, contact_email, contact_phone, notes,
-               status, approved_at, approved_by, approved_by_user_id,
+               status, state_version,
+               approved_at, approved_by, approved_by_user_id,
                rejected_at, declined_at, decline_reason,
                converted_rental_id, created_at, updated_at
         from rental_requests
@@ -186,6 +203,36 @@ export async function handleRentalRequestRoutes(
       // Idempotent re-approve: don't create another rental.
       if (row.status === 'approved' && row.converted_rental_id) {
         return { idempotent: true as const, row: shapeRow(row) }
+      }
+      // Dispatch APPROVE through the rental_request_approval reducer.
+      // Reducer asserts pending → approved; the idempotent short-
+      // circuit above already handled the re-approve case, and any
+      // other terminal state (declined) was handled above. Replaces
+      // the direct status='approved' UPDATE the original #325 left
+      // untouched (caught in the 2026-05-16 verification audit).
+      const currentSnapshot: RentalRequestApprovalWorkflowSnapshot = {
+        state: (row.status as RentalRequestApprovalWorkflowState) ?? 'pending',
+        state_version: row.state_version ?? 1,
+        approved_at: row.approved_at ?? null,
+        approved_by: row.approved_by ?? null,
+        declined_at: row.declined_at ?? null,
+        declined_by: null,
+        decline_reason: row.decline_reason ?? null,
+      }
+      const nowIso = new Date().toISOString()
+      const approveEvent: RentalRequestApprovalWorkflowEvent = {
+        type: 'APPROVE',
+        approved_at: nowIso,
+        approved_by: ctx.currentUserId,
+      }
+      let nextSnapshot: RentalRequestApprovalWorkflowSnapshot
+      try {
+        nextSnapshot = transitionRentalRequestApprovalWorkflow(currentSnapshot, approveEvent)
+      } catch (err) {
+        return {
+          error: 'illegal_transition' as const,
+          message: err instanceof Error ? err.message : String(err),
+        }
       }
 
       const items = overrides && overrides.length > 0 ? overrides : normalizeItems(row.items)
@@ -265,8 +312,9 @@ export async function handleRentalRequestRoutes(
       const updated = await client.query<RentalRequestRow>(
         `
         update rental_requests
-        set status = 'approved',
-            approved_at = now(),
+        set status = $5,
+            state_version = $6,
+            approved_at = $7,
             approved_by = $3,
             approved_by_user_id = $3,
             converted_rental_id = $4,
@@ -275,13 +323,52 @@ export async function handleRentalRequestRoutes(
         returning id, company_id, share_link_id, customer_id, items,
                   requested_start, requested_end,
                   contact_name, contact_email, contact_phone, notes,
-                  status, approved_at, approved_by, approved_by_user_id,
+                  status, state_version,
+                  approved_at, approved_by, approved_by_user_id,
                   rejected_at, declined_at, decline_reason,
                   converted_rental_id, created_at, updated_at
         `,
-        [requestId, ctx.company.id, ctx.currentUserId, primaryRentalId],
+        [
+          requestId,
+          ctx.company.id,
+          ctx.currentUserId,
+          primaryRentalId,
+          nextSnapshot.state,
+          nextSnapshot.state_version,
+          nextSnapshot.approved_at ?? nowIso,
+        ],
       )
       const updatedRow = updated.rows[0]!
+      // Append workflow_event_log row keyed on the PRIOR state_version
+      // so the unique (entity_id, state_version) constraint naturally
+      // rejects duplicate writes for the same transition.
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
+        schemaVersion: RENTAL_REQUEST_APPROVAL_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'rental_request',
+        entityId: requestId,
+        stateVersion: currentSnapshot.state_version,
+        eventType: 'APPROVE',
+        eventPayload: approveEvent as unknown as Record<string, unknown>,
+        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        actorUserId: ctx.currentUserId,
+      })
+      // Emit the create_rental_from_request side-effect outbox row as
+      // declared by the reducer's sideEffectTypes — provides the audit
+      // anchor "this APPROVE → these rentals" even though the route
+      // already created them inline.
+      await recordMutationOutbox(
+        ctx.company.id,
+        'rental_request',
+        requestId,
+        'create_rental_from_request',
+        { rental_request_id: requestId, rental_ids: createdRentals.map((r) => r.id) },
+        `rental_request:create_rental_from_request:${requestId}`,
+        'server',
+        ctx.currentUserId,
+        client,
+      )
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'rental_request',
@@ -310,6 +397,10 @@ export async function handleRentalRequestRoutes(
       }
       if (result.error === 'already_declined') {
         ctx.sendJson(409, { error: 'rental request already declined', rentalRequest: result.row })
+        return true
+      }
+      if (result.error === 'illegal_transition') {
+        ctx.sendJson(409, { error: result.message })
         return true
       }
       if (result.error === 'no_items' || result.error === 'no_convertible_items') {
@@ -347,7 +438,8 @@ export async function handleRentalRequestRoutes(
         select id, company_id, share_link_id, customer_id, items,
                requested_start, requested_end,
                contact_name, contact_email, contact_phone, notes,
-               status, approved_at, approved_by, approved_by_user_id,
+               status, state_version,
+               approved_at, approved_by, approved_by_user_id,
                rejected_at, declined_at, decline_reason,
                converted_rental_id, created_at, updated_at
         from rental_requests
@@ -365,24 +457,71 @@ export async function handleRentalRequestRoutes(
         // Idempotent: keep the original reason + timestamp.
         return { idempotent: true as const, row: shapeRow(row) }
       }
+      // Dispatch DECLINE through the rental_request_approval reducer.
+      const currentSnapshot: RentalRequestApprovalWorkflowSnapshot = {
+        state: (row.status as RentalRequestApprovalWorkflowState) ?? 'pending',
+        state_version: row.state_version ?? 1,
+        approved_at: row.approved_at ?? null,
+        approved_by: row.approved_by ?? null,
+        declined_at: row.declined_at ?? null,
+        declined_by: null,
+        decline_reason: row.decline_reason ?? null,
+      }
+      const nowIso = new Date().toISOString()
+      const declineEvent: RentalRequestApprovalWorkflowEvent = {
+        type: 'DECLINE',
+        declined_at: nowIso,
+        declined_by: ctx.currentUserId,
+        decline_reason: reason,
+      }
+      let nextSnapshot: RentalRequestApprovalWorkflowSnapshot
+      try {
+        nextSnapshot = transitionRentalRequestApprovalWorkflow(currentSnapshot, declineEvent)
+      } catch (err) {
+        return {
+          error: 'illegal_transition' as const,
+          message: err instanceof Error ? err.message : String(err),
+        }
+      }
       const updated = await client.query<RentalRequestRow>(
         `
         update rental_requests
-        set status = 'declined',
-            declined_at = now(),
+        set status = $4,
+            state_version = $5,
+            declined_at = $6,
             decline_reason = $3,
             updated_at = now()
         where id = $1 and company_id = $2
         returning id, company_id, share_link_id, customer_id, items,
                   requested_start, requested_end,
                   contact_name, contact_email, contact_phone, notes,
-                  status, approved_at, approved_by, approved_by_user_id,
+                  status, state_version,
+                  approved_at, approved_by, approved_by_user_id,
                   rejected_at, declined_at, decline_reason,
                   converted_rental_id, created_at, updated_at
         `,
-        [requestId, ctx.company.id, reason],
+        [
+          requestId,
+          ctx.company.id,
+          reason,
+          nextSnapshot.state,
+          nextSnapshot.state_version,
+          nextSnapshot.declined_at ?? nowIso,
+        ],
       )
       const updatedRow = updated.rows[0]!
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
+        schemaVersion: RENTAL_REQUEST_APPROVAL_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'rental_request',
+        entityId: requestId,
+        stateVersion: currentSnapshot.state_version,
+        eventType: 'DECLINE',
+        eventPayload: declineEvent as unknown as Record<string, unknown>,
+        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        actorUserId: ctx.currentUserId,
+      })
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'rental_request',
@@ -407,6 +546,10 @@ export async function handleRentalRequestRoutes(
       }
       if (result.error === 'already_approved') {
         ctx.sendJson(409, { error: 'rental request already approved', rentalRequest: result.row })
+        return true
+      }
+      if (result.error === 'illegal_transition') {
+        ctx.sendJson(409, { error: result.message })
         return true
       }
     }

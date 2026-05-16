@@ -1,11 +1,26 @@
 import { Sentry, captureWithEntityContext } from '../instrument.js'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import type http from 'node:http'
-import type { Pool } from 'pg'
+import type { Pool, PoolClient } from 'pg'
 import { createLogger } from '@sitelayer/logger'
+import {
+  QBO_SYNC_RUN_WORKFLOW_NAME,
+  QBO_SYNC_RUN_WORKFLOW_SCHEMA_VERSION,
+  transitionQboSyncRunWorkflow,
+  type QboSyncRunWorkflowEvent,
+  type QboSyncRunWorkflowSnapshot,
+  type QboSyncRunWorkflowState,
+} from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
 import { HttpError, parseExpectedVersion } from '../http-utils.js'
-import { recordMutationLedger, recordSyncEvent, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
+import {
+  recordMutationLedger,
+  recordMutationOutbox,
+  recordSyncEvent,
+  recordWorkflowEvent,
+  withMutationTx,
+  type LedgerExecutor,
+} from '../mutation-tx.js'
 import { QboParseError, parseQboClass, parseQboEstimateCreateResponse, parseQboItem } from '../qbo-parse.js'
 import { getSyncStatus } from './sync.js'
 
@@ -496,6 +511,272 @@ export async function backfillProjectMapping(
 }
 
 // ---------------------------------------------------------------------------
+// qbo_sync_run workflow wiring
+// ---------------------------------------------------------------------------
+
+type QboSyncRunRow = {
+  id: string
+  company_id: string
+  integration_connection_id: string
+  status: QboSyncRunWorkflowState
+  state_version: number
+  started_at: string | null
+  succeeded_at: string | null
+  failed_at: string | null
+  retried_at: string | null
+  error: string | null
+  snapshot: Record<string, unknown> | null
+  triggered_by: string | null
+}
+
+/**
+ * Create a `qbo_sync_runs` row in state='pending' and immediately
+ * dispatch START_SYNC through the reducer (pending → syncing). Both
+ * happen in the same tx so the workflow_event_log audit anchor lands
+ * with the row.
+ *
+ * Mirrors the rentals.ts pattern: read locked snapshot, run pure
+ * reducer, UPDATE row + state_version, append workflow_event_log,
+ * keyed on the prior state_version.
+ *
+ * Replaces the implicit state machine that was previously toggled via
+ * direct `integration_connections.status='connected'` writes (the
+ * original PR #325 left those untouched — caught in the 2026-05-16
+ * verification audit).
+ */
+async function startQboSyncRun(
+  client: PoolClient,
+  args: {
+    companyId: string
+    integrationConnectionId: string
+    triggeredBy: string
+  },
+): Promise<{ run: QboSyncRunRow; snapshot: QboSyncRunWorkflowSnapshot }> {
+  const created = await client.query<QboSyncRunRow>(
+    `insert into qbo_sync_runs (
+       company_id, integration_connection_id, status, state_version, triggered_by
+     ) values ($1, $2, 'pending', 1, $3)
+     returning id, company_id, integration_connection_id, status, state_version,
+               started_at, succeeded_at, failed_at, retried_at,
+               error, snapshot, triggered_by`,
+    [args.companyId, args.integrationConnectionId, args.triggeredBy],
+  )
+  const pendingRow = created.rows[0]!
+  const currentSnapshot: QboSyncRunWorkflowSnapshot = {
+    state: 'pending',
+    state_version: pendingRow.state_version,
+    started_at: null,
+    succeeded_at: null,
+    failed_at: null,
+    retried_at: null,
+    error: null,
+    snapshot: null,
+    triggered_by: pendingRow.triggered_by,
+  }
+  const nowIso = new Date().toISOString()
+  const startEvent: QboSyncRunWorkflowEvent = {
+    type: 'START_SYNC',
+    started_at: nowIso,
+    triggered_by: args.triggeredBy,
+  }
+  const nextSnapshot = transitionQboSyncRunWorkflow(currentSnapshot, startEvent)
+  const updated = await client.query<QboSyncRunRow>(
+    `update qbo_sync_runs
+       set status = $3,
+           state_version = $4,
+           started_at = $5,
+           error = null,
+           version = version + 1,
+           updated_at = now()
+     where company_id = $1 and id = $2
+     returning id, company_id, integration_connection_id, status, state_version,
+               started_at, succeeded_at, failed_at, retried_at,
+               error, snapshot, triggered_by`,
+    [args.companyId, pendingRow.id, nextSnapshot.state, nextSnapshot.state_version, nextSnapshot.started_at],
+  )
+  await recordWorkflowEvent(client, {
+    companyId: args.companyId,
+    workflowName: QBO_SYNC_RUN_WORKFLOW_NAME,
+    schemaVersion: QBO_SYNC_RUN_WORKFLOW_SCHEMA_VERSION,
+    entityType: 'qbo_sync_run',
+    entityId: pendingRow.id,
+    stateVersion: currentSnapshot.state_version,
+    eventType: 'START_SYNC',
+    eventPayload: startEvent as unknown as Record<string, unknown>,
+    snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+    actorUserId: args.triggeredBy,
+  })
+  // Side effect anchor: this START_SYNC triggered an actual sync attempt.
+  await recordMutationOutbox(
+    args.companyId,
+    'qbo_sync_run',
+    pendingRow.id,
+    'run_qbo_sync',
+    { qbo_sync_run_id: pendingRow.id, integration_connection_id: args.integrationConnectionId },
+    `qbo_sync_run:run:${pendingRow.id}`,
+    'server',
+    args.triggeredBy,
+    client,
+  )
+  return { run: updated.rows[0]!, snapshot: nextSnapshot }
+}
+
+/**
+ * Dispatch SYNC_SUCCEEDED on a syncing qbo_sync_runs row in the same
+ * tx as the integration_connections status flip. Reducer asserts
+ * syncing → succeeded. SYNC_SUCCEEDED is worker-only at the event
+ * endpoint; here we're emitting it INSIDE the inline-sync route so the
+ * route is effectively acting as the worker until we move the actual
+ * sync work off the request path.
+ */
+async function completeQboSyncRunSuccess(
+  client: PoolClient,
+  args: {
+    companyId: string
+    runId: string
+    snapshot: Record<string, unknown>
+    triggeredBy: string
+  },
+): Promise<void> {
+  const locked = await client.query<QboSyncRunRow>(
+    `select id, company_id, integration_connection_id, status, state_version,
+            started_at, succeeded_at, failed_at, retried_at,
+            error, snapshot, triggered_by
+       from qbo_sync_runs
+       where company_id = $1 and id = $2
+       for update`,
+    [args.companyId, args.runId],
+  )
+  const current = locked.rows[0]
+  if (!current) return
+  const currentSnapshot: QboSyncRunWorkflowSnapshot = {
+    state: current.status,
+    state_version: current.state_version,
+    started_at: current.started_at,
+    succeeded_at: current.succeeded_at,
+    failed_at: current.failed_at,
+    retried_at: current.retried_at,
+    error: current.error,
+    snapshot: current.snapshot,
+    triggered_by: current.triggered_by,
+  }
+  const nowIso = new Date().toISOString()
+  const event: QboSyncRunWorkflowEvent = {
+    type: 'SYNC_SUCCEEDED',
+    succeeded_at: nowIso,
+    snapshot: args.snapshot,
+  }
+  const nextSnapshot = transitionQboSyncRunWorkflow(currentSnapshot, event)
+  await client.query(
+    `update qbo_sync_runs
+       set status = $3,
+           state_version = $4,
+           succeeded_at = $5,
+           snapshot = $6::jsonb,
+           error = null,
+           version = version + 1,
+           updated_at = now()
+     where company_id = $1 and id = $2`,
+    [
+      args.companyId,
+      args.runId,
+      nextSnapshot.state,
+      nextSnapshot.state_version,
+      nextSnapshot.succeeded_at,
+      JSON.stringify(nextSnapshot.snapshot ?? {}),
+    ],
+  )
+  await recordWorkflowEvent(client, {
+    companyId: args.companyId,
+    workflowName: QBO_SYNC_RUN_WORKFLOW_NAME,
+    schemaVersion: QBO_SYNC_RUN_WORKFLOW_SCHEMA_VERSION,
+    entityType: 'qbo_sync_run',
+    entityId: args.runId,
+    stateVersion: currentSnapshot.state_version,
+    eventType: 'SYNC_SUCCEEDED',
+    eventPayload: event as unknown as Record<string, unknown>,
+    snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+    actorUserId: args.triggeredBy,
+  })
+}
+
+/**
+ * Dispatch SYNC_FAILED on a syncing qbo_sync_runs row in the same tx
+ * as the integration_connections status flip. Reducer asserts
+ * syncing → failed (and `failed` is non-terminal — a future RETRY
+ * brings it back).
+ */
+async function completeQboSyncRunFailure(
+  client: PoolClient,
+  args: {
+    companyId: string
+    runId: string
+    error: string
+    triggeredBy: string
+  },
+): Promise<void> {
+  const locked = await client.query<QboSyncRunRow>(
+    `select id, company_id, integration_connection_id, status, state_version,
+            started_at, succeeded_at, failed_at, retried_at,
+            error, snapshot, triggered_by
+       from qbo_sync_runs
+       where company_id = $1 and id = $2
+       for update`,
+    [args.companyId, args.runId],
+  )
+  const current = locked.rows[0]
+  if (!current) return
+  const currentSnapshot: QboSyncRunWorkflowSnapshot = {
+    state: current.status,
+    state_version: current.state_version,
+    started_at: current.started_at,
+    succeeded_at: current.succeeded_at,
+    failed_at: current.failed_at,
+    retried_at: current.retried_at,
+    error: current.error,
+    snapshot: current.snapshot,
+    triggered_by: current.triggered_by,
+  }
+  const nowIso = new Date().toISOString()
+  const event: QboSyncRunWorkflowEvent = {
+    type: 'SYNC_FAILED',
+    failed_at: nowIso,
+    error: args.error,
+  }
+  const nextSnapshot = transitionQboSyncRunWorkflow(currentSnapshot, event)
+  await client.query(
+    `update qbo_sync_runs
+       set status = $3,
+           state_version = $4,
+           failed_at = $5,
+           error = $6,
+           version = version + 1,
+           updated_at = now()
+     where company_id = $1 and id = $2`,
+    [
+      args.companyId,
+      args.runId,
+      nextSnapshot.state,
+      nextSnapshot.state_version,
+      nextSnapshot.failed_at,
+      nextSnapshot.error,
+    ],
+  )
+  await recordWorkflowEvent(client, {
+    companyId: args.companyId,
+    workflowName: QBO_SYNC_RUN_WORKFLOW_NAME,
+    schemaVersion: QBO_SYNC_RUN_WORKFLOW_SCHEMA_VERSION,
+    entityType: 'qbo_sync_run',
+    entityId: args.runId,
+    stateVersion: currentSnapshot.state_version,
+    eventType: 'SYNC_FAILED',
+    eventPayload: event as unknown as Record<string, unknown>,
+    snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+    actorUserId: args.triggeredBy,
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Route handler
 // ---------------------------------------------------------------------------
 
@@ -682,11 +963,31 @@ export async function handleQboRoutes(req: http.IncomingMessage, url: URL, ctx: 
     return true
   }
 
-  // POST /api/integrations/qbo/sync — full sync (simulated or live)
+  // POST /api/integrations/qbo/sync — full sync (simulated or live).
+  //
+  // Wraps the sync attempt in a qbo_sync_run workflow row. The route
+  // dispatches START_SYNC → SYNC_SUCCEEDED|SYNC_FAILED through the
+  // packages/workflows reducer; integration_connections.status stays a
+  // derived cache for backwards-compat (connected/syncing/error). The
+  // reducer is the authoritative state machine; workflow_event_log is
+  // the audit trail.
   if (req.method === 'POST' && url.pathname === '/api/integrations/qbo/sync') {
     if (!requireRole(['admin', 'office'])) return true
+    // Ensure a connection row exists so the qbo_sync_run FK resolves;
+    // the upsert here historically supported the no-credentials
+    // simulated path by creating a placeholder row.
+    const connectionPre = await upsertIntegrationConnection(pool, company.id, 'qbo', { status: 'syncing' })
     const connection = await getIntegrationConnectionWithSecrets(pool, company.id, 'qbo')
-    await upsertIntegrationConnection(pool, company.id, 'qbo', { status: 'syncing' })
+    const connectionId: string = (connectionPre as { id?: string }).id ?? connection?.id ?? ''
+    // Open a tx to create the workflow row + dispatch START_SYNC.
+    const initialRun = await withMutationTx(async (client) => {
+      return await startQboSyncRun(client, {
+        companyId: company.id,
+        integrationConnectionId: connectionId,
+        triggeredBy: currentUserId,
+      })
+    })
+    const qboSyncRunId = initialRun.run.id
     try {
       if (!connection?.access_token) {
         const customersResult = await pool.query(
@@ -738,26 +1039,37 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
             [company.id, new Date().toISOString()],
           )
           const row = result.rows[0]
-          const connectionId = connection?.id ?? row.id
+          const resolvedConnectionId = connection?.id ?? row.id
+          // Dispatch SYNC_SUCCEEDED in the same tx as the connection
+          // status flip so workflow_event_log + integration_connections
+          // can never disagree.
+          await completeQboSyncRunSuccess(client, {
+            companyId: company.id,
+            runId: qboSyncRunId,
+            snapshot: qboSnapshot as unknown as Record<string, unknown>,
+            triggeredBy: currentUserId,
+          })
           await recordMutationLedger(client, {
             companyId: company.id,
             entityType: 'integration_connection',
-            entityId: connectionId,
+            entityId: resolvedConnectionId,
             action: 'sync',
             syncPayload: {
               action: 'sync',
               provider: 'qbo',
               snapshot: qboSnapshot,
               simulated: true,
+              qbo_sync_run_id: qboSyncRunId,
             },
             outboxPayload: qboSnapshot,
-            idempotencyKey: `integration_connection:qbo:sync:${connectionId}`,
+            idempotencyKey: `integration_connection:qbo:sync:${resolvedConnectionId}:${qboSyncRunId}`,
           })
           return row
         })
         sendJson(200, {
           connection: refreshed,
           snapshot: qboSnapshot,
+          qbo_sync_run_id: qboSyncRunId,
         })
         return true
       }
@@ -1093,14 +1405,27 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
 `,
           [company.id, new Date().toISOString()],
         )
+        // Dispatch SYNC_SUCCEEDED in the same tx as the integration
+        // connection status flip.
+        await completeQboSyncRunSuccess(client, {
+          companyId: company.id,
+          runId: qboSyncRunId,
+          snapshot: qboSnapshot as unknown as Record<string, unknown>,
+          triggeredBy: currentUserId,
+        })
         await recordMutationLedger(client, {
           companyId: company.id,
           entityType: 'integration_connection',
           entityId: connection.id,
           action: 'sync',
-          syncPayload: { action: 'sync', provider: 'qbo', snapshot: qboSnapshot },
+          syncPayload: {
+            action: 'sync',
+            provider: 'qbo',
+            snapshot: qboSnapshot,
+            qbo_sync_run_id: qboSyncRunId,
+          },
           outboxPayload: qboSnapshot,
-          idempotencyKey: `integration_connection:qbo:sync:${connection.id}`,
+          idempotencyKey: `integration_connection:qbo:sync:${connection.id}:${qboSyncRunId}`,
         })
         return result.rows[0] ?? connection
       })
@@ -1108,6 +1433,7 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
       sendJson(200, {
         connection: refreshed,
         snapshot: qboSnapshot,
+        qbo_sync_run_id: qboSyncRunId,
       })
     } catch (error) {
       logger.error({ err: error, scope: 'qbo_sync' }, 'QBO sync error')
@@ -1116,8 +1442,29 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
         entity_type: 'integration_connection',
         company_id: company.id,
       })
-      await upsertIntegrationConnection(pool, company.id, 'qbo', { status: 'error' })
-      sendJson(500, { error: 'sync failed' })
+      // Dispatch SYNC_FAILED + flip integration_connections.status='error'
+      // in the same tx so the workflow row and the cached status flag
+      // can never disagree.
+      try {
+        await withMutationTx(async (client) => {
+          await completeQboSyncRunFailure(client, {
+            companyId: company.id,
+            runId: qboSyncRunId,
+            error: error instanceof Error ? error.message : String(error),
+            triggeredBy: currentUserId,
+          })
+          await client.query(
+            `update integration_connections
+               set status = 'error', version = version + 1
+             where company_id = $1 and provider = 'qbo'`,
+            [company.id],
+          )
+        })
+      } catch (innerErr) {
+        // Best-effort: don't mask the original sync error.
+        logger.error({ err: innerErr, scope: 'qbo_sync_failure_record' }, 'failed to record qbo_sync_run failure')
+      }
+      sendJson(500, { error: 'sync failed', qbo_sync_run_id: qboSyncRunId })
     }
     return true
   }
