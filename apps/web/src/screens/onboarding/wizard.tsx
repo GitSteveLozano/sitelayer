@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
@@ -12,6 +12,7 @@ import {
   useInviteMember,
   type Company,
 } from '@/lib/api'
+import { useOnboardingWizard } from '@/machines/onboarding-wizard'
 
 /**
  * Onboarding wizard (Phase 6 Batch 7).
@@ -22,34 +23,43 @@ import {
  * Home tab and see something rather than empty states.
  *
  * Reachable at /onboarding (top-level so it works pre-tab-bar).
+ *
+ * Step / form orchestration runs through `useOnboardingWizard()` so the
+ * back/forward transitions and the company-step gate (`slug + name
+ * non-empty`) are testable in isolation. The TanStack mutations stay in
+ * the component — the machine emits `SUBMIT` and the component drives
+ * the mutation, then sends `MARK_SUBMITTED` / `MARK_FAILED` to advance.
  */
 export function OnboardingWizardScreen() {
   const navigate = useNavigate()
   const createCompany = useCreateCompany()
+  const wizard = useOnboardingWizard()
   const [company, setCompany] = useState<Company | null>(null)
-  const [step, setStep] = useState<'company' | 'team' | 'seed' | 'done'>('company')
 
-  // Step 1 inputs
-  const [slug, setSlug] = useState('')
-  const [companyName, setCompanyName] = useState('')
-  const [seedDefaults, setSeedDefaults] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  const createCompanyAndContinue = async () => {
-    setError(null)
+  const runCreateCompany = async () => {
+    wizard.submit()
     try {
       const result = await createCompany.mutateAsync({
-        slug: slug.trim().toLowerCase(),
-        name: companyName.trim(),
-        seed_defaults: seedDefaults,
+        slug: wizard.companyForm.slug.trim().toLowerCase(),
+        name: wizard.companyForm.name.trim(),
+        seed_defaults: wizard.companyForm.seedDefaults,
       })
       setCompany(result.company)
       setActiveCompanySlug(result.company.slug)
-      setStep('team')
+      wizard.markSubmitted()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to create company')
+      wizard.markFailed(e instanceof Error ? e.message : 'Failed to create company')
     }
   }
+
+  // Wizard `done` is final — bounce to home once we hit it.
+  useEffect(() => {
+    if (wizard.isDone) {
+      const handle = setTimeout(() => navigate('/'), 800)
+      return () => clearTimeout(handle)
+    }
+    return undefined
+  }, [wizard.isDone, navigate])
 
   return (
     <div className="px-5 pt-6 pb-12 max-w-2xl mx-auto">
@@ -60,56 +70,58 @@ export function OnboardingWizardScreen() {
       </p>
 
       <div className="mt-6 flex items-center gap-2">
-        <StepDot active={step === 'company'} done={step !== 'company'} label="1 · Company" />
-        <StepDot active={step === 'team'} done={step === 'seed' || step === 'done'} label="2 · Team" />
-        <StepDot active={step === 'seed'} done={step === 'done'} label="3 · Seed data" />
+        <StepDot
+          active={wizard.isCompanyStep || wizard.isSubmitting || wizard.isError}
+          done={wizard.isTeamStep || wizard.isSeedStep || wizard.isDone}
+          label="1 · Company"
+        />
+        <StepDot active={wizard.isTeamStep} done={wizard.isSeedStep || wizard.isDone} label="2 · Team" />
+        <StepDot active={wizard.isSeedStep} done={wizard.isDone} label="3 · Seed data" />
       </div>
 
       <div className="mt-6 space-y-3">
-        {step === 'company' ? (
+        {wizard.isCompanyStep || wizard.isSubmitting || wizard.isError ? (
           <Card>
             <Field
               label="Company slug (URL-safe)"
-              value={slug}
-              onChange={setSlug}
+              value={wizard.companyForm.slug}
+              onChange={(v) => wizard.setCompanyField('slug', v)}
               placeholder="acme-builders"
               hint="2-64 chars, lowercase letters/digits/dashes."
             />
-            <Field label="Company name" value={companyName} onChange={setCompanyName} placeholder="ACME Builders" />
+            <Field
+              label="Company name"
+              value={wizard.companyForm.name}
+              onChange={(v) => wizard.setCompanyField('name', v)}
+              placeholder="ACME Builders"
+            />
             <label className="flex items-center gap-2 mt-3">
               <input
                 type="checkbox"
-                checked={seedDefaults}
-                onChange={(e) => setSeedDefaults(e.target.checked)}
+                checked={wizard.companyForm.seedDefaults}
+                onChange={(e) => wizard.setCompanyField('seedDefaults', e.target.checked)}
                 className="rounded"
               />
               <span className="text-[13px]">Seed default divisions + service items</span>
             </label>
-            {error ? <div className="text-[12px] text-warn mt-2">{error}</div> : null}
+            {wizard.error ? <div className="text-[12px] text-warn mt-2">{wizard.error}</div> : null}
             <div className="mt-3">
               <MobileButton
                 variant="primary"
-                onClick={createCompanyAndContinue}
-                disabled={!slug.trim() || !companyName.trim() || createCompany.isPending}
+                onClick={runCreateCompany}
+                disabled={!wizard.canAdvanceFromCompany || createCompany.isPending}
               >
-                {createCompany.isPending ? 'Creating…' : 'Create company'}
+                {createCompany.isPending || wizard.isSubmitting ? 'Creating…' : 'Create company'}
               </MobileButton>
             </div>
           </Card>
         ) : null}
 
-        {step === 'team' && company ? <TeamStep company={company} onNext={() => setStep('seed')} /> : null}
+        {wizard.isTeamStep && company ? <TeamStep company={company} onNext={() => wizard.next()} /> : null}
 
-        {step === 'seed' && company ? (
-          <SeedStep
-            onDone={() => {
-              setStep('done')
-              setTimeout(() => navigate('/'), 800)
-            }}
-          />
-        ) : null}
+        {wizard.isSeedStep && company ? <SeedStep onDone={() => wizard.submit()} /> : null}
 
-        {step === 'done' ? (
+        {wizard.isDone ? (
           <Card>
             <div className="text-[14px] font-semibold">All set</div>
             <div className="text-[12px] text-ink-3 mt-1">Redirecting to your home dashboard…</div>
