@@ -296,9 +296,7 @@ function PendingInlineEditor({
         onChange={(e) => onEdit({ note: e.currentTarget.value })}
         style={{ minHeight: 60 }}
       />
-      {error ? (
-        <MBanner tone="error" title="Couldn't update" body={error} />
-      ) : null}
+      {error ? <MBanner tone="error" title="Couldn't update" body={error} /> : null}
       <MButtonRow>
         <MButton size="sm" variant="primary" onClick={() => void onApprove()} disabled={isSubmitting}>
           {isSubmitting ? 'Saving…' : 'Approve'}
