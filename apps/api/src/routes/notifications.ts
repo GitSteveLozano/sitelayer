@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { isValidUuid } from '../http-utils.js'
@@ -88,13 +89,15 @@ export async function handleNotificationRoutes(
     }
     params.push(limit)
 
-    const result = await ctx.pool.query<NotificationRow>(
-      `select ${SELECT_PROJECTION}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<NotificationRow>(
+        `select ${SELECT_PROJECTION}
        from notifications
        where ${filters.join(' and ')}
        order by created_at desc
        limit $${params.length}`,
-      params,
+        params,
+      ),
     )
     ctx.sendJson(200, { notifications: result.rows })
     return true
@@ -111,8 +114,9 @@ export async function handleNotificationRoutes(
     // mark someone else's notification read — even if they guess the id.
     // jsonb_set with create_missing=true on payload->>'read_at' keeps the
     // existing payload contents intact while stamping the read time.
-    const updated = await ctx.pool.query<NotificationRow>(
-      `update notifications
+    const updated = await withMutationTx(ctx.company.id, (c) =>
+      c.query<NotificationRow>(
+        `update notifications
          set payload = jsonb_set(
            coalesce(payload, '{}'::jsonb),
            '{read_at}',
@@ -123,7 +127,8 @@ export async function handleNotificationRoutes(
          and company_id = $2
          and recipient_clerk_user_id = $3
        returning ${SELECT_PROJECTION}`,
-      [id, ctx.company.id, ctx.currentUserId],
+        [id, ctx.company.id, ctx.currentUserId],
+      ),
     )
     if (updated.rowCount === 0) {
       ctx.sendJson(404, { error: 'notification not found' })

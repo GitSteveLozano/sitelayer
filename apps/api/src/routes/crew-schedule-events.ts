@@ -11,7 +11,7 @@ import {
   type CrewScheduleWorkflowState,
 } from '@sitelayer/workflows'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit } from '../metrics.js'
 import { isValidDateInput, isValidUuid, parseExpectedVersion } from '../http-utils.js'
@@ -129,12 +129,14 @@ export async function handleCrewScheduleEventRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const result = await ctx.pool.query<CrewScheduleRow>(
-      `select ${CREW_SCHEDULE_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<CrewScheduleRow>(
+        `select ${CREW_SCHEDULE_COLUMNS}
        from crew_schedules
        where company_id = $1 and id = $2 and deleted_at is null
        limit 1`,
-      [ctx.company.id, id],
+        [ctx.company.id, id],
+      ),
     )
     const row = result.rows[0]
     if (!row) {

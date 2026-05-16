@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
+import { withCompanyClient } from '../mutation-tx.js'
 
 export type AuditEventRouteCtx = {
   pool: Pool
@@ -17,7 +18,7 @@ type AuditFilters = {
   limit?: number
 }
 
-async function listAuditEvents(pool: Pool, companyId: string, filters: AuditFilters) {
+async function listAuditEvents(_pool: Pool, companyId: string, filters: AuditFilters) {
   const clauses: string[] = ['company_id = $1']
   const values: unknown[] = [companyId]
   if (filters.entityType) {
@@ -38,13 +39,15 @@ async function listAuditEvents(pool: Pool, companyId: string, filters: AuditFilt
   }
   const limit = Math.max(1, Math.min(1000, filters.limit ?? 200))
   values.push(limit)
-  const result = await pool.query(
-    `select id, actor_user_id, actor_role, entity_type, entity_id, action, before, after, request_id, sentry_trace, created_at
+  const result = await withCompanyClient(companyId, (c) =>
+    c.query(
+      `select id, actor_user_id, actor_role, entity_type, entity_id, action, before, after, request_id, sentry_trace, created_at
      from audit_events
      where ${clauses.join(' and ')}
      order by created_at desc
      limit $${values.length}`,
-    values,
+      values,
+    ),
   )
   return result.rows
 }

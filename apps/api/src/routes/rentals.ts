@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import { initialRentalNextInvoiceAt } from '@sitelayer/domain'
 import { processRentalInvoice, RENTAL_SELECT_COLUMNS, type RentalRow } from '@sitelayer/queue'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput, parseExpectedVersion } from '../http-utils.js'
 
 export type RentalRouteCtx = {
@@ -42,14 +42,16 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
       ctx.sendJson(400, { error: 'status must be one of active, returned, closed, all' })
       return true
     }
-    const result = await ctx.pool.query<RentalRow>(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<RentalRow>(
+        `
       select ${RENTAL_SELECT_COLUMNS}
       from rentals
       where company_id = $1 and deleted_at is null${statusClause}
       order by delivered_on desc, created_at desc
       `,
-      values,
+        values,
+      ),
     )
     ctx.sendJson(200, { rentals: result.rows })
     return true
@@ -81,20 +83,18 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
     const projectId = body.project_id ? String(body.project_id) : null
     const customerId = body.customer_id ? String(body.customer_id) : null
     if (projectId) {
-      const existing = await ctx.pool.query('select 1 from projects where company_id = $1 and id = $2', [
-        ctx.company.id,
-        projectId,
-      ])
+      const existing = await withCompanyClient(ctx.company.id, (c) =>
+        c.query('select 1 from projects where company_id = $1 and id = $2', [ctx.company.id, projectId]),
+      )
       if (!existing.rows[0]) {
         ctx.sendJson(400, { error: 'project_id not found for company' })
         return true
       }
     }
     if (customerId) {
-      const existing = await ctx.pool.query('select 1 from customers where company_id = $1 and id = $2', [
-        ctx.company.id,
-        customerId,
-      ])
+      const existing = await withCompanyClient(ctx.company.id, (c) =>
+        c.query('select 1 from customers where company_id = $1 and id = $2', [ctx.company.id, customerId]),
+      )
       if (!existing.rows[0]) {
         ctx.sendJson(400, { error: 'customer_id not found for company' })
         return true
@@ -271,9 +271,11 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
       ctx.sendJson(400, { error: 'rental id is required' })
       return true
     }
-    const existing = await ctx.pool.query<RentalRow>(
-      `select ${RENTAL_SELECT_COLUMNS} from rentals where company_id = $1 and id = $2 and deleted_at is null`,
-      [ctx.company.id, rentalId],
+    const existing = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<RentalRow>(
+        `select ${RENTAL_SELECT_COLUMNS} from rentals where company_id = $1 and id = $2 and deleted_at is null`,
+        [ctx.company.id, rentalId],
+      ),
     )
     const rental = existing.rows[0]
     if (!rental) {

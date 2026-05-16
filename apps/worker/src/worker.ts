@@ -98,10 +98,29 @@ function getPoolConfig(connectionString: string): PoolConfig {
 
 const pool = new Pool(getPoolConfig(databaseUrl))
 
+/**
+ * Bind `app.company_id` for the lifetime of the active transaction so any
+ * RLS-protected SELECT/INSERT/UPDATE the worker issues against company-scoped
+ * tables passes the `company_isolation` policy (migration 066). Caller must
+ * have already opened a transaction with `client.query('begin')`.
+ *
+ * Migration 066's policy is `app_current_company_id() IS NULL OR company_id =
+ * app_current_company_id()`, so a tx that forgets to set this still works —
+ * but writes to the 4 RLS-enforced tables (audit_events, workflow_event_log,
+ * mutation_outbox, sync_events) under FORCE will pass WITH CHECK only when
+ * the GUC matches the row's company_id. Set this near the top of every BEGIN
+ * the worker opens to keep behaviour stable when the permissive `IS NULL OR`
+ * clause is removed in a follow-up.
+ */
+async function setCompanyGuc(client: PoolClient, companyId: string): Promise<void> {
+  await client.query('select set_config($1, $2, true)', ['app.company_id', companyId])
+}
+
 async function processQueue(companyId: string, limit = 25) {
   const client = await pool.connect()
   try {
     await client.query('begin')
+    await setCompanyGuc(client, companyId)
     const result = await processQueueWithClient(client, companyId, limit)
     await client.query('commit')
     for (const row of result.outbox) {
@@ -145,6 +164,7 @@ async function drainRentalInvoices(companyId: string): Promise<{
     for (const rental of due) {
       await client.query('begin')
       try {
+        await setCompanyGuc(client, rental.company_id)
         const result = await processRentalInvoice(client, rental)
         // Mirror the API's POST /api/rentals/:id/invoke ledger writes so a
         // worker-billed rental still surfaces in sync_events / mutation_outbox
@@ -563,6 +583,7 @@ async function drainAgentMutations<TPayload>(
   const client = await pool.connect()
   try {
     await client.query('begin')
+    await setCompanyGuc(client, companyId)
     const claimed = await client.query<{ id: string; payload: TPayload }>(
       `update mutation_outbox
          set status = 'processing',
@@ -589,6 +610,7 @@ async function drainAgentMutations<TPayload>(
     for (const row of claimed.rows) {
       summary.processed++
       await client.query('begin')
+      await setCompanyGuc(client, companyId)
       try {
         const result = await process(client, companyId, row.payload)
         summary.insightsCreated += result.insightsCreated

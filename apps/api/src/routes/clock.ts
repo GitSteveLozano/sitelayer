@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { haversineDistanceMeters, isInsideGeofence } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid, parseOptionalNumber } from '../http-utils.js'
 import { parseClockEventPhotoMultipart, ClockEventPhotoUploadError } from '../clock-event-photo-upload.js'
 import type { BlueprintStorage } from '../storage.js'
@@ -111,9 +111,11 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
         return true
       }
       if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
-      const workerCheck = await ctx.pool.query<{ id: string }>(
-        `select id from workers where company_id = $1 and id = $2 and deleted_at is null limit 1`,
-        [ctx.company.id, explicitWorkerIdRaw],
+      const workerCheck = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{ id: string }>(
+          `select id from workers where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+          [ctx.company.id, explicitWorkerIdRaw],
+        ),
       )
       if (!workerCheck.rows[0]) {
         ctx.sendJson(404, { error: 'worker not found' })
@@ -123,15 +125,17 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     } else {
       // Self path — the heuristic worker lookup remains the v1 placeholder
       // until Phase 1D.4 wires Clerk user → worker mapping.
-      const workerLookup = await ctx.pool.query<{ id: string }>(
-        `
+      const workerLookup = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{ id: string }>(
+          `
         select w.id
         from workers w
         where w.company_id = $1 and w.deleted_at is null
         order by w.created_at asc
         limit 1
         `,
-        [ctx.company.id],
+          [ctx.company.id],
+        ),
       )
       workerId = workerLookup.rows[0]?.id ?? null
     }
@@ -149,22 +153,24 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
         ctx.sendJson(400, { error: 'project_id must be a valid uuid' })
         return true
       }
-      const explicitProject = await ctx.pool.query<{
-        id: string
-        site_lat: string | null
-        site_lng: string | null
-        site_radius_m: number | null
-        auto_clock_in_enabled: boolean
-        auto_clock_correction_window_seconds: number
-      }>(
-        `
+      const explicitProject = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{
+          id: string
+          site_lat: string | null
+          site_lng: string | null
+          site_radius_m: number | null
+          auto_clock_in_enabled: boolean
+          auto_clock_correction_window_seconds: number
+        }>(
+          `
         select id, site_lat, site_lng, site_radius_m,
                auto_clock_in_enabled, auto_clock_correction_window_seconds
         from projects
         where company_id = $1 and id = $2 and deleted_at is null
         limit 1
         `,
-        [ctx.company.id, explicitProjectId],
+          [ctx.company.id, explicitProjectId],
+        ),
       )
       if (!explicitProject.rows[0]) {
         ctx.sendJson(404, { error: 'project not found' })
@@ -186,15 +192,16 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
         })
       }
     } else {
-      const candidateProjects = await ctx.pool.query<{
-        id: string
-        site_lat: string | null
-        site_lng: string | null
-        site_radius_m: number | null
-        auto_clock_in_enabled: boolean
-        auto_clock_correction_window_seconds: number
-      }>(
-        `
+      const candidateProjects = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{
+          id: string
+          site_lat: string | null
+          site_lng: string | null
+          site_radius_m: number | null
+          auto_clock_in_enabled: boolean
+          auto_clock_correction_window_seconds: number
+        }>(
+          `
         select id, site_lat, site_lng, site_radius_m,
                auto_clock_in_enabled, auto_clock_correction_window_seconds
         from projects
@@ -205,7 +212,8 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
           and site_radius_m is not null
           and site_radius_m > 0
         `,
-        [ctx.company.id],
+          [ctx.company.id],
+        ),
       )
       let bestDistance = Number.POSITIVE_INFINITY
       for (const row of candidateProjects.rows) {
@@ -254,8 +262,9 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     const occurredAt = new Date().toISOString()
     const correctibleUntil = computeCorrectibleUntil(source, occurredAt, correctionWindowSeconds)
 
-    const inserted = await ctx.pool.query(
-      `
+    const inserted = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `
       insert into clock_events (
         company_id, worker_id, project_id, clerk_user_id, event_type,
         occurred_at, lat, lng, accuracy_m, inside_geofence, notes,
@@ -266,20 +275,21 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
                 event_type, occurred_at, lat, lng, accuracy_m,
                 inside_geofence, notes, source, correctible_until, created_at
       `,
-      [
-        ctx.company.id,
-        workerId,
-        projectId,
-        currentUserId,
-        occurredAt,
-        lat,
-        lng,
-        accuracy,
-        insideGeofence,
-        notes,
-        source,
-        correctibleUntil,
-      ],
+        [
+          ctx.company.id,
+          workerId,
+          projectId,
+          currentUserId,
+          occurredAt,
+          lat,
+          lng,
+          accuracy,
+          insideGeofence,
+          notes,
+          source,
+          correctibleUntil,
+        ],
+      ),
     )
     ctx.sendJson(201, { clockEvent: inserted.rows[0] })
     return true
@@ -311,9 +321,11 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
         return true
       }
       if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
-      const workerCheck = await ctx.pool.query<{ id: string }>(
-        `select id from workers where company_id = $1 and id = $2 and deleted_at is null limit 1`,
-        [ctx.company.id, explicitWorkerIdRaw],
+      const workerCheck = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{ id: string }>(
+          `select id from workers where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+          [ctx.company.id, explicitWorkerIdRaw],
+        ),
       )
       if (!workerCheck.rows[0]) {
         ctx.sendJson(404, { error: 'worker not found' })
@@ -321,26 +333,29 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       }
       workerId = workerCheck.rows[0].id
     } else {
-      const workerLookup = await ctx.pool.query<{ id: string }>(
-        `
+      const workerLookup = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{ id: string }>(
+          `
         select w.id
         from workers w
         where w.company_id = $1 and w.deleted_at is null
         order by w.created_at asc
         limit 1
         `,
-        [ctx.company.id],
+          [ctx.company.id],
+        ),
       )
       workerId = workerLookup.rows[0]?.id ?? null
     }
 
-    const openInLookup = await ctx.pool.query<{
-      id: string
-      project_id: string | null
-      occurred_at: string
-      event_type: string
-    }>(
-      `
+    const openInLookup = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        id: string
+        project_id: string | null
+        occurred_at: string
+        event_type: string
+      }>(
+        `
       select id, project_id, occurred_at, event_type
       from clock_events
       where company_id = $1
@@ -352,7 +367,8 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       order by occurred_at desc
       limit 1
       `,
-      [ctx.company.id, workerId, currentUserId],
+        [ctx.company.id, workerId, currentUserId],
+      ),
     )
     const openIn = openInLookup.rows[0]
     if (!openIn || openIn.event_type !== 'in') {
@@ -364,15 +380,17 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     let insideGeofence: boolean | null = null
     let correctionWindowSeconds: number | null = null
     if (projectId) {
-      const projectRow = await ctx.pool.query<{
-        site_lat: string | null
-        site_lng: string | null
-        site_radius_m: number | null
-        auto_clock_correction_window_seconds: number
-      }>(
-        `select site_lat, site_lng, site_radius_m, auto_clock_correction_window_seconds
+      const projectRow = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{
+          site_lat: string | null
+          site_lng: string | null
+          site_radius_m: number | null
+          auto_clock_correction_window_seconds: number
+        }>(
+          `select site_lat, site_lng, site_radius_m, auto_clock_correction_window_seconds
          from projects where company_id = $1 and id = $2`,
-        [ctx.company.id, projectId],
+          [ctx.company.id, projectId],
+        ),
       )
       const row = projectRow.rows[0]
       if (row) {
@@ -396,13 +414,14 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     const occurredAt = new Date().toISOString()
     const correctibleUntil = computeCorrectibleUntil(source, occurredAt, correctionWindowSeconds)
 
-    const inserted = await ctx.pool.query<{
-      id: string
-      worker_id: string | null
-      project_id: string | null
-      occurred_at: string
-    }>(
-      `
+    const inserted = await withMutationTx(ctx.company.id, (c) =>
+      c.query<{
+        id: string
+        worker_id: string | null
+        project_id: string | null
+        occurred_at: string
+      }>(
+        `
       insert into clock_events (
         company_id, worker_id, project_id, clerk_user_id, event_type,
         occurred_at, lat, lng, accuracy_m, inside_geofence, notes,
@@ -413,20 +432,21 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
                 event_type, occurred_at, lat, lng, accuracy_m,
                 inside_geofence, notes, source, correctible_until, created_at
       `,
-      [
-        ctx.company.id,
-        workerId,
-        projectId,
-        currentUserId,
-        occurredAt,
-        lat,
-        lng,
-        accuracy,
-        insideGeofence,
-        notes,
-        source,
-        correctibleUntil,
-      ],
+        [
+          ctx.company.id,
+          workerId,
+          projectId,
+          currentUserId,
+          occurredAt,
+          lat,
+          lng,
+          accuracy,
+          insideGeofence,
+          notes,
+          source,
+          correctibleUntil,
+        ],
+      ),
     )
     const outRow = inserted.rows[0]!
 
@@ -476,8 +496,9 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     const workerIdParam = String(url.searchParams.get('worker_id') ?? '').trim()
     const dateParam = String(url.searchParams.get('date') ?? '').trim()
     const includeVoided = url.searchParams.get('include_voided') === '1'
-    const result = await ctx.pool.query(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `
       select e.id, e.company_id, e.worker_id, e.project_id, e.clerk_user_id,
              e.event_type, e.occurred_at, e.lat, e.lng, e.accuracy_m,
              e.inside_geofence, e.notes, e.source, e.correctible_until,
@@ -495,7 +516,8 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       order by e.occurred_at asc
       limit 500
       `,
-      [ctx.company.id, workerIdParam, dateParam, includeVoided],
+        [ctx.company.id, workerIdParam, dateParam, includeVoided],
+      ),
     )
     ctx.sendJson(200, { events: result.rows })
     return true
@@ -516,22 +538,24 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
     const reason = typeof body.reason === 'string' ? body.reason.slice(0, 500) : null
 
-    const existing = await ctx.pool.query<{
-      id: string
-      clerk_user_id: string | null
-      worker_id: string | null
-      correctible_until: string | null
-      voided_at: string | null
-      source: ClockSource
-      event_type: string
-      occurred_at: string
-    }>(
-      `select id, clerk_user_id, worker_id, correctible_until, voided_at,
+    const existing = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        id: string
+        clerk_user_id: string | null
+        worker_id: string | null
+        correctible_until: string | null
+        voided_at: string | null
+        source: ClockSource
+        event_type: string
+        occurred_at: string
+      }>(
+        `select id, clerk_user_id, worker_id, correctible_until, voided_at,
               source, event_type, occurred_at
        from clock_events
        where company_id = $1 and id = $2
        limit 1`,
-      [ctx.company.id, id],
+        [ctx.company.id, id],
+      ),
     )
     const row = existing.rows[0]
     if (!row) {
@@ -564,8 +588,9 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       }
     }
 
-    const updated = await ctx.pool.query(
-      `update clock_events
+    const updated = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `update clock_events
          set voided_at = now(),
              voided_by = $3,
              notes = case
@@ -578,7 +603,8 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
                  event_type, occurred_at, lat, lng, accuracy_m,
                  inside_geofence, notes, source, correctible_until,
                  voided_at, voided_by, created_at`,
-      [ctx.company.id, id, ctx.currentUserId, reason],
+        [ctx.company.id, id, ctx.currentUserId, reason],
+      ),
     )
     if (!updated.rows[0]) {
       ctx.sendJson(409, { error: 'clock event already voided' })
@@ -599,9 +625,11 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const exists = await ctx.pool.query<{ id: string; voided_at: string | null }>(
-      `select id, voided_at from clock_events where company_id = $1 and id = $2 limit 1`,
-      [ctx.company.id, id],
+    const exists = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string; voided_at: string | null }>(
+        `select id, voided_at from clock_events where company_id = $1 and id = $2 limit 1`,
+        [ctx.company.id, id],
+      ),
     )
     if (!exists.rows[0]) {
       ctx.sendJson(404, { error: 'clock event not found' })
@@ -625,8 +653,9 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       throw err
     }
 
-    const updated = await ctx.pool.query(
-      `update clock_events
+    const updated = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `update clock_events
          set photo_storage_path = $3,
              photo_uploaded_at = now(),
              photo_verification_status = 'pending'
@@ -637,7 +666,8 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
                  voided_at, voided_by, photo_storage_path,
                  photo_uploaded_at, photo_verified_at, photo_verified_by,
                  photo_verification_status, created_at`,
-      [ctx.company.id, id, upload.storagePath],
+        [ctx.company.id, id, upload.storagePath],
+      ),
     )
     ctx.sendJson(200, { clockEvent: updated.rows[0] })
     return true
@@ -660,14 +690,16 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       ctx.sendJson(400, { error: 'status must be "approved" or "rejected"' })
       return true
     }
-    const updated = await ctx.pool.query<{ id: string; photo_verification_status: string | null }>(
-      `update clock_events
+    const updated = await withMutationTx(ctx.company.id, (c) =>
+      c.query<{ id: string; photo_verification_status: string | null }>(
+        `update clock_events
          set photo_verification_status = $3,
              photo_verified_at = now(),
              photo_verified_by = $4
        where company_id = $1 and id = $2 and photo_storage_path is not null
        returning id, photo_verification_status, photo_verified_at, photo_verified_by`,
-      [ctx.company.id, id, status, ctx.currentUserId],
+        [ctx.company.id, id, status, ctx.currentUserId],
+      ),
     )
     if (!updated.rows[0]) {
       ctx.sendJson(404, { error: 'clock event has no photo to review' })

@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 
 export type ProjectAssignmentRouteCtx = {
   pool: Pool
@@ -35,12 +35,14 @@ export async function handleProjectAssignmentRoutes(
       ctx.sendJson(404, { error: 'project not found' })
       return true
     }
-    const result = await ctx.pool.query(
-      `select id, project_id, clerk_user_id, role, assigned_by_clerk_user_id, created_at, deleted_at
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select id, project_id, clerk_user_id, role, assigned_by_clerk_user_id, created_at, deleted_at
          from project_assignments
          where company_id = $1 and project_id = $2 and deleted_at is null
          order by created_at asc`,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     ctx.sendJson(200, { assignments: result.rows })
     return true

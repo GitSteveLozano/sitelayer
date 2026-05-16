@@ -8,7 +8,7 @@ import {
   type CrewScheduleWorkflowSnapshot,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
 
 // POST /api/schedules wire-format validation. Mirrors the
@@ -125,8 +125,9 @@ export async function handleScheduleRoutes(
       ctx.sendJson(400, { error: 'project id is required' })
       return true
     }
-    const result = await ctx.pool.query(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `
       select s.id, s.project_id, s.scheduled_for, s.crew, s.status, s.version, s.deleted_at, s.created_at,
              s.start_time, s.end_time, s.takeoff_measurement_id,
              tm.service_item_code as takeoff_service_item_code,
@@ -141,7 +142,8 @@ export async function handleScheduleRoutes(
       where s.company_id = $1 and s.project_id = $2 and s.deleted_at is null
       order by s.scheduled_for desc, s.created_at desc
       `,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     ctx.sendJson(200, { schedules: result.rows })
     return true
@@ -162,8 +164,9 @@ export async function handleScheduleRoutes(
       ctx.sendJson(400, { error: 'to must be YYYY-MM-DD' })
       return true
     }
-    const result = await ctx.pool.query(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `
       select s.id, s.project_id, s.scheduled_for, s.crew, s.status, s.version,
              s.deleted_at, s.created_at,
              s.start_time, s.end_time, s.takeoff_measurement_id,
@@ -185,7 +188,8 @@ export async function handleScheduleRoutes(
       order by s.scheduled_for asc, s.created_at asc
       limit 200
       `,
-      [ctx.company.id, from, to],
+        [ctx.company.id, from, to],
+      ),
     )
     ctx.sendJson(200, { schedules: result.rows })
     return true

@@ -1,6 +1,6 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
 /**
@@ -69,9 +69,11 @@ export async function handleScaffoldOpsRoutes(
 ): Promise<boolean> {
   // ---- branches ----------------------------------------------------------
   if (req.method === 'GET' && url.pathname === '/api/branches') {
-    const result = await ctx.pool.query(
-      `select ${BRANCH_COLUMNS} from branches where company_id = $1 and deleted_at is null order by is_default desc, name asc`,
-      [ctx.company.id],
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${BRANCH_COLUMNS} from branches where company_id = $1 and deleted_at is null order by is_default desc, name asc`,
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, { branches: result.rows })
     return true
@@ -124,7 +126,9 @@ export async function handleScaffoldOpsRoutes(
       updates.push(`address = $${params.length}`)
     }
     if (body.is_default !== undefined && body.is_default) {
-      await ctx.pool.query('update branches set is_default = false where company_id = $1', [ctx.company.id])
+      await withMutationTx(ctx.company.id, (c) =>
+        c.query('update branches set is_default = false where company_id = $1', [ctx.company.id]),
+      )
       updates.push('is_default = true')
     }
     if (updates.length === 0) {
@@ -132,9 +136,11 @@ export async function handleScaffoldOpsRoutes(
       return true
     }
     updates.push('version = version + 1', 'updated_at = now()')
-    const result = await ctx.pool.query(
-      `update branches set ${updates.join(', ')} where company_id = $1 and id = $2 and deleted_at is null returning ${BRANCH_COLUMNS}`,
-      params,
+    const result = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `update branches set ${updates.join(', ')} where company_id = $1 and id = $2 and deleted_at is null returning ${BRANCH_COLUMNS}`,
+        params,
+      ),
     )
     if (!result.rows[0]) {
       ctx.sendJson(404, { error: 'branch not found' })
@@ -146,9 +152,11 @@ export async function handleScaffoldOpsRoutes(
 
   // ---- rental vendors ----------------------------------------------------
   if (req.method === 'GET' && url.pathname === '/api/rental-vendors') {
-    const result = await ctx.pool.query(
-      `select ${RENTAL_VENDOR_COLUMNS} from rental_vendors where company_id = $1 and deleted_at is null order by active desc, name asc`,
-      [ctx.company.id],
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${RENTAL_VENDOR_COLUMNS} from rental_vendors where company_id = $1 and deleted_at is null order by active desc, name asc`,
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, { vendors: result.rows })
     return true
@@ -162,17 +170,19 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'code and name are required' })
       return true
     }
-    const result = await ctx.pool.query(
-      `insert into rental_vendors (company_id, code, name, contact_email, contact_phone, notes)
+    const result = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `insert into rental_vendors (company_id, code, name, contact_email, contact_phone, notes)
        values ($1, $2, $3, $4, $5, $6) returning ${RENTAL_VENDOR_COLUMNS}`,
-      [
-        ctx.company.id,
-        code,
-        name,
-        nonEmptyString(body.contact_email),
-        nonEmptyString(body.contact_phone),
-        nonEmptyString(body.notes),
-      ],
+        [
+          ctx.company.id,
+          code,
+          name,
+          nonEmptyString(body.contact_email),
+          nonEmptyString(body.contact_phone),
+          nonEmptyString(body.notes),
+        ],
+      ),
     )
     ctx.sendJson(201, result.rows[0])
     return true
@@ -187,9 +197,11 @@ export async function handleScaffoldOpsRoutes(
       params.push(projectId)
       where += ` and project_id = $${params.length}`
     }
-    const result = await ctx.pool.query(
-      `select ${EXTERNAL_RENTAL_COLUMNS} from external_rentals where ${where} order by created_at desc`,
-      params,
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${EXTERNAL_RENTAL_COLUMNS} from external_rentals where ${where} order by created_at desc`,
+        params,
+      ),
     )
     ctx.sendJson(200, { externalRentals: result.rows })
     return true
@@ -205,25 +217,27 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'vendor_id, inventory_item_id, quantity, on_rent_date are required' })
       return true
     }
-    const result = await ctx.pool.query(
-      `insert into external_rentals (
+    const result = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `insert into external_rentals (
         company_id, vendor_id, inventory_item_id, project_id, branch_id,
         quantity, vendor_rate, rate_unit, on_rent_date, vendor_po, notes
       ) values ($1, $2, $3, $4, $5, $6, $7, coalesce($8, 'cycle'), $9, $10, $11)
       returning ${EXTERNAL_RENTAL_COLUMNS}`,
-      [
-        ctx.company.id,
-        vendorId,
-        inventoryItemId,
-        nonEmptyString(body.project_id),
-        nonEmptyString(body.branch_id),
-        quantity,
-        parseNumber(body.vendor_rate, 0) ?? 0,
-        nonEmptyString(body.rate_unit),
-        onRentDate,
-        nonEmptyString(body.vendor_po),
-        nonEmptyString(body.notes),
-      ],
+        [
+          ctx.company.id,
+          vendorId,
+          inventoryItemId,
+          nonEmptyString(body.project_id),
+          nonEmptyString(body.branch_id),
+          quantity,
+          parseNumber(body.vendor_rate, 0) ?? 0,
+          nonEmptyString(body.rate_unit),
+          onRentDate,
+          nonEmptyString(body.vendor_po),
+          nonEmptyString(body.notes),
+        ],
+      ),
     )
     ctx.sendJson(201, result.rows[0])
     return true
@@ -238,15 +252,17 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'returned_quantity must be a non-negative number' })
       return true
     }
-    const result = await ctx.pool.query(
-      `update external_rentals
+    const result = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `update external_rentals
        set returned_quantity = returned_quantity + $3,
            off_rent_date = case when returned_quantity + $3 >= quantity then coalesce($4, current_date) else off_rent_date end,
            status = case when returned_quantity + $3 >= quantity then 'returned' else status end,
            version = version + 1, updated_at = now()
        where company_id = $1 and id = $2 and deleted_at is null
        returning ${EXTERNAL_RENTAL_COLUMNS}`,
-      [ctx.company.id, id, returnedQuantity, nonEmptyString(body.off_rent_date)],
+        [ctx.company.id, id, returnedQuantity, nonEmptyString(body.off_rent_date)],
+      ),
     )
     if (!result.rows[0]) {
       ctx.sendJson(404, { error: 'external rental not found' })
@@ -258,11 +274,13 @@ export async function handleScaffoldOpsRoutes(
 
   // ---- manufacturer catalog ---------------------------------------------
   if (req.method === 'GET' && url.pathname === '/api/scaffold/manufacturers') {
-    const result = await ctx.pool.query(
-      `select ${MANUFACTURER_COLUMNS} from scaffold_manufacturers
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${MANUFACTURER_COLUMNS} from scaffold_manufacturers
        where company_id is null or company_id = $1
        order by name asc`,
-      [ctx.company.id],
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, { manufacturers: result.rows })
     return true
@@ -276,10 +294,12 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'code and name are required' })
       return true
     }
-    const result = await ctx.pool.query(
-      `insert into scaffold_manufacturers (company_id, code, name, website, notes)
+    const result = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `insert into scaffold_manufacturers (company_id, code, name, website, notes)
        values ($1, $2, $3, $4, $5) returning ${MANUFACTURER_COLUMNS}`,
-      [ctx.company.id, code, name, nonEmptyString(body.website), nonEmptyString(body.notes)],
+        [ctx.company.id, code, name, nonEmptyString(body.website), nonEmptyString(body.notes)],
+      ),
     )
     ctx.sendJson(201, result.rows[0])
     return true
@@ -292,9 +312,8 @@ export async function handleScaffoldOpsRoutes(
       params.push(manufacturerId)
       where += ` and manufacturer_id = $${params.length}`
     }
-    const result = await ctx.pool.query(
-      `select ${SYSTEM_COLUMNS} from scaffold_systems where ${where} order by name asc`,
-      params,
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(`select ${SYSTEM_COLUMNS} from scaffold_systems where ${where} order by name asc`, params),
     )
     ctx.sendJson(200, { systems: result.rows })
     return true
@@ -308,10 +327,12 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'code and name are required' })
       return true
     }
-    const result = await ctx.pool.query(
-      `insert into scaffold_systems (company_id, manufacturer_id, code, name, description)
+    const result = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `insert into scaffold_systems (company_id, manufacturer_id, code, name, description)
        values ($1, $2, $3, $4, $5) returning ${SYSTEM_COLUMNS}`,
-      [ctx.company.id, nonEmptyString(body.manufacturer_id), code, name, nonEmptyString(body.description)],
+        [ctx.company.id, nonEmptyString(body.manufacturer_id), code, name, nonEmptyString(body.description)],
+      ),
     )
     ctx.sendJson(201, result.rows[0])
     return true
@@ -331,9 +352,8 @@ export async function handleScaffoldOpsRoutes(
       params.push(manufacturerId)
       where += ` and manufacturer_id = $${params.length}`
     }
-    const result = await ctx.pool.query(
-      `select ${CATALOG_PART_COLUMNS} from catalog_parts where ${where} order by sku asc limit 500`,
-      params,
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(`select ${CATALOG_PART_COLUMNS} from catalog_parts where ${where} order by sku asc limit 500`, params),
     )
     ctx.sendJson(200, { catalogParts: result.rows })
     return true
@@ -347,29 +367,31 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'sku and description are required' })
       return true
     }
-    const result = await ctx.pool.query(
-      `insert into catalog_parts (
+    const result = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `insert into catalog_parts (
         company_id, manufacturer_id, scaffold_system_id, inventory_item_id,
         sku, description, unit, weight_kg, length_mm, width_mm, height_mm,
         surface_area_m2, attrs, active
       ) values ($1, $2, $3, $4, $5, $6, coalesce($7, 'ea'), $8, $9, $10, $11, $12, coalesce($13, '{}'::jsonb), coalesce($14, true))
       returning ${CATALOG_PART_COLUMNS}`,
-      [
-        ctx.company.id,
-        nonEmptyString(body.manufacturer_id),
-        nonEmptyString(body.scaffold_system_id),
-        nonEmptyString(body.inventory_item_id),
-        sku,
-        description,
-        nonEmptyString(body.unit),
-        parseNumber(body.weight_kg),
-        parseNumber(body.length_mm),
-        parseNumber(body.width_mm),
-        parseNumber(body.height_mm),
-        parseNumber(body.surface_area_m2),
-        body.attrs ?? null,
-        body.active ?? true,
-      ],
+        [
+          ctx.company.id,
+          nonEmptyString(body.manufacturer_id),
+          nonEmptyString(body.scaffold_system_id),
+          nonEmptyString(body.inventory_item_id),
+          sku,
+          description,
+          nonEmptyString(body.unit),
+          parseNumber(body.weight_kg),
+          parseNumber(body.length_mm),
+          parseNumber(body.width_mm),
+          parseNumber(body.height_mm),
+          parseNumber(body.surface_area_m2),
+          body.attrs ?? null,
+          body.active ?? true,
+        ],
+      ),
     )
     ctx.sendJson(201, result.rows[0])
     return true
@@ -440,9 +462,11 @@ export async function handleScaffoldOpsRoutes(
   const projectBomsMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/boms$/)
   if (req.method === 'GET' && projectBomsMatch) {
     const projectId = projectBomsMatch[1]!
-    const result = await ctx.pool.query(
-      `select ${BOM_COLUMNS} from boms where company_id = $1 and project_id = $2 and deleted_at is null order by created_at desc`,
-      [ctx.company.id, projectId],
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${BOM_COLUMNS} from boms where company_id = $1 and project_id = $2 and deleted_at is null order by created_at desc`,
+        [ctx.company.id, projectId],
+      ),
     )
     ctx.sendJson(200, { boms: result.rows })
     return true
@@ -456,17 +480,19 @@ export async function handleScaffoldOpsRoutes(
       ctx.sendJson(400, { error: 'name is required' })
       return true
     }
-    const result = await ctx.pool.query(
-      `insert into boms (company_id, project_id, source, source_ref, name, notes)
+    const result = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `insert into boms (company_id, project_id, source, source_ref, name, notes)
        values ($1, $2, coalesce($3, 'manual'), $4, $5, $6) returning ${BOM_COLUMNS}`,
-      [
-        ctx.company.id,
-        projectId,
-        nonEmptyString(body.source),
-        nonEmptyString(body.source_ref),
-        name,
-        nonEmptyString(body.notes),
-      ],
+        [
+          ctx.company.id,
+          projectId,
+          nonEmptyString(body.source),
+          nonEmptyString(body.source_ref),
+          name,
+          nonEmptyString(body.notes),
+        ],
+      ),
     )
     ctx.sendJson(201, result.rows[0])
     return true
@@ -475,17 +501,21 @@ export async function handleScaffoldOpsRoutes(
   const bomIdMatch = url.pathname.match(/^\/api\/boms\/([^/]+)$/)
   if (req.method === 'GET' && bomIdMatch) {
     const id = bomIdMatch[1]!
-    const bom = await ctx.pool.query(
-      `select ${BOM_COLUMNS} from boms where company_id = $1 and id = $2 and deleted_at is null`,
-      [ctx.company.id, id],
+    const bom = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(`select ${BOM_COLUMNS} from boms where company_id = $1 and id = $2 and deleted_at is null`, [
+        ctx.company.id,
+        id,
+      ]),
     )
     if (!bom.rows[0]) {
       ctx.sendJson(404, { error: 'bom not found' })
       return true
     }
-    const lines = await ctx.pool.query(
-      `select ${BOM_LINE_COLUMNS} from bom_lines where company_id = $1 and bom_id = $2 order by created_at asc`,
-      [ctx.company.id, id],
+    const lines = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${BOM_LINE_COLUMNS} from bom_lines where company_id = $1 and bom_id = $2 order by created_at asc`,
+        [ctx.company.id, id],
+      ),
     )
     ctx.sendJson(200, { ...bom.rows[0], lines: lines.rows })
     return true
@@ -535,12 +565,14 @@ export async function handleScaffoldOpsRoutes(
   if (req.method === 'POST' && bomApproveMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = bomApproveMatch[1]!
-    const result = await ctx.pool.query(
-      `update boms
+    const result = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `update boms
          set status = 'approved', approved_at = now(), approved_by = $3, version = version + 1, updated_at = now()
        where company_id = $1 and id = $2 and deleted_at is null and status = 'draft'
        returning ${BOM_COLUMNS}`,
-      [ctx.company.id, id, ctx.currentUserId],
+        [ctx.company.id, id, ctx.currentUserId],
+      ),
     )
     if (!result.rows[0]) {
       ctx.sendJson(409, { error: 'bom not in draft or not found' })

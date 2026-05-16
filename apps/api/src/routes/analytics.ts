@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import { DEFAULT_BONUS_RULE, calculateBonusPayout, computeProductivity, sumMoney } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
@@ -364,8 +365,9 @@ export async function handleAnalyticsRoutes(
     const from = url.searchParams.get('from') ?? new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString()
     const to = url.searchParams.get('to') ?? new Date().toISOString()
 
-    const result = await ctx.pool.query(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `
       select
         date_trunc('day', le.occurred_on)::date as day,
         p.division_code,
@@ -378,7 +380,8 @@ export async function handleAnalyticsRoutes(
       group by date_trunc('day', le.occurred_on), p.division_code
       order by day desc
       `,
-      [ctx.company.id, from, to],
+        [ctx.company.id, from, to],
+      ),
     )
 
     const history = result.rows.map((row) => ({

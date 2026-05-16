@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { Pool } from 'pg'
 import { calculateGeometryQuantity, normalizeGeometry } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidUuid, parseExpectedVersion } from '../http-utils.js'
 import {
   assertServiceItemCatalogStatus as assertServiceItemCatalogStatusImpl,
@@ -200,9 +200,8 @@ export async function handleTakeoffWriteRoutes(
     const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
     const measurementInput = prepareTakeoffMeasurementInput(body)
 
-    const projectVersionResult = await ctx.pool.query(
-      'select version from projects where company_id = $1 and id = $2',
-      [ctx.company.id, projectId],
+    const projectVersionResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query('select version from projects where company_id = $1 and id = $2', [ctx.company.id, projectId]),
     )
     const currentProject = projectVersionResult.rows[0]
     if (!currentProject) {
@@ -245,9 +244,11 @@ export async function handleTakeoffWriteRoutes(
     // Curated-catalog enforcement (per spec): a takeoff cannot reference a
     // service item without at least one curated division mapping, and if a
     // division was supplied it must be in the allowed set.
-    const projectDivisionResult = await ctx.pool.query<{ division_code: string | null }>(
-      'select division_code from projects where company_id = $1 and id = $2',
-      [ctx.company.id, projectId],
+    const projectDivisionResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ division_code: string | null }>(
+        'select division_code from projects where company_id = $1 and id = $2',
+        [ctx.company.id, projectId],
+      ),
     )
     const fallbackDivision = measurementInput.divisionCode ?? projectDivisionResult.rows[0]?.division_code ?? null
     const catalogStatus = await assertServiceItemCatalogStatus(
@@ -328,9 +329,8 @@ export async function handleTakeoffWriteRoutes(
     const preparedMeasurements = measurements.map((measurement, index) =>
       prepareTakeoffMeasurementInput(measurement, `measurements[${index}]`),
     )
-    const projectVersionResult = await ctx.pool.query(
-      'select version from projects where company_id = $1 and id = $2',
-      [ctx.company.id, projectId],
+    const projectVersionResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query('select version from projects where company_id = $1 and id = $2', [ctx.company.id, projectId]),
     )
     const currentProject = projectVersionResult.rows[0]
     if (!currentProject) {
@@ -376,9 +376,11 @@ export async function handleTakeoffWriteRoutes(
     // wipe the project's takeoff history. Pre-load the
     // (service_item_code, division_code) tuples in one query so a
     // 50-measurement replay doesn't fan out to 100 round-trips.
-    const projectDivisionResult = await ctx.pool.query<{ division_code: string | null }>(
-      'select division_code from projects where company_id = $1 and id = $2',
-      [ctx.company.id, projectId],
+    const projectDivisionResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ division_code: string | null }>(
+        'select division_code from projects where company_id = $1 and id = $2',
+        [ctx.company.id, projectId],
+      ),
     )
     const projectDivisionCode = projectDivisionResult.rows[0]?.division_code ?? null
     const catalogIndex = await loadServiceItemCatalogIndex(

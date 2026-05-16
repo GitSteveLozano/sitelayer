@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
 import { parseExpectedVersion } from '../http-utils.js'
 
 /**
@@ -54,9 +54,11 @@ export async function handleCustomerRoutes(
   ctx: CustomerRouteCtx,
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/customers') {
-    const result = await ctx.pool.query(
-      'select id, external_id, name, source, version, deleted_at, created_at from customers where company_id = $1 and deleted_at is null order by name asc',
-      [ctx.company.id],
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        'select id, external_id, name, source, version, deleted_at, created_at from customers where company_id = $1 and deleted_at is null order by name asc',
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, { customers: result.rows })
     return true

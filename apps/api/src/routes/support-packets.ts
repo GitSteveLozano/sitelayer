@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { getRequestContext } from '@sitelayer/logger'
 import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
@@ -141,7 +142,7 @@ function readClientRoute(client: JsonRecord): string | null {
   return getRequestContext()?.route ?? null
 }
 
-async function fetchAuditContext(pool: Pool, companyId: string, actorUserId: string, requestIds: string[]) {
+async function fetchAuditContext(_pool: Pool, companyId: string, actorUserId: string, requestIds: string[]) {
   const values: unknown[] = [companyId]
   const clauses: string[] = []
   if (requestIds.length) {
@@ -153,37 +154,43 @@ async function fetchAuditContext(pool: Pool, companyId: string, actorUserId: str
   clauses.push(`(actor_user_id = $${actorParam} and created_at >= now() - interval '2 hours')`)
   values.push(100)
   const limitParam = values.length
-  const result = await pool.query(
-    `select id, actor_user_id, actor_role, entity_type, entity_id, action, before, after, request_id, sentry_trace, created_at
+  const result = await withCompanyClient(companyId, (c) =>
+    c.query(
+      `select id, actor_user_id, actor_role, entity_type, entity_id, action, before, after, request_id, sentry_trace, created_at
        from audit_events
       where company_id = $1 and (${clauses.join(' or ')})
       order by created_at desc
       limit $${limitParam}`,
-    values,
+      values,
+    ),
   )
   return sanitizeSupportJson(result.rows)
 }
 
-async function fetchQueueContext(pool: Pool, companyId: string, requestIds: string[]) {
+async function fetchQueueContext(_pool: Pool, companyId: string, requestIds: string[]) {
   if (!requestIds.length) return { outbox: [], syncEvents: [] }
   const [outbox, syncEvents] = await Promise.all([
-    pool.query(
-      `select id, entity_type, entity_id, mutation_type, status, attempt_count, next_attempt_at,
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        `select id, entity_type, entity_id, mutation_type, status, attempt_count, next_attempt_at,
               applied_at, error, created_at, request_id, sentry_trace
          from mutation_outbox
         where company_id = $1 and request_id = any($2::text[])
         order by created_at desc
         limit 100`,
-      [companyId, requestIds],
+        [companyId, requestIds],
+      ),
     ),
-    pool.query(
-      `select id, entity_type, entity_id, direction, status, attempt_count, next_attempt_at,
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        `select id, entity_type, entity_id, direction, status, attempt_count, next_attempt_at,
               applied_at, error, created_at, request_id, sentry_trace
          from sync_events
         where company_id = $1 and request_id = any($2::text[])
         order by created_at desc
         limit 100`,
-      [companyId, requestIds],
+        [companyId, requestIds],
+      ),
     ),
   ])
   return {
@@ -192,19 +199,23 @@ async function fetchQueueContext(pool: Pool, companyId: string, requestIds: stri
   }
 }
 
-async function fetchQueueDepth(pool: Pool, companyId: string) {
+async function fetchQueueDepth(_pool: Pool, companyId: string) {
   const [outbox, syncEvents] = await Promise.all([
-    pool.query<{ count: string }>(
-      `select count(*)::text as count
+    withCompanyClient(companyId, (c) =>
+      c.query<{ count: string }>(
+        `select count(*)::text as count
          from mutation_outbox
         where company_id = $1 and status in ('pending', 'processing')`,
-      [companyId],
+        [companyId],
+      ),
     ),
-    pool.query<{ count: string }>(
-      `select count(*)::text as count
+    withCompanyClient(companyId, (c) =>
+      c.query<{ count: string }>(
+        `select count(*)::text as count
          from sync_events
         where company_id = $1 and status in ('pending', 'processing')`,
-      [companyId],
+        [companyId],
+      ),
     ),
   ])
   return {
@@ -389,23 +400,25 @@ async function createSupportPacket(ctx: SupportPacketRouteCtx) {
   const route = readClientRoute(client)
   const retentionDays = Math.max(1, Math.min(90, Number(process.env.SUPPORT_PACKET_RETENTION_DAYS ?? 30)))
   const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString()
-  const result = await ctx.pool.query<{ id: string; created_at: string; expires_at: string | null }>(
-    `insert into support_debug_packets (
+  const result = await withMutationTx(ctx.company.id, (c) =>
+    c.query<{ id: string; created_at: string; expires_at: string | null }>(
+      `insert into support_debug_packets (
        company_id, actor_user_id, request_id, route, build_sha, problem, client, server_context, expires_at, redaction_version
      ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::timestamptz, $10)
      returning id, created_at, expires_at`,
-    [
-      ctx.company.id,
-      ctx.identity.userId,
-      requestId,
-      route,
-      ctx.buildSha,
-      problem,
-      JSON.stringify(client),
-      JSON.stringify(serverContext),
-      expiresAt,
-      REDACTION_VERSION,
-    ],
+      [
+        ctx.company.id,
+        ctx.identity.userId,
+        requestId,
+        route,
+        ctx.buildSha,
+        problem,
+        JSON.stringify(client),
+        JSON.stringify(serverContext),
+        expiresAt,
+        REDACTION_VERSION,
+      ],
+    ),
   )
   const row = result.rows[0]
   if (!row) {
@@ -426,13 +439,15 @@ async function getSupportPacket(ctx: SupportPacketRouteCtx, id: string) {
     ctx.sendJson(400, { error: 'invalid support packet id' })
     return
   }
-  const result = await ctx.pool.query<SupportPacketRow>(
-    `select id, company_id, actor_user_id, request_id, route, build_sha, problem,
+  const result = await withCompanyClient(ctx.company.id, (c) =>
+    c.query<SupportPacketRow>(
+      `select id, company_id, actor_user_id, request_id, route, build_sha, problem,
             client, server_context, created_at, expires_at, redaction_version
        from support_debug_packets
       where id = $1 and company_id = $2 and (expires_at is null or expires_at > now())
       limit 1`,
-    [id, ctx.company.id],
+      [id, ctx.company.id],
+    ),
   )
   const row = result.rows[0]
   if (!row) {
@@ -445,13 +460,15 @@ async function getSupportPacket(ctx: SupportPacketRouteCtx, id: string) {
 async function listSupportPackets(ctx: SupportPacketRouteCtx, url: URL) {
   if (!ctx.requireRole(['admin'])) return
   const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 25)))
-  const result = await ctx.pool.query(
-    `select id, actor_user_id, request_id, route, build_sha, problem, created_at, expires_at, redaction_version
+  const result = await withCompanyClient(ctx.company.id, (c) =>
+    c.query(
+      `select id, actor_user_id, request_id, route, build_sha, problem, created_at, expires_at, redaction_version
        from support_debug_packets
       where company_id = $1 and (expires_at is null or expires_at > now())
       order by created_at desc
       limit $2`,
-    [ctx.company.id, limit],
+      [ctx.company.id, limit],
+    ),
   )
   ctx.sendJson(200, { support_packets: result.rows })
 }

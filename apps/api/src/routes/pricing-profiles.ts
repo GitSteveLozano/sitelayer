@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { parseConfigPayload, parseExpectedVersion } from '../http-utils.js'
 
 export type PricingProfileRouteCtx = {
@@ -25,9 +25,11 @@ export async function handlePricingProfileRoutes(
   ctx: PricingProfileRouteCtx,
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/pricing-profiles') {
-    const result = await ctx.pool.query(
-      'select id, name, is_default, config, version, created_at from pricing_profiles where company_id = $1 order by created_at asc',
-      [ctx.company.id],
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        'select id, name, is_default, config, version, created_at from pricing_profiles where company_id = $1 order by created_at asc',
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, { pricingProfiles: result.rows })
     return true

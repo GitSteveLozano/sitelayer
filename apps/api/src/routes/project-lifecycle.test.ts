@@ -51,7 +51,12 @@ class FakePool {
 
   private dispatch(sqlRaw: string, params: unknown[]) {
     const sql = sqlRaw.trim()
-    if (sql.startsWith('begin') || sql.startsWith('commit') || sql.startsWith('rollback')) {
+    if (
+      sql.startsWith('begin') ||
+      sql.startsWith('commit') ||
+      sql.startsWith('rollback') ||
+      sql.startsWith('select set_config')
+    ) {
       return { rows: [], rowCount: 0 }
     }
 

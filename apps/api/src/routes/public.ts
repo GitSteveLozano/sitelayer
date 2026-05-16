@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import { createLogger } from '@sitelayer/logger'
 import { formatMoney } from '@sitelayer/domain'
@@ -228,6 +229,9 @@ export async function handlePublicRoutes(
     const realmIds = Array.from(new Set(events.map((e) => e.realmId)))
     const connectionMap = new Map<string, { companyId: string; connectionId: string }>()
     for (const realmId of realmIds) {
+      // QBO webhook is inherently cross-company (the realmId resolves to a
+      // company); the lookup runs at the pool without a company GUC set, so
+      // RLS stays permissive for this admin-style lookup.
       const result = await ctx.pool.query<{ company_id: string; id: string }>(
         `select company_id, id from integration_connections
          where provider = 'qbo' and provider_account_id = $1
@@ -245,23 +249,27 @@ export async function handlePublicRoutes(
         skipped += 1
         continue
       }
-      await ctx.pool.query(
-        `insert into sync_events (
+      // sync_events insert is scoped to the connection's resolved company.
+      // Bind app.company_id explicitly so the row passes RLS once enforced.
+      await withMutationTx(conn.companyId, (c) =>
+        c.query(
+          `insert into sync_events (
            company_id, integration_connection_id, direction, entity_type, entity_id, payload, status
          ) values ($1, $2, 'inbound', $3, $4, $5::jsonb, 'pending')`,
-        [
-          conn.companyId,
-          conn.connectionId,
-          event.entityType,
-          event.entityId,
-          JSON.stringify({
-            source: 'qbo_webhook',
-            realmId: event.realmId,
-            operation: event.operation,
-            lastUpdated: event.lastUpdated,
-            raw: event.raw,
-          }),
-        ],
+          [
+            conn.companyId,
+            conn.connectionId,
+            event.entityType,
+            event.entityId,
+            JSON.stringify({
+              source: 'qbo_webhook',
+              realmId: event.realmId,
+              operation: event.operation,
+              lastUpdated: event.lastUpdated,
+              raw: event.raw,
+            }),
+          ],
+        ),
       )
       persisted += 1
     }

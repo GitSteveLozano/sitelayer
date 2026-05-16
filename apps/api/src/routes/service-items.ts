@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { parseExpectedVersion } from '../http-utils.js'
 
 export type ServiceItemRouteCtx = {
@@ -24,12 +24,14 @@ export async function handleServiceItemRoutes(
   ctx: ServiceItemRouteCtx,
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/service-items') {
-    const result = await ctx.pool.query(
-      `select code, name, category, unit, default_rate, source, version
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select code, name, category, unit, default_rate, source, version
        from service_items
        where company_id = $1 and deleted_at is null
        order by name asc`,
-      [ctx.company.id],
+        [ctx.company.id],
+      ),
     )
     ctx.sendJson(200, { serviceItems: result.rows })
     return true

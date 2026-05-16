@@ -2,7 +2,7 @@ import type http from 'node:http'
 import { randomUUID } from 'node:crypto'
 import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid, parseExpectedVersion } from '../http-utils.js'
 import { PIPELINE_VERSION as ROOMPLAN_PIPELINE_VERSION, parseCapturedRoom } from '@sitelayer/pipe-roomplan'
 import {
@@ -468,10 +468,12 @@ export async function handleTakeoffDraftRoutes(
 
     // Verify project tenancy before kicking the pipeline so a foreign
     // projectId doesn't waste a Claude/Luma call on the way to a 404.
-    const projectCheck = await ctx.pool.query(
-      `select id from projects
+    const projectCheck = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select id from projects
          where company_id = $1 and id = $2 and deleted_at is null`,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     if (!projectCheck.rows[0]) {
       ctx.sendJson(404, { error: 'project not found' })
@@ -607,15 +609,17 @@ export async function handleTakeoffDraftRoutes(
     // Pull the draft + its stored TakeoffResult. The tenant filter prevents
     // a foreign company from promoting another tenant's draft even with a
     // guessed uuid; the project_id check ties the promotion to the URL.
-    const draftQuery = await ctx.pool.query<{
-      id: string
-      takeoff_result_json: unknown
-      source: string
-    }>(
-      `select id, takeoff_result_json, source
+    const draftQuery = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        id: string
+        takeoff_result_json: unknown
+        source: string
+      }>(
+        `select id, takeoff_result_json, source
          from takeoff_drafts
         where company_id = $1 and project_id = $2 and id = $3 and deleted_at is null`,
-      [ctx.company.id, projectId, draftId],
+        [ctx.company.id, projectId, draftId],
+      ),
     )
     const draftRow = draftQuery.rows[0]
     if (!draftRow) {
@@ -708,9 +712,11 @@ export async function handleTakeoffDraftRoutes(
     // an uncurated code in `takeoff_measurements`.
     const overrideRows = prepared.filter((p) => p.fromOverride)
     if (overrideRows.length > 0) {
-      const projectDivisionResult = await ctx.pool.query<{ division_code: string | null }>(
-        'select division_code from projects where company_id = $1 and id = $2',
-        [ctx.company.id, projectId],
+      const projectDivisionResult = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{ division_code: string | null }>(
+          'select division_code from projects where company_id = $1 and id = $2',
+          [ctx.company.id, projectId],
+        ),
       )
       const projectDivisionCode = projectDivisionResult.rows[0]?.division_code ?? null
       const catalogIndex = await loadServiceItemCatalogIndex(
@@ -785,16 +791,18 @@ export async function handleTakeoffDraftRoutes(
       ctx.sendJson(400, { error: 'draft id must be a valid uuid' })
       return true
     }
-    const result = await ctx.pool.query<{
-      takeoff_result_json: unknown
-      source: string
-      review_required: boolean
-      pipeline_version: string | null
-    }>(
-      `select takeoff_result_json, source, review_required, pipeline_version
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        takeoff_result_json: unknown
+        source: string
+        review_required: boolean
+        pipeline_version: string | null
+      }>(
+        `select takeoff_result_json, source, review_required, pipeline_version
          from takeoff_drafts
         where company_id = $1 and id = $2 and deleted_at is null`,
-      [ctx.company.id, draftId],
+        [ctx.company.id, draftId],
+      ),
     )
     if (!result.rows[0]) {
       ctx.sendJson(404, { error: 'draft not found' })
@@ -824,12 +832,14 @@ export async function handleTakeoffDraftRoutes(
     const where = includeArchived
       ? `company_id = $1 and project_id = $2 and deleted_at is null`
       : `company_id = $1 and project_id = $2 and deleted_at is null and status = 'active'`
-    const result = await ctx.pool.query(
-      `select ${RETURNING_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${RETURNING_COLUMNS}
          from takeoff_drafts
         where ${where}
         order by case when status = 'active' then 0 else 1 end, created_at asc`,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     ctx.sendJson(200, { drafts: result.rows })
     return true
@@ -854,10 +864,12 @@ export async function handleTakeoffDraftRoutes(
     // Confirm the project exists for this tenant before inserting.
     // Otherwise we'd silently fail-open: the composite FK would reject the
     // insert but only on COMMIT, returning a less helpful 500.
-    const projectCheck = await ctx.pool.query(
-      `select id from projects
+    const projectCheck = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select id from projects
          where company_id = $1 and id = $2 and deleted_at is null`,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     if (!projectCheck.rows[0]) {
       ctx.sendJson(404, { error: 'project not found' })

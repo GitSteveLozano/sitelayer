@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput, isValidUuid } from '../http-utils.js'
 import { parseDailyLogPhotoMultipart, DailyLogPhotoUploadError } from '../daily-log-photo-upload.js'
 import { type BlueprintStorage, assertKeyInCompany } from '../storage.js'
@@ -107,8 +107,9 @@ export async function handleDailyLogRoutes(
     // company so they can audit submissions.
     const foremanFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
 
-    const result = await ctx.pool.query<DailyLogRow>(
-      `select ${DAILY_LOG_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<DailyLogRow>(
+        `select ${DAILY_LOG_COLUMNS}
        from daily_logs
        where company_id = $1
          and ($2 = '' or project_id = $2::uuid)
@@ -118,7 +119,8 @@ export async function handleDailyLogRoutes(
          and ($6 = '' or foreman_user_id = $6)
        order by occurred_on desc, created_at desc
        limit 200`,
-      [ctx.company.id, projectId, from, to, status, foremanFilter],
+        [ctx.company.id, projectId, from, to, status, foremanFilter],
+      ),
     )
     ctx.sendJson(200, { dailyLogs: result.rows })
     return true
@@ -137,13 +139,15 @@ export async function handleDailyLogRoutes(
     // by guessing the uuid (the list endpoint already isolates by
     // foreman_user_id; the detail path must match).
     const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
-    const result = await ctx.pool.query<DailyLogRow>(
-      `select ${DAILY_LOG_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<DailyLogRow>(
+        `select ${DAILY_LOG_COLUMNS}
        from daily_logs
        where company_id = $1 and id = $2
          and ($3 = '' or foreman_user_id = $3)
        limit 1`,
-      [ctx.company.id, id, ownerFilter],
+        [ctx.company.id, id, ownerFilter],
+      ),
     )
     if (!result.rows[0]) {
       ctx.sendJson(404, { error: 'daily log not found' })
@@ -169,9 +173,11 @@ export async function handleDailyLogRoutes(
     // Upsert: if a draft already exists for (project, day, foreman), return it.
     // The unique constraint guarantees we can ON CONFLICT DO NOTHING + RETURNING
     // to make this idempotent without an explicit transaction.
-    const projectExists = await ctx.pool.query<{ id: string }>(
-      `select id from projects where company_id = $1 and id = $2 and deleted_at is null limit 1`,
-      [ctx.company.id, projectId],
+    const projectExists = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string }>(
+        `select id from projects where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+        [ctx.company.id, projectId],
+      ),
     )
     if (!projectExists.rows[0]) {
       ctx.sendJson(404, { error: 'project not found' })
@@ -362,13 +368,15 @@ export async function handleDailyLogRoutes(
     // Owner check + status check rolled into one read so we don't upload
     // bytes for a row that's submitted (locked) or not visible.
     const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
-    const existing = await ctx.pool.query<{ id: string; status: string; foreman_user_id: string }>(
-      `select id, status, foreman_user_id
+    const existing = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string; status: string; foreman_user_id: string }>(
+        `select id, status, foreman_user_id
        from daily_logs
        where company_id = $1 and id = $2
          and ($3 = '' or foreman_user_id = $3)
        limit 1`,
-      [ctx.company.id, id, ownerFilter],
+        [ctx.company.id, id, ownerFilter],
+      ),
     )
     const row = existing.rows[0]
     if (!row) {
@@ -467,24 +475,28 @@ export async function handleDailyLogRoutes(
       return true
     }
     const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
-    const ownership = await ctx.pool.query<{ exists: boolean }>(
-      `select exists(
+    const ownership = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ exists: boolean }>(
+        `select exists(
          select 1 from daily_logs
          where company_id = $1 and id = $2
            and ($3 = '' or foreman_user_id = $3)
        ) as exists`,
-      [ctx.company.id, id, ownerFilter],
+        [ctx.company.id, id, ownerFilter],
+      ),
     )
     if (!ownership.rows[0]?.exists) {
       ctx.sendJson(404, { error: 'daily log not found or not yours' })
       return true
     }
-    const photos = await ctx.pool.query<DailyLogPhotoRow>(
-      `select id, storage_key, scope_step_id, scope_step_label, captured_at
+    const photos = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<DailyLogPhotoRow>(
+        `select id, storage_key, scope_step_id, scope_step_label, captured_at
        from daily_log_photos
        where company_id = $1 and daily_log_id = $2
        order by captured_at asc, id asc`,
-      [ctx.company.id, id],
+        [ctx.company.id, id],
+      ),
     )
     ctx.sendJson(200, { photos: photos.rows })
     return true
@@ -579,14 +591,16 @@ export async function handleDailyLogRoutes(
 
     // Confirm the key belongs to this row before exposing the bytes.
     const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
-    const ownership = await ctx.pool.query<{ exists: boolean }>(
-      `select exists(
+    const ownership = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ exists: boolean }>(
+        `select exists(
          select 1 from daily_logs
          where company_id = $1 and id = $2
            and $3 = any(photo_keys)
            and ($4 = '' or foreman_user_id = $4)
        ) as exists`,
-      [ctx.company.id, id, key, ownerFilter],
+        [ctx.company.id, id, key, ownerFilter],
+      ),
     )
     if (!ownership.rows[0]?.exists) {
       ctx.sendJson(404, { error: 'photo not found on this daily log' })

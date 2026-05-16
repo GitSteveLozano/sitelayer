@@ -9,7 +9,7 @@ import {
   type RentalBillingWorkflowEvent,
   type RentalBillingWorkflowSnapshot,
 } from '@sitelayer/workflows'
-import { recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit } from '../metrics.js'
 import {
@@ -72,13 +72,15 @@ export async function handleRentalBillingStateRoutes(
       params.push(stateFilter)
       where += ` and status = $${params.length}`
     }
-    const runs = await ctx.pool.query<RentalBillingRunRow>(
-      `select ${RENTAL_BILLING_RUN_COLUMNS}
+    const runs = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<RentalBillingRunRow>(
+        `select ${RENTAL_BILLING_RUN_COLUMNS}
        from rental_billing_runs
        where ${where}
        order by period_end desc, created_at desc
        limit 200`,
-      params,
+        params,
+      ),
     )
     ctx.sendJson(200, { billingRuns: runs.rows })
     return true
@@ -87,24 +89,28 @@ export async function handleRentalBillingStateRoutes(
   const billingRunSnapshotMatch = url.pathname.match(/^\/api\/rental-billing-runs\/([^/]+)$/)
   if (req.method === 'GET' && billingRunSnapshotMatch) {
     const runId = billingRunSnapshotMatch[1]!
-    const runResult = await ctx.pool.query<RentalBillingRunRow>(
-      `select ${RENTAL_BILLING_RUN_COLUMNS}
+    const runResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<RentalBillingRunRow>(
+        `select ${RENTAL_BILLING_RUN_COLUMNS}
        from rental_billing_runs
        where company_id = $1 and id = $2 and deleted_at is null
        limit 1`,
-      [ctx.company.id, runId],
+        [ctx.company.id, runId],
+      ),
     )
     const run = runResult.rows[0]
     if (!run) {
       ctx.sendJson(404, { error: 'rental billing run not found' })
       return true
     }
-    const linesResult = await ctx.pool.query<RentalBillingRunLineRow>(
-      `select ${RENTAL_BILLING_RUN_LINE_COLUMNS}
+    const linesResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<RentalBillingRunLineRow>(
+        `select ${RENTAL_BILLING_RUN_LINE_COLUMNS}
        from rental_billing_run_lines
        where company_id = $1 and billing_run_id = $2
        order by created_at asc`,
-      [ctx.company.id, runId],
+        [ctx.company.id, runId],
+      ),
     )
     ctx.sendJson(200, billingRunWorkflowSnapshotResponse(run, linesResult.rows))
     return true

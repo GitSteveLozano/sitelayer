@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type http from 'node:http'
 import type { Pool } from 'pg'
+import type pino from 'pino'
+import { attachMutationTx } from '../mutation-tx.js'
 import { handleInventoryUtilizationRoutes } from './inventory-utilization.js'
 
 // ---------------------------------------------------------------------------
@@ -47,9 +49,38 @@ class FakePool {
   movements: MovementSeed[] = []
   rentalLines: RentalLineSeed[] = []
 
+  attach() {
+    attachMutationTx({
+      pool: this as unknown as Pool,
+      logger: { warn: () => undefined } as unknown as pino.Logger,
+    })
+  }
+
+  // withCompanyClient() in mutation-tx.ts checks out a PoolClient, runs
+  // BEGIN + SET LOCAL app.company_id, runs the caller's query, COMMIT,
+  // and releases. Mirror that here so the read-side fan-out keeps working.
+  async connect() {
+    return {
+      query: (sql: string, params: unknown[] = []) => this.dispatch(sql, params),
+      release: () => undefined,
+    }
+  }
+
   async query(sql: string, params: unknown[] = []) {
+    return this.dispatch(sql, params)
+  }
+
+  private async dispatch(sql: string, params: unknown[] = []) {
     const companyId = params[0] as string
     const trimmed = sql.trim()
+    if (
+      trimmed.startsWith('begin') ||
+      trimmed.startsWith('commit') ||
+      trimmed.startsWith('rollback') ||
+      trimmed.startsWith('select set_config')
+    ) {
+      return { rows: [], rowCount: 0 }
+    }
 
     if (trimmed.startsWith('with stock as')) {
       // Per-item rows — only active, non-deleted items in this tenant.
@@ -145,6 +176,7 @@ class FakePool {
 }
 
 function makeCtx(pool: FakePool, opts: { role?: 'admin' | 'foreman' | 'office' | 'member'; companyId?: string } = {}) {
+  pool.attach()
   const responses: Array<{ status: number; body: unknown }> = []
   const role = opts.role ?? 'admin'
   const ctx = {

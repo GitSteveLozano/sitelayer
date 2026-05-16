@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Pool } from 'pg'
+import type pino from 'pino'
+import { attachMutationTx } from '../mutation-tx.js'
 import { handleNotificationRoutes, type NotificationRouteCtx } from './notifications.js'
 
 // ---------------------------------------------------------------------------
@@ -22,8 +24,33 @@ type StoredRow = {
 class FakePool {
   rows: StoredRow[] = []
 
+  attach() {
+    attachMutationTx({
+      pool: this as unknown as Pool,
+      logger: { warn: () => undefined } as unknown as pino.Logger,
+    })
+  }
+
+  // withCompanyClient() in mutation-tx.ts calls pool.connect() → client.query.
+  // Mirror that so RLS-scoped reads keep working under the same FakePool.
+  async connect() {
+    return {
+      query: (sql: string, params: unknown[] = []) => this.query(sql, params),
+      release: () => undefined,
+    }
+  }
+
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     const trimmed = sql.trim()
+
+    if (
+      trimmed.startsWith('begin') ||
+      trimmed.startsWith('commit') ||
+      trimmed.startsWith('rollback') ||
+      trimmed.startsWith('select set_config')
+    ) {
+      return { rows: [], rowCount: 0 }
+    }
 
     if (/^select[\s\S]+from notifications/i.test(trimmed)) {
       const [companyId, recipientId, ...rest] = params as [string, string, ...unknown[]]
@@ -84,6 +111,7 @@ function makeCtx(
   ctx: NotificationRouteCtx
   responses: Array<{ status: number; body: unknown }>
 } {
+  pool.attach()
   const responses: Array<{ status: number; body: unknown }> = []
   return {
     responses,

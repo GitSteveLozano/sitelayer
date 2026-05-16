@@ -59,9 +59,10 @@ export async function handleSystemRoutes(req: http.IncomingMessage, url: URL, ct
     // per-statement triggers on every bootstrap-source table (migration 014).
     // Saves the 11-query fan-out on a session restore where nothing has
     // changed.
-    const tokenResult = await ctx.pool.query<{ token: string | null }>(
-      'select token from company_bootstrap_state where company_id = $1',
-      [ctx.company.id],
+    const tokenResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ token: string | null }>('select token from company_bootstrap_state where company_id = $1', [
+        ctx.company.id,
+      ]),
     )
     const token = tokenResult.rows[0]?.token
     const etag = token ? `"${token}"` : null
@@ -104,7 +105,7 @@ export async function handleSystemRoutes(req: http.IncomingMessage, url: URL, ct
   if (req.method === 'GET' && url.pathname === '/api/projects') {
     const query = parseProjectsQuery(url.searchParams)
     const built = buildListProjectsQuery(ctx.company.id, query)
-    const result = await ctx.pool.query(built.sql, built.values)
+    const result = await withCompanyClient(ctx.company.id, (c) => c.query(built.sql, built.values))
     const projects = result.rows
     const nextCursor = projects.length === built.limit ? (projects[projects.length - 1]?.updated_at ?? null) : null
     ctx.sendJson(200, { projects, nextCursor })
@@ -112,9 +113,10 @@ export async function handleSystemRoutes(req: http.IncomingMessage, url: URL, ct
   }
 
   if (req.method === 'GET' && url.pathname === '/api/divisions') {
-    const result = await ctx.pool.query(
-      'select code, name, sort_order from divisions where company_id = $1 order by sort_order asc',
-      [ctx.company.id],
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query('select code, name, sort_order from divisions where company_id = $1 order by sort_order asc', [
+        ctx.company.id,
+      ]),
     )
     ctx.sendJson(200, { divisions: result.rows })
     return true

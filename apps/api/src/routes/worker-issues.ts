@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { enqueueNotification, recordMutationLedger, recordWorkflowEvent } from '../mutation-tx.js'
+import { enqueueNotification, recordMutationLedger, recordWorkflowEvent, withCompanyClient } from '../mutation-tx.js'
 import { listIssueRecipientUserIds } from '../notifications.js'
 import { withMutationTx } from '../mutation-tx.js'
 import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
@@ -195,9 +195,11 @@ export async function handleWorkerIssueRoutes(
     // `clerk_user_id` directly (membership lives on `company_memberships`),
     // so we mirror clock.ts's placeholder: pick the oldest worker until
     // the Clerk user → worker mapping lands in Phase 1D.4.
-    const workerLookup = await ctx.pool.query<{ id: string }>(
-      `select id from workers where company_id = $1 and deleted_at is null order by created_at asc limit 1`,
-      [ctx.company.id],
+    const workerLookup = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string }>(
+        `select id from workers where company_id = $1 and deleted_at is null order by created_at asc limit 1`,
+        [ctx.company.id],
+      ),
     )
     const workerId = workerLookup.rows[0]?.id ?? null
 
@@ -266,9 +268,11 @@ export async function handleWorkerIssueRoutes(
     // Confirm the issue exists and is owned by this company before we
     // accept upload bytes — refuse early so a misdirected upload doesn't
     // burn a multipart cycle.
-    const existing = await ctx.pool.query<{ id: string }>(
-      `select id from worker_issues where company_id = $1 and id = $2 limit 1`,
-      [ctx.company.id, issueId],
+    const existing = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string }>(`select id from worker_issues where company_id = $1 and id = $2 limit 1`, [
+        ctx.company.id,
+        issueId,
+      ]),
     )
     if (!existing.rows[0]) {
       ctx.sendJson(404, { error: 'worker_issue not found' })
@@ -321,15 +325,19 @@ export async function handleWorkerIssueRoutes(
     // self-sufficient response (mirrors how POST /api/daily-logs/:id/photos
     // returns the updated row + the new photo).
     const [issue, attachments] = await Promise.all([
-      ctx.pool.query(`select ${ISSUE_COLUMNS} from worker_issues where company_id = $1 and id = $2 limit 1`, [
-        ctx.company.id,
-        issueId,
-      ]),
-      ctx.pool.query<WorkerIssueAttachmentRow>(
-        `select ${ATTACHMENT_COLUMNS} from worker_issue_attachments
+      withCompanyClient(ctx.company.id, (c) =>
+        c.query(`select ${ISSUE_COLUMNS} from worker_issues where company_id = $1 and id = $2 limit 1`, [
+          ctx.company.id,
+          issueId,
+        ]),
+      ),
+      withCompanyClient(ctx.company.id, (c) =>
+        c.query<WorkerIssueAttachmentRow>(
+          `select ${ATTACHMENT_COLUMNS} from worker_issue_attachments
          where company_id = $1 and worker_issue_id = $2
          order by created_at asc`,
-        [ctx.company.id, issueId],
+          [ctx.company.id, issueId],
+        ),
       ),
     ])
 
@@ -344,11 +352,13 @@ export async function handleWorkerIssueRoutes(
   if (req.method === 'GET' && attachmentsMatch) {
     if (!ctx.requireRole(['admin', 'foreman', 'office', 'member'])) return true
     const issueId = attachmentsMatch[1]!
-    const result = await ctx.pool.query<WorkerIssueAttachmentRow>(
-      `select ${ATTACHMENT_COLUMNS} from worker_issue_attachments
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<WorkerIssueAttachmentRow>(
+        `select ${ATTACHMENT_COLUMNS} from worker_issue_attachments
        where company_id = $1 and worker_issue_id = $2
        order by created_at asc`,
-      [ctx.company.id, issueId],
+        [ctx.company.id, issueId],
+      ),
     )
     ctx.sendJson(200, { attachments: result.rows })
     return true
@@ -372,11 +382,13 @@ export async function handleWorkerIssueRoutes(
     // Confirm the key actually points at an attachment for this issue
     // before we expose bytes. Defense-in-depth: assertKeyInCompany only
     // proves company scope; the row check proves issue scope.
-    const lookup = await ctx.pool.query<WorkerIssueAttachmentRow>(
-      `select ${ATTACHMENT_COLUMNS} from worker_issue_attachments
+    const lookup = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<WorkerIssueAttachmentRow>(
+        `select ${ATTACHMENT_COLUMNS} from worker_issue_attachments
        where company_id = $1 and worker_issue_id = $2 and storage_key = $3
        limit 1`,
-      [ctx.company.id, issueId, key],
+        [ctx.company.id, issueId, key],
+      ),
     )
     const row = lookup.rows[0]
     if (!row) {
@@ -404,9 +416,11 @@ export async function handleWorkerIssueRoutes(
   if (req.method === 'GET' && detailMatch) {
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
     const issueId = detailMatch[1]!
-    const result = await ctx.pool.query<WorkflowIssueRow>(
-      `select ${WORKFLOW_ISSUE_COLUMNS} from worker_issues where company_id = $1 and id = $2 limit 1`,
-      [ctx.company.id, issueId],
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<WorkflowIssueRow>(
+        `select ${WORKFLOW_ISSUE_COLUMNS} from worker_issues where company_id = $1 and id = $2 limit 1`,
+        [ctx.company.id, issueId],
+      ),
     )
     const row = result.rows[0]
     if (!row) {
@@ -647,11 +661,13 @@ export async function handleWorkerIssueRoutes(
     }
     const limit = Math.max(1, Math.min(500, Number(url.searchParams.get('limit') ?? 100)))
     params.push(limit)
-    const result = await ctx.pool.query(
-      `select ${ISSUE_COLUMNS} from worker_issues ${where}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${ISSUE_COLUMNS} from worker_issues ${where}
        order by created_at desc
        limit $${params.length}`,
-      params,
+        params,
+      ),
     )
     ctx.sendJson(200, { worker_issues: result.rows })
     return true

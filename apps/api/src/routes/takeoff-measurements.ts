@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import { calculateGeometryQuantity, normalizeGeometry } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import { evaluateLww } from '../lww.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidUuid, parseExpectedVersion } from '../http-utils.js'
 import { resolveDefaultDraftId } from './takeoff-drafts.js'
 
@@ -79,14 +79,16 @@ export async function handleTakeoffMeasurementRoutes(
       draftFilter = 'and draft_id = $3'
       params.push(defaultDraftId)
     }
-    const result = await ctx.pool.query(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `
       select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
       from takeoff_measurements
       where company_id = $1 and project_id = $2 and deleted_at is null ${draftFilter}
       order by created_at desc
       `,
-      params,
+        params,
+      ),
     )
     ctx.sendJson(200, { measurements: result.rows })
     return true
@@ -138,9 +140,11 @@ export async function handleTakeoffMeasurementRoutes(
         ctx.sendJson(400, { error: 'blueprint_document_id must be a valid uuid' })
         return true
       }
-      const measurementProjectResult = await ctx.pool.query<{ project_id: string }>(
-        'select project_id from takeoff_measurements where company_id = $1 and id = $2 and deleted_at is null limit 1',
-        [ctx.company.id, measurementId],
+      const measurementProjectResult = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{ project_id: string }>(
+          'select project_id from takeoff_measurements where company_id = $1 and id = $2 and deleted_at is null limit 1',
+          [ctx.company.id, measurementId],
+        ),
       )
       const measurementProjectId = measurementProjectResult.rows[0]?.project_id
       if (!measurementProjectId) {
@@ -154,25 +158,27 @@ export async function handleTakeoffMeasurementRoutes(
 
     const ifUnmodifiedSince = req.headers['if-unmodified-since']
     if (ifUnmodifiedSince) {
-      const currentRow = await ctx.pool.query<{
-        id: string
-        project_id: string
-        blueprint_document_id: string | null
-        service_item_code: string
-        quantity: string
-        unit: string
-        notes: string | null
-        geometry: unknown
-        version: number
-        deleted_at: string | null
-        created_at: string
-        updated_at: string
-      }>(
-        `select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes,
+      const currentRow = await withCompanyClient(ctx.company.id, (c) =>
+        c.query<{
+          id: string
+          project_id: string
+          blueprint_document_id: string | null
+          service_item_code: string
+          quantity: string
+          unit: string
+          notes: string | null
+          geometry: unknown
+          version: number
+          deleted_at: string | null
+          created_at: string
+          updated_at: string
+        }>(
+          `select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes,
                 geometry, elevation, version, deleted_at, created_at, updated_at
          from takeoff_measurements
          where company_id = $1 and id = $2`,
-        [ctx.company.id, measurementId],
+          [ctx.company.id, measurementId],
+        ),
       )
       const current = currentRow.rows[0]
       if (current) {

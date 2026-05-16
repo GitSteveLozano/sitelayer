@@ -11,7 +11,7 @@ import {
   type TimeReviewWorkflowState,
 } from '@sitelayer/workflows'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, recordWorkflowEvent, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit } from '../metrics.js'
 import { isValidDateInput, isValidUuid } from '../http-utils.js'
@@ -182,8 +182,9 @@ export async function handleTimeReviewRunRoutes(
       ctx.sendJson(400, { error: 'to must be YYYY-MM-DD' })
       return true
     }
-    const result = await ctx.pool.query<TimeReviewRunRow>(
-      `select ${TIME_REVIEW_RUN_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<TimeReviewRunRow>(
+        `select ${TIME_REVIEW_RUN_COLUMNS}
        from time_review_runs
        where company_id = $1
          and ($2 = '' or state = $2)
@@ -192,7 +193,8 @@ export async function handleTimeReviewRunRoutes(
          and ($5 = '' or period_end   <= $5::date)
        order by period_start desc, created_at desc
        limit 200`,
-      [ctx.company.id, stateFilter, projectId, from, to],
+        [ctx.company.id, stateFilter, projectId, from, to],
+      ),
     )
     ctx.sendJson(200, { timeReviewRuns: result.rows })
     return true
@@ -206,12 +208,14 @@ export async function handleTimeReviewRunRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    const result = await ctx.pool.query<TimeReviewRunRow>(
-      `select ${TIME_REVIEW_RUN_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<TimeReviewRunRow>(
+        `select ${TIME_REVIEW_RUN_COLUMNS}
        from time_review_runs
        where company_id = $1 and id = $2
        limit 1`,
-      [ctx.company.id, id],
+        [ctx.company.id, id],
+      ),
     )
     if (!result.rows[0]) {
       ctx.sendJson(404, { error: 'time review run not found' })
@@ -245,15 +249,17 @@ export async function handleTimeReviewRunRoutes(
     // model is intentionally simple — single hours-over-eight signal — so
     // the column has a meaningful default before the cohort model lands
     // in Phase 5.
-    const entryRows = await ctx.pool.query<{ id: string; hours: string; over_eight: boolean }>(
-      `select id, hours, (hours::numeric > 8) as over_eight
+    const entryRows = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string; hours: string; over_eight: boolean }>(
+        `select id, hours, (hours::numeric > 8) as over_eight
        from labor_entries
        where company_id = $1
          and deleted_at is null
          and review_locked_at is null
          and ($2 = '' or project_id = $2::uuid)
          and occurred_on between $3::date and $4::date`,
-      [ctx.company.id, projectId ?? '', periodStart, periodEnd],
+        [ctx.company.id, projectId ?? '', periodStart, periodEnd],
+      ),
     )
 
     const coveredEntryIds = entryRows.rows.map((r) => r.id)

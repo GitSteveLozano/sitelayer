@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import { processQueue as processDatabaseQueue } from '@sitelayer/queue'
 import type { ActiveCompany } from '../auth-types.js'
@@ -11,25 +12,29 @@ export type SyncRouteCtx = {
   sendJson: (status: number, body: unknown) => void
 }
 
-async function countQueueRows(pool: Pool, companyId: string) {
+async function countQueueRows(_pool: Pool, companyId: string) {
   const [outboxResult, syncResult] = await Promise.all([
-    pool.query<{ pending_count: number }>(
-      `
+    withCompanyClient(companyId, (c) =>
+      c.query<{ pending_count: number }>(
+        `
       select count(*)::int as pending_count
       from mutation_outbox
       where company_id = $1
         and status in ('pending', 'processing')
       `,
-      [companyId],
+        [companyId],
+      ),
     ),
-    pool.query<{ pending_count: number }>(
-      `
+    withCompanyClient(companyId, (c) =>
+      c.query<{ pending_count: number }>(
+        `
       select count(*)::int as pending_count
       from sync_events
       where company_id = $1
         and status in ('pending', 'processing')
       `,
-      [companyId],
+        [companyId],
+      ),
     ),
   ])
   return {
@@ -41,24 +46,28 @@ async function countQueueRows(pool: Pool, companyId: string) {
 export async function getSyncStatus(pool: Pool, companyId: string) {
   const queue = await countQueueRows(pool, companyId)
   const [connections, latestSyncEvent] = await Promise.all([
-    pool.query(
-      `
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        `
       select id, provider, provider_account_id, sync_cursor, last_synced_at, status, version, created_at
       from integration_connections
       where company_id = $1
       order by created_at asc
       `,
-      [companyId],
+        [companyId],
+      ),
     ),
-    pool.query(
-      `
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        `
       select created_at, entity_type, entity_id, direction, status, attempt_count, applied_at, error
       from sync_events
       where company_id = $1
       order by created_at desc
       limit 1
       `,
-      [companyId],
+        [companyId],
+      ),
     ),
   ])
 
@@ -95,15 +104,17 @@ export async function handleSyncRoutes(req: http.IncomingMessage, url: URL, ctx:
 
   if (req.method === 'GET' && url.pathname === '/api/sync/events') {
     const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 25)))
-    const result = await ctx.pool.query(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `
       select id, integration_connection_id, direction, entity_type, entity_id, payload, status, attempt_count, next_attempt_at, applied_at, error, created_at
       from sync_events
       where company_id = $1
       order by created_at desc
       limit $2
       `,
-      [ctx.company.id, limit],
+        [ctx.company.id, limit],
+      ),
     )
     ctx.sendJson(200, { events: result.rows })
     return true
@@ -111,8 +122,9 @@ export async function handleSyncRoutes(req: http.IncomingMessage, url: URL, ctx:
 
   if (req.method === 'GET' && url.pathname === '/api/sync/outbox') {
     const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 25)))
-    const result = await ctx.pool.query(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `
       select
         id, device_id, actor_user_id, entity_type, entity_id, mutation_type, payload,
         idempotency_key, status, attempt_count, next_attempt_at, applied_at, error, created_at
@@ -121,7 +133,8 @@ export async function handleSyncRoutes(req: http.IncomingMessage, url: URL, ctx:
       order by created_at desc
       limit $2
       `,
-      [ctx.company.id, limit],
+        [ctx.company.id, limit],
+      ),
     )
     ctx.sendJson(200, { outbox: result.rows })
     return true

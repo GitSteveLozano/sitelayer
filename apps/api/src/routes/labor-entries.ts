@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput, parseExpectedVersion } from '../http-utils.js'
 
 export type LaborEntryRouteCtx = {
@@ -56,9 +56,8 @@ export async function handleLaborEntryRoutes(
     }
     const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
     if (expectedVersion !== null) {
-      const projectVersionResult = await ctx.pool.query(
-        'select version from projects where company_id = $1 and id = $2',
-        [ctx.company.id, body.project_id],
+      const projectVersionResult = await withCompanyClient(ctx.company.id, (c) =>
+        c.query('select version from projects where company_id = $1 and id = $2', [ctx.company.id, body.project_id]),
       )
       const currentProject = projectVersionResult.rows[0]
       if (!currentProject) {
@@ -127,15 +126,17 @@ export async function handleLaborEntryRoutes(
   if (req.method === 'GET' && url.pathname === '/api/labor-entries') {
     const projectId = String(url.searchParams.get('project_id') ?? '').trim()
     const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') ?? 50)))
-    const result = await ctx.pool.query(
-      `
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `
       select id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, version, deleted_at, created_at
       from labor_entries
       where company_id = $1 and ($2 = '' or project_id = $2)
       order by occurred_on desc, created_at desc
       limit $3
       `,
-      [ctx.company.id, projectId, limit],
+        [ctx.company.id, projectId, limit],
+      ),
     )
     ctx.sendJson(200, { laborEntries: result.rows })
     return true
@@ -161,9 +162,11 @@ export async function handleLaborEntryRoutes(
       const effectiveServiceItemCode =
         patchServiceItemCode ??
         (
-          await ctx.pool.query<{ service_item_code: string }>(
-            'select service_item_code from labor_entries where company_id = $1 and id = $2',
-            [ctx.company.id, laborEntryId],
+          await withCompanyClient(ctx.company.id, (c) =>
+            c.query<{ service_item_code: string }>(
+              'select service_item_code from labor_entries where company_id = $1 and id = $2',
+              [ctx.company.id, laborEntryId],
+            ),
           )
         ).rows[0]?.service_item_code
       if (effectiveServiceItemCode) {

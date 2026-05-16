@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
@@ -80,12 +81,14 @@ export async function handleNotificationPreferenceRoutes(
   ctx: NotificationPreferenceRouteCtx,
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/notification-preferences') {
-    const result = await ctx.pool.query<NotificationPreferenceRow>(
-      `select ${PREFERENCE_COLUMNS}
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<NotificationPreferenceRow>(
+        `select ${PREFERENCE_COLUMNS}
        from notification_preferences
        where company_id = $1 and clerk_user_id = $2
        limit 1`,
-      [ctx.company.id, ctx.currentUserId],
+        [ctx.company.id, ctx.currentUserId],
+      ),
     )
     if (result.rows[0]) {
       ctx.sendJson(200, { preferences: result.rows[0] })
@@ -126,8 +129,9 @@ export async function handleNotificationPreferenceRoutes(
       return true
     }
 
-    const upsert = await ctx.pool.query<NotificationPreferenceRow>(
-      `insert into notification_preferences (
+    const upsert = await withMutationTx(ctx.company.id, (c) =>
+      c.query<NotificationPreferenceRow>(
+        `insert into notification_preferences (
          company_id, clerk_user_id,
          channel_assignment_change, channel_time_review_ready,
          channel_daily_log_reminder, channel_clock_anomaly,
@@ -143,16 +147,17 @@ export async function handleNotificationPreferenceRoutes(
              email                       = excluded.email,
              updated_at                  = now()
        returning ${PREFERENCE_COLUMNS}`,
-      [
-        ctx.company.id,
-        ctx.currentUserId,
-        channels.channel_assignment_change,
-        channels.channel_time_review_ready,
-        channels.channel_daily_log_reminder,
-        channels.channel_clock_anomaly,
-        smsPhone,
-        email,
-      ],
+        [
+          ctx.company.id,
+          ctx.currentUserId,
+          channels.channel_assignment_change,
+          channels.channel_time_review_ready,
+          channels.channel_daily_log_reminder,
+          channels.channel_clock_anomaly,
+          smsPhone,
+          email,
+        ],
+      ),
     )
     ctx.sendJson(200, { preferences: upsert.rows[0] })
     return true

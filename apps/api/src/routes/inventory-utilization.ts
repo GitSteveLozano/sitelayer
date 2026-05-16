@@ -1,4 +1,5 @@
 import type http from 'node:http'
+import { withCompanyClient } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
@@ -72,8 +73,9 @@ export async function handleInventoryUtilizationRoutes(
   if (url.pathname !== '/api/inventory/utilization') return false
   if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
 
-  const result = await ctx.pool.query<UtilizationItemRow>(
-    `
+  const result = await withCompanyClient(ctx.company.id, (c) =>
+    c.query<UtilizationItemRow>(
+      `
     with stock as (
       select
         i.id as inventory_item_id,
@@ -142,7 +144,8 @@ export async function handleInventoryUtilizationRoutes(
     from stock
     order by idle_revenue_per_day_cents desc, code asc
     `,
-    [ctx.company.id],
+      [ctx.company.id],
+    ),
   )
 
   // Headline rollup — owner persona "% of equipment currently deployed".
@@ -151,8 +154,9 @@ export async function handleInventoryUtilizationRoutes(
   // job_rental_lines so service items are not double-counted as deployed.
   // in_yard_count and out_for_service_count come from the movement ledger
   // by location_type so each unit is in exactly one bucket.
-  const rollupResult = await ctx.pool.query<RollupRow>(
-    `
+  const rollupResult = await withCompanyClient(ctx.company.id, (c) =>
+    c.query<RollupRow>(
+      `
     with active_rentals as (
       select coalesce(sum(l.quantity), 0)::numeric(12,2) as on_rent_count
       from job_rental_lines l
@@ -204,7 +208,8 @@ export async function handleInventoryUtilizationRoutes(
     cross join movement_buckets mb
     cross join active_rentals ar
     `,
-    [ctx.company.id],
+      [ctx.company.id],
+    ),
   )
 
   const rollupRow = rollupResult.rows[0] ?? {

@@ -1,6 +1,6 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
-import { withMutationTx } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import {
   parseShipmentEventRequest,
@@ -63,11 +63,13 @@ export async function handleShipmentRoutes(
   const projectShipmentsMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/shipments$/)
   if (req.method === 'GET' && projectShipmentsMatch) {
     const projectId = projectShipmentsMatch[1]!
-    const result = await ctx.pool.query(
-      `select ${SHIPMENT_COLUMNS} from shipments
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${SHIPMENT_COLUMNS} from shipments
        where company_id = $1 and project_id = $2 and deleted_at is null
        order by coalesce(scheduled_for, created_at::date) desc, created_at desc`,
-      [ctx.company.id, projectId],
+        [ctx.company.id, projectId],
+      ),
     )
     ctx.sendJson(200, { shipments: result.rows })
     return true
@@ -76,24 +78,26 @@ export async function handleShipmentRoutes(
     if (!ctx.requireRole(['admin', 'office', 'foreman'])) return true
     const projectId = projectShipmentsMatch[1]!
     const body = await ctx.readBody()
-    const result = await ctx.pool.query(
-      `insert into shipments (
+    const result = await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `insert into shipments (
         company_id, project_id, bom_id, source_branch_id, destination_location_id,
         direction, scheduled_for, driver, ticket_number, notes
       ) values ($1, $2, $3, $4, $5, coalesce($6, 'outbound'), $7, $8, $9, $10)
       returning ${SHIPMENT_COLUMNS}`,
-      [
-        ctx.company.id,
-        projectId,
-        s(body.bom_id),
-        s(body.source_branch_id),
-        s(body.destination_location_id),
-        s(body.direction),
-        s(body.scheduled_for),
-        s(body.driver),
-        s(body.ticket_number),
-        s(body.notes),
-      ],
+        [
+          ctx.company.id,
+          projectId,
+          s(body.bom_id),
+          s(body.source_branch_id),
+          s(body.destination_location_id),
+          s(body.direction),
+          s(body.scheduled_for),
+          s(body.driver),
+          s(body.ticket_number),
+          s(body.notes),
+        ],
+      ),
     )
     ctx.sendJson(201, result.rows[0])
     return true
@@ -102,21 +106,27 @@ export async function handleShipmentRoutes(
   const shipmentIdMatch = url.pathname.match(/^\/api\/shipments\/([^/]+)$/)
   if (req.method === 'GET' && shipmentIdMatch) {
     const id = shipmentIdMatch[1]!
-    const shipment = await ctx.pool.query(
-      `select ${SHIPMENT_COLUMNS} from shipments where company_id = $1 and id = $2 and deleted_at is null`,
-      [ctx.company.id, id],
+    const shipment = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(`select ${SHIPMENT_COLUMNS} from shipments where company_id = $1 and id = $2 and deleted_at is null`, [
+        ctx.company.id,
+        id,
+      ]),
     )
     if (!shipment.rows[0]) {
       ctx.sendJson(404, { error: 'shipment not found' })
       return true
     }
-    const lines = await ctx.pool.query(
-      `select ${LINE_COLUMNS} from shipment_lines where company_id = $1 and shipment_id = $2 order by created_at asc`,
-      [ctx.company.id, id],
+    const lines = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${LINE_COLUMNS} from shipment_lines where company_id = $1 and shipment_id = $2 order by created_at asc`,
+        [ctx.company.id, id],
+      ),
     )
-    const events = await ctx.pool.query(
-      `select ${EVENT_COLUMNS} from shipment_events where company_id = $1 and shipment_id = $2 order by created_at asc`,
-      [ctx.company.id, id],
+    const events = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${EVENT_COLUMNS} from shipment_events where company_id = $1 and shipment_id = $2 order by created_at asc`,
+        [ctx.company.id, id],
+      ),
     )
     ctx.sendJson(200, { ...shipment.rows[0], lines: lines.rows, events: events.rows })
     return true
