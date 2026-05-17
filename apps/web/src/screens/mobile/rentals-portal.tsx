@@ -5,14 +5,14 @@
  */
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { listInventoryItems, type InventoryItemRow } from '../../api-v1-compat.js'
+import { listInventoryItems, type InventoryItem } from '@/lib/api'
 import { MBody, MButton, MI, MListInset, MListRow, MPill, MSectionH, MTopBar } from '../../components/m/index.js'
 import { MSkeletonList } from '../../components/m-states/index.js'
 import { formatMoney } from './format.js'
 
 export function MobileRentalsPortal({ companySlug }: { companySlug: string }) {
   const navigate = useNavigate()
-  const [items, setItems] = useState<readonly InventoryItemRow[] | null>(null)
+  const [items, setItems] = useState<readonly InventoryItem[] | null>(null)
 
   useEffect(() => {
     let cancelled = false

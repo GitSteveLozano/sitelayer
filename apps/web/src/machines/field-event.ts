@@ -2,7 +2,7 @@ import { useCallback, useEffect } from 'react'
 import { useMachine } from '@xstate/react'
 import { assign, fromPromise, setup } from 'xstate'
 
-import { apiGet, apiPatch } from '../api-v1-compat'
+import { apiGet, apiPatch } from '@/lib/api'
 
 /**
  * Headless field-event state machine — sister of billing-review.

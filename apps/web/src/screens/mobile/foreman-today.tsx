@@ -14,7 +14,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiGet, type BootstrapResponse, type ProjectRow } from '../../api-v1-compat.js'
+import { apiGet, type BootstrapResponse, type ProjectRow } from '@/lib/api'
 import {
   MAvatarGroup,
   MBody,

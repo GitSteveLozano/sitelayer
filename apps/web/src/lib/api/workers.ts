@@ -1,8 +1,14 @@
 // Workers — types + hooks for the company roster.
 // Wraps the existing /api/workers endpoints in apps/api/src/routes/workers.ts.
+//
+// Standard CRUD hooks come from the shared factory. The extra
+// `sendWorkerMessage` mutation (which does not fit the CRUD shape) and the
+// imperative `createWorker` helper stay defined locally.
 
-import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query'
+import { useMutation, type UseQueryOptions } from '@tanstack/react-query'
+
 import { request } from './client'
+import { createCrudHooks } from './crud-factory'
 
 export interface Worker {
   id: string
@@ -28,58 +34,33 @@ export interface WorkerPatchRequest {
   expected_version?: number
 }
 
-const KEYS = {
-  all: () => ['workers'] as const,
-  list: () => [...KEYS.all(), 'list'] as const,
-}
+const hooks = createCrudHooks<WorkerListResponse, Worker, WorkerCreateRequest, WorkerPatchRequest>({
+  entity: 'workers',
+  basePath: '/api/workers',
+})
 
-export const workerQueryKeys = KEYS
+export const workerQueryKeys = hooks.queryKeys
+export const fetchWorkers = hooks.fetchList
+export const useCreateWorker = hooks.useCreate
+export const usePatchWorker = hooks.usePatch
+export const useDeleteWorker = hooks.useDelete
 
-export function fetchWorkers(): Promise<WorkerListResponse> {
-  return request<WorkerListResponse>('/api/workers')
-}
-
+/**
+ * Re-exposed so XState actors that can't go through hooks (or call sites
+ * that want to do their own optimistic update) can still create a worker
+ * imperatively. The TanStack hook above goes through `request<T>` too.
+ */
 export function createWorker(input: WorkerCreateRequest): Promise<Worker> {
   return request<Worker>('/api/workers', { method: 'POST', json: input })
 }
 
+/**
+ * Thin wrapper so callers can keep passing `useWorkers(options)` (the
+ * factory's `useList` accepts the same `Partial<UseQueryOptions>` shape;
+ * this re-export pins the response type for ergonomics).
+ */
 export function useWorkers(options?: Partial<UseQueryOptions<WorkerListResponse>>) {
-  return useQuery<WorkerListResponse>({
-    queryKey: KEYS.list(),
-    queryFn: fetchWorkers,
-    staleTime: 5 * 60_000,
-    ...options,
-  })
-}
-
-export function useCreateWorker() {
-  const qc = useQueryClient()
-  return useMutation<Worker, Error, WorkerCreateRequest>({
-    mutationFn: (input) => createWorker(input),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: KEYS.all() })
-    },
-  })
-}
-
-export function usePatchWorker(id: string) {
-  const qc = useQueryClient()
-  return useMutation<Worker, Error, WorkerPatchRequest>({
-    mutationFn: (input) => request<Worker>(`/api/workers/${encodeURIComponent(id)}`, { method: 'PATCH', json: input }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
-
-export function useDeleteWorker() {
-  const qc = useQueryClient()
-  return useMutation<unknown, Error, { id: string; expected_version?: number }>({
-    mutationFn: ({ id, expected_version }) =>
-      request(`/api/workers/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-        json: expected_version !== undefined ? { expected_version } : undefined,
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
+  return hooks.useList(options)
 }
 
 export interface WorkerMessageRequest {

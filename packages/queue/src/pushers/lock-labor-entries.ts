@@ -1,4 +1,4 @@
-import type { QueueClient } from './index.js'
+import type { QueueClient } from '../index.js'
 
 // ---------------------------------------------------------------------------
 // lock_labor_entries dedicated handler

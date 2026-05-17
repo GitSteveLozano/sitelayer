@@ -3,10 +3,13 @@
 // in apps/api/src/routes/rental-billing-state.ts.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { RentalBillingHumanEventType, RentalBillingWorkflowState } from '@sitelayer/workflows'
 import { request } from './client'
 
-export type RentalBillingState = 'generated' | 'approved' | 'posting' | 'posted' | 'failed' | 'voided'
-export type RentalBillingHumanEvent = 'APPROVE' | 'POST_REQUESTED' | 'RETRY_POST' | 'VOID'
+// Re-exported under the v2 names. Canonical union lives in
+// @sitelayer/workflows so the reducer and the client agree.
+export type RentalBillingState = RentalBillingWorkflowState
+export type RentalBillingHumanEvent = RentalBillingHumanEventType
 
 export interface RentalBillingRunRow {
   id: string
@@ -96,6 +99,22 @@ export function fetchBillingRuns(params: BillingRunListParams = {}): Promise<Bil
 
 export function fetchBillingRun(id: string): Promise<RentalBillingSnapshot> {
   return request<RentalBillingSnapshot>(`/api/rental-billing-runs/${encodeURIComponent(id)}`)
+}
+
+/**
+ * Plain-function event dispatcher for XState actor invocations (the
+ * headless workflow factory in `machines/headless-workflow.ts`). React
+ * components should prefer `useDispatchBillingRunEvent`.
+ */
+export function dispatchBillingRunEvent(
+  runId: string,
+  event: RentalBillingHumanEvent,
+  stateVersion: number,
+): Promise<RentalBillingSnapshot> {
+  return request<RentalBillingSnapshot>(`/api/rental-billing-runs/${encodeURIComponent(runId)}/events`, {
+    method: 'POST',
+    json: { event, state_version: stateVersion },
+  })
 }
 
 export function useBillingRuns(params: BillingRunListParams = {}) {

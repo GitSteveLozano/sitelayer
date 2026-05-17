@@ -9,9 +9,9 @@ import {
   listInventoryItems,
   listInventoryLocations,
   type BootstrapResponse,
-  type InventoryItemRow,
-  type InventoryLocationRow,
-} from '../../api-v1-compat.js'
+  type InventoryItem,
+  type InventoryLocation,
+} from '@/lib/api'
 import {
   MBody,
   MButton,
@@ -34,8 +34,8 @@ export function MobileRentalDispatch({
   companySlug: string
 }) {
   const navigate = useNavigate()
-  const [items, setItems] = useState<readonly InventoryItemRow[]>([])
-  const [yards, setYards] = useState<readonly InventoryLocationRow[]>([])
+  const [items, setItems] = useState<readonly InventoryItem[]>([])
+  const [yards, setYards] = useState<readonly InventoryLocation[]>([])
   const [projectId, setProjectId] = useState<string>('')
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [billUpfront, setBillUpfront] = useState(true)

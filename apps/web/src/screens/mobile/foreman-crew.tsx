@@ -8,7 +8,7 @@
  */
 import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { BootstrapResponse, WorkerRow } from '../../api-v1-compat.js'
+import type { BootstrapResponse, WorkerRow } from '@/lib/api'
 import {
   MAvatar,
   MBanner,

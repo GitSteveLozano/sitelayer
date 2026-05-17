@@ -4,7 +4,7 @@ import {
   LOCK_LABOR_ENTRIES_MAX_ATTEMPTS,
   processLockLaborEntries,
   type LockLaborEntriesPayload,
-} from './lock-labor-entries.js'
+} from './pushers/lock-labor-entries.js'
 import type { QueueClient } from './index.js'
 
 type QueuedResponse<T extends QueryResultRow = QueryResultRow> = Pick<QueryResult<T>, 'rows' | 'rowCount'> | Error

@@ -302,3 +302,31 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 
   return body as T
 }
+
+/**
+ * Verb-bound shorthand for `request<T>`. Used by imperative call sites
+ * (XState actor invocations, one-off fetches inside event handlers)
+ * that can't go through TanStack hooks. The optional `companySlug`
+ * pins a non-active company; omit it to use the active slug.
+ */
+export function apiGet<T>(path: string, companySlug?: string): Promise<T> {
+  return request<T>(path, companySlug !== undefined ? { method: 'GET', companySlug } : { method: 'GET' })
+}
+
+export function apiPost<T>(path: string, body: unknown, companySlug?: string): Promise<T> {
+  return request<T>(
+    path,
+    companySlug !== undefined ? { method: 'POST', json: body, companySlug } : { method: 'POST', json: body },
+  )
+}
+
+export function apiPatch<T>(path: string, body: unknown, companySlug?: string): Promise<T> {
+  return request<T>(
+    path,
+    companySlug !== undefined ? { method: 'PATCH', json: body, companySlug } : { method: 'PATCH', json: body },
+  )
+}
+
+export function apiDelete<T>(path: string, companySlug?: string): Promise<T> {
+  return request<T>(path, companySlug !== undefined ? { method: 'DELETE', companySlug } : { method: 'DELETE' })
+}

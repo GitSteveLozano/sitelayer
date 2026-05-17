@@ -19,7 +19,7 @@
  */
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { apiGet, type BootstrapResponse } from '../../api-v1-compat.js'
+import { apiGet, type BootstrapResponse } from '@/lib/api'
 import { API_URL } from '../../lib/api/client.js'
 import {
   MAvatar,

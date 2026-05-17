@@ -26,7 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { BootstrapResponse } from '../api-v1-compat.js'
+import type { BootstrapResponse } from '@/lib/api'
 import { useClockIn, useClockOut, type ClockInRequest, type ClockOutRequest } from './api/clock.js'
 
 export interface GeofencePosition {

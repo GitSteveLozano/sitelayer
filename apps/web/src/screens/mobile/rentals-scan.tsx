@@ -12,9 +12,9 @@ import {
   listInventoryItems,
   listInventoryLocations,
   type BootstrapResponse,
-  type InventoryItemRow,
-  type InventoryLocationRow,
-} from '../../api-v1-compat.js'
+  type InventoryItem,
+  type InventoryLocation,
+} from '@/lib/api'
 import {
   MBody,
   MButton,
@@ -52,8 +52,8 @@ export function MobileRentalScan({
   initialMode?: Mode
 }) {
   const navigate = useNavigate()
-  const [items, setItems] = useState<readonly InventoryItemRow[] | null>(null)
-  const [locations, setLocations] = useState<readonly InventoryLocationRow[]>([])
+  const [items, setItems] = useState<readonly InventoryItem[] | null>(null)
+  const [locations, setLocations] = useState<readonly InventoryLocation[]>([])
   const [mode, setMode] = useState<Mode>(initialMode)
   const [assetCode, setAssetCode] = useState('')
   const [projectId, setProjectId] = useState('')

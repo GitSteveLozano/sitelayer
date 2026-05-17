@@ -7,7 +7,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { BootstrapResponse } from '../../api-v1-compat.js'
+import type { BootstrapResponse } from '@/lib/api'
 import {
   MAvatar,
   MBody,

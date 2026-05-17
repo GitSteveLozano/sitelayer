@@ -10,7 +10,7 @@
  */
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiPost } from '../../api-v1-compat.js'
+import { apiPost } from '@/lib/api'
 import {
   MBody,
   MButton,

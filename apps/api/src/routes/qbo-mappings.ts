@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
-import { parseExpectedVersion } from '../http-utils.js'
+import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 
 /**
  * Shape of an integration_mappings row. Mirrors the IntegrationMappingRow
@@ -121,65 +121,57 @@ export async function handleQboMappingRoutes(
       return true
     }
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const updated = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query(
-        `
-        update integration_mappings
-        set
-          entity_type = coalesce($3, entity_type),
-          local_ref = coalesce($4, local_ref),
-          external_id = coalesce($5, external_id),
-          label = coalesce($6, label),
-          status = coalesce($7, status),
-          notes = coalesce($8, notes),
-          version = version + 1,
-          updated_at = now(),
-          deleted_at = null
-        where company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null and ($9::int is null or version = $9)
-        returning id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
-        `,
-        [
-          ctx.company.id,
-          mappingId,
-          body.entity_type ?? null,
-          body.local_ref ?? null,
-          body.external_id ?? null,
-          body.label ?? null,
-          body.status ?? null,
-          body.notes ?? null,
-          expectedVersion,
-        ],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'integration_mapping',
-        entityId: mappingId,
-        action: 'update',
-        row,
-        syncPayload: { action: 'update', mapping: row },
-        idempotencyKey: `integration_mapping:qbo:update:${mappingId}`,
-      })
-      return row
+    return patchVersionedEntity({
+      ctx,
+      body,
+      entityType: 'integration_mapping',
+      entityName: 'mapping',
+      table: 'integration_mappings',
+      id: mappingId,
+      checkVersionWhere: "company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null",
+      update: async (client, expectedVersion) => {
+        const result = await client.query(
+          `
+          update integration_mappings
+          set
+            entity_type = coalesce($3, entity_type),
+            local_ref = coalesce($4, local_ref),
+            external_id = coalesce($5, external_id),
+            label = coalesce($6, label),
+            status = coalesce($7, status),
+            notes = coalesce($8, notes),
+            version = version + 1,
+            updated_at = now(),
+            deleted_at = null
+          where company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null and ($9::int is null or version = $9)
+          returning id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
+          `,
+          [
+            ctx.company.id,
+            mappingId,
+            body.entity_type ?? null,
+            body.local_ref ?? null,
+            body.external_id ?? null,
+            body.label ?? null,
+            body.status ?? null,
+            body.notes ?? null,
+            expectedVersion,
+          ],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'integration_mapping',
+          entityId: mappingId,
+          action: 'update',
+          row,
+          syncPayload: { action: 'update', mapping: row },
+          idempotencyKey: `integration_mapping:qbo:update:${mappingId}`,
+        })
+        return row
+      },
     })
-    if (!updated) {
-      if (
-        !(await ctx.checkVersion(
-          'integration_mappings',
-          "company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null",
-          [ctx.company.id, mappingId],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'mapping not found' })
-      return true
-    }
-    ctx.sendJson(200, updated)
-    return true
   }
 
   if (req.method === 'DELETE' && url.pathname.match(/^\/api\/integrations\/qbo\/mappings\/[^/]+$/)) {
@@ -190,46 +182,38 @@ export async function handleQboMappingRoutes(
       return true
     }
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const deleted = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query(
-        `
-        update integration_mappings
-        set deleted_at = now(), version = version + 1, status = 'deleted', updated_at = now()
-        where company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null and ($3::int is null or version = $3)
-        returning id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
-        `,
-        [ctx.company.id, mappingId, expectedVersion],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'integration_mapping',
-        entityId: mappingId,
-        action: 'delete',
-        row,
-        syncPayload: { action: 'delete', mapping: row },
-        idempotencyKey: `integration_mapping:qbo:delete:${mappingId}`,
-      })
-      return row
+    return deleteVersionedEntity({
+      ctx,
+      body,
+      entityType: 'integration_mapping',
+      entityName: 'mapping',
+      table: 'integration_mappings',
+      id: mappingId,
+      checkVersionWhere: "company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null",
+      delete: async (client, expectedVersion) => {
+        const result = await client.query(
+          `
+          update integration_mappings
+          set deleted_at = now(), version = version + 1, status = 'deleted', updated_at = now()
+          where company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null and ($3::int is null or version = $3)
+          returning id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
+          `,
+          [ctx.company.id, mappingId, expectedVersion],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'integration_mapping',
+          entityId: mappingId,
+          action: 'delete',
+          row,
+          syncPayload: { action: 'delete', mapping: row },
+          idempotencyKey: `integration_mapping:qbo:delete:${mappingId}`,
+        })
+        return row
+      },
     })
-    if (!deleted) {
-      if (
-        !(await ctx.checkVersion(
-          'integration_mappings',
-          "company_id = $1 and provider = 'qbo' and id = $2 and deleted_at is null",
-          [ctx.company.id, mappingId],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'mapping not found' })
-      return true
-    }
-    ctx.sendJson(200, deleted)
-    return true
   }
 
   return false

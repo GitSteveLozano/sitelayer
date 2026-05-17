@@ -12,7 +12,8 @@ import {
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidDateInput, parseExpectedVersion } from '../http-utils.js'
+import { isValidDateInput } from '../http-utils.js'
+import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 
 export type RentalRouteCtx = {
   pool: Pool
@@ -258,7 +259,6 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
       return true
     }
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
     if (body.delivered_on !== undefined && body.delivered_on !== null && !isValidDateInput(body.delivered_on)) {
       ctx.sendJson(400, { error: 'delivered_on must be YYYY-MM-DD' })
       return true
@@ -286,67 +286,65 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
       })
       return true
     }
-    const updated = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query<RentalRow>(
-        `
-        update rentals
-        set
-          item_description = coalesce($3, item_description),
-          daily_rate = coalesce($4, daily_rate),
-          delivered_on = coalesce($5::date, delivered_on),
-          returned_on = case when $6::text = '__clear__' then null
-                             else returned_on end,
-          invoice_cadence_days = coalesce($7, invoice_cadence_days),
-          notes = coalesce($8, notes),
-          project_id = case when $9::text = '__clear__' then null
-                            when $9::text is null then project_id
-                            else $9::uuid end,
-          customer_id = case when $10::text = '__clear__' then null
-                             when $10::text is null then customer_id
-                             else $10::uuid end,
-          version = version + 1,
-          updated_at = now()
-        where company_id = $1 and id = $2 and deleted_at is null
-          and ($11::int is null or version = $11)
-        returning ${RENTAL_SELECT_COLUMNS}
-        `,
-        [
-          ctx.company.id,
-          rentalId,
-          body.item_description ?? null,
-          body.daily_rate ?? null,
-          body.delivered_on ?? null,
-          body.returned_on === null ? '__clear__' : null,
-          body.invoice_cadence_days ?? null,
-          body.notes ?? null,
-          body.project_id === null ? '__clear__' : (body.project_id ?? null),
-          body.customer_id === null ? '__clear__' : (body.customer_id ?? null),
-          expectedVersion,
-        ],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'rental',
-        entityId: rentalId,
-        action: 'update',
-        row,
-        idempotencyKey: `rental:update:${rentalId}:${row.version}`,
-      })
-      return row
+    return patchVersionedEntity({
+      ctx,
+      body,
+      entityType: 'rental',
+      entityName: 'rental',
+      table: 'rentals',
+      id: rentalId,
+      checkVersionWhere: 'company_id = $1 and id = $2',
+      update: async (client, expectedVersion) => {
+        const result = await client.query<RentalRow>(
+          `
+          update rentals
+          set
+            item_description = coalesce($3, item_description),
+            daily_rate = coalesce($4, daily_rate),
+            delivered_on = coalesce($5::date, delivered_on),
+            returned_on = case when $6::text = '__clear__' then null
+                               else returned_on end,
+            invoice_cadence_days = coalesce($7, invoice_cadence_days),
+            notes = coalesce($8, notes),
+            project_id = case when $9::text = '__clear__' then null
+                              when $9::text is null then project_id
+                              else $9::uuid end,
+            customer_id = case when $10::text = '__clear__' then null
+                               when $10::text is null then customer_id
+                               else $10::uuid end,
+            version = version + 1,
+            updated_at = now()
+          where company_id = $1 and id = $2 and deleted_at is null
+            and ($11::int is null or version = $11)
+          returning ${RENTAL_SELECT_COLUMNS}
+          `,
+          [
+            ctx.company.id,
+            rentalId,
+            body.item_description ?? null,
+            body.daily_rate ?? null,
+            body.delivered_on ?? null,
+            body.returned_on === null ? '__clear__' : null,
+            body.invoice_cadence_days ?? null,
+            body.notes ?? null,
+            body.project_id === null ? '__clear__' : (body.project_id ?? null),
+            body.customer_id === null ? '__clear__' : (body.customer_id ?? null),
+            expectedVersion,
+          ],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'rental',
+          entityId: rentalId,
+          action: 'update',
+          row,
+          idempotencyKey: `rental:update:${rentalId}:${row.version}`,
+        })
+        return row
+      },
     })
-    if (!updated) {
-      if (
-        !(await ctx.checkVersion('rentals', 'company_id = $1 and id = $2', [ctx.company.id, rentalId], expectedVersion))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'rental not found' })
-      return true
-    }
-    ctx.sendJson(200, updated)
-    return true
   }
 
   if (req.method === 'DELETE' && url.pathname.match(/^\/api\/rentals\/[^/]+$/)) {
@@ -357,40 +355,37 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
       return true
     }
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const deleted = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query<RentalRow>(
-        `
-        update rentals
-        set deleted_at = now(), version = version + 1, updated_at = now()
-        where company_id = $1 and id = $2 and deleted_at is null
-          and ($3::int is null or version = $3)
-        returning ${RENTAL_SELECT_COLUMNS}
-        `,
-        [ctx.company.id, rentalId, expectedVersion],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'rental',
-        entityId: rentalId,
-        action: 'delete',
-        row,
-      })
-      return row
+    return deleteVersionedEntity({
+      ctx,
+      body,
+      entityType: 'rental',
+      entityName: 'rental',
+      table: 'rentals',
+      id: rentalId,
+      checkVersionWhere: 'company_id = $1 and id = $2',
+      delete: async (client, expectedVersion) => {
+        const result = await client.query<RentalRow>(
+          `
+          update rentals
+          set deleted_at = now(), version = version + 1, updated_at = now()
+          where company_id = $1 and id = $2 and deleted_at is null
+            and ($3::int is null or version = $3)
+          returning ${RENTAL_SELECT_COLUMNS}
+          `,
+          [ctx.company.id, rentalId, expectedVersion],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'rental',
+          entityId: rentalId,
+          action: 'delete',
+          row,
+        })
+        return row
+      },
     })
-    if (!deleted) {
-      if (
-        !(await ctx.checkVersion('rentals', 'company_id = $1 and id = $2', [ctx.company.id, rentalId], expectedVersion))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'rental not found' })
-      return true
-    }
-    ctx.sendJson(200, deleted)
-    return true
   }
 
   if (req.method === 'POST' && url.pathname.match(/^\/api\/rentals\/[^/]+\/invoice$/)) {

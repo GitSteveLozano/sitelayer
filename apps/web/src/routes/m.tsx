@@ -25,7 +25,7 @@
  */
 import { Navigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { type BootstrapResponse, type SessionResponse } from '../api-v1-compat'
+import { type BootstrapResponse, type SessionResponse } from '@/lib/api'
 import { ApiError, request, getActiveCompanySlug } from '../lib/api/client'
 import { queryKeys } from '../lib/api/keys'
 import { normalizeMobileShellRole } from '../lib/active-context'

@@ -1,8 +1,11 @@
 // Pricing profiles — labor-rate-by-division config (jsonb).
 // Wraps /api/pricing-profiles in apps/api/src/routes/pricing-profiles.ts.
+//
+// Hooks come from the shared CRUD factory; this module owns the typed
+// surface and re-exports under the existing names so consumer screens
+// keep working without changes.
 
-import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query'
-import { request } from './client'
+import { createCrudHooks } from './crud-factory'
 
 /**
  * The `config` jsonb is shaped like:
@@ -36,54 +39,19 @@ export interface PricingProfilePatchRequest {
   expected_version?: number
 }
 
-const KEYS = {
-  all: () => ['pricing-profiles'] as const,
-  list: () => [...KEYS.all(), 'list'] as const,
-}
+const hooks = createCrudHooks<
+  PricingProfileListResponse,
+  PricingProfile,
+  PricingProfileCreateRequest,
+  PricingProfilePatchRequest
+>({
+  entity: 'pricing-profiles',
+  basePath: '/api/pricing-profiles',
+})
 
-export const pricingProfileQueryKeys = KEYS
-
-export function fetchPricingProfiles(): Promise<PricingProfileListResponse> {
-  return request<PricingProfileListResponse>('/api/pricing-profiles')
-}
-
-export function usePricingProfiles(options?: Partial<UseQueryOptions<PricingProfileListResponse>>) {
-  return useQuery<PricingProfileListResponse>({
-    queryKey: KEYS.list(),
-    queryFn: fetchPricingProfiles,
-    staleTime: 5 * 60_000,
-    ...options,
-  })
-}
-
-export function useCreatePricingProfile() {
-  const qc = useQueryClient()
-  return useMutation<PricingProfile, Error, PricingProfileCreateRequest>({
-    mutationFn: (input) => request<PricingProfile>('/api/pricing-profiles', { method: 'POST', json: input }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
-
-export function usePatchPricingProfile(id: string) {
-  const qc = useQueryClient()
-  return useMutation<PricingProfile, Error, PricingProfilePatchRequest>({
-    mutationFn: (input) =>
-      request<PricingProfile>(`/api/pricing-profiles/${encodeURIComponent(id)}`, {
-        method: 'PATCH',
-        json: input,
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
-
-export function useDeletePricingProfile() {
-  const qc = useQueryClient()
-  return useMutation<unknown, Error, { id: string; expected_version?: number }>({
-    mutationFn: ({ id, expected_version }) =>
-      request(`/api/pricing-profiles/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-        json: expected_version !== undefined ? { expected_version } : undefined,
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
+export const pricingProfileQueryKeys = hooks.queryKeys
+export const fetchPricingProfiles = hooks.fetchList
+export const usePricingProfiles = hooks.useList
+export const useCreatePricingProfile = hooks.useCreate
+export const usePatchPricingProfile = hooks.usePatch
+export const useDeletePricingProfile = hooks.useDelete

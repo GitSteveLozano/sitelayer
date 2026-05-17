@@ -10,7 +10,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiGet, apiPatch, type BootstrapResponse } from '../../api-v1-compat.js'
+import { apiGet, apiPatch, type BootstrapResponse } from '@/lib/api'
 import {
   MBody,
   MButton,

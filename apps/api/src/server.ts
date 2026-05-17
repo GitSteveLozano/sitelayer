@@ -11,7 +11,7 @@ import { backfillCustomerMapping, listIntegrationMappings, upsertIntegrationMapp
 import { assertBlueprintDocumentsBelongToProject } from './routes/takeoff-write.js'
 import { dispatch } from './routes/dispatch.js'
 import { handlePublicRoutes } from './routes/public.js'
-import { handlePublicEstimateShareRoutes } from './routes/estimate-shares.js'
+import { handlePublicEstimateShareRoutes } from './routes/estimate-shares-portal.js'
 import { handlePortalRentalRoutes } from './routes/portal-rentals.js'
 import { handlePublicPortalRoutes } from './routes/portal-public.js'
 import {

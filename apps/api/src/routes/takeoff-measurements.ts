@@ -1,10 +1,11 @@
 import type http from 'node:http'
-import type { Pool, PoolClient } from 'pg'
+import type { Pool } from 'pg'
 import { calculateGeometryQuantity, normalizeGeometry } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import { evaluateLww } from '../lww.js'
-import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { HttpError, isValidUuid, parseExpectedVersion } from '../http-utils.js'
+import { recordMutationLedger, withCompanyClient } from '../mutation-tx.js'
+import { HttpError, isValidUuid } from '../http-utils.js'
+import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 import { resolveDefaultDraftId } from './takeoff-drafts.js'
 
 const ELEVATION_VOCAB_PATCH = new Set(['east', 'south', 'west', 'north', 'roof', 'other'])
@@ -102,7 +103,6 @@ export async function handleTakeoffMeasurementRoutes(
       return true
     }
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
     let geometryJson: string | null = null
     let quantity: unknown = body.quantity ?? null
     if (body.geometry !== undefined && body.geometry !== null && body.geometry !== '') {
@@ -203,72 +203,65 @@ export async function handleTakeoffMeasurementRoutes(
       }
     }
 
-    const updated = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query(
-        `
-        update takeoff_measurements
-        set
-          service_item_code = coalesce($3, service_item_code),
-          quantity = coalesce($4, quantity),
-          unit = coalesce($5, unit),
-          notes = coalesce($6, notes),
-          blueprint_document_id = coalesce($7, blueprint_document_id),
-          geometry = coalesce($8::jsonb, geometry),
-          elevation = coalesce($10, elevation),
-          version = version + 1,
-          updated_at = now()
-        where company_id = $1 and id = $2 and deleted_at is null and ($9::int is null or version = $9)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at, updated_at
-        `,
-        [
-          ctx.company.id,
-          measurementId,
-          body.service_item_code ?? null,
-          quantity,
-          body.unit ?? null,
-          body.notes ?? null,
-          patchBlueprintDocumentId,
-          geometryJson,
-          expectedVersion,
-          body.elevation === undefined || body.elevation === null || String(body.elevation).trim() === ''
-            ? null
-            : (() => {
-                const v = String(body.elevation).trim().toLowerCase()
-                if (!ELEVATION_VOCAB_PATCH.has(v)) {
-                  throw new HttpError(400, 'elevation must be one of: east, south, west, north, roof, other')
-                }
-                return v
-              })(),
-        ],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'takeoff_measurement',
-        entityId: measurementId,
-        action: 'update',
-        row,
-        syncPayload: { action: 'update', measurement: row },
-      })
-      return row
+    return patchVersionedEntity({
+      ctx,
+      body,
+      entityType: 'takeoff_measurement',
+      entityName: 'measurement',
+      table: 'takeoff_measurements',
+      id: measurementId,
+      checkVersionWhere: 'company_id = $1 and id = $2',
+      update: async (client, expectedVersion) => {
+        const result = await client.query(
+          `
+          update takeoff_measurements
+          set
+            service_item_code = coalesce($3, service_item_code),
+            quantity = coalesce($4, quantity),
+            unit = coalesce($5, unit),
+            notes = coalesce($6, notes),
+            blueprint_document_id = coalesce($7, blueprint_document_id),
+            geometry = coalesce($8::jsonb, geometry),
+            elevation = coalesce($10, elevation),
+            version = version + 1,
+            updated_at = now()
+          where company_id = $1 and id = $2 and deleted_at is null and ($9::int is null or version = $9)
+          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at, updated_at
+          `,
+          [
+            ctx.company.id,
+            measurementId,
+            body.service_item_code ?? null,
+            quantity,
+            body.unit ?? null,
+            body.notes ?? null,
+            patchBlueprintDocumentId,
+            geometryJson,
+            expectedVersion,
+            body.elevation === undefined || body.elevation === null || String(body.elevation).trim() === ''
+              ? null
+              : (() => {
+                  const v = String(body.elevation).trim().toLowerCase()
+                  if (!ELEVATION_VOCAB_PATCH.has(v)) {
+                    throw new HttpError(400, 'elevation must be one of: east, south, west, north, roof, other')
+                  }
+                  return v
+                })(),
+          ],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'takeoff_measurement',
+          entityId: measurementId,
+          action: 'update',
+          row,
+          syncPayload: { action: 'update', measurement: row },
+        })
+        return row
+      },
     })
-    if (!updated) {
-      if (
-        !(await ctx.checkVersion(
-          'takeoff_measurements',
-          'company_id = $1 and id = $2',
-          [ctx.company.id, measurementId],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'measurement not found' })
-      return true
-    }
-    ctx.sendJson(200, updated)
-    return true
   }
 
   if (req.method === 'DELETE' && url.pathname.match(/^\/api\/takeoff\/measurements\/[^/]+$/)) {
@@ -279,45 +272,37 @@ export async function handleTakeoffMeasurementRoutes(
       return true
     }
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const deleted = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query(
-        `
-        update takeoff_measurements
-        set deleted_at = now(), version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null and ($3::int is null or version = $3)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at
-        `,
-        [ctx.company.id, measurementId, expectedVersion],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'takeoff_measurement',
-        entityId: measurementId,
-        action: 'delete',
-        row,
-        syncPayload: { action: 'delete', measurement: row },
-      })
-      return row
+    return deleteVersionedEntity({
+      ctx,
+      body,
+      entityType: 'takeoff_measurement',
+      entityName: 'measurement',
+      table: 'takeoff_measurements',
+      id: measurementId,
+      checkVersionWhere: 'company_id = $1 and id = $2',
+      delete: async (client, expectedVersion) => {
+        const result = await client.query(
+          `
+          update takeoff_measurements
+          set deleted_at = now(), version = version + 1
+          where company_id = $1 and id = $2 and deleted_at is null and ($3::int is null or version = $3)
+          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at
+          `,
+          [ctx.company.id, measurementId, expectedVersion],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'takeoff_measurement',
+          entityId: measurementId,
+          action: 'delete',
+          row,
+          syncPayload: { action: 'delete', measurement: row },
+        })
+        return row
+      },
     })
-    if (!deleted) {
-      if (
-        !(await ctx.checkVersion(
-          'takeoff_measurements',
-          'company_id = $1 and id = $2',
-          [ctx.company.id, measurementId],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'measurement not found' })
-      return true
-    }
-    ctx.sendJson(200, deleted)
-    return true
   }
 
   return false

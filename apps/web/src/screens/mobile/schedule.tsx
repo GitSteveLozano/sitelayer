@@ -6,7 +6,7 @@
  * right side shows site cards with crew dot counts.
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
+import { apiPost, type BootstrapResponse } from '@/lib/api'
 import {
   MBody,
   MButton,

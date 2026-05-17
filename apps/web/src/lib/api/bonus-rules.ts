@@ -1,8 +1,11 @@
 // Bonus rules — tier schedule (jsonb config) for crew bonus payouts.
 // Wraps /api/bonus-rules in apps/api/src/routes/bonus-rules.ts.
+//
+// Hooks come from the shared CRUD factory; this module owns the typed
+// surface and re-exports under the existing names so consumer screens
+// keep working without changes.
 
-import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query'
-import { request } from './client'
+import { createCrudHooks } from './crud-factory'
 
 /**
  * The `config` jsonb is shaped like:
@@ -36,51 +39,14 @@ export interface BonusRulePatchRequest {
   expected_version?: number
 }
 
-const KEYS = {
-  all: () => ['bonus-rules'] as const,
-  list: () => [...KEYS.all(), 'list'] as const,
-}
+const hooks = createCrudHooks<BonusRuleListResponse, BonusRule, BonusRuleCreateRequest, BonusRulePatchRequest>({
+  entity: 'bonus-rules',
+  basePath: '/api/bonus-rules',
+})
 
-export const bonusRuleQueryKeys = KEYS
-
-export function fetchBonusRules(): Promise<BonusRuleListResponse> {
-  return request<BonusRuleListResponse>('/api/bonus-rules')
-}
-
-export function useBonusRules(options?: Partial<UseQueryOptions<BonusRuleListResponse>>) {
-  return useQuery<BonusRuleListResponse>({
-    queryKey: KEYS.list(),
-    queryFn: fetchBonusRules,
-    staleTime: 5 * 60_000,
-    ...options,
-  })
-}
-
-export function useCreateBonusRule() {
-  const qc = useQueryClient()
-  return useMutation<BonusRule, Error, BonusRuleCreateRequest>({
-    mutationFn: (input) => request<BonusRule>('/api/bonus-rules', { method: 'POST', json: input }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
-
-export function usePatchBonusRule(id: string) {
-  const qc = useQueryClient()
-  return useMutation<BonusRule, Error, BonusRulePatchRequest>({
-    mutationFn: (input) =>
-      request<BonusRule>(`/api/bonus-rules/${encodeURIComponent(id)}`, { method: 'PATCH', json: input }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
-
-export function useDeleteBonusRule() {
-  const qc = useQueryClient()
-  return useMutation<unknown, Error, { id: string; expected_version?: number }>({
-    mutationFn: ({ id, expected_version }) =>
-      request(`/api/bonus-rules/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-        json: expected_version !== undefined ? { expected_version } : undefined,
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
+export const bonusRuleQueryKeys = hooks.queryKeys
+export const fetchBonusRules = hooks.fetchList
+export const useBonusRules = hooks.useList
+export const useCreateBonusRule = hooks.useCreate
+export const usePatchBonusRule = hooks.usePatch
+export const useDeleteBonusRule = hooks.useDelete

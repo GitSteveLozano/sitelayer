@@ -11,7 +11,7 @@
  */
 import { describe, expect, test } from 'vitest'
 import { computeOvernightDelta, __overnightInternals } from './foreman-today'
-import type { BootstrapResponse } from '../../api-v1-compat'
+import type { BootstrapResponse } from '@/lib/api'
 
 const { yesterdayCutoffMs, overnightDismissKey } = __overnightInternals
 

@@ -16,7 +16,8 @@
  */
 import { lazy, useEffect, useMemo, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
-import type { BootstrapResponse } from '../api-v1-compat.js'
+import type { BootstrapResponse } from '@/lib/api'
+import type { CompanyRole } from '@sitelayer/domain'
 import {
   availableRoleModes,
   computeActiveContext,
@@ -69,7 +70,7 @@ import { MobileQuickInvoice } from './mobile/invoice-quick.js'
 
 export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
-  companyRole: 'admin' | 'foreman' | 'office' | 'member'
+  companyRole: CompanyRole
   companySlug: string
   /**
    * Where the shell is mounted. '/m' is the legacy alias kept for any

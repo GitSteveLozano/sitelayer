@@ -1267,3 +1267,12 @@ export {
   type MarkupProfileConfig,
   type SubtotalsByKind,
 } from './markup.js'
+
+export {
+  COMPANY_ROLES,
+  normalizeCompanyRole,
+  type ActiveCompany,
+  type CompanyRole,
+  type IntegrationEntityType,
+  type ProjectRole,
+} from './roles.js'

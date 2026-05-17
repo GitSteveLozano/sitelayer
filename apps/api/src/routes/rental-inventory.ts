@@ -1,7 +1,8 @@
 import type http from 'node:http'
 import { handleInventoryAvailabilityRoutes } from './inventory-availability.js'
 import { handleRentalBillingStateRoutes } from './rental-billing-state.js'
-import { handleRentalContractsCrudRoutes } from './rental-contracts-crud.js'
+import { handleRentalContractLinesRoutes } from './rental-contract-lines.js'
+import { handleRentalContractsRoutes } from './rental-contracts.js'
 import { handleRentalInventoryCrudRoutes } from './rental-inventory-crud.js'
 import { handleRentalInventoryCsvRoutes } from './rental-inventory-csv.js'
 import type { RentalInventoryRouteCtx } from './rental-inventory.types.js'
@@ -16,11 +17,12 @@ export type { RentalInventoryRouteCtx } from './rental-inventory.types.js'
  * route additions stay easy to bisect.
  *
  * Split modules:
- * - rental-inventory-crud.ts   — items + locations + movements CRUD
- * - inventory-availability.ts  — stock availability query (read-only rollup)
- * - rental-inventory-csv.ts    — bulk CSV import (upsert by code)
- * - rental-contracts-crud.ts   — contracts + lines + billing-run create/preview
- * - rental-billing-state.ts    — billing run workflow events (state machine)
+ * - rental-inventory-crud.ts    — items + locations + movements CRUD
+ * - inventory-availability.ts   — stock availability query (read-only rollup)
+ * - rental-inventory-csv.ts     — bulk CSV import (upsert by code)
+ * - rental-contracts.ts         — contracts + billing-run create/preview
+ * - rental-contract-lines.ts    — contract lines + per-line rate tiers
+ * - rental-billing-state.ts     — billing run workflow events (state machine)
  */
 export async function handleRentalInventoryRoutes(
   req: http.IncomingMessage,
@@ -30,7 +32,8 @@ export async function handleRentalInventoryRoutes(
   if (await handleRentalInventoryCrudRoutes(req, url, ctx)) return true
   if (await handleInventoryAvailabilityRoutes(req, url, ctx)) return true
   if (await handleRentalInventoryCsvRoutes(req, url, ctx)) return true
-  if (await handleRentalContractsCrudRoutes(req, url, ctx)) return true
+  if (await handleRentalContractsRoutes(req, url, ctx)) return true
+  if (await handleRentalContractLinesRoutes(req, url, ctx)) return true
   if (await handleRentalBillingStateRoutes(req, url, ctx)) return true
   return false
 }
