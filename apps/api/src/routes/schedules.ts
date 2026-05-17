@@ -8,6 +8,7 @@ import {
   type CrewScheduleWorkflowSnapshot,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
+import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
 
@@ -327,6 +328,8 @@ export async function handleScheduleRoutes(
         snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
         actorUserId: ctx.currentUserId,
       })
+      const confirmOutcome = workflowEventOutcome('CONFIRM')
+      if (confirmOutcome) observeWorkflowEvent(CREW_SCHEDULE_WORKFLOW_NAME, confirmOutcome)
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'crew_schedule',

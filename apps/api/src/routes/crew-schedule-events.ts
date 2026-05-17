@@ -13,7 +13,7 @@ import {
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
-import { observeAudit } from '../metrics.js'
+import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { isValidDateInput, isValidUuid, parseExpectedVersion } from '../http-utils.js'
 
 // Crew-schedule workflow surface — mirrors the rental-billing-state and
@@ -270,6 +270,8 @@ export async function handleCrewScheduleEventRoutes(
           after: result.row,
         })
         observeAudit('crew_schedule', `event:${result.eventType.toLowerCase()}`)
+        const outcome = workflowEventOutcome(result.eventType)
+        if (outcome) observeWorkflowEvent(CREW_SCHEDULE_WORKFLOW_NAME, outcome)
       }
       ctx.sendJson(200, snapshotResponse(result.row))
       return true

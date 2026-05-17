@@ -29,6 +29,7 @@ function makeRow(overrides: Partial<PendingNotificationRow> = {}): PendingNotifi
     payload: null,
     attempt_count: 0,
     delivery_attempts: 0,
+    state_version: 1,
     ...overrides,
   }
 }
@@ -126,11 +127,29 @@ describe('drainNotifications — Clerk hydration → send', () => {
     expect(message.to).toBe('alice@example.com')
 
     // The row was patched with the hydrated email AND marked sent. Order:
-    // claim → update recipient_email → send → mark sent.
+    // claim → HYDRATE (persists email + transitions to hydrating)
+    //       → SEND_REQUESTED (transitions to sending)
+    //       → SEND_SUCCEEDED (transitions to sent, stamps sent_at).
+    // Each transition writes a workflow_event_log row in the same tx.
     const updates = calls.filter((c) => c.sql.includes('update notifications'))
-    expect(updates[0]?.sql).toContain('set recipient_email = $2')
-    expect(updates[0]?.params).toEqual(['r-hydrate', 'alice@example.com'])
-    expect(updates[1]?.sql).toContain("set status = 'sent'")
+    expect(updates).toHaveLength(3)
+    // HYDRATE: status='pending' (workflow `hydrating` projects to legacy
+    // pending) + recipient_email persisted.
+    expect(updates[0]?.sql).toContain('set status = $2')
+    expect(updates[0]?.sql).toContain('recipient_email = $5')
+    expect(updates[0]?.params?.[0]).toBe('r-hydrate')
+    expect(updates[0]?.params?.[1]).toBe('pending')
+    expect(updates[0]?.params?.[4]).toBe('alice@example.com')
+    // SEND_REQUESTED → 'sending'.
+    expect(updates[1]?.params?.[1]).toBe('sending')
+    // SEND_SUCCEEDED → 'sent'.
+    expect(updates[2]?.params?.[1]).toBe('sent')
+    expect(updates[2]?.sql).toContain('sent_at = now()')
+    // Three workflow_event_log inserts in the same tx (HYDRATE,
+    // SEND_REQUESTED, SEND_SUCCEEDED).
+    const events = calls.filter((c) => c.sql.includes('insert into workflow_event_log'))
+    expect(events).toHaveLength(3)
+    expect(events.map((e) => e.params?.[5])).toEqual(['HYDRATE', 'SEND_REQUESTED', 'SEND_SUCCEEDED'])
   })
 
   it('does not call Clerk when recipient_email is already populated', async () => {
@@ -166,8 +185,17 @@ describe('drainNotifications — Clerk 404 (user deleted)', () => {
 
     const updates = calls.filter((c) => c.sql.includes('update notifications'))
     expect(updates).toHaveLength(1)
-    expect(updates[0]?.sql).toContain("set status = 'failed'")
-    expect(updates[0]?.params).toEqual(['r-deleted', 2, 'clerk_user_not_found'])
+    // SEND_FAILED with kind=clerk_not_found → projects to legacy 'failed'.
+    // params: [id, status, new_state_version, current_state_version, attemptCount, reason]
+    expect(updates[0]?.sql).toContain('set status = $2')
+    expect(updates[0]?.params?.[0]).toBe('r-deleted')
+    expect(updates[0]?.params?.[1]).toBe('failed')
+    expect(updates[0]?.params?.[4]).toBe(2)
+    expect(updates[0]?.params?.[5]).toBe('clerk_user_not_found')
+    // Exactly one workflow_event_log row written (SEND_FAILED).
+    const events = calls.filter((c) => c.sql.includes('insert into workflow_event_log'))
+    expect(events).toHaveLength(1)
+    expect(events[0]?.params?.[5]).toBe('SEND_FAILED')
   })
 })
 
@@ -214,10 +242,17 @@ describe('drainNotifications — Clerk unreachable', () => {
 
     const updates = calls.filter((c) => c.sql.includes('update notifications'))
     expect(updates).toHaveLength(2)
+    // Row 1 deferred via procedural deferRow path (no workflow transition).
     expect(updates[0]?.sql).toContain("set status = 'pending'")
     expect((updates[0]?.params as unknown[])[3]).toMatch(/^clerk_unreachable/)
-    expect(updates[1]?.sql).toContain("set status = 'failed'")
-    expect((updates[1]?.params as unknown[])[2]).toBe('clerk_unreachable')
+    // Row 2 exhausted retries → SEND_FAILED kind=clerk_unreachable → legacy 'failed'.
+    expect(updates[1]?.sql).toContain('set status = $2')
+    expect((updates[1]?.params as unknown[])[1]).toBe('failed')
+    expect((updates[1]?.params as unknown[])[5]).toBe('clerk_unreachable')
+    // Exactly one workflow_event_log row written for the exhausted row.
+    const events = calls.filter((c) => c.sql.includes('insert into workflow_event_log'))
+    expect(events).toHaveLength(1)
+    expect(events[0]?.params?.[5]).toBe('SEND_FAILED')
   })
 })
 
@@ -232,7 +267,12 @@ describe('drainNotifications — broadcast / disabled resolver', () => {
     expect(result.sent).toBe(1)
     expect(sendEmail).not.toHaveBeenCalled()
     const updates = calls.filter((c) => c.sql.includes('update notifications'))
-    expect(updates[0]?.sql).toContain("set status = 'sent'")
+    // Broadcast → SEND_REQUESTED + SEND_SUCCEEDED chained transitions.
+    expect(updates).toHaveLength(2)
+    expect((updates[0]?.params as unknown[])[1]).toBe('sending')
+    expect((updates[1]?.params as unknown[])[1]).toBe('sent')
+    const events = calls.filter((c) => c.sql.includes('insert into workflow_event_log'))
+    expect(events.map((e) => e.params?.[5])).toEqual(['SEND_REQUESTED', 'SEND_SUCCEEDED'])
   })
 
   it('defers (does NOT silently mark sent) when clerkResolver is null but row needs hydration', async () => {

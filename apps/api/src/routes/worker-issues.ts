@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { enqueueNotification, recordMutationLedger, recordWorkflowEvent, withCompanyClient } from '../mutation-tx.js'
 import { listIssueRecipientUserIds } from '../notifications.js'
 import { withMutationTx } from '../mutation-tx.js'
@@ -630,7 +631,7 @@ export async function handleWorkerIssueRoutes(
           idempotencyKey: `worker_issue:escalate:${issueId}:${nextSnapshot.state_version}`,
         })
       }
-      return { kind: 'ok' as const, row: freshRow }
+      return { kind: 'ok' as const, row: freshRow, eventType: event.type }
     })
     if (updated.kind === 'not_found') {
       ctx.sendJson(404, { error: 'worker_issue not found' })
@@ -644,6 +645,8 @@ export async function handleWorkerIssueRoutes(
       ctx.sendJson(409, { error: updated.message, ...buildWorkflowResponse(updated.current) })
       return true
     }
+    const outcome = workflowEventOutcome(updated.eventType)
+    if (outcome) observeWorkflowEvent(FIELD_EVENT_WORKFLOW_NAME, outcome)
     ctx.sendJson(200, buildWorkflowResponse(updated.row))
     return true
   }

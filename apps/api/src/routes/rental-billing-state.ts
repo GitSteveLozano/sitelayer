@@ -11,7 +11,7 @@ import {
 } from '@sitelayer/workflows'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
-import { observeAudit } from '../metrics.js'
+import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import {
   RENTAL_BILLING_RUN_COLUMNS,
   RENTAL_BILLING_RUN_LINE_COLUMNS,
@@ -274,6 +274,8 @@ export async function handleRentalBillingStateRoutes(
         after: result.run,
       })
       observeAudit('rental_billing_run', `event:${result.eventType.toLowerCase()}`)
+      const outcome = workflowEventOutcome(result.eventType)
+      if (outcome) observeWorkflowEvent(RENTAL_BILLING_WORKFLOW_NAME, outcome)
       ctx.sendJson(200, billingRunWorkflowSnapshotResponse(result.run, result.lines))
       return true
     } catch (err) {

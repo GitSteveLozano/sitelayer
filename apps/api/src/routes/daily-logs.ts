@@ -1,10 +1,17 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput, isValidUuid } from '../http-utils.js'
 import { parseDailyLogPhotoMultipart, DailyLogPhotoUploadError } from '../daily-log-photo-upload.js'
 import { type BlueprintStorage, assertKeyInCompany } from '../storage.js'
+import {
+  DAILY_LOG_WORKFLOW_NAME,
+  DAILY_LOG_WORKFLOW_SCHEMA_VERSION,
+  dailyLogStatusToWorkflowState,
+  transitionDailyLogWorkflow,
+  type DailyLogWorkflowSnapshot,
+} from '@sitelayer/workflows'
 
 export type DailyLogRouteCtx = {
   pool: Pool
@@ -29,7 +36,7 @@ const DAILY_LOG_COLUMNS = `
   id, company_id, project_id, occurred_on, foreman_user_id,
   scope_progress, weather, notes, schedule_deviations,
   crew_summary, photo_keys, status, submitted_at,
-  origin, version, created_at, updated_at
+  origin, version, state_version, created_at, updated_at
 `
 
 type DailyLogRow = {
@@ -48,6 +55,7 @@ type DailyLogRow = {
   submitted_at: string | null
   origin: string | null
   version: number
+  state_version: number
   created_at: string
   updated_at: string
 }
@@ -314,22 +322,85 @@ export async function handleDailyLogRoutes(
     // Foreman can only submit their own draft. Admin/office unrestricted.
     const ownerFilter = ctx.company.role === 'foreman' ? ctx.currentUserId : ''
 
-    const submitted = await withMutationTx(async (client: PoolClient) => {
+    // Dispatch through the deterministic daily_log workflow:
+    //   - SELECT ... FOR UPDATE locks the row
+    //   - transitionDailyLogWorkflow validates draft → submitted
+    //   - one UPDATE flips status + bumps state_version + version
+    //   - recordWorkflowEvent appends to workflow_event_log in the same tx
+    //   - recordMutationLedger keeps the stable idempotency key the
+    //     pre-workflow handler used
+    // The 'illegal_transition' branch (already submitted) and
+    // 'not_found' branches both collapse to the legacy 409 response so
+    // HTTP behaviour is unchanged. No-row from the UPDATE only happens
+    // when the row vanished between SELECT and UPDATE (or the foreman
+    // ownership filter rejected it), which the pre-workflow handler
+    // also surfaced as 409.
+    const result = await withMutationTx(async (client: PoolClient) => {
+      const lockedResult = await client.query<DailyLogRow>(
+        `select ${DAILY_LOG_COLUMNS}
+         from daily_logs
+         where company_id = $1
+           and id = $2
+           and ($3 = '' or foreman_user_id = $3)
+         for update`,
+        [ctx.company.id, id, ownerFilter],
+      )
+      const current = lockedResult.rows[0]
+      if (!current) return { kind: 'not_found' as const }
+      if (current.status !== 'draft') {
+        return { kind: 'illegal_transition' as const }
+      }
+
+      const submittedAt = new Date().toISOString()
+      const beforeStateVersion = current.state_version
+      let nextSnapshot: DailyLogWorkflowSnapshot
+      try {
+        nextSnapshot = transitionDailyLogWorkflow(
+          {
+            state: dailyLogStatusToWorkflowState(current.status),
+            state_version: current.state_version,
+            submitted_at: current.submitted_at,
+            submitted_by: null,
+          },
+          { type: 'SUBMIT', submitted_at: submittedAt, submitted_by: ctx.currentUserId },
+        )
+      } catch {
+        return { kind: 'illegal_transition' as const }
+      }
+
       const updateResult = await client.query<DailyLogRow>(
         `update daily_logs
-           set status = 'submitted',
-               submitted_at = now(),
+           set status = $4,
+               state_version = $5,
+               submitted_at = $6::timestamptz,
                version = version + 1,
                updated_at = now()
          where company_id = $1
            and id = $2
-           and status = 'draft'
            and ($3 = '' or foreman_user_id = $3)
+           and status = 'draft'
          returning ${DAILY_LOG_COLUMNS}`,
-        [ctx.company.id, id, ownerFilter],
+        [ctx.company.id, id, ownerFilter, nextSnapshot.state, nextSnapshot.state_version, submittedAt],
       )
       const row = updateResult.rows[0]
-      if (!row) return null
+      if (!row) return { kind: 'not_found' as const }
+
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: DAILY_LOG_WORKFLOW_NAME,
+        schemaVersion: DAILY_LOG_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'daily_log',
+        entityId: row.id,
+        stateVersion: beforeStateVersion,
+        eventType: 'SUBMIT',
+        eventPayload: {
+          type: 'SUBMIT',
+          submitted_at: submittedAt,
+          submitted_by: ctx.currentUserId,
+        },
+        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        actorUserId: ctx.currentUserId,
+      })
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'daily_log',
@@ -339,14 +410,14 @@ export async function handleDailyLogRoutes(
         actorUserId: ctx.currentUserId,
         idempotencyKey: `daily_log:submit:${row.id}`,
       })
-      return row
+      return { kind: 'ok' as const, row }
     })
 
-    if (!submitted) {
+    if (result.kind !== 'ok') {
       ctx.sendJson(409, { error: 'daily log not found, already submitted, or not yours to submit' })
       return true
     }
-    ctx.sendJson(200, { dailyLog: submitted })
+    ctx.sendJson(200, { dailyLog: result.row })
     return true
   }
 

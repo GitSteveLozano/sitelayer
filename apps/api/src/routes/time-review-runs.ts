@@ -13,7 +13,7 @@ import {
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
-import { observeAudit } from '../metrics.js'
+import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { isValidDateInput, isValidUuid } from '../http-utils.js'
 
 export type TimeReviewRouteCtx = {
@@ -439,6 +439,8 @@ export async function handleTimeReviewRunRoutes(
         after: result.run,
       })
       observeAudit('time_review_run', `event:${result.eventType.toLowerCase()}`)
+      const outcome = workflowEventOutcome(result.eventType)
+      if (outcome) observeWorkflowEvent(TIME_REVIEW_WORKFLOW_NAME, outcome)
       ctx.sendJson(200, snapshotResponse(result.run))
       return true
     } catch (err) {

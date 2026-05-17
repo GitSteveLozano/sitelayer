@@ -21,6 +21,7 @@
 
 import type { Logger } from '@sitelayer/logger'
 import type { EmailConfig, EmailMessage, sendEmail as sendEmailFn } from './email.js'
+import { Sentry } from './instrument.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -267,7 +268,14 @@ export class EmailChannel implements NotificationChannel {
     }
     if (message.bodyHtml) msg.html = message.bodyHtml
     try {
-      const result = await this.deps.sendEmail(msg, { config: this.deps.emailConfig })
+      const result = await Sentry.startSpan(
+        {
+          name: 'notification.email.send',
+          op: 'http.client',
+          attributes: { 'http.service': 'email', 'notification.kind': message.kind },
+        },
+        () => this.deps.sendEmail(msg, { config: this.deps.emailConfig }),
+      )
       const out: ChannelSendOk = { ok: true, channel: this.kind, delivered: 1 }
       if (result.messageId) out.messageId = result.messageId
       return out
@@ -368,14 +376,26 @@ export class TwilioSMSChannel implements NotificationChannel {
     })
 
     try {
-      const res = await fetchImpl(url, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/x-www-form-urlencoded',
-          authorization: `Basic ${auth}`,
+      const res = await Sentry.startSpan(
+        {
+          name: 'twilio.request',
+          op: 'http.client',
+          attributes: { 'http.url': url, 'http.method': 'POST', 'http.service': 'twilio' },
         },
-        body: params.toString(),
-      })
+        async (span) => {
+          const r = await fetchImpl(url, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/x-www-form-urlencoded',
+              authorization: `Basic ${auth}`,
+            },
+            body: params.toString(),
+          })
+          span?.setAttribute('http.status_code', r.status)
+          if (!r.ok) span?.setStatus({ code: 2, message: `twilio_${r.status}` })
+          return r
+        },
+      )
       if (!res.ok) {
         const text = await res.text().catch(() => '')
         // 4xx (other than 429) is permanent — bad number, blocked, etc.
@@ -514,9 +534,21 @@ export class WebPushChannel implements NotificationChannel {
     let lastError: string | null = null
     for (const sub of subs) {
       try {
-        const res = await this.deps.webpush!.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          payload,
+        const res = await Sentry.startSpan(
+          {
+            name: 'web-push.send',
+            op: 'http.client',
+            attributes: { 'http.service': 'web-push', 'notification.kind': message.kind },
+          },
+          async (span) => {
+            const r = await this.deps.webpush!.sendNotification(
+              { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+              payload,
+            )
+            span?.setAttribute('http.status_code', r.statusCode)
+            if (r.statusCode >= 400) span?.setStatus({ code: 2, message: `web-push_${r.statusCode}` })
+            return r
+          },
         )
         if (res.statusCode >= 200 && res.statusCode < 300) {
           delivered++

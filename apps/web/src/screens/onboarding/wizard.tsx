@@ -12,7 +12,7 @@ import {
   useInviteMember,
   type Company,
 } from '@/lib/api'
-import { useOnboardingWizard } from '@/machines/onboarding-wizard'
+import { useOnboardingWizard, type TeamForm, type SeedOptions } from '@/machines/onboarding-wizard'
 
 /**
  * Onboarding wizard (Phase 6 Batch 7).
@@ -29,6 +29,12 @@ import { useOnboardingWizard } from '@/machines/onboarding-wizard'
  * non-empty`) are testable in isolation. The TanStack mutations stay in
  * the component — the machine emits `SUBMIT` and the component drives
  * the mutation, then sends `MARK_SUBMITTED` / `MARK_FAILED` to advance.
+ *
+ * TeamStep + SeedStep are now controlled: their form state (invites
+ * list, seed values, inline errors) lives in the machine context. The
+ * substep components receive `teamForm` / `seedOptions` from the
+ * parent's wizard hook and emit `ADD_INVITE`, `REMOVE_INVITE`,
+ * `SET_SEED` events instead of holding local state.
  */
 export function OnboardingWizardScreen() {
   const navigate = useNavigate()
@@ -117,9 +123,29 @@ export function OnboardingWizardScreen() {
           </Card>
         ) : null}
 
-        {wizard.isTeamStep && company ? <TeamStep company={company} onNext={() => wizard.next()} /> : null}
+        {wizard.isTeamStep && company ? (
+          <TeamStep
+            company={company}
+            teamForm={wizard.teamForm}
+            error={wizard.teamError}
+            onSetField={wizard.setTeamField}
+            onAddInvite={wizard.addInvite}
+            onSetError={wizard.setTeamError}
+            onNext={() => wizard.next()}
+          />
+        ) : null}
 
-        {wizard.isSeedStep && company ? <SeedStep onDone={() => wizard.submit()} /> : null}
+        {wizard.isSeedStep && company ? (
+          <SeedStep
+            seedOptions={wizard.seedOptions}
+            error={wizard.seedError}
+            submitting={wizard.seedSubmitting}
+            onSetSeed={wizard.setSeed}
+            onSetError={wizard.setSeedError}
+            onSetSubmitting={wizard.setSeedSubmitting}
+            onDone={() => wizard.submit()}
+          />
+        ) : null}
 
         {wizard.isDone ? (
           <Card>
@@ -142,25 +168,32 @@ export function OnboardingWizardScreen() {
   )
 }
 
-function TeamStep({ company, onNext }: { company: Company; onNext: () => void }) {
+interface TeamStepProps {
+  company: Company
+  teamForm: TeamForm
+  error: string | null
+  onSetField: (field: 'pendingClerkUserId' | 'pendingRole', value: string) => void
+  onAddInvite: (clerkUserId: string, role: string) => void
+  onSetError: (error: string | null) => void
+  onNext: () => void
+}
+
+function TeamStep({ company, teamForm, error, onSetField, onAddInvite, onSetError, onNext }: TeamStepProps) {
   const invite = useInviteMember(company.id)
-  const [inviteUserId, setInviteUserId] = useState('')
-  const [role, setRole] = useState('foreman')
-  const [invited, setInvited] = useState<Array<{ id: string; role: string }>>([])
-  const [error, setError] = useState<string | null>(null)
+  const pendingId = teamForm.pendingClerkUserId
+  const role = teamForm.pendingRole
 
   const submit = async () => {
-    setError(null)
-    if (!inviteUserId.trim()) {
+    onSetError(null)
+    if (!pendingId.trim()) {
       onNext()
       return
     }
     try {
-      await invite.mutateAsync({ clerk_user_id: inviteUserId.trim(), role })
-      setInvited((prev) => [...prev, { id: inviteUserId.trim(), role }])
-      setInviteUserId('')
+      await invite.mutateAsync({ clerk_user_id: pendingId.trim(), role })
+      onAddInvite(pendingId.trim(), role)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Invite failed')
+      onSetError(e instanceof Error ? e.message : 'Invite failed')
     }
   }
 
@@ -170,12 +203,17 @@ function TeamStep({ company, onNext }: { company: Company; onNext: () => void })
       <div className="text-[12px] text-ink-3 mt-1">
         Add Clerk user ids of teammates. You can also do this later in More → Members.
       </div>
-      <Field label="Clerk user id" value={inviteUserId} onChange={setInviteUserId} placeholder="user_2YXxX…" />
+      <Field
+        label="Clerk user id"
+        value={pendingId}
+        onChange={(v) => onSetField('pendingClerkUserId', v)}
+        placeholder="user_2YXxX…"
+      />
       <label className="block mt-3">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Role</div>
         <select
           value={role}
-          onChange={(e) => setRole(e.target.value)}
+          onChange={(e) => onSetField('pendingRole', e.target.value)}
           className="mt-1 w-full text-[15px] py-2 bg-transparent border-b border-line focus:outline-none focus:border-accent"
         >
           <option value="admin">admin</option>
@@ -184,11 +222,11 @@ function TeamStep({ company, onNext }: { company: Company; onNext: () => void })
           <option value="member">member</option>
         </select>
       </label>
-      {invited.length > 0 ? (
+      {teamForm.invited.length > 0 ? (
         <div className="mt-3 space-y-1">
-          {invited.map((row) => (
-            <div key={row.id} className="flex items-center justify-between text-[12px] text-ink-3">
-              <span className="font-mono truncate">{row.id}</span>
+          {teamForm.invited.map((row) => (
+            <div key={row.clerkUserId} className="flex items-center justify-between text-[12px] text-ink-3">
+              <span className="font-mono truncate">{row.clerkUserId}</span>
               <Pill tone="default">{row.role}</Pill>
             </div>
           ))}
@@ -199,21 +237,31 @@ function TeamStep({ company, onNext }: { company: Company; onNext: () => void })
         <MobileButton
           variant="ghost"
           onClick={() => {
-            setInviteUserId('')
+            onSetField('pendingClerkUserId', '')
             onNext()
           }}
         >
           Skip
         </MobileButton>
         <MobileButton variant="primary" onClick={submit} disabled={invite.isPending}>
-          {invite.isPending ? 'Inviting…' : inviteUserId.trim() ? 'Invite' : 'Continue'}
+          {invite.isPending ? 'Inviting…' : pendingId.trim() ? 'Invite' : 'Continue'}
         </MobileButton>
       </div>
     </Card>
   )
 }
 
-function SeedStep({ onDone }: { onDone: () => void }) {
+interface SeedStepProps {
+  seedOptions: SeedOptions
+  error: string | null
+  submitting: boolean
+  onSetSeed: (field: keyof SeedOptions, value: string) => void
+  onSetError: (error: string | null) => void
+  onSetSubmitting: (submitting: boolean) => void
+  onDone: () => void
+}
+
+function SeedStep({ seedOptions, error, submitting, onSetSeed, onSetError, onSetSubmitting, onDone }: SeedStepProps) {
   // The seed inserts ride on the auth context's active company id
   // (set via setActiveCompanySlug right after company creation), so
   // the seed step doesn't need the company row passed down.
@@ -221,33 +269,31 @@ function SeedStep({ onDone }: { onDone: () => void }) {
   const createWorker = useCreateWorker()
   const createLocation = useCreateInventoryLocation()
   const createServiceItem = useCreateServiceItem()
-  const [customerName, setCustomerName] = useState('')
-  const [workerName, setWorkerName] = useState('')
-  const [yardName, setYardName] = useState('Main yard')
-  const [error, setError] = useState<string | null>(null)
-  const [submitting, setSubmitting] = useState(false)
 
   const submit = async () => {
-    setError(null)
-    setSubmitting(true)
+    onSetError(null)
+    onSetSubmitting(true)
     // Run each seed independently so a single failure (e.g. duplicate
     // service-item code on retry) doesn't roll back the others. The
     // step is optional anyway — partial success is still useful.
     type SeedTask = { label: string; run: () => Promise<unknown> }
     const tasks: SeedTask[] = []
-    if (customerName.trim())
-      tasks.push({ label: 'customer', run: () => createCustomer.mutateAsync({ name: customerName.trim() }) })
-    if (workerName.trim())
+    if (seedOptions.customerName.trim())
+      tasks.push({
+        label: 'customer',
+        run: () => createCustomer.mutateAsync({ name: seedOptions.customerName.trim() }),
+      })
+    if (seedOptions.workerName.trim())
       tasks.push({
         label: 'worker',
-        run: () => createWorker.mutateAsync({ name: workerName.trim(), role: 'foreman' }),
+        run: () => createWorker.mutateAsync({ name: seedOptions.workerName.trim(), role: 'foreman' }),
       })
-    if (yardName.trim())
+    if (seedOptions.yardName.trim())
       tasks.push({
         label: 'yard',
         run: () =>
           createLocation.mutateAsync({
-            name: yardName.trim(),
+            name: seedOptions.yardName.trim(),
             location_type: 'yard',
             is_default: true,
           }),
@@ -274,17 +320,32 @@ function SeedStep({ onDone }: { onDone: () => void }) {
     // Partial success: surface what failed so the user can finish in
     // the relevant catalog screen instead of retrying the whole step
     // (which would create duplicates of the rows that did succeed).
-    setError(`Seeded everything except: ${failed.join(', ')}. Finish in More → Catalog.`)
-    setSubmitting(false)
+    onSetError(`Seeded everything except: ${failed.join(', ')}. Finish in More → Catalog.`)
+    onSetSubmitting(false)
   }
 
   return (
     <Card>
       <div className="text-[14px] font-semibold">Seed data (optional)</div>
       <div className="text-[12px] text-ink-3 mt-1">One row each so your home dashboard isn't empty on first load.</div>
-      <Field label="First customer (e.g. ACME Inc)" value={customerName} onChange={setCustomerName} placeholder="" />
-      <Field label="First worker (e.g. Mike Foreman)" value={workerName} onChange={setWorkerName} placeholder="" />
-      <Field label="Default yard name" value={yardName} onChange={setYardName} placeholder="Main yard" />
+      <Field
+        label="First customer (e.g. ACME Inc)"
+        value={seedOptions.customerName}
+        onChange={(v) => onSetSeed('customerName', v)}
+        placeholder=""
+      />
+      <Field
+        label="First worker (e.g. Mike Foreman)"
+        value={seedOptions.workerName}
+        onChange={(v) => onSetSeed('workerName', v)}
+        placeholder=""
+      />
+      <Field
+        label="Default yard name"
+        value={seedOptions.yardName}
+        onChange={(v) => onSetSeed('yardName', v)}
+        placeholder="Main yard"
+      />
       {error ? <div className="text-[12px] text-warn mt-2">{error}</div> : null}
       <div className="mt-3 grid grid-cols-2 gap-2">
         <MobileButton variant="ghost" onClick={onDone}>

@@ -67,7 +67,14 @@ type Context = {
   companyForm: CompanyForm
   teamForm: TeamForm
   seedOptions: SeedOptions
+  /** Error surfaced by the company-step create-company mutation. */
   error: string | null
+  /** Inline error for the team-step invite mutation (substep-controlled). */
+  teamError: string | null
+  /** Inline error for the seed-step seed inserts (substep-controlled). */
+  seedError: string | null
+  /** True while the seed-step is firing its parallel mutations. */
+  seedSubmitting: boolean
 }
 
 export type OnboardingWizardEvent =
@@ -82,6 +89,18 @@ export type OnboardingWizardEvent =
   | { type: 'APPEND_INVITED'; member: InvitedTeamMember }
   | { type: 'CLEAR_PENDING_INVITE' }
   | { type: 'SET_SEED_FIELD'; field: keyof SeedOptions; value: string }
+  // New, controlled-substep events (Phase: lift state out of TeamStep /
+  // SeedStep). `ADD_INVITE` is a higher-level alias for the
+  // pending-id + APPEND_INVITED dance; the substep components can emit
+  // it after a successful invite mutation without holding their own
+  // pending-id state. `REMOVE_INVITE` lets the team list trim entries.
+  // `SET_SEED` is the spec-shaped alias for `SET_SEED_FIELD`.
+  | { type: 'ADD_INVITE'; clerkUserId: string; role: string }
+  | { type: 'REMOVE_INVITE'; clerkUserId: string }
+  | { type: 'SET_SEED'; field: keyof SeedOptions; value: string }
+  | { type: 'SET_TEAM_ERROR'; error: string | null }
+  | { type: 'SET_SEED_ERROR'; error: string | null }
+  | { type: 'SET_SEED_SUBMITTING'; submitting: boolean }
   | { type: 'DISMISS_ERROR' }
 
 const DEFAULT_TEAM_FORM: TeamForm = {
@@ -148,6 +167,45 @@ export const onboardingWizardMachine = setup({
         return { ...context.seedOptions, [event.field]: event.value }
       },
     }),
+    addInvite: assign({
+      teamForm: ({ context, event }) => {
+        if (event.type !== 'ADD_INVITE') return context.teamForm
+        // Idempotent — don't append duplicate clerk ids.
+        if (context.teamForm.invited.some((row) => row.clerkUserId === event.clerkUserId)) {
+          return { ...context.teamForm, pendingClerkUserId: '' }
+        }
+        return {
+          ...context.teamForm,
+          invited: [...context.teamForm.invited, { clerkUserId: event.clerkUserId, role: event.role }],
+          pendingClerkUserId: '',
+        }
+      },
+    }),
+    removeInvite: assign({
+      teamForm: ({ context, event }) => {
+        if (event.type !== 'REMOVE_INVITE') return context.teamForm
+        return {
+          ...context.teamForm,
+          invited: context.teamForm.invited.filter((row) => row.clerkUserId !== event.clerkUserId),
+        }
+      },
+    }),
+    setSeed: assign({
+      seedOptions: ({ context, event }) => {
+        if (event.type !== 'SET_SEED') return context.seedOptions
+        return { ...context.seedOptions, [event.field]: event.value }
+      },
+    }),
+    setTeamError: assign({
+      teamError: ({ context, event }) => (event.type === 'SET_TEAM_ERROR' ? event.error : context.teamError),
+    }),
+    setSeedError: assign({
+      seedError: ({ context, event }) => (event.type === 'SET_SEED_ERROR' ? event.error : context.seedError),
+    }),
+    setSeedSubmitting: assign({
+      seedSubmitting: ({ context, event }) =>
+        event.type === 'SET_SEED_SUBMITTING' ? event.submitting : context.seedSubmitting,
+    }),
   },
 }).createMachine({
   id: 'onboardingWizard',
@@ -157,6 +215,9 @@ export const onboardingWizardMachine = setup({
     teamForm: { ...DEFAULT_TEAM_FORM },
     seedOptions: { ...DEFAULT_SEED_OPTIONS, ...(input.seedOptions ?? {}) },
     error: null,
+    teamError: null,
+    seedError: null,
+    seedSubmitting: false,
   }),
   // Form-field mutations and error dismissal are valid in any state.
   on: {
@@ -165,6 +226,12 @@ export const onboardingWizardMachine = setup({
     APPEND_INVITED: { actions: 'appendInvited' },
     CLEAR_PENDING_INVITE: { actions: 'clearPendingInvite' },
     SET_SEED_FIELD: { actions: 'setSeedField' },
+    ADD_INVITE: { actions: 'addInvite' },
+    REMOVE_INVITE: { actions: 'removeInvite' },
+    SET_SEED: { actions: 'setSeed' },
+    SET_TEAM_ERROR: { actions: 'setTeamError' },
+    SET_SEED_ERROR: { actions: 'setSeedError' },
+    SET_SEED_SUBMITTING: { actions: 'setSeedSubmitting' },
     DISMISS_ERROR: { actions: 'clearError' },
   },
   states: {
@@ -234,6 +301,9 @@ export interface OnboardingWizardHookResult {
   teamForm: TeamForm
   seedOptions: SeedOptions
   error: string | null
+  teamError: string | null
+  seedError: string | null
+  seedSubmitting: boolean
   isCompanyStep: boolean
   isTeamStep: boolean
   isSeedStep: boolean
@@ -252,6 +322,12 @@ export interface OnboardingWizardHookResult {
   appendInvited: (member: InvitedTeamMember) => void
   clearPendingInvite: () => void
   setSeedField: (field: keyof SeedOptions, value: string) => void
+  addInvite: (clerkUserId: string, role: string) => void
+  removeInvite: (clerkUserId: string) => void
+  setSeed: (field: keyof SeedOptions, value: string) => void
+  setTeamError: (error: string | null) => void
+  setSeedError: (error: string | null) => void
+  setSeedSubmitting: (submitting: boolean) => void
   dismissError: () => void
 }
 
@@ -283,6 +359,21 @@ export function useOnboardingWizard(
     (field: keyof SeedOptions, value: string) => send({ type: 'SET_SEED_FIELD', field, value }),
     [send],
   )
+  const addInvite = useCallback(
+    (clerkUserId: string, role: string) => send({ type: 'ADD_INVITE', clerkUserId, role }),
+    [send],
+  )
+  const removeInvite = useCallback((clerkUserId: string) => send({ type: 'REMOVE_INVITE', clerkUserId }), [send])
+  const setSeed = useCallback(
+    (field: keyof SeedOptions, value: string) => send({ type: 'SET_SEED', field, value }),
+    [send],
+  )
+  const setTeamError = useCallback((err: string | null) => send({ type: 'SET_TEAM_ERROR', error: err }), [send])
+  const setSeedError = useCallback((err: string | null) => send({ type: 'SET_SEED_ERROR', error: err }), [send])
+  const setSeedSubmitting = useCallback(
+    (submitting: boolean) => send({ type: 'SET_SEED_SUBMITTING', submitting }),
+    [send],
+  )
   const dismissError = useCallback(() => send({ type: 'DISMISS_ERROR' }), [send])
 
   const currentState = (state.value as OnboardingWizardState) ?? 'company_step'
@@ -293,6 +384,9 @@ export function useOnboardingWizard(
     teamForm: state.context.teamForm,
     seedOptions: state.context.seedOptions,
     error: state.context.error,
+    teamError: state.context.teamError,
+    seedError: state.context.seedError,
+    seedSubmitting: state.context.seedSubmitting,
     isCompanyStep: currentState === 'company_step',
     isTeamStep: currentState === 'team_step',
     isSeedStep: currentState === 'seed_step',
@@ -312,6 +406,12 @@ export function useOnboardingWizard(
     appendInvited,
     clearPendingInvite,
     setSeedField,
+    addInvite,
+    removeInvite,
+    setSeed,
+    setTeamError,
+    setSeedError,
+    setSeedSubmitting,
     dismissError,
   }
 }

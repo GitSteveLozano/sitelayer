@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import {
@@ -314,6 +315,8 @@ export async function handleShipmentRoutes(
         snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
         actorUserId: ctx.currentUserId,
       })
+      const outcome = workflowEventOutcome(parsed.value.event)
+      if (outcome) observeWorkflowEvent(SHIPMENT_WORKFLOW_NAME, outcome)
       return { shipment: updated.rows[0], snapshot: nextSnapshot }
     })
     if ('error' in result) {

@@ -1,4 +1,5 @@
 import type { Pool, PoolClient } from 'pg'
+import { Sentry } from './instrument.js'
 
 /**
  * CompanyCam photo poll.
@@ -101,12 +102,24 @@ async function pollProject(
   pin: { project_id: string; external_project_id: string; access_token: string | null },
 ): Promise<{ imported: number }> {
   const url = `${BASE_URL}/projects/${encodeURIComponent(pin.external_project_id)}/photos`
-  const response = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${pin.access_token}`,
-      Accept: 'application/json',
+  const response = await Sentry.startSpan(
+    {
+      name: 'companycam.request',
+      op: 'http.client',
+      attributes: { 'http.url': url, 'http.method': 'GET' },
     },
-  })
+    async (span) => {
+      const r = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${pin.access_token}`,
+          Accept: 'application/json',
+        },
+      })
+      span?.setAttribute('http.status_code', r.status)
+      if (!r.ok) span?.setStatus({ code: 2, message: `companycam_${r.status}` })
+      return r
+    },
+  )
   if (!response.ok) {
     const body = await response.text()
     throw new Error(`companycam GET ${pin.external_project_id} ${response.status}: ${body.slice(0, 200)}`)

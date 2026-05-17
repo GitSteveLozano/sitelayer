@@ -15,8 +15,32 @@
 //      - If neither: legacy "broadcast" path keeps marking sent so the
 //        backlog doesn't loop forever. (Real broadcasts use a separate
 //        fan-out path; rows without either field today are stale fixtures.)
+//
+// State-machine integration (migration 081):
+//
+//   Each terminal transition (mark sent / mark failed with a definite
+//   classification / hydrate the email) is dispatched through the
+//   registered `notification` workflow reducer
+//   (`packages/workflows/src/notification.ts`) and written to
+//   `workflow_event_log` in the same tx. Procedural deferrals — Clerk
+//   rate limit, hydration-disabled tiers, Clerk unreachable when the
+//   attempt cap hasn't been reached — stay as direct `status='pending'`
+//   updates and don't produce workflow_event_log rows. Those are
+//   scheduling concerns; modelling them as workflow states would
+//   explode the transition table without making the audit trail any
+//   cleaner.
 
 import type { Logger } from '@sitelayer/logger'
+import {
+  NOTIFICATION_WORKFLOW_NAME,
+  NOTIFICATION_WORKFLOW_SCHEMA_VERSION,
+  transitionNotificationWorkflow,
+  type NotificationChannel,
+  type NotificationFailureKind,
+  type NotificationWorkflowEvent,
+  type NotificationWorkflowSnapshot,
+  type NotificationWorkflowState,
+} from '@sitelayer/workflows'
 import type { EmailConfig, EmailMessage, sendEmail as sendEmailFn } from './email.js'
 import type { ClerkResolver, EmailResolution } from './clerk-hydrate.js'
 import type { NotificationDispatcher, DispatchableRow } from './notification-channels.js'
@@ -38,6 +62,13 @@ export type PendingNotificationRow = {
    * don't burn the cap that governs actual channel sends.
    */
   delivery_attempts: number
+  /**
+   * Workflow state_version (migration 081). Optimistic-concurrency
+   * counter — the reducer bumps this by 1 on every transition and the
+   * UPDATE persists `state_version + 1` so concurrent writes fail
+   * naturally under the row's FOR UPDATE lock.
+   */
+  state_version: number
 }
 
 // Minimal subset of pg's PoolClient/Client surface used here. Lets tests pass
@@ -92,31 +123,204 @@ function backoffSecondsFor(nextAttemptCount: number): number {
   return Math.min(60 * 60 * 24, 300 * Math.pow(2, nextAttemptCount))
 }
 
-async function markSent(client: NotificationDbClient, id: string): Promise<void> {
-  await client.query(`update notifications set status = 'sent', sent_at = now(), error = null where id = $1`, [id])
+/**
+ * Build a workflow snapshot from a freshly-claimed row. The reducer's
+ * `state_version` is the version BEFORE the transition; the row's
+ * current `state_version` matches that. The reducer doesn't read any
+ * other fields off the snapshot for transitions out of `pending`, but
+ * we spread the row's current state to keep replay determinism (the
+ * persisted snapshot_after includes the spread).
+ */
+function snapshotFromRow(row: PendingNotificationRow): NotificationWorkflowSnapshot {
+  return {
+    state: 'pending',
+    state_version: row.state_version,
+    recipient_email: row.recipient_email,
+  }
 }
 
-async function persistHydratedEmail(client: NotificationDbClient, id: string, email: string): Promise<void> {
-  await client.query(`update notifications set recipient_email = $2 where id = $1`, [id, email])
+/**
+ * Append one row to workflow_event_log inside the caller's tx. The
+ * worker mirrors `apps/api/src/mutation-tx.ts:recordWorkflowEvent`
+ * inline rather than importing from apps/api (which would invert the
+ * dep graph). `state_version` is the version BEFORE the transition —
+ * the per-(entity_id, state_version) unique constraint then naturally
+ * rejects duplicate writes for the same transition.
+ */
+async function recordWorkflowEvent(
+  client: NotificationDbClient,
+  companyId: string,
+  entityId: string,
+  stateVersionBefore: number,
+  event: NotificationWorkflowEvent,
+  snapshotAfter: NotificationWorkflowSnapshot,
+): Promise<void> {
+  await client.query(
+    `insert into workflow_event_log (
+       company_id, workflow_name, schema_version, entity_type, entity_id,
+       state_version, event_type, event_payload, snapshot_after, actor_user_id
+     )
+     values ($1, $2, $3, 'notification', $4, $5, $6, $7::jsonb, $8::jsonb, null)
+     on conflict (entity_id, state_version) do nothing`,
+    [
+      companyId,
+      NOTIFICATION_WORKFLOW_NAME,
+      NOTIFICATION_WORKFLOW_SCHEMA_VERSION,
+      entityId,
+      stateVersionBefore,
+      event.type,
+      JSON.stringify(event),
+      JSON.stringify(snapshotAfter),
+    ],
+  )
+}
+
+/**
+ * Walk the row through one workflow transition: run the pure reducer,
+ * persist the resulting (state, state_version, audit-field) triple on
+ * the `notifications` row, and append the workflow_event_log entry.
+ * Returns the new snapshot so the caller can chain further transitions
+ * (e.g. HYDRATE → SEND_REQUESTED → SEND_SUCCEEDED in one drain pass).
+ *
+ * The `extraUpdates` parameter is an SQL fragment + params for
+ * runner-owned columns (next_attempt_at, attempt_count, delivery_attempts,
+ * error, last_delivery_error) that aren't part of the reducer's
+ * vocabulary. Those scheduling fields stay procedural so the rate-limit
+ * / backoff semantics described in the migration 081 header don't get
+ * accidentally relocated into the workflow boundary.
+ */
+async function applyTransition(
+  client: NotificationDbClient,
+  row: { id: string; company_id: string },
+  snapshot: NotificationWorkflowSnapshot,
+  event: NotificationWorkflowEvent,
+  extraSetSql: string,
+  extraParams: ReadonlyArray<unknown>,
+): Promise<NotificationWorkflowSnapshot> {
+  const next = transitionNotificationWorkflow(snapshot, event)
+  const status = workflowStateToLegacyStatus(next.state)
+  // $1 = row.id, $2 = next.state (status text), $3 = next.state_version,
+  // $4 = current state_version (stale-write guard). Remaining params
+  // are positional and slotted into $5...$N by the caller-built fragment.
+  const sql = `update notifications
+                  set status = $2,
+                      state_version = $3${extraSetSql ? ',\n                      ' + extraSetSql : ''}
+                where id = $1
+                  and state_version = $4`
+  await client.query(sql, [row.id, status, next.state_version, snapshot.state_version, ...extraParams])
+  await recordWorkflowEvent(client, row.company_id, row.id, snapshot.state_version, event, next)
+  return next
+}
+
+/**
+ * The `notifications.status` column predates the workflow and is
+ * referenced by legacy queries / dashboards that expect the original
+ * three values (`pending`, `sent`, `failed`). The reducer's eight
+ * states project onto those three for the column write so existing
+ * surfaces don't break:
+ *   pending / hydrating                              → 'pending'
+ *     (work in flight; the next batch shouldn't claim hydrating because
+ *      its row stays under FOR UPDATE inside the same tx)
+ *   sending                                          → 'sending'
+ *   sent                                             → 'sent'
+ *   failed_clerk_not_found / failed_clerk_unreachable /
+ *     failed_provider                                → 'failed'
+ *   voided                                           → 'voided'
+ * The authoritative state vocabulary lives on `workflow_event_log` and
+ * is replayable.
+ */
+function workflowStateToLegacyStatus(state: NotificationWorkflowState): string {
+  switch (state) {
+    case 'pending':
+    case 'hydrating':
+      return 'pending'
+    case 'sending':
+      return 'sending'
+    case 'sent':
+      return 'sent'
+    case 'failed_clerk_not_found':
+    case 'failed_clerk_unreachable':
+    case 'failed_provider':
+      return 'failed'
+    case 'voided':
+      return 'voided'
+  }
+}
+
+async function markSent(
+  client: NotificationDbClient,
+  row: PendingNotificationRow,
+  snapshot: NotificationWorkflowSnapshot,
+  channel: NotificationChannel,
+  nowIso: string,
+): Promise<NotificationWorkflowSnapshot> {
+  // Walk the row through SEND_REQUESTED → SEND_SUCCEEDED so the audit
+  // trail captures both the dispatcher invocation and the outcome.
+  // Re-uses snapshot.state to decide whether the requested step is
+  // necessary (a row claimed straight out of `pending` needs both
+  // transitions; the future API retry surface might enter at `sending`
+  // already if the reducer is re-driven externally).
+  let cur = snapshot
+  if (cur.state !== 'sending') {
+    cur = await applyTransition(client, row, cur, { type: 'SEND_REQUESTED', requested_at: nowIso }, '', [])
+  }
+  cur = await applyTransition(
+    client,
+    row,
+    cur,
+    { type: 'SEND_SUCCEEDED', sent_at: nowIso, channel },
+    `sent_at = now(),
+                      error = null`,
+    [],
+  )
+  return cur
+}
+
+async function persistHydratedEmail(
+  client: NotificationDbClient,
+  row: PendingNotificationRow,
+  snapshot: NotificationWorkflowSnapshot,
+  email: string,
+  nowIso: string,
+): Promise<NotificationWorkflowSnapshot> {
+  return await applyTransition(
+    client,
+    row,
+    snapshot,
+    { type: 'HYDRATE', hydrated_at: nowIso, recipient_email: email },
+    `recipient_email = $5`,
+    [email],
+  )
 }
 
 async function markFailedWithReason(
   client: NotificationDbClient,
-  id: string,
+  row: PendingNotificationRow,
+  snapshot: NotificationWorkflowSnapshot,
   attemptCount: number,
   reason: string,
-): Promise<void> {
-  await client.query(
-    `update notifications
-     set status = 'failed',
-         attempt_count = $2,
-         error = $3,
-         last_delivery_error = $3
-     where id = $1`,
-    [id, attemptCount, reason],
+  kind: NotificationFailureKind,
+  nowIso: string,
+): Promise<NotificationWorkflowSnapshot> {
+  return await applyTransition(
+    client,
+    row,
+    snapshot,
+    { type: 'SEND_FAILED', failed_at: nowIso, error: reason, kind },
+    `attempt_count = $5,
+                      error = $6,
+                      last_delivery_error = $6`,
+    [attemptCount, reason],
   )
 }
 
+/**
+ * Procedural deferral: keep the row at status='pending' with a fresh
+ * next_attempt_at fence. Not a workflow transition — the reducer's
+ * canonical pending state is preserved, and no workflow_event_log
+ * entry is written. Rate-limit / hydration-disabled / pre-cap Clerk
+ * unreachable cycles all route here.
+ */
 async function deferRow(
   client: NotificationDbClient,
   id: string,
@@ -138,16 +342,26 @@ async function deferRow(
 async function applyClerkUnreachable(
   client: NotificationDbClient,
   row: PendingNotificationRow,
+  snapshot: NotificationWorkflowSnapshot,
   errorMessage: string,
   maxAttempts: number,
-): Promise<{ deferred: boolean }> {
+  nowIso: string,
+): Promise<{ deferred: boolean; snapshot: NotificationWorkflowSnapshot }> {
   const nextAttempt = row.attempt_count + 1
   if (nextAttempt >= maxAttempts) {
-    await markFailedWithReason(client, row.id, nextAttempt, UNREACHABLE_REASON)
-    return { deferred: false }
+    const next = await markFailedWithReason(
+      client,
+      row,
+      snapshot,
+      nextAttempt,
+      UNREACHABLE_REASON,
+      'clerk_unreachable',
+      nowIso,
+    )
+    return { deferred: false, snapshot: next }
   }
   await deferRow(client, row.id, nextAttempt, backoffSecondsFor(nextAttempt), `${UNREACHABLE_REASON}: ${errorMessage}`)
-  return { deferred: true }
+  return { deferred: true, snapshot }
 }
 
 async function attemptSend(
@@ -174,31 +388,60 @@ async function attemptSend(
 async function applySendFailure(
   client: NotificationDbClient,
   row: PendingNotificationRow,
+  snapshot: NotificationWorkflowSnapshot,
   errorMessage: string,
   maxAttempts: number,
-): Promise<{ status: 'pending' | 'failed'; exhausted: boolean; deliveryAttempts: number }> {
+  nowIso: string,
+): Promise<{
+  status: 'pending' | 'failed'
+  exhausted: boolean
+  deliveryAttempts: number
+  snapshot: NotificationWorkflowSnapshot
+}> {
   const nextAttempt = row.attempt_count + 1
   const nextDeliveryAttempts = (row.delivery_attempts ?? 0) + 1
   // Exhaust the row when its dedicated *delivery* counter crosses the cap,
   // not the legacy row-lifecycle attempt counter — those are mixed up with
   // hydration/preference deferrals.
   const exhausted = nextDeliveryAttempts >= maxAttempts
-  const nextStatus = exhausted ? 'failed' : 'pending'
   const backoff = backoffSecondsFor(nextDeliveryAttempts)
   const truncated = errorMessage.slice(0, 2000)
+  if (exhausted) {
+    // Terminal exhaustion — emit SEND_FAILED with kind=provider and the
+    // reducer lands in failed_provider. We also keep the runner-owned
+    // delivery counters and backoff fence on the row so dashboards
+    // continue to show the last-attempt timestamps.
+    const next = await applyTransition(
+      client,
+      row,
+      snapshot,
+      { type: 'SEND_FAILED', failed_at: nowIso, error: truncated, kind: 'provider' },
+      `attempt_count = $5,
+                      next_attempt_at = now() + ($6 || ' seconds')::interval,
+                      error = $7,
+                      delivery_attempts = $8,
+                      next_delivery_at = now() + ($6 || ' seconds')::interval,
+                      last_delivery_error = $7`,
+      [nextAttempt, backoff, truncated, nextDeliveryAttempts],
+    )
+    return { status: 'failed', exhausted, deliveryAttempts: nextDeliveryAttempts, snapshot: next }
+  }
+  // Pre-cap deferral. Procedural: status stays at 'pending', no event
+  // is logged. Rate-limit / backoff semantics live here, not in the
+  // reducer.
   await client.query(
     `update notifications
-     set status = $2,
-         attempt_count = $3,
-         next_attempt_at = now() + ($4 || ' seconds')::interval,
-         error = $5,
-         delivery_attempts = $6,
-         next_delivery_at = now() + ($4 || ' seconds')::interval,
-         last_delivery_error = $5
+     set status = 'pending',
+         attempt_count = $2,
+         next_attempt_at = now() + ($3 || ' seconds')::interval,
+         error = $4,
+         delivery_attempts = $5,
+         next_delivery_at = now() + ($3 || ' seconds')::interval,
+         last_delivery_error = $4
      where id = $1`,
-    [row.id, nextStatus, nextAttempt, backoff, truncated, nextDeliveryAttempts],
+    [row.id, nextAttempt, backoff, truncated, nextDeliveryAttempts],
   )
-  return { status: nextStatus, exhausted, deliveryAttempts: nextDeliveryAttempts }
+  return { status: 'pending', exhausted, deliveryAttempts: nextDeliveryAttempts, snapshot }
 }
 
 /**
@@ -210,13 +453,18 @@ async function ensureRecipientEmail(
   deps: DrainNotificationsDeps,
   config: DrainNotificationsConfig,
   row: PendingNotificationRow,
-): Promise<{ email: string; hydrated: boolean } | { email: null; deferred: boolean; failed: boolean }> {
+  snapshot: NotificationWorkflowSnapshot,
+  nowIso: string,
+): Promise<
+  | { email: string; hydrated: boolean; snapshot: NotificationWorkflowSnapshot }
+  | { email: null; deferred: boolean; failed: boolean; snapshot: NotificationWorkflowSnapshot }
+> {
   if (row.recipient_email) {
-    return { email: row.recipient_email, hydrated: false }
+    return { email: row.recipient_email, hydrated: false, snapshot }
   }
   if (!row.recipient_clerk_user_id) {
     // No recipient at all — caller handles legacy broadcast.
-    return { email: null, deferred: false, failed: false }
+    return { email: null, deferred: false, failed: false, snapshot }
   }
 
   if (!config.clerkResolver) {
@@ -229,7 +477,7 @@ async function ensureRecipientEmail(
       { id: row.id, kind: row.kind, clerk_user_id: row.recipient_clerk_user_id },
       '[notifications] clerk hydration disabled; deferring',
     )
-    return { email: null, deferred: true, failed: false }
+    return { email: null, deferred: true, failed: false, snapshot }
   }
 
   let resolution: EmailResolution
@@ -238,30 +486,38 @@ async function ensureRecipientEmail(
   } catch (err) {
     // Resolver itself shouldn't throw, but defend in depth.
     const errorMessage = err instanceof Error ? err.message : String(err)
-    const result = await applyClerkUnreachable(deps.client, row, errorMessage, config.maxAttempts)
+    const result = await applyClerkUnreachable(deps.client, row, snapshot, errorMessage, config.maxAttempts, nowIso)
     deps.logger.warn(
       { id: row.id, kind: row.kind, err: errorMessage },
       '[notifications] clerk resolver threw; applied unreachable policy',
     )
-    return { email: null, deferred: result.deferred, failed: !result.deferred }
+    return { email: null, deferred: result.deferred, failed: !result.deferred, snapshot: result.snapshot }
   }
 
   switch (resolution.kind) {
     case 'email': {
-      await persistHydratedEmail(deps.client, row.id, resolution.email)
+      const next = await persistHydratedEmail(deps.client, row, snapshot, resolution.email, nowIso)
       deps.logger.info(
         { id: row.id, kind: row.kind, clerk_user_id: row.recipient_clerk_user_id },
         '[notifications] hydrated email from clerk',
       )
-      return { email: resolution.email, hydrated: true }
+      return { email: resolution.email, hydrated: true, snapshot: next }
     }
     case 'not_found': {
-      await markFailedWithReason(deps.client, row.id, row.attempt_count + 1, NOT_FOUND_REASON)
+      const next = await markFailedWithReason(
+        deps.client,
+        row,
+        snapshot,
+        row.attempt_count + 1,
+        NOT_FOUND_REASON,
+        'clerk_not_found',
+        nowIso,
+      )
       deps.logger.warn(
         { id: row.id, kind: row.kind, clerk_user_id: row.recipient_clerk_user_id },
         '[notifications] clerk user not found; marking failed',
       )
-      return { email: null, deferred: false, failed: true }
+      return { email: null, deferred: false, failed: true, snapshot: next }
     }
     case 'rate_limited': {
       const nextAttempt = row.attempt_count + 1
@@ -275,11 +531,11 @@ async function ensureRecipientEmail(
         },
         '[notifications] clerk rate limited; deferring',
       )
-      return { email: null, deferred: true, failed: false }
+      return { email: null, deferred: true, failed: false, snapshot }
     }
     case 'unreachable': {
       const errorMessage = resolution.error instanceof Error ? resolution.error.message : String(resolution.error)
-      const result = await applyClerkUnreachable(deps.client, row, errorMessage, config.maxAttempts)
+      const result = await applyClerkUnreachable(deps.client, row, snapshot, errorMessage, config.maxAttempts, nowIso)
       deps.logger.warn(
         {
           id: row.id,
@@ -290,7 +546,7 @@ async function ensureRecipientEmail(
         },
         '[notifications] clerk unreachable',
       )
-      return { email: null, deferred: result.deferred, failed: !result.deferred }
+      return { email: null, deferred: result.deferred, failed: !result.deferred, snapshot: result.snapshot }
     }
     default: {
       // Exhaustiveness guard.
@@ -320,7 +576,9 @@ export async function drainNotifications(
 
   const claimed = await client.query<PendingNotificationRow>(
     `
-      select id, company_id, recipient_clerk_user_id, recipient_email, kind, subject, body_text, body_html, payload, attempt_count
+      select id, company_id, recipient_clerk_user_id, recipient_email, kind, subject, body_text, body_html, payload,
+             attempt_count, coalesce(delivery_attempts, 0) as delivery_attempts,
+             coalesce(state_version, 1) as state_version
       from notifications
       where status = 'pending' and next_attempt_at <= now()
       order by next_attempt_at asc, created_at asc
@@ -336,6 +594,11 @@ export async function drainNotifications(
       break
     }
     processed += 1
+    // One ISO timestamp per row — every event the runner emits for
+    // this row stamps the same wall-clock. The reducer itself never
+    // reads Date.now(); the `*_at` fields all travel on the events.
+    const nowIso = new Date().toISOString()
+    let snapshot = snapshotFromRow(row)
 
     // Phase 1C: when a dispatcher is wired, route through the channel
     // system. The legacy email-only path below remains the fallback so
@@ -357,7 +620,7 @@ export async function drainNotifications(
         outcome = await config.dispatcher.dispatch(dispatchable, client)
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : String(err)
-        const result = await applySendFailure(client, row, errorMessage, config.maxAttempts)
+        const result = await applySendFailure(client, row, snapshot, errorMessage, config.maxAttempts, nowIso)
         failed += 1
         consecutiveFailures += 1
         logger.error(
@@ -368,7 +631,7 @@ export async function drainNotifications(
       }
 
       if (outcome.kind === 'sent') {
-        await markSent(client, row.id)
+        await markSent(client, row, snapshot, outcome.channel as NotificationChannel, nowIso)
         sent += 1
         consecutiveFailures = 0
         logger.info(
@@ -380,14 +643,14 @@ export async function drainNotifications(
       if (outcome.kind === 'silent') {
         // User picked 'off' for this event type — mark sent so the row
         // doesn't loop, but don't count it against the failure budget.
-        await markSent(client, row.id)
+        await markSent(client, row, snapshot, 'console', nowIso)
         sent += 1
         consecutiveFailures = 0
         logger.info({ id: row.id, kind: row.kind, reason: outcome.reason }, '[notifications] silenced by preference')
         continue
       }
       if (outcome.kind === 'broadcast') {
-        await markSent(client, row.id)
+        await markSent(client, row, snapshot, 'broadcast', nowIso)
         sent += 1
         consecutiveFailures = 0
         logger.info({ id: row.id, kind: row.kind, recipient: 'broadcast' }, '[notifications] logged broadcast')
@@ -406,7 +669,15 @@ export async function drainNotifications(
       }
       // outcome.kind === 'failed'
       if (outcome.permanent) {
-        await markFailedWithReason(client, row.id, row.attempt_count + 1, outcome.error.slice(0, 2000))
+        await markFailedWithReason(
+          client,
+          row,
+          snapshot,
+          row.attempt_count + 1,
+          outcome.error.slice(0, 2000),
+          'provider',
+          nowIso,
+        )
         failed += 1
         consecutiveFailures += 1
         logger.warn(
@@ -415,7 +686,7 @@ export async function drainNotifications(
         )
         continue
       }
-      const result = await applySendFailure(client, row, outcome.error, config.maxAttempts)
+      const result = await applySendFailure(client, row, snapshot, outcome.error, config.maxAttempts, nowIso)
       failed += 1
       consecutiveFailures += 1
       logger.warn(
@@ -433,12 +704,13 @@ export async function drainNotifications(
     }
 
     // Hydrate (or short-circuit) the recipient email.
-    const ensured = await ensureRecipientEmail(deps, config, row)
+    const ensured = await ensureRecipientEmail(deps, config, row, snapshot, nowIso)
+    snapshot = ensured.snapshot
     if (ensured.email == null) {
       // Legacy broadcast: row had neither email nor clerk id. Keep marking
       // sent so the queue doesn't loop. Real fan-out lives elsewhere.
       if (!row.recipient_email && !row.recipient_clerk_user_id) {
-        await markSent(client, row.id)
+        await markSent(client, row, snapshot, 'broadcast', nowIso)
         sent += 1
         consecutiveFailures = 0
         logger.info({ id: row.id, kind: row.kind, recipient: 'broadcast' }, '[notifications] logged broadcast')
@@ -455,12 +727,12 @@ export async function drainNotifications(
 
     const send = await attemptSend(deps, config, row, ensured.email)
     if (send.ok) {
-      await markSent(client, row.id)
+      await markSent(client, row, snapshot, 'email', nowIso)
       sent += 1
       consecutiveFailures = 0
       continue
     }
-    const result = await applySendFailure(client, row, send.error, config.maxAttempts)
+    const result = await applySendFailure(client, row, snapshot, send.error, config.maxAttempts, nowIso)
     failed += 1
     consecutiveFailures += 1
     logger.warn(

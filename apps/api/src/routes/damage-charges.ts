@@ -8,6 +8,7 @@ import {
   type DamageChargeSettlementWorkflowSnapshot,
   type DamageChargeSettlementWorkflowState,
 } from '@sitelayer/workflows'
+import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationOutbox, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
@@ -149,6 +150,8 @@ async function applyDamageChargeSettlementTransition(
     snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
     actorUserId: args.actorUserId,
   })
+  const outcome = workflowEventOutcome(args.eventType)
+  if (outcome) observeWorkflowEvent(DAMAGE_CHARGE_SETTLEMENT_WORKFLOW_NAME, outcome)
   return { kind: 'ok' as const, row: updated.rows[0]!, nextSnapshot }
 }
 

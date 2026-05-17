@@ -8,6 +8,7 @@ import {
   sumMoney,
 } from '@sitelayer/domain'
 import { createLogger } from '@sitelayer/logger'
+import { captureWithEntityContext } from '../instrument.js'
 import {
   nextProjectCloseoutEvents,
   PROJECT_CLOSEOUT_WORKFLOW_NAME,
@@ -20,6 +21,7 @@ import {
   type WorkflowSnapshot,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
+import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import {
   enqueueAdminAlert,
   recordMutationLedger,
@@ -540,6 +542,8 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
         snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
         actorUserId: ctx.currentUserId,
       })
+      const closeoutOutcome = workflowEventOutcome('CLOSEOUT')
+      if (closeoutOutcome) observeWorkflowEvent(PROJECT_CLOSEOUT_WORKFLOW_NAME, closeoutOutcome)
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'project',
@@ -587,6 +591,12 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
       }
     } catch (err) {
       logger.warn({ err, projectId }, '[notifications] margin_shortfall alert failed')
+      captureWithEntityContext(err, {
+        scope: 'margin_shortfall_alert',
+        entity_type: 'project',
+        entity_id: projectId,
+        company_id: ctx.company.id,
+      })
     }
     ctx.sendJson(200, closed)
     return true
