@@ -15,7 +15,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import { isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid } from '../http-utils.js'
 
 export type ProjectLifecycleRouteCtx = {
   pool: Pool
@@ -271,7 +271,8 @@ export async function handleProjectLifecycleRoutes(
             nextSnapshot.archived_at ?? null,
           ],
         )
-        const updated = updateResult.rows[0]!
+        const updated = updateResult.rows[0]
+        if (!updated) throw new HttpError(500, 'project lifecycle update returned no row')
 
         await recordWorkflowEvent(client, {
           companyId: ctx.company.id,
@@ -281,8 +282,8 @@ export async function handleProjectLifecycleRoutes(
           entityId: updated.id,
           stateVersion,
           eventType,
-          eventPayload: reducerEvent as unknown as Record<string, unknown>,
-          snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+          eventPayload: reducerEvent,
+          snapshotAfter: nextSnapshot,
           actorUserId: ctx.currentUserId,
         })
         await recordMutationLedger(client, {
@@ -290,7 +291,7 @@ export async function handleProjectLifecycleRoutes(
           entityType: 'project',
           entityId: updated.id,
           action: `lifecycle:${eventType.toLowerCase()}`,
-          row: updated as unknown as Record<string, unknown>,
+          row: updated,
           // Per-state_version key so REOPEN → COMPLETE → REOPEN cycles
           // produce distinct outbox rows.
           idempotencyKey: `project_lifecycle:event:${updated.id}:${updated.lifecycle_state_version}`,
@@ -310,7 +311,7 @@ export async function handleProjectLifecycleRoutes(
             entityId: updated.id,
             action: `notify_foreman_${transition}`,
             mutationType: 'notify_foreman_assignment',
-            row: updated as unknown as Record<string, unknown>,
+            row: updated,
             outboxPayload: {
               project_id: updated.id,
               project_name: updated.name,

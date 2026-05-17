@@ -237,26 +237,30 @@ export async function getScopeVsBid(
   projectId: string,
   options: { draftId?: string | null } = {},
 ) {
-  const projectResult = await pool.query<{ bid_total: string | number | null }>(
-    'select bid_total from projects where company_id = $1 and id = $2 limit 1',
-    [companyId, projectId],
+  const projectResult = await withCompanyClient(companyId, (client) =>
+    client.query<{ bid_total: string | number | null }>(
+      'select bid_total from projects where company_id = $1 and id = $2 limit 1',
+      [companyId, projectId],
+    ),
   )
   const project = projectResult.rows[0]
   if (!project) return null
 
   const draftId = options.draftId ?? (await resolveDefaultDraftId(pool, companyId, projectId))
 
-  const linesResult = await pool.query(
-    draftId
-      ? `select service_item_code, quantity, unit, rate, amount, division_code, created_at
+  const linesResult = await withCompanyClient(companyId, (client) =>
+    client.query(
+      draftId
+        ? `select service_item_code, quantity, unit, rate, amount, division_code, created_at
            from estimate_lines
           where company_id = $1 and project_id = $2 and draft_id = $3
           order by created_at asc, service_item_code asc`
-      : `select service_item_code, quantity, unit, rate, amount, division_code, created_at
+        : `select service_item_code, quantity, unit, rate, amount, division_code, created_at
            from estimate_lines
           where company_id = $1 and project_id = $2 and draft_id is null
           order by created_at asc, service_item_code asc`,
-    draftId ? [companyId, projectId, draftId] : [companyId, projectId],
+      draftId ? [companyId, projectId, draftId] : [companyId, projectId],
+    ),
   )
 
   const bidTotal = Number(project.bid_total ?? 0)
@@ -270,13 +274,15 @@ export async function getScopeVsBid(
   }
 }
 
-async function listServiceItemDivisions(pool: Pool, companyId: string, serviceItemCode: string) {
-  const result = await pool.query<{ division_code: string; created_at: string }>(
-    `select division_code, created_at
+async function listServiceItemDivisions(_pool: Pool, companyId: string, serviceItemCode: string) {
+  const result = await withCompanyClient(companyId, (client) =>
+    client.query<{ division_code: string; created_at: string }>(
+      `select division_code, created_at
      from service_item_divisions
      where company_id = $1 and service_item_code = $2
      order by created_at asc`,
-    [companyId, serviceItemCode],
+      [companyId, serviceItemCode],
+    ),
   )
   return result.rows
 }
@@ -305,15 +311,21 @@ async function forecastProjectHours(pool: Pool, companyId: string, projectId: st
     return { service_item_code: code, quantity, unit }
   })
 
-  const [projectRows, serviceItemRows, bonusRuleRows, productivity] = await Promise.all([
-    pool.query('select id, target_sqft_per_hr, labor_rate from projects where company_id = $1 and id = $2 limit 1', [
-      companyId,
-      projectId,
-    ]),
-    pool.query('select code, default_rate from service_items where company_id = $1 and deleted_at is null', [
-      companyId,
-    ]),
-    pool.query('select config from bonus_rules where company_id = $1 order by created_at desc limit 1', [companyId]),
+  const [[projectRows, serviceItemRows, bonusRuleRows], productivity] = await Promise.all([
+    withCompanyClient(companyId, async (client) =>
+      Promise.all([
+        client.query(
+          'select id, target_sqft_per_hr, labor_rate from projects where company_id = $1 and id = $2 limit 1',
+          [companyId, projectId],
+        ),
+        client.query('select code, default_rate from service_items where company_id = $1 and deleted_at is null', [
+          companyId,
+        ]),
+        client.query('select config from bonus_rules where company_id = $1 order by created_at desc limit 1', [
+          companyId,
+        ]),
+      ]),
+    ),
     listServiceItemProductivity(pool, companyId),
   ])
 

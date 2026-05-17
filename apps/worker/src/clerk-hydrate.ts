@@ -70,8 +70,7 @@ function pickPrimaryEmail(user: User): string | null {
  */
 function statusFromError(err: unknown): number | null {
   if (isClerkAPIResponseError(err)) {
-    const status = (err as unknown as { status?: number }).status
-    if (typeof status === 'number') return status
+    if (typeof err.status === 'number') return err.status
   }
   if (err && typeof err === 'object') {
     const maybe = err as { status?: unknown; statusCode?: unknown }

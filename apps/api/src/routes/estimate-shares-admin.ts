@@ -2,6 +2,7 @@ import type http from 'node:http'
 import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import { generateShareToken } from '../estimate-share-token.js'
+import { HttpError } from '../http-utils.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import {
   PORTAL_ESTIMATES_PATH_PREFIX,
@@ -123,14 +124,15 @@ export async function handleEstimateShareRoutes(
           String(expires_in_days),
         ],
       )
-      const row = insertResult.rows[0]!
+      const row = insertResult.rows[0]
+      if (!row) throw new HttpError(500, 'estimate share link insert returned no row')
 
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'estimate_share_link',
         entityId: row.id,
         action: 'created',
-        row: { ...row, share_token: '[redacted]' } as Record<string, unknown>,
+        row: { ...row, share_token: '[redacted]' },
         idempotencyKey: `estimate_share_link:created:${row.id}`,
         actorUserId: ctx.currentUserId,
       })

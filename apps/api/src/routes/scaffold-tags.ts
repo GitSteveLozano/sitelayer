@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { randomUUID } from 'node:crypto'
+import { HttpError } from '../http-utils.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
@@ -173,7 +174,8 @@ export async function handleScaffoldTagRoutes(
           s(body.notes),
         ],
       )
-      const inspectionRow = inspection.rows[0]!
+      const inspectionRow = inspection.rows[0]
+      if (!inspectionRow) throw new HttpError(500, 'scaffold inspection insert returned no row')
       // Mirror onto the tag.
       await client.query(
         `update scaffold_tags

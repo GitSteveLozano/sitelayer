@@ -31,7 +31,7 @@ interface BarcodeDetectorConstructor {
 
 function getBarcodeDetector(): BarcodeDetectorConstructor | null {
   if (typeof window === 'undefined') return null
-  const ctor = (window as unknown as { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector
+  const ctor = (window as Window & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector
   return ctor ?? null
 }
 

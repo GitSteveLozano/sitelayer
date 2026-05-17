@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
+import { HttpError } from '../http-utils.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
 import {
   API_PORTAL_ESTIMATES_PATH_PREFIX,
@@ -138,7 +139,8 @@ export async function handlePublicEstimateShareRoutes(
          returning ${SHARE_COLUMNS}`,
         [row.id, signer_name, signature_data_url, ip],
       )
-      const next = updated.rows[0]!
+      const next = updated.rows[0]
+      if (!next) throw new HttpError(500, 'estimate share accept update returned no row')
 
       await recordMutationLedger(client, {
         companyId: row.company_id,
@@ -229,7 +231,8 @@ export async function handlePublicEstimateShareRoutes(
          returning ${SHARE_COLUMNS}`,
         [row.id, decline_reason],
       )
-      const next = updated.rows[0]!
+      const next = updated.rows[0]
+      if (!next) throw new HttpError(500, 'estimate share decline update returned no row')
 
       await recordMutationLedger(client, {
         companyId: row.company_id,

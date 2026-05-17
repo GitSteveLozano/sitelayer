@@ -169,7 +169,7 @@ async function liveOrQueueClockIn(input: ClockInRequest): Promise<ClockMutationR
   } catch (err) {
     if (err instanceof NetworkError) {
       const { enqueueOfflineMutation } = await import('@/lib/offline/queue')
-      await enqueueOfflineMutation('clock_in', input as unknown as Record<string, unknown>)
+      await enqueueOfflineMutation('clock_in', { ...input })
       return { queued: true }
     }
     throw err
@@ -182,7 +182,7 @@ async function liveOrQueueClockOut(input: ClockOutRequest): Promise<ClockMutatio
   } catch (err) {
     if (err instanceof NetworkError) {
       const { enqueueOfflineMutation } = await import('@/lib/offline/queue')
-      await enqueueOfflineMutation('clock_out', input as unknown as Record<string, unknown>)
+      await enqueueOfflineMutation('clock_out', { ...input })
       return { queued: true }
     }
     throw err

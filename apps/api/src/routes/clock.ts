@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import { haversineDistanceMeters, isInsideGeofence } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidUuid, parseOptionalNumber } from '../http-utils.js'
+import { HttpError, isValidUuid, parseOptionalNumber } from '../http-utils.js'
 import { parseClockEventPhotoMultipart, ClockEventPhotoUploadError } from '../clock-event-photo-upload.js'
 import type { BlueprintStorage } from '../storage.js'
 
@@ -448,7 +448,8 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
         ],
       ),
     )
-    const outRow = inserted.rows[0]!
+    const outRow = inserted.rows[0]
+    if (!outRow) throw new HttpError(500, 'clock event insert returned no row')
 
     let laborEntry: Record<string, unknown> | null = null
     if (projectId && workerId) {

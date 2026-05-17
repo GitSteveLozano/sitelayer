@@ -103,6 +103,10 @@ export function createNotificationRunner(deps: { pool: Pool; logger: Logger }): 
   // instances handle actual sends so the subscription loader/pruner have
   // the right context. The static instance is reused for the
   // availability check inside the dispatcher.
+  // TODO: align the local WebPushClient interface with the real
+  // `web-push` SDK signatures (the SDK's `sendNotification` returns
+  // `SendResult`, ours narrows it to `{ statusCode: number }`). Until
+  // then this cast bridges the local narrowed interface to the SDK.
   const staticPushChannel: NotificationChannel | null = vapidConfig
     ? new WebPushChannel(
         {

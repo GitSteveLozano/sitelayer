@@ -14,7 +14,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import { isValidDateInput, isValidUuid, parseExpectedVersion } from '../http-utils.js'
+import { HttpError, isValidDateInput, isValidUuid, parseExpectedVersion } from '../http-utils.js'
 
 // Crew-schedule workflow surface — mirrors the rental-billing-state and
 // time-review-runs route shape (see docs/DETERMINISTIC_WORKFLOWS.md).
@@ -88,13 +88,16 @@ function snapshotResponse(row: CrewScheduleRow): {
 } {
   const { status, state_version, deleted_at, ...rest } = row
   void deleted_at
+  // The context preserves `status` for backwards-compat with the
+  // existing JSON response shape; the declared `Omit<..., 'status'>`
+  // return type predates that addition. TODO: tighten the return type
+  // to include `status` (or migrate clients off relying on it) so the
+  // cast can go away.
+  const context = { ...rest, status } as Omit<CrewScheduleRow, 'status' | 'state_version' | 'deleted_at'>
   return {
     state: status,
     state_version,
-    context: {
-      ...rest,
-      status,
-    } as unknown as Omit<CrewScheduleRow, 'status' | 'state_version' | 'deleted_at'>,
+    context,
     next_events: workflowNextEvents(status),
   }
 }
@@ -214,7 +217,8 @@ export async function handleCrewScheduleEventRoutes(
             nextSnapshot.confirmed_by ?? null,
           ],
         )
-        const updated = updateResult.rows[0]!
+        const updated = updateResult.rows[0]
+        if (!updated) throw new HttpError(500, 'crew schedule update returned no row')
 
         await recordWorkflowEvent(client, {
           companyId: ctx.company.id,
@@ -224,8 +228,8 @@ export async function handleCrewScheduleEventRoutes(
           entityId: updated.id,
           stateVersion,
           eventType,
-          eventPayload: reducerEvent as unknown as Record<string, unknown>,
-          snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+          eventPayload: reducerEvent,
+          snapshotAfter: nextSnapshot,
           actorUserId: ctx.currentUserId,
         })
         await recordMutationLedger(client, {
@@ -233,7 +237,7 @@ export async function handleCrewScheduleEventRoutes(
           entityType: 'crew_schedule',
           entityId: updated.id,
           action: `event:${eventType.toLowerCase()}`,
-          row: updated as unknown as Record<string, unknown>,
+          row: updated,
           syncPayload: { action: 'confirm', schedule: updated },
           idempotencyKey: `crew_schedule:event:${updated.id}:${updated.state_version}`,
         })
@@ -325,7 +329,8 @@ export async function handleCrewScheduleEventRoutes(
          returning ${CREW_SCHEDULE_COLUMNS}`,
         [ctx.company.id, id, scheduledFor],
       )
-      const row = updated.rows[0]!
+      const row = updated.rows[0]
+      if (!row) throw new HttpError(500, 'crew schedule reschedule returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'crew_schedule',

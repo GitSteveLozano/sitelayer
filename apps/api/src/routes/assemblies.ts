@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid } from '../http-utils.js'
 
 export type AssemblyRouteCtx = {
   pool: Pool
@@ -112,13 +112,14 @@ export async function handleAssemblyRoutes(
          returning ${ASSEMBLY_COLUMNS}`,
         [ctx.company.id, serviceItem, name, description, unit],
       )
-      const row = insert.rows[0]!
+      const row = insert.rows[0]
+      if (!row) throw new HttpError(500, 'assembly insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'service_item_assembly',
         entityId: row.id,
         action: 'create',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row
@@ -228,13 +229,14 @@ export async function handleAssemblyRoutes(
          where company_id = $1 and id = $2`,
         [ctx.company.id, assemblyId, recompute.rows[0]?.total ?? '0'],
       )
-      const componentRow = insert.rows[0]!
+      const componentRow = insert.rows[0]
+      if (!componentRow) throw new HttpError(500, 'assembly component insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'service_item_assembly_component',
         entityId: componentRow.id,
         action: 'create',
-        row: componentRow as unknown as Record<string, unknown>,
+        row: componentRow,
         actorUserId: ctx.currentUserId,
       })
       return componentRow
@@ -269,7 +271,7 @@ export async function handleAssemblyRoutes(
         entityType: 'service_item_assembly',
         entityId: row.id,
         action: 'delete',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row

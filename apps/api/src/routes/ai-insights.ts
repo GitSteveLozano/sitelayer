@@ -109,7 +109,7 @@ export async function handleAiInsightRoutes(
         entityType: 'ai_insight',
         entityId: row.id,
         action: 'dismiss',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row
@@ -147,7 +147,7 @@ export async function handleAiInsightRoutes(
         entityType: 'ai_insight',
         entityId: row.id,
         action: 'apply',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row

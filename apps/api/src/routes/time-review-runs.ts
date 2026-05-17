@@ -14,7 +14,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import { isValidDateInput, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidDateInput, isValidUuid } from '../http-utils.js'
 
 export type TimeReviewRouteCtx = {
   pool: Pool
@@ -277,13 +277,14 @@ export async function handleTimeReviewRunRoutes(
          returning ${TIME_REVIEW_RUN_COLUMNS}`,
         [ctx.company.id, projectId, periodStart, periodEnd, coveredEntryIds, totalHours, totalEntries, anomalyCount],
       )
-      const row = insert.rows[0]!
+      const row = insert.rows[0]
+      if (!row) throw new HttpError(500, 'time review run insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'time_review_run',
         entityId: row.id,
         action: 'create',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row
@@ -360,7 +361,8 @@ export async function handleTimeReviewRunRoutes(
             nextSnapshot.reopened_at ?? null,
           ],
         )
-        const updated = updateResult.rows[0]!
+        const updated = updateResult.rows[0]
+        if (!updated) throw new HttpError(500, 'time review run update returned no row')
 
         await recordWorkflowEvent(client, {
           companyId: ctx.company.id,
@@ -370,8 +372,8 @@ export async function handleTimeReviewRunRoutes(
           entityId: updated.id,
           stateVersion,
           eventType,
-          eventPayload: reducerEvent as unknown as Record<string, unknown>,
-          snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+          eventPayload: reducerEvent,
+          snapshotAfter: nextSnapshot,
           actorUserId: ctx.currentUserId,
         })
         await recordMutationLedger(client, {
@@ -379,7 +381,7 @@ export async function handleTimeReviewRunRoutes(
           entityType: 'time_review_run',
           entityId: updated.id,
           action: `event:${eventType.toLowerCase()}`,
-          row: updated as unknown as Record<string, unknown>,
+          row: updated,
           idempotencyKey: `time_review_run:event:${updated.id}:${updated.state_version}`,
         })
 
@@ -394,7 +396,7 @@ export async function handleTimeReviewRunRoutes(
             entityId: updated.id,
             action: `${action}_labor_entries`,
             mutationType: 'lock_labor_entries',
-            row: updated as unknown as Record<string, unknown>,
+            row: updated,
             outboxPayload: {
               action,
               run_id: updated.id,

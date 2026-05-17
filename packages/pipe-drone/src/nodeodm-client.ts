@@ -110,7 +110,10 @@ export async function nodeOdmUploadImage(opts: NodeOdmUploadImageOptions): Promi
   }
   const stream = createReadStream(opts.imagePath)
   // Convert Node Readable → Web ReadableStream for fetch body+File.
-  const webStream = Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>
+  // Node's `stream/web.ReadableStream` and the DOM `ReadableStream`
+  // global are nominally distinct types even though they share the
+  // runtime shape; the single cast bridges the two.
+  const webStream = Readable.toWeb(stream) as ReadableStream<Uint8Array>
   const blob = await new Response(webStream).blob()
   const form = new FormData()
   form.append('images', blob, opts.filename || basename(opts.imagePath))
@@ -160,8 +163,11 @@ export async function nodeOdmDownloadAsset(opts: NodeOdmDownloadAssetOptions): P
     throw new Error(`nodeOdmDownloadAsset(${opts.asset}) returned no body`)
   }
   const sink = createWriteStream(opts.outPath)
-  // Web ReadableStream → Node Readable.
-  const nodeStream = Readable.fromWeb(res.body as unknown as import('node:stream/web').ReadableStream<Uint8Array>)
+  // Web ReadableStream → Node Readable. `res.body` is the DOM
+  // ReadableStream and `Readable.fromWeb` wants the structurally
+  // identical `node:stream/web.ReadableStream`; the single cast bridges
+  // the two.
+  const nodeStream = Readable.fromWeb(res.body as import('node:stream/web').ReadableStream<Uint8Array>)
   await pipeline(nodeStream, sink)
 }
 

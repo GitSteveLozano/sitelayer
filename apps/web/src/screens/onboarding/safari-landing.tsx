@@ -145,7 +145,7 @@ export function useShouldShowSafariLanding(): { ready: boolean; show: boolean; s
       return
     }
     const standalone =
-      (navigator as unknown as { standalone?: boolean }).standalone === true ||
+      (navigator as Navigator & { standalone?: boolean }).standalone === true ||
       window.matchMedia('(display-mode: standalone)').matches
     if (standalone) {
       setState({ ready: true, show: false })

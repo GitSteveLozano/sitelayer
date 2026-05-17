@@ -38,7 +38,7 @@ export function PostInstallSplash({ forceShow, onDismiss }: PostInstallSplashPro
     if (typeof window === 'undefined') return
     if (window.localStorage.getItem(POST_INSTALL_SPLASH_KEY)) return
     const standalone =
-      (typeof navigator !== 'undefined' && (navigator as unknown as { standalone?: boolean }).standalone === true) ||
+      (typeof navigator !== 'undefined' && (navigator as Navigator & { standalone?: boolean }).standalone === true) ||
       window.matchMedia('(display-mode: standalone)').matches
     if (!standalone) return
     setShow(true)

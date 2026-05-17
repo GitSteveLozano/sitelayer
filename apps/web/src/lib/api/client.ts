@@ -137,8 +137,7 @@ export function nextRequestId(): string {
  */
 function readTraceHeaders(): { sentryTrace: string | null; baggage: string | null } {
   try {
-    const getTraceData = (Sentry as unknown as { getTraceData?: () => Record<string, string | undefined> }).getTraceData
-    const data = typeof getTraceData === 'function' ? getTraceData() : undefined
+    const data = Sentry.getTraceData?.()
     if (!data) return { sentryTrace: null, baggage: null }
     return {
       sentryTrace: data['sentry-trace'] ?? null,

@@ -29,7 +29,7 @@ import {
   withCompanyClient,
   withMutationTx,
 } from '../mutation-tx.js'
-import { isValidUuid, parseExpectedVersion, parseOptionalNumber } from '../http-utils.js'
+import { HttpError, isValidUuid, parseExpectedVersion, parseOptionalNumber } from '../http-utils.js'
 import { patchVersionedEntity } from '../versioned-update.js'
 
 const logger = createLogger('api:projects')
@@ -58,14 +58,16 @@ export type ProjectRouteCtx = {
 }
 
 export async function summarizeProject(
-  pool: Pool,
+  _pool: Pool,
   companyId: string,
   projectId: string,
   options: { draftId?: string | null } = {},
 ) {
-  const projectResult = await pool.query(
-    'select id, company_id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, version from projects where company_id = $1 and id = $2 limit 1',
-    [companyId, projectId],
+  const projectResult = await withCompanyClient(companyId, (client) =>
+    client.query(
+      'select id, company_id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, version from projects where company_id = $1 and id = $2 limit 1',
+      [companyId, projectId],
+    ),
   )
   const project = projectResult.rows[0]
   if (!project) return null
@@ -86,19 +88,23 @@ export async function summarizeProject(
   const scopedParams = draftId ? [companyId, projectId, draftId] : [companyId, projectId]
 
   const [measurementsResult, estimateLinesResult, laborEntriesResult, materialBillsResult, bonusRuleResult] =
-    await Promise.all([
-      pool.query(measurementsSql, scopedParams),
-      pool.query(estimateLinesSql, scopedParams),
-      pool.query(
-        'select service_item_code, hours, sqft_done, status, occurred_on from labor_entries where company_id = $1 and project_id = $2 order by occurred_on desc, created_at desc',
-        [companyId, projectId],
-      ),
-      pool.query(
-        'select amount, bill_type from material_bills where company_id = $1 and project_id = $2 and deleted_at is null',
-        [companyId, projectId],
-      ),
-      pool.query('select config from bonus_rules where company_id = $1 order by created_at desc limit 1', [companyId]),
-    ])
+    await withCompanyClient(companyId, async (client) =>
+      Promise.all([
+        client.query(measurementsSql, scopedParams),
+        client.query(estimateLinesSql, scopedParams),
+        client.query(
+          'select service_item_code, hours, sqft_done, status, occurred_on from labor_entries where company_id = $1 and project_id = $2 order by occurred_on desc, created_at desc',
+          [companyId, projectId],
+        ),
+        client.query(
+          'select amount, bill_type from material_bills where company_id = $1 and project_id = $2 and deleted_at is null',
+          [companyId, projectId],
+        ),
+        client.query('select config from bonus_rules where company_id = $1 order by created_at desc limit 1', [
+          companyId,
+        ]),
+      ]),
+    )
 
   // Money sums use sumMoney (integer-cents arithmetic) — JS float
   // accumulation drifts on numeric(12,2) sums. The downstream consumers
@@ -274,6 +280,7 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
         ],
       )
       const row = inserted.rows[0]
+      if (!row) throw new HttpError(500, 'project insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'project',
@@ -292,13 +299,15 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
          returning id`,
         [ctx.company.id, row.id],
       )
+      const defaultDraftRow = defaultDraft.rows[0]
+      if (!defaultDraftRow) throw new HttpError(500, 'takeoff draft insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'takeoff_draft',
-        entityId: defaultDraft.rows[0].id,
+        entityId: defaultDraftRow.id,
         action: 'create',
         row: {
-          id: defaultDraft.rows[0].id,
+          id: defaultDraftRow.id,
           project_id: row.id,
           name: 'Default',
           type: 'measurement',
@@ -538,8 +547,8 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
         entityId: projectId,
         stateVersion: beforeStateVersion,
         eventType: 'CLOSEOUT',
-        eventPayload: reducerEvent as unknown as Record<string, unknown>,
-        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        eventPayload: reducerEvent,
+        snapshotAfter: nextSnapshot,
         actorUserId: ctx.currentUserId,
       })
       const closeoutOutcome = workflowEventOutcome('CLOSEOUT')

@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { PoolClient } from 'pg'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidDateInput } from '../http-utils.js'
+import { HttpError, isValidDateInput } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 import {
   INVENTORY_ITEM_COLUMNS,
@@ -105,7 +105,8 @@ export async function handleRentalInventoryCrudRoutes(
           optionalString(body.notes),
         ],
       )
-      const row = result.rows[0]!
+      const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'inventory item insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'inventory_item',
@@ -265,7 +266,8 @@ export async function handleRentalInventoryCrudRoutes(
           body.is_default ?? false,
         ],
       )
-      const row = result.rows[0]!
+      const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'inventory location insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'inventory_location',
@@ -450,7 +452,8 @@ export async function handleRentalInventoryCrudRoutes(
           lng,
         ],
       )
-      const row = result.rows[0]!
+      const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'inventory movement insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'inventory_movement',
@@ -508,10 +511,12 @@ export async function handleRentalInventoryCrudRoutes(
               `Auto-opened from inventory_movement ${row.id}`,
             ],
           )
+          const chargeRow = charge.rows[0]
+          if (!chargeRow) throw new HttpError(500, 'damage charge insert returned no row')
           await recordMutationLedger(client, {
             companyId: ctx.company.id,
             entityType: 'damage_charge',
-            entityId: charge.rows[0]!.id,
+            entityId: chargeRow.id,
             action: 'create',
             row: {
               source: 'inventory_movement_auto',

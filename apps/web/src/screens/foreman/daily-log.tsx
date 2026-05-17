@@ -543,15 +543,15 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, onApplyProposal, attribution
   const supportsVoice =
     typeof window !== 'undefined' &&
     Boolean(
-      (window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown }).SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition,
+      (window as Window & { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown }).SpeechRecognition ||
+      (window as Window & { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition,
     )
 
   const startVoice = () => {
     if (!supportsVoice || recognizing) return
     const Ctor =
-      (window as unknown as { SpeechRecognition?: SpeechRecognitionConstructor }).SpeechRecognition ??
-      (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionConstructor }).webkitSpeechRecognition
+      (window as Window & { SpeechRecognition?: SpeechRecognitionConstructor }).SpeechRecognition ??
+      (window as Window & { webkitSpeechRecognition?: SpeechRecognitionConstructor }).webkitSpeechRecognition
     if (!Ctor) return
     const rec = new Ctor()
     rec.lang = 'en-US'

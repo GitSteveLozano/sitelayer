@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
+import { HttpError } from '../http-utils.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { enqueueNotification, recordMutationLedger, recordWorkflowEvent, withCompanyClient } from '../mutation-tx.js'
 import { listIssueRecipientUserIds } from '../notifications.js'
@@ -310,13 +311,14 @@ export async function handleWorkerIssueRoutes(
          returning ${ATTACHMENT_COLUMNS}`,
         [ctx.company.id, issueId, upload.kind, upload.storagePath, upload.mimeType, upload.bytes],
       )
-      const row = result.rows[0]!
+      const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'worker issue attachment insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'worker_issue_attachment',
         entityId: row.id,
         action: 'create',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row
@@ -573,7 +575,7 @@ export async function handleWorkerIssueRoutes(
         stateVersion: row.state_version,
         eventType: event.type,
         eventPayload: { ...event },
-        snapshotAfter: { ...nextSnapshot } as Record<string, unknown>,
+        snapshotAfter: { ...nextSnapshot },
         actorUserId: ctx.currentUserId,
       })
       // Side effects via outbox
@@ -581,7 +583,8 @@ export async function handleWorkerIssueRoutes(
         `select ${WORKFLOW_ISSUE_COLUMNS} from worker_issues where id = $1 and company_id = $2 limit 1`,
         [issueId, ctx.company.id],
       )
-      const freshRow = fresh.rows[0]!
+      const freshRow = fresh.rows[0]
+      if (!freshRow) throw new HttpError(500, 'worker issue refetch returned no row')
       if (event.type === 'RESOLVE') {
         await recordMutationLedger(client, {
           companyId: ctx.company.id,

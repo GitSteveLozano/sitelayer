@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid } from '../http-utils.js'
 
 export type BlueprintPageRouteCtx = {
   pool: Pool
@@ -115,13 +115,14 @@ export async function handleBlueprintPageRoutes(
          returning ${PAGE_COLUMNS}`,
         [ctx.company.id, docId, pageNumber, storagePath],
       )
-      const row = inserted.rows[0]!
+      const row = inserted.rows[0]
+      if (!row) throw new HttpError(500, 'blueprint page insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'blueprint_page',
         entityId: row.id,
         action: 'create',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row
@@ -184,7 +185,7 @@ export async function handleBlueprintPageRoutes(
         entityType: 'blueprint_page',
         entityId: row.id,
         action: 'calibrate',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row

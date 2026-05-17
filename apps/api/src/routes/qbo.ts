@@ -15,7 +15,7 @@ import type { Pool } from 'pg'
 import { createLogger } from '@sitelayer/logger'
 import type { ActiveCompany } from '../auth-types.js'
 import { parseExpectedVersion } from '../http-utils.js'
-import { recordMutationLedger, recordSyncEvent, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordSyncEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { QboParseError, parseQboClass, parseQboEstimateCreateResponse, parseQboItem } from '../qbo-parse.js'
 import { qboGet, qboPost } from '../qbo-http.js'
 import { decodeQboState, encodeQboState, type QboOAuthState } from '../qbo-oauth-state.js'
@@ -284,17 +284,22 @@ export async function handleQboRoutes(req: http.IncomingMessage, url: URL, ctx: 
     const qboSyncRunId = initialRun.run.id
     try {
       if (!connection?.access_token) {
-        const customersResult = await pool.query(
-          'select id, external_id, name from customers where company_id = $1 and deleted_at is null and external_id is not null',
-          [company.id],
-        )
-        const serviceItemsResult = await pool.query(
-          "select code, name, source from service_items where company_id = $1 and deleted_at is null and (source = 'qbo' or code like 'qbo-%')",
-          [company.id],
-        )
-        const divisionsResult = await pool.query(
-          'select code, name from divisions where company_id = $1 order by sort_order asc',
-          [company.id],
+        const [customersResult, serviceItemsResult, divisionsResult] = await withCompanyClient(
+          company.id,
+          async (client) =>
+            Promise.all([
+              client.query(
+                'select id, external_id, name from customers where company_id = $1 and deleted_at is null and external_id is not null',
+                [company.id],
+              ),
+              client.query(
+                "select code, name, source from service_items where company_id = $1 and deleted_at is null and (source = 'qbo' or code like 'qbo-%')",
+                [company.id],
+              ),
+              client.query('select code, name from divisions where company_id = $1 order by sort_order asc', [
+                company.id,
+              ]),
+            ]),
         )
         const qboSnapshot = {
           syncedCustomers: customersResult.rowCount,
@@ -340,7 +345,7 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
           await completeQboSyncRunSuccess(client, {
             companyId: company.id,
             runId: qboSyncRunId,
-            snapshot: qboSnapshot as unknown as Record<string, unknown>,
+            snapshot: qboSnapshot as Record<string, unknown>,
             triggeredBy: currentUserId,
           })
           await recordMutationLedger(client, {
@@ -553,9 +558,8 @@ do update set
         })
       }
 
-      const divisionsResult = await pool.query(
-        'select code, name from divisions where company_id = $1 order by sort_order asc',
-        [company.id],
+      const divisionsResult = await withCompanyClient(company.id, (client) =>
+        client.query('select code, name from divisions where company_id = $1 order by sort_order asc', [company.id]),
       )
       const divisionLocalRefs: string[] = []
       const divisionExternalIds: string[] = []
@@ -704,7 +708,7 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
         await completeQboSyncRunSuccess(client, {
           companyId: company.id,
           runId: qboSyncRunId,
-          snapshot: qboSnapshot as unknown as Record<string, unknown>,
+          snapshot: qboSnapshot as Record<string, unknown>,
           triggeredBy: currentUserId,
         })
         await recordMutationLedger(client, {
@@ -774,24 +778,24 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
     const realmId = connection.provider_account_id as string
     const accessToken = connection.access_token as string
 
-    const accountMappingResult = await pool.query<{ external_id: string }>(
-      `select external_id from integration_mappings
+    const [accountMappingResult, unsynced] = await withCompanyClient(company.id, async (client) =>
+      Promise.all([
+        client.query<{ external_id: string }>(
+          `select external_id from integration_mappings
        where company_id = $1 and provider = 'qbo'
          and entity_type = 'qbo_account' and local_ref = 'materials'
          and deleted_at is null
        limit 1`,
-      [company.id],
-    )
-    const materialsAccountId = accountMappingResult.rows[0]?.external_id ?? null
-
-    const unsynced = await pool.query<{
-      id: string
-      vendor_name: string
-      amount: string | number
-      description: string | null
-      occurred_on: string | null
-    }>(
-      `select mb.id, mb.vendor_name, mb.amount, mb.description, mb.occurred_on
+          [company.id],
+        ),
+        client.query<{
+          id: string
+          vendor_name: string
+          amount: string | number
+          description: string | null
+          occurred_on: string | null
+        }>(
+          `select mb.id, mb.vendor_name, mb.amount, mb.description, mb.occurred_on
        from material_bills mb
        where mb.company_id = $1 and mb.deleted_at is null
          and not exists (
@@ -800,8 +804,11 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
              and im.entity_type = 'material_bill' and im.local_ref = mb.id::text
              and im.deleted_at is null
          )`,
-      [company.id],
+          [company.id],
+        ),
+      ]),
     )
+    const materialsAccountId = accountMappingResult.rows[0]?.external_id ?? null
 
     const errors: Array<{ bill_id: string; error: string }> = []
     let synced = 0
@@ -823,13 +830,15 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
         }
         let vendorId = vendorCache.get(displayName) ?? null
         if (!vendorId) {
-          const mappedVendor = await pool.query<{ external_id: string }>(
-            `select external_id from integration_mappings
+          const mappedVendor = await withCompanyClient(company.id, (client) =>
+            client.query<{ external_id: string }>(
+              `select external_id from integration_mappings
              where company_id = $1 and provider = 'qbo'
                and entity_type = 'qbo_vendor' and local_ref = $2
                and deleted_at is null
              limit 1`,
-            [company.id, displayName],
+              [company.id, displayName],
+            ),
           )
           vendorId = mappedVendor.rows[0]?.external_id ?? null
         }
@@ -936,9 +945,11 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
     const projectId = pushQboMatch[1]!
     const connection = await getIntegrationConnectionWithSecrets(pool, company.id, 'qbo')
 
-    const projectResult = await pool.query(
-      'select id, name, customer_name, bid_total from projects where company_id = $1 and id = $2',
-      [company.id, projectId],
+    const projectResult = await withCompanyClient(company.id, (client) =>
+      client.query('select id, name, customer_name, bid_total from projects where company_id = $1 and id = $2', [
+        company.id,
+        projectId,
+      ]),
     )
     if (!projectResult.rows[0]) {
       sendJson(404, { error: 'project not found' })

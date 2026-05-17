@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import type { PoolClient } from 'pg'
+import { HttpError } from '../http-utils.js'
 import { withMutationTx } from '../mutation-tx.js'
 import {
   TRACKING_MODES,
@@ -95,7 +96,8 @@ export async function handleRentalInventoryCsvRoutes(
             optionalString(row.notes),
           ],
         )
-        const upserted = upsert.rows[0]!
+        const upserted = upsert.rows[0]
+        if (!upserted) throw new HttpError(500, 'inventory item upsert returned no row')
         // xmax='0' on a fresh insert; non-zero on UPDATE conflict path.
         if (upserted.xmax === '0') inserted += 1
         else updated += 1

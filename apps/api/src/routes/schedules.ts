@@ -10,7 +10,7 @@ import {
 import type { ActiveCompany } from '../auth-types.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidDateInput, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
+import { HttpError, isValidDateInput, parseExpectedVersion, parseJsonBody } from '../http-utils.js'
 
 // POST /api/schedules wire-format validation. Mirrors the
 // workflow-event parser pattern (see packages/workflows/src/*.ts) so
@@ -106,6 +106,7 @@ export async function handleScheduleRoutes(
         ],
       )
       const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'crew schedule insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'crew_schedule',
@@ -286,6 +287,7 @@ export async function handleScheduleRoutes(
         ],
       )
       const schedule = updateResult.rows[0]
+      if (!schedule) throw new HttpError(500, 'crew schedule update returned no row')
       const createdLaborEntries: Record<string, unknown>[] = []
       for (const entry of entries) {
         if (!entry.service_item_code || entry.hours === undefined || !entry.occurred_on) continue
@@ -305,7 +307,9 @@ export async function handleScheduleRoutes(
             entry.occurred_on,
           ],
         )
-        createdLaborEntries.push(inserted.rows[0])
+        const laborRow = inserted.rows[0]
+        if (!laborRow) throw new HttpError(500, 'labor entry insert returned no row')
+        createdLaborEntries.push(laborRow)
       }
       await client.query(
         'update projects set version = version + 1, updated_at = now() where company_id = $1 and id = $2',
@@ -324,8 +328,8 @@ export async function handleScheduleRoutes(
         entityId: scheduleId,
         stateVersion: beforeStateVersion,
         eventType: 'CONFIRM',
-        eventPayload: reducerEvent as unknown as Record<string, unknown>,
-        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        eventPayload: reducerEvent,
+        snapshotAfter: nextSnapshot,
         actorUserId: ctx.currentUserId,
       })
       const confirmOutcome = workflowEventOutcome('CONFIRM')
@@ -432,6 +436,7 @@ export async function handleScheduleRoutes(
           ],
         )
         const row = insert.rows[0]
+        if (!row) throw new HttpError(500, 'crew schedule copy insert returned no row')
         copied += 1
         created.push(row)
         await recordMutationLedger(client, {

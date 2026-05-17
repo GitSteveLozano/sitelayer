@@ -356,8 +356,8 @@ export async function recordWorkflowEvent(
     entityId: string
     stateVersion: number
     eventType: string
-    eventPayload: Record<string, unknown>
-    snapshotAfter: Record<string, unknown>
+    eventPayload: object
+    snapshotAfter: object
     actorUserId?: string | null
   },
 ): Promise<void> {
