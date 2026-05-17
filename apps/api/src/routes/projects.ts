@@ -28,6 +28,7 @@ import {
   withMutationTx,
 } from '../mutation-tx.js'
 import { isValidUuid, parseExpectedVersion, parseOptionalNumber } from '../http-utils.js'
+import { patchVersionedEntity } from '../versioned-update.js'
 
 const logger = createLogger('api:projects')
 
@@ -316,7 +317,6 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
       return true
     }
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
     const patchSiteLat = body.site_lat === undefined ? null : parseOptionalNumber(body.site_lat)
     const patchSiteLng = body.site_lng === undefined ? null : parseOptionalNumber(body.site_lng)
     const patchSiteRadius = body.site_radius_m === undefined ? null : parseOptionalNumber(body.site_radius_m)
@@ -328,86 +328,79 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
         ? null
         : parseOptionalNumber(body.auto_clock_correction_window_seconds)
     const patchDailyBudget = body.daily_budget_cents === undefined ? null : parseOptionalNumber(body.daily_budget_cents)
-    const updated = await withMutationTx(async (client) => {
-      const result = await client.query(
-        `
-        update projects
-        set
-          name = coalesce($3, name),
-          customer_name = coalesce($4, customer_name),
-          division_code = coalesce($5, division_code),
-          status = coalesce($6, status),
-          bid_total = coalesce($7, bid_total),
-          labor_rate = coalesce($8, labor_rate),
-          target_sqft_per_hr = coalesce($9, target_sqft_per_hr),
-          bonus_pool = coalesce($10, bonus_pool),
-          site_lat = case when $12::boolean then $13::numeric else site_lat end,
-          site_lng = case when $14::boolean then $15::numeric else site_lng end,
-          site_radius_m = case when $16::boolean then $17::int else site_radius_m end,
-          auto_clock_in_enabled = case when $18::boolean then $19::boolean else auto_clock_in_enabled end,
-          auto_clock_out_grace_seconds = case when $20::boolean then $21::int else auto_clock_out_grace_seconds end,
-          auto_clock_correction_window_seconds = case when $22::boolean then $23::int else auto_clock_correction_window_seconds end,
-          daily_budget_cents = case when $24::boolean then $25::int else daily_budget_cents end,
-          updated_at = now(),
-          version = version + 1
-        where company_id = $1 and id = $2 and ($11::int is null or version = $11)
-        returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, auto_clock_in_enabled, auto_clock_out_grace_seconds, auto_clock_correction_window_seconds, daily_budget_cents, version, created_at, updated_at
-        `,
-        [
-          ctx.company.id,
-          projectId,
-          body.name ?? null,
-          body.customer_name ?? null,
-          body.division_code ?? null,
-          body.status ?? null,
-          body.bid_total ?? null,
-          body.labor_rate ?? null,
-          body.target_sqft_per_hr ?? null,
-          body.bonus_pool ?? null,
-          expectedVersion,
-          body.site_lat !== undefined,
-          patchSiteLat,
-          body.site_lng !== undefined,
-          patchSiteLng,
-          body.site_radius_m !== undefined,
-          patchSiteRadius,
-          body.auto_clock_in_enabled !== undefined,
-          patchAutoClockEnabled,
-          body.auto_clock_out_grace_seconds !== undefined,
-          patchAutoClockGrace,
-          body.auto_clock_correction_window_seconds !== undefined,
-          patchAutoClockCorrection,
-          body.daily_budget_cents !== undefined,
-          patchDailyBudget,
-        ],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'project',
-        entityId: projectId,
-        action: 'update',
-        row,
-      })
-      return row
+    return patchVersionedEntity({
+      ctx,
+      body,
+      entityType: 'project',
+      entityName: 'project',
+      table: 'projects',
+      id: projectId,
+      checkVersionWhere: 'company_id = $1 and id = $2',
+      update: async (client, expectedVersion) => {
+        const result = await client.query(
+          `
+          update projects
+          set
+            name = coalesce($3, name),
+            customer_name = coalesce($4, customer_name),
+            division_code = coalesce($5, division_code),
+            status = coalesce($6, status),
+            bid_total = coalesce($7, bid_total),
+            labor_rate = coalesce($8, labor_rate),
+            target_sqft_per_hr = coalesce($9, target_sqft_per_hr),
+            bonus_pool = coalesce($10, bonus_pool),
+            site_lat = case when $12::boolean then $13::numeric else site_lat end,
+            site_lng = case when $14::boolean then $15::numeric else site_lng end,
+            site_radius_m = case when $16::boolean then $17::int else site_radius_m end,
+            auto_clock_in_enabled = case when $18::boolean then $19::boolean else auto_clock_in_enabled end,
+            auto_clock_out_grace_seconds = case when $20::boolean then $21::int else auto_clock_out_grace_seconds end,
+            auto_clock_correction_window_seconds = case when $22::boolean then $23::int else auto_clock_correction_window_seconds end,
+            daily_budget_cents = case when $24::boolean then $25::int else daily_budget_cents end,
+            updated_at = now(),
+            version = version + 1
+          where company_id = $1 and id = $2 and ($11::int is null or version = $11)
+          returning id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, site_lat, site_lng, site_radius_m, auto_clock_in_enabled, auto_clock_out_grace_seconds, auto_clock_correction_window_seconds, daily_budget_cents, version, created_at, updated_at
+          `,
+          [
+            ctx.company.id,
+            projectId,
+            body.name ?? null,
+            body.customer_name ?? null,
+            body.division_code ?? null,
+            body.status ?? null,
+            body.bid_total ?? null,
+            body.labor_rate ?? null,
+            body.target_sqft_per_hr ?? null,
+            body.bonus_pool ?? null,
+            expectedVersion,
+            body.site_lat !== undefined,
+            patchSiteLat,
+            body.site_lng !== undefined,
+            patchSiteLng,
+            body.site_radius_m !== undefined,
+            patchSiteRadius,
+            body.auto_clock_in_enabled !== undefined,
+            patchAutoClockEnabled,
+            body.auto_clock_out_grace_seconds !== undefined,
+            patchAutoClockGrace,
+            body.auto_clock_correction_window_seconds !== undefined,
+            patchAutoClockCorrection,
+            body.daily_budget_cents !== undefined,
+            patchDailyBudget,
+          ],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'project',
+          entityId: projectId,
+          action: 'update',
+          row,
+        })
+        return row
+      },
     })
-    if (!updated) {
-      if (
-        !(await ctx.checkVersion(
-          'projects',
-          'company_id = $1 and id = $2',
-          [ctx.company.id, projectId],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'project not found' })
-      return true
-    }
-    ctx.sendJson(200, updated)
-    return true
   }
 
   if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/closeout$/)) {

@@ -22,10 +22,10 @@
  * This is a pure function — no I/O, no React. Bootstrap response shape
  * lives in api.ts.
  */
-import type { ProjectAssignmentRow } from '../api-v1-compat.js'
+import type { ProjectAssignmentRow } from '@/lib/api'
+import type { CompanyRole, ProjectRole } from '@sitelayer/domain'
 
-export type CompanyRole = 'admin' | 'foreman' | 'office' | 'member'
-export type ProjectRole = 'admin' | 'foreman' | 'worker'
+export type { CompanyRole, ProjectRole } from '@sitelayer/domain'
 export type RoleMode = ProjectRole
 
 export type ActiveContext = {
@@ -53,7 +53,9 @@ export type ComputeActiveContextArgs = {
  * Coerce an arbitrary string from /api/session into the CompanyRole union.
  * Unknown values fall through to 'member'. 'office' is preserved here
  * (computeActiveContext aliases it to admin) so call sites that branch on
- * the raw role still see what came off the wire.
+ * the raw role still see what came off the wire — distinct from the
+ * server-side `normalizeCompanyRole` in @sitelayer/domain which collapses
+ * 'office' to 'admin' at the auth boundary.
  */
 export function normalizeMobileShellRole(value: string | null | undefined): CompanyRole {
   if (value === 'admin' || value === 'foreman' || value === 'office' || value === 'member') {

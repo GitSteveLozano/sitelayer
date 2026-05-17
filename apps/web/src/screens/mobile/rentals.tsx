@@ -8,9 +8,9 @@ import { useNavigate } from 'react-router-dom'
 import {
   fetchInventoryUtilizationSummary,
   listInventoryItems,
-  type InventoryItemRow,
+  type InventoryItem,
   type InventoryUtilizationSummary,
-} from '../../api-v1-compat.js'
+} from '@/lib/api'
 import {
   MBody,
   MChip,
@@ -35,7 +35,7 @@ type Filter = 'all' | 'out' | 'available' | 'service'
 
 export function MobileRentals({ companySlug }: { companySlug: string }) {
   const navigate = useNavigate()
-  const [items, setItems] = useState<readonly InventoryItemRow[] | null>(null)
+  const [items, setItems] = useState<readonly InventoryItem[] | null>(null)
   const [utilization, setUtilization] = useState<InventoryUtilizationSummary | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
   const [query, setQuery] = useState('')
@@ -197,7 +197,7 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
   )
 }
 
-function ItemCard({ item }: { item: InventoryItemRow }) {
+function ItemCard({ item }: { item: InventoryItem }) {
   const out = !item.active
   return (
     <div

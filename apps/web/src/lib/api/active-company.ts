@@ -8,7 +8,7 @@
  * that pre-shell (sign-in, marketing) cannot.
  */
 import { useQueryClient } from '@tanstack/react-query'
-import type { BootstrapResponse } from '../../api-v1-compat'
+import type { BootstrapResponse } from '@/lib/api'
 import { getActiveCompanySlug } from './client'
 import { queryKeys } from './keys'
 import { useCompanyModules, type CompanyModulesResponse } from './companies'

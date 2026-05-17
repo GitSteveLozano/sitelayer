@@ -68,7 +68,7 @@ export function LifecycleBanner({ projectId }: { projectId: string }) {
             <button
               key={evt.type}
               type="button"
-              onClick={() => lifecycle.dispatch(evt.type)}
+              onClick={() => lifecycle.dispatch({ type: evt.type })}
               disabled={lifecycle.isSubmitting || Boolean(evt.disabled_reason)}
               title={evt.disabled_reason ?? undefined}
               className="px-3 py-1.5 rounded border border-line text-[12px] font-semibold text-ink bg-card-soft disabled:opacity-50 hover:bg-card"

@@ -2,7 +2,8 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { parseConfigPayload, parseExpectedVersion } from '../http-utils.js'
+import { parseConfigPayload } from '../http-utils.js'
+import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 
 export type BonusRuleRouteCtx = {
   pool: Pool
@@ -89,56 +90,48 @@ export async function handleBonusRuleRoutes(
         return true
       }
     }
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const updated = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query(
-        `
-        update bonus_rules
-        set
-          name = coalesce($3, name),
-          config = coalesce($4::jsonb, config),
-          is_active = coalesce($5, is_active),
-          version = version + 1
-        where company_id = $1 and id = $2 and ($6::int is null or version = $6)
-        returning id, name, config, is_active, version, created_at
-        `,
-        [
-          ctx.company.id,
-          bonusRuleId,
-          body.name ?? null,
-          config ? JSON.stringify(config) : null,
-          body.is_active ?? null,
-          expectedVersion,
-        ],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'bonus_rule',
-        entityId: bonusRuleId,
-        action: 'update',
-        row,
-        syncPayload: { action: 'update', bonusRule: row },
-      })
-      return row
+    return patchVersionedEntity({
+      ctx,
+      body,
+      entityType: 'bonus_rule',
+      entityName: 'bonus rule',
+      table: 'bonus_rules',
+      id: bonusRuleId,
+      checkVersionWhere: 'company_id = $1 and id = $2',
+      update: async (client, expectedVersion) => {
+        const result = await client.query(
+          `
+          update bonus_rules
+          set
+            name = coalesce($3, name),
+            config = coalesce($4::jsonb, config),
+            is_active = coalesce($5, is_active),
+            version = version + 1
+          where company_id = $1 and id = $2 and ($6::int is null or version = $6)
+          returning id, name, config, is_active, version, created_at
+          `,
+          [
+            ctx.company.id,
+            bonusRuleId,
+            body.name ?? null,
+            config ? JSON.stringify(config) : null,
+            body.is_active ?? null,
+            expectedVersion,
+          ],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'bonus_rule',
+          entityId: bonusRuleId,
+          action: 'update',
+          row,
+          syncPayload: { action: 'update', bonusRule: row },
+        })
+        return row
+      },
     })
-    if (!updated) {
-      if (
-        !(await ctx.checkVersion(
-          'bonus_rules',
-          'company_id = $1 and id = $2',
-          [ctx.company.id, bonusRuleId],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'bonus rule not found' })
-      return true
-    }
-    ctx.sendJson(200, updated)
-    return true
   }
 
   if (req.method === 'DELETE' && url.pathname.match(/^\/api\/bonus-rules\/[^/]+$/)) {
@@ -149,40 +142,32 @@ export async function handleBonusRuleRoutes(
       return true
     }
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const deleted = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query(
-        'delete from bonus_rules where company_id = $1 and id = $2 and ($3::int is null or version = $3) returning id, name, config, is_active, version, created_at',
-        [ctx.company.id, bonusRuleId, expectedVersion],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'bonus_rule',
-        entityId: bonusRuleId,
-        action: 'delete',
-        row,
-        syncPayload: { action: 'delete', bonusRule: row },
-      })
-      return row
+    return deleteVersionedEntity({
+      ctx,
+      body,
+      entityType: 'bonus_rule',
+      entityName: 'bonus rule',
+      table: 'bonus_rules',
+      id: bonusRuleId,
+      checkVersionWhere: 'company_id = $1 and id = $2',
+      delete: async (client, expectedVersion) => {
+        const result = await client.query(
+          'delete from bonus_rules where company_id = $1 and id = $2 and ($3::int is null or version = $3) returning id, name, config, is_active, version, created_at',
+          [ctx.company.id, bonusRuleId, expectedVersion],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'bonus_rule',
+          entityId: bonusRuleId,
+          action: 'delete',
+          row,
+          syncPayload: { action: 'delete', bonusRule: row },
+        })
+        return row
+      },
     })
-    if (!deleted) {
-      if (
-        !(await ctx.checkVersion(
-          'bonus_rules',
-          'company_id = $1 and id = $2',
-          [ctx.company.id, bonusRuleId],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'bonus rule not found' })
-      return true
-    }
-    ctx.sendJson(200, deleted)
-    return true
   }
 
   return false

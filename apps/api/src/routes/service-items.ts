@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { parseExpectedVersion } from '../http-utils.js'
+import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 
 export type ServiceItemRouteCtx = {
   pool: Pool
@@ -79,57 +79,49 @@ export async function handleServiceItemRoutes(
       return true
     }
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const updated = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query(
-        `
-        update service_items
-        set
-          name = coalesce($3, name),
-          category = coalesce($4, category),
-          unit = coalesce($5, unit),
-          default_rate = coalesce($6, default_rate),
-          version = version + 1
-        where company_id = $1 and code = $2 and ($7::int is null or version = $7)
-        returning code, name, category, unit, default_rate, source, version, created_at
-        `,
-        [
-          ctx.company.id,
-          code,
-          body.name ?? null,
-          body.category ?? null,
-          body.unit ?? null,
-          body.default_rate ?? null,
-          expectedVersion,
-        ],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'service_item',
-        entityId: code,
-        action: 'update',
-        row,
-      })
-      return row
+    return patchVersionedEntity({
+      ctx,
+      body,
+      entityType: 'service_item',
+      entityName: 'service item',
+      table: 'service_items',
+      id: code,
+      checkVersionWhere: 'company_id = $1 and code = $2',
+      update: async (client, expectedVersion) => {
+        const result = await client.query(
+          `
+          update service_items
+          set
+            name = coalesce($3, name),
+            category = coalesce($4, category),
+            unit = coalesce($5, unit),
+            default_rate = coalesce($6, default_rate),
+            version = version + 1
+          where company_id = $1 and code = $2 and ($7::int is null or version = $7)
+          returning code, name, category, unit, default_rate, source, version, created_at
+          `,
+          [
+            ctx.company.id,
+            code,
+            body.name ?? null,
+            body.category ?? null,
+            body.unit ?? null,
+            body.default_rate ?? null,
+            expectedVersion,
+          ],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'service_item',
+          entityId: code,
+          action: 'update',
+          row,
+        })
+        return row
+      },
     })
-    if (!updated) {
-      if (
-        !(await ctx.checkVersion(
-          'service_items',
-          'company_id = $1 and code = $2',
-          [ctx.company.id, code],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'service item not found' })
-      return true
-    }
-    ctx.sendJson(200, updated)
-    return true
   }
 
   if (req.method === 'DELETE' && url.pathname.match(/^\/api\/service-items\/[^/]+$/)) {
@@ -140,44 +132,36 @@ export async function handleServiceItemRoutes(
       return true
     }
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const deleted = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query(
-        `
-        update service_items
-        set deleted_at = now(), version = version + 1
-        where company_id = $1 and code = $2 and deleted_at is null and ($3::int is null or version = $3)
-        returning code, name, category, unit, default_rate, source, version, created_at
-        `,
-        [ctx.company.id, code, expectedVersion],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'service_item',
-        entityId: code,
-        action: 'delete',
-        row,
-      })
-      return row
+    return deleteVersionedEntity({
+      ctx,
+      body,
+      entityType: 'service_item',
+      entityName: 'service item',
+      table: 'service_items',
+      id: code,
+      checkVersionWhere: 'company_id = $1 and code = $2',
+      delete: async (client, expectedVersion) => {
+        const result = await client.query(
+          `
+          update service_items
+          set deleted_at = now(), version = version + 1
+          where company_id = $1 and code = $2 and deleted_at is null and ($3::int is null or version = $3)
+          returning code, name, category, unit, default_rate, source, version, created_at
+          `,
+          [ctx.company.id, code, expectedVersion],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'service_item',
+          entityId: code,
+          action: 'delete',
+          row,
+        })
+        return row
+      },
     })
-    if (!deleted) {
-      if (
-        !(await ctx.checkVersion(
-          'service_items',
-          'company_id = $1 and code = $2',
-          [ctx.company.id, code],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'service item not found' })
-      return true
-    }
-    ctx.sendJson(200, deleted)
-    return true
   }
 
   return false

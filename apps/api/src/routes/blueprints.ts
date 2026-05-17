@@ -12,6 +12,7 @@ import { isMultipartRequest, parseBlueprintMultipart, type BlueprintMultipartRes
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, parseExpectedVersion } from '../http-utils.js'
+import { deleteVersionedEntity } from '../versioned-update.js'
 
 type BlueprintDocumentRow = {
   id: string
@@ -522,45 +523,37 @@ export async function handleBlueprintRoutes(
       return true
     }
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const deleted = await withMutationTx(async (client) => {
-      const result = await client.query(
-        `
-        update blueprint_documents
-        set deleted_at = now(), version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null and ($3::int is null or version = $3)
-        returning id, project_id, file_name, storage_path, version, deleted_at, created_at
-        `,
-        [ctx.company.id, blueprintId, expectedVersion],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'blueprint_document',
-        entityId: blueprintId,
-        action: 'delete',
-        row,
-        syncPayload: { action: 'delete', blueprint: row },
-      })
-      return row
+    return deleteVersionedEntity({
+      ctx,
+      body,
+      entityType: 'blueprint_document',
+      entityName: 'blueprint',
+      table: 'blueprint_documents',
+      id: blueprintId,
+      checkVersionWhere: 'company_id = $1 and id = $2',
+      delete: async (client, expectedVersion) => {
+        const result = await client.query(
+          `
+          update blueprint_documents
+          set deleted_at = now(), version = version + 1
+          where company_id = $1 and id = $2 and deleted_at is null and ($3::int is null or version = $3)
+          returning id, project_id, file_name, storage_path, version, deleted_at, created_at
+          `,
+          [ctx.company.id, blueprintId, expectedVersion],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'blueprint_document',
+          entityId: blueprintId,
+          action: 'delete',
+          row,
+          syncPayload: { action: 'delete', blueprint: row },
+        })
+        return row
+      },
     })
-    if (!deleted) {
-      if (
-        !(await ctx.checkVersion(
-          'blueprint_documents',
-          'company_id = $1 and id = $2',
-          [ctx.company.id, blueprintId],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'blueprint not found' })
-      return true
-    }
-    ctx.sendJson(200, deleted)
-    return true
   }
 
   return false

@@ -10,7 +10,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiGet, apiPost, type BootstrapResponse } from '../../api-v1-compat.js'
+import { apiGet, apiPost, type BootstrapResponse } from '@/lib/api'
 import {
   MAvatar,
   MBanner,

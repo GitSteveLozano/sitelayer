@@ -4,7 +4,7 @@
  */
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { listInventoryItems, type InventoryItemRow } from '../../api-v1-compat.js'
+import { listInventoryItems, type InventoryItem } from '@/lib/api'
 import {
   MBody,
   MButton,
@@ -22,7 +22,7 @@ import { formatMoney } from './format.js'
 
 export function MobileRentalsUtilization({ companySlug }: { companySlug: string }) {
   const navigate = useNavigate()
-  const [items, setItems] = useState<readonly InventoryItemRow[] | null>(null)
+  const [items, setItems] = useState<readonly InventoryItem[] | null>(null)
 
   useEffect(() => {
     listInventoryItems(companySlug)

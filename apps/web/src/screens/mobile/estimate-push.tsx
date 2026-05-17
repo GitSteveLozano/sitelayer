@@ -10,10 +10,7 @@
  */
 import { useNavigate, useParams } from 'react-router-dom'
 import { useEstimatePush } from '../../machines/estimate-push.js'
-import {
-  type EstimatePushHumanEvent,
-  type EstimatePushWorkflowState as EstimatePushState,
-} from '../../api-v1-compat.js'
+import { type EstimatePushHumanEvent, type EstimatePushState } from '@/lib/api'
 import {
   MBanner,
   MBody,

@@ -1,7 +1,8 @@
 import type http from 'node:http'
 import type { PoolClient } from 'pg'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidDateInput, parseExpectedVersion } from '../http-utils.js'
+import { isValidDateInput } from '../http-utils.js'
+import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 import {
   INVENTORY_ITEM_COLUMNS,
   INVENTORY_LOCATION_COLUMNS,
@@ -25,7 +26,8 @@ import {
  * Handle the inventory catalog CRUD surface — items, locations, and the
  * movement ledger. These are the read/write paths that maintain the
  * "what stock do we own and where is it" picture; the contract/billing
- * surfaces live in `rental-contracts-crud.ts` and `rental-billing-state.ts`.
+ * surfaces live in `rental-contracts.ts`, `rental-contract-lines.ts`, and
+ * `rental-billing-state.ts`.
  *
  * Routes:
  * - GET    /api/inventory/items                — list non-deleted items
@@ -121,115 +123,99 @@ export async function handleRentalInventoryCrudRoutes(
     if (!ctx.requireRole(['admin', 'office'])) return true
     const itemId = url.pathname.split('/')[4] ?? ''
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const updated = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query<InventoryItemRow>(
-        `
-        update inventory_items
-        set
-          code = coalesce($3, code),
-          description = coalesce($4, description),
-          category = coalesce($5, category),
-          unit = coalesce($6, unit),
-          default_rental_rate = coalesce($7, default_rental_rate),
-          replacement_value = coalesce($8, replacement_value),
-          tracking_mode = coalesce($9, tracking_mode),
-          active = coalesce($10, active),
-          notes = coalesce($11, notes),
-          version = version + 1,
-          updated_at = now()
-        where company_id = $1 and id = $2 and deleted_at is null
-          and ($12::int is null or version = $12)
-        returning ${INVENTORY_ITEM_COLUMNS}
-        `,
-        [
-          ctx.company.id,
-          itemId,
-          optionalString(body.code),
-          optionalString(body.description),
-          optionalString(body.category),
-          optionalString(body.unit),
-          body.default_rental_rate ?? null,
-          body.replacement_value ?? null,
-          body.tracking_mode ? normalizeEnum(body.tracking_mode, TRACKING_MODES, 'quantity') : null,
-          body.active ?? null,
-          optionalString(body.notes),
-          expectedVersion,
-        ],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'inventory_item',
-        entityId: itemId,
-        action: 'update',
-        row,
-        idempotencyKey: `inventory_item:update:${itemId}:${row.version}`,
-      })
-      return row
+    return patchVersionedEntity({
+      ctx,
+      body,
+      entityType: 'inventory_item',
+      entityName: 'inventory item',
+      table: 'inventory_items',
+      id: itemId,
+      checkVersionWhere: 'company_id = $1 and id = $2',
+      update: async (client, expectedVersion) => {
+        const result = await client.query<InventoryItemRow>(
+          `
+          update inventory_items
+          set
+            code = coalesce($3, code),
+            description = coalesce($4, description),
+            category = coalesce($5, category),
+            unit = coalesce($6, unit),
+            default_rental_rate = coalesce($7, default_rental_rate),
+            replacement_value = coalesce($8, replacement_value),
+            tracking_mode = coalesce($9, tracking_mode),
+            active = coalesce($10, active),
+            notes = coalesce($11, notes),
+            version = version + 1,
+            updated_at = now()
+          where company_id = $1 and id = $2 and deleted_at is null
+            and ($12::int is null or version = $12)
+          returning ${INVENTORY_ITEM_COLUMNS}
+          `,
+          [
+            ctx.company.id,
+            itemId,
+            optionalString(body.code),
+            optionalString(body.description),
+            optionalString(body.category),
+            optionalString(body.unit),
+            body.default_rental_rate ?? null,
+            body.replacement_value ?? null,
+            body.tracking_mode ? normalizeEnum(body.tracking_mode, TRACKING_MODES, 'quantity') : null,
+            body.active ?? null,
+            optionalString(body.notes),
+            expectedVersion,
+          ],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'inventory_item',
+          entityId: itemId,
+          action: 'update',
+          row,
+          idempotencyKey: `inventory_item:update:${itemId}:${row.version}`,
+        })
+        return row
+      },
     })
-    if (!updated) {
-      if (
-        !(await ctx.checkVersion(
-          'inventory_items',
-          'company_id = $1 and id = $2',
-          [ctx.company.id, itemId],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'inventory item not found' })
-      return true
-    }
-    ctx.sendJson(200, updated)
-    return true
   }
 
   if (req.method === 'DELETE' && url.pathname.match(/^\/api\/inventory\/items\/[^/]+$/)) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const itemId = url.pathname.split('/')[4] ?? ''
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const deleted = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query<InventoryItemRow>(
-        `
-        update inventory_items
-        set deleted_at = now(), active = false, version = version + 1, updated_at = now()
-        where company_id = $1 and id = $2 and deleted_at is null
-          and ($3::int is null or version = $3)
-        returning ${INVENTORY_ITEM_COLUMNS}
-        `,
-        [ctx.company.id, itemId, expectedVersion],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'inventory_item',
-        entityId: itemId,
-        action: 'delete',
-        row,
-      })
-      return row
+    return deleteVersionedEntity({
+      ctx,
+      body,
+      entityType: 'inventory_item',
+      entityName: 'inventory item',
+      table: 'inventory_items',
+      id: itemId,
+      checkVersionWhere: 'company_id = $1 and id = $2',
+      delete: async (client, expectedVersion) => {
+        const result = await client.query<InventoryItemRow>(
+          `
+          update inventory_items
+          set deleted_at = now(), active = false, version = version + 1, updated_at = now()
+          where company_id = $1 and id = $2 and deleted_at is null
+            and ($3::int is null or version = $3)
+          returning ${INVENTORY_ITEM_COLUMNS}
+          `,
+          [ctx.company.id, itemId, expectedVersion],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'inventory_item',
+          entityId: itemId,
+          action: 'delete',
+          row,
+        })
+        return row
+      },
     })
-    if (!deleted) {
-      if (
-        !(await ctx.checkVersion(
-          'inventory_items',
-          'company_id = $1 and id = $2',
-          [ctx.company.id, itemId],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'inventory item not found' })
-      return true
-    }
-    ctx.sendJson(200, deleted)
-    return true
   }
 
   if (req.method === 'GET' && url.pathname === '/api/inventory/locations') {

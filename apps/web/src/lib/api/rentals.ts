@@ -24,6 +24,9 @@ export interface InventoryItem {
   active: boolean
   notes: string | null
   version: number
+  deleted_at?: string | null
+  created_at?: string
+  updated_at?: string
 }
 
 export function useInventoryItems() {
@@ -33,13 +36,26 @@ export function useInventoryItems() {
   })
 }
 
+/** Imperative fetcher for inventory items. The `companySlug` arg pins
+ *  a non-active company; omit to use the active slug. */
+export function listInventoryItems(companySlug?: string): Promise<{ inventoryItems: InventoryItem[] }> {
+  return request<{ inventoryItems: InventoryItem[] }>(
+    '/api/inventory/items',
+    companySlug !== undefined ? { companySlug } : {},
+  )
+}
+
 export interface InventoryLocation {
   id: string
+  company_id?: string
   project_id: string | null
   name: string
-  location_type: string
+  location_type: 'yard' | 'job_site' | 'service' | string
   is_default: boolean
   version: number
+  deleted_at?: string | null
+  created_at?: string
+  updated_at?: string
 }
 
 export function useInventoryLocations() {
@@ -47,6 +63,52 @@ export function useInventoryLocations() {
     queryKey: ['inventory', 'locations'],
     queryFn: () => request('/api/inventory/locations'),
   })
+}
+
+/** Imperative fetcher for inventory locations. */
+export function listInventoryLocations(companySlug?: string): Promise<{ inventoryLocations: InventoryLocation[] }> {
+  return request<{ inventoryLocations: InventoryLocation[] }>(
+    '/api/inventory/locations',
+    companySlug !== undefined ? { companySlug } : {},
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Utilization summary (mobile dashboard)
+// ---------------------------------------------------------------------------
+
+export interface InventoryUtilizationTopItem {
+  inventory_item_id: string
+  code: string
+  name: string
+  on_rent_quantity: string
+  total_quantity: string
+  utilization_pct: number
+}
+
+export interface InventoryUtilizationSummary {
+  total_items: number
+  total_quantity_owned: number
+  on_rent_count: number
+  in_yard_count: number
+  out_for_service_count: number
+  utilization_pct: number
+  top_utilized: InventoryUtilizationTopItem[]
+  generated_at: string
+}
+
+/**
+ * Headline deployment rollup for the rentals dashboard. The full
+ * payload (per-item breakdown, legacy idle-revenue totals) is also on
+ * the wire — see `useInventoryUtilization` for that surface. Mobile
+ * callers just need the deployment headline.
+ */
+export async function fetchInventoryUtilizationSummary(companySlug?: string): Promise<InventoryUtilizationSummary> {
+  const body = await request<{ totals: InventoryUtilizationSummary }>(
+    '/api/inventory/utilization',
+    companySlug !== undefined ? { companySlug } : {},
+  )
+  return body.totals
 }
 
 // ---------------------------------------------------------------------------

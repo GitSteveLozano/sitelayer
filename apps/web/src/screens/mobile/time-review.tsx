@@ -9,7 +9,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import type { BootstrapResponse, LaborRow } from '../../api-v1-compat.js'
+import type { BootstrapResponse, LaborRow } from '@/lib/api'
 import { usePatchLaborEntry } from '../../lib/api/labor-entries.js'
 import {
   MAvatar,

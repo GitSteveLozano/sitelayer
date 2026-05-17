@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import { enqueueNotificationRow } from '../notifications.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { parseExpectedVersion } from '../http-utils.js'
+import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 
 /**
  * Same context shape as customers.ts, minus the QBO mapping backfill —
@@ -77,47 +77,38 @@ export async function handleWorkerRoutes(req: http.IncomingMessage, url: URL, ct
       return true
     }
     const body = await ctx.readBody()
-    const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
-    const updated = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query(
-        `
-        update workers
-        set
-          name = coalesce($3, name),
-          role = coalesce($4, role),
-          version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null and ($5::int is null or version = $5)
-        returning id, name, role, version, deleted_at, created_at
-        `,
-        [ctx.company.id, workerId, body.name ?? null, body.role ?? null, expectedVersion],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'worker',
-        entityId: workerId,
-        action: 'update',
-        row,
-      })
-      return row
+    return patchVersionedEntity({
+      ctx,
+      body,
+      entityType: 'worker',
+      entityName: 'worker',
+      table: 'workers',
+      id: workerId,
+      update: async (client, expectedVersion) => {
+        const result = await client.query(
+          `
+          update workers
+          set
+            name = coalesce($3, name),
+            role = coalesce($4, role),
+            version = version + 1
+          where company_id = $1 and id = $2 and deleted_at is null and ($5::int is null or version = $5)
+          returning id, name, role, version, deleted_at, created_at
+          `,
+          [ctx.company.id, workerId, body.name ?? null, body.role ?? null, expectedVersion],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'worker',
+          entityId: workerId,
+          action: 'update',
+          row,
+        })
+        return row
+      },
     })
-    if (!updated) {
-      if (
-        !(await ctx.checkVersion(
-          'workers',
-          'company_id = $1 and id = $2 and deleted_at is null',
-          [ctx.company.id, workerId],
-          expectedVersion,
-        ))
-      ) {
-        return true
-      }
-      ctx.sendJson(404, { error: 'worker not found' })
-      return true
-    }
-    ctx.sendJson(200, updated)
-    return true
   }
 
   if (req.method === 'POST' && url.pathname.match(/^\/api\/workers\/[^/]+\/messages$/)) {
@@ -200,33 +191,34 @@ export async function handleWorkerRoutes(req: http.IncomingMessage, url: URL, ct
       ctx.sendJson(400, { error: 'worker id is required' })
       return true
     }
-    const deleted = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query(
-        `
-        update workers
-        set deleted_at = now(), version = version + 1
-        where company_id = $1 and id = $2 and deleted_at is null
-        returning id, name, role, version, deleted_at, created_at
-        `,
-        [ctx.company.id, workerId],
-      )
-      const row = result.rows[0]
-      if (!row) return null
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'worker',
-        entityId: workerId,
-        action: 'delete',
-        row,
-      })
-      return row
+    return deleteVersionedEntity({
+      ctx,
+      entityType: 'worker',
+      entityName: 'worker',
+      table: 'workers',
+      id: workerId,
+      delete: async (client) => {
+        const result = await client.query(
+          `
+          update workers
+          set deleted_at = now(), version = version + 1
+          where company_id = $1 and id = $2 and deleted_at is null
+          returning id, name, role, version, deleted_at, created_at
+          `,
+          [ctx.company.id, workerId],
+        )
+        const row = result.rows[0]
+        if (!row) return null
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'worker',
+          entityId: workerId,
+          action: 'delete',
+          row,
+        })
+        return row
+      },
     })
-    if (!deleted) {
-      ctx.sendJson(404, { error: 'worker not found' })
-      return true
-    }
-    ctx.sendJson(200, deleted)
-    return true
   }
 
   return false

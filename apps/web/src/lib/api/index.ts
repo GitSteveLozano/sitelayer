@@ -4,6 +4,10 @@
 // the directory layout can evolve without rippling through every caller.
 
 export {
+  apiDelete,
+  apiGet,
+  apiPatch,
+  apiPost,
   ApiError,
   API_URL,
   NetworkError,
@@ -16,6 +20,29 @@ export {
 } from './client'
 
 export { queryKeys } from './keys'
+
+export type {
+  BootstrapResponse,
+  BonusRuleRow,
+  IntegrationMappingRow,
+  LaborRow,
+  MaterialBillRow,
+  PricingProfileRow,
+  ProjectAssignmentRow,
+  ProjectRow,
+  ProjectSummary,
+  SessionResponse,
+  WorkerRow,
+} from './bootstrap'
+
+export {
+  dispatchProjectLifecycleEvent,
+  fetchProjectLifecycle,
+  type ProjectLifecycleHumanEvent,
+  type ProjectLifecycleHumanEventEnvelope,
+  type ProjectLifecycleSnapshot,
+  type ProjectLifecycleState,
+} from './project-lifecycle'
 
 export {
   clockIn,
@@ -207,6 +234,7 @@ export {
 } from './bonus-rules'
 
 export {
+  dispatchEstimatePushEvent,
   estimatePushQueryKeys,
   fetchEstimatePush,
   fetchEstimatePushes,
@@ -224,6 +252,7 @@ export {
 
 export {
   billingRunQueryKeys,
+  dispatchBillingRunEvent,
   fetchBillingRun,
   fetchBillingRuns,
   useBillingRun,
@@ -462,6 +491,9 @@ export {
 } from './ai'
 
 export {
+  fetchInventoryUtilizationSummary,
+  listInventoryItems,
+  listInventoryLocations,
   useCreateContractLine,
   useCreateInventoryItem,
   useCreateInventoryLocation,
@@ -504,6 +536,8 @@ export {
   type InventoryLocationCreateRequest,
   type InventoryLocationPatchRequest,
   type InventoryMovement,
+  type InventoryUtilizationSummary,
+  type InventoryUtilizationTopItem,
   type JobRentalContract,
   type MovementListParams,
   type RentalContractLine,

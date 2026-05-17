@@ -59,7 +59,7 @@ import { handleWorkerRoutes } from './workers.js'
 import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
 import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
 import { handleLaborPayrollRunRoutes } from './labor-payroll-runs.js'
-import { handleEstimateShareRoutes } from './estimate-shares.js'
+import { handleEstimateShareRoutes } from './estimate-shares-admin.js'
 import { handleInventoryForecastRoutes } from './inventory-forecast.js'
 
 /**
@@ -154,844 +154,679 @@ export type DispatchContext = {
 }
 
 /**
- * Walks the registered route cascade. Each handler receives the per-request
- * context it needs and returns true once it has handled the URL+method
- * pair. Order matches the previous inline cascade in server.ts so behaviour
- * is preserved.
+ * Walks the registered route cascade. Each handler is a thunk that
+ * closes over the per-request context and returns true once it has
+ * handled the URL+method pair. Order is significant — earlier entries
+ * win when paths overlap. Adding a new route is one entry on the array.
  *
  * Returns true if a handler responded; false to let the caller emit 404.
  */
 export async function dispatch(ctx: DispatchContext): Promise<boolean> {
-  const { req, url, res, pool, company, identity, sendJson, requireRole, readBody, checkVersion, sendRedirect } = ctx
+  const { req, url, pool, company, identity, sendJson, requireRole, readBody, checkVersion, sendRedirect } = ctx
+  const currentUserId = ctx.getCurrentUserId()
 
-  // System / session-scoped GETs (bootstrap, spec, session, projects list,
-  // divisions). These are read-only and were previously inline in server.ts.
-  if (
-    await handleSystemRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      sendJson,
-      setHeader: ctx.setHeader,
-      send304: ctx.send304,
-    })
-  ) {
-    return true
+  // Handlers take `readonly string[]`; DispatchContext narrows to
+  // `readonly CompanyRole[]`. Hoist the cast once.
+  const requireRoleStr = (allowed: readonly string[]) => requireRole(allowed as readonly CompanyRole[])
+
+  const routes: Array<() => Promise<boolean>> = [
+    // System / session-scoped GETs (bootstrap, spec, session, projects list, divisions).
+    () =>
+      handleSystemRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        sendJson,
+        setHeader: ctx.setHeader,
+        send304: ctx.send304,
+      }),
+
+    // Customer routes
+    () =>
+      handleCustomerRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+        backfillCustomerMapping: ctx.backfillCustomerMapping,
+      }),
+
+    // Worker routes
+    () =>
+      handleWorkerRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+      }),
+
+    // Pricing-profile routes
+    () =>
+      handlePricingProfileRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+      }),
+
+    // Bonus-rule routes
+    () =>
+      handleBonusRuleRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+      }),
+
+    // Audit events (admin-only GET /api/audit-events)
+    () =>
+      handleAuditEventRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        sendJson,
+      }),
+
+    // Worker issues — wk-issue ping (any role POSTs; admin/foreman/office GET)
+    () =>
+      handleWorkerIssueRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        storage: ctx.storage,
+        maxAttachmentBytes: Number(process.env.MAX_WORKER_ISSUE_ATTACHMENT_BYTES ?? 25 * 1024 * 1024),
+        attachmentDownloadPresigned: ctx.blueprintDownloadPresigned,
+        sendFileContent: ctx.sendFileContent,
+        sendFileRedirect: ctx.sendFileRedirect,
+      }),
+
+    // Foreman morning brief — fm-brief upsert + read.
+    () =>
+      handleProjectBriefRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Support / debug packets — bounded redacted client timeline + audit/queue join.
+    () =>
+      handleSupportPacketRoutes(req, url, {
+        pool,
+        company,
+        identity,
+        tier: ctx.tier,
+        buildSha: process.env.APP_BUILD_SHA ?? process.env.SENTRY_RELEASE ?? 'unknown',
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // QBO mapping CRUD
+    () =>
+      handleQboMappingRoutes(req, url, {
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+        listMappings: ctx.listIntegrationMappings,
+        upsertMapping: ctx.upsertIntegrationMapping,
+      }),
+
+    // Sync queue inspection + manual drain
+    () =>
+      handleSyncRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // QBO auth + connection + sync
+    () =>
+      handleQboRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        sendRedirect,
+        qboConfig: ctx.qboConfig,
+      }),
+
+    // Service-item mutations (code-keyed) and list
+    () =>
+      handleServiceItemRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+      }),
+
+    // Project mutations (POST/PATCH/closeout/summary)
+    () =>
+      handleProjectRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+      }),
+
+    // Per-project foreman/worker assignments.
+    () =>
+      handleProjectAssignmentRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        getCurrentUserId: ctx.getCurrentUserId,
+      }),
+
+    // Material-bill CRUD
+    () =>
+      handleMaterialBillRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+      }),
+
+    // Takeoff drafts (multi-draft per project)
+    () =>
+      handleTakeoffDraftRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        currentUserId,
+        storage: ctx.storage,
+        maxBlueprintUploadBytes: ctx.maxBlueprintUploadBytes,
+      }),
+
+    // Takeoff measurement read + LWW-gated PATCH/DELETE
+    () =>
+      handleTakeoffMeasurementRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+        assertBlueprintDocumentsBelongToProject: ctx.assertBlueprintDocumentsBelongToProject,
+      }),
+
+    // Multi-condition takeoff tags (Phase 3A) — 1:N scope tags per polygon
+    () =>
+      handleTakeoffTagRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Blueprint pages + per-page calibration (Phase 3B/C)
+    () =>
+      handleBlueprintPageRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Takeoff CSV import (Phase 3G)
+    () =>
+      handleTakeoffImportRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Assemblies (Phase 3F)
+    () =>
+      handleAssemblyRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // QBO custom field mappings (Phase 3H — sqft on QBO entities)
+    () =>
+      handleQboCustomFieldRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Inventory utilization rollup (Phase 4 — must precede the catalog
+    // CRUD handler so the more-specific path matches first).
+    () =>
+      handleInventoryUtilizationRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        sendJson,
+      }),
+
+    // AI Layer — bid accuracy cohort stats (Phase 5).
+    () =>
+      handleBidAccuracyRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        sendJson,
+      }),
+
+    // AI Layer — insights CRUD + agent triggers (Phase 5).
+    () =>
+      handleAiInsightRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Rental inventory + billing workflow
+    () =>
+      handleRentalInventoryRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+      }),
+
+    // Branches, cross-hire, scaffold catalog + BOM bridge
+    () =>
+      handleScaffoldOpsRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // QR scaffold tags + inspections
+    () =>
+      handleScaffoldTagRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Damage / loss / late-return billing
+    () =>
+      handleDamageChargeRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Shipments: estimate-to-fulfillment workflow
+    () =>
+      handleShipmentRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Payroll exports: XLSX / Xero / Payworks
+    () =>
+      handlePayrollExportRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        res: ctx.res,
+      }),
+
+    // Customer portal links
+    () =>
+      handleCustomerPortalRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // CompanyCam one-way photo mirror
+    () =>
+      handleCompanyCamRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Avontus-style rentals
+    () =>
+      handleRentalRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+      }),
+
+    // Operator-side approval queue for portal rental_requests submissions
+    // (see routes/portal-rentals.ts for the public create path).
+    () =>
+      handleRentalRequestRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Crew schedules
+    () =>
+      handleScheduleRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+      }),
+
+    // Crew schedule workflow snapshot + events (GET /:id, POST /:id/events,
+    // PATCH /:id) — mirrors rental-billing-state and time-review-runs.
+    () =>
+      handleCrewScheduleEventRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+      }),
+
+    // Labor entries
+    () =>
+      handleLaborEntryRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        assertDivisionAllowedForServiceItem: ctx.assertDivisionAllowedForServiceItem,
+      }),
+
+    // Clock in/out + timeline
+    () =>
+      handleClockRoutes(req, url, {
+        pool,
+        company,
+        currentUserId: identity.userId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        storage: ctx.storage,
+        // Reuse the blueprint upload cap until ops asks for a separate knob.
+        maxPhotoBytes: ctx.maxBlueprintUploadBytes,
+      }),
+
+    // Daily logs (Sitemap.html § fm-log) — incl. photo upload + fetch
+    () =>
+      handleDailyLogRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+        storage: ctx.storage,
+        maxPhotoBytes: Number(process.env.MAX_DAILY_LOG_PHOTO_BYTES ?? 15 * 1024 * 1024),
+        photoDownloadPresigned: ctx.blueprintDownloadPresigned,
+        sendFileContent: ctx.sendFileContent,
+        sendFileRedirect: ctx.sendFileRedirect,
+      }),
+
+    // Labor burden rollup (fm-today-v2 dark card)
+    () =>
+      handleLaborBurdenRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        sendJson,
+      }),
+
+    // Time review runs (Sitemap.html § t-approve) — workflow snapshot + events
+    () =>
+      handleTimeReviewRunRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Project lifecycle workflow (single 7-state machine: draft → … → archived)
+    () =>
+      handleProjectLifecycleRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Labor payroll runs (QBO TimeActivity export) — workflow snapshot + events
+    () =>
+      handleLaborPayrollRunRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Authenticated estimate share-link routes (POST /api/projects/:id/estimate/share, list, revoke)
+    () =>
+      handleEstimateShareRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        shareSecret: ctx.estimateShareConfig.secret,
+        portalBaseUrl: ctx.estimateShareConfig.portalBaseUrl,
+      }),
+
+    // Inventory demand forecast — GET /api/inventory-items/:id/forecast
+    () =>
+      handleInventoryForecastRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+      }),
+
+    // Web Push subscription registration (read VAPID key, upsert/delete subs)
+    () =>
+      handlePushSubscriptionRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        vapidPublicKey: process.env.VAPID_PUBLIC_KEY?.trim() || null,
+      }),
+
+    // Per-user notification channel preferences
+    () =>
+      handleNotificationPreferenceRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Per-user notification feed (list unread + mark read). Used by wk-today's
+    // "Foreman replied" banner to drain the worker's queue of Loop 2
+    // resolution messages. Scoped via WHERE recipient_clerk_user_id = currentUserId.
+    () =>
+      handleNotificationRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Takeoff measurement writes (POST single + replace set)
+    () =>
+      handleTakeoffWriteRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Estimate flow (recompute, scope-vs-bid, PDF, forecast hours, divisions xref)
+    () =>
+      handleEstimateRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        sendPdf: ctx.sendPdf,
+      }),
+
+    // Estimate-push workflow snapshots/events
+    () =>
+      handleEstimatePushRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Analytics dashboards
+    () =>
+      handleAnalyticsRoutes(req, url, {
+        pool,
+        company,
+        currentUserId: identity.userId,
+        requireRole: requireRoleStr,
+        sendJson,
+      }),
+
+    // Blueprint document CRUD + streaming upload + presigned download
+    () =>
+      handleBlueprintRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        checkVersion,
+        storage: ctx.storage,
+        maxBlueprintUploadBytes: ctx.maxBlueprintUploadBytes,
+        blueprintDownloadPresigned: ctx.blueprintDownloadPresigned,
+        sendFileContent: ctx.sendFileContent,
+        sendFileRedirect: ctx.sendFileRedirect,
+      }),
+
+    // Debug trace lookup (Bearer DEBUG_TRACE_TOKEN, prod-gated)
+    () =>
+      handleDebugTraceRoute({
+        req,
+        url,
+        pool,
+        company,
+        currentUserId,
+        sendJson,
+        setHeader: ctx.setHeader,
+        send304: ctx.send304,
+        requestId: ctx.requestId,
+        tier: ctx.tier,
+      }),
+  ]
+
+  for (const route of routes) {
+    if (await route()) return true
   }
-
-  // Customer routes
-  if (
-    await handleCustomerRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-      backfillCustomerMapping: ctx.backfillCustomerMapping,
-    })
-  ) {
-    return true
-  }
-
-  // Worker routes
-  if (
-    await handleWorkerRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-    })
-  ) {
-    return true
-  }
-
-  // Pricing-profile routes
-  if (
-    await handlePricingProfileRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-    })
-  ) {
-    return true
-  }
-
-  // Bonus-rule routes
-  if (
-    await handleBonusRuleRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-    })
-  ) {
-    return true
-  }
-
-  // Audit events (admin-only GET /api/audit-events)
-  if (
-    await handleAuditEventRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Worker issues — wk-issue ping (any role POSTs; admin/foreman/office GET)
-  if (
-    await handleWorkerIssueRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      storage: ctx.storage,
-      maxAttachmentBytes: Number(process.env.MAX_WORKER_ISSUE_ATTACHMENT_BYTES ?? 25 * 1024 * 1024),
-      attachmentDownloadPresigned: ctx.blueprintDownloadPresigned,
-      sendFileContent: ctx.sendFileContent,
-      sendFileRedirect: ctx.sendFileRedirect,
-    })
-  ) {
-    return true
-  }
-
-  // Foreman morning brief — fm-brief upsert + read.
-  if (
-    await handleProjectBriefRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Support / debug packets — bounded redacted client timeline + audit/queue
-  // join.
-  if (
-    await handleSupportPacketRoutes(req, url, {
-      pool,
-      company,
-      identity,
-      tier: ctx.tier,
-      buildSha: process.env.APP_BUILD_SHA ?? process.env.SENTRY_RELEASE ?? 'unknown',
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // QBO mapping CRUD
-  if (
-    await handleQboMappingRoutes(req, url, {
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-      listMappings: ctx.listIntegrationMappings,
-      upsertMapping: ctx.upsertIntegrationMapping,
-    })
-  ) {
-    return true
-  }
-
-  // Sync queue inspection + manual drain
-  if (
-    await handleSyncRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // QBO auth + connection + sync
-  if (
-    await handleQboRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      sendRedirect,
-      qboConfig: ctx.qboConfig,
-    })
-  ) {
-    return true
-  }
-
-  // Service-item mutations (code-keyed) and list
-  if (
-    await handleServiceItemRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-    })
-  ) {
-    return true
-  }
-
-  // Project mutations (POST/PATCH/closeout/summary)
-  if (
-    await handleProjectRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-    })
-  ) {
-    return true
-  }
-
-  // Per-project foreman/worker assignments. Sits next to project routes
-  // so /api/projects/:id/assignments lands in the same shape.
-  if (
-    await handleProjectAssignmentRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      getCurrentUserId: ctx.getCurrentUserId,
-    })
-  ) {
-    return true
-  }
-
-  // Material-bill CRUD
-  if (
-    await handleMaterialBillRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-    })
-  ) {
-    return true
-  }
-
-  // Takeoff measurement read + LWW-gated PATCH/DELETE
-  if (
-    await handleTakeoffDraftRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      currentUserId: ctx.getCurrentUserId(),
-      storage: ctx.storage,
-      maxBlueprintUploadBytes: ctx.maxBlueprintUploadBytes,
-    })
-  ) {
-    return true
-  }
-
-  if (
-    await handleTakeoffMeasurementRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-      assertBlueprintDocumentsBelongToProject: ctx.assertBlueprintDocumentsBelongToProject,
-    })
-  ) {
-    return true
-  }
-
-  // Multi-condition takeoff tags (Phase 3A) — 1:N scope tags per polygon
-  if (
-    await handleTakeoffTagRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Blueprint pages + per-page calibration (Phase 3B/C)
-  if (
-    await handleBlueprintPageRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Takeoff CSV import (Phase 3G)
-  if (
-    await handleTakeoffImportRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Assemblies (Phase 3F)
-  if (
-    await handleAssemblyRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // QBO custom field mappings (Phase 3H — sqft on QBO entities)
-  if (
-    await handleQboCustomFieldRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Inventory utilization rollup (Phase 4 — must precede the catalog
-  // CRUD handler so the more-specific path matches first).
-  if (
-    await handleInventoryUtilizationRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // AI Layer — bid accuracy cohort stats (Phase 5).
-  if (
-    await handleBidAccuracyRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // AI Layer — insights CRUD + agent triggers (Phase 5).
-  if (
-    await handleAiInsightRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Rental inventory + billing workflow
-  if (
-    await handleRentalInventoryRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-    })
-  ) {
-    return true
-  }
-
-  // Branches, cross-hire, scaffold catalog + BOM bridge
-  if (
-    await handleScaffoldOpsRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // QR scaffold tags + inspections
-  if (
-    await handleScaffoldTagRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Damage / loss / late-return billing
-  if (
-    await handleDamageChargeRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Shipments: estimate-to-fulfillment workflow
-  if (
-    await handleShipmentRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Payroll exports: XLSX / Xero / Payworks
-  if (
-    await handlePayrollExportRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      res: ctx.res,
-    })
-  ) {
-    return true
-  }
-
-  // Customer portal links
-  if (
-    await handleCustomerPortalRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // CompanyCam one-way photo mirror
-  if (
-    await handleCompanyCamRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Avontus-style rentals
-  if (
-    await handleRentalRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-    })
-  ) {
-    return true
-  }
-
-  // Operator-side approval queue for portal rental_requests submissions
-  // (see routes/portal-rentals.ts for the public create path).
-  if (
-    await handleRentalRequestRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Crew schedules
-  if (
-    await handleScheduleRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-    })
-  ) {
-    return true
-  }
-
-  // Crew schedule workflow snapshot + events (GET /:id, POST /:id/events,
-  // PATCH /:id) — mirrors rental-billing-state and time-review-runs.
-  if (
-    await handleCrewScheduleEventRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-    })
-  ) {
-    return true
-  }
-
-  // Labor entries
-  if (
-    await handleLaborEntryRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      assertDivisionAllowedForServiceItem: ctx.assertDivisionAllowedForServiceItem,
-    })
-  ) {
-    return true
-  }
-
-  // Clock in/out + timeline
-  if (
-    await handleClockRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: identity.userId,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      storage: ctx.storage,
-      // Reuse the blueprint upload cap until ops asks for a separate knob.
-      maxPhotoBytes: ctx.maxBlueprintUploadBytes,
-    })
-  ) {
-    return true
-  }
-
-  // Daily logs (Sitemap.html § fm-log) — incl. photo upload + fetch
-  if (
-    await handleDailyLogRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-      storage: ctx.storage,
-      maxPhotoBytes: Number(process.env.MAX_DAILY_LOG_PHOTO_BYTES ?? 15 * 1024 * 1024),
-      photoDownloadPresigned: ctx.blueprintDownloadPresigned,
-      sendFileContent: ctx.sendFileContent,
-      sendFileRedirect: ctx.sendFileRedirect,
-    })
-  ) {
-    return true
-  }
-
-  // Labor burden rollup (fm-today-v2 dark card)
-  if (
-    await handleLaborBurdenRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Time review runs (Sitemap.html § t-approve) — workflow snapshot + events
-  if (
-    await handleTimeReviewRunRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Project lifecycle workflow (single 7-state machine: draft → … → archived)
-  if (
-    await handleProjectLifecycleRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Labor payroll runs (QBO TimeActivity export) — workflow snapshot + events
-  if (
-    await handleLaborPayrollRunRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Authenticated estimate share-link routes (POST /api/projects/:id/estimate/share, list, revoke)
-  if (
-    await handleEstimateShareRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      shareSecret: ctx.estimateShareConfig.secret,
-      portalBaseUrl: ctx.estimateShareConfig.portalBaseUrl,
-    })
-  ) {
-    return true
-  }
-
-  // Inventory demand forecast — GET /api/inventory-items/:id/forecast
-  if (
-    await handleInventoryForecastRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-    })
-  ) {
-    return true
-  }
-
-  // Web Push subscription registration (read VAPID key, upsert/delete subs)
-  if (
-    await handlePushSubscriptionRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      vapidPublicKey: process.env.VAPID_PUBLIC_KEY?.trim() || null,
-    })
-  ) {
-    return true
-  }
-
-  // Per-user notification channel preferences
-  if (
-    await handleNotificationPreferenceRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Per-user notification feed (list unread + mark read).
-  // Used by wk-today's "Foreman replied" banner to drain the worker's
-  // queue of Loop 2 resolution messages. Scoped via WHERE
-  // recipient_clerk_user_id = currentUserId.
-  if (
-    await handleNotificationRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Takeoff measurement writes (POST single + replace set)
-  if (
-    await handleTakeoffWriteRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Estimate flow (recompute, scope-vs-bid, PDF, forecast hours, divisions xref)
-  if (
-    await handleEstimateRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      sendPdf: ctx.sendPdf,
-    })
-  ) {
-    return true
-  }
-
-  // Estimate-push workflow snapshots/events
-  if (
-    await handleEstimatePushRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Analytics dashboards
-  if (
-    await handleAnalyticsRoutes(req, url, {
-      pool,
-      company,
-      currentUserId: identity.userId,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      sendJson,
-    })
-  ) {
-    return true
-  }
-
-  // Blueprint document CRUD + streaming upload + presigned download
-  if (
-    await handleBlueprintRoutes(req, url, {
-      pool,
-      company,
-      requireRole: (allowed) => requireRole(allowed as readonly CompanyRole[]),
-      readBody,
-      sendJson,
-      checkVersion,
-      storage: ctx.storage,
-      maxBlueprintUploadBytes: ctx.maxBlueprintUploadBytes,
-      blueprintDownloadPresigned: ctx.blueprintDownloadPresigned,
-      sendFileContent: ctx.sendFileContent,
-      sendFileRedirect: ctx.sendFileRedirect,
-    })
-  ) {
-    return true
-  }
-
-  // Debug trace lookup (Bearer DEBUG_TRACE_TOKEN, prod-gated)
-  if (
-    await handleDebugTraceRoute({
-      req,
-      url,
-      pool,
-      company,
-      currentUserId: ctx.getCurrentUserId(),
-      sendJson,
-      setHeader: ctx.setHeader,
-      send304: ctx.send304,
-      requestId: ctx.requestId,
-      tier: ctx.tier,
-    })
-  ) {
-    return true
-  }
-
-  // Suppress unused-import lints — `res` is part of the context for any
-  // future handler that needs raw stream access; deliberately not used in
-  // the cascade today.
-  void res
 
   return false
 }

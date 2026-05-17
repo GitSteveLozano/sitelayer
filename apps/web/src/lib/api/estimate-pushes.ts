@@ -3,10 +3,13 @@
 // apps/api/src/routes/estimate-pushes.ts.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { EstimatePushHumanEventType, EstimatePushWorkflowState } from '@sitelayer/workflows'
 import { ApiError, request } from './client'
 
-export type EstimatePushState = 'drafted' | 'reviewed' | 'approved' | 'posting' | 'posted' | 'failed' | 'voided'
-export type EstimatePushHumanEvent = 'REVIEW' | 'APPROVE' | 'POST_REQUESTED' | 'RETRY_POST' | 'VOID'
+// Re-exported under the v2 names. Canonical union lives in
+// @sitelayer/workflows so the reducer and the client agree.
+export type EstimatePushState = EstimatePushWorkflowState
+export type EstimatePushHumanEvent = EstimatePushHumanEventType
 
 export interface EstimatePushRow {
   id: string
@@ -89,6 +92,22 @@ export function fetchEstimatePushes(params: EstimatePushListParams = {}): Promis
 
 export function fetchEstimatePush(id: string): Promise<EstimatePushSnapshot> {
   return request<EstimatePushSnapshot>(`/api/estimate-pushes/${encodeURIComponent(id)}`)
+}
+
+/**
+ * Plain-function event dispatcher for XState actor invocations (the
+ * headless workflow factory in `machines/headless-workflow.ts`). React
+ * components should prefer `useDispatchEstimatePushEvent`.
+ */
+export function dispatchEstimatePushEvent(
+  pushId: string,
+  event: EstimatePushHumanEvent,
+  stateVersion: number,
+): Promise<EstimatePushSnapshot> {
+  return request<EstimatePushSnapshot>(`/api/estimate-pushes/${encodeURIComponent(pushId)}/events`, {
+    method: 'POST',
+    json: { event, state_version: stateVersion },
+  })
 }
 
 /**

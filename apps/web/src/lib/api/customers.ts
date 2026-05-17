@@ -1,8 +1,11 @@
 // Customers — types + hooks for the company customer roster.
 // Wraps /api/customers in apps/api/src/routes/customers.ts.
+//
+// Hooks are produced by the shared CRUD factory; the per-entity surface
+// here is just type definitions + a thin re-export so existing callers
+// (`useCustomers`, `useCreateCustomer`, …) keep working unchanged.
 
-import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query'
-import { request } from './client'
+import { createCrudHooks } from './crud-factory'
 
 export interface Customer {
   id: string
@@ -31,51 +34,14 @@ export interface CustomerPatchRequest {
   expected_version?: number
 }
 
-const KEYS = {
-  all: () => ['customers'] as const,
-  list: () => [...KEYS.all(), 'list'] as const,
-}
+const hooks = createCrudHooks<CustomerListResponse, Customer, CustomerCreateRequest, CustomerPatchRequest>({
+  entity: 'customers',
+  basePath: '/api/customers',
+})
 
-export const customerQueryKeys = KEYS
-
-export function fetchCustomers(): Promise<CustomerListResponse> {
-  return request<CustomerListResponse>('/api/customers')
-}
-
-export function useCustomers(options?: Partial<UseQueryOptions<CustomerListResponse>>) {
-  return useQuery<CustomerListResponse>({
-    queryKey: KEYS.list(),
-    queryFn: fetchCustomers,
-    staleTime: 5 * 60_000,
-    ...options,
-  })
-}
-
-export function useCreateCustomer() {
-  const qc = useQueryClient()
-  return useMutation<Customer, Error, CustomerCreateRequest>({
-    mutationFn: (input) => request<Customer>('/api/customers', { method: 'POST', json: input }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
-
-export function usePatchCustomer(id: string) {
-  const qc = useQueryClient()
-  return useMutation<Customer, Error, CustomerPatchRequest>({
-    mutationFn: (input) =>
-      request<Customer>(`/api/customers/${encodeURIComponent(id)}`, { method: 'PATCH', json: input }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
-
-export function useDeleteCustomer() {
-  const qc = useQueryClient()
-  return useMutation<unknown, Error, { id: string; expected_version?: number }>({
-    mutationFn: ({ id, expected_version }) =>
-      request(`/api/customers/${encodeURIComponent(id)}`, {
-        method: 'DELETE',
-        json: expected_version !== undefined ? { expected_version } : undefined,
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
+export const customerQueryKeys = hooks.queryKeys
+export const fetchCustomers = hooks.fetchList
+export const useCustomers = hooks.useList
+export const useCreateCustomer = hooks.useCreate
+export const usePatchCustomer = hooks.usePatch
+export const useDeleteCustomer = hooks.useDelete

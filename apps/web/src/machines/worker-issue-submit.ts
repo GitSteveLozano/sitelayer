@@ -2,7 +2,7 @@ import { useCallback, useMemo } from 'react'
 import { useMachine } from '@xstate/react'
 import { assign, fromPromise, setup } from 'xstate'
 
-import { apiPost } from '../api-v1-compat'
+import { apiPost } from '@/lib/api'
 import { API_URL, buildAuthHeaders } from '../lib/api/client'
 
 /**

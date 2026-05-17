@@ -1,9 +1,13 @@
 // Service items — code-keyed catalog of billable items.
 // Wraps GET/POST/PATCH/DELETE /api/service-items in
 // apps/api/src/routes/service-items.ts.
+//
+// Hooks come from the shared CRUD factory. Service items are keyed by
+// `code` rather than `id`; the factory takes `idKey: 'code'` so the
+// generated DELETE hook accepts `{ code, expected_version? }` to match
+// the existing call sites.
 
-import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query'
-import { request } from './client'
+import { createCrudHooks } from './crud-factory'
 
 export interface ServiceItem {
   code: string
@@ -36,51 +40,15 @@ export interface ServiceItemPatchRequest {
   expected_version?: number
 }
 
-const KEYS = {
-  all: () => ['service-items'] as const,
-  list: () => [...KEYS.all(), 'list'] as const,
-}
+const hooks = createCrudHooks<ServiceItemListResponse, ServiceItem, ServiceItemCreateRequest, ServiceItemPatchRequest>({
+  entity: 'service-items',
+  basePath: '/api/service-items',
+  idKey: 'code',
+})
 
-export const serviceItemQueryKeys = KEYS
-
-export function fetchServiceItems(): Promise<ServiceItemListResponse> {
-  return request<ServiceItemListResponse>('/api/service-items')
-}
-
-export function useServiceItems(options?: Partial<UseQueryOptions<ServiceItemListResponse>>) {
-  return useQuery<ServiceItemListResponse>({
-    queryKey: KEYS.list(),
-    queryFn: fetchServiceItems,
-    staleTime: 5 * 60_000,
-    ...options,
-  })
-}
-
-export function useCreateServiceItem() {
-  const qc = useQueryClient()
-  return useMutation<ServiceItem, Error, ServiceItemCreateRequest>({
-    mutationFn: (input) => request<ServiceItem>('/api/service-items', { method: 'POST', json: input }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
-
-export function usePatchServiceItem(code: string) {
-  const qc = useQueryClient()
-  return useMutation<ServiceItem, Error, ServiceItemPatchRequest>({
-    mutationFn: (input) =>
-      request<ServiceItem>(`/api/service-items/${encodeURIComponent(code)}`, { method: 'PATCH', json: input }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
-
-export function useDeleteServiceItem() {
-  const qc = useQueryClient()
-  return useMutation<unknown, Error, { code: string; expected_version?: number }>({
-    mutationFn: ({ code, expected_version }) =>
-      request(`/api/service-items/${encodeURIComponent(code)}`, {
-        method: 'DELETE',
-        json: expected_version !== undefined ? { expected_version } : undefined,
-      }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.all() }),
-  })
-}
+export const serviceItemQueryKeys = hooks.queryKeys
+export const fetchServiceItems = hooks.fetchList
+export const useServiceItems = hooks.useList
+export const useCreateServiceItem = hooks.useCreate
+export const usePatchServiceItem = hooks.usePatch
+export const useDeleteServiceItem = hooks.useDelete

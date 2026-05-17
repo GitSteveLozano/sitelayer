@@ -2,12 +2,9 @@ import { describe, expect, it } from 'vitest'
 import type { Pool } from 'pg'
 import type pino from 'pino'
 import { attachMutationTx } from '../mutation-tx.js'
-import {
-  PORTAL_ESTIMATES_PATH_PREFIX,
-  handleEstimateShareRoutes,
-  handlePublicEstimateShareRoutes,
-  type EstimateShareRow,
-} from './estimate-shares.js'
+import { PORTAL_ESTIMATES_PATH_PREFIX, type EstimateShareRow } from '../estimate-share-helpers.js'
+import { handleEstimateShareRoutes } from './estimate-shares-admin.js'
+import { handlePublicEstimateShareRoutes } from './estimate-shares-portal.js'
 import { generateShareToken } from '../estimate-share-token.js'
 
 // ---------------------------------------------------------------------------

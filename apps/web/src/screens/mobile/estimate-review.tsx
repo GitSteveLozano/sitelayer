@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { apiGet, type ProjectSummary } from '../../api-v1-compat.js'
+import { apiGet, type ProjectSummary } from '@/lib/api'
 import { createEstimatePush } from '../../lib/api/estimate-pushes.js'
 import {
   MBody,
