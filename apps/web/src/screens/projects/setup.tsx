@@ -1,10 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
-import { request } from '@/lib/api/client'
-import { useQueryClient } from '@tanstack/react-query'
-import { projectQueryKeys, useProject } from '@/lib/api/projects'
+import { useProjectSetup } from '@/machines/project-setup'
 
 /**
  * `prj-geofence` + project setup — single screen that edits the
@@ -19,44 +17,36 @@ import { projectQueryKeys, useProject } from '@/lib/api/projects'
  * Daily budget + auto-clock policy editors round out the design's
  * project-setup intent (the burden card on fm-today + the
  * auto_clock_in_enabled gate from 1A).
+ *
+ * Form state, dirty tracking, and the 409 retry path live in
+ * `useProjectSetup` (XState). This component is a thin renderer over
+ * the machine's snapshot.
  */
 export function ProjectSetupScreen() {
   const params = useParams<{ id: string }>()
   const id = params.id ?? null
   const navigate = useNavigate()
-  const qc = useQueryClient()
-  const project = useProject(id)
-  const data = project.data?.project
+  const setup = useProjectSetup(id)
+  const { project, form, error, isLoading, isMissing, isSubmitting, isClean, outOfSync } = setup
 
-  const [name, setName] = useState('')
-  const [siteLat, setSiteLat] = useState('')
-  const [siteLng, setSiteLng] = useState('')
-  const [siteRadius, setSiteRadius] = useState(100)
-  const [autoEnabled, setAutoEnabled] = useState(true)
-  const [graceSec, setGraceSec] = useState(300)
-  const [correctionSec, setCorrectionSec] = useState(120)
-  const [budgetDollars, setBudgetDollars] = useState('')
-  const [hydrated, setHydrated] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
+  // Track whether the user kicked off a save during this mount so we
+  // only navigate to the detail screen on the submit→clean transition,
+  // not on the initial post-LOAD clean tick.
+  const saveInFlightRef = useRef(false)
   useEffect(() => {
-    if (hydrated || !data) return
-    setName(data.name)
-    setSiteLat(data.site_lat ?? '')
-    setSiteLng(data.site_lng ?? '')
-    setSiteRadius(data.site_radius_m ?? 100)
-    setAutoEnabled(data.auto_clock_in_enabled)
-    setGraceSec(data.auto_clock_out_grace_seconds)
-    setCorrectionSec(data.auto_clock_correction_window_seconds)
-    setBudgetDollars(((data.daily_budget_cents ?? 0) / 100).toString())
-    setHydrated(true)
-  }, [data, hydrated])
+    if (isSubmitting) saveInFlightRef.current = true
+  }, [isSubmitting])
+  useEffect(() => {
+    if (saveInFlightRef.current && isClean && project) {
+      saveInFlightRef.current = false
+      navigate(`/projects/${project.id}`)
+    }
+  }, [isClean, project, navigate])
 
-  if (project.isPending) {
+  if (isLoading) {
     return <div className="px-5 pt-8 text-[13px] text-ink-3">Loading project…</div>
   }
-  if (!data) {
+  if (isMissing || !project) {
     return (
       <div className="px-5 pt-8">
         <h1 className="font-display text-[24px] font-bold tracking-tight">Project not found</h1>
@@ -69,61 +59,20 @@ export function ProjectSetupScreen() {
     )
   }
 
-  const onSave = async () => {
-    setError(null)
-    if (!name.trim()) {
-      setError('Name is required')
-      return
-    }
-    const lat = siteLat ? Number(siteLat) : null
-    const lng = siteLng ? Number(siteLng) : null
-    if (
-      (lat !== null && (!Number.isFinite(lat) || Math.abs(lat) > 90)) ||
-      (lng !== null && (!Number.isFinite(lng) || Math.abs(lng) > 180))
-    ) {
-      setError('Lat / lng out of range')
-      return
-    }
-    const budget = Number(budgetDollars)
-    if (!Number.isFinite(budget) || budget < 0) {
-      setError('Daily budget must be a non-negative number')
-      return
-    }
-    setSaving(true)
-    try {
-      await request(`/api/projects/${encodeURIComponent(data.id)}`, {
-        method: 'PATCH',
-        json: {
-          expected_version: data.version,
-          name: name.trim(),
-          site_lat: lat,
-          site_lng: lng,
-          site_radius_m: siteRadius,
-          auto_clock_in_enabled: autoEnabled,
-          auto_clock_out_grace_seconds: graceSec,
-          auto_clock_correction_window_seconds: correctionSec,
-          daily_budget_cents: Math.round(budget * 100),
-        },
-      })
-      void qc.invalidateQueries({ queryKey: projectQueryKeys.all() })
-      navigate(`/projects/${data.id}`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Save failed')
-    } finally {
-      setSaving(false)
-    }
+  const onSave = () => {
+    setup.submit()
   }
 
-  const hasGeofence = siteLat && siteLng
+  const hasGeofence = form.siteLat && form.siteLng
 
   return (
     <div className="flex flex-col">
       <div className="px-5 pt-6 pb-3">
-        <Link to={`/projects/${data.id}`} className="text-[13px] text-accent font-medium">
+        <Link to={`/projects/${project.id}`} className="text-[13px] text-accent font-medium">
           ← back
         </Link>
         <h1 className="mt-2 font-display text-[26px] font-bold tracking-tight">Project setup</h1>
-        <div className="text-[12px] text-ink-3 mt-1">{data.name}</div>
+        <div className="text-[12px] text-ink-3 mt-1">{project.name}</div>
       </div>
 
       <div className="px-4 pb-12 space-y-3">
@@ -131,13 +80,13 @@ export function ProjectSetupScreen() {
           <div className="text-[13px] font-semibold mb-2">Basics</div>
           <Field label="Project name" required>
             <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
+              value={form.name}
+              onChange={(e) => setup.edit('name', e.target.value)}
               className="w-full p-2.5 rounded border border-line-2 bg-card text-[14px] focus:outline-none focus:border-accent"
             />
           </Field>
           <Field label="Status">
-            <Pill tone={data.status === 'active' ? 'good' : 'warn'}>{data.status}</Pill>
+            <Pill tone={project.status === 'active' ? 'good' : 'warn'}>{project.status}</Pill>
           </Field>
         </Card>
 
@@ -150,8 +99,8 @@ export function ProjectSetupScreen() {
           <div className="grid grid-cols-2 gap-2.5">
             <Field label="Lat">
               <input
-                value={siteLat}
-                onChange={(e) => setSiteLat(e.target.value)}
+                value={form.siteLat}
+                onChange={(e) => setup.edit('siteLat', e.target.value)}
                 inputMode="decimal"
                 placeholder="49.8951"
                 className="w-full p-2.5 rounded border border-line-2 bg-card text-[14px] num focus:outline-none focus:border-accent"
@@ -159,22 +108,22 @@ export function ProjectSetupScreen() {
             </Field>
             <Field label="Lng">
               <input
-                value={siteLng}
-                onChange={(e) => setSiteLng(e.target.value)}
+                value={form.siteLng}
+                onChange={(e) => setup.edit('siteLng', e.target.value)}
                 inputMode="decimal"
                 placeholder="-97.1384"
                 className="w-full p-2.5 rounded border border-line-2 bg-card text-[14px] num focus:outline-none focus:border-accent"
               />
             </Field>
           </div>
-          <Field label={`Radius · ${siteRadius}m`}>
+          <Field label={`Radius · ${form.siteRadius}m`}>
             <input
               type="range"
               min={50}
               max={300}
               step={10}
-              value={siteRadius}
-              onChange={(e) => setSiteRadius(Number(e.target.value))}
+              value={form.siteRadius}
+              onChange={(e) => setup.edit('siteRadius', Number(e.target.value))}
               className="w-full accent-accent"
             />
             <div className="flex justify-between text-[11px] text-ink-3 mt-0.5">
@@ -182,7 +131,9 @@ export function ProjectSetupScreen() {
               <span>300m</span>
             </div>
           </Field>
-          {hasGeofence ? <MapPreview lat={Number(siteLat)} lng={Number(siteLng)} radius={siteRadius} /> : null}
+          {hasGeofence ? (
+            <MapPreview lat={Number(form.siteLat)} lng={Number(form.siteLng)} radius={form.siteRadius} />
+          ) : null}
         </Card>
 
         <Card>
@@ -191,45 +142,45 @@ export function ProjectSetupScreen() {
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => setAutoEnabled(true)}
+                onClick={() => setup.edit('autoEnabled', true)}
                 className={`flex-1 px-3 py-2 rounded border text-[13px] ${
-                  autoEnabled ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
+                  form.autoEnabled ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
                 }`}
               >
                 Auto on entry
               </button>
               <button
                 type="button"
-                onClick={() => setAutoEnabled(false)}
+                onClick={() => setup.edit('autoEnabled', false)}
                 className={`flex-1 px-3 py-2 rounded border text-[13px] ${
-                  !autoEnabled ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
+                  !form.autoEnabled ? 'bg-accent text-white border-transparent' : 'bg-card-soft text-ink-2 border-line'
                 }`}
               >
                 Reminder only
               </button>
             </div>
           </Field>
-          <Field label={`Auto clock-out grace · ${graceSec}s`}>
+          <Field label={`Auto clock-out grace · ${form.graceSec}s`}>
             <input
               type="range"
               min={0}
               max={1800}
               step={30}
-              value={graceSec}
-              onChange={(e) => setGraceSec(Number(e.target.value))}
-              disabled={!autoEnabled}
+              value={form.graceSec}
+              onChange={(e) => setup.edit('graceSec', Number(e.target.value))}
+              disabled={!form.autoEnabled}
               className="w-full accent-accent disabled:opacity-50"
             />
           </Field>
-          <Field label={`Correction window · ${correctionSec}s`}>
+          <Field label={`Correction window · ${form.correctionSec}s`}>
             <input
               type="range"
               min={0}
               max={600}
               step={30}
-              value={correctionSec}
-              onChange={(e) => setCorrectionSec(Number(e.target.value))}
-              disabled={!autoEnabled}
+              value={form.correctionSec}
+              onChange={(e) => setup.edit('correctionSec', Number(e.target.value))}
+              disabled={!form.autoEnabled}
               className="w-full accent-accent disabled:opacity-50"
             />
             <div className="text-[11px] text-ink-3 mt-0.5">
@@ -245,8 +196,8 @@ export function ProjectSetupScreen() {
           </div>
           <Field label="Daily budget ($)">
             <input
-              value={budgetDollars}
-              onChange={(e) => setBudgetDollars(e.target.value)}
+              value={form.budgetDollars}
+              onChange={(e) => setup.edit('budgetDollars', e.target.value)}
               inputMode="decimal"
               placeholder="2400"
               className="w-full p-2.5 rounded border border-line-2 bg-card text-[14px] num focus:outline-none focus:border-accent"
@@ -256,14 +207,19 @@ export function ProjectSetupScreen() {
 
         <Attribution source="Saved via PATCH /api/projects/:id (version-checked)" />
 
-        {error ? <div className="text-[13px] text-bad px-1">{error}</div> : null}
+        {outOfSync ? (
+          <div className="text-[13px] text-warn px-1">
+            Project changed on the server — form reloaded. Re-apply your edits and save again.
+          </div>
+        ) : null}
+        {error && !outOfSync ? <div className="text-[13px] text-bad px-1">{error}</div> : null}
 
         <div className="flex gap-2 pt-2">
-          <MobileButton variant="ghost" onClick={() => navigate(`/projects/${data.id}`)}>
+          <MobileButton variant="ghost" onClick={() => navigate(`/projects/${project.id}`)}>
             Cancel
           </MobileButton>
-          <MobileButton variant="primary" onClick={onSave} disabled={saving}>
-            {saving ? 'Saving…' : 'Save'}
+          <MobileButton variant="primary" onClick={onSave} disabled={isSubmitting}>
+            {isSubmitting ? 'Saving…' : 'Save'}
           </MobileButton>
         </div>
       </div>

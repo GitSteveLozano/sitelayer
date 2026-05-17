@@ -16,7 +16,7 @@ import {
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
-import { observeAudit } from '../metrics.js'
+import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 
 /**
  * Route handlers for the estimate-push workflow.
@@ -552,6 +552,8 @@ export async function handleEstimatePushRoutes(
         after: result.row,
       })
       observeAudit('estimate_push', `event:${result.eventType.toLowerCase()}`)
+      const outcome = workflowEventOutcome(result.eventType)
+      if (outcome) observeWorkflowEvent(ESTIMATE_PUSH_WORKFLOW_NAME, outcome)
       ctx.sendJson(200, snapshotResponse(result.row, result.lines))
       return true
     } catch (err) {

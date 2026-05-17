@@ -11,6 +11,7 @@ import {
   type RentalRequestApprovalWorkflowState,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
+import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import {
   recordMutationLedger,
   recordMutationOutbox,
@@ -354,6 +355,8 @@ export async function handleRentalRequestRoutes(
         snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
         actorUserId: ctx.currentUserId,
       })
+      const approveOutcome = workflowEventOutcome('APPROVE')
+      if (approveOutcome) observeWorkflowEvent(RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME, approveOutcome)
       // Emit the create_rental_from_request side-effect outbox row as
       // declared by the reducer's sideEffectTypes — provides the audit
       // anchor "this APPROVE → these rentals" even though the route
@@ -522,6 +525,8 @@ export async function handleRentalRequestRoutes(
         snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
         actorUserId: ctx.currentUserId,
       })
+      const declineOutcome = workflowEventOutcome('DECLINE')
+      if (declineOutcome) observeWorkflowEvent(RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME, declineOutcome)
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'rental_request',

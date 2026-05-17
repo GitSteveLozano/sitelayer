@@ -7,6 +7,7 @@ import {
   type EstimatePushFn,
   type EstimatePushSummary,
 } from '@sitelayer/queue'
+import { observeWorkflowEvent } from '../metrics.js'
 import { createQboEstimatePush } from '../qbo-estimate-push.js'
 
 const stubEstimatePush: EstimatePushFn = async ({ pushId }) => {
@@ -31,7 +32,16 @@ export function createEstimatePushRunner(deps: { pool: Pool; logger: Logger; qbo
     // contract.
     const client = await pool.connect()
     try {
-      return await processEstimatePush(client, companyId, estimatePush, 5)
+      const summary = await processEstimatePush(client, companyId, estimatePush, 5)
+      // Workflow lifecycle counters. POST_SUCCEEDED / POST_FAILED rows
+      // are emitted inside processEstimatePush; mirror them into the
+      // worker-side counter so operator dashboards can graph posted
+      // vs failed rates per drain. `skipped` is an idempotent replay
+      // (estimate already had qbo_estimate_id) — still a success.
+      for (let i = 0; i < summary.posted; i += 1) observeWorkflowEvent('estimate_push', 'succeeded')
+      for (let i = 0; i < summary.skipped; i += 1) observeWorkflowEvent('estimate_push', 'succeeded')
+      for (let i = 0; i < summary.failed; i += 1) observeWorkflowEvent('estimate_push', 'failed')
+      return summary
     } finally {
       client.release()
     }

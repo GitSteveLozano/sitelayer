@@ -1,6 +1,7 @@
 import type { Pool } from 'pg'
 import type { Logger } from '@sitelayer/logger'
 import { CircuitBreaker, withCircuitBreaker } from '@sitelayer/queue'
+import { observeWorkflowEvent } from '../metrics.js'
 import {
   processLaborPayrollPush,
   processGenerateLaborPayrollRun,
@@ -32,7 +33,14 @@ export function createLaborPayrollRunner(deps: {
   async function drainLaborPayrollPushes(companyId: string) {
     const client = await pool.connect()
     try {
-      return await processLaborPayrollPush(client, companyId, laborPayrollPush, 5)
+      const summary = await processLaborPayrollPush(client, companyId, laborPayrollPush, 5)
+      // POST_SUCCEEDED / POST_FAILED counters. `skipped` rows are
+      // idempotent replays (run already had qbo_payroll_batch_ref) —
+      // still successful.
+      for (let i = 0; i < summary.posted; i += 1) observeWorkflowEvent('labor_payroll_run', 'succeeded')
+      for (let i = 0; i < summary.skipped; i += 1) observeWorkflowEvent('labor_payroll_run', 'succeeded')
+      for (let i = 0; i < summary.failed; i += 1) observeWorkflowEvent('labor_payroll_run', 'failed')
+      return summary
     } finally {
       client.release()
     }

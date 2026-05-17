@@ -6,6 +6,7 @@ import { formatMoney } from '@sitelayer/domain'
 import type { AppTier } from '@sitelayer/config'
 import { CORS_ALLOW_HEADERS } from '../http-utils.js'
 import { extractSvixHeaders, verifyClerkWebhook } from '../clerk-webhook.js'
+import { captureWithEntityContext } from '../instrument.js'
 import {
   extractIntuitSignature,
   flattenQboWebhookPayload,
@@ -173,6 +174,10 @@ export async function handlePublicRoutes(
     const result = verifyClerkWebhook(raw, extractSvixHeaders(req.headers), ctx.clerkWebhookSecret)
     if (!result.ok) {
       logger.warn({ err: result.error }, '[clerk-webhook] verification failed')
+      captureWithEntityContext(new Error(`clerk webhook verification failed: ${result.error}`), {
+        scope: 'clerk_webhook_verification',
+        entity_type: 'clerk_webhook',
+      })
       ctx.sendJson(result.status, { error: result.error })
       return true
     }

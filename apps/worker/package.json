@@ -20,7 +20,9 @@
     "@sitelayer/domain": "file:../../packages/domain",
     "@sitelayer/logger": "file:../../packages/logger",
     "@sitelayer/queue": "file:../../packages/queue",
+    "@sitelayer/workflows": "file:../../packages/workflows",
     "pg": "^8.13.1",
+    "prom-client": "^15.1.3",
     "web-push": "^3.6.7"
   },
   "devDependencies": {

@@ -68,6 +68,26 @@ const supportPacketsTotal = new client.Counter({
   registers: [registry],
 })
 
+// Workflow lifecycle events. One counter with two labels (workflow + outcome)
+// so operators can graph success/fail rates per workflow uniformly. Cardinality
+// is bounded: ~15 known workflow names × 5 outcomes ≈ 75 series.
+//
+// Outcome conventions:
+//   requested  — first event dispatched on the workflow (START_SYNC,
+//                POST_REQUESTED, SUBMIT, APPROVE, REVIEW, etc.) — i.e. the
+//                workflow has begun a side-effecting attempt.
+//   succeeded  — happy terminal state reached (posted, sent, succeeded,
+//                accepted, applied).
+//   failed     — failure-tagged state reached (failed, declined-by-system).
+//   voided     — VOID event applied.
+//   retried    — RETRY_POST (or equivalent) applied.
+const workflowEventTotal = new client.Counter({
+  name: 'sitelayer_workflow_event_total',
+  help: 'Workflow events dispatched by workflow + outcome',
+  labelNames: ['workflow', 'outcome'] as const,
+  registers: [registry],
+})
+
 const dbPoolGauge = new client.Gauge({
   name: 'sitelayer_db_pool_state',
   help: 'pg Pool client counts (total / idle / waiting)',
@@ -97,6 +117,75 @@ export function observeAudit(entityType: string, action: string): void {
 
 export function observeSupportPacket(action: string): void {
   supportPacketsTotal.inc({ action })
+}
+
+/**
+ * Record a workflow lifecycle transition. `workflow` is the canonical
+ * workflow name (e.g. `qbo_sync_run`, `estimate_push`, `rental_billing_run`);
+ * `outcome` is one of `requested|succeeded|failed|voided|retried`.
+ *
+ * Call sites: the API route or worker runner that owns the state
+ * transition. Best-effort; metric writes must not throw into the caller.
+ */
+export function observeWorkflowEvent(workflow: string, outcome: string): void {
+  workflowEventTotal.inc({ workflow, outcome })
+}
+
+/**
+ * Map a workflow event_type (the upper-case event verb the reducers
+ * speak) onto the bounded outcome label set. Returns null when the
+ * event type doesn't map to a lifecycle outcome we graph (e.g. REVIEW,
+ * APPROVE — those are intermediate human steps; only the dispatcher
+ * step that fires the actual side effect is counted as `requested`).
+ *
+ * Centralised here so route handlers don't each invent their own
+ * branching, and so the label cardinality stays bounded.
+ */
+export function workflowEventOutcome(eventType: string): string | null {
+  switch (eventType) {
+    // Dispatcher / side-effect-triggering events. These map to
+    // `requested` — the workflow has begun a side-effecting attempt.
+    case 'START_SYNC':
+    case 'POST_REQUESTED':
+    case 'SUBMIT':
+    case 'INVOICE':
+    case 'INVOICE_QUEUED':
+    case 'ESCALATE':
+    case 'START_ESTIMATING':
+    case 'SEND':
+    case 'START_WORK':
+      return 'requested'
+    // Happy terminal events.
+    case 'POST_SUCCEEDED':
+    case 'SYNC_SUCCEEDED':
+    case 'APPROVE':
+    case 'ACCEPT':
+    case 'CONFIRM':
+    case 'RESOLVE':
+    case 'CLOSE':
+    case 'CLOSEOUT':
+    case 'COMPLETE':
+    case 'INVOICE_POSTED':
+    case 'RETURN':
+    case 'WAIVE':
+      return 'succeeded'
+    // Failure-tagged events.
+    case 'POST_FAILED':
+    case 'SYNC_FAILED':
+    case 'DECLINE':
+    case 'REJECT':
+    case 'DISMISS':
+      return 'failed'
+    case 'VOID':
+    case 'ARCHIVE':
+      return 'voided'
+    case 'RETRY_POST':
+    case 'RETRY':
+    case 'REOPEN':
+      return 'retried'
+    default:
+      return null
+  }
 }
 
 // Queue tables whose pending depth / dead-letter count we surface.

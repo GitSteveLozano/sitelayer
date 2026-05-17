@@ -15,7 +15,7 @@ import {
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
-import { observeAudit } from '../metrics.js'
+import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { isValidDateInput, isValidUuid } from '../http-utils.js'
 
 /**
@@ -643,6 +643,8 @@ export async function handleLaborPayrollRunRoutes(
         after: result.run,
       })
       observeAudit('labor_payroll_run', `event:${result.eventType.toLowerCase()}`)
+      const outcome = workflowEventOutcome(result.eventType)
+      if (outcome) observeWorkflowEvent(LABOR_PAYROLL_WORKFLOW_NAME, outcome)
       ctx.sendJson(200, snapshotResponse(result.run))
       return true
     } catch (err) {

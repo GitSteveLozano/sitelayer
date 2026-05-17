@@ -8,6 +8,7 @@ import {
   type ScaffoldOpsApprovalWorkflowSnapshot,
   type ScaffoldOpsApprovalWorkflowState,
 } from '@sitelayer/workflows'
+import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 
@@ -648,6 +649,8 @@ export async function handleScaffoldOpsRoutes(
         snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
         actorUserId: ctx.currentUserId,
       })
+      const outcome2 = workflowEventOutcome('APPROVE')
+      if (outcome2) observeWorkflowEvent(SCAFFOLD_OPS_APPROVAL_WORKFLOW_NAME, outcome2)
       return { kind: 'ok' as const, row: updated.rows[0] }
     })
     if (outcome.kind === 'not_found') {

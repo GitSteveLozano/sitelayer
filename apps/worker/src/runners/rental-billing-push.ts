@@ -7,10 +7,13 @@ import {
   type RentalBillingInvoicePushFn,
   type RentalBillingInvoicePushSummary,
 } from '@sitelayer/queue'
+import { observeWorkflowEvent } from '../metrics.js'
 import { createQboRentalInvoicePush } from '../qbo-invoice-push.js'
 
 const stubRentalBillingInvoicePush: RentalBillingInvoicePushFn = async ({ runId }) => {
-  return { qbo_invoice_id: `STUB-INV-${runId.slice(0, 8)}-${Date.now()}` }
+  // Deterministic synthetic id: same runId → same stub invoice id, so replay
+  // of the same outbox row never invents a new external id.
+  return { qbo_invoice_id: `STUB-INV-${runId.slice(0, 8)}` }
 }
 
 export function createRentalBillingPushRunner(deps: { pool: Pool; logger: Logger; qboCircuit: CircuitBreaker }) {
@@ -47,7 +50,14 @@ export function createRentalBillingPushRunner(deps: { pool: Pool; logger: Logger
     // the 5-minute lease. We just hand it a connection.
     const client = await pool.connect()
     try {
-      return await processRentalBillingInvoicePush(client, companyId, rentalBillingInvoicePush, 5)
+      const summary = await processRentalBillingInvoicePush(client, companyId, rentalBillingInvoicePush, 5)
+      // Mirror POST_SUCCEEDED / POST_FAILED rows into the worker-side
+      // counter. `skipped` is the idempotent-replay case (run already
+      // had qbo_invoice_id) — still a success.
+      for (let i = 0; i < summary.posted; i += 1) observeWorkflowEvent('rental_billing_run', 'succeeded')
+      for (let i = 0; i < summary.skipped; i += 1) observeWorkflowEvent('rental_billing_run', 'succeeded')
+      for (let i = 0; i < summary.failed; i += 1) observeWorkflowEvent('rental_billing_run', 'failed')
+      return summary
     } finally {
       client.release()
     }

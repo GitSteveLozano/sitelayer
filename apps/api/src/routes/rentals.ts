@@ -11,6 +11,7 @@ import {
   type RentalWorkflowState,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
+import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidDateInput } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
@@ -125,6 +126,8 @@ async function applyRentalWorkflowTransition(
     snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
     actorUserId: args.actorUserId,
   })
+  const outcome = workflowEventOutcome(args.eventType)
+  if (outcome) observeWorkflowEvent(RENTAL_WORKFLOW_NAME, outcome)
 
   return { kind: 'ok' as const, row: updated.rows[0]!, nextSnapshot }
 }

@@ -15,6 +15,7 @@ import {
   type QboSyncRunWorkflowSnapshot,
   type QboSyncRunWorkflowState,
 } from '@sitelayer/workflows'
+import { observeWorkflowEvent } from './metrics.js'
 import { recordMutationOutbox, recordWorkflowEvent } from './mutation-tx.js'
 
 type QboSyncRunRow = {
@@ -116,6 +117,7 @@ export async function startQboSyncRun(
     args.triggeredBy,
     client,
   )
+  observeWorkflowEvent(QBO_SYNC_RUN_WORKFLOW_NAME, 'requested')
   return { run: updated.rows[0]!, snapshot: nextSnapshot }
 }
 
@@ -196,6 +198,7 @@ export async function completeQboSyncRunSuccess(
     snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
     actorUserId: args.triggeredBy,
   })
+  observeWorkflowEvent(QBO_SYNC_RUN_WORKFLOW_NAME, 'succeeded')
 }
 
 /**
@@ -272,4 +275,5 @@ export async function completeQboSyncRunFailure(
     snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
     actorUserId: args.triggeredBy,
   })
+  observeWorkflowEvent(QBO_SYNC_RUN_WORKFLOW_NAME, 'failed')
 }
