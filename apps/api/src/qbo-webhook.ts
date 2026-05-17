@@ -94,6 +94,13 @@ export function verifyQboWebhook(
   }
   // Length mismatch is itself a signature failure but we must not throw.
   // timingSafeEqual requires equal-length buffers, so short-circuit explicitly.
+  //
+  // Note: HMAC-SHA256 always produces a 32-byte digest, so `expected.length`
+  // is invariant. A mismatched `provided.length` means a malformed or
+  // truncated signature — not a different-length-but-valid signature. So
+  // the early return here doesn't leak signature length to an attacker
+  // (there's only one valid length). If we ever switch to a variable-length
+  // HMAC variant this branch becomes a timing oracle and must be removed.
   if (provided.length !== expected.length) {
     return { ok: false, status: 401, error: 'signature mismatch' }
   }
