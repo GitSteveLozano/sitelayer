@@ -25,12 +25,7 @@ import { withMutationTx } from './mutation-tx.js'
 export interface VersionedUpdateCtx {
   company: ActiveCompany
   sendJson: (status: number, body: unknown) => void
-  checkVersion: (
-    table: string,
-    where: string,
-    params: unknown[],
-    expectedVersion: number | null,
-  ) => Promise<boolean>
+  checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
 }
 
 export interface PatchVersionedEntityArgs<TRow> {

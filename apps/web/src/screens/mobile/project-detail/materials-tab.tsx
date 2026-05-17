@@ -1,12 +1,5 @@
 import type { BootstrapResponse } from '@/lib/api'
-import {
-  MI,
-  MKpi,
-  MKpiRow,
-  MListInset,
-  MListRow,
-  MSectionH,
-} from '../../../components/m/index.js'
+import { MI, MKpi, MKpiRow, MListInset, MListRow, MSectionH } from '../../../components/m/index.js'
 import { formatMoney } from '../format.js'
 
 export function MaterialsTab({ bills }: { bills: BootstrapResponse['materialBills'] }) {

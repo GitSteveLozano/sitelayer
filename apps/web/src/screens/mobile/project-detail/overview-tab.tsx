@@ -1,11 +1,5 @@
 import type { ProjectRow } from '@/lib/api'
-import {
-  MButton,
-  MI,
-  MListInset,
-  MListRow,
-  MSectionH,
-} from '../../../components/m/index.js'
+import { MButton, MI, MListInset, MListRow, MSectionH } from '../../../components/m/index.js'
 import { MAiStripe } from '../../../components/m/ai.js'
 import { BidAccuracyCard } from '../../projects/bid-accuracy-card.js'
 import { LifecycleBanner } from '../../../components/lifecycle/banner.js'

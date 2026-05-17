@@ -1,9 +1,4 @@
-import {
-  appendWorkflowEvent,
-  markOutboxRowFailedFresh,
-  type QueueClient,
-  type TraceContext,
-} from '../index.js'
+import { appendWorkflowEvent, markOutboxRowFailedFresh, type QueueClient, type TraceContext } from '../index.js'
 
 // ---------------------------------------------------------------------------
 // Estimate-push QBO handler.

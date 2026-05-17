@@ -13,11 +13,7 @@ const stubRentalBillingInvoicePush: RentalBillingInvoicePushFn = async ({ runId 
   return { qbo_invoice_id: `STUB-INV-${runId.slice(0, 8)}-${Date.now()}` }
 }
 
-export function createRentalBillingPushRunner(deps: {
-  pool: Pool
-  logger: Logger
-  qboCircuit: CircuitBreaker
-}) {
+export function createRentalBillingPushRunner(deps: { pool: Pool; logger: Logger; qboCircuit: CircuitBreaker }) {
   const { pool, logger, qboCircuit } = deps
 
   // Rental billing invoice push fn selection.

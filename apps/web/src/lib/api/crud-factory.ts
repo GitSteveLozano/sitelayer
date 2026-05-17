@@ -90,12 +90,7 @@ export interface CrudHooks<TListResponse, TRow, TCreateReq, TPatchReq> {
  * Build the standard CRUD hook bundle for an entity module. See module
  * doc-comment for the contract.
  */
-export function createCrudHooks<
-  TListResponse,
-  TRow,
-  TCreateReq = Partial<TRow>,
-  TPatchReq = Partial<TRow>,
->(
+export function createCrudHooks<TListResponse, TRow, TCreateReq = Partial<TRow>, TPatchReq = Partial<TRow>>(
   opts: CrudFactoryOptions<TListResponse, TRow, TCreateReq, TPatchReq>,
 ): CrudHooks<TListResponse, TRow, TCreateReq, TPatchReq> {
   const idKey = opts.idKey ?? 'id'

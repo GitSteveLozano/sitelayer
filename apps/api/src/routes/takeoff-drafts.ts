@@ -16,10 +16,7 @@ import { loadServiceItemCatalogIndex, rejectionMessageForCatalog } from '../cata
 import { captureRoomplanDraft } from '../takeoff-capture-pipelines/roomplan.js'
 import { capturePhotogrammetryDraft } from '../takeoff-capture-pipelines/photogrammetry.js'
 import { captureDroneDraft } from '../takeoff-capture-pipelines/drone.js'
-import {
-  captureBlueprintVisionDraft,
-  type BlueprintLiveInputs,
-} from '../takeoff-capture-pipelines/blueprint-vision.js'
+import { captureBlueprintVisionDraft, type BlueprintLiveInputs } from '../takeoff-capture-pipelines/blueprint-vision.js'
 import { defaultCaptureName } from '../takeoff-capture-pipelines/shared.js'
 
 export type TakeoffDraftRouteCtx = {

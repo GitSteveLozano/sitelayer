@@ -2,11 +2,7 @@ import type http from 'node:http'
 import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import { generateShareToken } from '../estimate-share-token.js'
-import {
-  recordMutationLedger,
-  withCompanyClient,
-  withMutationTx,
-} from '../mutation-tx.js'
+import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import {
   PORTAL_ESTIMATES_PATH_PREFIX,
   SHARE_COLUMNS,

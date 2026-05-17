@@ -1,11 +1,7 @@
 import type { Pool, PoolClient } from 'pg'
 import { createLogger } from '@sitelayer/logger'
 import { verifyShareToken, type VerifyShareTokenResult } from './estimate-share-token.js'
-import {
-  enqueueNotification,
-  recordMutationLedger,
-  recordWorkflowEvent,
-} from './mutation-tx.js'
+import { enqueueNotification, recordMutationLedger, recordWorkflowEvent } from './mutation-tx.js'
 import { listOperatorRecipientUserIds } from './notifications.js'
 
 export const logger = createLogger('api:estimate-shares')
@@ -143,7 +139,10 @@ export type ShareLookupOk = { ok: true; row: EstimateShareRow }
 export type ShareLookupErr = { ok: false; status: number; error: string }
 export type ShareLookupResult = ShareLookupOk | ShareLookupErr
 
-export function classifyShareForRecipient(row: EstimateShareRow | null, verify: VerifyShareTokenResult): ShareLookupResult {
+export function classifyShareForRecipient(
+  row: EstimateShareRow | null,
+  verify: VerifyShareTokenResult,
+): ShareLookupResult {
   if (!verify.ok) return { ok: false, status: 401, error: 'invalid share token' }
   if (!row) return { ok: false, status: 404, error: 'share link not found' }
   const expiresMs = new Date(row.expires_at).getTime()

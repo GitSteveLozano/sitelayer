@@ -40,12 +40,7 @@ export interface ServiceItemPatchRequest {
   expected_version?: number
 }
 
-const hooks = createCrudHooks<
-  ServiceItemListResponse,
-  ServiceItem,
-  ServiceItemCreateRequest,
-  ServiceItemPatchRequest
->({
+const hooks = createCrudHooks<ServiceItemListResponse, ServiceItem, ServiceItemCreateRequest, ServiceItemPatchRequest>({
   entity: 'service-items',
   basePath: '/api/service-items',
   idKey: 'code',

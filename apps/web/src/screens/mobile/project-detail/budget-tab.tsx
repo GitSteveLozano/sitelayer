@@ -1,10 +1,5 @@
 import type { ProjectRow } from '@/lib/api'
-import {
-  MKpi,
-  MKpiRow,
-  MPill,
-  MSectionH,
-} from '../../../components/m/index.js'
+import { MKpi, MKpiRow, MPill, MSectionH } from '../../../components/m/index.js'
 import { useProjectLaborVariance, type LaborVarianceRow } from '../../../lib/api/labor-variance.js'
 import { useProjectCloseoutSummary, type CloseoutSummaryResponse } from '../../../lib/api/closeout-summary.js'
 import { formatDecimalHours, formatMoney } from '../format.js'
