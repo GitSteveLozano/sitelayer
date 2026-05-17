@@ -31,6 +31,14 @@ async function lookupRole(pool: Pool, companyId: string, userId: string): Promis
 }
 
 async function listAnalytics(pool: Pool, companyId: string) {
+  // Note (perf): the labor_entries + material_bills scans below are
+  // company-wide. The total-cost aggregates need the full history per
+  // project so we cannot cap by date without changing semantics. At
+  // pilot volumes (≤ 100k labor rows per company) this is fine; if a
+  // single company crosses ~1M rows we should switch to a precomputed
+  // per-project rollup table refreshed out-of-band rather than scanning
+  // the full ledger per request. Migration 083 adds the per-project
+  // composite index that makes the in-memory groupby fast.
   const [projectRows, laborRows, materialRows, bonusRules] = await Promise.all([
     pool.query(
       'select id, name, customer_name, division_code, status, bid_total, labor_rate, bonus_pool from projects where company_id = $1 order by updated_at desc',

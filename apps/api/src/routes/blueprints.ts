@@ -443,24 +443,60 @@ export async function handleBlueprintRoutes(
           `,
           [ctx.company.id, source.id],
         )
-        for (const measurement of sourceMeasurements.rows) {
+        // Batched copy: build parallel arrays for each column, then a
+        // single multi-row INSERT via unnest. Previously this was a
+        // for/await loop issuing one INSERT per row (N+1) — at N=1000
+        // measurements that's a 1000-round-trip per blueprint version.
+        if (sourceMeasurements.rows.length > 0) {
+          const projectIds: string[] = []
+          const serviceItemCodes: string[] = []
+          const quantities: string[] = []
+          const units: string[] = []
+          const notesArr: string[] = []
+          const geometries: string[] = []
+          const divisionCodes: Array<string | null> = []
+          for (const measurement of sourceMeasurements.rows) {
+            projectIds.push(measurement.project_id)
+            serviceItemCodes.push(measurement.service_item_code)
+            quantities.push(String(measurement.quantity))
+            units.push(measurement.unit)
+            notesArr.push(
+              `${measurement.notes ?? ''}${measurement.notes ? ' · ' : ''}copied from blueprint v${source.version}`,
+            )
+            geometries.push(JSON.stringify(measurement.geometry ?? {}))
+            divisionCodes.push(measurement.division_code ?? null)
+          }
           await client.query(
             `
             insert into takeoff_measurements (
               company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code
             )
-            values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, 1, $9)
+            select
+              $1::uuid,
+              t.project_id::uuid,
+              $2::uuid,
+              t.service_item_code,
+              t.quantity::numeric,
+              t.unit,
+              t.notes,
+              t.geometry::jsonb,
+              1,
+              t.division_code
+            from unnest(
+              $3::text[], $4::text[], $5::text[], $6::text[],
+              $7::text[], $8::text[], $9::text[]
+            ) as t(project_id, service_item_code, quantity, unit, notes, geometry, division_code)
             `,
             [
               ctx.company.id,
-              measurement.project_id,
               row.id,
-              measurement.service_item_code,
-              measurement.quantity,
-              measurement.unit,
-              `${measurement.notes ?? ''}${measurement.notes ? ' · ' : ''}copied from blueprint v${source.version}`,
-              JSON.stringify(measurement.geometry ?? {}),
-              measurement.division_code ?? null,
+              projectIds,
+              serviceItemCodes,
+              quantities,
+              units,
+              notesArr,
+              geometries,
+              divisionCodes,
             ],
           )
         }
