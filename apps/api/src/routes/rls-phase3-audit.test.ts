@@ -471,6 +471,5 @@ afterAll(() => {
   }
   lines.push('')
 
-   
   console.log(lines.join('\n'))
 })
