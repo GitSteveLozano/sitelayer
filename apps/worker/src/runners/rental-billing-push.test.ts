@@ -154,7 +154,6 @@ describe('createRentalBillingPushRunner', () => {
       // Run the drain twice with the same outbox row claim and check the
       // stub id remains stable. This is the "same runId → same stub id"
       // contract that lets a re-claim after crash recover safely.
-      let observed: string | null = null
       const claimedRow = {
         id: 'outbox-1',
         entity_id: RUN_ID,
@@ -194,7 +193,7 @@ describe('createRentalBillingPushRunner', () => {
       const drain = createRentalBillingPushRunner({ pool, logger: testLogger, qboCircuit: makeBreaker() })
       await drain('co-1')
       const update = calls.find((c) => c.sql.includes('update rental_billing_runs') && c.sql.includes("'posted'"))
-      observed = String(update!.params[4])
+      const observed = String(update!.params[4])
 
       // Second drain on the same runId.
       const { pool: pool2, calls: calls2 } = makePool(responder)

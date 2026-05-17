@@ -42,7 +42,7 @@ function makePool(responder: Responder): { pool: Pool; calls: FakeCall[]; releas
   const released: boolean[] = []
 
   function makeClient(): PoolClient {
-    let idx = released.length
+    const idx = released.length
     released.push(false)
     const client: Partial<PoolClient> = {
       query: vi.fn(async (sql: string, params?: ReadonlyArray<unknown>) => {
