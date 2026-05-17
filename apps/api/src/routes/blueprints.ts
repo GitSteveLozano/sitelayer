@@ -108,9 +108,10 @@ async function copyBlueprintFile(
   return destKey
 }
 
-async function listBlueprintDocuments(pool: Pool, companyId: string, projectId: string) {
-  const result = await pool.query(
-    `
+async function listBlueprintDocuments(_pool: Pool, companyId: string, projectId: string) {
+  const result = await withCompanyClient(companyId, (client) =>
+    client.query(
+      `
     select
       id,
       project_id,
@@ -129,7 +130,8 @@ async function listBlueprintDocuments(pool: Pool, companyId: string, projectId: 
     where company_id = $1 and project_id = $2 and deleted_at is null
     order by version desc, created_at desc
     `,
-    [companyId, projectId],
+      [companyId, projectId],
+    ),
   )
   return result.rows as BlueprintDocumentRow[]
 }

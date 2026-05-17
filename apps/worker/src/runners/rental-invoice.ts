@@ -53,7 +53,7 @@ export function createRentalInvoiceRunner(deps: { pool: Pool; logger: Logger }) 
                 origin: 'worker',
               },
               outboxPayload: {
-                ...(result.bill as unknown as Record<string, unknown>),
+                ...result.bill,
                 source: 'rental_invoice',
                 rental_id: rental.id,
               },

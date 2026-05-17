@@ -16,6 +16,7 @@ import {
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
+import { HttpError } from '../http-utils.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 
 /**
@@ -266,7 +267,8 @@ export async function handleEstimatePushRoutes(
            returning ${ESTIMATE_PUSH_COLUMNS}`,
           [ctx.company.id, projectId, project.customer_id, subtotal],
         )
-        const created = insertResult.rows[0]!
+        const created = insertResult.rows[0]
+        if (!created) throw new HttpError(500, 'estimate push insert returned no row')
 
         for (let i = 0; i < linesResult.rows.length; i++) {
           const src = linesResult.rows[i]!
@@ -474,7 +476,8 @@ export async function handleEstimatePushRoutes(
             nextSnapshot.qbo_estimate_id ?? null,
           ],
         )
-        const updated = updateResult.rows[0]!
+        const updated = updateResult.rows[0]
+        if (!updated) throw new HttpError(500, 'estimate push update returned no row')
 
         await recordWorkflowEvent(client, {
           companyId: ctx.company.id,
@@ -484,8 +487,8 @@ export async function handleEstimatePushRoutes(
           entityId: updated.id,
           stateVersion: stateVersion,
           eventType,
-          eventPayload: reducerEvent as unknown as Record<string, unknown>,
-          snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+          eventPayload: reducerEvent,
+          snapshotAfter: nextSnapshot,
           actorUserId: ctx.currentUserId,
         })
 

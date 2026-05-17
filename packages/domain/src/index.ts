@@ -1,4 +1,6 @@
-export type WorkflowStage = 'foundation' | 'takeoff' | 'field' | 'sync' | 'analytics' | 'extensions'
+// Internal — used only to type the WORKFLOW_STAGES const below. External
+// callers see the inferred element type of WORKFLOW_STAGES.
+type WorkflowStage = 'foundation' | 'takeoff' | 'field' | 'sync' | 'analytics' | 'extensions'
 
 export interface TenantTemplate {
   slug: string

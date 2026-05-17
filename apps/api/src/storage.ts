@@ -294,18 +294,23 @@ export async function createBlueprintStorage(storageEnv: StorageEnv): Promise<Bl
     return new LocalFsStorage(storageEnv.blueprintStorageRoot)
   }
 
-  const clientMod = (await import('@aws-sdk/client-s3')) as unknown as {
-    S3Client: S3Ctor
-    PutObjectCommand: S3CommandCtor
-    GetObjectCommand: S3CommandCtor
-    CopyObjectCommand: S3CommandCtor
-  }
-  const libStorage = (await import('@aws-sdk/lib-storage')) as unknown as { Upload: S3UploadCtor }
-  const presigner = (await import('@aws-sdk/s3-request-presigner')) as unknown as { getSignedUrl: GetSignedUrlFn }
+  // S3Module is intentionally a thin local shim around the AWS SDK
+  // constructors so the rest of this file never sees AWS-SDK types and
+  // the dynamic imports stay lazy. The single unknown cast at the
+  // boundary bridges SDK constructor signatures (typed input) to the
+  // local `unknown`-input shape.
+  const sdkModule = {
+    ...(await import('@aws-sdk/client-s3')),
+    ...(await import('@aws-sdk/lib-storage')),
+    ...(await import('@aws-sdk/s3-request-presigner')),
+  } as unknown as S3Module
   const mod: S3Module = {
-    ...clientMod,
-    Upload: libStorage.Upload,
-    getSignedUrl: presigner.getSignedUrl,
+    S3Client: sdkModule.S3Client,
+    PutObjectCommand: sdkModule.PutObjectCommand,
+    GetObjectCommand: sdkModule.GetObjectCommand,
+    CopyObjectCommand: sdkModule.CopyObjectCommand,
+    Upload: sdkModule.Upload,
+    getSignedUrl: sdkModule.getSignedUrl,
   }
   const client = new mod.S3Client({
     region: storageEnv.spacesRegion,

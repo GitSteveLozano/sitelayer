@@ -311,8 +311,8 @@ export async function handleShipmentRoutes(
         // (entity_id, state_version) constraint in 020_workflow_event_log).
         stateVersion: snapshot.state_version,
         eventType: parsed.value.event,
-        eventPayload: event as unknown as Record<string, unknown>,
-        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        eventPayload: event,
+        snapshotAfter: nextSnapshot,
         actorUserId: ctx.currentUserId,
       })
       const outcome = workflowEventOutcome(parsed.value.event)

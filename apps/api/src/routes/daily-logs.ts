@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidDateInput, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidDateInput, isValidUuid } from '../http-utils.js'
 import { parseDailyLogPhotoMultipart, DailyLogPhotoUploadError } from '../daily-log-photo-upload.js'
 import { type BlueprintStorage, assertKeyInCompany } from '../storage.js'
 import {
@@ -204,13 +204,14 @@ export async function handleDailyLogRoutes(
          returning ${DAILY_LOG_COLUMNS}`,
         [ctx.company.id, projectId, occurredOn, ctx.currentUserId],
       )
-      const row = upsert.rows[0]!
+      const row = upsert.rows[0]
+      if (!row) throw new HttpError(500, 'daily log upsert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'daily_log',
         entityId: row.id,
         action: 'create',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row
@@ -287,7 +288,7 @@ export async function handleDailyLogRoutes(
         entityType: 'daily_log',
         entityId: row.id,
         action: 'update',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row
@@ -398,7 +399,7 @@ export async function handleDailyLogRoutes(
           submitted_at: submittedAt,
           submitted_by: ctx.currentUserId,
         },
-        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        snapshotAfter: nextSnapshot,
         actorUserId: ctx.currentUserId,
       })
       await recordMutationLedger(client, {
@@ -406,7 +407,7 @@ export async function handleDailyLogRoutes(
         entityType: 'daily_log',
         entityId: row.id,
         action: 'submit',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
         idempotencyKey: `daily_log:submit:${row.id}`,
       })
@@ -511,7 +512,7 @@ export async function handleDailyLogRoutes(
         entityType: 'daily_log',
         entityId: updatedRow.id,
         action: 'photo_add',
-        row: updatedRow as unknown as Record<string, unknown>,
+        row: updatedRow,
         actorUserId: ctx.currentUserId,
       })
       return { dailyLog: updatedRow, photoRow: photoInsert.rows[0] ?? null }
@@ -619,7 +620,7 @@ export async function handleDailyLogRoutes(
         entityType: 'daily_log',
         entityId: updatedRow.id,
         action: 'photo_remove',
-        row: updatedRow as unknown as Record<string, unknown>,
+        row: updatedRow,
         actorUserId: ctx.currentUserId,
       })
       return updatedRow

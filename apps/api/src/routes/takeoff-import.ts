@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid } from '../http-utils.js'
 
 export type TakeoffImportRouteCtx = {
   pool: Pool
@@ -136,7 +136,9 @@ export async function handleTakeoffImportRoutes(
          returning id`,
         [ctx.company.id, projectId, pageId, row.service_item_code, row.quantity, row.unit, importedNote],
       )
-      const measurementId = measurement.rows[0]!.id
+      const measurementRow = measurement.rows[0]
+      if (!measurementRow) throw new HttpError(500, 'takeoff measurement insert returned no row')
+      const measurementId = measurementRow.id
       const tag = await client.query<{ id: string }>(
         `insert into takeoff_measurement_tags
            (company_id, measurement_id, service_item_code, quantity, unit, rate, sort_order)
@@ -144,7 +146,9 @@ export async function handleTakeoffImportRoutes(
          returning id`,
         [ctx.company.id, measurementId, row.service_item_code, row.quantity, row.unit, row.rate ?? 0],
       )
-      created.push({ measurement_id: measurementId, tag_id: tag.rows[0]!.id })
+      const tagRow = tag.rows[0]
+      if (!tagRow) throw new HttpError(500, 'takeoff measurement tag insert returned no row')
+      created.push({ measurement_id: measurementId, tag_id: tagRow.id })
     }
     await recordMutationLedger(client, {
       companyId: ctx.company.id,
@@ -152,7 +156,7 @@ export async function handleTakeoffImportRoutes(
       entityId: projectId,
       action: 'import',
       actorUserId: ctx.currentUserId,
-      row: { project_id: projectId, source_label: sourceLabel, count: created.length } as Record<string, unknown>,
+      row: { project_id: projectId, source_label: sourceLabel, count: created.length },
     })
     return created
   })

@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { PoolClient } from 'pg'
 import { calculateJobRentalBillingRun, initialJobRentalNextBillingDate } from '@sitelayer/domain'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidDateInput } from '../http-utils.js'
+import { HttpError, isValidDateInput } from '../http-utils.js'
 import { patchVersionedEntity } from '../versioned-update.js'
 import {
   JOB_RENTAL_CONTRACT_COLUMNS,
@@ -102,7 +102,8 @@ export async function handleRentalContractsRoutes(
           optionalString(body.notes),
         ],
       )
-      const row = result.rows[0]!
+      const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'rental contract insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'job_rental_contract',
@@ -286,7 +287,8 @@ export async function handleRentalContractsRoutes(
           calculation.subtotal,
         ],
       )
-      const run = runResult.rows[0]!
+      const run = runResult.rows[0]
+      if (!run) throw new HttpError(500, 'rental billing run insert returned no row')
       const runLines: RentalBillingRunLineRow[] = []
       for (const line of calculation.lines) {
         if (!line.inventory_item_id) continue
@@ -316,7 +318,9 @@ export async function handleRentalContractsRoutes(
             line.description,
           ],
         )
-        runLines.push(inserted.rows[0]!)
+        const lineRow = inserted.rows[0]
+        if (!lineRow) throw new HttpError(500, 'rental billing run line insert returned no row')
+        runLines.push(lineRow)
         await client.query(
           `
           update job_rental_lines
@@ -338,7 +342,8 @@ export async function handleRentalContractsRoutes(
         `,
         [ctx.company.id, fresh.contract.id, calculation.period_end, calculation.next_billing_date],
       )
-      const contract = contractUpdate.rows[0]!
+      const contract = contractUpdate.rows[0]
+      if (!contract) throw new HttpError(500, 'rental contract update returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'rental_billing_run',

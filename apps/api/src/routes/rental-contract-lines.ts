@@ -1,7 +1,7 @@
 import type http from 'node:http'
 import type { PoolClient } from 'pg'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidDateInput } from '../http-utils.js'
+import { HttpError, isValidDateInput } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 import {
   JOB_RENTAL_CONTRACT_COLUMNS,
@@ -121,7 +121,9 @@ export async function handleRentalContractLinesRoutes(
           optionalString(body.notes),
         ],
       )
-      const rowId = result.rows[0]!.id
+      const insertedRow = result.rows[0]
+      if (!insertedRow) throw new HttpError(500, 'rental line insert returned no row')
+      const rowId = insertedRow.id
       const row = await selectJobRentalLineById(client, ctx.company.id, rowId)
       if (!row) throw new Error('inserted rental line not found')
       await recordMutationLedger(client, {
@@ -326,7 +328,8 @@ export async function handleRentalContractLinesRoutes(
          returning id, job_rental_line_id, rate_unit, min_days, max_days, rate, sort_order`,
         [ctx.company.id, lineId, rateUnit, minDays, maxDays, rate, sortOrder],
       )
-      const row = result.rows[0]!
+      const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'rental rate tier insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'rental_rate_tier',

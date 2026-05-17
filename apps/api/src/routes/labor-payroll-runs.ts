@@ -16,7 +16,7 @@ import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
-import { isValidDateInput, isValidUuid } from '../http-utils.js'
+import { HttpError, isValidDateInput, isValidUuid } from '../http-utils.js'
 
 /**
  * Labor payroll workflow routes.
@@ -435,7 +435,8 @@ export async function handleLaborPayrollRunRoutes(
            returning ${LABOR_PAYROLL_RUN_COLUMNS}`,
           [ctx.company.id, periodStart, periodEnd, totals.ids, totals.totalHours, totals.totalCents, timeReviewRunId],
         )
-        const created = insert.rows[0]!
+        const created = insert.rows[0]
+        if (!created) throw new HttpError(500, 'labor payroll run insert returned no row')
 
         // Claim the labor entries by stamping payroll_run_id. Filtered on
         // payroll_run_id IS NULL so a concurrent batch can't double-claim.
@@ -455,7 +456,7 @@ export async function handleLaborPayrollRunRoutes(
           entityType: 'labor_payroll_run',
           entityId: created.id,
           action: 'create',
-          row: created as unknown as Record<string, unknown>,
+          row: created,
           actorUserId: ctx.currentUserId,
         })
         return { kind: 'ok' as const, row: created }
@@ -565,7 +566,8 @@ export async function handleLaborPayrollRunRoutes(
             nextSnapshot.qbo_timeactivity_ids ? JSON.stringify(nextSnapshot.qbo_timeactivity_ids) : null,
           ],
         )
-        const updated = updateResult.rows[0]!
+        const updated = updateResult.rows[0]
+        if (!updated) throw new HttpError(500, 'labor payroll run update returned no row')
 
         await recordWorkflowEvent(client, {
           companyId: ctx.company.id,
@@ -575,8 +577,8 @@ export async function handleLaborPayrollRunRoutes(
           entityId: updated.id,
           stateVersion,
           eventType,
-          eventPayload: reducerEvent as unknown as Record<string, unknown>,
-          snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+          eventPayload: reducerEvent,
+          snapshotAfter: nextSnapshot,
           actorUserId: ctx.currentUserId,
         })
         await recordMutationLedger(client, {
@@ -584,7 +586,7 @@ export async function handleLaborPayrollRunRoutes(
           entityType: 'labor_payroll_run',
           entityId: updated.id,
           action: `event:${eventType.toLowerCase()}`,
-          row: updated as unknown as Record<string, unknown>,
+          row: updated,
           idempotencyKey: `labor_payroll_run:event:${updated.id}:${updated.state_version}`,
         })
 
@@ -599,7 +601,7 @@ export async function handleLaborPayrollRunRoutes(
             entityId: updated.id,
             action: 'post_qbo_time_activities',
             mutationType: 'post_qbo_time_activities',
-            row: updated as unknown as Record<string, unknown>,
+            row: updated,
             outboxPayload: {
               labor_payroll_run_id: updated.id,
               period_start: updated.period_start,

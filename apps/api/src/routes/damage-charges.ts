@@ -8,6 +8,7 @@ import {
   type DamageChargeSettlementWorkflowSnapshot,
   type DamageChargeSettlementWorkflowState,
 } from '@sitelayer/workflows'
+import { HttpError } from '../http-utils.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationOutbox, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
@@ -146,13 +147,15 @@ async function applyDamageChargeSettlementTransition(
     entityId: args.chargeId,
     stateVersion: currentSnapshot.state_version,
     eventType: args.eventType,
-    eventPayload: args.event as unknown as Record<string, unknown>,
-    snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+    eventPayload: args.event,
+    snapshotAfter: nextSnapshot,
     actorUserId: args.actorUserId,
   })
   const outcome = workflowEventOutcome(args.eventType)
   if (outcome) observeWorkflowEvent(DAMAGE_CHARGE_SETTLEMENT_WORKFLOW_NAME, outcome)
-  return { kind: 'ok' as const, row: updated.rows[0]!, nextSnapshot }
+  const updatedRow = updated.rows[0]
+  if (!updatedRow) throw new HttpError(500, 'damage charge update returned no row')
+  return { kind: 'ok' as const, row: updatedRow, nextSnapshot }
 }
 
 export async function handleDamageChargeRoutes(

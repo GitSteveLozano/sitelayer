@@ -13,7 +13,7 @@ import {
 import type { ActiveCompany } from '../auth-types.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidDateInput } from '../http-utils.js'
+import { HttpError, isValidDateInput } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 
 export type RentalRouteCtx = {
@@ -122,14 +122,16 @@ async function applyRentalWorkflowTransition(
     entityId: args.rentalId,
     stateVersion: currentSnapshot.state_version,
     eventType: args.eventType,
-    eventPayload: args.event as unknown as Record<string, unknown>,
-    snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+    eventPayload: args.event,
+    snapshotAfter: nextSnapshot,
     actorUserId: args.actorUserId,
   })
   const outcome = workflowEventOutcome(args.eventType)
   if (outcome) observeWorkflowEvent(RENTAL_WORKFLOW_NAME, outcome)
 
-  return { kind: 'ok' as const, row: updated.rows[0]!, nextSnapshot }
+  const updatedRow = updated.rows[0]
+  if (!updatedRow) throw new HttpError(500, 'rental update returned no row')
+  return { kind: 'ok' as const, row: updatedRow, nextSnapshot }
 }
 
 /**
@@ -240,7 +242,8 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
           body.notes ? String(body.notes) : null,
         ],
       )
-      const row = inserted.rows[0]!
+      const row = inserted.rows[0]
+      if (!row) throw new HttpError(500, 'rental insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'rental',
@@ -653,8 +656,10 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
           ctx.company.id,
         ],
       )
-      const closedRow = closed.rows[0]!
-      const newRow = newRental.rows[0]!
+      const closedRow = closed.rows[0]
+      if (!closedRow) throw new HttpError(500, 'rental close returned no row')
+      const newRow = newRental.rows[0]
+      if (!newRow) throw new HttpError(500, 'rental transfer returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'rental',

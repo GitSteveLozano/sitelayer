@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { resolveShareSecret, verifyShareToken } from '../estimate-share-token.js'
+import { HttpError } from '../http-utils.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 
 /**
@@ -167,7 +168,8 @@ export async function handlePortalRentalRoutes(
       // standard sync feed. We don't go through recordMutationLedger because
       // there is no authenticated company context on this path; a direct
       // insert keeps the audit trail without requiring a fake actor.
-      const row = result.rows[0]!
+      const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'rental request insert returned no row')
       await client.query(
         `
         insert into mutation_outbox (

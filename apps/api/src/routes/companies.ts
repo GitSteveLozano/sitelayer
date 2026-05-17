@@ -2,6 +2,7 @@ import type http from 'node:http'
 import type { Pool } from 'pg'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from '../onboarding.js'
 import { recordAudit } from '../audit.js'
+import { HttpError } from '../http-utils.js'
 import { observeAudit } from '../metrics.js'
 import { enqueueNotification } from '../mutation-tx.js'
 
@@ -196,6 +197,8 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
        returning ot_service_item_code`,
       [companyId, nextCode],
     )
+    const updatedRow = updated.rows[0]
+    if (!updatedRow) throw new HttpError(500, 'company update returned no row')
     await recordAudit(pool, {
       companyId,
       actorUserId: userId,
@@ -203,10 +206,10 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       entityId: companyId,
       action: 'update_settings',
       before: before.rows[0],
-      after: updated.rows[0],
+      after: updatedRow,
     })
     observeAudit('company', 'update_settings')
-    sendJson(200, { ot_service_item_code: updated.rows[0]!.ot_service_item_code })
+    sendJson(200, { ot_service_item_code: updatedRow.ot_service_item_code })
     return true
   }
 
@@ -239,7 +242,8 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
          returning id, slug, name, created_at`,
         [slug, name],
       )
-      const newCompany = created.rows[0]!
+      const newCompany = created.rows[0]
+      if (!newCompany) throw new HttpError(500, 'company insert returned no row')
       await client.query(
         `insert into company_memberships (company_id, clerk_user_id, role)
          values ($1, $2, 'admin')`,
@@ -303,7 +307,8 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
        returning id, company_id, clerk_user_id, role, created_at`,
       [targetCompanyId, inviteUserId, role],
     )
-    const membership = inserted.rows[0]!
+    const membership = inserted.rows[0]
+    if (!membership) throw new HttpError(500, 'company membership upsert returned no row')
     await recordAudit(pool, {
       companyId: targetCompanyId,
       actorUserId: userId,

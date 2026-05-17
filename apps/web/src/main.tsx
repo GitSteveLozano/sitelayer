@@ -1,6 +1,8 @@
 // instrument.ts must be the first import — Sentry needs to wrap everything.
-import { Sentry } from './instrument'
-import { StrictMode } from 'react'
+// (Now a thin facade; the real @sentry/react module is lazy-loaded on
+// `requestIdleCallback` after first paint, so this import is cheap.)
+import './instrument'
+import { lazy, StrictMode, Suspense, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { startOfflineReplayLoop } from './lib/offline/replay'
@@ -11,6 +13,11 @@ import './styles/globals.css'
 // classes so they don't bleed into v2's main routes.
 import './styles/m.css'
 
+// Lazy-load Sentry's React error boundary so the SDK stays out of the
+// eager graph. Suspense fallback renders the children directly — no
+// spinner — so the app is visible while @sentry/react streams in.
+const SentryBoundary = lazy(() => import('./instrument-sentry-boundary'))
+
 const container = document.getElementById('root')
 if (!container) throw new Error('#root not found')
 
@@ -18,9 +25,9 @@ const root = createRoot(container)
 
 root.render(
   <StrictMode>
-    <Sentry.ErrorBoundary fallback={<RootError />}>
+    <LazyErrorBoundary fallback={<RootError />}>
       <App />
-    </Sentry.ErrorBoundary>
+    </LazyErrorBoundary>
   </StrictMode>,
 )
 
@@ -32,6 +39,18 @@ root.render(
 // Offline mutation queue + replay loop (1E.6). Boots regardless of SW
 // availability so the queue still works in dev / Safari private mode.
 startOfflineReplayLoop()
+
+function LazyErrorBoundary({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
+  // Suspense fallback IS the children: while the Sentry boundary chunk
+  // is loading the app renders unprotected (the entire SPA wouldn't be
+  // crashing during the 1-frame load anyway). This avoids the user
+  // staring at a spinner waiting for an SDK that isn't blocking paint.
+  return (
+    <Suspense fallback={<>{children}</>}>
+      <SentryBoundary fallback={fallback}>{children}</SentryBoundary>
+    </Suspense>
+  )
+}
 
 function RootError() {
   return (

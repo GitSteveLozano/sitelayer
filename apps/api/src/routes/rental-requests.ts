@@ -11,6 +11,7 @@ import {
   type RentalRequestApprovalWorkflowState,
 } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
+import { HttpError } from '../http-utils.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import {
   recordMutationLedger,
@@ -286,7 +287,8 @@ export async function handleRentalRequestRoutes(
           `,
           [ctx.company.id, row.customer_id, description, dailyRate, deliveredOn, cadence, nextInvoiceAt, row.notes],
         )
-        const rentalRow = inserted.rows[0]!
+        const rentalRow = inserted.rows[0]
+        if (!rentalRow) throw new HttpError(500, 'rental insert returned no row')
         await recordMutationLedger(client, {
           companyId: ctx.company.id,
           entityType: 'rental',
@@ -339,7 +341,8 @@ export async function handleRentalRequestRoutes(
           nextSnapshot.approved_at ?? nowIso,
         ],
       )
-      const updatedRow = updated.rows[0]!
+      const updatedRow = updated.rows[0]
+      if (!updatedRow) throw new HttpError(500, 'rental request approve update returned no row')
       // Append workflow_event_log row keyed on the PRIOR state_version
       // so the unique (entity_id, state_version) constraint naturally
       // rejects duplicate writes for the same transition.
@@ -351,8 +354,8 @@ export async function handleRentalRequestRoutes(
         entityId: requestId,
         stateVersion: currentSnapshot.state_version,
         eventType: 'APPROVE',
-        eventPayload: approveEvent as unknown as Record<string, unknown>,
-        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        eventPayload: approveEvent,
+        snapshotAfter: nextSnapshot,
         actorUserId: ctx.currentUserId,
       })
       const approveOutcome = workflowEventOutcome('APPROVE')
@@ -512,7 +515,8 @@ export async function handleRentalRequestRoutes(
           nextSnapshot.declined_at ?? nowIso,
         ],
       )
-      const updatedRow = updated.rows[0]!
+      const updatedRow = updated.rows[0]
+      if (!updatedRow) throw new HttpError(500, 'rental request decline update returned no row')
       await recordWorkflowEvent(client, {
         companyId: ctx.company.id,
         workflowName: RENTAL_REQUEST_APPROVAL_WORKFLOW_NAME,
@@ -521,8 +525,8 @@ export async function handleRentalRequestRoutes(
         entityId: requestId,
         stateVersion: currentSnapshot.state_version,
         eventType: 'DECLINE',
-        eventPayload: declineEvent as unknown as Record<string, unknown>,
-        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        eventPayload: declineEvent,
+        snapshotAfter: nextSnapshot,
         actorUserId: ctx.currentUserId,
       })
       const declineOutcome = workflowEventOutcome('DECLINE')

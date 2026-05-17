@@ -15,6 +15,7 @@ import {
   type QboSyncRunWorkflowSnapshot,
   type QboSyncRunWorkflowState,
 } from '@sitelayer/workflows'
+import { HttpError } from './http-utils.js'
 import { observeWorkflowEvent } from './metrics.js'
 import { recordMutationOutbox, recordWorkflowEvent } from './mutation-tx.js'
 
@@ -60,7 +61,8 @@ export async function startQboSyncRun(
                error, snapshot, triggered_by`,
     [args.companyId, args.integrationConnectionId, args.triggeredBy],
   )
-  const pendingRow = created.rows[0]!
+  const pendingRow = created.rows[0]
+  if (!pendingRow) throw new HttpError(500, 'qbo sync run insert returned no row')
   const currentSnapshot: QboSyncRunWorkflowSnapshot = {
     state: 'pending',
     state_version: pendingRow.state_version,
@@ -101,8 +103,8 @@ export async function startQboSyncRun(
     entityId: pendingRow.id,
     stateVersion: currentSnapshot.state_version,
     eventType: 'START_SYNC',
-    eventPayload: startEvent as unknown as Record<string, unknown>,
-    snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+    eventPayload: startEvent,
+    snapshotAfter: nextSnapshot,
     actorUserId: args.triggeredBy,
   })
   // Side effect anchor: this START_SYNC triggered an actual sync attempt.
@@ -118,7 +120,9 @@ export async function startQboSyncRun(
     client,
   )
   observeWorkflowEvent(QBO_SYNC_RUN_WORKFLOW_NAME, 'requested')
-  return { run: updated.rows[0]!, snapshot: nextSnapshot }
+  const updatedRow = updated.rows[0]
+  if (!updatedRow) throw new HttpError(500, 'qbo sync run update returned no row')
+  return { run: updatedRow, snapshot: nextSnapshot }
 }
 
 /**
@@ -194,8 +198,8 @@ export async function completeQboSyncRunSuccess(
     entityId: args.runId,
     stateVersion: currentSnapshot.state_version,
     eventType: 'SYNC_SUCCEEDED',
-    eventPayload: event as unknown as Record<string, unknown>,
-    snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+    eventPayload: event,
+    snapshotAfter: nextSnapshot,
     actorUserId: args.triggeredBy,
   })
   observeWorkflowEvent(QBO_SYNC_RUN_WORKFLOW_NAME, 'succeeded')
@@ -271,8 +275,8 @@ export async function completeQboSyncRunFailure(
     entityId: args.runId,
     stateVersion: currentSnapshot.state_version,
     eventType: 'SYNC_FAILED',
-    eventPayload: event as unknown as Record<string, unknown>,
-    snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+    eventPayload: event,
+    snapshotAfter: nextSnapshot,
     actorUserId: args.triggeredBy,
   })
   observeWorkflowEvent(QBO_SYNC_RUN_WORKFLOW_NAME, 'failed')

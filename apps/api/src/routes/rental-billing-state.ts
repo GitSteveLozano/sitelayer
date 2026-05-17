@@ -11,6 +11,7 @@ import {
 } from '@sitelayer/workflows'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { recordAudit } from '../audit.js'
+import { HttpError } from '../http-utils.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import {
   RENTAL_BILLING_RUN_COLUMNS,
@@ -182,7 +183,8 @@ export async function handleRentalBillingStateRoutes(
             nextSnapshot.qbo_invoice_id ?? null,
           ],
         )
-        const updated = updateResult.rows[0]!
+        const updated = updateResult.rows[0]
+        if (!updated) throw new HttpError(500, 'rental billing run update returned no row')
         const linesResult = await client.query<RentalBillingRunLineRow>(
           `select ${RENTAL_BILLING_RUN_LINE_COLUMNS}
            from rental_billing_run_lines
@@ -203,8 +205,8 @@ export async function handleRentalBillingStateRoutes(
           entityId: updated.id,
           stateVersion: stateVersion,
           eventType,
-          eventPayload: reducerEvent as unknown as Record<string, unknown>,
-          snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+          eventPayload: reducerEvent,
+          snapshotAfter: nextSnapshot,
           actorUserId: ctx.currentUserId,
         })
         // Audit/event ledger row keyed on state_version so each transition

@@ -79,11 +79,7 @@ type CreateOutput = { issueId: string }
 type UploadInput = { companySlug: string; issueId: string; attachment: PendingAttachment }
 
 async function createWorkerIssue(input: CreateInput): Promise<CreateOutput> {
-  const response = await apiPost<{ worker_issue: { id: string } }>(
-    '/api/worker-issues',
-    input.body as unknown as Record<string, unknown>,
-    input.companySlug,
-  )
+  const response = await apiPost<{ worker_issue: { id: string } }>('/api/worker-issues', input.body, input.companySlug)
   const id = response?.worker_issue?.id
   if (!id) {
     throw new Error('worker issue create response missing id')

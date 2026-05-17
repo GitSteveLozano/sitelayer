@@ -39,21 +39,25 @@ async function listAnalytics(pool: Pool, companyId: string) {
   // per-project rollup table refreshed out-of-band rather than scanning
   // the full ledger per request. Migration 083 adds the per-project
   // composite index that makes the in-memory groupby fast.
-  const [projectRows, laborRows, materialRows, bonusRules] = await Promise.all([
-    pool.query(
-      'select id, name, customer_name, division_code, status, bid_total, labor_rate, bonus_pool from projects where company_id = $1 order by updated_at desc',
-      [companyId],
-    ),
-    pool.query(
-      'select project_id, service_item_code, hours, sqft_done, occurred_on from labor_entries where company_id = $1 and deleted_at is null',
-      [companyId],
-    ),
-    pool.query(
-      'select project_id, amount, bill_type from material_bills where company_id = $1 and deleted_at is null',
-      [companyId],
-    ),
-    pool.query('select config from bonus_rules where company_id = $1 order by created_at desc limit 1', [companyId]),
-  ])
+  const [projectRows, laborRows, materialRows, bonusRules] = await withCompanyClient(companyId, async (client) =>
+    Promise.all([
+      client.query(
+        'select id, name, customer_name, division_code, status, bid_total, labor_rate, bonus_pool from projects where company_id = $1 order by updated_at desc',
+        [companyId],
+      ),
+      client.query(
+        'select project_id, service_item_code, hours, sqft_done, occurred_on from labor_entries where company_id = $1 and deleted_at is null',
+        [companyId],
+      ),
+      client.query(
+        'select project_id, amount, bill_type from material_bills where company_id = $1 and deleted_at is null',
+        [companyId],
+      ),
+      client.query('select config from bonus_rules where company_id = $1 order by created_at desc limit 1', [
+        companyId,
+      ]),
+    ]),
+  )
 
   const bonusTiers = bonusRules.rows[0]?.config?.tiers ?? DEFAULT_BONUS_RULE.tiers
   const laborByProject = new Map<string, typeof laborRows.rows>()
@@ -139,23 +143,26 @@ async function listDivisionAnalytics(pool: Pool, companyId: string, options: { s
     projectWhere += ' and (p.updated_at >= $2::date or p.closed_at >= $2::date)'
   }
 
-  const [projectRows, laborRows, materialRows, divisionRows] = await Promise.all([
-    pool.query(
-      `select p.id, p.name, p.division_code, p.status, p.bid_total, p.labor_rate
+  const [projectRows, laborRows, materialRows, divisionRows] = await withCompanyClient(companyId, async (client) =>
+    Promise.all([
+      client.query(
+        `select p.id, p.name, p.division_code, p.status, p.bid_total, p.labor_rate
        from projects p
        ${projectWhere}
        order by p.updated_at desc`,
-      projectQueryParams,
-    ),
-    pool.query('select project_id, hours, sqft_done from labor_entries where company_id = $1 and deleted_at is null', [
-      companyId,
+        projectQueryParams,
+      ),
+      client.query(
+        'select project_id, hours, sqft_done from labor_entries where company_id = $1 and deleted_at is null',
+        [companyId],
+      ),
+      client.query(
+        'select project_id, amount, bill_type from material_bills where company_id = $1 and deleted_at is null',
+        [companyId],
+      ),
+      client.query('select code, name from divisions where company_id = $1 order by sort_order asc', [companyId]),
     ]),
-    pool.query(
-      'select project_id, amount, bill_type from material_bills where company_id = $1 and deleted_at is null',
-      [companyId],
-    ),
-    pool.query('select code, name from divisions where company_id = $1 order by sort_order asc', [companyId]),
-  ])
+  )
 
   const divisionNameByCode = new Map<string, string>()
   for (const row of divisionRows.rows) {
@@ -276,18 +283,22 @@ async function listDivisionAnalytics(pool: Pool, companyId: string, options: { s
   return { divisions, as_of: new Date().toISOString() }
 }
 
-export async function listServiceItemProductivity(pool: Pool, companyId: string) {
-  const [laborRows, itemRows] = await Promise.all([
-    pool.query(
-      `select service_item_code, hours, sqft_done, occurred_on
+export async function listServiceItemProductivity(_pool: Pool, companyId: string) {
+  const [laborRows, itemRows] = await withCompanyClient(companyId, async (client) =>
+    Promise.all([
+      client.query(
+        `select service_item_code, hours, sqft_done, occurred_on
        from labor_entries
        where company_id = $1
          and deleted_at is null
          and service_item_code is not null`,
-      [companyId],
-    ),
-    pool.query('select code, name, unit from service_items where company_id = $1 and deleted_at is null', [companyId]),
-  ])
+        [companyId],
+      ),
+      client.query('select code, name, unit from service_items where company_id = $1 and deleted_at is null', [
+        companyId,
+      ]),
+    ]),
+  )
 
   const itemsByCode = new Map<string, { code: string; name: string; unit: string }>()
   for (const row of itemRows.rows) {

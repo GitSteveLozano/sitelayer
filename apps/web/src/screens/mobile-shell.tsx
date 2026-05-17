@@ -14,7 +14,7 @@
  * Implementation note: for Phase 2 the per-tab screens are placeholders.
  * Each phase from 3 onward replaces a placeholder with a real screen.
  */
-import { lazy, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
 import type { CompanyRole } from '@sitelayer/domain'
@@ -26,47 +26,79 @@ import {
   type RoleMode,
 } from '../lib/active-context.js'
 import { MBottomTabs, MChip, MChipRow, MI, MShell } from '../components/m/index.js'
-
-// MoreRoute lives outside the shell historically; we mount it inside so
-// the bottom-tab chrome stays visible while the user is in settings,
-// catalog, integrations, etc. Lazy-loaded so the More tab doesn't pull
-// the settings-screen bundle into the initial paint.
-const MoreRoute = lazy(() => import('../routes/more.js'))
 import { InstallPromptBanner } from '../components/shell/InstallPromptBanner.js'
 import { OfflineBanner } from '../components/shell/OfflineBanner.js'
 import { PushDeniedBanner } from '../components/shell/PushDeniedBanner.js'
 import { UpdateBanner } from '../components/shell/UpdateBanner.js'
-import { AdminHome } from './mobile/admin-home.js'
-import { MobileProjectsList } from './mobile/projects-list.js'
-import { MobileEstimatesSent } from './mobile/estimates-sent.js'
-import { MobileProjectDetail } from './mobile/project-detail.js'
-import { MobileProjectNew } from './mobile/project-new.js'
-import { MobileTakeoffList } from './mobile/takeoff-list.js'
-import { MobileEstimateReview } from './mobile/estimate-review.js'
-import { MobileEstimatePush } from './mobile/estimate-push.js'
-import { MobileSchedule } from './mobile/schedule.js'
-import { MobileTimeReview } from './mobile/time-review.js'
-import { MobileForemanTimeEntry } from './mobile/foreman-time-entry.js'
-import { WorkerToday } from './mobile/worker-today.js'
-import { WorkerClockinConfirm } from './mobile/worker-clockin.js'
-import { WorkerScope } from './mobile/worker-scope.js'
-import { WorkerIssue } from './mobile/worker-issue.js'
-import { WorkerHours } from './mobile/worker-hours.js'
-import { WorkerLog } from './mobile/worker-log.js'
-import { ForemanToday } from './mobile/foreman-today.js'
-import { ForemanField } from './mobile/foreman-field.js'
-import { ForemanCrew } from './mobile/foreman-crew.js'
-import { ForemanBrief } from './mobile/foreman-brief.js'
-import { ForemanLog } from './mobile/foreman-log.js'
-import { ForemanBlockerDetail } from './mobile/foreman-blocker-detail.js'
-import { MobileRentals } from './mobile/rentals.js'
-import { MobileRentalDispatch } from './mobile/rentals-dispatch.js'
-import { MobileRentalsUtilization } from './mobile/rentals-utilization.js'
-import { MobileRentalScan } from './mobile/rentals-scan.js'
-import { MobileScaffoldInspectionScreen } from './mobile/scaffold-inspection.js'
-import { MobileRentalsPortal } from './mobile/rentals-portal.js'
-import { RentalRequestsQueueScreen } from './rentals/rental-requests-queue.js'
-import { MobileQuickInvoice } from './mobile/invoice-quick.js'
+
+// All per-tab screens are lazy. Workers never resolve admin routes (no
+// tab linkage, no programmatic navigation), so the projects/estimates/
+// schedule chunks never download for them — and vice versa. Each Route's
+// element is wrapped under a single <Suspense> below.
+//
+// Named-export screens use `.then(m => ({ default: m.Name }))` to satisfy
+// React.lazy's default-export contract without forcing every screen to
+// add a default export.
+const MoreRoute = lazy(() => import('../routes/more.js'))
+const AdminHome = lazy(() => import('./mobile/admin-home.js').then((m) => ({ default: m.AdminHome })))
+const MobileProjectsList = lazy(() =>
+  import('./mobile/projects-list.js').then((m) => ({ default: m.MobileProjectsList })),
+)
+const MobileEstimatesSent = lazy(() =>
+  import('./mobile/estimates-sent.js').then((m) => ({ default: m.MobileEstimatesSent })),
+)
+const MobileProjectDetail = lazy(() =>
+  import('./mobile/project-detail.js').then((m) => ({ default: m.MobileProjectDetail })),
+)
+const MobileProjectNew = lazy(() => import('./mobile/project-new.js').then((m) => ({ default: m.MobileProjectNew })))
+const MobileTakeoffList = lazy(() => import('./mobile/takeoff-list.js').then((m) => ({ default: m.MobileTakeoffList })))
+const MobileEstimateReview = lazy(() =>
+  import('./mobile/estimate-review.js').then((m) => ({ default: m.MobileEstimateReview })),
+)
+const MobileEstimatePush = lazy(() =>
+  import('./mobile/estimate-push.js').then((m) => ({ default: m.MobileEstimatePush })),
+)
+const MobileSchedule = lazy(() => import('./mobile/schedule.js').then((m) => ({ default: m.MobileSchedule })))
+const MobileTimeReview = lazy(() => import('./mobile/time-review.js').then((m) => ({ default: m.MobileTimeReview })))
+const MobileForemanTimeEntry = lazy(() =>
+  import('./mobile/foreman-time-entry.js').then((m) => ({ default: m.MobileForemanTimeEntry })),
+)
+const WorkerToday = lazy(() => import('./mobile/worker-today.js').then((m) => ({ default: m.WorkerToday })))
+const WorkerClockinConfirm = lazy(() =>
+  import('./mobile/worker-clockin.js').then((m) => ({ default: m.WorkerClockinConfirm })),
+)
+const WorkerScope = lazy(() => import('./mobile/worker-scope.js').then((m) => ({ default: m.WorkerScope })))
+const WorkerIssue = lazy(() => import('./mobile/worker-issue.js').then((m) => ({ default: m.WorkerIssue })))
+const WorkerHours = lazy(() => import('./mobile/worker-hours.js').then((m) => ({ default: m.WorkerHours })))
+const WorkerLog = lazy(() => import('./mobile/worker-log.js').then((m) => ({ default: m.WorkerLog })))
+const ForemanToday = lazy(() => import('./mobile/foreman-today.js').then((m) => ({ default: m.ForemanToday })))
+const ForemanField = lazy(() => import('./mobile/foreman-field.js').then((m) => ({ default: m.ForemanField })))
+const ForemanCrew = lazy(() => import('./mobile/foreman-crew.js').then((m) => ({ default: m.ForemanCrew })))
+const ForemanBrief = lazy(() => import('./mobile/foreman-brief.js').then((m) => ({ default: m.ForemanBrief })))
+const ForemanLog = lazy(() => import('./mobile/foreman-log.js').then((m) => ({ default: m.ForemanLog })))
+const ForemanBlockerDetail = lazy(() =>
+  import('./mobile/foreman-blocker-detail.js').then((m) => ({ default: m.ForemanBlockerDetail })),
+)
+const MobileRentals = lazy(() => import('./mobile/rentals.js').then((m) => ({ default: m.MobileRentals })))
+const MobileRentalDispatch = lazy(() =>
+  import('./mobile/rentals-dispatch.js').then((m) => ({ default: m.MobileRentalDispatch })),
+)
+const MobileRentalsUtilization = lazy(() =>
+  import('./mobile/rentals-utilization.js').then((m) => ({ default: m.MobileRentalsUtilization })),
+)
+const MobileRentalScan = lazy(() => import('./mobile/rentals-scan.js').then((m) => ({ default: m.MobileRentalScan })))
+const MobileScaffoldInspectionScreen = lazy(() =>
+  import('./mobile/scaffold-inspection.js').then((m) => ({ default: m.MobileScaffoldInspectionScreen })),
+)
+const MobileRentalsPortal = lazy(() =>
+  import('./mobile/rentals-portal.js').then((m) => ({ default: m.MobileRentalsPortal })),
+)
+const RentalRequestsQueueScreen = lazy(() =>
+  import('./rentals/rental-requests-queue.js').then((m) => ({ default: m.RentalRequestsQueueScreen })),
+)
+const MobileQuickInvoice = lazy(() =>
+  import('./mobile/invoice-quick.js').then((m) => ({ default: m.MobileQuickInvoice })),
+)
 
 export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
@@ -177,95 +209,97 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
             }}
           />
         ) : null}
-        <Routes>
-          <Route index element={<Navigate to="today" replace />} />
-          <Route
-            path="today"
-            element={
-              ctx.kind === 'admin' ? (
-                <AdminHome bootstrap={bootstrap} />
-              ) : ctx.kind === 'worker' ? (
-                <WorkerToday bootstrap={bootstrap} companySlug={companySlug} />
-              ) : (
-                <ForemanToday bootstrap={bootstrap} companySlug={companySlug} />
-              )
-            }
-          />
-          <Route path="brief" element={<ForemanBrief bootstrap={bootstrap} companySlug={companySlug} />} />
-          <Route path="brief/:projectId" element={<ForemanBrief bootstrap={bootstrap} companySlug={companySlug} />} />
-          <Route path="field" element={<ForemanField bootstrap={bootstrap} companySlug={companySlug} />} />
-          <Route path="field/*" element={<ForemanField bootstrap={bootstrap} companySlug={companySlug} />} />
-          <Route
-            path="foreman/blocker/:issueId"
-            element={<ForemanBlockerDetail bootstrap={bootstrap} companySlug={companySlug} />}
-          />
-          <Route path="clockin" element={<WorkerClockinConfirm />} />
-          <Route path="scope" element={<WorkerScope bootstrap={bootstrap} />} />
-          <Route path="issue" element={<WorkerIssue bootstrap={bootstrap} companySlug={companySlug} />} />
-          <Route path="projects" element={<MobileProjectsList bootstrap={bootstrap} />} />
-          <Route path="projects/sent" element={<MobileEstimatesSent />} />
-          <Route path="projects/new" element={<MobileProjectNew companySlug={companySlug} />} />
-          <Route path="projects/:projectId" element={<MobileProjectDetail bootstrap={bootstrap} />} />
-          <Route path="projects/:projectId/takeoff" element={<MobileTakeoffList companySlug={companySlug} />} />
-          <Route path="projects/:projectId/estimate" element={<MobileEstimateReview companySlug={companySlug} />} />
-          <Route
-            path="projects/:projectId/estimate-push/:pushId"
-            element={<MobileEstimatePush companySlug={companySlug} />}
-          />
-          <Route path="projects/:projectId/*" element={<MobileProjectDetail bootstrap={bootstrap} />} />
-          <Route path="schedule" element={<MobileSchedule bootstrap={bootstrap} companySlug={companySlug} />} />
-          <Route path="schedule/*" element={<MobileSchedule bootstrap={bootstrap} companySlug={companySlug} />} />
-          <Route path="rentals" element={<MobileRentals companySlug={companySlug} />} />
-          <Route
-            path="rentals/dispatch"
-            element={<MobileRentalDispatch bootstrap={bootstrap} companySlug={companySlug} />}
-          />
-          <Route path="rentals/utilization" element={<MobileRentalsUtilization companySlug={companySlug} />} />
-          <Route
-            path="rentals/scan"
-            element={<MobileRentalScan bootstrap={bootstrap} companySlug={companySlug} initialMode="deliver" />}
-          />
-          <Route
-            path="rentals/return"
-            element={<MobileRentalScan bootstrap={bootstrap} companySlug={companySlug} initialMode="return" />}
-          />
-          <Route path="scaffold-inspections" element={<MobileScaffoldInspectionScreen />} />
-          <Route path="scaffold-inspections/:token" element={<MobileScaffoldInspectionScreen />} />
-          <Route path="rentals/portal" element={<MobileRentalsPortal companySlug={companySlug} />} />
-          <Route path="rentals/requests" element={<RentalRequestsQueueScreen />} />
-          <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} />} />
-          <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
-          <Route path="more/*" element={<MoreRoute />} />
-          <Route path="crew" element={<ForemanCrew bootstrap={bootstrap} />} />
-          <Route path="crew/*" element={<ForemanCrew bootstrap={bootstrap} />} />
-          <Route
-            path="log"
-            element={
-              ctx.kind === 'worker' ? (
-                <WorkerLog bootstrap={bootstrap} companySlug={companySlug} />
-              ) : (
-                <ForemanLog bootstrap={bootstrap} companySlug={companySlug} />
-              )
-            }
-          />
-          <Route
-            path="log/*"
-            element={
-              ctx.kind === 'worker' ? (
-                <WorkerLog bootstrap={bootstrap} companySlug={companySlug} />
-              ) : (
-                <ForemanLog bootstrap={bootstrap} companySlug={companySlug} />
-              )
-            }
-          />
-          <Route path="time" element={<MobileTimeReview bootstrap={bootstrap} />} />
-          <Route path="time/new" element={<MobileForemanTimeEntry bootstrap={bootstrap} />} />
-          <Route path="time/*" element={<MobileTimeReview bootstrap={bootstrap} />} />
-          <Route path="scope/*" element={<WorkerScope bootstrap={bootstrap} />} />
-          <Route path="hours" element={<WorkerHours bootstrap={bootstrap} />} />
-          <Route path="hours/*" element={<WorkerHours bootstrap={bootstrap} />} />
-          <Route path="*" element={<Navigate to="today" replace />} />
-        </Routes>
+        <Suspense fallback={<div className="p-4 text-ink-3">Loading…</div>}>
+          <Routes>
+            <Route index element={<Navigate to="today" replace />} />
+            <Route
+              path="today"
+              element={
+                ctx.kind === 'admin' ? (
+                  <AdminHome bootstrap={bootstrap} />
+                ) : ctx.kind === 'worker' ? (
+                  <WorkerToday bootstrap={bootstrap} companySlug={companySlug} />
+                ) : (
+                  <ForemanToday bootstrap={bootstrap} companySlug={companySlug} />
+                )
+              }
+            />
+            <Route path="brief" element={<ForemanBrief bootstrap={bootstrap} companySlug={companySlug} />} />
+            <Route path="brief/:projectId" element={<ForemanBrief bootstrap={bootstrap} companySlug={companySlug} />} />
+            <Route path="field" element={<ForemanField bootstrap={bootstrap} companySlug={companySlug} />} />
+            <Route path="field/*" element={<ForemanField bootstrap={bootstrap} companySlug={companySlug} />} />
+            <Route
+              path="foreman/blocker/:issueId"
+              element={<ForemanBlockerDetail bootstrap={bootstrap} companySlug={companySlug} />}
+            />
+            <Route path="clockin" element={<WorkerClockinConfirm />} />
+            <Route path="scope" element={<WorkerScope bootstrap={bootstrap} />} />
+            <Route path="issue" element={<WorkerIssue bootstrap={bootstrap} companySlug={companySlug} />} />
+            <Route path="projects" element={<MobileProjectsList bootstrap={bootstrap} />} />
+            <Route path="projects/sent" element={<MobileEstimatesSent />} />
+            <Route path="projects/new" element={<MobileProjectNew companySlug={companySlug} />} />
+            <Route path="projects/:projectId" element={<MobileProjectDetail bootstrap={bootstrap} />} />
+            <Route path="projects/:projectId/takeoff" element={<MobileTakeoffList companySlug={companySlug} />} />
+            <Route path="projects/:projectId/estimate" element={<MobileEstimateReview companySlug={companySlug} />} />
+            <Route
+              path="projects/:projectId/estimate-push/:pushId"
+              element={<MobileEstimatePush companySlug={companySlug} />}
+            />
+            <Route path="projects/:projectId/*" element={<MobileProjectDetail bootstrap={bootstrap} />} />
+            <Route path="schedule" element={<MobileSchedule bootstrap={bootstrap} companySlug={companySlug} />} />
+            <Route path="schedule/*" element={<MobileSchedule bootstrap={bootstrap} companySlug={companySlug} />} />
+            <Route path="rentals" element={<MobileRentals companySlug={companySlug} />} />
+            <Route
+              path="rentals/dispatch"
+              element={<MobileRentalDispatch bootstrap={bootstrap} companySlug={companySlug} />}
+            />
+            <Route path="rentals/utilization" element={<MobileRentalsUtilization companySlug={companySlug} />} />
+            <Route
+              path="rentals/scan"
+              element={<MobileRentalScan bootstrap={bootstrap} companySlug={companySlug} initialMode="deliver" />}
+            />
+            <Route
+              path="rentals/return"
+              element={<MobileRentalScan bootstrap={bootstrap} companySlug={companySlug} initialMode="return" />}
+            />
+            <Route path="scaffold-inspections" element={<MobileScaffoldInspectionScreen />} />
+            <Route path="scaffold-inspections/:token" element={<MobileScaffoldInspectionScreen />} />
+            <Route path="rentals/portal" element={<MobileRentalsPortal companySlug={companySlug} />} />
+            <Route path="rentals/requests" element={<RentalRequestsQueueScreen />} />
+            <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} />} />
+            <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
+            <Route path="more/*" element={<MoreRoute />} />
+            <Route path="crew" element={<ForemanCrew bootstrap={bootstrap} />} />
+            <Route path="crew/*" element={<ForemanCrew bootstrap={bootstrap} />} />
+            <Route
+              path="log"
+              element={
+                ctx.kind === 'worker' ? (
+                  <WorkerLog bootstrap={bootstrap} companySlug={companySlug} />
+                ) : (
+                  <ForemanLog bootstrap={bootstrap} companySlug={companySlug} />
+                )
+              }
+            />
+            <Route
+              path="log/*"
+              element={
+                ctx.kind === 'worker' ? (
+                  <WorkerLog bootstrap={bootstrap} companySlug={companySlug} />
+                ) : (
+                  <ForemanLog bootstrap={bootstrap} companySlug={companySlug} />
+                )
+              }
+            />
+            <Route path="time" element={<MobileTimeReview bootstrap={bootstrap} />} />
+            <Route path="time/new" element={<MobileForemanTimeEntry bootstrap={bootstrap} />} />
+            <Route path="time/*" element={<MobileTimeReview bootstrap={bootstrap} />} />
+            <Route path="scope/*" element={<WorkerScope bootstrap={bootstrap} />} />
+            <Route path="hours" element={<WorkerHours bootstrap={bootstrap} />} />
+            <Route path="hours/*" element={<WorkerHours bootstrap={bootstrap} />} />
+            <Route path="*" element={<Navigate to="today" replace />} />
+          </Routes>
+        </Suspense>
         <MBottomTabs tabs={[...tabs]} activeId={activeTab} onSelect={(id) => navigate(`${basePath}/${id}`)} />
       </MShell>
     </div>

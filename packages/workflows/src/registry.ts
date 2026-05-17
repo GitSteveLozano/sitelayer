@@ -73,6 +73,9 @@ export function registerWorkflow<
     // Same name + same version — idempotent re-import (e.g. hot reload).
     return definition
   }
+  // Existential erasure: the registry must hold heterogeneous workflow
+  // definitions, and TS can't prove the variance is sound across
+  // different Snapshot/Event types. Callers re-narrow via getWorkflow().
   REGISTRY.set(key, definition as unknown as AnyDefinition)
   return definition
 }

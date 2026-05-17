@@ -8,6 +8,7 @@ import {
   type ScaffoldOpsApprovalWorkflowSnapshot,
   type ScaffoldOpsApprovalWorkflowState,
 } from '@sitelayer/workflows'
+import { HttpError } from '../http-utils.js'
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
@@ -107,7 +108,8 @@ export async function handleScaffoldOpsRoutes(
          returning ${BRANCH_COLUMNS}`,
         [ctx.company.id, code, name, nonEmptyString(body.address), body.is_default ?? false],
       )
-      const created = result.rows[0]!
+      const created = result.rows[0]
+      if (!created) throw new HttpError(500, 'branch insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'branch',
@@ -645,8 +647,8 @@ export async function handleScaffoldOpsRoutes(
         entityId: id,
         stateVersion: currentSnapshot.state_version,
         eventType: 'APPROVE',
-        eventPayload: event as unknown as Record<string, unknown>,
-        snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
+        eventPayload: event,
+        snapshotAfter: nextSnapshot,
         actorUserId: ctx.currentUserId,
       })
       const outcome2 = workflowEventOutcome('APPROVE')

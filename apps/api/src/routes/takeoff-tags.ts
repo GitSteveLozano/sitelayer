@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidUuid } from '../http-utils.js'
+import { HttpError, isValidUuid } from '../http-utils.js'
 
 export type TakeoffTagRouteCtx = {
   pool: Pool
@@ -146,13 +146,14 @@ export async function handleTakeoffTagRoutes(
          returning ${TAG_COLUMNS}`,
         [ctx.company.id, measurementId, code, quantity, unit, rate, notes, nextSort],
       )
-      const row = inserted.rows[0]!
+      const row = inserted.rows[0]
+      if (!row) throw new HttpError(500, 'takeoff tag insert returned no row')
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'takeoff_measurement_tag',
         entityId: row.id,
         action: 'create',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row
@@ -219,7 +220,7 @@ export async function handleTakeoffTagRoutes(
         entityType: 'takeoff_measurement_tag',
         entityId: row.id,
         action: 'update',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row
@@ -253,7 +254,7 @@ export async function handleTakeoffTagRoutes(
         entityType: 'takeoff_measurement_tag',
         entityId: row.id,
         action: 'delete',
-        row: row as unknown as Record<string, unknown>,
+        row: row,
         actorUserId: ctx.currentUserId,
       })
       return row
