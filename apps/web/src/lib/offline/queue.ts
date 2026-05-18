@@ -33,10 +33,12 @@ export type OfflineMutationKind =
   | 'clock_out'
   | 'clock_void'
   | 'clock_event_photo_upload'
+  | 'daily_log_create'
   | 'daily_log_patch'
   | 'daily_log_submit'
   | 'daily_log_photo_upload'
   | 'daily_log_photo_delete'
+  | 'takeoff_measurement_create'
   | 'time_review_event'
   | 'notification_pref_save'
 
@@ -89,10 +91,12 @@ const BLOB_SLOTS: Record<OfflineMutationKind, readonly string[]> = {
   clock_out: [],
   clock_void: [],
   clock_event_photo_upload: ['file'],
+  daily_log_create: [],
   daily_log_patch: [],
   daily_log_submit: [],
   daily_log_photo_upload: ['file'],
   daily_log_photo_delete: [],
+  takeoff_measurement_create: [],
   time_review_event: [],
   notification_pref_save: [],
 }

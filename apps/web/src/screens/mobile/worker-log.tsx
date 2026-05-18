@@ -96,6 +96,14 @@ export function WorkerLog({
       let logId = dailyLogId
       if (!logId) {
         const created = await createDailyLog.mutateAsync({ project_id: projectId, occurred_on: todayIso() })
+        // createDailyLog can resolve with `{ queued: true }` when the
+        // call was enqueued for offline replay. In that case we don't
+        // have a server-assigned daily-log id yet, so the photo upload
+        // can't proceed today — surface a friendly error and stop.
+        if ('queued' in created) {
+          setError("You're offline — your log was queued. Try sending the photo when reconnected.")
+          return
+        }
         logId = created.dailyLog.id
         setDailyLogId(logId)
       }

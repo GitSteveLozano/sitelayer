@@ -6,6 +6,7 @@ import { lazy, StrictMode, Suspense, type ReactNode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { startOfflineReplayLoop } from './lib/offline/replay'
+import { installChunkReloadHandler } from './lib/pwa/chunk-reload'
 import './styles/globals.css'
 // m.css is the design-token + component CSS for the mobile shell at /m/*
 // (migrated from apps/web in #229). Loaded eagerly so /m routes render
@@ -39,6 +40,12 @@ root.render(
 // Offline mutation queue + replay loop (1E.6). Boots regardless of SW
 // availability so the queue still works in dev / Safari private mode.
 startOfflineReplayLoop()
+
+// Stale-chunk recovery. After a deploy any React.lazy() import that
+// targets an old hashed asset URL 404s; the global handlers catch the
+// resulting ChunkLoadError / "Failed to fetch dynamically imported
+// module" and force one reload per session to pick up the new bundle.
+installChunkReloadHandler()
 
 function LazyErrorBoundary({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
   // Suspense fallback IS the children: while the Sentry boundary chunk
