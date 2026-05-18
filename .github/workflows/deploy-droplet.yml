@@ -545,7 +545,7 @@ jobs:
         # wired a webhook. Documented in ops/env/production.env.json
         # under "DEPLOY_NOTIFICATION_WEBHOOK".
         if: always() && env.DEPLOY_NOTIFICATION_WEBHOOK != ''
-        uses: 8398a7/action-slack@1750b5085f3ec60384090fb7c52965ef822e869e # v3.18.0
+        uses: 8398a7/action-slack@77eaa4f1c608a7d68b38af4e3f739dcd8cba273e # v3.19.0
         with:
           status: ${{ job.status }}
           fields: repo,message,commit,author,action,workflow
