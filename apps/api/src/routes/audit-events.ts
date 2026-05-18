@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
+import { buildPaginationMeta, parsePagination, PAGINATION_MAX_LIMIT } from '../http-utils.js'
 import { withCompanyClient } from '../mutation-tx.js'
 
 export type AuditEventRouteCtx = {
@@ -15,7 +16,8 @@ type AuditFilters = {
   entityId?: string | null
   actorUserId?: string | null
   since?: string | null
-  limit?: number
+  limit: number
+  offset: number
 }
 
 async function listAuditEvents(_pool: Pool, companyId: string, filters: AuditFilters) {
@@ -37,24 +39,28 @@ async function listAuditEvents(_pool: Pool, companyId: string, filters: AuditFil
     values.push(filters.since)
     clauses.push(`created_at >= $${values.length}::timestamptz`)
   }
-  const limit = Math.max(1, Math.min(1000, filters.limit ?? 200))
-  values.push(limit)
+  values.push(filters.limit)
+  values.push(filters.offset)
   const result = await withCompanyClient(companyId, (c) =>
     c.query(
       `select id, actor_user_id, actor_role, entity_type, entity_id, action, before, after, request_id, sentry_trace, created_at
      from audit_events
      where ${clauses.join(' and ')}
      order by created_at desc
-     limit $${values.length}`,
+     limit $${values.length - 1} offset $${values.length}`,
       values,
     ),
   )
-  return result.rows
+  return result
 }
 
 /**
  * Handle GET /api/audit-events. Admin-only; supports entity_type,
- * entity_id, actor_user_id, since, limit query filters.
+ * entity_id, actor_user_id, since, limit, offset query filters.
+ *
+ * Pagination defaults to limit=100, max=500 per the unbounded-list
+ * hardening pass (the prior default of 1000 was halved in favor of the
+ * shared cap; the higher ceiling is still reachable via ?limit=).
  */
 export async function handleAuditEventRoutes(
   req: http.IncomingMessage,
@@ -63,15 +69,23 @@ export async function handleAuditEventRoutes(
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/audit-events') {
     if (!ctx.requireRole(['admin'])) return true
-    const limitParam = url.searchParams.get('limit')
-    const events = await listAuditEvents(ctx.pool, ctx.company.id, {
+    const pagination = parsePagination(url.searchParams, { maxLimit: PAGINATION_MAX_LIMIT })
+    if (!pagination.ok) {
+      ctx.sendJson(400, { error: pagination.error })
+      return true
+    }
+    const result = await listAuditEvents(ctx.pool, ctx.company.id, {
       entityType: url.searchParams.get('entity_type'),
       entityId: url.searchParams.get('entity_id'),
       actorUserId: url.searchParams.get('actor_user_id'),
       since: url.searchParams.get('since'),
-      ...(limitParam ? { limit: Number(limitParam) } : {}),
+      limit: pagination.value.limit,
+      offset: pagination.value.offset,
     })
-    ctx.sendJson(200, { events })
+    ctx.sendJson(200, {
+      events: result.rows,
+      pagination: buildPaginationMeta(pagination.value, result.rowCount ?? result.rows.length),
+    })
     return true
   }
 

@@ -29,6 +29,7 @@ export async function listIntegrationMappings(
   companyId: string,
   provider: string,
   entityType?: string | null,
+  pagination?: { limit: number; offset: number },
 ) {
   const filters: string[] = ['company_id = $1', 'provider = $2', 'deleted_at is null']
   const values: unknown[] = [companyId, provider]
@@ -36,12 +37,18 @@ export async function listIntegrationMappings(
     values.push(entityType)
     filters.push(`entity_type = $${values.length}`)
   }
+  let pageClause = ''
+  if (pagination) {
+    values.push(pagination.limit)
+    values.push(pagination.offset)
+    pageClause = ` limit $${values.length - 1} offset $${values.length}`
+  }
   const result = await pool.query(
     `
     select id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
     from integration_mappings
     where ${filters.join(' and ')}
-    order by entity_type asc, created_at asc
+    order by entity_type asc, created_at asc${pageClause}
     `,
     values,
   )

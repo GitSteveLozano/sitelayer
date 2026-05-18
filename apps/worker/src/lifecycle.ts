@@ -1,11 +1,18 @@
 import type { Pool } from 'pg'
 import type { Logger } from '@sitelayer/logger'
 import { Sentry, captureWithEntityContext } from './instrument.js'
+import { observeWorkerTickInterval } from './metrics.js'
 
 export interface LifecycleDeps {
   pool: Pool
   logger: Logger
   pollIntervalMs: number
+  /**
+   * Upper bound for the adaptive backoff. After a sequence of empty ticks the
+   * scheduler doubles `currentIntervalMs` until it reaches this cap. Defaults
+   * to `WORKER_POLL_MAX_INTERVAL_MS` (60_000ms) when omitted.
+   */
+  maxPollIntervalMs?: number
   heartbeat: () => Promise<{ idle: boolean }>
 }
 
@@ -15,6 +22,27 @@ export interface LifecycleHandle {
   installSignalHandlers(): void
 }
 
+/**
+ * Pure backoff math for the worker tick scheduler. Exported so the math
+ * can be unit-tested without the heartbeat/timer/pool plumbing.
+ *
+ * - When `foundWork` is true, reset to `base` so the worker reacts fast to
+ *   a fresh outbox row.
+ * - When `foundWork` is false, double `current` up to `max`.
+ *
+ * Inputs are clamped: `base`/`max` are coerced to at least 1ms, `current`
+ * is treated as `base` when it falls below `base` (e.g. after a misconfigured
+ * env value).
+ */
+export function nextInterval(current: number, base: number, max: number, foundWork: boolean): number {
+  const safeBase = Math.max(1, Math.floor(base))
+  const safeMax = Math.max(safeBase, Math.floor(max))
+  if (foundWork) return safeBase
+  const safeCurrent = Math.max(safeBase, Math.floor(current))
+  const doubled = safeCurrent * 2
+  return Math.min(doubled, safeMax)
+}
+
 export function createLifecycle(deps: LifecycleDeps): LifecycleHandle {
   const { pool, logger, pollIntervalMs, heartbeat } = deps
 
@@ -22,17 +50,30 @@ export function createLifecycle(deps: LifecycleDeps): LifecycleHandle {
   let heartbeatInFlight: Promise<{ idle: boolean } | undefined> | null = null
   let heartbeatTimer: ReturnType<typeof setTimeout> | null = null
 
-  // Adaptive backoff: when a heartbeat finds no work, stretch the next tick to
-  // `idlePollIntervalMs` (default 3x active). The first non-idle tick resets to
-  // the active cadence. Saves CPU on busy hosts where the worker is mostly
-  // waiting around.
-  const idlePollIntervalMs = (() => {
-    const raw = process.env.WORKER_IDLE_POLL_INTERVAL_MS
-    const fallback = pollIntervalMs * 3
-    if (!raw) return fallback
+  // Adaptive exponential backoff. `currentIntervalMs` starts at the base
+  // `pollIntervalMs`. After every empty tick (no runner reported work) it
+  // doubles up to `maxPollIntervalMs`. The first tick that finds work
+  // resets it back to `pollIntervalMs`, so the worker reacts fast to a
+  // fresh outbox row but does not waste cycles polling an empty queue.
+  const maxPollIntervalMs = (() => {
+    if (typeof deps.maxPollIntervalMs === 'number' && deps.maxPollIntervalMs > 0) {
+      return Math.max(pollIntervalMs, Math.floor(deps.maxPollIntervalMs))
+    }
+    const raw = process.env.WORKER_POLL_MAX_INTERVAL_MS
+    const fallback = 60_000
+    if (!raw) return Math.max(pollIntervalMs, fallback)
     const n = Number(raw)
-    return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback
+    if (!Number.isFinite(n) || n <= 0) return Math.max(pollIntervalMs, fallback)
+    return Math.max(pollIntervalMs, Math.floor(n))
   })()
+
+  let currentIntervalMs = pollIntervalMs
+
+  // Publish the static base/max once so dashboards can graph backoff
+  // ratio (current / max). `current` will be updated whenever it changes.
+  observeWorkerTickInterval('base', pollIntervalMs)
+  observeWorkerTickInterval('max', maxPollIntervalMs)
+  observeWorkerTickInterval('current', currentIntervalMs)
 
   async function runHeartbeat(): Promise<{ idle: boolean } | undefined> {
     if (shutdownStarted) return undefined
@@ -56,7 +97,29 @@ export function createLifecycle(deps: LifecycleDeps): LifecycleHandle {
 
   function scheduleNextHeartbeat(idle: boolean): void {
     if (shutdownStarted) return
-    const delay = idle ? idlePollIntervalMs : pollIntervalMs
+    const foundWork = !idle
+    const previous = currentIntervalMs
+    currentIntervalMs = nextInterval(previous, pollIntervalMs, maxPollIntervalMs, foundWork)
+
+    if (currentIntervalMs !== previous) {
+      observeWorkerTickInterval('current', currentIntervalMs)
+      if (foundWork) {
+        logger.info(
+          { interval_ms: currentIntervalMs, previous_ms: previous },
+          '[worker] tick interval reset to base — work found',
+        )
+      } else {
+        logger.debug(
+          {
+            interval_ms: currentIntervalMs,
+            previous_ms: previous,
+            max_interval_ms: maxPollIntervalMs,
+          },
+          '[worker] tick interval backed off — idle',
+        )
+      }
+    }
+
     heartbeatTimer = setTimeout(() => {
       void runHeartbeat()
         .then((result) => {
@@ -68,7 +131,7 @@ export function createLifecycle(deps: LifecycleDeps): LifecycleHandle {
           // back off a bit before the next attempt.
           scheduleNextHeartbeat(true)
         })
-    }, delay)
+    }, currentIntervalMs)
   }
 
   async function shutdown(signal: NodeJS.Signals) {

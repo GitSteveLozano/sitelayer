@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { HttpError, isValidDateInput, isValidUuid, parseExpectedVersion, parseOptionalNumber } from './http-utils.js'
+import {
+  buildPaginationMeta,
+  HttpError,
+  isValidDateInput,
+  isValidUuid,
+  PAGINATION_DEFAULT_LIMIT,
+  PAGINATION_MAX_LIMIT,
+  parseExpectedVersion,
+  parseOptionalNumber,
+  parsePagination,
+} from './http-utils.js'
 
 describe('HttpError', () => {
   it('captures status and message', () => {
@@ -67,6 +77,66 @@ describe('parseExpectedVersion', () => {
     expect(parseExpectedVersion(-1)).toBeNull()
     expect(parseExpectedVersion(1.5)).toBeNull()
     expect(parseExpectedVersion('not a number')).toBeNull()
+  })
+})
+
+describe('parsePagination', () => {
+  it('returns defaults when both params are absent', () => {
+    const result = parsePagination(new URLSearchParams())
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value).toEqual({ limit: PAGINATION_DEFAULT_LIMIT, offset: 0 })
+  })
+
+  it('parses explicit limit and offset', () => {
+    const result = parsePagination(new URLSearchParams('limit=25&offset=50'))
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value).toEqual({ limit: 25, offset: 50 })
+  })
+
+  it('clamps limit above the max', () => {
+    const result = parsePagination(new URLSearchParams(`limit=${PAGINATION_MAX_LIMIT + 200}`))
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.limit).toBe(PAGINATION_MAX_LIMIT)
+  })
+
+  it('clamps limit below 1 up to 1', () => {
+    const result = parsePagination(new URLSearchParams('limit=0'))
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.limit).toBe(1)
+  })
+
+  it('rejects non-numeric limit', () => {
+    const result = parsePagination(new URLSearchParams('limit=abc'))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/limit/)
+  })
+
+  it('rejects non-numeric offset', () => {
+    const result = parsePagination(new URLSearchParams('offset=abc'))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/offset/)
+  })
+
+  it('rejects negative offset', () => {
+    const result = parsePagination(new URLSearchParams('offset=-1'))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/offset/)
+  })
+
+  it('honours route-specific overrides', () => {
+    const result = parsePagination(new URLSearchParams('limit=50'), { defaultLimit: 10, maxLimit: 40 })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.value.limit).toBe(40)
+  })
+})
+
+describe('buildPaginationMeta', () => {
+  it('marks has_more when rowCount equals limit', () => {
+    expect(buildPaginationMeta({ limit: 100, offset: 0 }, 100)).toEqual({ limit: 100, offset: 0, has_more: true })
+  })
+
+  it('marks has_more false when rowCount < limit', () => {
+    expect(buildPaginationMeta({ limit: 100, offset: 200 }, 17)).toEqual({ limit: 100, offset: 200, has_more: false })
   })
 })
 

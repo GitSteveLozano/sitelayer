@@ -2,7 +2,7 @@ import type http from 'node:http'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
-import { isValidUuid } from '../http-utils.js'
+import { buildPaginationMeta, isValidUuid, parsePagination } from '../http-utils.js'
 
 export type NotificationRouteCtx = {
   pool: Pool
@@ -33,15 +33,9 @@ type NotificationRow = {
   created_at: string
 }
 
-const DEFAULT_LIMIT = 20
-const MAX_LIMIT = 100
-
-function clampLimit(raw: string | null): number {
-  if (!raw) return DEFAULT_LIMIT
-  const parsed = Number(raw)
-  if (!Number.isFinite(parsed) || parsed <= 0) return DEFAULT_LIMIT
-  return Math.min(Math.max(1, Math.floor(parsed)), MAX_LIMIT)
-}
+// Notifications page in a feed — keep a smaller default than the global
+// 100, but the upper bound is the shared 500 cap (set via maxLimit).
+const NOTIFICATIONS_DEFAULT_LIMIT = 20
 
 // Project the schema's columns plus a synthesized `read_at` derived from
 // payload->>'read_at'. Keeping this string in one constant means the
@@ -78,7 +72,11 @@ export async function handleNotificationRoutes(
   if (req.method === 'GET' && url.pathname === '/api/notifications') {
     const unreadOnly = url.searchParams.get('unread') === '1'
     const kind = url.searchParams.get('kind')
-    const limit = clampLimit(url.searchParams.get('limit'))
+    const pagination = parsePagination(url.searchParams, { defaultLimit: NOTIFICATIONS_DEFAULT_LIMIT })
+    if (!pagination.ok) {
+      ctx.sendJson(400, { error: pagination.error })
+      return true
+    }
 
     const filters: string[] = ['company_id = $1', 'recipient_clerk_user_id = $2']
     const params: unknown[] = [ctx.company.id, ctx.currentUserId]
@@ -87,7 +85,8 @@ export async function handleNotificationRoutes(
       params.push(kind)
       filters.push(`kind = $${params.length}`)
     }
-    params.push(limit)
+    params.push(pagination.value.limit)
+    params.push(pagination.value.offset)
 
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query<NotificationRow>(
@@ -95,11 +94,14 @@ export async function handleNotificationRoutes(
        from notifications
        where ${filters.join(' and ')}
        order by created_at desc
-       limit $${params.length}`,
+       limit $${params.length - 1} offset $${params.length}`,
         params,
       ),
     )
-    ctx.sendJson(200, { notifications: result.rows })
+    ctx.sendJson(200, {
+      notifications: result.rows,
+      pagination: buildPaginationMeta(pagination.value, result.rowCount ?? result.rows.length),
+    })
     return true
   }
 

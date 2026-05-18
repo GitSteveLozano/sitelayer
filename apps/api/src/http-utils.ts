@@ -1,8 +1,8 @@
 import http from 'node:http'
 
 export const CORS_ALLOW_HEADERS =
-  'content-type, authorization, baggage, sentry-trace, traceparent, x-request-id, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id, x-sitelayer-act-as'
-export const CORS_EXPOSE_HEADERS = 'x-request-id, etag'
+  'content-type, authorization, baggage, sentry-trace, traceparent, x-request-id, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id, x-sitelayer-act-as, idempotency-key'
+export const CORS_EXPOSE_HEADERS = 'x-request-id, etag, idempotent-replay'
 
 export class HttpError extends Error {
   constructor(
@@ -116,6 +116,78 @@ export function isValidUuid(value: unknown): value is string {
     typeof value === 'string' &&
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)
   )
+}
+
+/**
+ * Default + bounds for list-endpoint pagination. `limit` clamps to
+ * `[1, PAGINATION_MAX_LIMIT]`; `offset` must be non-negative. Centralized
+ * so every list route enforces the same upper bound (audit fix: unbounded
+ * GETs were OOM/latency risks at scale).
+ */
+export const PAGINATION_DEFAULT_LIMIT = 100
+export const PAGINATION_MAX_LIMIT = 500
+
+export interface PaginationParams {
+  limit: number
+  offset: number
+}
+
+export type PaginationResult = { ok: true; value: PaginationParams } | { ok: false; error: string }
+
+/**
+ * Parse `?limit=` and `?offset=` query params with the audit-fix policy:
+ * - Non-numeric `limit` or `offset` → 400 (error result)
+ * - `limit` clamped to `[1, PAGINATION_MAX_LIMIT]` (no error on out-of-range)
+ * - `offset < 0` → 400
+ * - Missing → defaults (`limit=100`, `offset=0`)
+ *
+ * Floats are truncated to integers (Math.floor); negative `limit` clamps
+ * up to 1 rather than erroring, matching the existing notifications/audit
+ * route conventions.
+ */
+export function parsePagination(
+  searchParams: URLSearchParams,
+  opts: { defaultLimit?: number; maxLimit?: number } = {},
+): PaginationResult {
+  const defaultLimit = opts.defaultLimit ?? PAGINATION_DEFAULT_LIMIT
+  const maxLimit = opts.maxLimit ?? PAGINATION_MAX_LIMIT
+  const rawLimit = searchParams.get('limit')
+  const rawOffset = searchParams.get('offset')
+
+  let limit = defaultLimit
+  if (rawLimit !== null && rawLimit !== '') {
+    const parsed = Number(rawLimit)
+    if (!Number.isFinite(parsed)) {
+      return { ok: false, error: 'limit must be a number' }
+    }
+    limit = Math.min(Math.max(1, Math.floor(parsed)), maxLimit)
+  }
+
+  let offset = 0
+  if (rawOffset !== null && rawOffset !== '') {
+    const parsed = Number(rawOffset)
+    if (!Number.isFinite(parsed)) {
+      return { ok: false, error: 'offset must be a number' }
+    }
+    if (parsed < 0) {
+      return { ok: false, error: 'offset must be >= 0' }
+    }
+    offset = Math.floor(parsed)
+  }
+
+  return { ok: true, value: { limit, offset } }
+}
+
+/**
+ * Build the response-shape `pagination` field for a list endpoint.
+ * `has_more` is a row-count heuristic — exact totals would require an
+ * extra COUNT(*) on potentially-large tables.
+ */
+export function buildPaginationMeta(
+  params: PaginationParams,
+  rowCount: number,
+): { limit: number; offset: number; has_more: boolean } {
+  return { limit: params.limit, offset: params.offset, has_more: rowCount === params.limit }
 }
 
 /**

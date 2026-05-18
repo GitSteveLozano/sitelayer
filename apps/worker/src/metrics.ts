@@ -50,6 +50,29 @@ export function observeQueuePruneOrGc(queue: string, outcome: string, count = 1)
   }
 }
 
+// Adaptive-backoff visibility. `level=base|max` are set once at boot;
+// `level=current` updates every time the scheduler changes intervals.
+// Useful as a Prometheus gauge to graph how often the worker is sitting
+// at max vs base in production.
+const workerTickIntervalMs = new client.Gauge({
+  name: 'sitelayer_worker_tick_interval_ms',
+  help: 'Worker tick interval (ms) by level: base, max, or current backoff state',
+  labelNames: ['level'] as const,
+  registers: [registry],
+})
+
+/**
+ * Record the worker tick interval for a given level (base | max | current).
+ * Called by `lifecycle.ts` at boot and every time the backoff changes.
+ */
+export function observeWorkerTickInterval(level: 'base' | 'max' | 'current', ms: number): void {
+  try {
+    workerTickIntervalMs.set({ level }, ms)
+  } catch {
+    // never surface metric errors into the worker
+  }
+}
+
 /**
  * Mirror of `observeWorkflowEvent` in apps/api/src/metrics.ts. Same
  * outcome label set (`requested|succeeded|failed|voided|retried`),

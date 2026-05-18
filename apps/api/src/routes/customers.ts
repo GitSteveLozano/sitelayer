@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
-import { parseJsonBody } from '../http-utils.js'
+import { buildPaginationMeta, parseJsonBody, parsePagination } from '../http-utils.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 
@@ -81,13 +81,21 @@ export async function handleCustomerRoutes(
   ctx: CustomerRouteCtx,
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/customers') {
+    const pagination = parsePagination(url.searchParams)
+    if (!pagination.ok) {
+      ctx.sendJson(400, { error: pagination.error })
+      return true
+    }
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query(
-        'select id, external_id, name, source, version, deleted_at, created_at from customers where company_id = $1 and deleted_at is null order by name asc',
-        [ctx.company.id],
+        'select id, external_id, name, source, version, deleted_at, created_at from customers where company_id = $1 and deleted_at is null order by name asc limit $2 offset $3',
+        [ctx.company.id, pagination.value.limit, pagination.value.offset],
       ),
     )
-    ctx.sendJson(200, { customers: result.rows })
+    ctx.sendJson(200, {
+      customers: result.rows,
+      pagination: buildPaginationMeta(pagination.value, result.rowCount ?? result.rows.length),
+    })
     return true
   }
 

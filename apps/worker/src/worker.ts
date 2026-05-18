@@ -40,6 +40,7 @@ const databaseUrl = appConfig.databaseUrl
 const databaseSslRejectUnauthorized = process.env.DATABASE_SSL_REJECT_UNAUTHORIZED !== 'false'
 const activeCompanySlug = process.env.ACTIVE_COMPANY_SLUG ?? 'la-operations'
 const pollIntervalMs = Number(process.env.WORKER_POLL_INTERVAL_MS ?? 10_000)
+const maxPollIntervalMs = Number(process.env.WORKER_POLL_MAX_INTERVAL_MS ?? 60_000)
 
 const pool = buildPool({
   databaseUrl,
@@ -386,7 +387,7 @@ async function heartbeat(): Promise<{ idle: boolean }> {
   return { idle: true }
 }
 
-const lifecycle = createLifecycle({ pool, logger, pollIntervalMs, heartbeat })
+const lifecycle = createLifecycle({ pool, logger, pollIntervalMs, maxPollIntervalMs, heartbeat })
 lifecycle.installSignalHandlers()
 
 const initial = await lifecycle.runHeartbeat()

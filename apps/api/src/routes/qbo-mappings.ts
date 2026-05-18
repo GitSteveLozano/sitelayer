@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { PoolClient } from 'pg'
 import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
-import { parseJsonBody } from '../http-utils.js'
+import { buildPaginationMeta, parseJsonBody, parsePagination, type PaginationParams } from '../http-utils.js'
 import { recordMutationLedger, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 
@@ -64,8 +64,17 @@ export type QboMappingRouteCtx = {
    * List active integration_mappings rows for a (company, provider). Same
    * shape as server.ts's listIntegrationMappings; passed in so this route
    * module doesn't need a Pool reference.
+   *
+   * `pagination` is optional so existing callers/tests that hand back the
+   * full set continue to work; when supplied, the implementation should
+   * apply `limit`/`offset` at the SQL layer.
    */
-  listMappings: (companyId: string, provider: string, entityType: string | null) => Promise<IntegrationMappingRow[]>
+  listMappings: (
+    companyId: string,
+    provider: string,
+    entityType: string | null,
+    pagination?: PaginationParams,
+  ) => Promise<IntegrationMappingRow[]>
   /**
    * Upsert via (company, provider, entity_type, local_ref). Same contract
    * as server.ts's upsertIntegrationMapping. Threaded through the context
@@ -99,7 +108,16 @@ export async function handleQboMappingRoutes(
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/integrations/qbo/mappings') {
     const entityType = url.searchParams.get('entity_type')
-    ctx.sendJson(200, { mappings: await ctx.listMappings(ctx.company.id, 'qbo', entityType) })
+    const pagination = parsePagination(url.searchParams)
+    if (!pagination.ok) {
+      ctx.sendJson(400, { error: pagination.error })
+      return true
+    }
+    const mappings = await ctx.listMappings(ctx.company.id, 'qbo', entityType, pagination.value)
+    ctx.sendJson(200, {
+      mappings,
+      pagination: buildPaginationMeta(pagination.value, mappings.length),
+    })
     return true
   }
 
