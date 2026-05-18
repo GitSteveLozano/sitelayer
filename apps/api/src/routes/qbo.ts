@@ -133,10 +133,10 @@ export async function handleQboRoutes(req: http.IncomingMessage, url: URL, ctx: 
       return true
     }
     const stateMembership = await withCompanyClient(stateData.companyId, async (client) =>
-      client.query(
-        'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
-        [stateData.companyId, stateData.userId],
-      ),
+      client.query('select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1', [
+        stateData.companyId,
+        stateData.userId,
+      ]),
     )
     if (!stateMembership.rows.length) {
       sendJson(403, { error: 'state user is not a member of this company' })

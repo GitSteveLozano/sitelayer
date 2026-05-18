@@ -393,6 +393,10 @@ jobs:
           APP_TIER: local
           ACTIVE_COMPANY_SLUG: e2e-fixtures
           NODE_ENV: test
+          # No Clerk wiring in CI — soft-disable the notification + welcome-email
+          # runners so the worker boots. The workflow specs that depend on
+          # POST_SUCCEEDED don't need notifications fired.
+          NOTIFICATIONS_ENABLED: '0'
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
