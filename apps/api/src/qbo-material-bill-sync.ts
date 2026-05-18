@@ -54,6 +54,13 @@ type UnsyncedBill = {
   occurred_on: string | null
 }
 
+// TODO(cost-log): the wrappers below are exercised only by the
+// integration-test harness today (see qbo-material-bill-sync.test.ts).
+// They operate against a plain QboBillSyncRunner (no PoolClient /
+// withCompanyClient context), so company_usage_log cost rows can't be
+// attached here without restructuring the runner contract. Wire when
+// this is folded into withMutationTx alongside the production
+// material-bill push site in routes/qbo.ts (which already logs cost).
 async function qboGet<T>(
   baseUrl: string,
   realmId: string,
