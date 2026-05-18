@@ -132,9 +132,11 @@ export async function handleQboRoutes(req: http.IncomingMessage, url: URL, ctx: 
       sendJson(status, { error: error instanceof Error ? error.message : 'invalid state' })
       return true
     }
-    const stateMembership = await pool.query(
-      'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
-      [stateData.companyId, stateData.userId],
+    const stateMembership = await withCompanyClient(stateData.companyId, async (client) =>
+      client.query('select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1', [
+        stateData.companyId,
+        stateData.userId,
+      ]),
     )
     if (!stateMembership.rows.length) {
       sendJson(403, { error: 'state user is not a member of this company' })

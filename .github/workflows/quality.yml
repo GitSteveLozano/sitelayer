@@ -282,19 +282,10 @@ jobs:
       VITE_API_URL: http://localhost:3001
       VITE_DEFAULT_COMPANY_SLUG: e2e-fixtures
       E2E_BASE_URL: http://localhost:3100
-      # Local 2026-05-17 run with the seed fixture + act-as header
-      # path landed showed 5/6 specs fail: three workflow specs poll
-      # for `posted` but never advance because the CI e2e job does
-      # not start a worker (the worker is what drains
-      # mutation_outbox → emits *_SUCCEEDED into the reducer); two
-      # other specs fail on real UI assertions (`Labor variance`
-      # card missing, `/^Resolved/` text not visible). Leaving the
-      # flag at '0' so the harness wiring (browser install, spec
-      # discovery, config validation) stays green while those
-      # blockers are addressed in follow-up PRs. The flip becomes
-      # safe once (a) a worker process is started alongside the
-      # API in this job, and (b) the failing UI assertions are
-      # reconciled with the current screens.
+      # E2E_RUN held at '0'. Worker wiring is now in place (POST_SUCCEEDED
+      # events fire from the bundled worker), but specs may still need
+      # UI-assertion reconciliation before flipping. To flip: set to '1' and
+      # verify all specs pass in CI.
       E2E_RUN: '0'
       E2E_SKIP_WEBSERVER: '1'
     steps:
@@ -384,6 +375,29 @@ jobs:
           cat /tmp/web.log
           exit 1
 
+      - name: Start worker process
+        run: |
+          npm run build --workspace @sitelayer/worker
+          nohup npm --workspace @sitelayer/worker run start > /tmp/worker.log 2>&1 &
+          echo $! > /tmp/worker.pid
+          # wait a moment for boot, then verify it's still running
+          sleep 3
+          if ! kill -0 "$(cat /tmp/worker.pid)" 2>/dev/null; then
+            echo "Worker failed to start. Log:"
+            cat /tmp/worker.log || true
+            exit 1
+          fi
+          echo "Worker started (PID $(cat /tmp/worker.pid))"
+        env:
+          DATABASE_URL: postgres://sitelayer:sitelayer@localhost:5432/sitelayer
+          APP_TIER: local
+          ACTIVE_COMPANY_SLUG: e2e-fixtures
+          NODE_ENV: test
+          # No Clerk wiring in CI — soft-disable the notification + welcome-email
+          # runners so the worker boots. The workflow specs that depend on
+          # POST_SUCCEEDED don't need notifications fired.
+          NOTIFICATIONS_ENABLED: '0'
+
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium
 
@@ -405,6 +419,8 @@ jobs:
           cat /tmp/api.log || true
           echo '--- /tmp/web.log ---'
           cat /tmp/web.log || true
+          echo '--- /tmp/worker.log ---'
+          cat /tmp/worker.log || true
 
       - name: Stop servers
         if: always()
@@ -414,4 +430,7 @@ jobs:
           fi
           if [ -f /tmp/web.pid ]; then
             kill "$(cat /tmp/web.pid)" 2>/dev/null || true
+          fi
+          if [ -f /tmp/worker.pid ]; then
+            kill "$(cat /tmp/worker.pid)" 2>/dev/null || true
           fi
