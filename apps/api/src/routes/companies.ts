@@ -89,6 +89,39 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
     return true
   }
 
+  // GET /api/me/memberships — list every (company, role) the current
+  // Clerk user is in, so the SPA can render a multi-company switcher.
+  // This is the only route that legitimately needs to read across
+  // companies (the user is asking "which companies am I in?") — every
+  // other surface is single-tenant. The query runs at the pool, not
+  // through withCompanyClient, because there's no active company id
+  // yet. Migration 066's `app_current_company_id() IS NULL OR ...`
+  // policy explicitly permits this read at the pool.
+  //
+  // Distinct from `GET /api/companies` (above) which returns the same
+  // memberships but is shaped for the historical admin / onboarding
+  // flow. The /me variant returns a narrower shape and skips the
+  // `created_at` cursor; the switcher just needs slug/name/role.
+  if (req.method === 'GET' && url.pathname === '/api/me/memberships') {
+    const result = await pool.query<{
+      company_id: string
+      company_slug: string
+      company_name: string
+      role: string
+    }>(
+      `
+      select c.id as company_id, c.slug as company_slug, c.name as company_name, cm.role
+      from company_memberships cm
+      join companies c on c.id = cm.company_id
+      where cm.clerk_user_id = $1
+      order by c.name asc
+      `,
+      [userId],
+    )
+    sendJson(200, { memberships: result.rows })
+    return true
+  }
+
   const modulesMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/modules$/)
   if (req.method === 'GET' && modulesMatch) {
     const companyId = modulesMatch[1]!
@@ -256,6 +289,50 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
     })
     observeAudit('company', 'update_settings')
     sendJson(200, { ot_service_item_code: updatedRow.ot_service_item_code })
+    return true
+  }
+
+  // GET /api/companies/:id/usage — month-to-date cost rollup from
+  // company_usage_log (migration 086). The substrate for future quotas;
+  // no enforcement here, just read access. Any member of the company can
+  // read; the data is non-sensitive aggregate spend. The query carries
+  // its own company_id filter, mirroring what RLS would enforce via
+  // app_current_company_id() — so a misrouted call cannot see another
+  // tenant's spend even if RLS is in shadow mode.
+  const usageMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/usage$/)
+  if (req.method === 'GET' && usageMatch) {
+    const companyId = usageMatch[1]!
+    const member = await pool.query<{ role: string }>(
+      'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+      [companyId, userId],
+    )
+    if (!member.rows[0]) {
+      sendJson(403, { error: 'not a member of this company' })
+      return true
+    }
+    const rollup = await pool.query<{ operation: string; count: string | number; total_usd: string | number }>(
+      `select operation,
+              count(*) as count,
+              coalesce(sum(cost_usd), 0) as total_usd
+         from company_usage_log
+        where company_id = $1
+          and created_at >= date_trunc('month', now())
+        group by operation
+        order by operation asc`,
+      [companyId],
+    )
+    const byOperation = rollup.rows.map((row) => ({
+      operation: row.operation,
+      count: Number(row.count),
+      total_usd: Number(row.total_usd),
+    }))
+    const totalUsd = byOperation.reduce((acc, row) => acc + row.total_usd, 0)
+    sendJson(200, {
+      month_to_date: {
+        total_usd: totalUsd,
+        by_operation: byOperation,
+      },
+    })
     return true
   }
 

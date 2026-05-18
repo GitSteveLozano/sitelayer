@@ -1,0 +1,14 @@
+[Unit]
+Description=Daily off-region backup at 06:00 UTC
+Documentation=https://github.com/GitSteveLozano/sitelayer/blob/main/BACKUP_STRATEGY.md
+
+[Timer]
+# 06:00 UTC daily, well after the in-region 03:17 / 03:32 / 03:47 chain so
+# the off-region pipe doesn't fight the local dump for pg_dump connections.
+OnCalendar=*-*-* 06:00:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+Unit=sitelayer-offregion-backup.service
+
+[Install]
+WantedBy=timers.target

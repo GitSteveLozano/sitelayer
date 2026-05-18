@@ -26,6 +26,7 @@ import {
   type RoleMode,
 } from '../lib/active-context.js'
 import { MBottomTabs, MChip, MChipRow, MI, MShell } from '../components/m/index.js'
+import { CompanySwitcher } from '../components/shell/CompanySwitcher.js'
 import { InstallPromptBanner } from '../components/shell/InstallPromptBanner.js'
 import { OfflineBanner } from '../components/shell/OfflineBanner.js'
 import { PushDeniedBanner } from '../components/shell/PushDeniedBanner.js'
@@ -198,6 +199,11 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
         <UpdateBanner />
         <InstallPromptBanner />
         <PushDeniedBanner />
+        {/* Multi-company switcher — renders nothing for single-company
+            users. Mounted above the role-mode switcher so the tenancy
+            choice precedes the persona choice (you pick which company
+            you're acting on, then which hat you're wearing inside it). */}
+        <CompanySwitcher />
         {roleModes.length > 1 ? (
           <RoleModeSwitcher
             modes={roleModes}

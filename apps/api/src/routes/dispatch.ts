@@ -99,6 +99,7 @@ export type DispatchContext = {
     successRedirectUri: string
     stateSecret: string
     baseUrl: string
+    environment?: 'sandbox' | 'production'
   }
   estimateShareConfig: {
     secret: string

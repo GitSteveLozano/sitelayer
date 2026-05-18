@@ -743,6 +743,7 @@ const server = http.createServer(async (req, res) => {
                 successRedirectUri: qboSuccessRedirectUri,
                 stateSecret: qboStateSecret,
                 baseUrl: qboBaseUrl,
+                environment: qboEnvironment,
               },
               estimateShareConfig: {
                 secret: estimateShareSecret,

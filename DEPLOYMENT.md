@@ -505,6 +505,54 @@ Monthly manual drill (regardless of weekly timer):
 bash /app/sitelayer/scripts/restore-drill.sh
 ```
 
+### Off-region backup
+
+Daily 06:00 UTC, systemd timer `sitelayer-offregion-backup.timer`
+runs `scripts/backup-to-offregion.sh`, which pipes `pg_dump | gzip`
+into a DO Spaces bucket in a non-`tor1` region (default: `nyc3`).
+Retention 35 days.
+
+Existing backup layers (managed Postgres PITR, weekly droplet snapshots,
+the daily logical `sitelayer-postgres-backup.timer` and its off-host copy
+to the preview droplet) all live in `tor1`. The off-region timer is
+defense-in-depth for a region-wide DigitalOcean outage; it is not a
+substitute for any of the in-region layers.
+
+Unit files live in `ops/systemd/` and are copied to `/etc/systemd/system/`
+during enable. They are NOT auto-enabled by the deploy pipeline — the
+off-region Spaces bucket must be provisioned and the
+`DO_SPACES_OFFREGION_*` env vars rendered into `/app/sitelayer/.env`
+first, otherwise the script exits 1 with a clear error.
+
+To enable on the prod droplet:
+
+1. Provision the off-region Spaces bucket + scoped read/write key.
+   Run `scripts/provision-spaces-buckets.sh --region nyc3` against a
+   single-bucket override, or create the bucket manually via `doctl` /
+   the DO console. Verify with
+   `AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… aws --endpoint-url https://nyc3.digitaloceanspaces.com s3 ls`.
+2. Add `DO_SPACES_OFFREGION_KEY`, `DO_SPACES_OFFREGION_SECRET`,
+   `DO_SPACES_OFFREGION_BUCKET`, and `DO_SPACES_OFFREGION_ENDPOINT` to
+   the GitHub Actions `production` environment so the next deploy renders
+   them into `/app/sitelayer/.env` via `ops/env/production.env.json`.
+3. Copy unit files:
+   `sudo cp /app/sitelayer/ops/systemd/sitelayer-offregion-backup.{service,timer} /etc/systemd/system/`
+4. `sudo systemctl daemon-reload && sudo systemctl enable --now sitelayer-offregion-backup.timer`
+5. Verify with `systemctl list-timers | grep offregion` and
+   `journalctl -u sitelayer-offregion-backup.service`.
+
+To run a one-off backup outside the timer (operator on the droplet):
+
+```bash
+sudo -u sitelayer /app/sitelayer/scripts/backup-to-offregion.sh
+```
+
+To sweep retention without uploading a new dump:
+
+```bash
+sudo -u sitelayer /app/sitelayer/scripts/backup-to-offregion.sh --skip-backup --retain-days 35
+```
+
 ### Container Log Rotation
 
 `docker-compose.prod.yml` configures a per-service `logging` block:
