@@ -153,11 +153,13 @@ if ! command -v "$AWS_CLI" >/dev/null 2>&1; then
   exit 1
 fi
 
-# pg_dump must read RLS-protected tables (audit_events, mutation_outbox,
-# sync_events, workflow_event_log — RLS ENABLED via migration 073). Same
-# trick as scripts/backup-postgres.sh: -c row_security=off at the GUC
-# layer. DO managed-PG deploy user has BYPASSRLS so this is allowed.
-PG_DUMP_PGOPTIONS="${PG_DUMP_PGOPTIONS:--c row_security=off}"
+# pg_dump must read RLS-protected tables. Phase 2 (073) enabled RLS on
+# 4 tables; Phase 3 (085) FORCEs RLS on 65 more. `row_security=off`
+# does not bypass FORCE; the DO managed-PG deploy user is not BYPASSRLS.
+# Use --enable-row-security and rely on migration 066's permissive
+# policy (USING `app_current_company_id() IS NULL OR ...`) — without
+# the GUC bound, every row is visible. Same approach as
+# scripts/backup-postgres.sh.
 
 # Configure awscli to talk to the off-region Spaces endpoint. Scope the
 # vars to this invocation rather than mutating the calling env.
@@ -183,7 +185,7 @@ if [ "$SKIP_BACKUP" -ne 1 ]; then
   # upload internally so the dump is never staged on local disk. PIPESTATUS
   # lets us catch a pg_dump or gzip failure even though `aws s3 cp` exited 0.
   set +e
-  PGOPTIONS="$PG_DUMP_PGOPTIONS" pg_dump --no-owner --no-privileges "$DATABASE_URL" \
+  pg_dump --enable-row-security --no-owner --no-privileges "$DATABASE_URL" \
     | gzip -9 \
     | "$AWS_CLI" s3 cp --no-progress --expected-size 0 - "$uri"
   pipe_status=("${PIPESTATUS[@]}")
