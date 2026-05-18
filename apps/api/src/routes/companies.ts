@@ -259,6 +259,50 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
     return true
   }
 
+  // GET /api/companies/:id/usage — month-to-date cost rollup from
+  // company_usage_log (migration 086). The substrate for future quotas;
+  // no enforcement here, just read access. Any member of the company can
+  // read; the data is non-sensitive aggregate spend. The query carries
+  // its own company_id filter, mirroring what RLS would enforce via
+  // app_current_company_id() — so a misrouted call cannot see another
+  // tenant's spend even if RLS is in shadow mode.
+  const usageMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/usage$/)
+  if (req.method === 'GET' && usageMatch) {
+    const companyId = usageMatch[1]!
+    const member = await pool.query<{ role: string }>(
+      'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+      [companyId, userId],
+    )
+    if (!member.rows[0]) {
+      sendJson(403, { error: 'not a member of this company' })
+      return true
+    }
+    const rollup = await pool.query<{ operation: string; count: string | number; total_usd: string | number }>(
+      `select operation,
+              count(*) as count,
+              coalesce(sum(cost_usd), 0) as total_usd
+         from company_usage_log
+        where company_id = $1
+          and created_at >= date_trunc('month', now())
+        group by operation
+        order by operation asc`,
+      [companyId],
+    )
+    const byOperation = rollup.rows.map((row) => ({
+      operation: row.operation,
+      count: Number(row.count),
+      total_usd: Number(row.total_usd),
+    }))
+    const totalUsd = byOperation.reduce((acc, row) => acc + row.total_usd, 0)
+    sendJson(200, {
+      month_to_date: {
+        total_usd: totalUsd,
+        by_operation: byOperation,
+      },
+    })
+    return true
+  }
+
   if (req.method === 'POST' && url.pathname === '/api/companies') {
     const parsed = parseJsonBody(CompanyCreateBodySchema, await readBody())
     if (!parsed.ok) {

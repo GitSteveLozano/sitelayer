@@ -20,12 +20,21 @@ import { handleCompanyRoutes, type CompanyRouteCtx } from './companies.js'
 type CompanyRow = { id: string; ot_service_item_code: string | null; modules?: Record<string, boolean> }
 type ServiceItemRow = { company_id: string; code: string }
 type MembershipRow = { company_id: string; clerk_user_id: string; role: string }
+type UsageLogRow = {
+  company_id: string
+  operation: string
+  cost_usd: number
+  /** Optional override; defaults to "now" so the rollup filter
+   *  (`created_at >= date_trunc('month', now())`) includes it. */
+  created_at?: Date
+}
 
 class FakePool {
   companies: CompanyRow[] = []
   serviceItems: ServiceItemRow[] = []
   memberships: MembershipRow[] = []
   audit: Array<{ entityType: string; action: string; before: unknown; after: unknown }> = []
+  usageLog: UsageLogRow[] = []
 
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     const trimmed = sql.trim()
@@ -40,6 +49,38 @@ class FakePool {
       const [companyId, code] = params as [string, string]
       const r = this.serviceItems.find((x) => x.company_id === companyId && x.code === code)
       return { rows: r ? [{ code: r.code }] : [], rowCount: r ? 1 : 0 }
+    }
+
+    // GET /api/companies/:id/usage rollup — group by operation over the
+    // calendar month. Mirrors the route's SQL: count + sum filtered to
+    // month-to-date. Returns numeric totals as strings to match pg's
+    // numeric round-trip, so the route's Number() coercion is exercised.
+    if (
+      /^select operation,/i.test(trimmed) &&
+      /count\(\*\) as count/i.test(trimmed) &&
+      /from company_usage_log/i.test(trimmed)
+    ) {
+      const [companyId] = params as [string]
+      const now = new Date()
+      const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+      const grouped = new Map<string, { count: number; total: number }>()
+      for (const row of this.usageLog) {
+        if (row.company_id !== companyId) continue
+        const ts = row.created_at ?? new Date()
+        if (ts < monthStart) continue
+        const acc = grouped.get(row.operation) ?? { count: 0, total: 0 }
+        acc.count += 1
+        acc.total += Number(row.cost_usd)
+        grouped.set(row.operation, acc)
+      }
+      const rows = [...grouped.entries()]
+        .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+        .map(([operation, v]) => ({
+          operation,
+          count: v.count,
+          total_usd: v.total.toString(),
+        }))
+      return { rows, rowCount: rows.length }
     }
 
     if (/^select ot_service_item_code from companies/i.test(trimmed)) {
@@ -456,5 +497,78 @@ describe('GET /api/companies/:id/settings', () => {
 
     await handleCompanyRoutes({ method: 'GET' } as never, buildUrl('/api/companies/co-1/settings'), ctx)
     expect(responses[0]?.status).toBe(403)
+  })
+})
+
+describe('GET /api/companies/:id/usage', () => {
+  it('groups month-to-date cost rows by operation and reports the total', async () => {
+    const pool = new FakePool()
+    pool.companies.push({ id: 'co-1', ot_service_item_code: null })
+    pool.memberships.push({ company_id: 'co-1', clerk_user_id: 'user_member', role: 'member' })
+    pool.usageLog.push(
+      { company_id: 'co-1', operation: 'qbo_api_call', cost_usd: 0.05 },
+      { company_id: 'co-1', operation: 'qbo_api_call', cost_usd: 0.05 },
+      { company_id: 'co-1', operation: 'blueprint_vision_page', cost_usd: 1.25 },
+    )
+
+    const { ctx, responses } = makeCtx(pool, 'user_member')
+    const handled = await handleCompanyRoutes({ method: 'GET' } as never, buildUrl('/api/companies/co-1/usage'), ctx)
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as {
+      month_to_date: {
+        total_usd: number
+        by_operation: Array<{ operation: string; count: number; total_usd: number }>
+      }
+    }
+    expect(body.month_to_date.by_operation).toEqual([
+      { operation: 'blueprint_vision_page', count: 1, total_usd: 1.25 },
+      { operation: 'qbo_api_call', count: 2, total_usd: 0.1 },
+    ])
+    // Total math: 0.05 + 0.05 + 1.25 = 1.35. Use toBeCloseTo because pg
+    // numeric round-trips as a string and Number() parses it inexactly.
+    expect(body.month_to_date.total_usd).toBeCloseTo(1.35, 6)
+  })
+
+  it('returns zeros (empty by_operation, total 0) when the company has no logged usage', async () => {
+    const pool = new FakePool()
+    pool.companies.push({ id: 'co-empty', ot_service_item_code: null })
+    pool.memberships.push({ company_id: 'co-empty', clerk_user_id: 'user_member', role: 'member' })
+
+    const { ctx, responses } = makeCtx(pool, 'user_member')
+    await handleCompanyRoutes({ method: 'GET' } as never, buildUrl('/api/companies/co-empty/usage'), ctx)
+    expect(responses[0]?.status).toBe(200)
+    expect(responses[0]?.body).toEqual({
+      month_to_date: { total_usd: 0, by_operation: [] },
+    })
+  })
+
+  it('rejects non-members with 403 and never returns usage data', async () => {
+    const pool = new FakePool()
+    pool.companies.push({ id: 'co-1', ot_service_item_code: null })
+    pool.usageLog.push({ company_id: 'co-1', operation: 'qbo_api_call', cost_usd: 0.05 })
+
+    const { ctx, responses } = makeCtx(pool, 'user_stranger')
+    await handleCompanyRoutes({ method: 'GET' } as never, buildUrl('/api/companies/co-1/usage'), ctx)
+    expect(responses[0]?.status).toBe(403)
+  })
+
+  it("scopes rows to the requested company (a different tenant's spend never leaks)", async () => {
+    const pool = new FakePool()
+    pool.companies.push({ id: 'co-a', ot_service_item_code: null }, { id: 'co-b', ot_service_item_code: null })
+    pool.memberships.push({ company_id: 'co-a', clerk_user_id: 'user_a', role: 'admin' })
+    pool.usageLog.push(
+      { company_id: 'co-a', operation: 'qbo_api_call', cost_usd: 0.05 },
+      { company_id: 'co-b', operation: 'qbo_api_call', cost_usd: 9.99 },
+    )
+
+    const { ctx, responses } = makeCtx(pool, 'user_a')
+    await handleCompanyRoutes({ method: 'GET' } as never, buildUrl('/api/companies/co-a/usage'), ctx)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as {
+      month_to_date: { total_usd: number; by_operation: Array<{ operation: string; total_usd: number }> }
+    }
+    expect(body.month_to_date.by_operation).toEqual([{ operation: 'qbo_api_call', count: 1, total_usd: 0.05 }])
+    expect(body.month_to_date.total_usd).toBeCloseTo(0.05, 6)
   })
 })

@@ -13,10 +13,17 @@ import { randomUUID } from 'node:crypto'
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import { z } from 'zod'
-import { createLogger } from '@sitelayer/logger'
+import { createLogger, getRequestContext } from '@sitelayer/logger'
 import type { ActiveCompany } from '../auth-types.js'
 import { parseExpectedVersion, parseJsonBody } from '../http-utils.js'
-import { recordMutationLedger, recordSyncEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import {
+  currentTraceHeaders,
+  recordMutationLedger,
+  recordSyncEvent,
+  withCompanyClient,
+  withMutationTx,
+} from '../mutation-tx.js'
+import { recordCostLog } from '../cost-log.js'
 import { QboParseError, parseQboClass, parseQboEstimateCreateResponse, parseQboItem } from '../qbo-parse.js'
 import { qboGet, qboPost } from '../qbo-http.js'
 import { decodeQboState, encodeQboState, type QboOAuthState } from '../qbo-oauth-state.js'
@@ -82,6 +89,49 @@ export type QboConfig = {
   successRedirectUri: string
   stateSecret: string
   baseUrl: string
+  /** 'sandbox' | 'production'. Drives whether per-call cost is logged
+   *  into `company_usage_log` — sandbox is free; production gets a
+   *  placeholder cost per call. */
+  environment?: 'sandbox' | 'production'
+}
+
+// Placeholder per-call cost for the QBO Intuit Developer plan. Real cost
+// depends on the plan tier; we'll calibrate from `company_usage_log`
+// once pilot data accumulates. See migration 086.
+const QBO_PROD_CALL_COST_USD = 0.05
+
+function isQboLive(qboConfig: QboConfig): boolean {
+  if (qboConfig.environment) return qboConfig.environment === 'production'
+  // Fallback: infer from the base URL when the explicit field isn't set
+  // (older call sites that haven't been threaded through). The sandbox
+  // host always carries the `sandbox-` subdomain.
+  return !qboConfig.baseUrl.includes('sandbox-')
+}
+
+/**
+ * Append one `company_usage_log` row for a successful QBO API call. Folds
+ * into the surrounding `withMutationTx` so the cost lands on the same
+ * `app.company_id` GUC RLS uses, and rolls back if the surrounding
+ * mutation does. No-op when QBO is in sandbox mode.
+ */
+async function logQboCostInsideTx(
+  client: import('pg').PoolClient,
+  qboConfig: QboConfig,
+  companyId: string,
+  description: string,
+): Promise<void> {
+  if (!isQboLive(qboConfig)) return
+  const ctx = getRequestContext()
+  const { sentryTrace } = currentTraceHeaders()
+  await recordCostLog(client, {
+    companyId,
+    operation: 'qbo_api_call',
+    costUsd: QBO_PROD_CALL_COST_USD,
+    description,
+    requestId: ctx?.requestId ?? null,
+    sentryTrace,
+    metadata: { qbo_environment: qboConfig.environment ?? 'unknown' },
+  })
 }
 
 export type QboRouteCtx = {
@@ -423,6 +473,12 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
       const realmId = connection.provider_account_id ?? ''
       const accessToken = connection.access_token ?? ''
 
+      // Each successful QBO HTTP call appends one descriptor here. The
+      // final `withMutationTx` below drains the list into
+      // `company_usage_log` so all cost rows for this sync attempt land
+      // in the same transaction as the connection status flip.
+      const qboCostEntries: string[] = []
+
       type QboCustomer = { Id?: string; DisplayName?: string; id?: string; displayName?: string }
       let qboCustomers: QboCustomer[] = []
       try {
@@ -433,6 +489,7 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
           accessToken,
         )
         qboCustomers = customerResponse.QueryResponse?.Customer ?? []
+        qboCostEntries.push('qbo:customer:query')
       } catch (e) {
         logger.error({ err: e, scope: 'qbo_customers' }, 'Failed to sync customers from QBO')
         captureWithEntityContext(e, {
@@ -506,6 +563,7 @@ do update set
           accessToken,
         )
         qboItemsRaw = itemResponse.QueryResponse?.Item ?? []
+        qboCostEntries.push('qbo:item:query')
       } catch (e) {
         logger.error({ err: e, scope: 'qbo_items' }, 'Failed to sync items from QBO')
         captureWithEntityContext(e, {
@@ -597,6 +655,7 @@ do update set
           accessToken,
         )
         qboClassesRaw = classResponse.QueryResponse?.Class ?? []
+        qboCostEntries.push('qbo:class:query')
       } catch (e) {
         logger.error({ err: e, scope: 'qbo_classes' }, 'Failed to sync classes from QBO')
         captureWithEntityContext(e, {
@@ -696,6 +755,7 @@ do update set
             connection.id,
           )
         }
+        qboCostEntries.push('qbo:time_activity:query')
       } catch (e) {
         logger.error({ err: e, scope: 'qbo_time_activities' }, 'Failed to pull time activities from QBO')
         captureWithEntityContext(e, {
@@ -724,6 +784,7 @@ do update set
             connection.id,
           )
         }
+        qboCostEntries.push('qbo:bill:query')
       } catch (e) {
         logger.error({ err: e, scope: 'qbo_bills' }, 'Failed to pull bills from QBO')
         captureWithEntityContext(e, {
@@ -773,6 +834,12 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
           outboxPayload: qboSnapshot,
           idempotencyKey: `integration_connection:qbo:sync:${connection.id}:${qboSyncRunId}`,
         })
+        // Drain every successful QBO call from this sync attempt into
+        // company_usage_log. No-op on sandbox; production logs $0.05 per
+        // call as a placeholder (see migration 086 and isQboLive above).
+        for (const description of qboCostEntries) {
+          await logQboCostInsideTx(client, qboConfig, company.id, description)
+        }
         return result.rows[0] ?? connection
       })
 
@@ -870,6 +937,11 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
         })
         continue
       }
+      // Successful QBO calls for this bill are collected here and drained
+      // into company_usage_log inside the success-path withMutationTx
+      // below. One row per real HTTP call (vendor query, vendor create,
+      // bill create).
+      const billCostEntries: string[] = []
       try {
         const displayName = bill.vendor_name.trim()
         if (!displayName) {
@@ -900,11 +972,13 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
             realmId,
             accessToken,
           )
+          billCostEntries.push('qbo:vendor:query')
           vendorId = vendorSearch.QueryResponse?.Vendor?.[0]?.Id ?? null
           if (!vendorId) {
             const created = await qboPost<{ Vendor?: { Id?: string } }>(baseUrl, `/vendor`, realmId, accessToken, {
               DisplayName: displayName,
             })
+            billCostEntries.push('qbo:vendor:create')
             vendorId = created.Vendor?.Id ?? null
           }
           if (!vendorId) {
@@ -938,6 +1012,7 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
           ],
         }
         const response = await qboPost<{ Bill?: { Id?: string } }>(baseUrl, `/bill`, realmId, accessToken, billPayload)
+        billCostEntries.push('qbo:bill:create')
         const qboBillId = response.Bill?.Id ?? null
         if (!qboBillId) {
           errors.push({ bill_id: bill.id, error: 'QBO did not return a Bill.Id' })
@@ -968,6 +1043,9 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
             null,
             { executor: client },
           )
+          for (const description of billCostEntries) {
+            await logQboCostInsideTx(client, qboConfig, company.id, description)
+          }
         })
         synced += 1
       } catch (err) {
@@ -1086,6 +1164,7 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
         await recordSyncEvent(company.id, 'project', projectId, { action: 'push_qbo', result }, null, {
           executor: client,
         })
+        await logQboCostInsideTx(client, qboConfig, company.id, 'qbo:estimate:create')
       })
       sendJson(200, { success: true, result })
     } catch (error) {

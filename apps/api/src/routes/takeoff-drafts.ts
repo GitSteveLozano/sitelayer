@@ -1,8 +1,10 @@
 import type http from 'node:http'
 import { randomUUID } from 'node:crypto'
 import type { Pool } from 'pg'
+import { getRequestContext } from '@sitelayer/logger'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { currentTraceHeaders, recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordCostLog } from '../cost-log.js'
 import { isValidUuid, parseExpectedVersion } from '../http-utils.js'
 import type { TakeoffResult } from '@sitelayer/capture-schema'
 import {
@@ -16,7 +18,11 @@ import { loadServiceItemCatalogIndex, rejectionMessageForCatalog } from '../cata
 import { captureRoomplanDraft } from '../takeoff-capture-pipelines/roomplan.js'
 import { capturePhotogrammetryDraft } from '../takeoff-capture-pipelines/photogrammetry.js'
 import { captureDroneDraft } from '../takeoff-capture-pipelines/drone.js'
-import { captureBlueprintVisionDraft, type BlueprintLiveInputs } from '../takeoff-capture-pipelines/blueprint-vision.js'
+import {
+  captureBlueprintVisionDraft,
+  resolveBlueprintVisionMode,
+  type BlueprintLiveInputs,
+} from '../takeoff-capture-pipelines/blueprint-vision.js'
 import { defaultCaptureName } from '../takeoff-capture-pipelines/shared.js'
 
 export type TakeoffDraftRouteCtx = {
@@ -38,6 +44,32 @@ export type TakeoffDraftRouteCtx = {
 
 const ALLOWED_STATUS = new Set(['active', 'archived'])
 const ALLOWED_CAPTURE_KINDS = new Set(['roomplan', 'photogrammetry', 'drone', 'blueprint_vision'])
+
+// Placeholder cost per blueprint page Claude Opus reads. The real cost
+// is token-driven (input + output) but the Anthropic SDK call site does
+// not surface usage today; we record a flat per-page estimate so the
+// per-company spend column has data while we wait for the SDK to expose
+// it. metadata flags the estimation method.
+const BLUEPRINT_VISION_COST_PER_PAGE_USD = 0.25
+
+/**
+ * Count drawing pages in a captured blueprint TakeoffResult. Returns 0
+ * for non-blueprint captures or when the artifact metadata is missing
+ * — the caller skips cost logging in that case.
+ */
+function countBlueprintPages(takeoffResult: unknown): number {
+  if (!takeoffResult || typeof takeoffResult !== 'object') return 0
+  const sa = (takeoffResult as { sourceArtifact?: unknown }).sourceArtifact
+  if (!sa || typeof sa !== 'object') return 0
+  const kind = (sa as { kind?: unknown }).kind
+  if (kind !== 'blueprint') return 0
+  const blueprint = (sa as { blueprint?: unknown }).blueprint
+  if (!blueprint || typeof blueprint !== 'object') return 0
+  const pdfMeta = (blueprint as { pdfMeta?: unknown }).pdfMeta
+  if (!pdfMeta || typeof pdfMeta !== 'object') return 0
+  const pages = (pdfMeta as { pages?: unknown }).pages
+  return typeof pages === 'number' && Number.isFinite(pages) && pages > 0 ? Math.floor(pages) : 0
+}
 const RETURNING_COLUMNS = `id, company_id, project_id, name, type, status, source, takeoff_result_blob_uri, review_required, pipeline_version, version, deleted_at, created_at, updated_at`
 const PROMOTED_MEASUREMENT_COLUMNS = `id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at`
 
@@ -376,6 +408,16 @@ export async function handleTakeoffDraftRoutes(
     const { result: takeoffResult, pipelineVersion } = dispatchOutcome
     const reviewRequired = takeoffResult.quantities.some((q) => q.confidence < 0.5)
 
+    // Was the underlying pipeline actually a live Anthropic call? The
+    // dispatcher returns the same TakeoffResult shape either way, so we
+    // re-resolve the env-gated mode flag here instead of threading a
+    // bool through the pipeline contract. Live mode requires both the
+    // multipart upload (which the route created blueprintLive from) and
+    // the env vars (BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY).
+    const usedBlueprintVisionLive =
+      kind === 'blueprint_vision' && blueprintLive != null && resolveBlueprintVisionMode() === 'live'
+    const blueprintPagesCount = usedBlueprintVisionLive ? countBlueprintPages(takeoffResult) : 0
+
     const created = await withMutationTx(async (client) => {
       const insertResult = await client.query(
         `insert into takeoff_drafts (
@@ -395,6 +437,32 @@ export async function handleTakeoffDraftRoutes(
         row: { ...row, source: kind, pipeline_version: pipelineVersion },
         actorUserId: ctx.currentUserId ?? null,
       })
+      // Cost attribution for blueprint vision: flat $0.25/page placeholder
+      // (the Anthropic SDK call site doesn't surface token counts). One row
+      // per attempt rather than per page so the cost log lines up 1:1 with
+      // the draft it produced; metadata pages count lets the read endpoint
+      // recover the per-page rate.
+      if (usedBlueprintVisionLive && blueprintPagesCount > 0) {
+        const requestCtx = getRequestContext()
+        const { sentryTrace } = currentTraceHeaders()
+        await recordCostLog(client, {
+          companyId: ctx.company.id,
+          operation: 'blueprint_vision_page',
+          costUsd: BLUEPRINT_VISION_COST_PER_PAGE_USD * blueprintPagesCount,
+          description: `blueprint_vision:capture pages=${blueprintPagesCount}`,
+          requestId: requestCtx?.requestId ?? null,
+          sentryTrace,
+          metadata: {
+            pages: blueprintPagesCount,
+            estimation: 'flat_per_page',
+            per_page_usd: BLUEPRINT_VISION_COST_PER_PAGE_USD,
+            input_tokens: null,
+            output_tokens: null,
+            pipeline_version: pipelineVersion,
+            draft_id: row.id,
+          },
+        })
+      }
       return row
     })
 
