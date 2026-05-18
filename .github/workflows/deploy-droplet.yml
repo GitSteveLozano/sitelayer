@@ -536,3 +536,20 @@ jobs:
 
             echo "Deployment completed successfully"
           EOF
+
+      - name: Notify deploy result
+        # Posts to a Slack-compatible webhook (works for Slack, Discord via
+        # the slack-compatible shim, Mattermost, etc.) on every deploy
+        # outcome. No-op when DEPLOY_NOTIFICATION_WEBHOOK is unset so
+        # forks / new operators don't fail the pipeline before they've
+        # wired a webhook. Documented in ops/env/production.env.json
+        # under "DEPLOY_NOTIFICATION_WEBHOOK".
+        if: always() && env.DEPLOY_NOTIFICATION_WEBHOOK != ''
+        uses: 8398a7/action-slack@1750b5085f3ec60384090fb7c52965ef822e869e # v3.18.0
+        with:
+          status: ${{ job.status }}
+          fields: repo,message,commit,author,action,workflow
+          text: 'sitelayer prod deploy ${{ job.status }} for ${{ github.sha }}'
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.DEPLOY_NOTIFICATION_WEBHOOK }}
+          DEPLOY_NOTIFICATION_WEBHOOK: ${{ secrets.DEPLOY_NOTIFICATION_WEBHOOK }}

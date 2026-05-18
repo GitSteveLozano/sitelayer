@@ -28,11 +28,46 @@ import { uploadClockEventPhoto } from '@/lib/api/clock'
 let replayInFlight = false
 let intervalId: ReturnType<typeof setInterval> | null = null
 
+/** Cross-tab lock name. All tabs share IndexedDB, so without a
+ * cross-tab guard two tabs both heartbeat at the same instant, both
+ * `listOfflineMutations()` returns the same rows, and each tab POSTs
+ * the same mutation before the other deletes it. The Web Locks API
+ * serializes the replay across tabs of the same origin.
+ *
+ * Available in every browser that ships Service Workers (Chrome 69+,
+ * Firefox 96+, Safari 15.4+). The fallback path runs the local
+ * `replayInFlight` guard only — that's still correct for single-tab
+ * usage and degrades gracefully on the long tail of older browsers.
+ */
+const OFFLINE_REPLAY_LOCK = 'sitelayer:offline-replay'
+
 /**
  * Idempotent — safe to call from multiple places. Bails out fast if
- * a replay is already running.
+ * a replay is already running locally OR in another tab (Web Locks).
  */
 export async function replayOfflineQueue(): Promise<{ replayed: number; dropped: number; deferred: number }> {
+  // Cross-tab guard: only one tab at a time owns the replay lock. If
+  // another tab is already replaying, `ifAvailable` returns null and
+  // we no-op rather than waiting (the other tab's heartbeat or our
+  // next heartbeat will pick up any leftover rows).
+  if (typeof navigator !== 'undefined' && navigator.locks) {
+    const result = await navigator.locks.request(
+      OFFLINE_REPLAY_LOCK,
+      { mode: 'exclusive', ifAvailable: true },
+      async (lock) => {
+        if (!lock) return null
+        return runReplay()
+      },
+    )
+    return result ?? { replayed: 0, dropped: 0, deferred: 0 }
+  }
+  // Web Locks unavailable — fall back to the local in-tab guard. Same
+  // behavior as before this fix for single-tab usage; multi-tab races
+  // are only possible on browsers without navigator.locks (pre-2020).
+  return runReplay()
+}
+
+async function runReplay(): Promise<{ replayed: number; dropped: number; deferred: number }> {
   if (replayInFlight) return { replayed: 0, dropped: 0, deferred: 0 }
   replayInFlight = true
   let replayed = 0

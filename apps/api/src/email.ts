@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { createLogger } from '@sitelayer/logger'
 
 const logger = createLogger('email')
@@ -55,11 +56,33 @@ export function loadEmailConfig(env: NodeJS.ProcessEnv = process.env): EmailConf
   return config
 }
 
+/**
+ * Returns log-safe fields derived from an EmailMessage. Email addresses are
+ * quasi-PII and bodies often carry customer/project details, so logs only
+ * receive a stable, non-reversible recipient hash plus length-only summaries
+ * of the subject/body. Use this helper at every logger call site that touches
+ * a message — never log `msg.to`, `msg.subject`, or `msg.text` directly.
+ */
+export function redactEmail(msg: EmailMessage): {
+  recipient_hash: string
+  subject_length: number
+  body_length: number
+} {
+  return {
+    recipient_hash: createHash('sha256').update(msg.to).digest('hex').slice(0, 8),
+    subject_length: msg.subject.length,
+    body_length: msg.text.length,
+  }
+}
+
 type FetchFn = typeof fetch
 
 async function sendViaResend(msg: EmailMessage, config: EmailConfig, fetchImpl: FetchFn): Promise<SendEmailResult> {
   if (!config.resendApiKey) {
-    logger.warn({ to: msg.to }, '[email] RESEND_API_KEY missing; falling back to console')
+    logger.warn(
+      { recipient_hash: redactEmail(msg).recipient_hash },
+      '[email] RESEND_API_KEY missing; falling back to console',
+    )
     return sendViaConsole(msg, 'resend')
   }
   const resendBody: Record<string, unknown> = {
@@ -87,12 +110,17 @@ async function sendViaResend(msg: EmailMessage, config: EmailConfig, fetchImpl: 
   const json = (await res.json().catch(() => ({}))) as { id?: string }
   const out: SendEmailResult = { provider: 'resend', ok: true }
   if (json.id) out.messageId = json.id
+  // messageId is provider-issued and not PII; recipient address is omitted.
+  logger.info({ provider: 'resend', messageId: out.messageId, ...redactEmail(msg) }, '[email] sent via resend')
   return out
 }
 
 async function sendViaSendgrid(msg: EmailMessage, config: EmailConfig, fetchImpl: FetchFn): Promise<SendEmailResult> {
   if (!config.sendgridApiKey) {
-    logger.warn({ to: msg.to }, '[email] SENDGRID_API_KEY missing; falling back to console')
+    logger.warn(
+      { recipient_hash: redactEmail(msg).recipient_hash },
+      '[email] SENDGRID_API_KEY missing; falling back to console',
+    )
     return sendViaConsole(msg, 'sendgrid')
   }
   const content: { type: string; value: string }[] = [{ type: 'text/plain', value: msg.text }]
@@ -120,18 +148,23 @@ async function sendViaSendgrid(msg: EmailMessage, config: EmailConfig, fetchImpl
   const messageId = res.headers.get('x-message-id')
   const out: SendEmailResult = { provider: 'sendgrid', ok: true }
   if (messageId) out.messageId = messageId
+  // messageId is provider-issued and not PII; recipient address is omitted.
+  logger.info({ provider: 'sendgrid', messageId: out.messageId, ...redactEmail(msg) }, '[email] sent via sendgrid')
   return out
 }
 
 function sendViaConsole(msg: EmailMessage, routedFrom: EmailProvider = 'console'): SendEmailResult {
+  // Console fallback: never log subject/body text or the raw recipient. The
+  // recipient_hash gives log correlation without leaking the address; the
+  // length fields preserve enough operational signal (was it truncated? did
+  // the template render?) without exposing customer data.
   logger.info(
     {
-      to: msg.to,
-      subject: msg.subject,
-      body: msg.text,
+      provider: routedFrom,
       routed_from: routedFrom,
+      ...redactEmail(msg),
     },
-    'email',
+    'email sent via console fallback',
   )
   return { provider: 'console', ok: true }
 }

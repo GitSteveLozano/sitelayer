@@ -22,7 +22,7 @@
  * approve/reject) so foremen still attribute manual overrides through
  * that channel.
  */
-import { useMemo, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
 import { ApiError } from '../../lib/api/client.js'
@@ -59,8 +59,22 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
   const [sqftDone, setSqftDone] = useState<string>('')
   const [notes, setNotes] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
+  const [touched, setTouched] = useState(false)
+
+  const workerFieldId = useId()
+  const projectFieldId = useId()
+  const serviceItemFieldId = useId()
+  const dateFieldId = useId()
+  const hoursFieldId = useId()
 
   const project = useMemo(() => projects.find((p) => p.id === projectId) ?? null, [projects, projectId])
+
+  // Inline validation only after the user tries to save once.
+  const workerError = touched && workerId.length === 0 ? 'Pick a worker.' : null
+  const projectError = touched && projectId.length === 0 ? 'Pick a project.' : null
+  const serviceItemError = touched && serviceItemCode.length === 0 ? 'Pick a service item.' : null
+  const dateError = touched && occurredOn.length === 0 ? 'Date is required.' : null
+  const hoursError = touched && !(Number(hours) > 0) ? 'Hours must be greater than 0.' : null
 
   // Notes aren't stored server-side yet — we capture them for the
   // approval-queue handoff so the foreman knows the row is intentional
@@ -77,6 +91,7 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
     !createLabor.isPending
 
   const handleSubmit = async () => {
+    setTouched(true)
     if (!canSubmit) return
     setError(null)
     try {
@@ -108,8 +123,15 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
 
         <MSectionH>Who & where</MSectionH>
         <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Field label="Worker *">
-            <MSelect value={workerId} onChange={(e) => setWorkerId(e.currentTarget.value)}>
+          <Field label="Worker *" htmlFor={workerFieldId} error={workerError}>
+            <MSelect
+              id={workerFieldId}
+              value={workerId}
+              onChange={(e) => setWorkerId(e.currentTarget.value)}
+              aria-invalid={workerError ? true : undefined}
+              aria-describedby={workerError ? `${workerFieldId}-err` : undefined}
+              aria-required="true"
+            >
               <option value="">Select worker…</option>
               {workers.map((w) => (
                 <option key={w.id} value={w.id}>
@@ -119,8 +141,9 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
             </MSelect>
           </Field>
 
-          <Field label="Project *">
+          <Field label="Project *" htmlFor={projectFieldId} error={projectError}>
             <MSelect
+              id={projectFieldId}
               value={projectId}
               onChange={(e) => {
                 setProjectId(e.currentTarget.value)
@@ -129,6 +152,9 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
                 // previously valid code may no longer apply.
                 setServiceItemCode('')
               }}
+              aria-invalid={projectError ? true : undefined}
+              aria-describedby={projectError ? `${projectFieldId}-err` : undefined}
+              aria-required="true"
             >
               <option value="">Select project…</option>
               {projects.map((p) => (
@@ -140,11 +166,15 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
             </MSelect>
           </Field>
 
-          <Field label="Service item *">
+          <Field label="Service item *" htmlFor={serviceItemFieldId} error={serviceItemError}>
             <MSelect
+              id={serviceItemFieldId}
               value={serviceItemCode}
               onChange={(e) => setServiceItemCode(e.currentTarget.value)}
               disabled={serviceItems.length === 0}
+              aria-invalid={serviceItemError ? true : undefined}
+              aria-describedby={serviceItemError ? `${serviceItemFieldId}-err` : undefined}
+              aria-required="true"
             >
               <option value="">Select service item…</option>
               {serviceItems.map((s) => (
@@ -163,11 +193,20 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
 
         <MSectionH>When & how much</MSectionH>
         <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Field label="Date *">
-            <MInput type="date" value={occurredOn} onChange={(e) => setOccurredOn(e.currentTarget.value)} />
-          </Field>
-          <Field label="Hours *">
+          <Field label="Date *" htmlFor={dateFieldId} error={dateError}>
             <MInput
+              id={dateFieldId}
+              type="date"
+              value={occurredOn}
+              onChange={(e) => setOccurredOn(e.currentTarget.value)}
+              aria-invalid={dateError ? true : undefined}
+              aria-describedby={dateError ? `${dateFieldId}-err` : undefined}
+              aria-required="true"
+            />
+          </Field>
+          <Field label="Hours *" htmlFor={hoursFieldId} error={hoursError}>
+            <MInput
+              id={hoursFieldId}
               type="number"
               inputMode="decimal"
               step="0.25"
@@ -175,6 +214,9 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
               value={hours}
               onChange={(e) => setHours(e.currentTarget.value)}
               placeholder="8.0"
+              aria-invalid={hoursError ? true : undefined}
+              aria-describedby={hoursError ? `${hoursFieldId}-err` : undefined}
+              aria-required="true"
             />
           </Field>
           <Field label="Sqft done (optional)">
@@ -214,9 +256,19 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+  htmlFor,
+  error,
+}: {
+  label: string
+  children: React.ReactNode
+  htmlFor?: string
+  error?: string | null
+}) {
   return (
-    <label style={{ display: 'block' }}>
+    <label style={{ display: 'block' }} {...(htmlFor ? { htmlFor } : {})}>
       <span
         style={{
           display: 'block',
@@ -231,6 +283,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
         {label}
       </span>
       {children}
+      {error ? (
+        <p
+          id={htmlFor ? `${htmlFor}-err` : undefined}
+          style={{ marginTop: 6, marginBottom: 0, color: 'var(--m-red)', fontSize: 12 }}
+        >
+          {error}
+        </p>
+      ) : null}
     </label>
   )
 }

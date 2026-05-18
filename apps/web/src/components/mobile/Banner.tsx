@@ -95,9 +95,14 @@ export interface BannerProps {
 }
 
 export function Banner({ tone = 'warn', title, children, action, icon, className }: BannerProps) {
+  // Error tone interrupts (assertive); status tones (warn / info / ok)
+  // announce without yanking focus so a "posted" / "approved" update
+  // doesn't hijack a screen-reader user mid-flow.
+  const isError = tone === 'error'
   return (
     <div
-      role="status"
+      role={isError ? 'alert' : 'status'}
+      aria-live={isError ? 'assertive' : 'polite'}
       className={cn('mx-4 my-2.5 px-3.5 py-3 rounded-[12px] border flex items-start gap-2.5', TONE_BG[tone], className)}
     >
       <span className={cn('shrink-0 mt-0.5', TONE_ICON[tone])} aria-hidden="true">

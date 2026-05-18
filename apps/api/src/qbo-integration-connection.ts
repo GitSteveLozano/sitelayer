@@ -51,6 +51,21 @@ export async function upsertIntegrationConnection(
     webhook_secret?: string | null
     sync_cursor?: string | null
     status?: string | null
+    /**
+     * Optimistic-concurrency guard. When supplied, the UPDATE only fires
+     * if the persisted row still has version === expected_version; if a
+     * concurrent caller has already bumped the row, the UPDATE returns
+     * zero rows and this function returns `null` so the route can emit
+     * 409 (matching the entity-CRUD pattern).
+     *
+     * `getIntegrationConnection()` reads outside the transaction in the
+     * existing route, so without this WHERE clause two concurrent POSTs
+     * with the same expected_version both passed the version check and
+     * both ran the UPDATE — the second clobbering the first. The
+     * version=expected guard moves the gate into the UPDATE itself, so
+     * only one of the two writes lands.
+     */
+    expected_version?: number | null
   },
   executor: LedgerExecutor = pool,
 ) {
@@ -78,6 +93,7 @@ export async function upsertIntegrationConnection(
     return inserted.rows[0]
   }
 
+  const expectedVersion = values.expected_version ?? null
   const updated = await executor.query(
     `
     update integration_connections
@@ -91,6 +107,7 @@ export async function upsertIntegrationConnection(
       last_synced_at = coalesce(last_synced_at, now()),
       version = version + 1
     where company_id = $1 and provider = $2 and id = $9
+      and ($10::int is null or version = $10)
     returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_state, rate_limit_state, status, version, created_at
     `,
     [
@@ -103,7 +120,16 @@ export async function upsertIntegrationConnection(
       values.sync_cursor ?? null,
       values.status ?? null,
       existing.id,
+      expectedVersion,
     ],
   )
-  return updated.rows[0] ?? existing
+  // If expected_version was passed and the row has been bumped by a
+  // concurrent caller, the UPDATE returns zero rows. Return null so the
+  // caller can emit 409 with the live version (mirrors the
+  // versioned-update.ts entity-CRUD pattern).
+  if (updated.rowCount === 0) {
+    if (expectedVersion !== null) return null
+    return existing
+  }
+  return updated.rows[0]
 }

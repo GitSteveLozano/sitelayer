@@ -79,6 +79,9 @@ export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse
             }}
           >
             <MI.Search size={18} style={{ color: 'var(--m-ink-3)' }} />
+            {/* Outline is governed by the global :focus-visible rule in
+             * m.css so keyboard users still see a 2px accent outline
+             * when this search input takes focus. */}
             <MInput
               type="search"
               placeholder="Search projects, clients…"
@@ -88,7 +91,6 @@ export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse
                 flex: 1,
                 background: 'transparent',
                 border: 'none',
-                outline: 'none',
                 height: 'auto',
                 padding: 0,
                 fontSize: 15,

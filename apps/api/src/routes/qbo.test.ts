@@ -161,8 +161,15 @@ class FakePool {
     // upsertIntegrationConnection — update
     if (/^update integration_connections/i.test(sql) && /coalesce/i.test(sql)) {
       const [companyId, provider] = params as [string, string]
+      // Params 9, 10 are connection id and expected_version (nullable).
+      const expectedVersion = params[9] as number | null | undefined
       const row = this.connections.find((c) => c.company_id === companyId && c.provider === provider)
       if (!row) return { rows: [], rowCount: 0 }
+      // Honour the WHERE (version = $expected) guard so the test can
+      // exercise the concurrency 409 path.
+      if (expectedVersion !== null && expectedVersion !== undefined && row.version !== expectedVersion) {
+        return { rows: [], rowCount: 0 }
+      }
       // Field 3+ are coalesce values; bump version.
       row.version += 1
       return { rows: [row], rowCount: 1 }
@@ -330,6 +337,63 @@ describe('handleQboRoutes — POST /api/integrations/qbo', () => {
     expect(responses[0]?.status).toBe(409)
     const body = responses[0]?.body as { current_version: number }
     expect(body.current_version).toBe(5)
+  })
+
+  it('returns 409 when a concurrent writer bumps the version between the pre-tx read and the UPDATE', async () => {
+    // Models the race the audit flagged: two POSTs with expected_version=5
+    // both pass the pre-tx version check (currentConnection.version === 5),
+    // but the second one's UPDATE must lose because the first has already
+    // bumped the row to version 6. The WHERE (version = $expected) guard
+    // inside upsertIntegrationConnection enforces this, and the route
+    // surfaces a 409 with the live version instead of silently clobbering.
+    const pool = new FakePool()
+    pool.connections.push({
+      id: 'conn-1',
+      company_id: 'co-1',
+      provider: 'qbo',
+      provider_account_id: null,
+      access_token: null,
+      refresh_token: null,
+      webhook_secret: null,
+      sync_cursor: null,
+      last_synced_at: null,
+      retry_state: null,
+      rate_limit_state: null,
+      status: 'connected',
+      version: 5,
+      created_at: '',
+    })
+    // Inject a concurrent bump between the pre-tx getIntegrationConnection
+    // read (the first SELECT against integration_connections) and the
+    // upsert's internal getIntegrationConnection / UPDATE that runs inside
+    // withMutationTx. We override `query` so the second SELECT-from-
+    // integration_connections call sees a bumped row, simulating another
+    // tab that committed in the window between the two reads.
+    const { ctx, responses } = makeCtx(pool, { status: 'connected', expected_version: 5 })
+    let selectsSeen = 0
+    const realQuery = pool.query.bind(pool)
+    pool.query = (async (sql: string, params: unknown[] = []) => {
+      const isConnectionSelect =
+        /from integration_connections/i.test(sql) && /order by created_at desc/i.test(sql) && !/access_token/i.test(sql)
+      if (isConnectionSelect) {
+        selectsSeen++
+        // After the route's pre-tx read passes, bump the persisted row so
+        // the upsert sees a version mismatch on its WHERE guard.
+        if (selectsSeen === 1) {
+          const row = pool.connections.find((c) => c.id === 'conn-1')
+          if (row) row.version = 6
+        }
+      }
+      return realQuery(sql, params)
+    }) as typeof pool.query
+    await handleQboRoutes({ method: 'POST' } as never, buildUrl('/api/integrations/qbo'), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(409)
+    const body = responses[0]?.body as { current_version: number | null; error: string }
+    expect(body.error).toBe('version conflict')
+    expect(body.current_version).toBe(6)
+    // Importantly: the second writer was rejected, so version stayed at 6
+    // (the value the concurrent writer set) and didn't get bumped further.
+    expect(pool.connections[0]?.version).toBe(6)
   })
 
   it('writes a sync_events + mutation_outbox row after upserting the connection', async () => {

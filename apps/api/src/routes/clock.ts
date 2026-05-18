@@ -259,6 +259,17 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
       return true
     }
 
+    // `correctionWindowSeconds` and `autoClockEnabled` were read above
+    // outside a transaction. An admin update to the project policy that
+    // lands after this read but before the INSERT below will not be
+    // reflected: the auto-gate may admit an event that was "just
+    // disabled" and the computed `correctible_until` will use the
+    // pre-update window. This is a documented UX-edge — accepting one
+    // stale-window clock event vs. serializing every clock-in through a
+    // SELECT FOR UPDATE on the projects row (which would block the whole
+    // crew on a single admin edit). Audit/accounting fields are not
+    // derived from these values, so the worst case is one event with a
+    // slightly-too-generous correction window.
     const occurredAt = new Date().toISOString()
     const correctibleUntil = computeCorrectibleUntil(source, occurredAt, correctionWindowSeconds)
 

@@ -249,6 +249,12 @@ export async function handleQboRoutes(req: http.IncomingMessage, url: URL, ctx: 
       sendJson(409, { error: 'version conflict', current_version: Number(currentConnection.version) })
       return true
     }
+    // Pass expected_version into the upsert so the UPDATE itself enforces
+    // the optimistic-concurrency check. The pre-tx read above can race
+    // with another concurrent POST: both reads pass, both UPDATEs fire,
+    // and the second clobbers the first. The version=expected guard in
+    // upsertIntegrationConnection moves the gate into the UPDATE, so the
+    // second writer's UPDATE matches zero rows and we surface 409 here.
     const connection = await withMutationTx(async (client) => {
       const row = await upsertIntegrationConnection(
         pool,
@@ -261,9 +267,11 @@ export async function handleQboRoutes(req: http.IncomingMessage, url: URL, ctx: 
           webhook_secret: body.webhook_secret ?? null,
           sync_cursor: body.sync_cursor ?? null,
           status: body.status ?? 'connected',
+          expected_version: currentConnection ? expectedVersion : null,
         },
         client,
       )
+      if (!row) return null
       await recordMutationLedger(client, {
         companyId: company.id,
         entityType: 'integration_connection',
@@ -279,6 +287,18 @@ export async function handleQboRoutes(req: http.IncomingMessage, url: URL, ctx: 
       })
       return row
     })
+    if (!connection) {
+      // upsertIntegrationConnection returned null → expected_version was
+      // supplied AND a concurrent writer bumped the row between our
+      // pre-tx read and the UPDATE. Re-read the live version so the
+      // client can refresh and retry. Matches the entity-CRUD 409 shape.
+      const live = await getIntegrationConnection(pool, company.id, 'qbo')
+      sendJson(409, {
+        error: 'version conflict',
+        current_version: live ? Number(live.version) : null,
+      })
+      return true
+    }
     sendJson(200, { connection })
     return true
   }

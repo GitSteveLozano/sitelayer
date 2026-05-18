@@ -45,6 +45,8 @@ export function UpdateBanner() {
     <button
       type="button"
       onClick={onTap}
+      role="status"
+      aria-live="polite"
       className="block w-full text-left px-4 py-2.5 bg-accent text-white text-[13px] font-medium"
     >
       <span className="inline-flex items-center gap-2">

@@ -140,6 +140,14 @@ export async function handleRentalBillingStateRoutes(
         )
         const current = lockedResult.rows[0]
         if (!current) return { kind: 'not_found' as const }
+        // Post-lock version check: two concurrent POSTs with the same
+        // stateVersion serialize on the row lock above; the second arrival
+        // sees the bumped state_version and returns 409 instead of
+        // re-running the reducer. The same pattern is repeated in every
+        // workflow event route (time-review-runs, labor-payroll-runs,
+        // estimate-pushes, project-lifecycle, crew-schedule-events). The
+        // workflow_event_log UNIQUE (entity_id, state_version) is a
+        // belt-and-braces backstop in case a future caller forgets it.
         if (current.state_version !== stateVersion) {
           return { kind: 'version_conflict' as const, run: current }
         }

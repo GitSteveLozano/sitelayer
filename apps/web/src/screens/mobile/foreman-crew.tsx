@@ -547,6 +547,10 @@ function ForemanCrewMap({ projects, workers, labor, today, onOpenProject }: Fore
             </button>
           )
         })}
+        {/* Worker map pins intentionally use the 24px avatar size; map
+         * markers are a dense-data exception to the 44×44 rule (bumping
+         * them would overlap on adjacent clocked-in workers). The pin is
+         * still keyboard-reachable via the roster list below. */}
         {roster.map((pin) => {
           const onSite = pin.hours > 0
           return (
@@ -719,13 +723,14 @@ function MapZoom({ label }: { label: string }) {
       type="button"
       aria-label={label === '+' ? 'Zoom in' : 'Zoom out'}
       style={{
-        width: 36,
-        height: 36,
+        // 44×44 minimum (WCAG 2.1) — map zoom is core navigation.
+        width: 44,
+        height: 44,
         border: '1px solid var(--m-line)',
-        borderRadius: 10,
+        borderRadius: 12,
         background: '#fff',
         color: 'var(--m-ink)',
-        fontSize: 20,
+        fontSize: 22,
         fontWeight: 700,
         boxShadow: 'var(--m-shadow-1)',
       }}

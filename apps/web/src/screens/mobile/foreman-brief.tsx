@@ -237,11 +237,19 @@ export function ForemanBrief({
                         aria-label="Remove step"
                         onClick={() => removeStep(idx)}
                         style={{
+                          // Match the reorder targets so the row reads as
+                          // three equal 44×44 controls.
+                          width: 44,
+                          height: 44,
+                          flexShrink: 0,
                           border: 'none',
                           background: 'transparent',
                           color: 'var(--m-red)',
-                          padding: 4,
+                          padding: 0,
                           cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
                         }}
                       >
                         <MI.X size={16} />
@@ -359,7 +367,19 @@ function MaterialsList({
                 type="button"
                 aria-label="Remove material"
                 onClick={() => remove(idx)}
-                style={{ border: 'none', background: 'transparent', color: 'var(--m-red)', cursor: 'pointer' }}
+                style={{
+                  width: 44,
+                  height: 44,
+                  flexShrink: 0,
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--m-red)',
+                  cursor: 'pointer',
+                  padding: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
               >
                 <MI.X size={16} />
               </button>
@@ -378,14 +398,21 @@ function MaterialsList({
 
 function reorderBtnStyle(disabled: boolean): React.CSSProperties {
   return {
-    width: 26,
-    height: 22,
+    // 44×44 minimum tap target (WCAG 2.1) — primary reorder control on a
+    // gloved-hand interface. Visible chrome stays compact via inner padding.
+    width: 44,
+    height: 44,
+    flexShrink: 0,
     border: '1px solid var(--m-line)',
-    borderRadius: 6,
+    borderRadius: 8,
     background: 'var(--m-card)',
     color: disabled ? 'var(--m-ink-4)' : 'var(--m-ink)',
-    fontSize: 10,
+    fontSize: 14,
+    lineHeight: 1,
     cursor: disabled ? 'not-allowed' : 'pointer',
     padding: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   }
 }

@@ -10,7 +10,9 @@
 
   --m-ink: #1c1816;
   --m-ink-2: #5b544c;
-  --m-ink-3: #8a8278;
+  /* --m-ink-3 darkened from #8a8278 (3.8:1 on white, below WCAG AA) to #6d6358
+   * (≈5.5:1 on --m-bg #ffffff, ≈5.1:1 on --m-card-soft #f7f4ef). */
+  --m-ink-3: #6d6358;
   --m-ink-4: #aea69a;
 
   --m-accent: #d9904a;
@@ -41,6 +43,50 @@
   --m-num: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 }
 
+/* ============================================================
+   FOCUS-VISIBLE — keyboard a11y baseline
+   Construction crews sometimes pair the PWA with an external
+   keyboard; without these rules they get zero focus feedback.
+   Per-component Tailwind `focus:outline-none` rules already pair
+   with `focus-visible:ring-2 focus-visible:ring-accent`, so this
+   global rule only fires when no other ring is in play.
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid var(--m-accent);
+  outline-offset: 2px;
+}
+button:focus-visible,
+a:focus-visible,
+[role='button']:focus-visible {
+  outline: 2px solid var(--m-accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* ============================================================
+   REDUCED MOTION — respect OS-level user preference.
+   Pulse/blink animations that run forever (geofence dot,
+   worker-issue recording indicator) become static.
+   ============================================================ */
+@keyframes m-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
 /* dark variant for select screens */
 .m-dark {
   --m-bg: #0e0c0a;
@@ -50,6 +96,7 @@
   --m-line-2: #3a3329;
   --m-ink: #f3ecdf;
   --m-ink-2: #c0b8a8;
+  /* Dark-mode --m-ink-3 already gives ≈5.4:1 on --m-bg #0e0c0a; left alone. */
   --m-ink-3: #8e8676;
   --m-ink-4: #5a5346;
 }
@@ -125,20 +172,26 @@
 }
 .m-topbar-back,
 .m-topbar-action {
-  width: 36px;
-  height: 36px;
+  /* 44×44 minimum tap target per WCAG 2.1 — gloved hands on jobsites. */
+  width: 44px;
+  height: 44px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 18px;
+  border-radius: 22px;
   color: var(--m-ink);
   background: transparent;
   border: none;
   cursor: pointer;
   flex-shrink: 0;
+  /* Pull the bigger hit-area back so the visible chrome still lines up
+   * with the 16px horizontal gutter the topbar uses. */
+  margin-left: -8px;
 }
 .m-topbar-action {
   color: var(--m-accent);
+  margin-left: 0;
+  margin-right: -8px;
 }
 .m-topbar-title {
   flex: 1;
@@ -200,13 +253,19 @@
   padding: 16px;
 }
 
-/* Section header */
-.m-section-h {
+/* Section header — rendered as <h2>..<h6> for screen-reader heading nav.
+ * Tailwind preflight neutralises native heading margins, but we set them
+ * explicitly here so the layout doesn't depend on preflight presence. */
+.m-section-h,
+.m-section-h-row-title {
   font-size: 11px;
   font-weight: 600;
   color: var(--m-ink-3);
   letter-spacing: 0.06em;
   text-transform: uppercase;
+  margin: 0;
+}
+.m-section-h {
   padding: 18px 20px 8px;
 }
 .m-section-h-row {
@@ -653,8 +712,12 @@
   color: var(--m-ink);
 }
 .m-input:focus {
-  outline: none;
   border-color: var(--m-accent);
+}
+/* Pointer focus stays subtle (just the accent border), but keyboard focus
+ * gets the global 2px accent outline from the :focus-visible rule above. */
+.m-input:focus:not(:focus-visible) {
+  outline: none;
 }
 .m-textarea {
   min-height: 96px;
