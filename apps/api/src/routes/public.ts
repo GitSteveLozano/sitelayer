@@ -188,6 +188,14 @@ export async function handlePublicRoutes(
       case 'user.created':
       case 'user.updated':
         // Mirror table TBD; intentionally a no-op until the schema lands.
+        //
+        // Welcome email is intentionally NOT enqueued here. It fires
+        // from POST /api/companies once the user has finished onboarding
+        // and we have a real company_id to scope the outbox row against
+        // (mutation_outbox is keyed by company_id). Triggering here
+        // would require a pre-tenancy outbox path and would also send a
+        // welcome before the user has anything to welcome them to. See
+        // routes/companies.ts → recordMutationOutbox(..., 'welcome_email', ...).
         break
       case 'user.deleted':
         // Don't cascade-delete memberships; preserve audit trail by leaving

@@ -196,6 +196,246 @@ describe('PATCH /api/companies/:id/settings — ot_service_item_code', () => {
   })
 })
 
+// Separate FakePool dedicated to the POST /api/companies path. It needs
+// `connect()` (the create-company route runs in an explicit transaction
+// for slug-uniqueness + membership + seeds) plus a handful of SQL shapes
+// that the settings tests above don't exercise.
+class CreateCompanyFakePool {
+  companies: Array<{ id: string; slug: string; name: string; created_at: string }> = []
+  memberships: Array<{ id: string; company_id: string; clerk_user_id: string; role: string }> = []
+  audit: Array<{ entityType: string; action: string }> = []
+  outbox: Array<{
+    company_id: string
+    entity_type: string
+    entity_id: string
+    mutation_type: string
+    payload: Record<string, unknown>
+    idempotency_key: string
+    actor_user_id: string | null
+  }> = []
+  nextId = 1
+
+  async connect() {
+    return {
+      query: (sql: string, params: unknown[] = []) => this.dispatch(sql, params),
+      release: () => undefined,
+    }
+  }
+
+  async query(sql: string, params: unknown[] = []) {
+    return this.dispatch(sql, params)
+  }
+
+  private dispatch(sqlRaw: string, params: unknown[]): { rows: unknown[]; rowCount: number } {
+    const sql = sqlRaw.trim()
+    if (sql === 'begin' || sql === 'commit' || sql === 'rollback') {
+      return { rows: [], rowCount: 0 }
+    }
+    if (/^select id from companies where slug = \$1/i.test(sql)) {
+      const [slug] = params as [string]
+      const found = this.companies.find((c) => c.slug === slug)
+      return { rows: found ? [{ id: found.id }] : [], rowCount: found ? 1 : 0 }
+    }
+    if (/^insert into companies/i.test(sql)) {
+      const [slug, name] = params as [string, string]
+      const row = {
+        id: `co-${this.nextId++}`,
+        slug,
+        name,
+        created_at: new Date('2026-01-01T00:00:00Z').toISOString(),
+      }
+      this.companies.push(row)
+      return { rows: [row], rowCount: 1 }
+    }
+    if (/^insert into company_memberships/i.test(sql)) {
+      const [companyId, userId, role] = params as [string, string, string]
+      const row = { id: `m-${this.nextId++}`, company_id: companyId, clerk_user_id: userId, role }
+      this.memberships.push(row)
+      return { rows: [row], rowCount: 1 }
+    }
+    if (/^\s*insert into audit_events/i.test(sql)) {
+      const entityType = (params[3] as string) ?? 'unknown'
+      const action = (params[5] as string) ?? 'unknown'
+      this.audit.push({ entityType, action })
+      return { rows: [], rowCount: 0 }
+    }
+    // Permit the recordMutationOutbox welcome-email enqueue + any
+    // seed-defaults inserts that ride through on the happy path. We
+    // explicitly set seed_defaults: false in the tests below to keep
+    // the SQL surface small, but the welcome-email outbox row is
+    // emitted unconditionally so the fake pool has to absorb it.
+    if (/^\s*insert into mutation_outbox/i.test(sql)) {
+      // recordMutationOutbox positional args: (companyId, deviceId,
+      // actorUserId, entityType, entityId, mutationType, payloadJson,
+      // idempotencyKey, sentryTrace, baggage, requestId).
+      const [companyId, , actorUserId, entityType, entityId, mutationType, payloadJson, idempotencyKey] = params as [
+        string,
+        string,
+        string | null,
+        string,
+        string,
+        string,
+        string,
+        string,
+      ]
+      let parsedPayload: Record<string, unknown>
+      try {
+        parsedPayload = JSON.parse(payloadJson) as Record<string, unknown>
+      } catch {
+        parsedPayload = {}
+      }
+      this.outbox.push({
+        company_id: companyId,
+        entity_type: entityType,
+        entity_id: entityId,
+        mutation_type: mutationType,
+        payload: parsedPayload,
+        idempotency_key: idempotencyKey,
+        actor_user_id: actorUserId,
+      })
+      return { rows: [], rowCount: 0 }
+    }
+    if (/^insert into/i.test(sql)) {
+      return { rows: [], rowCount: 0 }
+    }
+    throw new Error(`unexpected SQL in CreateCompanyFakePool: ${sql.slice(0, 200)}`)
+  }
+}
+
+describe('POST /api/companies — slug collision', () => {
+  it('returns 409 with a suggested_slug when the requested slug is taken', async () => {
+    const pool = new CreateCompanyFakePool()
+    pool.companies.push({
+      id: 'co-existing',
+      slug: 'acme-builders',
+      name: 'Existing ACME',
+      created_at: new Date('2026-01-01T00:00:00Z').toISOString(),
+    })
+    const { ctx, responses } = makeCtx(pool as unknown as FakePool, 'user_admin', {
+      slug: 'acme-builders',
+      name: 'New ACME',
+      seed_defaults: false,
+    })
+
+    const handled = await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(409)
+    expect(responses[0]?.body).toEqual({ error: 'slug already taken', suggested_slug: 'acme-builders-2' })
+  })
+
+  it('walks past taken suffixes to find the first free candidate', async () => {
+    const pool = new CreateCompanyFakePool()
+    for (const slug of ['acme', 'acme-2', 'acme-3', 'acme-4']) {
+      pool.companies.push({
+        id: `co-${slug}`,
+        slug,
+        name: slug,
+        created_at: new Date('2026-01-01T00:00:00Z').toISOString(),
+      })
+    }
+    const { ctx, responses } = makeCtx(pool as unknown as FakePool, 'user_admin', {
+      slug: 'acme',
+      name: 'ACME',
+      seed_defaults: false,
+    })
+
+    await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
+    expect(responses[0]?.status).toBe(409)
+    expect((responses[0]?.body as { suggested_slug?: string }).suggested_slug).toBe('acme-5')
+  })
+
+  it('falls back to the generic 409 (no suggested_slug) when -2..-10 are all taken', async () => {
+    const pool = new CreateCompanyFakePool()
+    pool.companies.push({
+      id: 'co-acme',
+      slug: 'acme',
+      name: 'ACME',
+      created_at: new Date('2026-01-01T00:00:00Z').toISOString(),
+    })
+    for (let i = 2; i <= 10; i += 1) {
+      pool.companies.push({
+        id: `co-acme-${i}`,
+        slug: `acme-${i}`,
+        name: `ACME ${i}`,
+        created_at: new Date('2026-01-01T00:00:00Z').toISOString(),
+      })
+    }
+    const { ctx, responses } = makeCtx(pool as unknown as FakePool, 'user_admin', {
+      slug: 'acme',
+      name: 'ACME',
+      seed_defaults: false,
+    })
+
+    await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
+    expect(responses[0]?.status).toBe(409)
+    expect(responses[0]?.body).toEqual({ error: 'slug already in use' })
+  })
+
+  it('creates the company on the happy path (no collision)', async () => {
+    const pool = new CreateCompanyFakePool()
+    const { ctx, responses } = makeCtx(pool as unknown as FakePool, 'user_admin', {
+      slug: 'fresh-co',
+      name: 'Fresh Co',
+      seed_defaults: false,
+    })
+
+    await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
+    expect(responses[0]?.status).toBe(201)
+    const body = responses[0]?.body as { company: { slug: string }; role: string }
+    expect(body.company.slug).toBe('fresh-co')
+    expect(body.role).toBe('admin')
+  })
+})
+
+describe('POST /api/companies — welcome_email outbox enqueue', () => {
+  it('enqueues exactly one welcome_email mutation_outbox row with the expected idempotency key', async () => {
+    const pool = new CreateCompanyFakePool()
+    const { ctx, responses } = makeCtx(pool as unknown as FakePool, 'user_owner', {
+      slug: 'welcome-co',
+      name: 'Welcome Co',
+      seed_defaults: false,
+    })
+
+    await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
+    expect(responses[0]?.status).toBe(201)
+
+    const welcomeRows = pool.outbox.filter((row) => row.mutation_type === 'welcome_email')
+    expect(welcomeRows).toHaveLength(1)
+    const row = welcomeRows[0]!
+    expect(row.entity_type).toBe('company')
+    expect(row.entity_id).toBe(pool.companies[0]!.id)
+    expect(row.company_id).toBe(pool.companies[0]!.id)
+    expect(row.actor_user_id).toBe('user_owner')
+    expect(row.idempotency_key).toBe(`welcome_email:user_owner:${pool.companies[0]!.id}`)
+    expect(row.payload).toEqual({
+      user_id: 'user_owner',
+      company_id: pool.companies[0]!.id,
+      company_name: 'Welcome Co',
+    })
+    // PII hygiene: the row must not carry the user's email verbatim.
+    expect(JSON.stringify(row.payload)).not.toMatch(/@/)
+  })
+
+  it('does not emit a welcome_email row when the slug collides (no company was created)', async () => {
+    const pool = new CreateCompanyFakePool()
+    pool.companies.push({
+      id: 'co-existing',
+      slug: 'acme-builders',
+      name: 'Existing ACME',
+      created_at: new Date('2026-01-01T00:00:00Z').toISOString(),
+    })
+    const { ctx, responses } = makeCtx(pool as unknown as FakePool, 'user_owner', {
+      slug: 'acme-builders',
+      name: 'New ACME',
+      seed_defaults: false,
+    })
+
+    await handleCompanyRoutes({ method: 'POST' } as never, buildUrl('/api/companies'), ctx)
+    expect(responses[0]?.status).toBe(409)
+    expect(pool.outbox.filter((row) => row.mutation_type === 'welcome_email')).toHaveLength(0)
+  })
+})
+
 describe('GET /api/companies/:id/settings', () => {
   it('returns the current ot_service_item_code for any member', async () => {
     const pool = new FakePool()

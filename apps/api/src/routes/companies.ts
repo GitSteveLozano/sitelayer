@@ -5,7 +5,7 @@ import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from '../onboarding.js'
 import { recordAudit } from '../audit.js'
 import { HttpError, parseJsonBody } from '../http-utils.js'
 import { observeAudit } from '../metrics.js'
-import { enqueueNotification } from '../mutation-tx.js'
+import { enqueueNotification, recordMutationOutbox } from '../mutation-tx.js'
 
 // JSON-object guard used for the modules / portal_settings PATCH bodies.
 // The route writes `modules || $2::jsonb` and `portal_settings || $3::jsonb`,
@@ -282,7 +282,29 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       const existing = await client.query('select id from companies where slug = $1 limit 1', [slug])
       if (existing.rows[0]) {
         await client.query('rollback')
-        sendJson(409, { error: 'slug already in use' })
+        // Best-effort suggestion: probe `<slug>-2` … `<slug>-10` for an
+        // unused variant so the wizard can auto-populate the field
+        // instead of bouncing the user back with a raw 409. If none of
+        // the 9 candidates are free (extreme collision), fall back to
+        // the legacy `{ error }` shape so the UI path stays the same.
+        // The suggestion respects COMPANY_SLUG_PATTERN; since we only
+        // append `-N` to a slug we already validated, the resulting
+        // candidate is guaranteed in-pattern up to N=10.
+        let suggestedSlug: string | null = null
+        for (let i = 2; i <= 10; i += 1) {
+          const candidate = `${slug}-${i}`
+          if (!COMPANY_SLUG_PATTERN.test(candidate)) continue
+          const probe = await pool.query('select id from companies where slug = $1 limit 1', [candidate])
+          if (!probe.rows[0]) {
+            suggestedSlug = candidate
+            break
+          }
+        }
+        if (suggestedSlug) {
+          sendJson(409, { error: 'slug already taken', suggested_slug: suggestedSlug })
+        } else {
+          sendJson(409, { error: 'slug already in use' })
+        }
         return true
       }
       const created = await client.query<{ id: string; slug: string; name: string; created_at: string }>(
@@ -300,6 +322,33 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       if (seedDefaults) {
         await seedCompanyDefaults(client, newCompany.id)
       }
+      // Enqueue the welcome email for the new owner. We scope the row to the
+      // freshly-created company so RLS keeps it tenant-clean, and use a
+      // stable idempotency key `welcome_email:<user>:<company>` so:
+      //   1. A double-tap on POST /api/companies (e.g. retry after a flaky
+      //      network) coalesces onto the same outbox row.
+      //   2. A Clerk `user.created` replay would slot under a different
+      //      shape (the webhook handler is still a no-op; see ADR 0003 +
+      //      public.ts) and not conflict with this row.
+      // PII hygiene: we deliberately do NOT carry the user's email in the
+      // payload — the worker hydrates it from Clerk at send time via the
+      // existing ClerkResolver path, and `redactEmail` is used at every
+      // log site that touches an address.
+      await recordMutationOutbox(
+        newCompany.id,
+        'company',
+        newCompany.id,
+        'welcome_email',
+        {
+          user_id: userId,
+          company_id: newCompany.id,
+          company_name: newCompany.name,
+        },
+        `welcome_email:${userId}:${newCompany.id}`,
+        'server',
+        userId,
+        client,
+      )
       await client.query('commit')
       await recordAudit(pool, {
         companyId: newCompany.id,

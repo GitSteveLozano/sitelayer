@@ -18,6 +18,7 @@ import { createTakeoffToBidRunner } from './runners/takeoff-to-bid.js'
 import { createDamageChargesRunner } from './runners/damage-charges.js'
 import { createVoiceToLogRunner } from './runners/voice-to-log.js'
 import { createCompanyCamPollRunner } from './runners/companycam-poll.js'
+import { createWelcomeEmailRunner } from './runners/welcome-email.js'
 import { createStuckWorkflowAlertsRunner } from './runners/stuck-workflow-alerts.js'
 import { createBlueprintStorageGcClient, createBlueprintStorageGcRunner } from './runners/blueprint-storage-gc.js'
 import { createQueuePruneRunner } from './runners/queue-prune.js'
@@ -85,6 +86,7 @@ const takeoffToBidRunner = createTakeoffToBidRunner({ pool })
 const damageChargesRunner = createDamageChargesRunner({ pool })
 const voiceToLogRunner = createVoiceToLogRunner({ pool })
 const companyCamPollRunner = createCompanyCamPollRunner({ pool })
+const welcomeEmailRunner = createWelcomeEmailRunner({ pool, logger })
 const checkStuckPostingWorkflows = createStuckWorkflowAlertsRunner({ pool, logger })
 
 // Blueprint storage GC + queue prune (cost-control runners shipped
@@ -247,6 +249,16 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     return { processed: 0, imported: 0, skipped: 0, failed: 0 }
   })
 
+  const welcomeEmailSummary = await welcomeEmailRunner(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] welcome_email drain failed')
+    captureWithEntityContext(error, {
+      scope: 'welcome_email',
+      entity_type: 'company',
+      company_id: companyId,
+    })
+    return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
+  })
+
   const voiceToLogSummary = await voiceToLogRunner(companyId).catch((error) => {
     logger.error({ err: error }, '[worker] voice_to_log drain failed')
     captureWithEntityContext(error, {
@@ -328,6 +340,8 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     companycam_processed: companyCamSummary.processed,
     companycam_imported: companyCamSummary.imported,
     companycam_failed: companyCamSummary.failed,
+    welcome_email_processed: welcomeEmailSummary.processed,
+    welcome_email_failed: welcomeEmailSummary.failed,
     blueprint_storage_gc_processed: blueprintStorageGcSummary.processed,
     blueprint_storage_gc_failed: blueprintStorageGcSummary.failed,
     queue_prune_ran: queuePruneSummary.ran,
@@ -363,6 +377,7 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     voiceToLogSummary.processed > 0 ||
     damageChargePushSummary.processed > 0 ||
     companyCamSummary.processed > 0 ||
+    welcomeEmailSummary.processed > 0 ||
     blueprintStorageGcSummary.processed > 0 ||
     queuePruneSummary.ran
   ) {

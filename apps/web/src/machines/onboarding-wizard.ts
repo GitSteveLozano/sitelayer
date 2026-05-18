@@ -69,6 +69,12 @@ type Context = {
   seedOptions: SeedOptions
   /** Error surfaced by the company-step create-company mutation. */
   error: string | null
+  /**
+   * Optional hint text shown beneath the slug field after a 409 with a
+   * server-supplied `suggested_slug`. Cleared the next time the user
+   * edits the slug, or when the create succeeds.
+   */
+  slugHint: string | null
   /** Inline error for the team-step invite mutation (substep-controlled). */
   teamError: string | null
   /** Inline error for the seed-step seed inserts (substep-controlled). */
@@ -84,6 +90,13 @@ export type OnboardingWizardEvent =
   | { type: 'RETRY' }
   | { type: 'MARK_SUBMITTED' }
   | { type: 'MARK_FAILED'; error: string }
+  /**
+   * 409 from POST /api/companies with a server-supplied `suggested_slug`.
+   * Auto-populates the slug field with the suggestion and surfaces a
+   * one-line hint under the input so the user understands the change.
+   * Routes back to `company_step` so the user can keep editing the form.
+   */
+  | { type: 'SLUG_SUGGESTION'; suggestion: string; hint?: string }
   | { type: 'SET_COMPANY_FIELD'; field: keyof CompanyForm; value: string | boolean }
   | { type: 'SET_TEAM_FIELD'; field: 'pendingClerkUserId' | 'pendingRole'; value: string }
   | { type: 'APPEND_INVITED'; member: InvitedTeamMember }
@@ -133,13 +146,36 @@ export const onboardingWizardMachine = setup({
   },
   actions: {
     clearError: assign({ error: () => null }),
+    clearSlugHint: assign({ slugHint: () => null }),
     setError: assign({
       error: ({ context, event }) => (event.type === 'MARK_FAILED' ? event.error : context.error),
+    }),
+    applySlugSuggestion: assign({
+      companyForm: ({ context, event }) => {
+        if (event.type !== 'SLUG_SUGGESTION') return context.companyForm
+        return { ...context.companyForm, slug: event.suggestion } as CompanyForm
+      },
+      slugHint: ({ context, event }) => {
+        if (event.type !== 'SLUG_SUGGESTION') return context.slugHint
+        return (
+          event.hint ??
+          `That slug is taken. We've picked \`${event.suggestion}\` — feel free to change it before continuing.`
+        )
+      },
+      error: () => null,
     }),
     setCompanyField: assign({
       companyForm: ({ context, event }) => {
         if (event.type !== 'SET_COMPANY_FIELD') return context.companyForm
         return { ...context.companyForm, [event.field]: event.value } as CompanyForm
+      },
+      // Editing the slug invalidates the auto-suggested hint — once the
+      // user types over it, the hint becomes stale and would be
+      // confusing if it stuck around.
+      slugHint: ({ context, event }) => {
+        if (event.type !== 'SET_COMPANY_FIELD') return context.slugHint
+        if (event.field === 'slug') return null
+        return context.slugHint
       },
     }),
     setTeamField: assign({
@@ -215,6 +251,7 @@ export const onboardingWizardMachine = setup({
     teamForm: { ...DEFAULT_TEAM_FORM },
     seedOptions: { ...DEFAULT_SEED_OPTIONS, ...(input.seedOptions ?? {}) },
     error: null,
+    slugHint: null,
     teamError: null,
     seedError: null,
     seedSubmitting: false,
@@ -253,11 +290,17 @@ export const onboardingWizardMachine = setup({
       on: {
         MARK_SUBMITTED: {
           target: 'team_step',
-          actions: 'clearError',
+          actions: ['clearError', 'clearSlugHint'],
         },
         MARK_FAILED: {
           target: 'error',
           actions: 'setError',
+        },
+        // 409 → server gave us a free candidate slug. Pop back to the
+        // company step with the field pre-filled + hint visible.
+        SLUG_SUGGESTION: {
+          target: 'company_step',
+          actions: 'applySlugSuggestion',
         },
       },
     },
@@ -271,6 +314,12 @@ export const onboardingWizardMachine = setup({
         BACK: {
           target: 'company_step',
           actions: 'clearError',
+        },
+        // Same flow if the suggestion arrives after MARK_FAILED routed
+        // us to the error state — apply it and go back to editing.
+        SLUG_SUGGESTION: {
+          target: 'company_step',
+          actions: 'applySlugSuggestion',
         },
       },
     },
@@ -301,6 +350,7 @@ export interface OnboardingWizardHookResult {
   teamForm: TeamForm
   seedOptions: SeedOptions
   error: string | null
+  slugHint: string | null
   teamError: string | null
   seedError: string | null
   seedSubmitting: boolean
@@ -317,6 +367,7 @@ export interface OnboardingWizardHookResult {
   retry: () => void
   markSubmitted: () => void
   markFailed: (error: string) => void
+  applySlugSuggestion: (suggestion: string, hint?: string) => void
   setCompanyField: (field: keyof CompanyForm, value: string | boolean) => void
   setTeamField: (field: 'pendingClerkUserId' | 'pendingRole', value: string) => void
   appendInvited: (member: InvitedTeamMember) => void
@@ -345,6 +396,13 @@ export function useOnboardingWizard(
   const retry = useCallback(() => send({ type: 'RETRY' }), [send])
   const markSubmitted = useCallback(() => send({ type: 'MARK_SUBMITTED' }), [send])
   const markFailed = useCallback((err: string) => send({ type: 'MARK_FAILED', error: err }), [send])
+  const applySlugSuggestion = useCallback(
+    (suggestion: string, hint?: string) =>
+      send(
+        hint !== undefined ? { type: 'SLUG_SUGGESTION', suggestion, hint } : { type: 'SLUG_SUGGESTION', suggestion },
+      ),
+    [send],
+  )
   const setCompanyField = useCallback(
     (field: keyof CompanyForm, value: string | boolean) => send({ type: 'SET_COMPANY_FIELD', field, value }),
     [send],
@@ -384,6 +442,7 @@ export function useOnboardingWizard(
     teamForm: state.context.teamForm,
     seedOptions: state.context.seedOptions,
     error: state.context.error,
+    slugHint: state.context.slugHint,
     teamError: state.context.teamError,
     seedError: state.context.seedError,
     seedSubmitting: state.context.seedSubmitting,
@@ -401,6 +460,7 @@ export function useOnboardingWizard(
     retry,
     markSubmitted,
     markFailed,
+    applySlugSuggestion,
     setCompanyField,
     setTeamField,
     appendInvited,

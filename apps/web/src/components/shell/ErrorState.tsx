@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { cn } from '@/lib/cn'
+import { TraceIdFooter } from './TraceIdFooter'
 
 /**
  * Centred error-state surface from Sitemap §13 (e.g. "Couldn't load
@@ -9,6 +10,11 @@ import { cn } from '@/lib/cn'
  * Two action slots:
  *   - `retry` — primary, "Try again". Fires the caller's refetch.
  *   - `secondary` — "Open offline copy", "Get help", etc.
+ *
+ * `requestId` (optional) wires the API correlation id from
+ * `ApiError.requestId` into a "Trace ID … Copy" footer so support can
+ * resolve the trace via /api/debug/traces/:traceId. Pass null/undefined
+ * to suppress the footer entirely — the same opt-in shape as MBanner.
  */
 export interface ErrorStateProps {
   title: ReactNode
@@ -18,9 +24,10 @@ export interface ErrorStateProps {
   /** Tertiary action — "Get help" link or similar. Renders as a smaller text button below. */
   tertiary?: ReactNode
   className?: string
+  requestId?: string | null | undefined
 }
 
-export function ErrorState({ title, body, retry, secondary, tertiary, className }: ErrorStateProps) {
+export function ErrorState({ title, body, retry, secondary, tertiary, className, requestId }: ErrorStateProps) {
   return (
     <div className={cn('flex flex-col items-center text-center px-8 py-12', className)}>
       <div
@@ -48,6 +55,7 @@ export function ErrorState({ title, body, retry, secondary, tertiary, className 
           {tertiary}
         </div>
       ) : null}
+      {requestId ? <TraceIdFooter requestId={requestId} className="mt-4 justify-center" /> : null}
     </div>
   )
 }

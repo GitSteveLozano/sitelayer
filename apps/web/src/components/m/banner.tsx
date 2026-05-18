@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { MI } from './icons.js'
+import { TraceIdFooter } from '../shell/TraceIdFooter.js'
 
 export type MBannerTone = 'info' | 'error' | 'ok' | 'warn'
 
@@ -9,6 +10,13 @@ export type MBannerProps = {
   body?: ReactNode | undefined
   icon?: ReactNode | undefined
   action?: ReactNode | undefined
+  /**
+   * Customer-facing correlation id (ApiError.requestId). When present an
+   * unobtrusive "Trace ID: xxx · Copy" footer renders below the body so
+   * support can drill into `/api/debug/traces/:traceId`. Pass null/undefined
+   * (the default) to suppress — non-API banners stay clean.
+   */
+  requestId?: string | null | undefined
 }
 
 /**
@@ -22,7 +30,7 @@ export type MBannerProps = {
  * as "Estimate posted" or "Time review approved" are announced without
  * yanking focus.
  */
-export function MBanner({ tone, title, body, icon, action }: MBannerProps) {
+export function MBanner({ tone, title, body, icon, action, requestId }: MBannerProps) {
   const dataTone = tone === 'warn' ? undefined : tone
   const isError = tone === 'error'
   return (
@@ -36,6 +44,7 @@ export function MBanner({ tone, title, body, icon, action }: MBannerProps) {
       <div className="m-banner-body">
         <div className="m-banner-title">{title}</div>
         {body ? <div className="m-banner-text">{body}</div> : null}
+        {requestId ? <TraceIdFooter requestId={requestId} /> : null}
       </div>
       {action ? <div style={{ flexShrink: 0 }}>{action}</div> : null}
     </div>

@@ -2,7 +2,7 @@
 // Wraps POST /api/companies and POST /api/companies/:id/memberships.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { request } from './client'
+import { ApiError, request } from './client'
 
 export interface Company {
   id: string
@@ -33,6 +33,27 @@ export function useCreateCompany() {
     mutationFn: (input) => request<CreateCompanyResponse>('/api/companies', { method: 'POST', json: input }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['companies'] }),
   })
+}
+
+/**
+ * Pull the server-suggested slug from a 409 `ApiError` body, if any.
+ * Returns `null` for any other shape (network error, 4xx without a
+ * `suggested_slug` field, 5xx) so callers can fall through to the
+ * generic error path. Lives next to the create hook so the shape stays
+ * in sync with the API contract.
+ *
+ * See `apps/api/src/routes/companies.ts` — the slug-collision branch
+ * probes `<slug>-2`..`<slug>-10` and emits
+ * `{ error: 'slug already taken', suggested_slug }` when a free
+ * candidate is found.
+ */
+export function suggestedSlugFromError(err: unknown): string | null {
+  if (!(err instanceof ApiError)) return null
+  if (err.status !== 409) return null
+  const body = err.body
+  if (!body || typeof body !== 'object') return null
+  const candidate = (body as { suggested_slug?: unknown }).suggested_slug
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : null
 }
 
 export interface CompanyModules {
