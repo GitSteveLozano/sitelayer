@@ -13,13 +13,13 @@
     "lint": "npm run typecheck"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.32.1",
+    "@anthropic-ai/sdk": "^0.96.0",
     "@sitelayer/capture-schema": "*",
     "commander": "^12.1.0"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0",
-    "tsx": "^4.20.3",
+    "@types/node": "^25.8.0",
+    "tsx": "^4.22.1",
     "typescript": "^6.0.3",
     "vitest": "^3.2.4"
   },

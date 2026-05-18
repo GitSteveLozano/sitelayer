@@ -14,9 +14,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.1042.0",
-    "@clerk/backend": "^3.4.4",
-    "@sentry/node": "^10.51.0",
+    "@aws-sdk/client-s3": "^3.1048.0",
+    "@clerk/backend": "^3.4.9",
+    "@sentry/node": "^10.53.1",
     "@sitelayer/config": "file:../../packages/config",
     "@sitelayer/domain": "file:../../packages/domain",
     "@sitelayer/logger": "file:../../packages/logger",
