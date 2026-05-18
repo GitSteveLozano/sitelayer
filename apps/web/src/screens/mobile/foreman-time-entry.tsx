@@ -59,6 +59,9 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
   const [sqftDone, setSqftDone] = useState<string>('')
   const [notes, setNotes] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
+  // Carry the request id off the failed API call so the user can paste
+  // it into a support thread via the TraceIdFooter on the error banner.
+  const [errorRequestId, setErrorRequestId] = useState<string | null>(null)
   const [touched, setTouched] = useState(false)
 
   const workerFieldId = useId()
@@ -94,6 +97,7 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
     setTouched(true)
     if (!canSubmit) return
     setError(null)
+    setErrorRequestId(null)
     try {
       await createLabor.mutateAsync({
         project_id: projectId,
@@ -108,6 +112,7 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
       navigate('/time?created=1')
     } catch (err) {
       setError(err instanceof ApiError ? err.message_for_user() : err instanceof Error ? err.message : String(err))
+      setErrorRequestId(err instanceof ApiError ? err.requestId : null)
     }
   }
 
@@ -117,7 +122,7 @@ export function MobileForemanTimeEntry({ bootstrap }: { bootstrap: BootstrapResp
       <MBody>
         {error ? (
           <div style={{ padding: '12px 16px 0' }}>
-            <MBanner tone="error" title="Could not save" body={error} />
+            <MBanner tone="error" title="Could not save" body={error} requestId={errorRequestId} />
           </div>
         ) : null}
 

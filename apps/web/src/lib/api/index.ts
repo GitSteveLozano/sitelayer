@@ -327,6 +327,7 @@ export {
 } from './issues'
 
 export {
+  suggestedSlugFromError,
   useCompanyModules,
   useCompanySettings,
   useCreateCompany,

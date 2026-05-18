@@ -4,6 +4,7 @@ import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import {
   setActiveCompanySlug,
+  suggestedSlugFromError,
   useCreateCompany,
   useCreateCustomer,
   useCreateInventoryLocation,
@@ -54,6 +55,14 @@ export function OnboardingWizardScreen() {
       setActiveCompanySlug(result.company.slug)
       wizard.markSubmitted()
     } catch (e) {
+      // 409 with `suggested_slug`: bounce the user back to the company
+      // step with the field pre-filled. Falls through to markFailed for
+      // any other error shape so the existing surface stays unchanged.
+      const suggestion = suggestedSlugFromError(e)
+      if (suggestion) {
+        wizard.applySlugSuggestion(suggestion)
+        return
+      }
       wizard.markFailed(e instanceof Error ? e.message : 'Failed to create company')
     }
   }
@@ -95,6 +104,11 @@ export function OnboardingWizardScreen() {
               placeholder="acme-builders"
               hint="2-64 chars, lowercase letters/digits/dashes."
             />
+            {wizard.slugHint ? (
+              <div className="text-[12px] text-accent mt-1" data-testid="slug-hint">
+                {wizard.slugHint}
+              </div>
+            ) : null}
             <Field
               label="Company name"
               value={wizard.companyForm.name}

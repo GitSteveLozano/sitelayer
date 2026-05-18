@@ -112,6 +112,67 @@ describe('onboardingWizardMachine', () => {
     })
   })
 
+  describe('slug suggestion (409 with suggested_slug)', () => {
+    function reachSubmitting() {
+      const actor = newActor()
+      actor.send({ type: 'SET_COMPANY_FIELD', field: 'slug', value: 'acme' })
+      actor.send({ type: 'SET_COMPANY_FIELD', field: 'name', value: 'ACME' })
+      actor.send({ type: 'NEXT' })
+      return actor
+    }
+
+    it('SLUG_SUGGESTION from submitting → company_step with slug pre-filled', () => {
+      const actor = reachSubmitting()
+      actor.send({ type: 'SLUG_SUGGESTION', suggestion: 'acme-2' })
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('company_step')
+      expect(snap.context.companyForm.slug).toBe('acme-2')
+      expect(snap.context.companyForm.name).toBe('ACME')
+      expect(snap.context.slugHint).toBeTruthy()
+      expect(snap.context.slugHint).toContain('acme-2')
+      expect(snap.context.error).toBeNull()
+    })
+
+    it('SLUG_SUGGESTION from error state also applies the suggestion + clears error', () => {
+      const actor = reachSubmitting()
+      actor.send({ type: 'MARK_FAILED', error: 'slug already taken' })
+      expect(actor.getSnapshot().value).toBe('error')
+      actor.send({ type: 'SLUG_SUGGESTION', suggestion: 'acme-3' })
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('company_step')
+      expect(snap.context.companyForm.slug).toBe('acme-3')
+      expect(snap.context.error).toBeNull()
+      expect(snap.context.slugHint).toBeTruthy()
+    })
+
+    it('editing the slug after a suggestion clears the hint', () => {
+      const actor = reachSubmitting()
+      actor.send({ type: 'SLUG_SUGGESTION', suggestion: 'acme-2' })
+      expect(actor.getSnapshot().context.slugHint).toBeTruthy()
+      actor.send({ type: 'SET_COMPANY_FIELD', field: 'slug', value: 'acme-prime' })
+      const snap = actor.getSnapshot()
+      expect(snap.context.companyForm.slug).toBe('acme-prime')
+      expect(snap.context.slugHint).toBeNull()
+    })
+
+    it('a successful submit clears any lingering slugHint', () => {
+      const actor = reachSubmitting()
+      actor.send({ type: 'SLUG_SUGGESTION', suggestion: 'acme-2' })
+      expect(actor.getSnapshot().context.slugHint).toBeTruthy()
+      actor.send({ type: 'NEXT' })
+      actor.send({ type: 'MARK_SUBMITTED' })
+      const snap = actor.getSnapshot()
+      expect(snap.value).toBe('team_step')
+      expect(snap.context.slugHint).toBeNull()
+    })
+
+    it('uses a caller-supplied hint when provided', () => {
+      const actor = reachSubmitting()
+      actor.send({ type: 'SLUG_SUGGESTION', suggestion: 'acme-2', hint: 'Custom hint here' })
+      expect(actor.getSnapshot().context.slugHint).toBe('Custom hint here')
+    })
+  })
+
   describe('error → recovery', () => {
     function reachError() {
       const actor = newActor()
