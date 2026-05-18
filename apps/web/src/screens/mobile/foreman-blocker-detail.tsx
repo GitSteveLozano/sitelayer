@@ -287,7 +287,12 @@ export function ForemanBlockerDetail({
                 />
                 <div style={{ marginTop: 16 }}>
                   <MButtonStack>
-                    <MButton variant="primary" onClick={handleResolve} disabled={fe.isSubmitting || !fe.snapshot}>
+                    <MButton
+                      variant="primary"
+                      onClick={handleResolve}
+                      disabled={fe.isSubmitting || !fe.snapshot || reply.trim().length === 0}
+                      aria-disabled={fe.isSubmitting || !fe.snapshot || reply.trim().length === 0}
+                    >
                       {fe.isSubmitting ? 'Resolving…' : 'Resolve'}
                     </MButton>
                     <MButton variant="ghost" onClick={() => setEscalateMode(true)}>
