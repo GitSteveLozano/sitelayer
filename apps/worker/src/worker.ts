@@ -19,6 +19,8 @@ import { createDamageChargesRunner } from './runners/damage-charges.js'
 import { createVoiceToLogRunner } from './runners/voice-to-log.js'
 import { createCompanyCamPollRunner } from './runners/companycam-poll.js'
 import { createStuckWorkflowAlertsRunner } from './runners/stuck-workflow-alerts.js'
+import { createBlueprintStorageGcClient, createBlueprintStorageGcRunner } from './runners/blueprint-storage-gc.js'
+import { createQueuePruneRunner } from './runners/queue-prune.js'
 import type { AgentDrainSummary } from './runner-utils.js'
 
 const logger = createLogger('worker')
@@ -83,6 +85,17 @@ const damageChargesRunner = createDamageChargesRunner({ pool })
 const voiceToLogRunner = createVoiceToLogRunner({ pool })
 const companyCamPollRunner = createCompanyCamPollRunner({ pool })
 const checkStuckPostingWorkflows = createStuckWorkflowAlertsRunner({ pool, logger })
+
+// Blueprint storage GC + queue prune (cost-control runners shipped
+// 2026-05-17 after the cost audit flagged orphaned Spaces objects and
+// unbounded mutation_outbox / sync_events growth). The GC runner needs
+// a storage client; we await the dynamic-import build at boot so the
+// SDK lazy-load happens once, not on every heartbeat.
+const blueprintStorageGc = createBlueprintStorageGcRunner({
+  pool,
+  storage: await createBlueprintStorageGcClient(),
+})
+const queuePruneRunner = createQueuePruneRunner({ pool, logger })
 
 async function heartbeat(): Promise<{ idle: boolean }> {
   const companyId = await getCompanyId()
@@ -243,6 +256,29 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
   })
 
+  // Blueprint storage GC: drains DELETE-blueprint outbox rows and
+  // unlinks the underlying Spaces / local-FS object.
+  const blueprintStorageGcSummary = await blueprintStorageGc(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] blueprint_storage_gc drain failed')
+    captureWithEntityContext(error, {
+      scope: 'blueprint_storage_gc',
+      entity_type: 'blueprint_document',
+      company_id: companyId,
+    })
+    return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
+  })
+
+  // Daily prune of long-applied mutation_outbox / sync_events rows.
+  // Gated by a process-local lastRunAt; safe to invoke every heartbeat.
+  const queuePruneSummary = await queuePruneRunner.maybePrune().catch((error) => {
+    logger.error({ err: error }, '[worker] queue_prune failed')
+    captureWithEntityContext(error, {
+      scope: 'queue_prune',
+      company_id: companyId,
+    })
+    return { ran: false, mutation_outbox: 0, sync_events: 0 }
+  })
+
   // Defense-in-depth alert: any workflow row stuck in 'posting' beyond
   // the threshold means the worker crashed mid-push or QBO succeeded
   // silently and the worker missed the response. Surface to Sentry so
@@ -291,6 +327,11 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     companycam_processed: companyCamSummary.processed,
     companycam_imported: companyCamSummary.imported,
     companycam_failed: companyCamSummary.failed,
+    blueprint_storage_gc_processed: blueprintStorageGcSummary.processed,
+    blueprint_storage_gc_failed: blueprintStorageGcSummary.failed,
+    queue_prune_ran: queuePruneSummary.ran,
+    queue_prune_mutation_outbox: queuePruneSummary.mutation_outbox,
+    queue_prune_sync_events: queuePruneSummary.sync_events,
     rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
     estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
   }
@@ -320,7 +361,9 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     takeoffToBidSummary.processed > 0 ||
     voiceToLogSummary.processed > 0 ||
     damageChargePushSummary.processed > 0 ||
-    companyCamSummary.processed > 0
+    companyCamSummary.processed > 0 ||
+    blueprintStorageGcSummary.processed > 0 ||
+    queuePruneSummary.ran
   ) {
     logger.info(
       {

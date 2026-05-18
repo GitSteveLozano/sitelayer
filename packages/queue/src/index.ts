@@ -21,6 +21,57 @@ export {
 } from './circuit-breaker.js'
 
 /**
+ * Prune long-applied rows out of `mutation_outbox` and `sync_events`.
+ * Both tables grow forever once a row is `applied_at IS NOT NULL`
+ * because nothing ever reclaims them — they're an audit trail, not a
+ * work queue. After ~30 days they're operationally useless (the trace
+ * id has aged out of Sentry, the QBO push has long since reconciled)
+ * but they keep bloating the table, slowing autovacuum and chewing
+ * managed-Postgres disk.
+ *
+ * Safe to re-run: the DELETE is gated by `applied_at < now() -
+ * interval 'N days'`, so a second run within the same hour is a no-op.
+ * Caller is responsible for cadence (the worker's queue-prune runner
+ * fires once per day via a last-run-at gate).
+ *
+ * Returns per-table delete counts so the caller can emit metrics /
+ * structured logs.
+ */
+export async function pruneAppliedQueue(
+  client: QueueClient,
+  opts: { retentionDays: number },
+): Promise<{ mutation_outbox: number; sync_events: number }> {
+  const retentionDays = Math.max(1, Math.floor(opts.retentionDays))
+  // Use a parameterised interval so a misconfigured env can't inject
+  // SQL via the `interval 'N days'` literal. Casting through
+  // `make_interval` keeps the value typed as an integer day count.
+  const outbox = await client.query<{ count: number }>(
+    `with d as (
+       delete from mutation_outbox
+        where applied_at is not null
+          and applied_at < now() - make_interval(days => $1)
+        returning 1
+     )
+     select count(*)::int as count from d`,
+    [retentionDays],
+  )
+  const sync = await client.query<{ count: number }>(
+    `with d as (
+       delete from sync_events
+        where applied_at is not null
+          and applied_at < now() - make_interval(days => $1)
+        returning 1
+     )
+     select count(*)::int as count from d`,
+    [retentionDays],
+  )
+  return {
+    mutation_outbox: outbox.rows[0]?.count ?? 0,
+    sync_events: sync.rows[0]?.count ?? 0,
+  }
+}
+
+/**
  * Mark outbox rows whose attempt_count has reached the retry cap as
  * 'dead'. Run once per heartbeat at the start of the drain so a stuck
  * row never gets re-claimed. Returns the number of rows dead-lettered.
@@ -125,6 +176,11 @@ export const DEDICATED_HANDLER_MUTATION_TYPES = [
   'notify_worker_resolution',
   'notify_estimator_escalation',
   'notify_foreman_assignment',
+  // Blueprint storage GC — drained by apps/worker/src/runners/
+  // blueprint-storage-gc.ts. Marking it dedicated keeps the generic
+  // drain from racing the GC runner (the generic drain just marks
+  // applied without actually deleting the Spaces object).
+  'delete_blueprint_storage_object',
 ] as const
 
 /**

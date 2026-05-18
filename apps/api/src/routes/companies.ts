@@ -1,10 +1,56 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
+import { z } from 'zod'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from '../onboarding.js'
 import { recordAudit } from '../audit.js'
-import { HttpError } from '../http-utils.js'
+import { HttpError, parseJsonBody } from '../http-utils.js'
 import { observeAudit } from '../metrics.js'
 import { enqueueNotification } from '../mutation-tx.js'
+
+// JSON-object guard used for the modules / portal_settings PATCH bodies.
+// The route writes `modules || $2::jsonb` and `portal_settings || $3::jsonb`,
+// so the input must be a plain object (no arrays, no primitives) — pg would
+// otherwise blow up downstream with a less-obvious error.
+const JsonObjectSchema = z.record(z.string(), z.unknown())
+
+const CompanyModulesPatchSchema = z
+  .object({
+    modules: JsonObjectSchema.optional(),
+    portal_settings: JsonObjectSchema.optional(),
+  })
+  .refine((v) => v.modules !== undefined || v.portal_settings !== undefined, {
+    message: 'modules or portal_settings is required',
+  })
+
+// Schema enforces clerk_user_id (or legacy user_id alias) is a string and
+// the role is one of the known company-membership roles. Mirrors the
+// existing 400s but rejects e.g. `role: 42` upfront.
+const CompanyMembershipBodySchema = z
+  .object({
+    clerk_user_id: z.string().trim().min(1).optional(),
+    user_id: z.string().trim().min(1).optional(),
+    role: z.enum(['admin', 'member', 'foreman', 'office', 'bookkeeper']).optional(),
+  })
+  .refine((v) => Boolean(v.clerk_user_id ?? v.user_id), {
+    message: 'clerk_user_id is required',
+    path: ['clerk_user_id'],
+  })
+
+const CompanyCreateBodySchema = z.object({
+  slug: z.string().optional(),
+  name: z.string().optional(),
+  seed_defaults: z.boolean().optional(),
+})
+
+// Settings PATCH: ot_service_item_code must explicitly appear in the body
+// (a missing key is a different 400 than `null`), and must be a string or
+// null when present. The route still does the company-scoped catalog
+// lookup downstream.
+const CompanySettingsPatchSchema = z
+  .object({
+    ot_service_item_code: z.union([z.string(), z.null()]),
+  })
+  .strict()
 
 export type CompanyRouteCtx = {
   pool: Pool
@@ -75,17 +121,13 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       sendJson(403, { error: 'admin role required' })
       return true
     }
-    const body = await readBody()
-    const modulesPatch =
-      body.modules && typeof body.modules === 'object' ? (body.modules as Record<string, unknown>) : null
-    const portalPatch =
-      body.portal_settings && typeof body.portal_settings === 'object'
-        ? (body.portal_settings as Record<string, unknown>)
-        : null
-    if (!modulesPatch && !portalPatch) {
-      sendJson(400, { error: 'modules or portal_settings is required' })
+    const parsed = parseJsonBody(CompanyModulesPatchSchema, await readBody())
+    if (!parsed.ok) {
+      sendJson(400, { error: parsed.error })
       return true
     }
+    const modulesPatch = parsed.value.modules ?? null
+    const portalPatch = parsed.value.portal_settings ?? null
     const updated = await pool.query<{ modules: Record<string, boolean>; portal_settings: Record<string, boolean> }>(
       `
       update companies
@@ -151,21 +193,25 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       sendJson(403, { error: 'admin role required' })
       return true
     }
-    const body = await readBody()
-    if (!Object.prototype.hasOwnProperty.call(body, 'ot_service_item_code')) {
+    const rawBody = await readBody()
+    if (!Object.prototype.hasOwnProperty.call(rawBody, 'ot_service_item_code')) {
+      // Preserve the legacy "required" message — distinct from the
+      // type-mismatch error the schema raises for a wrong-typed value.
       sendJson(400, { error: 'ot_service_item_code is required (string or null)' })
       return true
     }
-    const raw = body.ot_service_item_code
+    const parsed = parseJsonBody(CompanySettingsPatchSchema, rawBody)
+    if (!parsed.ok) {
+      sendJson(400, { error: 'ot_service_item_code must be string or null' })
+      return true
+    }
+    const raw = parsed.value.ot_service_item_code
     let nextCode: string | null
     if (raw === null) {
       nextCode = null
-    } else if (typeof raw === 'string') {
+    } else {
       const trimmed = raw.trim()
       nextCode = trimmed === '' ? null : trimmed
-    } else {
-      sendJson(400, { error: 'ot_service_item_code must be string or null' })
-      return true
     }
     // Validate the code exists in service_items for the company so a
     // typo can't silently disable OT push downstream. NULL writes
@@ -214,11 +260,13 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
   }
 
   if (req.method === 'POST' && url.pathname === '/api/companies') {
-    const body = await readBody()
-    const slug = String(body.slug ?? '')
-      .trim()
-      .toLowerCase()
-    const name = String(body.name ?? '').trim()
+    const parsed = parseJsonBody(CompanyCreateBodySchema, await readBody())
+    if (!parsed.ok) {
+      sendJson(400, { error: parsed.error })
+      return true
+    }
+    const slug = (parsed.value.slug ?? '').trim().toLowerCase()
+    const name = (parsed.value.name ?? '').trim()
     if (!slug || !COMPANY_SLUG_PATTERN.test(slug)) {
       sendJson(400, { error: 'slug must be 2-64 chars, lowercase letters/digits/dashes' })
       return true
@@ -227,7 +275,7 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       sendJson(400, { error: 'name is required' })
       return true
     }
-    const seedDefaults = body.seed_defaults !== false
+    const seedDefaults = parsed.value.seed_defaults !== false
     const client = await pool.connect()
     try {
       await client.query('begin')
@@ -283,15 +331,25 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       sendJson(403, { error: 'admin role required' })
       return true
     }
-    const body = await readBody()
-    const inviteUserId = String(body.clerk_user_id ?? body.user_id ?? '').trim()
-    const role = String(body.role ?? 'member').trim() || 'member'
-    if (!inviteUserId) {
-      sendJson(400, { error: 'clerk_user_id is required' })
+    const parsed = parseJsonBody(CompanyMembershipBodySchema, await readBody())
+    if (!parsed.ok) {
+      // Preserve the legacy specific error messages: "clerk_user_id is
+      // required" if neither id was supplied, otherwise the role enum
+      // message verbatim. Tests rely on this exact wording.
+      const issue = parsed.error
+      if (issue.includes('clerk_user_id')) {
+        sendJson(400, { error: 'clerk_user_id is required' })
+      } else if (issue.includes('role')) {
+        sendJson(400, { error: 'role must be admin, member, foreman, office, or bookkeeper' })
+      } else {
+        sendJson(400, { error: parsed.error })
+      }
       return true
     }
-    if (!['admin', 'member', 'foreman', 'office', 'bookkeeper'].includes(role)) {
-      sendJson(400, { error: 'role must be admin, member, foreman, office, or bookkeeper' })
+    const inviteUserId = (parsed.value.clerk_user_id ?? parsed.value.user_id ?? '').trim()
+    const role = parsed.value.role ?? 'member'
+    if (!inviteUserId) {
+      sendJson(400, { error: 'clerk_user_id is required' })
       return true
     }
     const inserted = await pool.query<{

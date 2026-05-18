@@ -1,8 +1,35 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
+import { parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+
+// POST /api/customers — `name` is required (the route already rejects an
+// empty string with a specific message; we keep that path). external_id
+// and source are optional + nullable so the existing payload shape stays
+// valid. The schema's job is to reject `name: 42` / `external_id: {...}`
+// upfront with a 400 instead of writing junk into customers.
+const CustomerCreateBodySchema = z
+  .object({
+    name: z.string().optional(),
+    external_id: z.string().nullish(),
+    source: z.string().optional(),
+  })
+  .loose()
+
+// PATCH /api/customers/:id — every column is optional (partial update).
+// expected_version / version pass through for the versioned-update helper.
+const CustomerPatchBodySchema = z
+  .object({
+    name: z.string().nullish(),
+    external_id: z.string().nullish(),
+    source: z.string().nullish(),
+    expected_version: z.union([z.number(), z.string()]).nullish(),
+    version: z.union([z.number(), z.string()]).nullish(),
+  })
+  .loose()
 
 /**
  * Cross-cutting helpers the customers route module needs from the rest of
@@ -66,8 +93,13 @@ export async function handleCustomerRoutes(
 
   if (req.method === 'POST' && url.pathname === '/api/customers') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
-    const name = String(body.name ?? '').trim()
+    const parsed = parseJsonBody(CustomerCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
+    const name = (body.name ?? '').trim()
     if (!name) {
       ctx.sendJson(400, { error: 'name is required' })
       return true
@@ -103,7 +135,12 @@ export async function handleCustomerRoutes(
       ctx.sendJson(400, { error: 'customer id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedPatch = parseJsonBody(CustomerPatchBodySchema, await ctx.readBody())
+    if (!parsedPatch.ok) {
+      ctx.sendJson(400, { error: parsedPatch.error })
+      return true
+    }
+    const body = parsedPatch.value
     return patchVersionedEntity({
       ctx,
       body,

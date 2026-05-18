@@ -1,9 +1,44 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { parseExpectedVersion } from '../http-utils.js'
+import { parseExpectedVersion, parseJsonBody } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+
+// POST /api/projects/:id/material-bills wire-format. The existing route
+// only enforced presence of vendor/amount/bill_type; we tighten amount to
+// a number (string-or-number to match the QBO mappings + existing client
+// pattern that occasionally posts numeric-looking strings) and accept the
+// optional occurred_on as YYYY-MM-DD when supplied. The 400 from the
+// schema replaces the generic "vendor, amount, and bill_type are required"
+// path for shape errors; the legacy missing-field 400 still wins because
+// of the explicit required-fields check below the parse.
+const DateInputSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, { message: 'must be YYYY-MM-DD' })
+
+const MaterialBillCreateBodySchema = z
+  .object({
+    vendor: z.string().optional(),
+    amount: z.union([z.number(), z.string()]).optional(),
+    bill_type: z.string().optional(),
+    description: z.string().nullish(),
+    occurred_on: DateInputSchema.nullish(),
+    expected_version: z.union([z.number(), z.string()]).nullish(),
+    version: z.union([z.number(), z.string()]).nullish(),
+  })
+  .loose()
+
+const MaterialBillPatchBodySchema = z
+  .object({
+    vendor: z.string().nullish(),
+    amount: z.union([z.number(), z.string()]).nullish(),
+    bill_type: z.string().nullish(),
+    description: z.string().nullish(),
+    occurred_on: DateInputSchema.nullish(),
+    expected_version: z.union([z.number(), z.string()]).nullish(),
+    version: z.union([z.number(), z.string()]).nullish(),
+  })
+  .loose()
 
 export type MaterialBillRouteCtx = {
   pool: Pool
@@ -58,7 +93,12 @@ export async function handleMaterialBillRoutes(
       ctx.sendJson(400, { error: 'project id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(MaterialBillCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     if (!body.vendor || body.amount === undefined || !body.bill_type) {
       ctx.sendJson(400, { error: 'vendor, amount, and bill_type are required' })
       return true
@@ -121,7 +161,12 @@ export async function handleMaterialBillRoutes(
       ctx.sendJson(400, { error: 'bill id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedPatch = parseJsonBody(MaterialBillPatchBodySchema, await ctx.readBody())
+    if (!parsedPatch.ok) {
+      ctx.sendJson(400, { error: parsedPatch.error })
+      return true
+    }
+    const body = parsedPatch.value
     return patchVersionedEntity({
       ctx,
       body,

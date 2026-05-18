@@ -1,5 +1,5 @@
 import { createWriteStream } from 'node:fs'
-import { mkdir, readFile as fsReadFile, writeFile as fsWriteFile } from 'node:fs/promises'
+import { mkdir, readFile as fsReadFile, unlink as fsUnlink, writeFile as fsWriteFile } from 'node:fs/promises'
 import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import type { Readable } from 'node:stream'
@@ -26,6 +26,14 @@ export interface BlueprintStorage {
   putStream(key: string, body: Readable, options?: PutStreamOptions): Promise<void>
   get(key: string): Promise<Buffer>
   copy(sourceKey: string, destKey: string): Promise<void>
+  /**
+   * Delete a single stored object. Used by the blueprint-storage GC
+   * runner that drains `mutation_outbox` rows enqueued when a
+   * blueprint_document is soft-deleted. Missing keys must NOT throw —
+   * GC is idempotent and a re-run after a partial success should still
+   * mark the row applied.
+   */
+  deleteObject(storagePath: string): Promise<void>
   /**
    * Returns a presigned download URL when the backend supports it (S3); returns
    * `null` when the caller should stream the bytes back through the API itself
@@ -159,6 +167,23 @@ class LocalFsStorage implements BlueprintStorage {
     await this.put(destKey, buf)
   }
 
+  async deleteObject(storagePath: string): Promise<void> {
+    // `abs()` re-validates the key stays inside the storage root, so a
+    // malformed path can never unlink anything outside it. We only ever
+    // unlink the file itself — never the parent directory tree — so a
+    // stale empty company/blueprint folder is acceptable and will be
+    // re-used on the next upload.
+    const abs = this.abs(storagePath)
+    try {
+      await fsUnlink(abs)
+    } catch (err) {
+      // ENOENT is idempotent success: file already gone (perhaps GC
+      // ran once and the outbox row was re-claimed). Any other error
+      // surfaces so the runner can retry / mark failed.
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    }
+  }
+
   async getDownloadUrl(): Promise<null> {
     return null
   }
@@ -185,6 +210,7 @@ interface S3Module {
   PutObjectCommand: S3CommandCtor
   GetObjectCommand: S3CommandCtor
   CopyObjectCommand: S3CommandCtor
+  DeleteObjectCommand: S3CommandCtor
   Upload: S3UploadCtor
   getSignedUrl: GetSignedUrlFn
 }
@@ -242,6 +268,19 @@ class S3Storage implements BlueprintStorage {
         Bucket: this.bucket,
         CopySource: formatS3CopySource(this.bucket, sourceKey),
         Key: destKey,
+      }),
+    )
+  }
+
+  async deleteObject(storagePath: string): Promise<void> {
+    // S3 DeleteObject is already idempotent (returns 204 whether the key
+    // existed or not), so unlike the local-FS path we don't need an
+    // explicit not-found swallow. The path-traversal guard sits at the
+    // caller (assertKeyInCompany inside the route + GC runner).
+    await this.client.send(
+      new this.mod.DeleteObjectCommand({
+        Bucket: this.bucket,
+        Key: storagePath,
       }),
     )
   }
@@ -309,6 +348,7 @@ export async function createBlueprintStorage(storageEnv: StorageEnv): Promise<Bl
     PutObjectCommand: sdkModule.PutObjectCommand,
     GetObjectCommand: sdkModule.GetObjectCommand,
     CopyObjectCommand: sdkModule.CopyObjectCommand,
+    DeleteObjectCommand: sdkModule.DeleteObjectCommand,
     Upload: sdkModule.Upload,
     getSignedUrl: sdkModule.getSignedUrl,
   }

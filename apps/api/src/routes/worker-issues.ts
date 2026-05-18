@@ -641,11 +641,17 @@ export async function handleWorkerIssueRoutes(
       return true
     }
     if (updated.kind === 'version_conflict') {
-      ctx.sendJson(409, { error: 'state_version stale', ...buildWorkflowResponse(updated.current) })
+      ctx.sendJson(409, {
+        error: 'state_version mismatch — reload and retry',
+        snapshot: buildWorkflowResponse(updated.current),
+      })
       return true
     }
     if (updated.kind === 'illegal_transition') {
-      ctx.sendJson(409, { error: updated.message, ...buildWorkflowResponse(updated.current) })
+      ctx.sendJson(409, {
+        error: updated.message,
+        snapshot: buildWorkflowResponse(updated.current),
+      })
       return true
     }
     const outcome = workflowEventOutcome(updated.eventType)

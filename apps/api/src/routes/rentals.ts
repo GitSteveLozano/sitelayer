@@ -206,7 +206,7 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
         c.query('select 1 from projects where company_id = $1 and id = $2', [ctx.company.id, projectId]),
       )
       if (!existing.rows[0]) {
-        ctx.sendJson(400, { error: 'project_id not found for company' })
+        ctx.sendJson(404, { error: 'project_id not found for company' })
         return true
       }
     }
@@ -215,7 +215,7 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
         c.query('select 1 from customers where company_id = $1 and id = $2', [ctx.company.id, customerId]),
       )
       if (!existing.rows[0]) {
-        ctx.sendJson(400, { error: 'customer_id not found for company' })
+        ctx.sendJson(404, { error: 'customer_id not found for company' })
         return true
       }
     }

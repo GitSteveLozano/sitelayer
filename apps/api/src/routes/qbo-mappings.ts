@@ -1,8 +1,38 @@
 import type http from 'node:http'
 import type { PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
+import { parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+
+// POST upsert wire-format. Entity type / local ref / external id are all
+// required strings (existing 400 path) — schema rejects e.g. numeric
+// external_id upfront. label/status/notes are nullable + optional with
+// `String(...)` legacy coercion replaced by typed strings.
+const QboMappingCreateBodySchema = z
+  .object({
+    entity_type: z.string().optional(),
+    local_ref: z.string().optional(),
+    external_id: z.string().optional(),
+    label: z.string().nullish(),
+    status: z.string().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+const QboMappingPatchBodySchema = z
+  .object({
+    entity_type: z.string().nullish(),
+    local_ref: z.string().nullish(),
+    external_id: z.string().nullish(),
+    label: z.string().nullish(),
+    status: z.string().nullish(),
+    notes: z.string().nullish(),
+    expected_version: z.union([z.number(), z.string()]).nullish(),
+    version: z.union([z.number(), z.string()]).nullish(),
+  })
+  .loose()
 
 /**
  * Shape of an integration_mappings row. Mirrors the IntegrationMappingRow
@@ -75,10 +105,15 @@ export async function handleQboMappingRoutes(
 
   if (req.method === 'POST' && url.pathname === '/api/integrations/qbo/mappings') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
-    const entityType = String(body.entity_type ?? '').trim()
-    const localRef = String(body.local_ref ?? '').trim()
-    const externalId = String(body.external_id ?? '').trim()
+    const parsed = parseJsonBody(QboMappingCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
+    const entityType = (body.entity_type ?? '').trim()
+    const localRef = (body.local_ref ?? '').trim()
+    const externalId = (body.external_id ?? '').trim()
     if (!entityType || !localRef || !externalId) {
       ctx.sendJson(400, { error: 'entity_type, local_ref, and external_id are required' })
       return true
@@ -91,9 +126,9 @@ export async function handleQboMappingRoutes(
           entity_type: entityType,
           local_ref: localRef,
           external_id: externalId,
-          label: body.label ? String(body.label).trim() : null,
-          status: body.status ? String(body.status).trim() : 'active',
-          notes: body.notes ? String(body.notes).trim() : null,
+          label: body.label ? body.label.trim() : null,
+          status: body.status ? body.status.trim() : 'active',
+          notes: body.notes ? body.notes.trim() : null,
         },
         client,
       )
@@ -120,7 +155,12 @@ export async function handleQboMappingRoutes(
       ctx.sendJson(400, { error: 'mapping id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedPatch = parseJsonBody(QboMappingPatchBodySchema, await ctx.readBody())
+    if (!parsedPatch.ok) {
+      ctx.sendJson(400, { error: parsedPatch.error })
+      return true
+    }
+    const body = parsedPatch.value
     return patchVersionedEntity({
       ctx,
       body,

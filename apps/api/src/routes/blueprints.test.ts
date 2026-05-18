@@ -19,6 +19,7 @@ class FakeStorage implements BlueprintStorage {
   bucket: string | null = null
   files = new Map<string, Buffer>()
   copies: Array<{ from: string; to: string }> = []
+  deletes: string[] = []
 
   async put(key: string, contents: Buffer) {
     this.files.set(key, contents)
@@ -33,6 +34,10 @@ class FakeStorage implements BlueprintStorage {
     this.copies.push({ from: sourceKey, to: destKey })
     const data = this.files.get(sourceKey)
     if (data) this.files.set(destKey, data)
+  }
+  async deleteObject(key: string) {
+    this.deletes.push(key)
+    this.files.delete(key)
   }
   async getDownloadUrl() {
     return null

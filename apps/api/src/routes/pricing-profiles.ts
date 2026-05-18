@@ -1,9 +1,33 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { parseConfigPayload } from '../http-utils.js'
+import { parseConfigPayload, parseJsonBody } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+
+// pricing_profiles.config is a free-form JSONB blob parsed separately by
+// parseConfigPayload (accepts already-parsed object OR JSON string). The
+// schema validates the wire shape around it.
+const PricingProfileCreateBodySchema = z
+  .object({
+    name: z.string().optional(),
+    is_default: z.boolean().optional(),
+    config: z.unknown().optional(),
+    config_json: z.unknown().optional(),
+  })
+  .loose()
+
+const PricingProfilePatchBodySchema = z
+  .object({
+    name: z.string().nullish(),
+    is_default: z.boolean().nullish(),
+    config: z.unknown().optional(),
+    config_json: z.unknown().optional(),
+    expected_version: z.union([z.number(), z.string()]).nullish(),
+    version: z.union([z.number(), z.string()]).nullish(),
+  })
+  .loose()
 
 export type PricingProfileRouteCtx = {
   pool: Pool
@@ -38,8 +62,13 @@ export async function handlePricingProfileRoutes(
 
   if (req.method === 'POST' && url.pathname === '/api/pricing-profiles') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
-    const name = String(body.name ?? '').trim()
+    const parsed = parseJsonBody(PricingProfileCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
+    const name = (body.name ?? '').trim()
     if (!name) {
       ctx.sendJson(400, { error: 'name is required' })
       return true
@@ -85,7 +114,12 @@ export async function handlePricingProfileRoutes(
       ctx.sendJson(400, { error: 'pricing profile id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedPatch = parseJsonBody(PricingProfilePatchBodySchema, await ctx.readBody())
+    if (!parsedPatch.ok) {
+      ctx.sendJson(400, { error: parsedPatch.error })
+      return true
+    }
+    const body = parsedPatch.value
     let config: Record<string, unknown> | null = null
     if (body.config !== undefined || body.config_json !== undefined) {
       try {

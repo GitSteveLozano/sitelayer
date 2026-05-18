@@ -29,8 +29,59 @@ import {
   withCompanyClient,
   withMutationTx,
 } from '../mutation-tx.js'
-import { HttpError, isValidUuid, parseExpectedVersion, parseOptionalNumber } from '../http-utils.js'
+import { z } from 'zod'
+import { HttpError, isValidUuid, parseExpectedVersion, parseJsonBody, parseOptionalNumber } from '../http-utils.js'
 import { patchVersionedEntity } from '../versioned-update.js'
+
+// POST /api/projects wire-format. The route already enforces non-empty
+// name + customer_name and a uuid-shaped customer_id; the schema adds
+// upfront rejection of e.g. `name: { ... }` and tags every numeric field
+// as string-or-number to match the legacy `body.x ?? 0` binding (numerics
+// flow through the pg driver verbatim).
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const ProjectCreateBodySchema = z
+  .object({
+    name: z.string().optional(),
+    customer_name: z.string().optional(),
+    customer_id: z.union([z.string(), z.null()]).optional(),
+    division_code: z.string().optional(),
+    status: z.string().optional(),
+    bid_total: NumericInputSchema.nullish(),
+    labor_rate: NumericInputSchema.nullish(),
+    target_sqft_per_hr: NumericInputSchema.nullish(),
+    bonus_pool: NumericInputSchema.nullish(),
+    site_lat: NumericInputSchema.nullish(),
+    site_lng: NumericInputSchema.nullish(),
+    site_radius_m: NumericInputSchema.nullish(),
+  })
+  .loose()
+
+// PATCH /api/projects/:id — every column is optional. `parseOptionalNumber`
+// handles the numeric/null discrimination downstream; Boolean(...) handles
+// the booleans. We keep the wire schema permissive so the existing partial
+// PATCH semantics aren't tightened.
+const ProjectPatchBodySchema = z
+  .object({
+    name: z.string().nullish(),
+    customer_name: z.string().nullish(),
+    division_code: z.string().nullish(),
+    status: z.string().nullish(),
+    bid_total: NumericInputSchema.nullish(),
+    labor_rate: NumericInputSchema.nullish(),
+    target_sqft_per_hr: NumericInputSchema.nullish(),
+    bonus_pool: NumericInputSchema.nullish(),
+    site_lat: NumericInputSchema.nullish(),
+    site_lng: NumericInputSchema.nullish(),
+    site_radius_m: NumericInputSchema.nullish(),
+    auto_clock_in_enabled: z.boolean().nullish(),
+    auto_clock_out_grace_seconds: NumericInputSchema.nullish(),
+    auto_clock_correction_window_seconds: NumericInputSchema.nullish(),
+    daily_budget_cents: NumericInputSchema.nullish(),
+    expected_version: NumericInputSchema.nullish(),
+    version: NumericInputSchema.nullish(),
+  })
+  .loose()
 
 const logger = createLogger('api:projects')
 
@@ -218,10 +269,15 @@ function projectCloseoutSnapshotResponse(
 export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, ctx: ProjectRouteCtx): Promise<boolean> {
   if (req.method === 'POST' && url.pathname === '/api/projects') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
-    const name = String(body.name ?? '').trim()
-    const customerName = String(body.customer_name ?? '').trim()
-    const divisionCode = String(body.division_code ?? 'D4')
+    const parsed = parseJsonBody(ProjectCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
+    const name = (body.name ?? '').trim()
+    const customerName = (body.customer_name ?? '').trim()
+    const divisionCode = (body.division_code ?? 'D4').toString()
     if (!name || !customerName) {
       ctx.sendJson(400, { error: 'name and customer_name are required' })
       return true
@@ -327,7 +383,12 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
       ctx.sendJson(400, { error: 'project id is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedPatch = parseJsonBody(ProjectPatchBodySchema, await ctx.readBody())
+    if (!parsedPatch.ok) {
+      ctx.sendJson(400, { error: parsedPatch.error })
+      return true
+    }
+    const body = parsedPatch.value
     const patchSiteLat = body.site_lat === undefined ? null : parseOptionalNumber(body.site_lat)
     const patchSiteLng = body.site_lng === undefined ? null : parseOptionalNumber(body.site_lng)
     const patchSiteRadius = body.site_radius_m === undefined ? null : parseOptionalNumber(body.site_radius_m)

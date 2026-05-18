@@ -44,6 +44,10 @@ class MemoryStorage implements BlueprintStorage {
     this.files.set(destKey, buf)
   }
 
+  async deleteObject(key: string) {
+    this.files.delete(key)
+  }
+
   async getDownloadUrl(_key: string, _options?: DownloadUrlOptions) {
     return null
   }

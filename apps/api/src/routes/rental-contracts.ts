@@ -77,7 +77,7 @@ export async function handleRentalContractsRoutes(
     const cycleDays = Math.max(1, Math.floor(parseNumber(body.billing_cycle_days, 25) || 25))
     const customerId = optionalString(body.customer_id) ?? project.customer_id
     if (customerId && !(await existsInCompany(ctx.pool, 'customers', ctx.company.id, customerId))) {
-      ctx.sendJson(400, { error: 'customer_id not found for company' })
+      ctx.sendJson(404, { error: 'customer_id not found for company' })
       return true
     }
     const contract = await withMutationTx(async (client: PoolClient) => {

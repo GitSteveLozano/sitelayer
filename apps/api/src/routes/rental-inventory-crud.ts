@@ -245,7 +245,7 @@ export async function handleRentalInventoryCrudRoutes(
     }
     const projectId = optionalString(body.project_id)
     if (projectId && !(await existsInCompany(ctx.pool, 'projects', ctx.company.id, projectId))) {
-      ctx.sendJson(400, { error: 'project_id not found for company' })
+      ctx.sendJson(404, { error: 'project_id not found for company' })
       return true
     }
     const location = await withMutationTx(async (client: PoolClient) => {
@@ -358,22 +358,22 @@ export async function handleRentalInventoryCrudRoutes(
       return true
     }
     if (!(await existsInCompany(ctx.pool, 'inventory_items', ctx.company.id, itemId))) {
-      ctx.sendJson(400, { error: 'inventory_item_id not found for company' })
+      ctx.sendJson(404, { error: 'inventory_item_id not found for company' })
       return true
     }
     const fromLocationId = optionalString(body.from_location_id)
     const toLocationId = optionalString(body.to_location_id)
     if (!(await existsInCompany(ctx.pool, 'inventory_locations', ctx.company.id, fromLocationId))) {
-      ctx.sendJson(400, { error: 'from_location_id not found for company' })
+      ctx.sendJson(404, { error: 'from_location_id not found for company' })
       return true
     }
     if (!(await existsInCompany(ctx.pool, 'inventory_locations', ctx.company.id, toLocationId))) {
-      ctx.sendJson(400, { error: 'to_location_id not found for company' })
+      ctx.sendJson(404, { error: 'to_location_id not found for company' })
       return true
     }
     const projectId = optionalString(body.project_id)
     if (projectId && !(await existsInCompany(ctx.pool, 'projects', ctx.company.id, projectId))) {
-      ctx.sendJson(400, { error: 'project_id not found for company' })
+      ctx.sendJson(404, { error: 'project_id not found for company' })
       return true
     }
     const occurredOn = optionalString(body.occurred_on) ?? todayISO()
@@ -389,7 +389,7 @@ export async function handleRentalInventoryCrudRoutes(
     // "Mike scanned cup-lock at 8:42a near 165 Front St."
     const workerId = optionalString(body.worker_id)
     if (workerId && !(await existsInCompany(ctx.pool, 'workers', ctx.company.id, workerId))) {
-      ctx.sendJson(400, { error: 'worker_id not found for company' })
+      ctx.sendJson(404, { error: 'worker_id not found for company' })
       return true
     }
     const scanPayload = optionalString(body.scan_payload)

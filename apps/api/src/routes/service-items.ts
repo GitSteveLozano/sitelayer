@@ -1,8 +1,36 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
+import { parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+
+// POST /api/service-items — code + name required (matches the existing
+// 400). default_rate is numeric (DB column is numeric); accept
+// string-or-number to match the historical loose binding without
+// silently coercing arbitrary garbage to NaN.
+const ServiceItemCreateBodySchema = z
+  .object({
+    code: z.string().optional(),
+    name: z.string().optional(),
+    category: z.string().optional(),
+    unit: z.string().optional(),
+    default_rate: z.union([z.number(), z.string()]).nullish(),
+    source: z.string().optional(),
+  })
+  .loose()
+
+const ServiceItemPatchBodySchema = z
+  .object({
+    name: z.string().nullish(),
+    category: z.string().nullish(),
+    unit: z.string().nullish(),
+    default_rate: z.union([z.number(), z.string()]).nullish(),
+    expected_version: z.union([z.number(), z.string()]).nullish(),
+    version: z.union([z.number(), z.string()]).nullish(),
+  })
+  .loose()
 
 export type ServiceItemRouteCtx = {
   pool: Pool
@@ -39,11 +67,16 @@ export async function handleServiceItemRoutes(
 
   if (req.method === 'POST' && url.pathname === '/api/service-items') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
-    const code = String(body.code ?? '').trim()
-    const name = String(body.name ?? '').trim()
-    const category = String(body.category ?? 'labor').trim()
-    const unit = String(body.unit ?? 'hr').trim()
+    const parsed = parseJsonBody(ServiceItemCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
+    const code = (body.code ?? '').trim()
+    const name = (body.name ?? '').trim()
+    const category = (body.category ?? 'labor').trim()
+    const unit = (body.unit ?? 'hr').trim()
     if (!code || !name) {
       ctx.sendJson(400, { error: 'code and name are required' })
       return true
@@ -78,7 +111,12 @@ export async function handleServiceItemRoutes(
       ctx.sendJson(400, { error: 'service item code is required' })
       return true
     }
-    const body = await ctx.readBody()
+    const parsedPatch = parseJsonBody(ServiceItemPatchBodySchema, await ctx.readBody())
+    if (!parsedPatch.ok) {
+      ctx.sendJson(400, { error: parsedPatch.error })
+      return true
+    }
+    const body = parsedPatch.value
     return patchVersionedEntity({
       ctx,
       body,

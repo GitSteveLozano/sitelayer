@@ -68,7 +68,7 @@ export async function handleRentalContractLinesRoutes(
       return true
     }
     if (!(await existsInCompany(ctx.pool, 'inventory_items', ctx.company.id, itemId))) {
-      ctx.sendJson(400, { error: 'inventory_item_id not found for company' })
+      ctx.sendJson(404, { error: 'inventory_item_id not found for company' })
       return true
     }
     const contractResult = await withCompanyClient(ctx.company.id, (c) =>
