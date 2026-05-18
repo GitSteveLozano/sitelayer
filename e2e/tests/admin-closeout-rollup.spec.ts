@@ -52,6 +52,9 @@ runSpec('admin sees closeout-summary and labor-variance cards on Budget tab', as
   await expect(closeoutCard.getByText(/\$[\d,]+(?:\.\d{2})?/).first()).toBeVisible()
 
   // Labor variance card — either the "worst offenders" populated form
-  // or the empty-state header still uses the "Labor variance" label.
-  await expect(adminPage.getByText('Labor variance', { exact: true }).first()).toBeVisible()
+  // (header is "Labor variance · worst offenders") or the empty-state
+  // header (just "Labor variance"). Both branches start with the
+  // canonical "Labor variance" label, so anchor on that prefix instead
+  // of requiring an exact match.
+  await expect(adminPage.getByText(/^Labor variance/).first()).toBeVisible()
 })

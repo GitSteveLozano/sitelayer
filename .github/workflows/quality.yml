@@ -282,11 +282,13 @@ jobs:
       VITE_API_URL: http://localhost:3001
       VITE_DEFAULT_COMPANY_SLUG: e2e-fixtures
       E2E_BASE_URL: http://localhost:3100
-      # E2E_RUN held at '0'. Worker wiring is now in place (POST_SUCCEEDED
-      # events fire from the bundled worker), but specs may still need
-      # UI-assertion reconciliation before flipping. To flip: set to '1' and
-      # verify all specs pass in CI.
-      E2E_RUN: '0'
+      # E2E_RUN flipped to '1' (round 11b). The worker is wired into this
+      # job (POST_SUCCEEDED events fire from the bundled worker, see the
+      # "Start worker process" step), and the two remaining UI-assertion
+      # drifts (admin-closeout-rollup's Labor variance matcher and the
+      # foreman-field-event reply field) have been reconciled. Specs are
+      # gating again: set to '0' only to defang while debugging.
+      E2E_RUN: '1'
       E2E_SKIP_WEBSERVER: '1'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

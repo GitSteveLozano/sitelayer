@@ -45,6 +45,14 @@ runSpec('foreman resolves a worker-flagged blocker', async ({ foremanPage }) => 
   // Resolve button enables. "Use what's on hand" is the lowest-friction
   // option that doesn't trigger any downstream change-order side-effects.
   await foremanPage.getByRole('button', { name: /Use what.+on hand/i }).click()
+
+  // The API's RESOLVE schema (packages/workflows/src/field-event.ts)
+  // requires a non-empty `message_to_worker` (min(1) max(4000)). Fill
+  // the "Reply to worker" textarea — the placeholder hints at the
+  // expected shape — before clicking Resolve. Without this the PATCH
+  // returns 400 and the screen stays on the picker.
+  await foremanPage.getByPlaceholder(/On its way/i).fill('On its way · 30m')
+
   await foremanPage.getByRole('button', { name: 'Resolve', exact: true }).click()
 
   // After the PATCH succeeds the foreman-blocker-detail screen renders
