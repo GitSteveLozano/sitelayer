@@ -2,6 +2,19 @@
 // internal `Event` type without importing @sentry/node from a hook target, so
 // this module operates on a structural shape and the live Sentry beforeSend
 // hook is responsible for casting.
+//
+// PII rule for callers (enforced at every captureWithEntityContext /
+// captureMessageWithEntityContext / Sentry.captureException /
+// Sentry.captureMessage / Sentry.setExtra / Sentry.setContext site):
+//
+//   Sentry extra/context must contain ONLY IDs and enum tags — never raw row
+//   data, never webhook payloads, never PII fields (email, phone, address,
+//   customer/vendor name, contract terms, blueprint contents, free-text
+//   notes). Body scrubbing below only covers the request body path
+//   (event.request.data); anything passed via `extra` / `setContext` /
+//   `setExtra` bypasses field-level scrubbing entirely. If you need to
+//   include row context, pass `{ entity_type, entity_id, company_id, scope }`
+//   as tags via captureWithEntityContext — not the row itself.
 
 export type ScrubbableEvent = {
   request?: {

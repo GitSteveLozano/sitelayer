@@ -251,6 +251,21 @@ docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
    the PDF streams straight into Spaces; the JSON-body variant of the
    endpoint stays dry-run.
 
+### Incident runbooks
+
+When something is on fire in production, the playbooks live under
+`docs/`. The index is [`docs/RUNBOOK_INDEX.md`](./docs/RUNBOOK_INDEX.md).
+Quick links to the rule each runbook gestures at:
+
+- QBO sync stalled / `CircuitOpenError` → [`docs/RUNBOOK_QBO_CIRCUIT.md`](./docs/RUNBOOK_QBO_CIRCUIT.md) (paired with QBO sync conventions #1).
+- Notifications not arriving → [`docs/RUNBOOK_NOTIFICATION_BACKLOG.md`](./docs/RUNBOOK_NOTIFICATION_BACKLOG.md).
+- API 503s / pool exhaustion → [`docs/RUNBOOK_CONNECTION_POOL.md`](./docs/RUNBOOK_CONNECTION_POOL.md).
+- Blueprint upload 500s → [`docs/RUNBOOK_SPACES_UPLOAD.md`](./docs/RUNBOOK_SPACES_UPLOAD.md) (paired with blueprint storage hygiene #1).
+- After any incident → fill [`docs/POSTMORTEM_TEMPLATE.md`](./docs/POSTMORTEM_TEMPLATE.md) and link it from the relevant runbook.
+
+Broader on-call orientation (DB down, Clerk outage, Cloudflare, cert
+renewal, compromised cred) stays in [`docs/INCIDENT_RESPONSE.md`](./docs/INCIDENT_RESPONSE.md).
+
 ## Local/preview role testing
 
 The substrate ships a dev-only auth-bypass so QA can exercise RBAC paths

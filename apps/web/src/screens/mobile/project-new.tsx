@@ -8,7 +8,7 @@
  * server (`apps/api/src/routes/projects.ts`): name + customer_name.
  * Everything else has a server default.
  */
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { apiPost } from '@/lib/api'
 import {
@@ -35,10 +35,19 @@ export function MobileProjectNew({ companySlug }: { companySlug: string }) {
   const [notes, setNotes] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Track whether the user has tried to submit — only surface inline
+  // validation after that so an untouched form doesn't shout at them.
+  const [touched, setTouched] = useState(false)
+
+  const nameId = useId()
+  const customerId = useId()
+  const nameError = touched && name.trim().length === 0 ? 'Project name is required.' : null
+  const customerError = touched && customerName.trim().length === 0 ? 'Customer name is required.' : null
 
   const canSubmit = name.trim().length > 0 && customerName.trim().length > 0 && !busy
 
   const handleSubmit = async () => {
+    setTouched(true)
     if (!canSubmit) return
     setBusy(true)
     setError(null)
@@ -74,14 +83,26 @@ export function MobileProjectNew({ companySlug }: { companySlug: string }) {
       <MBody>
         <MSectionH>Identification</MSectionH>
         <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <Field label="Project name *">
-            <MInput value={name} onChange={(e) => setName(e.currentTarget.value)} placeholder="215 Cinnamon Teal" />
-          </Field>
-          <Field label="Customer *">
+          <Field label="Project name *" htmlFor={nameId} error={nameError}>
             <MInput
+              id={nameId}
+              value={name}
+              onChange={(e) => setName(e.currentTarget.value)}
+              placeholder="215 Cinnamon Teal"
+              aria-invalid={nameError ? true : undefined}
+              aria-describedby={nameError ? `${nameId}-err` : undefined}
+              aria-required="true"
+            />
+          </Field>
+          <Field label="Customer *" htmlFor={customerId} error={customerError}>
+            <MInput
+              id={customerId}
               value={customerName}
               onChange={(e) => setCustomerName(e.currentTarget.value)}
               placeholder="Foxridge Homes"
+              aria-invalid={customerError ? true : undefined}
+              aria-describedby={customerError ? `${customerId}-err` : undefined}
+              aria-required="true"
             />
           </Field>
           <Field label="Division">
@@ -152,9 +173,19 @@ export function MobileProjectNew({ companySlug }: { companySlug: string }) {
   )
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+  htmlFor,
+  error,
+}: {
+  label: string
+  children: React.ReactNode
+  htmlFor?: string
+  error?: string | null
+}) {
   return (
-    <label style={{ display: 'block' }}>
+    <label style={{ display: 'block' }} {...(htmlFor ? { htmlFor } : {})}>
       <span
         style={{
           display: 'block',
@@ -169,6 +200,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
         {label}
       </span>
       {children}
+      {error ? (
+        <p
+          id={htmlFor ? `${htmlFor}-err` : undefined}
+          style={{ marginTop: 6, marginBottom: 0, color: 'var(--m-red)', fontSize: 12 }}
+        >
+          {error}
+        </p>
+      ) : null}
     </label>
   )
 }

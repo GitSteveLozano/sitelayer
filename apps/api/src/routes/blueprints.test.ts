@@ -305,16 +305,20 @@ function makeCtx(
   storage: FakeStorage,
   body: Record<string, unknown> = {},
   role: 'admin' | 'foreman' | 'member' = 'admin',
+  companyOverride?: { id: string; slug: string; name?: string },
 ): { ctx: BlueprintRouteCtx; responses: Array<{ status: number; body: unknown }>; redirects: string[] } {
   pool.attach()
   const responses: Array<{ status: number; body: unknown }> = []
   const redirects: string[] = []
+  const company = companyOverride
+    ? { id: companyOverride.id, slug: companyOverride.slug, name: companyOverride.name ?? companyOverride.slug }
+    : { id: 'co-1', slug: 'co', name: 'Co' }
   return {
     responses,
     redirects,
     ctx: {
       pool: pool as unknown as Pool,
-      company: { id: 'co-1', slug: 'co', name: 'Co', created_at: '', role },
+      company: { id: company.id, slug: company.slug, name: company.name, created_at: '', role },
       requireRole: (allowed) => {
         if (allowed.includes(role)) return true
         responses.push({ status: 403, body: { error: 'forbidden' } })
@@ -537,6 +541,83 @@ describe('handleBlueprintRoutes — POST /api/blueprints/:id/versions', () => {
     const { ctx, responses } = makeCtx(pool, new FakeStorage(), {})
     await handleBlueprintRoutes(mockReq('POST'), buildUrl(`/api/blueprints/${BLUEPRINT_ID}/versions`), ctx)
     expect(responses[0]?.status).toBe(404)
+  })
+})
+
+describe('handleBlueprintRoutes — GET /api/blueprints/:id/file cross-company isolation', () => {
+  it('returns 404 (not the file body) when company B requests company A blueprint', async () => {
+    // Seed two companies. Company A owns a blueprint; company B should not
+    // be able to read it via the file endpoint. The route filters every
+    // SELECT by company_id, so the row is structurally invisible — but
+    // the access-control guarantee is load-bearing for blueprint PDFs
+    // (customer addresses, contract terms; see CLAUDE.md "Blueprint storage
+    // hygiene" rule #3) so we lock the behavior with this test.
+    const pool = new FakePool()
+    const storage = new FakeStorage()
+    const companyAId = 'co-a'
+    const blueprintId = 'b-from-co-a'
+    const storageKey = `${companyAId}/${blueprintId}/plan.pdf`
+    pool.blueprints.push({
+      id: blueprintId,
+      company_id: companyAId,
+      project_id: PROJECT_ID,
+      file_name: 'plan.pdf',
+      storage_path: storageKey,
+      preview_type: 'storage_path',
+      calibration_length: null,
+      calibration_unit: null,
+      sheet_scale: null,
+      version: 1,
+      deleted_at: null,
+      replaces_blueprint_document_id: null,
+      created_at: '2026-05-01T00:00:00.000Z',
+    })
+    storage.files.set(storageKey, Buffer.from('confidential blueprint contents'))
+
+    // Request the file as company B (different id + slug).
+    const { ctx, responses } = makeCtx(pool, storage, {}, 'admin', { id: 'co-b', slug: 'company-b' })
+    await handleBlueprintRoutes(mockReq('GET'), buildUrl(`/api/blueprints/${blueprintId}/file`), ctx)
+
+    expect(responses).toHaveLength(1)
+    expect(responses[0]?.status).toBe(404)
+    const body = responses[0]?.body as { error?: string }
+    expect(body.error).toBe('blueprint not found')
+    // Defense-in-depth: even if the SELECT somehow returned the row, the
+    // sendFileContent path would have been invoked. Assert it was NOT — no
+    // response body carries the blueprint contents.
+    expect(responses.find((r) => (r.body as { kind?: string })?.kind === 'file')).toBeUndefined()
+  })
+
+  it('returns the file body when the owning company requests it', async () => {
+    // Sanity check: the same setup with the owning company resolves the file.
+    const pool = new FakePool()
+    const storage = new FakeStorage()
+    const companyAId = 'co-a'
+    const blueprintId = 'b-from-co-a'
+    const storageKey = `${companyAId}/${blueprintId}/plan.pdf`
+    pool.blueprints.push({
+      id: blueprintId,
+      company_id: companyAId,
+      project_id: PROJECT_ID,
+      file_name: 'plan.pdf',
+      storage_path: storageKey,
+      preview_type: 'storage_path',
+      calibration_length: null,
+      calibration_unit: null,
+      sheet_scale: null,
+      version: 1,
+      deleted_at: null,
+      replaces_blueprint_document_id: null,
+      created_at: '2026-05-01T00:00:00.000Z',
+    })
+    storage.files.set(storageKey, Buffer.from('confidential blueprint contents'))
+
+    const { ctx, responses } = makeCtx(pool, storage, {}, 'admin', { id: companyAId, slug: 'company-a' })
+    await handleBlueprintRoutes(mockReq('GET'), buildUrl(`/api/blueprints/${blueprintId}/file`), ctx)
+
+    expect(responses).toHaveLength(1)
+    expect(responses[0]?.status).toBe(200)
+    expect((responses[0]?.body as { kind?: string })?.kind).toBe('file')
   })
 })
 

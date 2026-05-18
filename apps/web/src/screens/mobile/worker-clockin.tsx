@@ -12,6 +12,22 @@ import { useNavigate } from 'react-router-dom'
 import { MBody, MButton, MButtonStack, MI, MTopBar } from '../../components/m/index.js'
 import { timeOfDay } from './format.js'
 
+/** Detect the OS-level reduced-motion preference; SMIL animations can't
+ *  be paused via the CSS `prefers-reduced-motion` rule, so we gate the
+ *  SVG <animate> nodes in JS instead. */
+function usePrefersReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return
+    const mql = window.matchMedia('(prefers-reduced-motion: reduce)')
+    setReduced(mql.matches)
+    const handler = (e: MediaQueryListEvent) => setReduced(e.matches)
+    mql.addEventListener('change', handler)
+    return () => mql.removeEventListener('change', handler)
+  }, [])
+  return reduced
+}
+
 export function WorkerClockinConfirm() {
   const navigate = useNavigate()
   const [secondsLeft, setSecondsLeft] = useState(120)
@@ -95,6 +111,7 @@ export function WorkerClockinConfirm() {
 }
 
 function MapPreview() {
+  const reducedMotion = usePrefersReducedMotion()
   return (
     <div
       style={{
@@ -109,8 +126,12 @@ function MapPreview() {
         <circle cx="180" cy="100" r="56" fill="none" stroke="rgba(217,144,74,0.5)" strokeDasharray="4 6" />
         <circle cx="180" cy="100" r="8" fill="var(--m-accent)" />
         <circle cx="180" cy="100" r="14" fill="none" stroke="rgba(217,144,74,0.5)">
-          <animate attributeName="r" values="8;22;8" dur="2.4s" repeatCount="indefinite" />
-          <animate attributeName="opacity" values="0.7;0;0.7" dur="2.4s" repeatCount="indefinite" />
+          {reducedMotion ? null : (
+            <>
+              <animate attributeName="r" values="8;22;8" dur="2.4s" repeatCount="indefinite" />
+              <animate attributeName="opacity" values="0.7;0;0.7" dur="2.4s" repeatCount="indefinite" />
+            </>
+          )}
         </circle>
       </svg>
     </div>

@@ -122,6 +122,7 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
             }}
           >
             <MI.Search size={18} style={{ color: 'var(--m-ink-3)' }} />
+            {/* Outline governed by the global :focus-visible rule in m.css. */}
             <MInput
               type="search"
               placeholder="Search by tag or name"
@@ -131,7 +132,6 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
                 flex: 1,
                 background: 'transparent',
                 border: 'none',
-                outline: 'none',
                 height: 'auto',
                 padding: 0,
                 fontSize: 15,

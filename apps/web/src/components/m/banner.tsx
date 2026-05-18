@@ -15,11 +15,23 @@ export type MBannerProps = {
  * Inline alert banner. 4 tones (info / ok / warn / error). Default tone
  * is amber-warn; set tone to override. Title is required, body and action
  * are optional.
+ *
+ * Accessibility: error banners use `role="alert"` + `aria-live="assertive"`
+ * (interrupt the screen reader); status banners (`ok` / `info` / `warn`)
+ * use `role="status"` + `aria-live="polite"` so toast-like updates such
+ * as "Estimate posted" or "Time review approved" are announced without
+ * yanking focus.
  */
 export function MBanner({ tone, title, body, icon, action }: MBannerProps) {
   const dataTone = tone === 'warn' ? undefined : tone
+  const isError = tone === 'error'
   return (
-    <div className="m-banner" data-tone={dataTone}>
+    <div
+      className="m-banner"
+      data-tone={dataTone}
+      role={isError ? 'alert' : 'status'}
+      aria-live={isError ? 'assertive' : 'polite'}
+    >
       <span className="m-banner-icon">{icon ?? <DefaultIcon tone={tone} />}</span>
       <div className="m-banner-body">
         <div className="m-banner-title">{title}</div>
