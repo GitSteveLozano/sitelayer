@@ -19,6 +19,7 @@
 import { type ReactNode } from 'react'
 import { SentryImpl } from './instrument-sentry-impl'
 import { loadSentry } from './instrument'
+import { isChunkLoadError, recoverFromChunkError } from './lib/pwa/chunk-reload'
 
 // Touching the real SDK from this lazy module ensures `loadSentry()`
 // completes (and the facade flips to real implementations) at the same
@@ -34,7 +35,25 @@ type Props = {
 }
 
 function SentryBoundary({ children, fallback }: Props) {
-  return <ErrorBoundary fallback={() => <>{fallback}</>}>{children}</ErrorBoundary>
+  return (
+    <ErrorBoundary
+      // beforeCapture lets us inspect the caught error before Sentry
+      // groups + sends it. A stale-chunk error after a deploy is the
+      // canonical "the user is on yesterday's bundle" case, and we
+      // want to reload rather than show the error fallback. The
+      // once-per-session guard inside recoverFromChunkError prevents
+      // an infinite reload loop if the reload also crashes.
+      beforeCapture={(scope, error) => {
+        if (isChunkLoadError(error)) {
+          scope.setTag('pwa.chunk_reload', 'triggered')
+          recoverFromChunkError(error)
+        }
+      }}
+      fallback={() => <>{fallback}</>}
+    >
+      {children}
+    </ErrorBoundary>
+  )
 }
 
 export default SentryBoundary

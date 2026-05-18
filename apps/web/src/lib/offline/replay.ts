@@ -159,6 +159,11 @@ async function dispatchHandler(row: OfflineMutation): Promise<void> {
       await uploadClockEventPhoto(id, asFile)
       return
     }
+    case 'daily_log_create': {
+      const input = (row.payload.input ?? {}) as Record<string, unknown>
+      await request('/api/daily-logs', { method: 'POST', json: input })
+      return
+    }
     case 'daily_log_patch': {
       const id = String(row.payload.id ?? '')
       const input = (row.payload.input ?? {}) as Record<string, unknown>
@@ -194,6 +199,15 @@ async function dispatchHandler(row: OfflineMutation): Promise<void> {
       const id = String(row.payload.id ?? '')
       const key = String(row.payload.key ?? '')
       await request(`/api/daily-logs/${encodeURIComponent(id)}/photos`, { method: 'DELETE', json: { key } })
+      return
+    }
+    case 'takeoff_measurement_create': {
+      const projectId = String(row.payload.projectId ?? '')
+      const input = (row.payload.input ?? {}) as Record<string, unknown>
+      await request(`/api/projects/${encodeURIComponent(projectId)}/takeoff/measurement`, {
+        method: 'POST',
+        json: input,
+      })
       return
     }
     case 'time_review_event': {

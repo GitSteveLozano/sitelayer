@@ -86,6 +86,14 @@ export function WorkerPhotoLogScreen() {
           project_id: activeProjectId,
           occurred_on: todayIso,
         })
+        // createLog can resolve with `{ queued: true }` if the call was
+        // enqueued for offline replay. Without a server-assigned id we
+        // can't run the follow-up photo upload, so bail with a toast
+        // instead of throwing on `.dailyLog.id`.
+        if ('queued' in created) {
+          setError("You're offline — your log was queued. Try the photo again when reconnected.")
+          return
+        }
         logId = created.dailyLog.id
       }
       // useUploadDailyLogPhoto is bound to existingLog?.id at hook

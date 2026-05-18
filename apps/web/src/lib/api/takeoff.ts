@@ -1,9 +1,20 @@
 // Phase 3 takeoff resource layer — tags, pages, assemblies, import,
 // QBO custom-field mappings, and the polygon-canvas data layer
 // (blueprints + measurements + measurement create).
+//
+// Offline-queue policy for this resource:
+//   - `useCreateMeasurement` is wrapped in `liveOrQueueCreateMeasurement`.
+//     Field foremen draw measurements on-site while the LTE connection
+//     fades in and out; a NetworkError enqueues into the
+//     `takeoff_measurement_create` kind so the polygon doesn't vanish
+//     on a tap that happens to land during an offline window.
+//   - Delete / tag / calibrate / assembly / import / QBO-mapping
+//     mutations are office-side or admin actions and stay live — they
+//     happen on stable connections and any failure should surface to
+//     the user immediately rather than silently queue.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { request } from './client'
+import { NetworkError, request } from './client'
 
 // ---------------------------------------------------------------------------
 // Blueprints + measurements (Phase 3 polygon canvas)
@@ -93,14 +104,31 @@ export interface CreateMeasurementInput {
   draft_id?: string | null
 }
 
+export type CreateMeasurementResult = TakeoffMeasurement | { queued: true }
+
+async function liveOrQueueCreateMeasurement(
+  projectId: string,
+  input: CreateMeasurementInput,
+): Promise<CreateMeasurementResult> {
+  try {
+    return await request<TakeoffMeasurement>(`/api/projects/${encodeURIComponent(projectId)}/takeoff/measurement`, {
+      method: 'POST',
+      json: input,
+    })
+  } catch (err) {
+    if (err instanceof NetworkError) {
+      const { enqueueOfflineMutation } = await import('@/lib/offline/queue')
+      await enqueueOfflineMutation('takeoff_measurement_create', { projectId, input: { ...input } })
+      return { queued: true }
+    }
+    throw err
+  }
+}
+
 export function useCreateMeasurement(projectId: string) {
   const qc = useQueryClient()
-  return useMutation<TakeoffMeasurement, Error, CreateMeasurementInput>({
-    mutationFn: (input) =>
-      request<TakeoffMeasurement>(`/api/projects/${encodeURIComponent(projectId)}/takeoff/measurement`, {
-        method: 'POST',
-        json: input,
-      }),
+  return useMutation<CreateMeasurementResult, Error, CreateMeasurementInput>({
+    mutationFn: (input) => liveOrQueueCreateMeasurement(projectId, input),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['takeoff'] }),
   })
 }

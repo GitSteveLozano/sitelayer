@@ -1,8 +1,22 @@
 // Daily logs — types, request functions, and TanStack hooks.
 // Wraps apps/api/src/routes/daily-logs.ts.
+//
+// Offline-queue policy for this resource:
+//   - create / patch / submit are wrapped in liveOrQueue* helpers so a
+//     NetworkError (offline, API unreachable, transient blip) enqueues
+//     the call into IndexedDB instead of throwing. The mutation
+//     resolves with `{ queued: true }` so the UI can show a "queued"
+//     toast and stay responsive — daily logs are field-foreman work,
+//     not office work, and double-tap retries on flaky LTE were
+//     creating duplicate submissions before this wrapper landed.
+//   - photo upload / delete are NOT wrapped here. Photos are already
+//     enqueued via a dedicated `daily_log_photo_upload` kind from the
+//     consumer side when needed (composer screens), and the multipart
+//     upload helper has its own response handling that doesn't map
+//     cleanly onto a synthetic queued response.
 
 import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query'
-import { ApiError, API_URL, buildAuthHeaders, request } from './client'
+import { ApiError, API_URL, NetworkError, buildAuthHeaders, request } from './client'
 import { queryKeys } from './keys'
 
 export type DailyLogStatus = 'draft' | 'submitted'
@@ -124,35 +138,90 @@ export function useDailyLog(id: string | null | undefined, options?: Partial<Use
   })
 }
 
+/**
+ * Synthetic response returned when a mutation was enqueued for offline
+ * replay instead of running live. The UI branches on `queued` to swap
+ * the success toast for a "queued for sync" affordance and to skip the
+ * cache write that would otherwise need a real `DailyLog`.
+ */
+export type DailyLogQueuedResponse = { queued: true }
+
+export type DailyLogMutationResult = DailyLogDetailResponse | DailyLogQueuedResponse
+
+async function liveOrQueueCreateDailyLog(input: DailyLogCreateRequest): Promise<DailyLogMutationResult> {
+  try {
+    return await createDailyLog(input)
+  } catch (err) {
+    if (err instanceof NetworkError) {
+      const { enqueueOfflineMutation } = await import('@/lib/offline/queue')
+      await enqueueOfflineMutation('daily_log_create', { input: { ...input } })
+      return { queued: true }
+    }
+    throw err
+  }
+}
+
+async function liveOrQueuePatchDailyLog(id: string, input: DailyLogPatchRequest): Promise<DailyLogMutationResult> {
+  try {
+    return await patchDailyLog(id, input)
+  } catch (err) {
+    if (err instanceof NetworkError) {
+      const { enqueueOfflineMutation } = await import('@/lib/offline/queue')
+      await enqueueOfflineMutation('daily_log_patch', { id, input: { ...input } })
+      return { queued: true }
+    }
+    throw err
+  }
+}
+
+async function liveOrQueueSubmitDailyLog(id: string, input: DailyLogSubmitRequest): Promise<DailyLogMutationResult> {
+  try {
+    return await submitDailyLog(id, input)
+  } catch (err) {
+    if (err instanceof NetworkError) {
+      const { enqueueOfflineMutation } = await import('@/lib/offline/queue')
+      await enqueueOfflineMutation('daily_log_submit', { id, input: { ...input } })
+      return { queued: true }
+    }
+    throw err
+  }
+}
+
 export function useCreateDailyLog() {
   const qc = useQueryClient()
-  return useMutation<DailyLogDetailResponse, Error, DailyLogCreateRequest>({
-    mutationFn: (input) => createDailyLog(input),
+  return useMutation<DailyLogMutationResult, Error, DailyLogCreateRequest>({
+    mutationFn: liveOrQueueCreateDailyLog,
     onSuccess: (data) => {
       void qc.invalidateQueries({ queryKey: queryKeys.dailyLogs.all() })
-      qc.setQueryData(queryKeys.dailyLogs.detail(data.dailyLog.id), data)
+      if (!('queued' in data)) {
+        qc.setQueryData(queryKeys.dailyLogs.detail(data.dailyLog.id), data)
+      }
     },
   })
 }
 
 export function usePatchDailyLog(id: string) {
   const qc = useQueryClient()
-  return useMutation<DailyLogDetailResponse, Error, DailyLogPatchRequest>({
-    mutationFn: (input) => patchDailyLog(id, input),
+  return useMutation<DailyLogMutationResult, Error, DailyLogPatchRequest>({
+    mutationFn: (input) => liveOrQueuePatchDailyLog(id, input),
     onSuccess: (data) => {
       void qc.invalidateQueries({ queryKey: queryKeys.dailyLogs.all() })
-      qc.setQueryData(queryKeys.dailyLogs.detail(id), data)
+      if (!('queued' in data)) {
+        qc.setQueryData(queryKeys.dailyLogs.detail(id), data)
+      }
     },
   })
 }
 
 export function useSubmitDailyLog(id: string) {
   const qc = useQueryClient()
-  return useMutation<DailyLogDetailResponse, Error, DailyLogSubmitRequest | void>({
-    mutationFn: (input) => submitDailyLog(id, input ?? {}),
+  return useMutation<DailyLogMutationResult, Error, DailyLogSubmitRequest | void>({
+    mutationFn: (input) => liveOrQueueSubmitDailyLog(id, input ?? {}),
     onSuccess: (data) => {
       void qc.invalidateQueries({ queryKey: queryKeys.dailyLogs.all() })
-      qc.setQueryData(queryKeys.dailyLogs.detail(id), data)
+      if (!('queued' in data)) {
+        qc.setQueryData(queryKeys.dailyLogs.detail(id), data)
+      }
     },
   })
 }
