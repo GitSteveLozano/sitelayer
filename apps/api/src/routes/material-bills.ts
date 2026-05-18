@@ -3,7 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import { z } from 'zod'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { parseExpectedVersion, parseJsonBody } from '../http-utils.js'
+import { buildPaginationMeta, parseExpectedVersion, parseJsonBody, parsePagination } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 
 // POST /api/projects/:id/material-bills wire-format. The existing route
@@ -71,6 +71,11 @@ export async function handleMaterialBillRoutes(
       ctx.sendJson(400, { error: 'project id is required' })
       return true
     }
+    const pagination = parsePagination(url.searchParams)
+    if (!pagination.ok) {
+      ctx.sendJson(400, { error: pagination.error })
+      return true
+    }
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query(
         `
@@ -78,11 +83,15 @@ export async function handleMaterialBillRoutes(
       from material_bills
       where company_id = $1 and project_id = $2 and deleted_at is null
       order by occurred_on desc, created_at desc
+      limit $3 offset $4
       `,
-        [ctx.company.id, projectId],
+        [ctx.company.id, projectId, pagination.value.limit, pagination.value.offset],
       ),
     )
-    ctx.sendJson(200, { materialBills: result.rows })
+    ctx.sendJson(200, {
+      materialBills: result.rows,
+      pagination: buildPaginationMeta(pagination.value, result.rowCount ?? result.rows.length),
+    })
     return true
   }
 

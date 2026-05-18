@@ -39,6 +39,12 @@ import { loadEmailConfig } from './email.js'
 import { applyRateLimit, createRateLimiter, isRateLimitExempt, loadRateLimitConfig } from './rate-limit.js'
 import { assertVersion } from './version-guard.js'
 import { validateRequiredEnvVars } from './lib/env-validate.js'
+import {
+  createIdempotencyCache,
+  isIdempotentPostPath,
+  validateIdempotencyKey,
+  type IdempotencyCachedResponse,
+} from './idempotency.js'
 
 const logger = createLogger('api')
 validateRequiredEnvVars(logger)
@@ -191,6 +197,26 @@ const pgIdleTimeoutMs = (() => {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 30_000
 })()
 
+// HTTP-level timeouts. Without these, Node's plain `http` module will let a
+// stalled client (or a wedged downstream call that ignores the pg query
+// timeout) hold a socket open indefinitely, piling up requests until the
+// process runs out of file descriptors. Defaults are deliberately wider than
+// the pg query timeout (10s) so legitimate slow queries finish before the
+// HTTP layer kills them. Keep-alive is short so load balancers / health
+// probes don't park sockets unnecessarily on the API.
+const httpRequestTimeoutMs = (() => {
+  const n = Number(process.env.HTTP_REQUEST_TIMEOUT_MS ?? 30_000)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 30_000
+})()
+const httpHeadersTimeoutMs = (() => {
+  const n = Number(process.env.HTTP_HEADERS_TIMEOUT_MS ?? 60_000)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 60_000
+})()
+const httpKeepAliveTimeoutMs = (() => {
+  const n = Number(process.env.HTTP_KEEP_ALIVE_TIMEOUT_MS ?? 5_000)
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 5_000
+})()
+
 function withTierOptions(config: PoolConfig): PoolConfig {
   return {
     ...config,
@@ -246,6 +272,18 @@ logger.info(
   },
   '[pool] configured',
 )
+logger.info(
+  {
+    httpRequestTimeoutMs,
+    httpHeadersTimeoutMs,
+    httpKeepAliveTimeoutMs,
+  },
+  '[http] timeouts configured',
+)
+
+// HTTP-layer idempotency cache. See apps/api/src/idempotency.ts for the
+// rationale; pilot is single-process so an in-memory Map suffices.
+const idempotencyCache = createIdempotencyCache()
 
 function getCorsOrigin(req: http.IncomingMessage): string {
   return getCorsOriginImpl(req, allowedOrigins)
@@ -643,6 +681,37 @@ const server = http.createServer(async (req, res) => {
             requestContext.companyId = company.id
             scope.setTag('company_id', company.id)
 
+            // HTTP-layer idempotency. Resolve the Idempotency-Key header (if
+            // present) and either short-circuit with the cached response or
+            // wrap the dispatch `sendJson` to capture the first response for
+            // future replays. See apps/api/src/idempotency.ts for the path
+            // wire-list rationale.
+            let idempotencyKey: string | null = null
+            if (req.method === 'POST' && isIdempotentPostPath(url.pathname)) {
+              const rawIdempotencyHeader = req.headers['idempotency-key']
+              if (rawIdempotencyHeader !== undefined) {
+                const validated = validateIdempotencyKey(rawIdempotencyHeader)
+                if (!validated.ok) {
+                  sendJson(res, 400, { error: validated.error, request_id: requestId })
+                  return
+                }
+                idempotencyKey = validated.key
+                const cached = idempotencyCache.get(company.id, idempotencyKey)
+                if (cached) {
+                  res.setHeader('idempotent-replay', 'true')
+                  sendJson(res, cached.status, cached.body, req)
+                  return
+                }
+              }
+            }
+            const dispatchSendJson = (status: number, body: unknown): void => {
+              if (idempotencyKey) {
+                const captured: IdempotencyCachedResponse = { status, body }
+                idempotencyCache.set(company.id, idempotencyKey, captured)
+              }
+              sendJson(res, status, body, req)
+            }
+
             // Post-auth route cascade (system + entity routes + debug trace).
             // Order matches the pre-extraction inline cascade so behaviour is
             // preserved. See routes/dispatch.ts for the registry; route
@@ -659,7 +728,7 @@ const server = http.createServer(async (req, res) => {
               requestId,
               requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
               readBody: () => readBody(req),
-              sendJson: (status, body) => sendJson(res, status, body, req),
+              sendJson: dispatchSendJson,
               sendRedirect: (location) => sendRedirect(res, location),
               checkVersion: (table, where, params, expectedVersion) =>
                 checkVersion(table, where, params, expectedVersion, res, req),
@@ -681,8 +750,8 @@ const server = http.createServer(async (req, res) => {
               },
               backfillCustomerMapping: (companyId, customer, executor) =>
                 backfillCustomerMapping(pool, companyId, customer, executor),
-              listIntegrationMappings: (companyId, provider, entityType) =>
-                listIntegrationMappings(pool, companyId, provider, entityType),
+              listIntegrationMappings: (companyId, provider, entityType, pagination) =>
+                listIntegrationMappings(pool, companyId, provider, entityType, pagination),
               upsertIntegrationMapping: (companyId, provider, values, executor) =>
                 upsertIntegrationMapping(pool, companyId, provider, values, executor),
               assertBlueprintDocumentsBelongToProject: (companyId, projectId, blueprintDocumentIds) =>
@@ -774,6 +843,14 @@ const server = http.createServer(async (req, res) => {
     }),
   )
 })
+
+// HTTP-layer timeouts (see HTTP_REQUEST_TIMEOUT_MS etc. above). Applied
+// after createServer so the values come from the same env-derived knobs
+// the boot log reports. requestTimeout must be > pgQueryTimeout so a
+// legitimately slow query isn't killed by the socket layer mid-flight.
+server.requestTimeout = httpRequestTimeoutMs
+server.headersTimeout = httpHeadersTimeoutMs
+server.keepAliveTimeout = httpKeepAliveTimeoutMs
 
 server.listen(port, () => {
   logger.info({ port }, '[api] listening')

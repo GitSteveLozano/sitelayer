@@ -2,7 +2,7 @@ import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import { isValidDateInput, parseExpectedVersion } from '../http-utils.js'
+import { buildPaginationMeta, isValidDateInput, parseExpectedVersion, parsePagination } from '../http-utils.js'
 
 export type LaborEntryRouteCtx = {
   pool: Pool
@@ -125,7 +125,11 @@ export async function handleLaborEntryRoutes(
 
   if (req.method === 'GET' && url.pathname === '/api/labor-entries') {
     const projectId = String(url.searchParams.get('project_id') ?? '').trim()
-    const limit = Math.max(1, Math.min(200, Number(url.searchParams.get('limit') ?? 50)))
+    const pagination = parsePagination(url.searchParams)
+    if (!pagination.ok) {
+      ctx.sendJson(400, { error: pagination.error })
+      return true
+    }
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query(
         `
@@ -133,12 +137,15 @@ export async function handleLaborEntryRoutes(
       from labor_entries
       where company_id = $1 and ($2 = '' or project_id = $2)
       order by occurred_on desc, created_at desc
-      limit $3
+      limit $3 offset $4
       `,
-        [ctx.company.id, projectId, limit],
+        [ctx.company.id, projectId, pagination.value.limit, pagination.value.offset],
       ),
     )
-    ctx.sendJson(200, { laborEntries: result.rows })
+    ctx.sendJson(200, {
+      laborEntries: result.rows,
+      pagination: buildPaginationMeta(pagination.value, result.rowCount ?? result.rows.length),
+    })
     return true
   }
 

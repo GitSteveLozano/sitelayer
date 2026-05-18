@@ -115,6 +115,7 @@ export type DispatchContext = {
     companyId: string,
     provider: string,
     entityType: string | null,
+    pagination?: { limit: number; offset: number },
   ) => Promise<IntegrationMappingRow[]>
   upsertIntegrationMapping: (
     companyId: string,

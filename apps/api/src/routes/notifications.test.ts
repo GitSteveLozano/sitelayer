@@ -54,10 +54,13 @@ class FakePool {
 
     if (/^select[\s\S]+from notifications/i.test(trimmed)) {
       const [companyId, recipientId, ...rest] = params as [string, string, ...unknown[]]
-      // last param is the limit; the parsed kind (if present) is the
-      // 3rd positional after company + recipient.
-      const limit = rest.length > 0 ? Number(rest[rest.length - 1]) : 20
-      const kind = rest.length === 2 ? (rest[0] as string) : null
+      // Trailing params are [..., limit, offset]; the optional kind (when
+      // ?kind=… is supplied) sits between recipient and limit. The route now
+      // always appends both limit and offset, so detect kind by whether
+      // rest has 3 trailing params instead of 2.
+      const offset = rest.length > 0 ? Number(rest[rest.length - 1]) : 0
+      const limit = rest.length > 1 ? Number(rest[rest.length - 2]) : 20
+      const kind = rest.length === 3 ? (rest[0] as string) : null
       const unreadOnly = /payload->>'read_at'\) is null/.test(trimmed)
       const filtered = this.rows
         .filter((r) => r.company_id === companyId)
@@ -65,7 +68,7 @@ class FakePool {
         .filter((r) => (kind ? r.kind === kind : true))
         .filter((r) => (unreadOnly ? r.payload['read_at'] === undefined : true))
         .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0))
-        .slice(0, limit)
+        .slice(offset, offset + limit)
         .map((r) => ({
           id: r.id,
           company_id: r.company_id,
