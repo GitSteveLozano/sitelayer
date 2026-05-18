@@ -99,16 +99,47 @@ export function registerTokenProvider(fn: TokenProvider): void {
   tokenProvider = fn
 }
 
+/**
+ * localStorage key the multi-company switcher writes to. When a user is
+ * a member of more than one company they pick which is active via
+ * `<CompanySwitcher />`; the selection is persisted here so a full
+ * reload (the cheap re-bootstrap the switcher triggers) lands on the
+ * chosen tenant. Reads fall back to `VITE_DEFAULT_COMPANY_SLUG` and
+ * then to `'la-operations'` so single-company users and ungated dev
+ * builds keep working without any storage value.
+ */
+export const ACTIVE_COMPANY_STORAGE_KEY = 'sitelayer.active-company-slug'
+
+function readStoredActiveCompanySlug(): string | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const value = window.localStorage.getItem(ACTIVE_COMPANY_STORAGE_KEY)
+    return value && value.trim() ? value.trim() : null
+  } catch {
+    return null
+  }
+}
+
+const DEFAULT_ACTIVE_COMPANY_SLUG = (import.meta.env.VITE_DEFAULT_COMPANY_SLUG ?? 'la-operations') as string
+
 // Active company slug — set by the shell when the user picks / lands on
-// a company. Until Phase 1D.4 wires the picker we default to the API's
-// own ACTIVE_COMPANY_SLUG fallback ('la-operations').
-let activeCompanySlug: string = (import.meta.env.VITE_DEFAULT_COMPANY_SLUG ?? 'la-operations') as string
+// a company, or written via `<CompanySwitcher />` to localStorage. The
+// module-state cache is initialised from localStorage (when available)
+// so refreshes immediately land on the chosen tenant; the env default
+// remains the fallback for single-company users and dev builds.
+let activeCompanySlug: string = readStoredActiveCompanySlug() ?? DEFAULT_ACTIVE_COMPANY_SLUG
 
 export function setActiveCompanySlug(slug: string): void {
   activeCompanySlug = slug
 }
 
 export function getActiveCompanySlug(): string {
+  // Prefer localStorage on every read so a write from the switcher
+  // (which calls `window.location.reload()` anyway) is visible to any
+  // call that fires before the reload completes. Falls back to the
+  // module state, then the env default.
+  const stored = readStoredActiveCompanySlug()
+  if (stored) return stored
   return activeCompanySlug
 }
 
@@ -167,7 +198,7 @@ export function applyTraceHeaders(headers: Headers): void {
  */
 export async function buildAuthHeaders(opts: { companySlug?: string; requestId?: string } = {}): Promise<Headers> {
   const headers = new Headers()
-  const slug = opts.companySlug ?? activeCompanySlug
+  const slug = opts.companySlug ?? getActiveCompanySlug()
   headers.set('x-sitelayer-company-slug', slug)
   headers.set('x-request-id', opts.requestId ?? nextRequestId())
   // W3C trace context — forwarded on every request so the API +
@@ -221,7 +252,7 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
   applyTraceHeaders(headers)
 
   if (!options.skipAuth) {
-    const slug = options.companySlug ?? activeCompanySlug
+    const slug = options.companySlug ?? getActiveCompanySlug()
     headers.set('x-sitelayer-company-slug', slug)
     try {
       const token = await tokenProvider()

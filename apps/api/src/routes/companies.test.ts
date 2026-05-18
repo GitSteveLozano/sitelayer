@@ -17,7 +17,13 @@ import { handleCompanyRoutes, type CompanyRouteCtx } from './companies.js'
 // Other shapes throw so a regression in the route surfaces as a
 // noisy test failure rather than a silent no-op.
 
-type CompanyRow = { id: string; ot_service_item_code: string | null; modules?: Record<string, boolean> }
+type CompanyRow = {
+  id: string
+  ot_service_item_code: string | null
+  modules?: Record<string, boolean>
+  slug?: string
+  name?: string
+}
 type ServiceItemRow = { company_id: string; code: string }
 type MembershipRow = { company_id: string; clerk_user_id: string; role: string }
 type UsageLogRow = {
@@ -38,6 +44,30 @@ class FakePool {
 
   async query(sql: string, params: unknown[] = []): Promise<{ rows: unknown[]; rowCount: number }> {
     const trimmed = sql.trim()
+
+    // GET /api/me/memberships — multi-company switcher feed.
+    // Distinguished from the generic `select role from company_memberships`
+    // shape below by the `join companies c` clause.
+    if (
+      /^select c\.id as company_id, c\.slug as company_slug, c\.name as company_name, cm\.role/i.test(trimmed) &&
+      /from company_memberships cm/i.test(trimmed) &&
+      /join companies c/i.test(trimmed)
+    ) {
+      const [userId] = params as [string]
+      const rows = this.memberships
+        .filter((m) => m.clerk_user_id === userId)
+        .map((m) => {
+          const c = this.companies.find((x) => x.id === m.company_id)
+          return {
+            company_id: m.company_id,
+            company_slug: c?.slug ?? '',
+            company_name: c?.name ?? '',
+            role: m.role,
+          }
+        })
+        .sort((a, b) => a.company_name.localeCompare(b.company_name))
+      return { rows, rowCount: rows.length }
+    }
 
     if (/^select role from company_memberships/i.test(trimmed)) {
       const [companyId, userId] = params as [string, string]
@@ -570,5 +600,49 @@ describe('GET /api/companies/:id/usage', () => {
     }
     expect(body.month_to_date.by_operation).toEqual([{ operation: 'qbo_api_call', count: 1, total_usd: 0.05 }])
     expect(body.month_to_date.total_usd).toBeCloseTo(0.05, 6)
+  })
+})
+
+describe('GET /api/me/memberships', () => {
+  it('returns the memberships for the authenticated user, sorted by company name', async () => {
+    const pool = new FakePool()
+    // Insert in non-alphabetical order to verify the route asks the
+    // database to sort by company name. The handler's contract is
+    // "alphabetical for stable UX in the switcher dropdown".
+    pool.companies.push({ id: 'co-globex', slug: 'globex', name: 'Globex Inc', ot_service_item_code: null })
+    pool.companies.push({ id: 'co-acme', slug: 'acme-co', name: 'Acme Co', ot_service_item_code: null })
+    pool.memberships.push({ company_id: 'co-globex', clerk_user_id: 'user_multi', role: 'foreman' })
+    pool.memberships.push({ company_id: 'co-acme', clerk_user_id: 'user_multi', role: 'admin' })
+    // Decoy: another user's memberships must not leak into this user's
+    // response. This is the row that proves the pool-level read respects
+    // the WHERE clerk_user_id filter even though it runs without the
+    // company GUC set (migration 066's IS NULL fallback policy).
+    pool.companies.push({ id: 'co-other', slug: 'other-co', name: 'Other Co', ot_service_item_code: null })
+    pool.memberships.push({ company_id: 'co-other', clerk_user_id: 'user_someone_else', role: 'admin' })
+
+    const { ctx, responses } = makeCtx(pool, 'user_multi')
+
+    const handled = await handleCompanyRoutes({ method: 'GET' } as never, buildUrl('/api/me/memberships'), ctx)
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(200)
+    expect(responses[0]?.body).toEqual({
+      memberships: [
+        { company_id: 'co-acme', company_slug: 'acme-co', company_name: 'Acme Co', role: 'admin' },
+        { company_id: 'co-globex', company_slug: 'globex', company_name: 'Globex Inc', role: 'foreman' },
+      ],
+    })
+  })
+
+  it('returns an empty list when the user has no memberships', async () => {
+    const pool = new FakePool()
+    pool.companies.push({ id: 'co-acme', slug: 'acme-co', name: 'Acme Co', ot_service_item_code: null })
+    // Note: no memberships for `user_orphan`.
+
+    const { ctx, responses } = makeCtx(pool, 'user_orphan')
+
+    const handled = await handleCompanyRoutes({ method: 'GET' } as never, buildUrl('/api/me/memberships'), ctx)
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(200)
+    expect(responses[0]?.body).toEqual({ memberships: [] })
   })
 })

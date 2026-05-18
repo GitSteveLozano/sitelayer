@@ -89,6 +89,39 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
     return true
   }
 
+  // GET /api/me/memberships — list every (company, role) the current
+  // Clerk user is in, so the SPA can render a multi-company switcher.
+  // This is the only route that legitimately needs to read across
+  // companies (the user is asking "which companies am I in?") — every
+  // other surface is single-tenant. The query runs at the pool, not
+  // through withCompanyClient, because there's no active company id
+  // yet. Migration 066's `app_current_company_id() IS NULL OR ...`
+  // policy explicitly permits this read at the pool.
+  //
+  // Distinct from `GET /api/companies` (above) which returns the same
+  // memberships but is shaped for the historical admin / onboarding
+  // flow. The /me variant returns a narrower shape and skips the
+  // `created_at` cursor; the switcher just needs slug/name/role.
+  if (req.method === 'GET' && url.pathname === '/api/me/memberships') {
+    const result = await pool.query<{
+      company_id: string
+      company_slug: string
+      company_name: string
+      role: string
+    }>(
+      `
+      select c.id as company_id, c.slug as company_slug, c.name as company_name, cm.role
+      from company_memberships cm
+      join companies c on c.id = cm.company_id
+      where cm.clerk_user_id = $1
+      order by c.name asc
+      `,
+      [userId],
+    )
+    sendJson(200, { memberships: result.rows })
+    return true
+  }
+
   const modulesMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/modules$/)
   if (req.method === 'GET' && modulesMatch) {
     const companyId = modulesMatch[1]!
