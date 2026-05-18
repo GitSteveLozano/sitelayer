@@ -12,9 +12,10 @@ import { Sentry, captureWithEntityContext } from '../instrument.js'
 import { randomUUID } from 'node:crypto'
 import type http from 'node:http'
 import type { Pool } from 'pg'
+import { z } from 'zod'
 import { createLogger } from '@sitelayer/logger'
 import type { ActiveCompany } from '../auth-types.js'
-import { parseExpectedVersion } from '../http-utils.js'
+import { parseExpectedVersion, parseJsonBody } from '../http-utils.js'
 import { recordMutationLedger, recordSyncEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { QboParseError, parseQboClass, parseQboEstimateCreateResponse, parseQboItem } from '../qbo-parse.js'
 import { qboGet, qboPost } from '../qbo-http.js'
@@ -53,6 +54,26 @@ export {
 } from '../qbo-integration-connection.js'
 
 const logger = createLogger('api:qbo')
+
+// POST /api/integrations/qbo wire-format. Replaces a stack of
+// `body.x as string | null | undefined` casts in the upsert call site so
+// a bogus numeric token or `{}` for status surfaces as a 400 rather than
+// landing in `integration_connections` and breaking the next OAuth round.
+// All fields are optional + nullable to keep the existing partial-upsert
+// semantics (omit a field → leave the persisted value alone). Caller may
+// also pass `expected_version` / `version` for optimistic concurrency.
+const QboConnectionUpsertBodySchema = z
+  .object({
+    provider_account_id: z.string().nullish(),
+    access_token: z.string().nullish(),
+    refresh_token: z.string().nullish(),
+    webhook_secret: z.string().nullish(),
+    sync_cursor: z.string().nullish(),
+    status: z.string().optional(),
+    expected_version: z.union([z.number(), z.string()]).nullish(),
+    version: z.union([z.number(), z.string()]).nullish(),
+  })
+  .loose()
 
 export type QboConfig = {
   clientId: string
@@ -216,7 +237,12 @@ export async function handleQboRoutes(req: http.IncomingMessage, url: URL, ctx: 
   // POST /api/integrations/qbo — update connection
   if (req.method === 'POST' && url.pathname === '/api/integrations/qbo') {
     if (!requireRole(['admin', 'office'])) return true
-    const body = await readBody()
+    const parsed = parseJsonBody(QboConnectionUpsertBodySchema, await readBody())
+    if (!parsed.ok) {
+      sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
     const currentConnection = await getIntegrationConnection(pool, company.id, 'qbo')
     if (currentConnection && expectedVersion !== null && Number(currentConnection.version) !== expectedVersion) {
@@ -229,12 +255,12 @@ export async function handleQboRoutes(req: http.IncomingMessage, url: URL, ctx: 
         company.id,
         'qbo',
         {
-          provider_account_id: (body.provider_account_id as string | null | undefined) ?? null,
-          access_token: (body.access_token as string | null | undefined) ?? null,
-          refresh_token: (body.refresh_token as string | null | undefined) ?? null,
-          webhook_secret: (body.webhook_secret as string | null | undefined) ?? null,
-          sync_cursor: (body.sync_cursor as string | null | undefined) ?? null,
-          status: (body.status as string | undefined) ?? 'connected',
+          provider_account_id: body.provider_account_id ?? null,
+          access_token: body.access_token ?? null,
+          refresh_token: body.refresh_token ?? null,
+          webhook_secret: body.webhook_secret ?? null,
+          sync_cursor: body.sync_cursor ?? null,
+          status: body.status ?? 'connected',
         },
         client,
       )

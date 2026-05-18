@@ -10,7 +10,7 @@ import {
 } from '../storage.js'
 import { isMultipartRequest, parseBlueprintMultipart, type BlueprintMultipartResult } from '../blueprint-upload.js'
 import type { ActiveCompany } from '../auth-types.js'
-import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { recordMutationLedger, recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, parseExpectedVersion } from '../http-utils.js'
 import { deleteVersionedEntity } from '../versioned-update.js'
 
@@ -589,6 +589,27 @@ export async function handleBlueprintRoutes(
           row,
           syncPayload: { action: 'delete', blueprint: row },
         })
+        // Enqueue the Spaces / local-FS object GC alongside the soft-
+        // delete. Without this the row goes away but the underlying blob
+        // sits in DO Spaces forever and racks up storage spend. The
+        // dedicated worker runner (apps/worker/src/runners/blueprint-
+        // storage-gc.ts) drains rows of this mutation_type and calls
+        // storage.deleteObject(). The idempotency key is keyed by
+        // blueprintId so a re-issued DELETE (or a retry) collapses onto
+        // the same outbox row via the existing ON CONFLICT path.
+        if (row.storage_path) {
+          await recordMutationOutbox(
+            ctx.company.id,
+            'blueprint_document',
+            blueprintId,
+            'delete_blueprint_storage_object',
+            { storage_path: row.storage_path },
+            `blueprint_storage_delete:${blueprintId}`,
+            'server',
+            null,
+            client,
+          )
+        }
         return row
       },
     })

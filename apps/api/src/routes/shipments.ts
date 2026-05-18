@@ -203,9 +203,6 @@ export async function handleShipmentRoutes(
       if (!current.rows[0]) {
         return { error: 'shipment not found' as const, code: 404 }
       }
-      if (current.rows[0].state_version !== parsed.value.state_version) {
-        return { error: 'state_version mismatch' as const, code: 409 }
-      }
       const snapshot: ShipmentWorkflowSnapshot = {
         state: current.rows[0].status,
         state_version: current.rows[0].state_version,
@@ -215,6 +212,13 @@ export async function handleShipmentRoutes(
         confirmed_by: current.rows[0].confirmed_by,
         driver: current.rows[0].driver,
         ticket_number: current.rows[0].ticket_number,
+      }
+      if (current.rows[0].state_version !== parsed.value.state_version) {
+        return {
+          error: 'state_version mismatch — reload and retry' as const,
+          code: 409,
+          snapshot,
+        }
       }
       // Synthesize the event variant from the parsed type — the reducer
       // wants fully-typed events, the wire format only carries `event`
@@ -320,7 +324,11 @@ export async function handleShipmentRoutes(
       return { shipment: updated.rows[0], snapshot: nextSnapshot }
     })
     if ('error' in result) {
-      ctx.sendJson(result.code ?? 400, { error: result.error })
+      const body: Record<string, unknown> = { error: result.error }
+      if ('snapshot' in result && result.snapshot) {
+        body.snapshot = result.snapshot
+      }
+      ctx.sendJson(result.code ?? 400, body)
       return true
     }
     ctx.sendJson(200, {

@@ -182,6 +182,14 @@ const pgConnectionTimeoutMs = (() => {
   const n = Number(process.env.PG_CONNECTION_TIMEOUT_MS ?? 5000)
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 5000
 })()
+// Close pg backends that have sat idle for this long. Without it the
+// API holds onto every managed-Postgres connection it ever opened, and
+// DO bills connection-hours on managed instances. 30s default closes
+// truly idle conns; reconnects are cheap.
+const pgIdleTimeoutMs = (() => {
+  const n = Number(process.env.PG_IDLE_TIMEOUT_MS ?? 30_000)
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 30_000
+})()
 
 function withTierOptions(config: PoolConfig): PoolConfig {
   return {
@@ -192,6 +200,7 @@ function withTierOptions(config: PoolConfig): PoolConfig {
     statement_timeout: pgStatementTimeoutMs,
     query_timeout: pgQueryTimeoutMs,
     connectionTimeoutMillis: pgConnectionTimeoutMs,
+    idleTimeoutMillis: pgIdleTimeoutMs,
   }
 }
 
@@ -233,6 +242,7 @@ logger.info(
     pgStatementTimeoutMs,
     pgQueryTimeoutMs,
     pgHealthProbeTimeoutMs,
+    pgIdleTimeoutMs,
   },
   '[pool] configured',
 )

@@ -93,4 +93,22 @@ describe('blueprint storage', () => {
     expect(getBlueprintMimeType('plan.png')).toBe('image/png')
     expect(getBlueprintMimeType('plan.jpeg')).toBe('image/jpeg')
   })
+
+  it('local storage deleteObject unlinks the file and tolerates missing keys', async () => {
+    const root = await makeTempDir()
+    const storage = await createBlueprintStorage(readStorageEnv({ BLUEPRINT_STORAGE_ROOT: root }, 'local'))
+    await storage.put('company-1/blueprint-1/file.pdf', Buffer.from('blueprint'))
+    await expect(storage.get('company-1/blueprint-1/file.pdf')).resolves.toEqual(Buffer.from('blueprint'))
+    await storage.deleteObject('company-1/blueprint-1/file.pdf')
+    // The blob is gone.
+    await expect(storage.get('company-1/blueprint-1/file.pdf')).rejects.toThrow()
+    // Re-delete is idempotent (GC may re-claim the row on crash).
+    await expect(storage.deleteObject('company-1/blueprint-1/file.pdf')).resolves.toBeUndefined()
+  })
+
+  it('local storage deleteObject blocks paths that resolve outside the storage root', async () => {
+    const root = await makeTempDir()
+    const storage = await createBlueprintStorage(readStorageEnv({ BLUEPRINT_STORAGE_ROOT: root }, 'local'))
+    await expect(storage.deleteObject('../escape.pdf')).rejects.toThrow(StorageError)
+  })
 })

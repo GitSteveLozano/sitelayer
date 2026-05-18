@@ -6,6 +6,7 @@ import {
   processQueue,
   processQueueWithClient,
   processRentalBillingInvoicePush,
+  pruneAppliedQueue,
   type QueueClient,
   type ReleasableQueueClient,
   type RentalBillingInvoicePushFn,
@@ -511,5 +512,48 @@ describe('processRentalBillingInvoicePush', () => {
     expect(sql[8]).toMatch(/^rollback$/i)
     expect(sql[10]).toMatch(/update mutation_outbox/i)
     expect(sql[10]).toMatch(/'failed'/)
+  })
+})
+
+describe('pruneAppliedQueue', () => {
+  // Sanity: a daily prune emits two parameterised DELETEs (one per
+  // queue table), gated by applied_at IS NOT NULL plus a retention
+  // threshold. The DELETE itself is idempotent — re-running within the
+  // retention window deletes zero rows — so the gate lives in the
+  // caller (the worker runner uses a process-local lastRunAt).
+  it('issues parameterised deletes for both queues and returns per-table counts', async () => {
+    const client = new FakeQueueClient([
+      { rows: [{ count: 7 }], rowCount: 1 },
+      { rows: [{ count: 3 }], rowCount: 1 },
+    ])
+    const result = await pruneAppliedQueue(client, { retentionDays: 30 })
+    expect(result).toEqual({ mutation_outbox: 7, sync_events: 3 })
+    const sql = sqlCalls(client)
+    expect(sql[0]).toMatch(/delete from mutation_outbox/i)
+    expect(sql[0]).toMatch(/applied_at is not null/i)
+    expect(sql[0]).toMatch(/make_interval\(days => \$1\)/)
+    expect(sql[1]).toMatch(/delete from sync_events/i)
+    expect(sql[1]).toMatch(/applied_at is not null/i)
+    // The retention day count is bound, not interpolated, so a
+    // malformed env var can never inject SQL.
+    expect(client.calls[0]?.values).toEqual([30])
+    expect(client.calls[1]?.values).toEqual([30])
+  })
+
+  it('clamps retentionDays to >= 1 day', async () => {
+    const client = new FakeQueueClient([
+      { rows: [{ count: 0 }], rowCount: 1 },
+      { rows: [{ count: 0 }], rowCount: 1 },
+    ])
+    await pruneAppliedQueue(client, { retentionDays: 0 })
+    expect(client.calls[0]?.values).toEqual([1])
+  })
+
+  it('exposes delete_blueprint_storage_object as a dedicated handler so the generic drain skips it', () => {
+    // The blueprint-storage GC runner claims this mutation_type in its
+    // own dedicated drain (apps/worker/src/runners/blueprint-storage-
+    // gc.ts). Without this entry, the generic processOutboxBatch would
+    // mark the row applied without ever calling deleteObject.
+    expect(DEDICATED_HANDLER_MUTATION_TYPES).toContain('delete_blueprint_storage_object')
   })
 })

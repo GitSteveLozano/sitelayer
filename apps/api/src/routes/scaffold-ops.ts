@@ -8,7 +8,121 @@ import {
   type ScaffoldOpsApprovalWorkflowSnapshot,
   type ScaffoldOpsApprovalWorkflowState,
 } from '@sitelayer/workflows'
-import { HttpError } from '../http-utils.js'
+import { z } from 'zod'
+import { HttpError, parseJsonBody } from '../http-utils.js'
+
+// Wire-format schemas for the scaffold-ops surface. Each schema reflects
+// the field shapes the existing `nonEmptyString` / `parseNumber` helpers
+// expect — strings (often nullable), string-or-number for numerics, plus
+// `.loose()` so we don't accidentally narrow what the SPA already sends.
+const StringOrNullSchema = z.union([z.string(), z.null()])
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const BranchCreateBodySchema = z
+  .object({
+    code: z.string().optional(),
+    name: z.string().optional(),
+    address: z.string().nullish(),
+    is_default: z.boolean().nullish(),
+  })
+  .loose()
+
+const BranchPatchBodySchema = z
+  .object({
+    name: z.string().nullish(),
+    address: z.string().nullish(),
+    is_default: z.boolean().nullish(),
+  })
+  .loose()
+
+const RentalVendorCreateBodySchema = z
+  .object({
+    code: z.string().optional(),
+    name: z.string().optional(),
+    contact_email: z.string().nullish(),
+    contact_phone: z.string().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+const ExternalRentalCreateBodySchema = z
+  .object({
+    vendor_id: z.string().optional(),
+    inventory_item_id: z.string().optional(),
+    quantity: NumericInputSchema.nullish(),
+    on_rent_date: z.string().optional(),
+    project_id: StringOrNullSchema.optional(),
+    branch_id: StringOrNullSchema.optional(),
+    vendor_rate: NumericInputSchema.nullish(),
+    rate_unit: z.string().nullish(),
+    vendor_po: z.string().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+const ExternalRentalReturnBodySchema = z
+  .object({
+    returned_quantity: NumericInputSchema.optional(),
+    off_rent_date: z.string().nullish(),
+  })
+  .loose()
+
+const ScaffoldManufacturerCreateBodySchema = z
+  .object({
+    code: z.string().optional(),
+    name: z.string().optional(),
+    website: z.string().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+const ScaffoldSystemCreateBodySchema = z
+  .object({
+    code: z.string().optional(),
+    name: z.string().optional(),
+    manufacturer_id: StringOrNullSchema.optional(),
+    description: z.string().nullish(),
+  })
+  .loose()
+
+const CatalogPartCreateBodySchema = z
+  .object({
+    sku: z.string().optional(),
+    description: z.string().optional(),
+    manufacturer_id: StringOrNullSchema.optional(),
+    scaffold_system_id: StringOrNullSchema.optional(),
+    inventory_item_id: StringOrNullSchema.optional(),
+    unit: z.string().nullish(),
+    weight_kg: NumericInputSchema.nullish(),
+    length_mm: NumericInputSchema.nullish(),
+    width_mm: NumericInputSchema.nullish(),
+    height_mm: NumericInputSchema.nullish(),
+    surface_area_m2: NumericInputSchema.nullish(),
+    attrs: z.unknown().nullish(),
+    active: z.boolean().nullish(),
+  })
+  .loose()
+
+const CatalogPartImportBodySchema = z
+  .object({
+    rows: z.array(z.record(z.string(), z.unknown())).optional(),
+  })
+  .loose()
+
+const BomCreateBodySchema = z
+  .object({
+    name: z.string().optional(),
+    source: z.string().nullish(),
+    source_ref: z.string().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+const BomLinesBodySchema = z
+  .object({
+    lines: z.array(z.record(z.string(), z.unknown())).optional(),
+  })
+  .loose()
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
@@ -91,7 +205,12 @@ export async function handleScaffoldOpsRoutes(
   }
   if (req.method === 'POST' && url.pathname === '/api/branches') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(BranchCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const code = nonEmptyString(body.code)
     const name = nonEmptyString(body.name)
     if (!code || !name) {
@@ -126,7 +245,12 @@ export async function handleScaffoldOpsRoutes(
   if (req.method === 'PATCH' && branchPatchMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = branchPatchMatch[1]!
-    const body = await ctx.readBody()
+    const parsedPatch = parseJsonBody(BranchPatchBodySchema, await ctx.readBody())
+    if (!parsedPatch.ok) {
+      ctx.sendJson(400, { error: parsedPatch.error })
+      return true
+    }
+    const body = parsedPatch.value
     const updates: string[] = []
     const params: unknown[] = [ctx.company.id, id]
     if (body.name !== undefined) {
@@ -175,7 +299,12 @@ export async function handleScaffoldOpsRoutes(
   }
   if (req.method === 'POST' && url.pathname === '/api/rental-vendors') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(RentalVendorCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const code = nonEmptyString(body.code)
     const name = nonEmptyString(body.name)
     if (!code || !name) {
@@ -220,7 +349,12 @@ export async function handleScaffoldOpsRoutes(
   }
   if (req.method === 'POST' && url.pathname === '/api/external-rentals') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(ExternalRentalCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const vendorId = nonEmptyString(body.vendor_id)
     const inventoryItemId = nonEmptyString(body.inventory_item_id)
     const quantity = parseNumber(body.quantity)
@@ -258,7 +392,12 @@ export async function handleScaffoldOpsRoutes(
   if (req.method === 'POST' && externalReturnMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = externalReturnMatch[1]!
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(ExternalRentalReturnBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const returnedQuantity = parseNumber(body.returned_quantity)
     if (returnedQuantity == null || returnedQuantity < 0) {
       ctx.sendJson(400, { error: 'returned_quantity must be a non-negative number' })
@@ -299,7 +438,12 @@ export async function handleScaffoldOpsRoutes(
   }
   if (req.method === 'POST' && url.pathname === '/api/scaffold/manufacturers') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(ScaffoldManufacturerCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const code = nonEmptyString(body.code)
     const name = nonEmptyString(body.name)
     if (!code || !name) {
@@ -332,7 +476,12 @@ export async function handleScaffoldOpsRoutes(
   }
   if (req.method === 'POST' && url.pathname === '/api/scaffold/systems') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(ScaffoldSystemCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const code = nonEmptyString(body.code)
     const name = nonEmptyString(body.name)
     if (!code || !name) {
@@ -372,7 +521,12 @@ export async function handleScaffoldOpsRoutes(
   }
   if (req.method === 'POST' && url.pathname === '/api/scaffold/catalog-parts') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(CatalogPartCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const sku = nonEmptyString(body.sku)
     const description = nonEmptyString(body.description)
     if (!sku || !description) {
@@ -410,8 +564,12 @@ export async function handleScaffoldOpsRoutes(
   }
   if (req.method === 'POST' && url.pathname === '/api/scaffold/catalog-parts/import') {
     if (!ctx.requireRole(['admin', 'office'])) return true
-    const body = await ctx.readBody()
-    const rows = Array.isArray(body.rows) ? (body.rows as Array<Record<string, unknown>>) : null
+    const parsed = parseJsonBody(CatalogPartImportBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const rows = parsed.value.rows ?? null
     if (!rows || rows.length === 0) {
       ctx.sendJson(400, { error: 'rows[] required (one object per part)' })
       return true
@@ -486,7 +644,12 @@ export async function handleScaffoldOpsRoutes(
   if (req.method === 'POST' && projectBomsMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const projectId = projectBomsMatch[1]!
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(BomCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const name = nonEmptyString(body.name)
     if (!name) {
       ctx.sendJson(400, { error: 'name is required' })
@@ -537,8 +700,12 @@ export async function handleScaffoldOpsRoutes(
   if (req.method === 'POST' && bomLinesMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = bomLinesMatch[1]!
-    const body = await ctx.readBody()
-    const lines = Array.isArray(body.lines) ? (body.lines as Array<Record<string, unknown>>) : null
+    const parsed = parseJsonBody(BomLinesBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const lines = parsed.value.lines ?? null
     if (!lines || lines.length === 0) {
       ctx.sendJson(400, { error: 'lines[] required' })
       return true

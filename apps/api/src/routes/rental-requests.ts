@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { z } from 'zod'
 import { initialRentalNextInvoiceAt } from '@sitelayer/domain'
 import { RENTAL_SELECT_COLUMNS, type RentalRow } from '@sitelayer/queue'
 import {
@@ -71,6 +72,35 @@ type RentalRequestItem = {
   description?: string | null
   daily_rate?: number | null
 }
+
+// Wire-format shape for an item entry on approve. The body fields are all
+// optional / nullable because the route already defensively coerces in
+// downstream code (description.toString(), Number(daily_rate)), but a
+// non-object entry would crash that loop with a less-clear error, so we
+// require an object shape upfront.
+const RentalRequestItemBodySchema = z
+  .object({
+    inventory_item_id: z.string().nullish(),
+    qty: z.number().nullish(),
+    start: z.string().nullish(),
+    end: z.string().nullish(),
+    delivery: z.string().nullish(),
+    description: z.string().nullish(),
+    daily_rate: z.number().nullish(),
+  })
+  .loose()
+
+const ApproveBodySchema = z
+  .object({
+    items: z.array(RentalRequestItemBodySchema).optional(),
+  })
+  .loose()
+
+const DeclineBodySchema = z
+  .object({
+    decline_reason: z.string().nullish(),
+  })
+  .loose()
 
 type RentalRequestRow = {
   id: string
@@ -174,11 +204,21 @@ export async function handleRentalRequestRoutes(
   if (req.method === 'POST' && approveMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const requestId = approveMatch[1]!
-    const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const rawBody = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const parsed = ApproveBodySchema.safeParse(rawBody)
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0]
+      const path = issue?.path.length ? issue.path.map((p) => String(p)).join('.') : '(root)'
+      ctx.sendJson(400, { error: `${path}: ${issue?.message ?? 'invalid body'}` })
+      return true
+    }
     // Operators can override defaults at approval time when the portal
     // submission lacked a catalog id — keeps the route useful even when
-    // the customer typo'd a description.
-    const overrides = Array.isArray(body.items) ? (body.items as RentalRequestItem[]) : null
+    // the customer typo'd a description. Cast back to the route's
+    // domain type — the schema is a superset that allows the field
+    // shapes the loop downstream actually consumes.
+    const overrides =
+      parsed.data.items && parsed.data.items.length > 0 ? (parsed.data.items as RentalRequestItem[]) : null
 
     const result = await withMutationTx(async (client: PoolClient) => {
       // Lock the request row so concurrent approve/decline don't race.
@@ -435,8 +475,16 @@ export async function handleRentalRequestRoutes(
   if (req.method === 'POST' && declineMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const requestId = declineMatch[1]!
-    const body = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
-    const reason = typeof body.decline_reason === 'string' ? body.decline_reason.trim() : null
+    const rawBody = await ctx.readBody().catch(() => ({}) as Record<string, unknown>)
+    const parsedDecline = DeclineBodySchema.safeParse(rawBody)
+    if (!parsedDecline.success) {
+      const issue = parsedDecline.error.issues[0]
+      const path = issue?.path.length ? issue.path.map((p) => String(p)).join('.') : '(root)'
+      ctx.sendJson(400, { error: `${path}: ${issue?.message ?? 'invalid body'}` })
+      return true
+    }
+    const reason =
+      typeof parsedDecline.data.decline_reason === 'string' ? parsedDecline.data.decline_reason.trim() : null
 
     const result = await withMutationTx(async (client: PoolClient) => {
       const fetched = await client.query<RentalRequestRow>(

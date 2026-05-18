@@ -8,7 +8,38 @@ import {
   type DamageChargeSettlementWorkflowSnapshot,
   type DamageChargeSettlementWorkflowState,
 } from '@sitelayer/workflows'
-import { HttpError } from '../http-utils.js'
+import { z } from 'zod'
+import { HttpError, parseJsonBody } from '../http-utils.js'
+
+// POST /api/projects/:id/damage-charges wire-format. Mirrors the existing
+// inline helpers (`s()`, `num()`) — every text field is a string (or
+// null), every numeric is string-or-number. Schema rejects malformed
+// shapes up front; the helpers continue to trim / coerce defensively.
+const StringOrNullSchema = z.union([z.string(), z.null()])
+const NumericInputSchema = z.union([z.number(), z.string()])
+
+const DamageChargeCreateBodySchema = z
+  .object({
+    kind: z.string().optional(),
+    description: z.string().optional(),
+    quantity: NumericInputSchema.nullish(),
+    unit_amount: NumericInputSchema.nullish(),
+    total_amount: NumericInputSchema.nullish(),
+    customer_id: StringOrNullSchema.optional(),
+    shipment_id: StringOrNullSchema.optional(),
+    shipment_line_id: StringOrNullSchema.optional(),
+    inventory_item_id: StringOrNullSchema.optional(),
+    catalog_part_id: StringOrNullSchema.optional(),
+    taxable: z.boolean().nullish(),
+    notes: z.string().nullish(),
+  })
+  .loose()
+
+const DamageChargeWaiveBodySchema = z
+  .object({
+    waive_reason: z.string().nullish(),
+  })
+  .loose()
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationOutbox, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
@@ -181,7 +212,12 @@ export async function handleDamageChargeRoutes(
   if (req.method === 'POST' && listMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const projectId = listMatch[1]!
-    const body = await ctx.readBody()
+    const parsed = parseJsonBody(DamageChargeCreateBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
     const kind = s(body.kind)
     const description = s(body.description)
     if (!kind || !['damage', 'loss', 'late_return', 'cleanup'].includes(kind)) {
@@ -274,8 +310,12 @@ export async function handleDamageChargeRoutes(
   if (req.method === 'POST' && waiveMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
     const id = waiveMatch[1]!
-    const body = await ctx.readBody()
-    const waiveReason = s(body.waive_reason)
+    const parsedWaive = parseJsonBody(DamageChargeWaiveBodySchema, await ctx.readBody())
+    if (!parsedWaive.ok) {
+      ctx.sendJson(400, { error: parsedWaive.error })
+      return true
+    }
+    const waiveReason = s(parsedWaive.value.waive_reason)
     const result = await withMutationTx(async (client: PoolClient) => {
       const nowIso = new Date().toISOString()
       const transition = await applyDamageChargeSettlementTransition(client, {
