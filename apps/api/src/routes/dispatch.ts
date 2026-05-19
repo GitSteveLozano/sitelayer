@@ -61,6 +61,7 @@ import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
 import { handleLaborPayrollRunRoutes } from './labor-payroll-runs.js'
 import { handleEstimateShareRoutes } from './estimate-shares-admin.js'
 import { handleInventoryForecastRoutes } from './inventory-forecast.js'
+import { handleWorkflowEventLogRoutes } from './workflow-event-log.js'
 
 /**
  * Cross-cutting deps the route cascade needs from server.ts. Constructed
@@ -781,6 +782,16 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         currentUserId,
         requireRole: requireRoleStr,
         readBody,
+        sendJson,
+      }),
+
+    // Workflow event-log tail — read-only GET for the SiteLayer Probe
+    // (ADR-0019). Operator-tier read access, company-scoped.
+    () =>
+      handleWorkflowEventLogRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
         sendJson,
       }),
 

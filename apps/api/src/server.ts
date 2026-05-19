@@ -39,6 +39,7 @@ import { loadEmailConfig } from './email.js'
 import { applyRateLimit, createRateLimiter, isRateLimitExempt, loadRateLimitConfig } from './rate-limit.js'
 import { assertVersion } from './version-guard.js'
 import { validateRequiredEnvVars } from './lib/env-validate.js'
+import { getBuildSha } from './lib/build-sha.js'
 import {
   createIdempotencyCache,
   isIdempotentPostPath,
@@ -96,7 +97,11 @@ try {
   }
   throw err
 }
-const buildSha = process.env.APP_BUILD_SHA ?? process.env.SENTRY_RELEASE ?? 'unknown'
+// Resolved via lib/build-sha.ts so the same value travels the
+// `x-sitelayer-build-sha` response header AND the `/api/version` body.
+// Resolution order: SITELAYER_BUILD_SHA → APP_BUILD_SHA → SENTRY_RELEASE
+// → repo-root BUILD_SHA file → 'dev'. See that module for the rationale.
+const buildSha = getBuildSha()
 const startedAt = new Date().toISOString()
 const metricsToken = process.env.API_METRICS_TOKEN?.trim() || null
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? 'http://localhost:5173,http://localhost:3000')
@@ -485,6 +490,16 @@ const server = http.createServer(async (req, res) => {
   const headerRequestId = typeof req.headers['x-request-id'] === 'string' ? req.headers['x-request-id'].trim() : ''
   const requestId = headerRequestId || randomUUID()
   res.setHeader('x-request-id', requestId)
+  // Surface the build sha on every response so the SPA Probe can read it
+  // without a `/api/version` round-trip. setHeader queues this on the
+  // response; Node merges queued headers with anything later writeHead
+  // calls add (and writeHead never sets x-sitelayer-build-sha itself), so
+  // the header travels for /health, /api/*, OPTIONS preflights, the
+  // streaming PDF/file paths, the metrics text response, and webhook
+  // 204s alike. The corresponding `access-control-expose-headers` entry
+  // lives in http-utils.ts:CORS_EXPOSE_HEADERS so the cross-origin SPA
+  // can actually read the value.
+  res.setHeader('x-sitelayer-build-sha', buildSha)
   const method = req.method ?? 'UNKNOWN'
   let initialRoute = '/'
   try {

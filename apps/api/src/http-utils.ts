@@ -2,7 +2,7 @@ import http from 'node:http'
 
 export const CORS_ALLOW_HEADERS =
   'content-type, authorization, baggage, sentry-trace, traceparent, x-request-id, x-sitelayer-company-id, x-sitelayer-company-slug, x-sitelayer-user-id, x-sitelayer-act-as, idempotency-key'
-export const CORS_EXPOSE_HEADERS = 'x-request-id, etag, idempotent-replay'
+export const CORS_EXPOSE_HEADERS = 'x-request-id, etag, idempotent-replay, x-sitelayer-build-sha'
 
 export class HttpError extends Error {
   constructor(
