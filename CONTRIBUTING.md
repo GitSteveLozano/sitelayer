@@ -8,6 +8,7 @@ Where to read what:
 
 - [`README.md`](./README.md) — architecture at a glance, where new code goes.
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — first-30-minutes setup, fixtures, app routes.
+- [`COLLABORATION.md`](./COLLABORATION.md) — one-developer collaborator setup, first PR loop, and takeoff coordination rule.
 - [`CLAUDE.md`](./CLAUDE.md) — operating posture, deploy procedure, env management, QBO/storage conventions.
 - [`AGENTS.md`](./AGENTS.md) — short version of the rules for any agent or new contributor.
 - [`SKILL.md`](./SKILL.md) — engineering skill: how to debug, implement, test, scope.

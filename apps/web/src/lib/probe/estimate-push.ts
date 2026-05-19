@@ -36,7 +36,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useUser } from '@clerk/clerk-react'
 import { Sentry } from '@/instrument'
-import { ACTIVE_COMPANY_STORAGE_KEY, API_URL, getActiveCompanySlug, getBuildSha } from '@/lib/api/client'
+import { ACTIVE_COMPANY_STORAGE_KEY, API_URL, getActiveCompanySlug, getBuildSha, request } from '@/lib/api/client'
 import { isClerkConfigured } from '@/lib/auth'
 import { useRole } from '@/lib/role'
 import type {
@@ -151,25 +151,22 @@ export async function fetchFeatureFlags(signal?: AbortSignal): Promise<CaptureFe
 }
 
 /* -------------------------------------------------------------------------- */
-/* Workflow event-log tail — TODO endpoint.                                    */
+/* Workflow event-log tail.                                                    */
 /* -------------------------------------------------------------------------- */
 
+interface WorkflowEventLogResponse {
+  events: WorkflowEventLogRow[]
+}
+
 /**
- * Fetch the last N rows of workflow_event_log for the given entity.
+ * Fetch the last N rows of workflow_event_log for the given entity. This
+ * deliberately uses the app's normal `request<T>()` client so Clerk/dev auth,
+ * active-company scoping, request ids, Sentry trace headers, and build-sha
+ * latching stay identical to other API calls.
  *
- * TODO(adr-0019): no public GET endpoint for workflow_event_log exists
- * today (the table is written by the deterministic-workflow reducers
- * but only `/api/audit-events` and per-route reads expose anything).
- * The Probe's contract is to ship an empty tail + a tail_error rather
- * than fail the whole capture. When the endpoint lands, swap the
- * fetch URL and parse the rows. Suggested shape from `mutation-tx.ts`:
- *
- *   GET /api/workflow-event-log?entity_type=estimate_push
- *                              &entity_id=<id>
- *                              &limit=3
- *
- * Until then the runner can fall back to `/api/audit-events?entity_id=`
- * which carries similar (but less structured) signal.
+ * Probe rule: event-log tail failures never fail the whole Capture. They return
+ * an empty tail plus a small error note so the operator still gets page_state,
+ * principal, trace, deploy, and feature flag context.
  */
 export async function fetchWorkflowEventLogTail(
   entityType: string,
@@ -177,13 +174,28 @@ export async function fetchWorkflowEventLogTail(
   limit: number = ESTIMATE_PUSH_TAIL_LIMIT,
   signal?: AbortSignal,
 ): Promise<{ rows: WorkflowEventLogRow[]; error: string | null }> {
-  void entityType
-  void entityId
-  void limit
-  void signal
-  return {
-    rows: [],
-    error: 'TODO: workflow_event_log GET endpoint not yet exposed; see lib/probe/estimate-push.ts',
+  const params = new URLSearchParams({
+    entity_type: entityType,
+    entity_id: entityId,
+    limit: String(limit),
+  })
+  try {
+    const options: { method: 'GET'; signal?: AbortSignal } = { method: 'GET' }
+    if (signal) options.signal = signal
+    const body = await request<WorkflowEventLogResponse>(`/api/workflow-event-log?${params.toString()}`, {
+      ...options,
+    })
+    return {
+      rows: Array.isArray(body.events) ? body.events.slice(0, limit) : [],
+      error: null,
+    }
+  } catch (err) {
+    if (signal?.aborted) return { rows: [], error: null }
+    const message = err instanceof Error ? err.message : 'unknown error'
+    return {
+      rows: [],
+      error: `workflow_event_log tail unavailable: ${message}`,
+    }
   }
 }
 
@@ -431,8 +443,7 @@ function useClerkPrincipal(role: string): CapturePrincipal {
   }
   // Clerk's `primaryEmailAddress` is the canonical signed-in email.
   const email = user.primaryEmailAddress?.emailAddress ?? user.emailAddresses?.[0]?.emailAddress ?? null
-  const displayName =
-    user.fullName ?? ([user.firstName, user.lastName].filter(Boolean).join(' ').trim() || null)
+  const displayName = user.fullName ?? ([user.firstName, user.lastName].filter(Boolean).join(' ').trim() || null)
   return {
     source: 'clerk',
     user_id: user.id,
