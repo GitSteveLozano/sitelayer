@@ -8,6 +8,7 @@ Where to read what:
 
 - [`README.md`](./README.md) — architecture at a glance, where new code goes.
 - [`DEVELOPMENT.md`](./DEVELOPMENT.md) — first-30-minutes setup, fixtures, app routes.
+- [`docs/ONBOARDING_DEVELOPER.md`](./docs/ONBOARDING_DEVELOPER.md) — new-collaborator path: Mac prerequisites, env scaffold, sign-in via RoleSwitcher or Clerk, first PR workflow.
 - [`CLAUDE.md`](./CLAUDE.md) — operating posture, deploy procedure, env management, QBO/storage conventions.
 - [`AGENTS.md`](./AGENTS.md) — short version of the rules for any agent or new contributor.
 - [`SKILL.md`](./SKILL.md) — engineering skill: how to debug, implement, test, scope.
@@ -75,6 +76,18 @@ Open the PR against `main`. Do not push directly to `main` — see [`AGENTS.md`]
 - **E2E for cross-system flows.** Playwright tests under `e2e/` exercise web → API → worker → DB. Run locally with `npm run test:e2e`. They are not gated on every PR but they do run nightly.
 
 When you fix a bug, add a regression test at the real seam — usually a route test or a reducer test, not a deep unit test of an internal helper. See [`SKILL.md`](./SKILL.md) "Debugging".
+
+## Coordination on shared dev tenants
+
+Concurrent edits to `takeoff_measurements`, takeoff drafts, and estimate lines are resolved **last-write-wins** (see [`CLAUDE.md`](./CLAUDE.md) → Decision #4). The diagnostic toast only fires on the offline replay path; two collaborators editing the same draft live can silently lose a write.
+
+Procedural v1 rule (no merge UI today):
+
+- Don't edit takeoff drafts, blueprint measurements, or estimate lines on a shared dev/preview tenant unless explicitly assigned that work.
+- For PR work that exercises the takeoff/measurement path, use your own seeded company rather than the shared `la-operations` template — see [`docs/ONBOARDING_DEVELOPER.md`](./docs/ONBOARDING_DEVELOPER.md) §6b.
+- Coordinate in the working channel before opening a shared draft (e.g. reproducing a customer report).
+
+This is a coordination guideline, not an architecture project. A merge UI or CRDT proposal needs an issue + ADR.
 
 ## Where to file questions
 
