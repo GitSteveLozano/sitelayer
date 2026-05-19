@@ -72,10 +72,10 @@ For frontend-only work with deterministic seeded data:
 
 ```bash
 VITE_FIXTURES=1 npm run dev:web
-open http://localhost:3000
+open http://localhost:3100
 ```
 
-No Postgres, no API server, no Docker. The SPA reads fixtures from disk. Good for component, layout, and screen-flow work.
+No Postgres, no API server, no Docker. The SPA reads fixtures from disk. Good for component, layout, and screen-flow work. The direct Vite dev server listens on `3100`; the Docker stack below maps host port `3000` to Vite's internal `3100`.
 
 ### 4b. Full local stack (API + web + worker + Postgres 18 + MinIO)
 
@@ -118,9 +118,9 @@ The repo ships a structurally-prod-safe dev auth bypass so you don't need Clerk 
 
 **Default (no Clerk creds):** Leave `VITE_CLERK_PUBLISHABLE_KEY` and `CLERK_JWT_KEY` empty. On boot, a `<RoleSwitcher />` panel renders bottom-right of the SPA. Tap a role — `e2e-admin`, `e2e-foreman`, `e2e-office`, `e2e-member`, or `e2e-bookkeeper` — and the SPA sends `x-sitelayer-act-as: e2e-<role>` on every API call. The API honors the header **only when `APP_TIER !== 'prod'`**. See `CLAUDE.md` → "Local/preview role testing" for the full mechanism.
 
-**With Clerk (preview-tier credentials, optional):** Set `VITE_CLERK_PUBLISHABLE_KEY=pk_test_…` (preview key is documented in `.env.example`) and the SPA mounts the real `/sign-in` and `/sign-up` Clerk components. Leave `CLERK_JWT_KEY` empty on the API side to keep header-fallback on; this lets a Clerk-signed-in user share the dev DB with RoleSwitcher-driven traffic.
+**With Clerk (preview-tier credentials, optional):** Set `VITE_CLERK_PUBLISHABLE_KEY=pk_test_…` (preview key is documented in `.env.example`) and the SPA mounts the real `/sign-in` and `/sign-up` Clerk components. If you need the API to resolve the real Clerk user id, set the matching `CLERK_JWT_KEY` too. If `CLERK_JWT_KEY` is left empty, the API cannot verify the Clerk bearer token and will use the local header/default fallback path instead; that is fine for UI sign-in smoke tests, but it is not a real Clerk-authenticated API session.
 
-Either path lands you in the SPA shell. The first time you authenticate you will have **no `company_memberships` row**, so you'll see the company-creation prompt.
+For RoleSwitcher, company resolution is still normal Sitelayer tenancy: the user id in `x-sitelayer-act-as` must have a `company_memberships` row for the active company slug. Use the seeded `e2e-fixtures` tenant for the canned `e2e-*` roles, or create your own company/row as below.
 
 ---
 
@@ -130,7 +130,17 @@ Sitelayer is multi-tenant: every request resolves to a company via `company_memb
 
 ### 6a. Default seed (already done for you)
 
-`docker/postgres/init/` includes a `la-operations` template seed company with the LA scope-item template. The compose stack sets `ACTIVE_COMPANY_SLUG=la-operations`. With `RoleSwitcher` you act as one of the `e2e-*` IDs against that company — there is a seed migration (`072_e2e_fixtures.sql`) that provisions a matching `company_memberships` row per role.
+`docker/postgres/init/` includes two relevant seeded tenants:
+
+- `la-operations` — the default local company slug, seeded with `demo-user` as admin.
+- `e2e-fixtures` — the role-testing tenant, seeded by `072_e2e_test_fixtures.sql` with one `company_memberships` row per canned RoleSwitcher id (`e2e-admin`, `e2e-foreman`, `e2e-office`, `e2e-member`, `e2e-bookkeeper`).
+
+If you use RoleSwitcher with the canned `e2e-*` ids, use `e2e-fixtures` as the active company. If the SPA is already open on `la-operations`, set the active company from DevTools and reload:
+
+```js
+localStorage.setItem('sitelayer.active-company-slug', 'e2e-fixtures')
+location.reload()
+```
 
 If `npm run seed:e2e` is wired in your tier (it is, for local), run it once:
 
@@ -224,7 +234,7 @@ gh pr create --base main
 
 ## 9. Coordination: takeoff edits are last-write-wins
 
-Sitelayer's offline-first design resolves concurrent edits via **last-write-wins (LWW)** on `takeoff_measurements` (and a similar pattern on other entities). Mechanics live in [`CLAUDE.md`](../CLAUDE.md) → Decision #4. Procedural rule for collaborators:
+Sitelayer's offline-first design resolves replay conflicts on `takeoff_measurements` via **last-write-wins (LWW)** plus a diagnostic toast. Mechanics live in [`CLAUDE.md`](../CLAUDE.md) → Decision #4. Other entities, including estimate-line flows, may rely on optimistic version checks instead. None of this is a collaborative merge UI. Procedural rule for collaborators:
 
 - **Do not edit takeoff drafts, blueprint measurements, or estimate lines on a shared dev/preview tenant unless explicitly assigned.** Two people editing the same draft can cause the older write to be silently discarded; the diagnostic toast only fires on the offline replay path.
 - **For PR work that touches the takeoff/measurement code path,** use your own seeded company (Section 6b) instead of the shared `la-operations` template. That way an integration test or manual click-through cannot stomp on someone else's in-flight measurement.

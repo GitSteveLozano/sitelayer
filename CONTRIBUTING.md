@@ -79,7 +79,7 @@ When you fix a bug, add a regression test at the real seam — usually a route t
 
 ## Coordination on shared dev tenants
 
-Concurrent edits to `takeoff_measurements`, takeoff drafts, and estimate lines are resolved **last-write-wins** (see [`CLAUDE.md`](./CLAUDE.md) → Decision #4). The diagnostic toast only fires on the offline replay path; two collaborators editing the same draft live can silently lose a write.
+`takeoff_measurements` is the only path currently wired through the **last-write-wins** offline replay check (see [`CLAUDE.md`](./CLAUDE.md) → Decision #4). Other shared draft/estimate flows may use optimistic version checks instead, but none of these are a multi-user merge UI. The diagnostic toast only fires on the offline replay path; two collaborators editing the same live surface can still lose time or hit conflicts.
 
 Procedural v1 rule (no merge UI today):
 
