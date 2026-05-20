@@ -1,9 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { useDispatchEstimatePushEvent, useEstimatePush, type EstimatePushHumanEvent } from '@/lib/api'
-import { useEstimatePushProbe } from '@/lib/probe/estimate-push'
+import {
+  isEstimatePushProbeDiagnosticsEnabled,
+  registerEstimatePushProbeDiagnostics,
+  useEstimatePushProbe,
+} from '@/lib/probe/estimate-push'
 
 const TONE_BY_STATE: Record<string, 'good' | 'warn' | 'default'> = {
   drafted: 'default',
@@ -24,6 +28,11 @@ export function EstimatePushDetailScreen() {
   // stays stable across the early-return branches below. The hook is
   // a no-op when `id` is empty and tolerates a null snapshot.
   const capture = useEstimatePushProbe(id ?? '', snapshot.data ?? null)
+
+  useEffect(() => {
+    if (!id || !isEstimatePushProbeDiagnosticsEnabled()) return
+    return registerEstimatePushProbeDiagnostics(capture)
+  }, [id, capture])
 
   if (!id) {
     return (
