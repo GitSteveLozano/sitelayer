@@ -32,6 +32,7 @@ export interface BlueprintDocument {
   version: number
   deleted_at: string | null
   replaces_blueprint_document_id: string | null
+  file_url?: string
   created_at: string
 }
 

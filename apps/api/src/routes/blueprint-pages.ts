@@ -3,6 +3,7 @@ import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
+import { assertKeyInCompany, getBlueprintMimeType, StorageError, type BlueprintStorage } from '../storage.js'
 
 export type BlueprintPageRouteCtx = {
   pool: Pool
@@ -11,6 +12,10 @@ export type BlueprintPageRouteCtx = {
   requireRole: (allowed: readonly CompanyRole[]) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
+  storage: BlueprintStorage
+  blueprintDownloadPresigned: boolean
+  sendFileContent: (mimeType: string, fileName: string, content: Buffer | string) => void
+  sendFileRedirect: (location: string) => void
 }
 
 const PAGE_COLUMNS = `
@@ -46,6 +51,8 @@ interface PageRow {
  *
  *   GET  /api/blueprints/:docId/pages              list pages on a doc
  *   POST /api/blueprints/:docId/pages              add a page (admin)
+ *   GET  /api/blueprint-pages/:id/file             serve/redirect the
+ *                                                  selected page asset
  *   POST /api/blueprint-pages/:id/calibrate        store the two-point
  *                                                  scale calibration
  *
@@ -131,6 +138,66 @@ export async function handleBlueprintPageRoutes(
     return true
   }
 
+  const fileMatch = url.pathname.match(/^\/api\/blueprint-pages\/([^/]+)\/file$/)
+  if (req.method === 'GET' && fileMatch) {
+    const pageId = fileMatch[1]!
+    if (!isValidUuid(pageId)) {
+      ctx.sendJson(400, { error: 'page id must be a valid uuid' })
+      return true
+    }
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        page_number: number
+        page_storage_path: string | null
+        file_name: string
+        document_storage_path: string
+      }>(
+        `
+        select
+          p.page_number,
+          p.storage_path as page_storage_path,
+          d.file_name,
+          d.storage_path as document_storage_path
+        from blueprint_pages p
+        join blueprint_documents d
+          on d.company_id = p.company_id
+         and d.id = p.blueprint_document_id
+         and d.deleted_at is null
+        where p.company_id = $1 and p.id = $2
+        limit 1
+        `,
+        [ctx.company.id, pageId],
+      ),
+    )
+    const row = result.rows[0]
+    if (!row) {
+      ctx.sendJson(404, { error: 'blueprint page not found' })
+      return true
+    }
+
+    const storagePath = row.page_storage_path ?? row.document_storage_path
+    const sourceName = row.page_storage_path ? fileNameFromPath(row.page_storage_path) : row.file_name
+    try {
+      const storageKey = assertBlueprintPageFilePath(ctx.company.id, storagePath)
+      if (ctx.blueprintDownloadPresigned) {
+        const signedUrl = await ctx.storage.getDownloadUrl(storageKey, { fileName: sourceName })
+        if (signedUrl) {
+          ctx.sendFileRedirect(signedUrl)
+          return true
+        }
+      }
+      const content = await ctx.storage.get(storageKey)
+      ctx.sendFileContent(getBlueprintMimeType(sourceName), sanitizeFileName(sourceName), content)
+    } catch (err) {
+      if (err instanceof HttpError) {
+        ctx.sendJson(err.status, { error: err.message })
+        return true
+      }
+      ctx.sendJson(404, { error: 'blueprint page file not found' })
+    }
+    return true
+  }
+
   const calibrateMatch = url.pathname.match(/^\/api\/blueprint-pages\/([^/]+)\/calibrate$/)
   if (req.method === 'POST' && calibrateMatch) {
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
@@ -199,4 +266,22 @@ export async function handleBlueprintPageRoutes(
   }
 
   return false
+}
+
+function sanitizeFileName(fileName: string): string {
+  const cleaned = fileName.trim().replace(/[^a-zA-Z0-9._-]+/g, '-')
+  return cleaned || 'blueprint-page'
+}
+
+function fileNameFromPath(path: string): string {
+  return path.split('/').filter(Boolean).at(-1) ?? 'blueprint-page'
+}
+
+function assertBlueprintPageFilePath(companyId: string, storagePath: string): string {
+  try {
+    return assertKeyInCompany(companyId, storagePath)
+  } catch (err) {
+    if (err instanceof StorageError) throw new HttpError(err.status, err.message)
+    throw err
+  }
 }

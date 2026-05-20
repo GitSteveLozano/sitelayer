@@ -380,6 +380,90 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
 }
 
 /**
+ * Authenticated binary request for image/PDF assets that cannot be loaded
+ * directly by <img> / WebGL because those requests cannot attach the
+ * Sitelayer company and Clerk/act-as headers. Callers own any object URL
+ * lifecycle created from the returned Blob.
+ */
+export async function requestBlob(path: string, options: Omit<RequestOptions, 'json'> = {}): Promise<Blob> {
+  const method = String(options.method ?? 'GET').toUpperCase()
+  const headers = new Headers(options.headers)
+  if (!headers.has('x-request-id')) {
+    headers.set('x-request-id', options.requestId ?? nextRequestId())
+  }
+  const requestId = headers.get('x-request-id')
+
+  applyTraceHeaders(headers)
+
+  if (!options.skipAuth) {
+    const slug = options.companySlug ?? getActiveCompanySlug()
+    headers.set('x-sitelayer-company-slug', slug)
+    try {
+      const token = await tokenProvider()
+      if (token) headers.set('Authorization', `Bearer ${token}`)
+    } catch (err) {
+      Sentry.captureException(err, { tags: { scope: 'token_provider' } })
+    }
+    if (!isClerkConfigured()) {
+      const actAs = getActAsUserId()
+      if (actAs) headers.set('x-sitelayer-act-as', actAs)
+    }
+  }
+
+  let response: Response
+  try {
+    response = await fetch(`${API_URL}${path}`, { ...options, method, headers })
+  } catch (err) {
+    Sentry.addBreadcrumb({
+      category: 'api',
+      type: 'http',
+      level: 'error',
+      message: `${method} ${path} network error`,
+      data: { method, path, request_id: requestId },
+    })
+    throw new NetworkError({ path, method, cause: err })
+  }
+
+  captureBuildShaHeader(response)
+
+  const responseRequestId = response.headers.get('x-request-id') ?? requestId
+  Sentry.addBreadcrumb({
+    category: 'api',
+    type: 'http',
+    level: response.ok ? 'info' : 'warning',
+    message: `${method} ${path} ${response.status}`,
+    data: { method, path, status: response.status, request_id: responseRequestId },
+  })
+
+  if (!response.ok) {
+    const contentType = response.headers.get('content-type') ?? ''
+    let body: unknown
+    if (contentType.includes('application/json')) {
+      try {
+        body = await response.json()
+      } catch {
+        body = null
+      }
+    } else {
+      try {
+        body = await response.text()
+      } catch {
+        body = null
+      }
+    }
+    throw new ApiError({
+      status: response.status,
+      path,
+      method,
+      requestId: responseRequestId,
+      body,
+    })
+  }
+
+  return response.blob()
+}
+
+/**
  * Verb-bound shorthand for `request<T>`. Used by imperative call sites
  * (XState actor invocations, one-off fetches inside event handlers)
  * that can't go through TanStack hooks. The optional `companySlug`

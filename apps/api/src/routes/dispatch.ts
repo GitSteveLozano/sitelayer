@@ -406,6 +406,10 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         requireRole: requireRoleStr,
         readBody,
         sendJson,
+        storage: ctx.storage,
+        blueprintDownloadPresigned: ctx.blueprintDownloadPresigned,
+        sendFileContent: ctx.sendFileContent,
+        sendFileRedirect: ctx.sendFileRedirect,
       }),
 
     // Takeoff CSV import (Phase 3G)

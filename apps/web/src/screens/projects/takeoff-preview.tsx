@@ -8,6 +8,8 @@ import {
   type BlueprintDocument,
   type TakeoffDraft,
 } from '@/lib/api'
+import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
+import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { buildTakeoffPreviewScene } from '@/lib/takeoff/geometry-3d'
 import { TakeoffThreeScene } from './takeoff-3d-scene'
 
@@ -28,6 +30,11 @@ export function TakeoffPreviewScreen() {
   const blueprintPages = useBlueprintPages(activeBlueprint?.id)
   const pageList = blueprintPages.data?.pages ?? []
   const activePage = pageList.find((page) => page.id === pageParam) ?? pageList[0] ?? null
+  const blueprintReference = useMemo(
+    () => buildBlueprintReference(activeBlueprint, activePage),
+    [activeBlueprint, activePage],
+  )
+  const blueprintTexture = useAuthenticatedObjectUrl(blueprintReference?.texturePath)
 
   const draftList = drafts.data?.drafts ?? []
   const activeDraft: TakeoffDraft | null = draftList.find((draft) => draft.id === draftParam) ?? draftList[0] ?? null
@@ -138,7 +145,12 @@ export function TakeoffPreviewScreen() {
       </header>
 
       <main className="relative flex-1 min-h-[560px] overflow-hidden">
-        <TakeoffThreeScene scene={scene} selectedId={selectedId} onSelect={setSelectedId} />
+        <TakeoffThreeScene
+          scene={scene}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          blueprintTextureUrl={blueprintTexture.url}
+        />
 
         <aside className="absolute left-3 top-3 w-[min(360px,calc(100vw-24px))] max-h-[calc(100%-24px)] overflow-y-auto rounded border border-white/12 bg-[#0d1117]/90 shadow-2xl backdrop-blur">
           <div className="border-b border-white/10 px-3 py-2">
@@ -146,6 +158,22 @@ export function TakeoffPreviewScreen() {
             <div className="mt-0.5 text-[11px] text-white/55">
               Scale: {scene.hasCalibration ? `${scene.worldPerBoardUnit.toFixed(3)} ft / board unit` : 'board-space'}
             </div>
+            {blueprintReference ? (
+              <div className="mt-1 text-[11px] text-white/50" data-testid="takeoff-preview-source-sheet-status">
+                Source sheet:{' '}
+                {blueprintReference.kind === 'image'
+                  ? blueprintTexture.loading
+                    ? 'loading image underlay'
+                    : blueprintTexture.error
+                      ? 'image underlay failed'
+                      : blueprintTexture.url
+                        ? 'image underlay loaded'
+                        : 'image underlay pending'
+                  : blueprintReference.kind === 'pdf'
+                    ? 'PDF rasterization needed before it can be underlaid'
+                    : 'unsupported file type for image underlay'}
+              </div>
+            ) : null}
           </div>
 
           {scene.warnings.length > 0 ? (

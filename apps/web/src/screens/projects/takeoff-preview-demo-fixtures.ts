@@ -7,6 +7,7 @@ export interface TakeoffDemoFixture {
   description: string
   referenceTitle: string
   referenceNotes: string[]
+  referenceImageUrl: string
   blueprintId: string
   page: BlueprintPage
   measurements: TakeoffMeasurement[]
@@ -25,6 +26,13 @@ export const TAKEOFF_DEMO_FIXTURES: TakeoffDemoFixture[] = [
       'Uses reviewed-style measurement rows only.',
       'Good baseline for checking selection, scale, and service item color mapping.',
     ],
+    referenceImageUrl: blueprintSvgDataUrl([
+      '<rect x="18" y="24" width="58" height="14" class="room" />',
+      '<polyline points="20,70 42,76 66,72 80,62" class="run" />',
+      '<circle cx="30" cy="48" r="2.5" class="opening" />',
+      '<circle cx="52" cy="48" r="2.5" class="opening" />',
+      '<circle cx="74" cy="48" r="2.5" class="opening" />',
+    ]),
     blueprintId: 'demo-blueprint-simple',
     page: page('demo-page-simple', 'demo-blueprint-simple', '18', '82', '82', '82', '48'),
     measurements: [
@@ -58,6 +66,18 @@ export const TAKEOFF_DEMO_FIXTURES: TakeoffDemoFixture[] = [
       'Synthetic coordinates, shaped like the public-domain blueprint fixtures documented for model tests.',
       'Good for asking Gemini or Claude whether the extrusion preserves room adjacency and openings.',
     ],
+    referenceImageUrl: blueprintSvgDataUrl([
+      '<rect x="16" y="18" width="40" height="36" class="room" />',
+      '<rect x="56" y="18" width="26" height="26" class="room" />',
+      '<rect x="18" y="58" width="28" height="24" class="room" />',
+      '<polyline points="16,18 82,18 82,82 18,82 16,18" class="shell" />',
+      '<polyline points="56,18 56,54 46,58 46,82" class="run" />',
+      '<circle cx="56" cy="33" r="2.5" class="door" />',
+      '<circle cx="46" cy="70" r="2.5" class="door" />',
+      '<circle cx="82" cy="30" r="2.5" class="opening" />',
+      '<circle cx="82" cy="40" r="2.5" class="opening" />',
+      '<circle cx="34" cy="82" r="2.5" class="opening" />',
+    ]),
     blueprintId: 'demo-blueprint-floor',
     page: page('demo-page-floor', 'demo-blueprint-floor', '10', '88', '90', '88', '64'),
     measurements: [
@@ -131,6 +151,15 @@ export const TAKEOFF_DEMO_FIXTURES: TakeoffDemoFixture[] = [
       'Represents what a model might propose after seeing a house photo plus a minimal plan.',
       'Useful for checking whether roof, openings, facade, and foundation cues need a richer schema.',
     ],
+    referenceImageUrl: blueprintSvgDataUrl([
+      '<rect x="18" y="42" width="58" height="16" class="room" />',
+      '<rect x="30" y="58" width="28" height="10" class="room" />',
+      '<polyline points="24,34 76,34" class="run" />',
+      '<polyline points="18,42 47,28 76,42" class="shell" />',
+      '<circle cx="26" cy="50" r="2.5" class="opening" />',
+      '<circle cx="46" cy="58" r="2.8" class="door" />',
+      '<circle cx="72" cy="50" r="2.5" class="opening" />',
+    ]),
     blueprintId: 'demo-blueprint-exterior',
     page: page('demo-page-exterior', 'demo-blueprint-exterior', '14', '86', '86', '86', '56'),
     measurements: [
@@ -223,6 +252,18 @@ function page(
     calibration_set_at: CREATED_AT,
     measurement_count: 0,
   }
+}
+
+function blueprintSvgDataUrl(elements: string[]): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+    <style>
+      .sheet{fill:#f8fafc}.grid{stroke:#d8dee9;stroke-width:.18}.room{fill:#dceafe;stroke:#334155;stroke-width:.8}.shell{fill:none;stroke:#111827;stroke-width:1.1}.run{fill:none;stroke:#475569;stroke-width:.8;stroke-dasharray:2 1}.opening{fill:#fef3c7;stroke:#92400e;stroke-width:.7}.door{fill:#fee2e2;stroke:#991b1b;stroke-width:.7}
+    </style>
+    <rect width="100" height="100" class="sheet"/>
+    ${Array.from({ length: 11 }, (_, index) => `<line x1="${index * 10}" y1="0" x2="${index * 10}" y2="100" class="grid"/><line x1="0" y1="${index * 10}" x2="100" y2="${index * 10}" class="grid"/>`).join('')}
+    ${elements.join('')}
+  </svg>`
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`
 }
 
 function polygon(
