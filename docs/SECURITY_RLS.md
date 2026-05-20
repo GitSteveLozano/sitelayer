@@ -98,6 +98,28 @@ DATABASE_URL=postgres://sitelayer:sitelayer@localhost:5432/sitelayer \
   npm --workspace=@sitelayer/api test -- rls.test.ts
 ```
 
+### Phase 3 runtime probe (constrained role)
+
+`apps/api/src/routes/rls-phase3-audit.test.ts` is a second test that
+audits every high-impact route's source for `withCompanyClient` /
+`withMutationTx` usage (static) and exercises a non-`BYPASSRLS` role
+against the `projects` table (runtime). The runtime probe needs a role
+that does NOT bypass RLS; migration `087_constrained_role_for_rls_probe.sql`
+provisions `sitelayer_constrained` for that purpose in every non-prod
+database (the DO block tier-gates on `current_database() ~
+'^sitelayer_prod'` and is a no-op there).
+
+Local:
+
+```bash
+CONSTRAINED_DB_URL=postgres://sitelayer_constrained:sitelayer_constrained@localhost:5432/sitelayer \
+  npm --workspace=@sitelayer/api test -- src/routes/rls-phase3-audit.test.ts
+```
+
+CI: the `test-integration` job in `.github/workflows/quality.yml` exports
+the same URL automatically once the migration has run against the
+ephemeral Postgres service.
+
 ## When you add a new company-scoped table
 
 Add the policy in the same migration that creates the table:
