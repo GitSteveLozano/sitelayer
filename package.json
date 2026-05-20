@@ -18,6 +18,7 @@
     "seed:e2e": "tsx apps/api/scripts/seed-e2e-fixtures.ts",
     "seed:scenario": "tsx scripts/seed-scenario.ts",
     "probe:workflows": "tsx apps/api/scripts/probe-workflows.ts",
+    "probe:estimate-push:smoke": "playwright test -c e2e/probe-estimate-push-smoke.config.ts",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "typecheck": "npm run typecheck --workspaces && npm run typecheck:e2e",
