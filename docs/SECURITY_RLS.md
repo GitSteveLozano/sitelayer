@@ -120,6 +120,12 @@ CI: the `test-integration` job in `.github/workflows/quality.yml` exports
 the same URL automatically once the migration has run against the
 ephemeral Postgres service.
 
+Preview deploys intentionally skip the constrained-role migration. The
+preview stack connects to the managed preview database as the app role, which
+does not have `CREATEROLE`; the preview app does not need the runtime probe
+login role. Local Docker and CI still run the migration and exercise the
+probe.
+
 ## When you add a new company-scoped table
 
 Add the policy in the same migration that creates the table:

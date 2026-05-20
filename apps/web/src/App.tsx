@@ -58,6 +58,9 @@ const TakeoffCanvasScreen = lazy(() =>
 const TakeoffSummaryScreen = lazy(() =>
   import('@/screens/projects/takeoff-summary').then((m) => ({ default: m.TakeoffSummaryScreen })),
 )
+const TakeoffPreviewScreen = lazy(() =>
+  import('@/screens/projects/takeoff-preview').then((m) => ({ default: m.TakeoffPreviewScreen })),
+)
 const TakeoffDetailScreen = lazy(() =>
   import('@/screens/projects/takeoff-detail').then((m) => ({ default: m.TakeoffDetailScreen })),
 )
@@ -71,6 +74,9 @@ const PortalEstimateAcceptedView = lazy(() =>
 const PortalRentalsView = lazy(() => import('@/portal/RentalsPortal').then((m) => ({ default: m.RentalsPortal })))
 const PortalRentalsCart = lazy(() => import('@/portal/RentalsCart').then((m) => ({ default: m.RentalsCart })))
 const PortalRentalsConfirm = lazy(() => import('@/portal/RentalsConfirm').then((m) => ({ default: m.RentalsConfirm })))
+const TakeoffPreviewDemo = lazy(() =>
+  import('@/screens/projects/takeoff-preview-demo').then((m) => ({ default: m.TakeoffPreviewDemo })),
+)
 const EstimateBuilderScreen = lazy(() =>
   import('@/screens/projects/estimate-builder').then((m) => ({ default: m.EstimateBuilderScreen })),
 )
@@ -175,6 +181,7 @@ export default function App() {
               <Route path="/portal/rentals/:shareToken" element={<PortalRentalsView />} />
               <Route path="/portal/rentals/:shareToken/cart" element={<PortalRentalsCart />} />
               <Route path="/portal/rentals/:shareToken/confirm" element={<PortalRentalsConfirm />} />
+              <Route path="/demo/takeoff-preview-3d" element={<TakeoffPreviewDemo />} />
 
               {/* Authenticated app -- Clerk-gated. */}
               <Route
@@ -203,6 +210,7 @@ function AppShellRoutes() {
       <Route path="/projects/:id/setup" element={<ProjectSetupScreen />} />
       <Route path="/projects/:id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />
       <Route path="/projects/:id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
+      <Route path="/projects/:id/takeoff-preview" element={<TakeoffPreviewScreen />} />
       <Route path="/projects/:id/takeoff-summary" element={<TakeoffSummaryScreen />} />
       <Route path="/projects/:id/photo-measure" element={<PhotoMeasureScreen />} />
       <Route path="/projects/:id/rental-contract" element={<ProjectRentalContractScreen />} />

@@ -346,6 +346,12 @@ export function TakeoffCanvasScreen() {
             <button type="button" onClick={() => setCompareOpen(true)} className="text-[12px] font-medium text-accent">
               Compare
             </button>
+            <Link
+              to={`/projects/${projectId}/takeoff-preview${activeBlueprint ? `?blueprint=${encodeURIComponent(activeBlueprint.id)}` : ''}${activeDraftId ? `${activeBlueprint ? '&' : '?'}draft=${encodeURIComponent(activeDraftId)}` : ''}`}
+              className="text-[12px] font-medium text-accent"
+            >
+              3D →
+            </Link>
             <Link to={`/projects/${projectId}/photo-measure`} className="text-[12px] font-medium text-accent">
               Photo →
             </Link>
