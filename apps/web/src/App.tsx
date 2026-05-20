@@ -74,6 +74,9 @@ const PortalEstimateAcceptedView = lazy(() =>
 const PortalRentalsView = lazy(() => import('@/portal/RentalsPortal').then((m) => ({ default: m.RentalsPortal })))
 const PortalRentalsCart = lazy(() => import('@/portal/RentalsCart').then((m) => ({ default: m.RentalsCart })))
 const PortalRentalsConfirm = lazy(() => import('@/portal/RentalsConfirm').then((m) => ({ default: m.RentalsConfirm })))
+const TakeoffPreviewDemo = lazy(() =>
+  import('@/screens/projects/takeoff-preview-demo').then((m) => ({ default: m.TakeoffPreviewDemo })),
+)
 const EstimateBuilderScreen = lazy(() =>
   import('@/screens/projects/estimate-builder').then((m) => ({ default: m.EstimateBuilderScreen })),
 )
@@ -178,6 +181,7 @@ export default function App() {
               <Route path="/portal/rentals/:shareToken" element={<PortalRentalsView />} />
               <Route path="/portal/rentals/:shareToken/cart" element={<PortalRentalsCart />} />
               <Route path="/portal/rentals/:shareToken/confirm" element={<PortalRentalsConfirm />} />
+              <Route path="/demo/takeoff-preview-3d" element={<TakeoffPreviewDemo />} />
 
               {/* Authenticated app -- Clerk-gated. */}
               <Route
