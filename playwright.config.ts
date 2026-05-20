@@ -69,7 +69,10 @@ const baseConfig: PlaywrightTestConfig = {
   workers: 1,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
-  retries: process.env.CI ? 1 : 0,
+  // These specs mutate deterministic workflow rows seeded once per run.
+  // A failed attempt leaves the row advanced and poisons its own retry, so
+  // retries add noise instead of signal.
+  retries: 0,
   reporter: [['list'], ['html', { open: 'never' }]],
   use: {
     baseURL,

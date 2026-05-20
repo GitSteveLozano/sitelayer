@@ -14,11 +14,11 @@ import { FIXTURE_IDS } from '../fixtures/ids'
  *      the labor entries that feed the payroll run.
  *   2. The labor-payroll run is already seeded `generated` — admin
  *      APPROVEs it (`generated → approved`).
- *   3. Admin POST_REQUESTED → `posting`, side-effect lands → `posted`.
+ *   3. Admin POST_REQUESTED → `posting`.
  *
- * The QBO post leg is mocked the same way as spec 2 — the seed harness
- * simulates the callback so the workflow reaches `posted` shortly after
- * POST_REQUESTED.
+ * `POST_SUCCEEDED` is worker-only and covered by queue/workflow tests.
+ * This browser spec stops at the human-controlled QBO handoff so it
+ * does not depend on background worker timing.
  */
 
 type TimeReviewSnapshot = {
@@ -33,7 +33,7 @@ type LaborPayrollSnapshot = {
 
 const runSpec = process.env.E2E_RUN === '1' ? test : test.skip
 
-runSpec('admin approves time review then runs labor payroll to posted', async ({ adminPage }) => {
+runSpec('admin approves time review then requests labor payroll post', async ({ adminPage }) => {
   const timeReviewId = FIXTURE_IDS.timeReviewRunId
   const payrollId = FIXTURE_IDS.laborPayrollRunId
 
@@ -63,25 +63,15 @@ runSpec('admin approves time review then runs labor payroll to posted', async ({
   })
   expect(payrollApproved.state).toBe('approved')
 
-  // 3. POST_REQUESTED → posting → posted (driven by the mocked QBO callback).
+  // 3. POST_REQUESTED → posting. POST_SUCCEEDED is worker-only.
   const payrollPosting = await dispatchWorkflowEvent<LaborPayrollSnapshot>(adminPage, payrollEventsPath, {
     event: 'POST_REQUESTED',
     state_version: payrollApproved.state_version,
   })
-  expect(['posting', 'posted']).toContain(payrollPosting.state)
-
-  await expect
-    .poll(
-      async () => {
-        const latest = await fetchWorkflowSnapshot<LaborPayrollSnapshot>(adminPage, payrollPath)
-        return latest.state
-      },
-      { timeout: 10_000, intervals: [250, 500, 1000] },
-    )
-    .toBe('posted')
+  expect(payrollPosting.state).toBe('posting')
 
   // UI cross-check: labor-payroll-run-detail renders the literal state
   // string in a Pill (mirrors estimate-push-detail).
   await adminPage.goto(`/financial/labor-payroll-runs/${payrollId}`)
-  await expect(adminPage.getByText('posted', { exact: true })).toBeVisible()
+  await expect(adminPage.getByText('posting', { exact: true })).toBeVisible()
 })
