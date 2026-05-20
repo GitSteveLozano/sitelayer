@@ -58,6 +58,7 @@ describe('buildTakeoffPreviewScene', () => {
       { x: 10, z: 0, boardX: 60, boardY: 50 },
       { x: 10, z: 10, boardX: 60, boardY: 60 },
     ])
+    expect(scene.items[0]?.heightFt).toBe(0.08)
   })
 
   it('filters to the active blueprint', () => {
@@ -78,6 +79,42 @@ describe('buildTakeoffPreviewScene', () => {
     )
 
     expect(scene.items.map((item) => item.id)).toEqual(['m1'])
+  })
+
+  it('assigns vertical preview heights to lineals and opening counts', () => {
+    const scene = buildTakeoffPreviewScene(
+      [
+        {
+          ...baseMeasurement,
+          id: 'wall-run',
+          service_item_code: '09 22 16',
+          geometry: {
+            kind: 'lineal',
+            points: [
+              { x: 40, y: 50 },
+              { x: 60, y: 50 },
+            ],
+          },
+        },
+        {
+          ...baseMeasurement,
+          id: 'window-count',
+          service_item_code: '08 50 00',
+          geometry: { kind: 'count', points: [{ x: 52, y: 50 }] },
+        },
+        {
+          ...baseMeasurement,
+          id: 'door-count',
+          service_item_code: '08 14 00',
+          geometry: { kind: 'count', points: [{ x: 58, y: 50 }] },
+        },
+      ],
+      { activeBlueprintId: 'b1', activePage: calibratedPage, defaultWallHeightFt: 10 },
+    )
+
+    expect(scene.items.find((item) => item.id === 'wall-run')?.heightFt).toBe(10)
+    expect(scene.items.find((item) => item.id === 'window-count')?.heightFt).toBeCloseTo(3.6)
+    expect(scene.items.find((item) => item.id === 'door-count')?.heightFt).toBeCloseTo(7.2)
   })
 
   it('warns and skips unsupported geometry blobs', () => {

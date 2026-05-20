@@ -40,6 +40,32 @@ test('renders a nonblank WebGL 3D takeoff preview from mocked measurements', asy
   expectImageHasSignal(png)
 })
 
+test('renders the public demo fixture switcher and export payload', async ({ page }) => {
+  await page.goto('/demo/takeoff-preview-3d')
+
+  await expect(page.getByRole('heading', { name: '3D takeoff demo' })).toBeVisible()
+  await expect(page.getByText('Simple house plan', { exact: true }).first()).toBeVisible()
+
+  await page.getByTestId('takeoff-demo-fixture-floor-plan').click()
+  await expect(page).toHaveURL(/fixture=floor-plan/)
+  await expect(page.getByText('Blueprint-style floor plan', { exact: true }).first()).toBeVisible()
+  await expect(page.getByText('7', { exact: true })).toBeVisible()
+  await expect(page.getByText('drawable measurements')).toBeVisible()
+
+  await page.getByText('Scene JSON').click()
+  await expect(page.getByTestId('takeoff-demo-debug-json')).toContainText('"id": "floor-plan"')
+  await expect(page.getByTestId('takeoff-demo-debug-json')).toContainText('"service_item_code": "08 50 00"')
+
+  const canvas = page.getByTestId('takeoff-preview-canvas')
+  await expect(canvas).toBeVisible()
+  await expect
+    .poll(() => canvas.evaluate((node) => (node as HTMLCanvasElement).width * (node as HTMLCanvasElement).height))
+    .toBeGreaterThan(0)
+
+  const png = PNG.sync.read(await canvas.screenshot())
+  expectImageHasSignal(png)
+})
+
 async function installApiMocks(page: Page, state: { sawDraftScopedMeasurements: boolean }): Promise<void> {
   await page.route('http://localhost:3001/api/**', async (route) => {
     const url = new URL(route.request().url())
