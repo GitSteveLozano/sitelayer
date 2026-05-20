@@ -61,6 +61,8 @@ import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
 import { handleLaborPayrollRunRoutes } from './labor-payroll-runs.js'
 import { handleEstimateShareRoutes } from './estimate-shares-admin.js'
 import { handleInventoryForecastRoutes } from './inventory-forecast.js'
+import { handleWorkflowEventLogRoutes } from './workflow-event-log.js'
+import { getBuildSha } from '../lib/build-sha.js'
 
 /**
  * Cross-cutting deps the route cascade needs from server.ts. Constructed
@@ -272,7 +274,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         identity,
         tier: ctx.tier,
-        buildSha: process.env.APP_BUILD_SHA ?? process.env.SENTRY_RELEASE ?? 'unknown',
+        buildSha: getBuildSha(),
         requireRole: requireRoleStr,
         readBody,
         sendJson,
@@ -781,6 +783,16 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         currentUserId,
         requireRole: requireRoleStr,
         readBody,
+        sendJson,
+      }),
+
+    // Workflow event-log tail — read-only GET for the SiteLayer Probe
+    // (ADR-0019). Operator-tier read access, company-scoped.
+    () =>
+      handleWorkflowEventLogRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
         sendJson,
       }),
 

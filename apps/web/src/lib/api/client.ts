@@ -27,6 +27,45 @@ export const API_URL = (import.meta.env.VITE_API_URL ?? 'http://localhost:3001')
 export const ACT_AS_STORAGE_KEY = 'sitelayer.act-as'
 
 /**
+ * Cached `x-sitelayer-build-sha` header value. The API stamps this on
+ * every response (see `apps/api/src/server.ts`); we latch the first
+ * value we see and reuse it for the page lifetime so consumers (the
+ * estimate-push Probe, future Sentry release tagging, etc.) don't need
+ * an extra `/api/version` round-trip. The API guarantees the value
+ * doesn't change mid-deploy because the container is restarted on every
+ * deploy; if a stale tab sees a different sha after a deploy, the SPA's
+ * stale-chunk error boundary will reload before the cached value can
+ * mislead a downstream report.
+ */
+let cachedBuildSha: string | null = null
+
+/**
+ * Read the latched build sha. Returns `null` until the first API
+ * response has been observed. Probes / Sentry tagging code should fall
+ * back to `null` gracefully rather than block on this.
+ */
+export function getBuildSha(): string | null {
+  return cachedBuildSha
+}
+
+/**
+ * Capture the build sha header off a Response. No-op when the header
+ * is missing (CORS misconfig, old API server) or when we already have
+ * a cached value. Exposed for tests; production callers go through
+ * `request<T>()` which invokes this automatically.
+ */
+export function captureBuildShaHeader(response: Response): void {
+  if (cachedBuildSha) return
+  const value = response.headers.get('x-sitelayer-build-sha')
+  if (value && value.trim()) cachedBuildSha = value.trim()
+}
+
+/** Test-only — reset the latched build sha so each test starts clean. */
+export function __resetBuildShaCacheForTests(): void {
+  cachedBuildSha = null
+}
+
+/**
  * Read the dev act-as override from localStorage. Returns null when:
  *   - we're SSR / not in a browser
  *   - the key isn't set
@@ -289,6 +328,13 @@ export async function request<T>(path: string, options: RequestOptions = {}): Pr
     })
     throw new NetworkError({ path, method, cause: err })
   }
+
+  // Latch the build sha header off the very first response we see. The
+  // helper is a no-op once cached so this is cheap on every subsequent
+  // request. Done unconditionally (even on 4xx/5xx) because the header
+  // travels with error responses too — the SPA wants the sha for
+  // diagnostics regardless of status code.
+  captureBuildShaHeader(response)
 
   const responseRequestId = response.headers.get('x-request-id') ?? requestId
   Sentry.addBreadcrumb({

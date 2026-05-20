@@ -162,6 +162,7 @@ Env files loaded from cwd upward: `.env` -> `.env.local` -> `.env.sentry.local` 
 ## Docs
 
 - `DEVELOPMENT.md` — Local development loop and routes
+- `docs/ONBOARDING_DEVELOPER.md` — Mac collaborator setup (clone → local stack → first PR)
 - `DEPLOYMENT.md` — Production deploy, tiers, caching, backups
 - `CLAUDE.md` — Architecture and agent coordination source of truth
 - `docs/RELEASE_GATES.md` — CI/release requirements

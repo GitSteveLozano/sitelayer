@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { useDispatchEstimatePushEvent, useEstimatePush, type EstimatePushHumanEvent } from '@/lib/api'
+import { useEstimatePushProbe } from '@/lib/probe/estimate-push'
 
 const TONE_BY_STATE: Record<string, 'good' | 'warn' | 'default'> = {
   drafted: 'default',
@@ -19,6 +20,10 @@ export function EstimatePushDetailScreen() {
   const snapshot = useEstimatePush(id)
   const dispatch = useDispatchEstimatePushEvent(id ?? '')
   const [error, setError] = useState<string | null>(null)
+  // ADR-0019 page-context Probe. Mounted unconditionally so hook order
+  // stays stable across the early-return branches below. The hook is
+  // a no-op when `id` is empty and tolerates a null snapshot.
+  const capture = useEstimatePushProbe(id ?? '', snapshot.data ?? null)
 
   if (!id) {
     return (
@@ -141,6 +146,21 @@ export function EstimatePushDetailScreen() {
       <div className="mt-4">
         <Attribution source="GET /api/estimate-pushes/:id · POST /:id/events" />
       </div>
+
+      {import.meta.env.DEV ? (
+        <div className="mt-4">
+          <MobileButton
+            variant="ghost"
+            onClick={() => {
+              const c = capture()
+              console.log('[ADR-0019 Capture]', c)
+              console.log('[ADR-0019 Capture JSON]', JSON.stringify(c, null, 2))
+            }}
+          >
+            Inspect Capture (dev)
+          </MobileButton>
+        </div>
+      ) : null}
     </div>
   )
 }

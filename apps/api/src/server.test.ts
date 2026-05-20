@@ -92,11 +92,84 @@ async function rawHttpCall(
   })
 }
 
+/**
+ * Raw request helper that returns response headers alongside the parsed
+ * JSON body. Most tests only need the body+status, but the build-sha
+ * smoke test below asserts on a response header (`x-sitelayer-build-sha`)
+ * which `apiCall` discards.
+ */
+async function apiCallWithHeaders<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<T & { status: number; headers: http.IncomingHttpHeaders }> {
+  const options: http.RequestOptions = {
+    hostname: 'localhost',
+    port: 3001,
+    path,
+    method,
+    headers: {
+      'Content-Type': 'application/json',
+      'x-sitelayer-company-slug': 'la-operations',
+      'x-sitelayer-user-id': 'demo-user',
+    },
+  }
+  return new Promise((resolve, reject) => {
+    const req = http.request(options, (res) => {
+      let data = ''
+      res.on('data', (chunk) => {
+        data += chunk
+      })
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data)
+          resolve({ ...parsed, status: res.statusCode ?? 0, headers: res.headers })
+        } catch {
+          resolve({ status: res.statusCode ?? 0, headers: res.headers } as T & {
+            status: number
+            headers: http.IncomingHttpHeaders
+          })
+        }
+      })
+    })
+    req.on('error', reject)
+    if (body) req.write(JSON.stringify(body))
+    req.end()
+  })
+}
+
 describeIntegration('API Integration Tests', () => {
   it('GET /health returns 200 OK', async () => {
     const result = await apiCall<{ ok: boolean }>('GET', '/health')
     expect(result.status).toBe(200)
     expect(result.ok).toBe(true)
+  })
+
+  // Smoke test for the x-sitelayer-build-sha header. The server sets it
+  // via setHeader at request entry (see apps/api/src/server.ts), so
+  // every response — /health, /api/*, OPTIONS, error 404s — carries it.
+  // The cross-origin SPA reads it through `access-control-expose-headers`
+  // (see CORS_EXPOSE_HEADERS in http-utils.ts). Asserting on /health
+  // covers the pre-auth public path, and /api/session covers the
+  // authenticated dispatch path; if either misses the header we know the
+  // setHeader-at-entry contract broke.
+  it('responses carry x-sitelayer-build-sha header (Probe build-sha propagation)', async () => {
+    const health = await apiCallWithHeaders<{ ok: boolean }>('GET', '/health')
+    expect(health.status).toBe(200)
+    const healthSha = health.headers['x-sitelayer-build-sha']
+    expect(typeof healthSha).toBe('string')
+    expect((healthSha as string).length).toBeGreaterThan(0)
+
+    const session = await apiCallWithHeaders<{ user: unknown }>('GET', '/api/session')
+    expect(session.status).toBe(200)
+    expect(session.headers['x-sitelayer-build-sha']).toBe(healthSha)
+
+    // Cross-origin readability: the expose-headers value must include
+    // the new header so a browser SPA can actually see it. /api/session
+    // goes through sendJson which stamps Access-Control-Expose-Headers.
+    const exposeHeaders = session.headers['access-control-expose-headers']
+    expect(typeof exposeHeaders).toBe('string')
+    expect((exposeHeaders as string).toLowerCase()).toContain('x-sitelayer-build-sha')
   })
 
   it('GET /api/bootstrap returns company and entities', async () => {
