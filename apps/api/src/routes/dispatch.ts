@@ -34,6 +34,7 @@ import { handleShipmentRoutes } from './shipments.js'
 import { handlePayrollExportRoutes } from './payroll-exports.js'
 import { handleCustomerPortalRoutes } from './customer-portal-links.js'
 import { handleCompanyCamRoutes } from './companycam.js'
+import { handleRentalEventRoutes } from './rental-events.js'
 import { handleRentalRequestRoutes } from './rental-requests.js'
 import { handleRentalRoutes } from './rentals.js'
 import { handleScheduleRoutes } from './schedules.js'
@@ -551,6 +552,22 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     // CompanyCam one-way photo mirror
     () =>
       handleCompanyCamRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Rental workflow event-API surface (GET /:id snapshot, POST /:id/events).
+    // Wired before handleRentalRoutes so the canonical workflow paths
+    // short-circuit the generic CRUD routes; the legacy POST /return and
+    // POST /transfer routes remain handled by handleRentalRoutes for
+    // back-compat with the rental-return-sheet and rental-transfer-sheet
+    // SPA flows.
+    () =>
+      handleRentalEventRoutes(req, url, {
         pool,
         company,
         currentUserId,

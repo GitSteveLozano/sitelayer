@@ -32,6 +32,7 @@ const DOMAIN_ENTITY_TYPES = new Set([
   'worker_issue',
   'labor_payroll_run',
   'estimate_share_link',
+  'rental',
 ])
 
 export type AuditInput = {
