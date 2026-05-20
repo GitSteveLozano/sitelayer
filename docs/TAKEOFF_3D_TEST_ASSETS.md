@@ -146,7 +146,12 @@ reviews it, and the deterministic preview extrudes that reviewed geometry into a
   plus public demo fixture switching and debug-payload coverage.
 - `apps/web/src/screens/projects/takeoff-preview-demo-fixtures.ts`: synthetic
   public demo fixtures for house-plan, floor-plan, and exterior-reference
-  critique loops.
+  critique loops. Each fixture now carries a tiny synthetic source-sheet image
+  that is rendered under the 3D scene, so the public demo exercises the same
+  underlay rendering path without bundling third-party assets.
+- `GET /api/blueprint-pages/:id/file`: authenticated page-file route used by
+  the app to fetch image-backed page assets with normal Sitelayer auth headers
+  before converting them to object URLs for canvas/WebGL use.
 - Measurement fixtures include `page_id`, so the smoke path exercises
   blueprint-page filtering and page-calibration binding rather than only
   document-level filtering. Legacy null `page_id` rows remain page-1 fallback
