@@ -102,9 +102,7 @@ describe('portalEstimateLoadMachine', () => {
   })
 
   it('successful RELOAD clears a prior error', async () => {
-    fetchPortalEstimateMock
-      .mockRejectedValueOnce(new Error('boom'))
-      .mockResolvedValueOnce(baseView)
+    fetchPortalEstimateMock.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce(baseView)
     const actor = startActor()
     await settle()
     expect(actor.getSnapshot().context.error).toBe('boom')

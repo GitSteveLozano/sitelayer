@@ -109,15 +109,14 @@ const machine = setup({
     loadView: fromPromise<PortalEstimateView, { shareToken: string }>(async ({ input }) => {
       return fetchPortalEstimate(input.shareToken)
     }),
-    submitAccept: fromPromise<
-      void,
-      { shareToken: string; signerName: string; signature: string }
-    >(async ({ input }) => {
-      await postPortalAccept(input.shareToken, {
-        signer_name: input.signerName.trim(),
-        signature_data_url: input.signature,
-      })
-    }),
+    submitAccept: fromPromise<void, { shareToken: string; signerName: string; signature: string }>(
+      async ({ input }) => {
+        await postPortalAccept(input.shareToken, {
+          signer_name: input.signerName.trim(),
+          signature_data_url: input.signature,
+        })
+      },
+    ),
     submitDecline: fromPromise<PortalEstimateView, { shareToken: string; reason: string }>(async ({ input }) => {
       await postPortalDecline(input.shareToken, { decline_reason: input.reason.trim() })
       // Re-fetch so we hydrate the screen into the declined state.
