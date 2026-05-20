@@ -1,13 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { MBanner, MBody, MButton, MButtonStack, MTextarea, MTopBar } from '@/components/m'
-import {
-  fetchPortalEstimate,
-  PortalApiError,
-  postPortalAccept,
-  postPortalDecline,
-  type PortalEstimateView,
-} from './api'
+import { usePortalEstimateSignature } from '@/machines/portal-estimate-signature'
+import { type PortalEstimateView } from './api'
 import { SignatureCapture } from './SignatureCapture'
 
 /**
@@ -18,54 +13,38 @@ import { SignatureCapture } from './SignatureCapture'
  * with two terminal CTAs (Accept + Decline). Mobile-first layout —
  * pure light theme so the customer never sees the operator's dark
  * mode chrome.
+ *
+ * State (load / accept / decline / submit error / signer fields) is
+ * owned by the `portalEstimateSignature` XState machine. This
+ * component is a thin renderer; the only side effect it owns is
+ * react-router navigation (the machine signals
+ * `shouldRedirectAccepted` and we call `navigate(...)` from a
+ * `useEffect`).
  */
 export function EstimateView() {
   const { shareToken } = useParams<{ shareToken: string }>()
   const navigate = useNavigate()
-  const [view, setView] = useState<PortalEstimateView | null>(null)
-  const [loadError, setLoadError] = useState<{ status: number; message: string } | null>(null)
-  const [mode, setMode] = useState<'idle' | 'accepting' | 'declining'>('idle')
-  const [signerName, setSignerName] = useState('')
-  const [signature, setSignature] = useState<string | null>(null)
-  const [declineReason, setDeclineReason] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [submitError, setSubmitError] = useState<string | null>(null)
+  const signature = usePortalEstimateSignature(shareToken ?? '')
 
+  // The machine signals when it's time to navigate into the accepted
+  // view. Doing the navigation here (instead of inside an XState
+  // action) keeps the machine framework-free, matching the existing
+  // `submit-form.ts` / `estimate-share.ts` convention.
   useEffect(() => {
-    if (!shareToken) return
-    let cancelled = false
-    fetchPortalEstimate(shareToken)
-      .then((data) => {
-        if (cancelled) return
-        setView(data)
-        if (data.status === 'accepted') {
-          navigate(`/portal/estimates/${shareToken}/accepted`, { replace: true })
-        }
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        const status = err instanceof PortalApiError ? err.status : 500
-        const message =
-          err instanceof PortalApiError
-            ? err.message_for_user()
-            : err instanceof Error
-              ? err.message
-              : 'Something went wrong.'
-        setLoadError({ status, message })
-      })
-    return () => {
-      cancelled = true
+    if (signature.shouldRedirectAccepted && shareToken) {
+      navigate(`/portal/estimates/${shareToken}/accepted`, { replace: true })
     }
-  }, [shareToken, navigate])
+  }, [signature.shouldRedirectAccepted, shareToken, navigate])
 
-  if (loadError) {
+  if (signature.loadError) {
     return (
       <Shell title="Estimate">
-        <MBanner tone="error" title={loadError.message} />
+        <MBanner tone="error" title={signature.loadError.message} />
       </Shell>
     )
   }
 
+  const view = signature.view
   if (!view) {
     return (
       <Shell title="Estimate">
@@ -95,73 +74,37 @@ export function EstimateView() {
     )
   }
 
-  const handleAccept = async () => {
-    if (!shareToken) return
-    if (!signerName.trim()) {
-      setSubmitError('Please type your full name.')
-      return
-    }
-    if (!signature) {
-      setSubmitError('Please sign in the box above.')
-      return
-    }
-    setSubmitting(true)
-    setSubmitError(null)
-    try {
-      await postPortalAccept(shareToken, {
-        signer_name: signerName.trim(),
-        signature_data_url: signature,
-      })
-      navigate(`/portal/estimates/${shareToken}/accepted`, { replace: true })
-    } catch (err) {
-      const message = err instanceof PortalApiError ? err.message_for_user() : 'Could not accept right now.'
-      setSubmitError(message)
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const handleDecline = async () => {
-    if (!shareToken) return
-    if (!declineReason.trim()) {
-      setSubmitError('Please share a quick reason.')
-      return
-    }
-    setSubmitting(true)
-    setSubmitError(null)
-    try {
-      await postPortalDecline(shareToken, { decline_reason: declineReason.trim() })
-      // Re-fetch to refresh the screen into the declined state.
-      const refreshed = await fetchPortalEstimate(shareToken)
-      setView(refreshed)
-      setMode('idle')
-    } catch (err) {
-      const message = err instanceof PortalApiError ? err.message_for_user() : 'Could not decline right now.'
-      setSubmitError(message)
-    } finally {
-      setSubmitting(false)
-    }
-  }
+  // The user-facing submit-time error is either the machine's
+  // `submitError` (from a failed network call) or the inline
+  // validation hint generated by the machine when the form is
+  // incomplete.
+  const inlineError =
+    signature.submitError ??
+    (signature.mode === 'accepting'
+      ? signature.acceptValidationMessage
+      : signature.mode === 'declining'
+        ? signature.declineValidationMessage
+        : null)
 
   return (
     <Shell title={view.project_name} sub={`From ${view.company_name}`}>
       <ReadOnlySnapshot view={view} />
 
-      {mode === 'idle' ? (
+      {signature.mode === 'idle' ? (
         <>
-          {submitError ? <MBanner tone="error" title={submitError} /> : null}
+          {signature.submitError ? <MBanner tone="error" title={signature.submitError} /> : null}
           <MButtonStack>
-            <MButton variant="primary" onClick={() => setMode('accepting')}>
+            <MButton variant="primary" onClick={signature.startAccept}>
               Accept estimate
             </MButton>
-            <MButton variant="quiet" onClick={() => setMode('declining')}>
+            <MButton variant="quiet" onClick={signature.startDecline}>
               Decline
             </MButton>
           </MButtonStack>
         </>
       ) : null}
 
-      {mode === 'accepting' ? (
+      {signature.mode === 'accepting' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Sign to accept</h3>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--m-ink-3, #64748b)' }}>
@@ -172,49 +115,49 @@ export function EstimateView() {
             <span style={{ fontSize: 12, color: 'var(--m-ink-3, #64748b)' }}>Your full name</span>
             <input
               className="m-input"
-              value={signerName}
-              onChange={(e) => setSignerName(e.target.value)}
+              value={signature.signerName}
+              onChange={(e) => signature.setSignerName(e.target.value)}
               autoComplete="name"
               placeholder="Jane Doe"
             />
           </label>
 
-          <SignatureCapture onChange={setSignature} />
+          <SignatureCapture onChange={signature.setSignature} />
 
-          {submitError ? <MBanner tone="error" title={submitError} /> : null}
+          {inlineError ? <MBanner tone="error" title={inlineError} /> : null}
 
           <MButtonStack>
-            <MButton variant="primary" onClick={handleAccept} disabled={submitting}>
-              {submitting ? 'Submitting…' : 'Submit acceptance'}
+            <MButton variant="primary" onClick={signature.submitAccept} disabled={signature.isSubmitting}>
+              {signature.isSubmittingAccept ? 'Submitting…' : 'Submit acceptance'}
             </MButton>
-            <MButton variant="quiet" onClick={() => setMode('idle')} disabled={submitting}>
+            <MButton variant="quiet" onClick={signature.cancel} disabled={signature.isSubmitting}>
               Cancel
             </MButton>
           </MButtonStack>
         </div>
       ) : null}
 
-      {mode === 'declining' ? (
+      {signature.mode === 'declining' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Decline this estimate</h3>
           <p style={{ margin: 0, fontSize: 13, color: 'var(--m-ink-3, #64748b)' }}>
             Optionally tell us why so we can follow up with adjustments.
           </p>
           <MTextarea
-            value={declineReason}
-            onChange={(e) => setDeclineReason(e.target.value)}
+            value={signature.declineReason}
+            onChange={(e) => signature.setDeclineReason(e.target.value)}
             rows={4}
             placeholder="Reason"
             maxLength={2000}
           />
 
-          {submitError ? <MBanner tone="error" title={submitError} /> : null}
+          {inlineError ? <MBanner tone="error" title={inlineError} /> : null}
 
           <MButtonStack>
-            <MButton variant="primary" onClick={handleDecline} disabled={submitting}>
-              {submitting ? 'Submitting…' : 'Submit decline'}
+            <MButton variant="primary" onClick={signature.submitDecline} disabled={signature.isSubmitting}>
+              {signature.isSubmittingDecline ? 'Submitting…' : 'Submit decline'}
             </MButton>
-            <MButton variant="quiet" onClick={() => setMode('idle')} disabled={submitting}>
+            <MButton variant="quiet" onClick={signature.cancel} disabled={signature.isSubmitting}>
               Cancel
             </MButton>
           </MButtonStack>

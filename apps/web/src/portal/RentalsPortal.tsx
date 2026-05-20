@@ -1,7 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { API_URL } from '@/lib/api'
 import { EmptyState } from '@/components/shell/EmptyState'
+import {
+  readCart as machineReadCart,
+  useRentalsPortal,
+  writeCart as machineWriteCart,
+  type PortalCartLine as MachinePortalCartLine,
+  type PortalCatalogItem as MachinePortalCatalogItem,
+} from '@/machines/rentals-portal'
 
 /**
  * Public customer rental portal — Browse view.
@@ -12,124 +17,41 @@ import { EmptyState } from '@/components/shell/EmptyState'
  * `:shareToken` and is included verbatim on every request; the API verifies
  * the HMAC before returning data.
  *
- * Cart state lives in localStorage so refresh persists what the customer
- * built up. Reservation submit hits `POST /portal/rentals/:share_token/reserve`
- * which lands a row in `rental_requests` for the operator to approve.
+ * State (catalog snapshot, filters, cart, loading/error) lives in the
+ * `rentalsPortal` XState machine. Cart persistence is performed inside
+ * the machine via a `persistCart` side-effect action that writes to
+ * localStorage on every mutation.
+ *
+ * Reservation submit (in `RentalsCart.tsx`) hits
+ * `POST /portal/rentals/:share_token/reserve` which lands a row in
+ * `rental_requests` for the operator to approve.
+ *
+ * Note: `RentalsCart.tsx` still imports `readCart`, `writeCart`, and
+ * `PortalCartLine` from this module, so we re-export the machine's
+ * versions for compatibility. The storage key contract between the two
+ * screens is preserved.
  */
 
-export interface PortalCatalogItem {
-  id: string
-  code: string
-  description: string
-  category: string
-  unit: string
-  default_rental_rate: string
-  replacement_value: string | null
-}
-
-export interface PortalCartLine {
-  inventory_item_id: string
-  qty: number
-  start: string
-  end: string
-  delivery: 'pickup' | 'delivery'
-}
-
-const CART_STORAGE_KEY = 'sitelayer:portal:rentals:cart'
-
-export function readCart(): PortalCartLine[] {
-  try {
-    const raw = window.localStorage.getItem(CART_STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? (parsed as PortalCartLine[]) : []
-  } catch {
-    return []
-  }
-}
-
-export function writeCart(cart: PortalCartLine[]): void {
-  try {
-    window.localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cart))
-  } catch {
-    // localStorage blocked (incognito, full disk) — silently degrade. The
-    // session-only state still works because the in-memory cart is the
-    // source of truth.
-  }
-}
-
-async function fetchCatalog(shareToken: string): Promise<{ items: PortalCatalogItem[] }> {
-  const url = `${API_URL}/api/portal/rentals/${encodeURIComponent(shareToken)}/catalog`
-  const response = await fetch(url, { method: 'GET' })
-  if (!response.ok) {
-    const body = (await response.json().catch(() => null)) as { error?: string } | null
-    throw new Error(body?.error ?? `Catalog request failed (${response.status})`)
-  }
-  return (await response.json()) as { items: PortalCatalogItem[] }
-}
+export type PortalCatalogItem = MachinePortalCatalogItem
+export type PortalCartLine = MachinePortalCartLine
+export const readCart = machineReadCart
+export const writeCart = machineWriteCart
 
 export function RentalsPortal() {
   const params = useParams<{ shareToken: string }>()
   const shareToken = params.shareToken ?? ''
-  const [items, setItems] = useState<PortalCatalogItem[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-  const [query, setQuery] = useState('')
-  const [category, setCategory] = useState<string>('All')
-  const [cart, setCart] = useState<PortalCartLine[]>(() => readCart())
-
-  useEffect(() => {
-    let cancelled = false
-    setLoading(true)
-    fetchCatalog(shareToken)
-      .then((res) => {
-        if (cancelled) return
-        setItems(res.items)
-        setError(null)
-      })
-      .catch((err: Error) => {
-        if (cancelled) return
-        setError(err.message)
-      })
-      .finally(() => {
-        if (cancelled) return
-        setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [shareToken])
-
-  useEffect(() => {
-    writeCart(cart)
-  }, [cart])
-
-  const categories = useMemo(() => {
-    const set = new Set<string>(['All'])
-    for (const i of items) if (i.category) set.add(i.category)
-    return Array.from(set)
-  }, [items])
-
-  const filtered = items.filter((i) => {
-    if (category !== 'All' && i.category !== category) return false
-    if (query && !`${i.code} ${i.description}`.toLowerCase().includes(query.toLowerCase())) return false
-    return true
-  })
-
-  function addToCart(line: PortalCartLine) {
-    setCart((cur) => [...cur, line])
-  }
+  const portal = useRentalsPortal(shareToken)
 
   if (!shareToken) {
     return <div style={{ padding: 32 }}>Missing share token.</div>
   }
-  if (loading) {
+  if (portal.isLoading) {
     return <div style={{ padding: 32 }}>Loading catalog…</div>
   }
-  if (error) {
+  if (portal.error) {
     return (
       <div style={{ padding: 32, color: '#a44' }}>
-        Catalog unavailable: {error}
+        Catalog unavailable: {portal.error}
         <p style={{ fontSize: 12, marginTop: 8 }}>
           The link may have expired. Contact the company that sent it for a fresh share link.
         </p>
@@ -151,14 +73,14 @@ export function RentalsPortal() {
         <div>
           <strong style={{ fontSize: 18 }}>Rental catalog</strong>
           <p style={{ fontSize: 12, margin: 0, color: '#666' }}>
-            {items.length} item{items.length === 1 ? '' : 's'} available
+            {portal.items.length} item{portal.items.length === 1 ? '' : 's'} available
           </p>
         </div>
         <Link
           to={`/portal/rentals/${encodeURIComponent(shareToken)}/cart`}
           style={{ textDecoration: 'none', padding: '8px 16px', border: '1px solid #ddd', borderRadius: 6 }}
         >
-          Cart ({cart.length})
+          Cart ({portal.cart.length})
         </Link>
       </header>
 
@@ -166,12 +88,12 @@ export function RentalsPortal() {
         <input
           type="text"
           placeholder="Search…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          value={portal.query}
+          onChange={(e) => portal.setQuery(e.target.value)}
           style={{ flex: 1, padding: 8, border: '1px solid #ddd', borderRadius: 4 }}
         />
-        <select value={category} onChange={(e) => setCategory(e.target.value)} style={{ padding: 8 }}>
-          {categories.map((c) => (
+        <select value={portal.category} onChange={(e) => portal.setCategory(e.target.value)} style={{ padding: 8 }}>
+          {portal.categories.map((c) => (
             <option key={c} value={c}>
               {c}
             </option>
@@ -187,16 +109,16 @@ export function RentalsPortal() {
           gap: 16,
         }}
       >
-        {filtered.map((item) => (
-          <CatalogCard key={item.id} item={item} onAdd={addToCart} />
+        {portal.filtered.map((item) => (
+          <CatalogCard key={item.id} item={item} onAdd={portal.addToCart} />
         ))}
       </div>
 
-      {filtered.length === 0 ? (
+      {portal.filtered.length === 0 ? (
         <EmptyState
-          title={query || category !== 'All' ? 'No items match' : 'Catalog is empty'}
+          title={portal.query || portal.category !== 'All' ? 'No items match' : 'Catalog is empty'}
           body={
-            query || category !== 'All'
+            portal.query || portal.category !== 'All'
               ? 'Try clearing the search or category filter.'
               : 'Ask the operator to publish inventory items.'
           }

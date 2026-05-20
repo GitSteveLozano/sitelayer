@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import { MBanner, MBody, MTopBar } from '@/components/m'
-import { fetchPortalEstimate, PortalApiError, type PortalEstimateView } from './api'
+import { usePortalEstimateLoad } from '@/machines/portal-estimate-load'
+import { type PortalEstimateView } from './api'
 
 /**
  * Confirmation screen the customer sees after a successful accept.
@@ -12,43 +12,27 @@ import { fetchPortalEstimate, PortalApiError, type PortalEstimateView } from './
  * after the link expires, we still render the read-only view since
  * accept is terminal — the API keeps the row available even past
  * `expires_at` for accepted shares.
+ *
+ * State (load / view / error) lives in the `portalEstimateLoad`
+ * XState machine; this component is a thin renderer.
  */
 export function EstimateAcceptedView() {
   const { shareToken } = useParams<{ shareToken: string }>()
-  const [view, setView] = useState<PortalEstimateView | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!shareToken) return
-    let cancelled = false
-    fetchPortalEstimate(shareToken)
-      .then((data) => {
-        if (cancelled) return
-        setView(data)
-      })
-      .catch((err: unknown) => {
-        if (cancelled) return
-        if (err instanceof PortalApiError) setLoadError(err.message_for_user())
-        else setLoadError('Could not load this estimate.')
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [shareToken])
+  const { view, error, isLoading } = usePortalEstimateLoad(shareToken ?? '')
 
   return (
     <div data-theme="light" style={{ minHeight: '100vh', background: '#f1f5f9', color: '#0f172a' }}>
       <MTopBar title="Estimate accepted" sub={view ? view.company_name : undefined} />
       <MBody pad>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 12, paddingBottom: 32 }}>
-          {loadError ? <MBanner tone="error" title={loadError} /> : null}
+          {error ? <MBanner tone="error" title={error} /> : null}
 
           {view ? (
             <>
               <Hero view={view} />
               <Receipt view={view} />
             </>
-          ) : !loadError ? (
+          ) : isLoading ? (
             <div style={{ padding: 24, textAlign: 'center', color: 'var(--m-ink-3, #64748b)', fontSize: 14 }}>
               Loading…
             </div>
