@@ -23,6 +23,8 @@ type WorkflowEventLogRow = {
   snapshot_after: { state: string; state_version: number }
   actor_user_id: string | null
   applied_at: string
+  request_id?: string | null
+  sentry_trace?: string | null
 }
 
 class FakePool {
@@ -83,6 +85,8 @@ class FakePool {
         from_state: r.from_state,
         actor_user_id: r.actor_user_id,
         applied_at: r.applied_at,
+        request_id: r.request_id ?? null,
+        sentry_trace: r.sentry_trace ?? null,
         event_payload: r.event_payload,
       }))
       const descending = projected.slice().sort((a, b) => b.state_version - a.state_version)
@@ -184,6 +188,8 @@ describe('handleWorkflowEventLogRoutes — GET /api/workflow-event-log', () => {
       snapshot_after: { state: 'approved', state_version: 3 },
       actor_user_id: 'u-1',
       applied_at: '2026-05-01T01:00:00.000Z',
+      request_id: 'web-approve',
+      sentry_trace: 'trace-approve-span-1',
     })
     const { ctx, responses } = makeCtx(pool)
     await handleWorkflowEventLogRoutes(
@@ -200,6 +206,8 @@ describe('handleWorkflowEventLogRoutes — GET /api/workflow-event-log', () => {
     expect(body.events[0]?.to_state).toBe('approved')
     expect(body.events[0]?.from_state_version).toBe(2)
     expect(body.events[0]?.to_state_version).toBe(3)
+    expect(body.events[0]?.request_id).toBe('web-approve')
+    expect(body.events[0]?.sentry_trace).toBe('trace-approve-span-1')
     // Oldest row has no predecessor.
     expect(body.events[1]?.event_type).toBe('REVIEW')
     expect(body.events[1]?.from_state).toBeNull()

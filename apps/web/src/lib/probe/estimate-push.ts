@@ -362,6 +362,8 @@ export function captureEstimatePush(args: CaptureEstimatePushArgs): Capture {
       state: args.snapshot.state,
       state_version: args.snapshot.state_version,
       next_events: args.snapshot.next_events.map((e) => e.type),
+      project_id: ctx.project_id,
+      customer_id: ctx.customer_id,
       qbo_estimate_id: ctx.qbo_estimate_id,
       subtotal: ctx.subtotal,
       reviewed_at: ctx.reviewed_at,

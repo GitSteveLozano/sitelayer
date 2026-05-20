@@ -5,6 +5,7 @@ import { Attribution } from '@/components/ai'
 import {
   estimatePushLineRate,
   estimatePushLineUnit,
+  createSupportPacket,
   useDispatchEstimatePushEvent,
   useEstimatePush,
   type EstimatePushHumanEvent,
@@ -30,6 +31,8 @@ export function EstimatePushDetailScreen() {
   const snapshot = useEstimatePush(id)
   const dispatch = useDispatchEstimatePushEvent(id ?? '')
   const [error, setError] = useState<string | null>(null)
+  const [supportPacketStatus, setSupportPacketStatus] = useState<string | null>(null)
+  const [supportPacketBusy, setSupportPacketBusy] = useState(false)
   // ADR-0019 page-context Probe. Mounted unconditionally so hook order
   // stays stable across the early-return branches below. The hook is
   // a no-op when `id` is empty and tolerates a null snapshot.
@@ -75,6 +78,26 @@ export function EstimatePushDetailScreen() {
       setError(e instanceof Error ? e.message : 'Event failed')
     }
   }
+
+  const onCreateSupportPacket = async () => {
+    const problem = window.prompt('Problem to attach to this support packet?', 'Estimate push issue')
+    if (problem === null) return
+    setSupportPacketBusy(true)
+    setSupportPacketStatus(null)
+    try {
+      const packet = await createSupportPacket({
+        problem,
+        client: capture(),
+      })
+      setSupportPacketStatus(`Support packet ${packet.support_id}`)
+    } catch (e) {
+      setSupportPacketStatus(e instanceof Error ? e.message : 'Support packet failed')
+    } finally {
+      setSupportPacketBusy(false)
+    }
+  }
+
+  const showProbeControls = import.meta.env.DEV || isEstimatePushProbeDiagnosticsEnabled()
 
   return (
     <div className="px-5 pt-6 pb-12 max-w-2xl">
@@ -167,8 +190,8 @@ export function EstimatePushDetailScreen() {
         <Attribution source="GET /api/estimate-pushes/:id · POST /:id/events" />
       </div>
 
-      {import.meta.env.DEV ? (
-        <div className="mt-4">
+      {showProbeControls ? (
+        <div className="mt-4 space-y-2">
           <MobileButton
             variant="ghost"
             onClick={() => {
@@ -179,6 +202,10 @@ export function EstimatePushDetailScreen() {
           >
             Inspect Capture (dev)
           </MobileButton>
+          <MobileButton variant="ghost" disabled={supportPacketBusy} onClick={onCreateSupportPacket}>
+            Create Support Packet
+          </MobileButton>
+          {supportPacketStatus ? <div className="text-[12px] text-ink-3">{supportPacketStatus}</div> : null}
         </div>
       ) : null}
     </div>
