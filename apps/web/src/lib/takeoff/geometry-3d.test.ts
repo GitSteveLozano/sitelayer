@@ -6,6 +6,7 @@ const baseMeasurement = {
   id: 'm1',
   project_id: 'p1',
   blueprint_document_id: 'b1',
+  page_id: 'page1',
   service_item_code: '09 29 00',
   quantity: '100',
   unit: 'sqft',
@@ -79,6 +80,55 @@ describe('buildTakeoffPreviewScene', () => {
     )
 
     expect(scene.items.map((item) => item.id)).toEqual(['m1'])
+  })
+
+  it('filters to the active blueprint page with page-one fallback for legacy rows', () => {
+    const page2 = { ...calibratedPage, id: 'page2', page_number: 2 }
+    const scene = buildTakeoffPreviewScene(
+      [
+        {
+          ...baseMeasurement,
+          id: 'page-1',
+          page_id: 'page1',
+          geometry: { kind: 'count', points: [{ x: 50, y: 50 }] },
+        },
+        {
+          ...baseMeasurement,
+          id: 'page-2',
+          page_id: 'page2',
+          geometry: { kind: 'count', points: [{ x: 60, y: 60 }] },
+        },
+        {
+          ...baseMeasurement,
+          id: 'legacy-page-1',
+          page_id: null,
+          geometry: { kind: 'count', points: [{ x: 70, y: 70 }] },
+        },
+      ],
+      { activeBlueprintId: 'b1', activePage: page2 },
+    )
+
+    expect(scene.items.map((item) => item.id)).toEqual(['page-2'])
+
+    const page1Scene = buildTakeoffPreviewScene(
+      [
+        {
+          ...baseMeasurement,
+          id: 'page-1',
+          page_id: 'page1',
+          geometry: { kind: 'count', points: [{ x: 50, y: 50 }] },
+        },
+        {
+          ...baseMeasurement,
+          id: 'legacy-page-1',
+          page_id: null,
+          geometry: { kind: 'count', points: [{ x: 70, y: 70 }] },
+        },
+      ],
+      { activeBlueprintId: 'b1', activePage: calibratedPage },
+    )
+    expect(page1Scene.items.map((item) => item.id)).toEqual(['page-1', 'legacy-page-1'])
+    expect(page1Scene.warnings.join(' ')).toContain('had no page_id')
   })
 
   it('assigns vertical preview heights to lineals and opening counts', () => {
