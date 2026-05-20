@@ -2,6 +2,20 @@
 
 This file is for AI agents (Claude, Codex, Gemini, anything) editing this repository. If you are a human, read [`CLAUDE.md`](./CLAUDE.md) first; it covers the same ground with more detail.
 
+## Collaborator Workstation Override
+
+If this repo is checked out under `~/projects/collaborator-system/`, assume the
+machine is a collaborator Mac, not Taylor's operator workstation:
+
+- do not require Mesh, control-plane, Tailscale, Bitbucket, browser-bridge, or
+  Taylor's private credentials;
+- do not add Mesh planning notes or upsert Mesh runtime dependencies unless
+  Taylor explicitly assigns an infra/deploy task;
+- use the checked-in code, this file, and `docs/ONBOARDING_DEVELOPER.md` as the
+  local source of truth;
+- report missing GitHub, Docker, browser-profile, Clerk, or production access
+  as blockers instead of trying to recreate Taylor's setup.
+
 ## Read this before editing anything
 
 ### 1. There is one web app: `apps/web/`

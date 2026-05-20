@@ -39,13 +39,23 @@ If `npm install` fails on `playwright` postinstall, run `npx playwright install 
 
 ## 3. Environment setup
 
-The repo ships `.env.example` (12 KB) as the **names-only scaffold**. Copy it once; never commit a populated `.env`:
+For the collaborator path, do **not** copy `.env.example` blindly. It includes
+a preview Clerk publishable key for other workflows; copying it as-is makes the
+SPA mount Clerk and suppresses the local RoleSwitcher.
+
+Create a minimal local `.env` instead:
 
 ```bash
-cp .env.example .env
+cat > .env <<'EOF'
+APP_TIER=local
+VITE_CLERK_PUBLISHABLE_KEY=
+CLERK_JWT_KEY=
+EOF
 ```
 
-Edit `.env` and fill in only the placeholders relevant to local dev. The minimum viable set for the fixture path is **none** — fixtures bypass everything that needs a secret. The minimum viable set for the full Docker stack is also **none**, because `docker-compose.yml` overrides `DATABASE_URL`, `DO_SPACES_*`, and tier vars for you.
+Docker Compose overrides `DATABASE_URL`, `DO_SPACES_*`, and tier vars for the
+local stack. Keep Clerk vars empty unless Taylor explicitly asks for a
+Clerk-authenticated check.
 
 Variables you may want to set locally:
 
@@ -64,20 +74,7 @@ Variables you may want to set locally:
 
 ## 4. Run the stack
 
-There are two well-supported local loops:
-
-### 4a. Fastest UI loop (fixtures, no Docker)
-
-For frontend-only work with deterministic seeded data:
-
-```bash
-VITE_FIXTURES=1 npm run dev:web
-open http://localhost:3100
-```
-
-No Postgres, no API server, no Docker. The SPA reads fixtures from disk. Good for component, layout, and screen-flow work. The direct Vite dev server listens on `3100`; the Docker stack below maps host port `3000` to Vite's internal `3100`.
-
-### 4b. Full local stack (API + web + worker + Postgres 18 + MinIO)
+### 4a. Full local stack (API + web + worker + Postgres 18 + MinIO)
 
 For anything that touches the API, a workflow, a migration, or end-to-end behavior:
 
@@ -101,7 +98,7 @@ If you upgraded from a pre-Postgres-18 checkout, reset the volume on first boot:
 docker compose down -v && docker compose up --build
 ```
 
-### 4c. Host-process loop (run services on the host, DB in Docker)
+### 4b. Host-process loop (run services on the host, DB in Docker)
 
 If you want hot-reload without rebuilding the api/web/worker images:
 
@@ -109,6 +106,10 @@ If you want hot-reload without rebuilding the api/web/worker images:
 docker compose up -d db minio minio-init
 npm run dev    # runs dev:api + dev:web + dev:worker concurrently against the dockerized DB
 ```
+
+Do not use `VITE_FIXTURES=1 npm run dev:web` as the collaborator default. The
+old fixture-mode docs drifted ahead of the implementation; use Docker when you
+need to see the app in Chrome.
 
 ---
 
@@ -216,9 +217,12 @@ npm run test
 #    becomes the final commit message — keep titles under 70 chars.
 git commit -m "fix(web): correct draft picker keyboard focus"
 
-# 5. Push and open a PR against main. Use the PR template (.github/PULL_REQUEST_TEMPLATE.md);
-#    fill in migration notes if you touched docker/postgres/init/.
+# 5. Push and open a PR against main. Use the PR template
+#    (.github/PULL_REQUEST_TEMPLATE.md); fill in migration notes if you touched
+#    docker/postgres/init/.
 git push -u origin HEAD
+
+# Optional if gh is installed; otherwise open the PR in GitHub's web UI.
 gh pr create --base main
 ```
 
