@@ -21,8 +21,37 @@
  * the whole HTTP server.
  */
 
+import type { PoolClient } from 'pg'
+import { createLogger } from '@sitelayer/logger'
+import { recordCostLog } from './cost-log.js'
+
+const logger = createLogger('api:qbo-material-bill-sync')
+
 export type QboBillSyncRunner = {
   query: <Row = unknown>(sql: string, params?: unknown[]) => Promise<{ rows: Row[]; rowCount?: number | null }>
+}
+
+/**
+ * Cost-log threading for QBO HTTP calls.
+ *
+ * Production callers that already run inside a `withMutationTx` /
+ * `withCompanyClient` context should pass a `PoolClient` so each
+ * successful QBO call appends a `company_usage_log` row to the same
+ * transaction (mirrors the pattern in
+ * `routes/qbo.ts:logQboCostInsideTx`).
+ *
+ * The smoke-test harness has no PoolClient in scope, so it leaves
+ * `costLog` undefined; the wrappers then skip the insert and emit a
+ * one-shot structured warning so the gap is visible in logs without
+ * flooding them.
+ */
+export type QboBillSyncCostLog = {
+  client?: PoolClient
+  companyId: string
+  costPerCallUsd?: number
+  qboEnvironment?: 'sandbox' | 'production' | string
+  requestId?: string | null
+  sentryTrace?: string | null
 }
 
 export type QboBillSyncOptions = {
@@ -32,6 +61,16 @@ export type QboBillSyncOptions = {
   companyId: string
   /** Override fetch for tests. Defaults to global fetch. */
   fetchImpl?: typeof fetch
+  /**
+   * Optional cost-log threading. When `client` is set, each successful
+   * QBO HTTP call appends one `company_usage_log` row inside the
+   * caller's transaction. When omitted, the runner emits one structured
+   * warning (`qbo_material_bill_sync.cost_log_skipped`) and proceeds —
+   * the smoke harness exercises this path today. Production callers
+   * folding this module into `withMutationTx` should always pass a
+   * client, matching `routes/qbo.ts`.
+   */
+  costLog?: QboBillSyncCostLog
 }
 
 export type QboBillSyncResult = {
@@ -54,19 +93,50 @@ type UnsyncedBill = {
   occurred_on: string | null
 }
 
-// TODO(cost-log): the wrappers below are exercised only by the
-// integration-test harness today (see qbo-material-bill-sync.test.ts).
-// They operate against a plain QboBillSyncRunner (no PoolClient /
-// withCompanyClient context), so company_usage_log cost rows can't be
-// attached here without restructuring the runner contract. Wire when
-// this is folded into withMutationTx alongside the production
-// material-bill push site in routes/qbo.ts (which already logs cost).
+/**
+ * One-shot structured warning when a caller exercises the QBO wrappers
+ * without threading a `PoolClient` (smoke-harness mode). Latch is
+ * process-wide; tests reset it via `_resetCostLogWarnedForTests`.
+ */
+let costLogSkippedWarned = false
+function warnCostLogSkippedOnce(companyId: string): void {
+  if (costLogSkippedWarned) return
+  costLogSkippedWarned = true
+  logger.warn(
+    {
+      scope: 'qbo_material_bill_sync.cost_log_skipped',
+      companyId,
+      reason: 'no PoolClient threaded through QboBillSyncOptions.costLog; harness mode',
+    },
+    'QBO cost log skipped — caller did not thread a PoolClient through',
+  )
+}
+
+async function maybeLogCost(costLog: QboBillSyncCostLog | undefined, description: string): Promise<void> {
+  if (!costLog) return
+  if (!costLog.client) {
+    warnCostLogSkippedOnce(costLog.companyId)
+    return
+  }
+  await recordCostLog(costLog.client, {
+    companyId: costLog.companyId,
+    operation: 'qbo_api_call',
+    costUsd: costLog.costPerCallUsd ?? 0,
+    description,
+    requestId: costLog.requestId ?? null,
+    sentryTrace: costLog.sentryTrace ?? null,
+    metadata: { qbo_environment: costLog.qboEnvironment ?? 'unknown' },
+  })
+}
+
 async function qboGet<T>(
   baseUrl: string,
   realmId: string,
   accessToken: string,
   endpoint: string,
   fetchImpl: typeof fetch,
+  costLog: QboBillSyncCostLog | undefined,
+  costDescription: string,
 ): Promise<T> {
   const response = await fetchImpl(`${baseUrl}/v3/company/${realmId}${endpoint}`, {
     method: 'GET',
@@ -76,7 +146,9 @@ async function qboGet<T>(
     },
   })
   if (!response.ok) throw new Error(`QBO API error: ${response.status} ${response.statusText}`)
-  return response.json() as Promise<T>
+  const payload = (await response.json()) as T
+  await maybeLogCost(costLog, costDescription)
+  return payload
 }
 
 async function qboPost<T>(
@@ -86,6 +158,8 @@ async function qboPost<T>(
   endpoint: string,
   body: unknown,
   fetchImpl: typeof fetch,
+  costLog: QboBillSyncCostLog | undefined,
+  costDescription: string,
 ): Promise<T> {
   const response = await fetchImpl(`${baseUrl}/v3/company/${realmId}${endpoint}`, {
     method: 'POST',
@@ -97,7 +171,17 @@ async function qboPost<T>(
     body: JSON.stringify(body),
   })
   if (!response.ok) throw new Error(`QBO API error: ${response.status} ${response.statusText}`)
-  return response.json() as Promise<T>
+  const payload = (await response.json()) as T
+  await maybeLogCost(costLog, costDescription)
+  return payload
+}
+
+/**
+ * Test-only: lets unit tests reset the warn-once latch between cases.
+ * Not part of the production callable surface.
+ */
+export function _resetCostLogWarnedForTests(): void {
+  costLogSkippedWarned = false
 }
 
 export async function processQboMaterialBillSync(
@@ -168,6 +252,8 @@ export async function processQboMaterialBillSync(
           options.accessToken,
           `/query?query=${encodeURIComponent(`select * from Vendor where DisplayName = '${escaped}'`)}`,
           fetchImpl,
+          options.costLog,
+          'qbo:vendor:query',
         )
         vendorId = vendorSearch.QueryResponse?.Vendor?.[0]?.Id ?? null
         if (!vendorId) {
@@ -178,6 +264,8 @@ export async function processQboMaterialBillSync(
             `/vendor`,
             { DisplayName: displayName },
             fetchImpl,
+            options.costLog,
+            'qbo:vendor:create',
           )
           vendorId = created.Vendor?.Id ?? null
         }
@@ -217,6 +305,8 @@ export async function processQboMaterialBillSync(
         `/bill`,
         billPayload,
         fetchImpl,
+        options.costLog,
+        'qbo:bill:create',
       )
       const qboBillId = response.Bill?.Id ?? null
       if (!qboBillId) {
