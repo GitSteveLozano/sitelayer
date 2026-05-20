@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 
 // Smoke-load every top-level lazy route registered in App.tsx. The point is
-// not to verify behavior — it's to catch broken imports, missing exports,
+// not to verify behavior -- it's to catch broken imports, missing exports,
 // and accidental top-level throws before they reach the prod bundle. The
 // post-cutover polish queue had several "looks fine in PR, breaks in prod"
 // regressions that these would have caught at PR time.
@@ -10,6 +10,7 @@ import { describe, expect, test } from 'vitest'
 
 const ROUTES: ReadonlyArray<readonly [string, () => Promise<{ default: unknown }>]> = [
   ['home', () => import('@/routes/home')],
+  ['workspace', () => import('@/routes/workspace')],
   ['projects', () => import('@/routes/projects')],
   ['time', () => import('@/routes/time')],
   ['rentals', () => import('@/routes/rentals')],

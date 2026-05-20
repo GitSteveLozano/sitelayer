@@ -79,6 +79,15 @@ describe('computeActiveContext', () => {
     ).toEqual({ kind: 'foreman', projectId: null })
   })
 
+  it('foreman company role defaults to the foreman shell before project assignment', () => {
+    expect(
+      computeActiveContext({
+        companyRole: 'foreman',
+        assignments: [],
+      }),
+    ).toEqual({ kind: 'foreman', projectId: null })
+  })
+
   it('worker default home when only worker assignments exist', () => {
     expect(
       computeActiveContext({
@@ -103,13 +112,13 @@ describe('computeActiveContext', () => {
     ).toEqual({ kind: 'foreman', projectId: null })
   })
 
-  it('member with no assignments falls back to admin scaffold', () => {
+  it('member with no assignments stays in the worker shell', () => {
     expect(
       computeActiveContext({
         companyRole: 'member',
         assignments: [],
       }),
-    ).toEqual({ kind: 'admin', projectId: null })
+    ).toEqual({ kind: 'worker', projectId: null })
   })
 
   it('non-matching currentProjectId falls back to default home', () => {
@@ -141,6 +150,15 @@ describe('availableRoleModes', () => {
       availableRoleModes({
         companyRole: 'member',
         assignments: [{ project_id: 'p1', role: 'worker' }],
+      }),
+    ).toEqual(['worker'])
+  })
+
+  it('defaults plain members without assignments to worker mode', () => {
+    expect(
+      availableRoleModes({
+        companyRole: 'member',
+        assignments: [],
       }),
     ).toEqual(['worker'])
   })
