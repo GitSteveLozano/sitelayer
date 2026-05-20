@@ -81,8 +81,7 @@ export function resolveBuildSha(opts: ResolveBuildShaOptions = {}): string {
   const fallback = opts.fallback ?? DEFAULT_BUILD_SHA
   const startDir = opts.startDir ?? process.cwd()
 
-  const fromEnv =
-    env.SITELAYER_BUILD_SHA?.trim() || env.APP_BUILD_SHA?.trim() || env.SENTRY_RELEASE?.trim() || ''
+  const fromEnv = env.SITELAYER_BUILD_SHA?.trim() || env.APP_BUILD_SHA?.trim() || env.SENTRY_RELEASE?.trim() || ''
   if (fromEnv) return fromEnv
 
   const fromFile = readBuildShaFile(startDir)

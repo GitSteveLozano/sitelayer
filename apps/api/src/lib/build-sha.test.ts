@@ -83,9 +83,7 @@ describe('resolveBuildSha', () => {
   })
 
   it('respects custom fallback', () => {
-    expect(resolveBuildSha({ env: {}, startDir: os.tmpdir(), fallback: 'custom-fallback' })).toBe(
-      'custom-fallback',
-    )
+    expect(resolveBuildSha({ env: {}, startDir: os.tmpdir(), fallback: 'custom-fallback' })).toBe('custom-fallback')
   })
 })
 

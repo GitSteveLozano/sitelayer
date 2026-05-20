@@ -153,9 +153,7 @@ export function EstimatePushDetailScreen() {
             variant="ghost"
             onClick={() => {
               const c = capture()
-              // eslint-disable-next-line no-console
               console.log('[ADR-0019 Capture]', c)
-              // eslint-disable-next-line no-console
               console.log('[ADR-0019 Capture JSON]', JSON.stringify(c, null, 2))
             }}
           >
