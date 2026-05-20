@@ -234,6 +234,14 @@ export async function handleBlueprintRoutes(
         ],
       )
       const row = inserted.rows[0]
+      await client.query(
+        `
+        insert into blueprint_pages (company_id, blueprint_document_id, page_number, storage_path)
+        values ($1, $2, 1, $3)
+        on conflict (blueprint_document_id, page_number) do nothing
+        `,
+        [ctx.company.id, row.id, row.storage_path],
+      )
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'blueprint_document',
@@ -435,10 +443,57 @@ export async function handleBlueprintRoutes(
         ],
       )
       const row = inserted.rows[0]
+      const copiedPages = await client.query<{ source_page_id: string; new_page_id: string }>(
+        `
+        with source_pages as (
+          select id, company_id, page_number, storage_path,
+                 calibration_world_distance, calibration_world_unit,
+                 calibration_x1, calibration_y1, calibration_x2, calibration_y2
+          from blueprint_pages
+          where company_id = $1 and blueprint_document_id = $2
+        ),
+        inserted_pages as (
+          insert into blueprint_pages (
+            company_id, blueprint_document_id, page_number, storage_path,
+            calibration_world_distance, calibration_world_unit,
+            calibration_x1, calibration_y1, calibration_x2, calibration_y2
+          )
+          select
+            company_id, $3::uuid, page_number, coalesce(storage_path, $4),
+            calibration_world_distance, calibration_world_unit,
+            calibration_x1, calibration_y1, calibration_x2, calibration_y2
+          from source_pages
+          on conflict (blueprint_document_id, page_number) do update
+            set storage_path = excluded.storage_path,
+                calibration_world_distance = excluded.calibration_world_distance,
+                calibration_world_unit = excluded.calibration_world_unit,
+                calibration_x1 = excluded.calibration_x1,
+                calibration_y1 = excluded.calibration_y1,
+                calibration_x2 = excluded.calibration_x2,
+                calibration_y2 = excluded.calibration_y2,
+                updated_at = now()
+          returning id, page_number
+        )
+        select s.id as source_page_id, i.id as new_page_id
+        from source_pages s
+        join inserted_pages i on i.page_number = s.page_number
+        `,
+        [ctx.company.id, source.id, row.id, row.storage_path],
+      )
+      if (copiedPages.rows.length === 0) {
+        await client.query(
+          `
+          insert into blueprint_pages (company_id, blueprint_document_id, page_number, storage_path)
+          values ($1, $2, 1, $3)
+          on conflict (blueprint_document_id, page_number) do nothing
+          `,
+          [ctx.company.id, row.id, row.storage_path],
+        )
+      }
       if (copyMeasurements) {
         const sourceMeasurements = await client.query(
           `
-          select project_id, service_item_code, quantity, unit, notes, geometry, division_code
+          select project_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code
           from takeoff_measurements
           where company_id = $1 and blueprint_document_id = $2 and deleted_at is null
           order by created_at asc
@@ -457,6 +512,8 @@ export async function handleBlueprintRoutes(
           const notesArr: string[] = []
           const geometries: string[] = []
           const divisionCodes: Array<string | null> = []
+          const pageIds: Array<string | null> = []
+          const copiedPageBySourceId = new Map(copiedPages.rows.map((p) => [p.source_page_id, p.new_page_id]))
           for (const measurement of sourceMeasurements.rows) {
             projectIds.push(measurement.project_id)
             serviceItemCodes.push(measurement.service_item_code)
@@ -467,16 +524,18 @@ export async function handleBlueprintRoutes(
             )
             geometries.push(JSON.stringify(measurement.geometry ?? {}))
             divisionCodes.push(measurement.division_code ?? null)
+            pageIds.push(measurement.page_id ? (copiedPageBySourceId.get(measurement.page_id) ?? null) : null)
           }
           await client.query(
             `
             insert into takeoff_measurements (
-              company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code
+              company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code
             )
             select
               $1::uuid,
               t.project_id::uuid,
               $2::uuid,
+              t.page_id::uuid,
               t.service_item_code,
               t.quantity::numeric,
               t.unit,
@@ -486,8 +545,8 @@ export async function handleBlueprintRoutes(
               t.division_code
             from unnest(
               $3::text[], $4::text[], $5::text[], $6::text[],
-              $7::text[], $8::text[], $9::text[]
-            ) as t(project_id, service_item_code, quantity, unit, notes, geometry, division_code)
+              $7::text[], $8::text[], $9::text[], $10::text[]
+            ) as t(project_id, service_item_code, quantity, unit, notes, geometry, division_code, page_id)
             `,
             [
               ctx.company.id,
@@ -499,6 +558,7 @@ export async function handleBlueprintRoutes(
               notesArr,
               geometries,
               divisionCodes,
+              pageIds,
             ],
           )
         }

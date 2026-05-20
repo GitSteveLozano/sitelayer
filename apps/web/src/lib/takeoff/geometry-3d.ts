@@ -64,15 +64,17 @@ export function buildTakeoffPreviewScene(
   if (!hasCalibration) {
     warnings.add('No page calibration found. The 3D preview is using board-space scale, not feet.')
   }
-  if (options.activePage) {
-    warnings.add('Measurements do not carry page_id in the web payload yet, so calibration assumes the selected page.')
-  }
 
   const items: TakeoffPreviewItem[] = []
   let skippedCount = 0
+  let legacyPageOneCount = 0
 
   for (const [index, measurement] of measurements.entries()) {
     if (activeBlueprintId && measurement.blueprint_document_id !== activeBlueprintId) continue
+    if (options.activePage && !measurementBelongsToPage(measurement, options.activePage)) continue
+    if (options.activePage && measurement.page_id == null && options.activePage.page_number === 1) {
+      legacyPageOneCount += 1
+    }
     const geometry = readGeometry(measurement.geometry)
     if (!geometry) {
       skippedCount += 1
@@ -168,6 +170,11 @@ export function buildTakeoffPreviewScene(
   if (skippedCount > 0) {
     warnings.add(`${skippedCount} measurement${skippedCount === 1 ? '' : 's'} had unsupported or incomplete geometry.`)
   }
+  if (legacyPageOneCount > 0) {
+    warnings.add(
+      `${legacyPageOneCount} legacy measurement${legacyPageOneCount === 1 ? '' : 's'} had no page_id and were shown on page 1 by convention.`,
+    )
+  }
   if (items.length === 0) {
     warnings.add('No drawable measurements found for this blueprint and draft.')
   }
@@ -181,6 +188,11 @@ export function buildTakeoffPreviewScene(
     bounds: computeBounds(items),
     skippedCount,
   }
+}
+
+function measurementBelongsToPage(measurement: TakeoffMeasurement, page: BlueprintPage): boolean {
+  if (measurement.page_id) return measurement.page_id === page.id
+  return page.page_number === 1
 }
 
 function readPageCalibration(page: BlueprintPage | null | undefined): number | null {

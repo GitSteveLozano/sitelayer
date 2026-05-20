@@ -65,6 +65,7 @@ class FakePool {
     company_id: string
     project_id: string
     blueprint_document_id: string
+    page_id?: string | null
     service_item_code: string
     quantity: string
     unit: string
@@ -74,11 +75,25 @@ class FakePool {
     deleted_at: string | null
     created_at: string
   }> = []
+  pages: Array<{
+    id: string
+    company_id: string
+    blueprint_document_id: string
+    page_number: number
+    storage_path: string | null
+    calibration_world_distance?: string | null
+    calibration_world_unit?: string | null
+    calibration_x1?: string | null
+    calibration_y1?: string | null
+    calibration_x2?: string | null
+    calibration_y2?: string | null
+  }> = []
   syncEvents: Row[] = []
   outbox: Array<{ mutation_type: string; entity_type: string; entity_id: string }> = []
   auditEvents: Row[] = []
   queryLog: string[] = []
   private nextMeasurementId = 1
+  private nextPageId = 1
 
   attach() {
     attachMutationTx({
@@ -194,6 +209,46 @@ class FakePool {
       }
     }
 
+    // blueprint_pages: default page for new blueprint docs
+    if (/^\s*insert into blueprint_pages/i.test(sql) && /values \(\$1, \$2, 1, \$3\)/i.test(sql)) {
+      const [companyId, blueprintDocumentId, storagePath] = params as [string, string, string | null]
+      const existing = this.pages.find((p) => p.blueprint_document_id === blueprintDocumentId && p.page_number === 1)
+      if (!existing) {
+        this.pages.push({
+          id: `pg-${this.nextPageId++}`,
+          company_id: companyId,
+          blueprint_document_id: blueprintDocumentId,
+          page_number: 1,
+          storage_path: storagePath,
+        })
+      }
+      return { rows: [], rowCount: existing ? 0 : 1 }
+    }
+
+    // blueprint_pages: copy source pages to a new blueprint version
+    if (/with source_pages as/i.test(sql) && /insert into blueprint_pages/i.test(sql)) {
+      const [companyId, sourceBlueprintId, newBlueprintId, fallbackStoragePath] = params as [
+        string,
+        string,
+        string,
+        string | null,
+      ]
+      const sourcePages = this.pages.filter(
+        (p) => p.company_id === companyId && p.blueprint_document_id === sourceBlueprintId,
+      )
+      const rows = sourcePages.map((page) => {
+        const copied = {
+          ...page,
+          id: `pg-${this.nextPageId++}`,
+          blueprint_document_id: newBlueprintId,
+          storage_path: page.storage_path ?? fallbackStoragePath,
+        }
+        this.pages.push(copied)
+        return { source_page_id: page.id, new_page_id: copied.id }
+      })
+      return { rows, rowCount: rows.length }
+    }
+
     // PATCH update
     if (/^update blueprint_documents/i.test(sql) && /set\s+file_name\s*=/i.test(sql)) {
       const [companyId, id, fileName, storagePath, previewType, calLength, calUnit, sheetScale, expectedVersion] =
@@ -236,7 +291,7 @@ class FakePool {
     }
 
     // takeoff_measurements: source select for version copy
-    if (/from takeoff_measurements/i.test(sql) && /select project_id, service_item_code/i.test(sql)) {
+    if (/from takeoff_measurements/i.test(sql) && /select project_id, page_id, service_item_code/i.test(sql)) {
       const [companyId, sourceBlueprintId] = params as [string, string]
       const rows = this.measurements.filter(
         (m) => m.company_id === companyId && m.blueprint_document_id === sourceBlueprintId && !m.deleted_at,
@@ -256,13 +311,26 @@ class FakePool {
         notesArr,
         geometries,
         divisionCodes,
-      ] = params as [string, string, string[], string[], string[], string[], string[], string[], Array<string | null>]
+        pageIds,
+      ] = params as [
+        string,
+        string,
+        string[],
+        string[],
+        string[],
+        string[],
+        string[],
+        string[],
+        Array<string | null>,
+        Array<string | null>,
+      ]
       for (let i = 0; i < projectIds.length; i += 1) {
         this.measurements.push({
           id: `m-${this.nextMeasurementId++}`,
           company_id: companyId,
           project_id: projectIds[i]!,
           blueprint_document_id: blueprintId,
+          page_id: pageIds[i] ?? null,
           service_item_code: serviceItemCodes[i]!,
           quantity: quantities[i]!,
           unit: units[i]!,
@@ -502,12 +570,26 @@ describe('handleBlueprintRoutes — POST /api/blueprints/:id/versions', () => {
       replaces_blueprint_document_id: null,
       created_at: '',
     })
+    pool.pages.push({
+      id: 'pg-source-1',
+      company_id: 'co-1',
+      blueprint_document_id: BLUEPRINT_ID,
+      page_number: 1,
+      storage_path: 'old.pdf',
+      calibration_world_distance: '20',
+      calibration_world_unit: 'ft',
+      calibration_x1: '10',
+      calibration_y1: '10',
+      calibration_x2: '30',
+      calibration_y2: '10',
+    })
     for (let i = 0; i < 5; i += 1) {
       pool.measurements.push({
         id: `m-src-${i}`,
         company_id: 'co-1',
         project_id: PROJECT_ID,
         blueprint_document_id: BLUEPRINT_ID,
+        page_id: 'pg-source-1',
         service_item_code: 'D4-PAINT',
         quantity: '100',
         unit: 'sqft',
@@ -529,6 +611,11 @@ describe('handleBlueprintRoutes — POST /api/blueprints/:id/versions', () => {
     // batched unnest insert — no per-row inserts.
     const newBlueprintId = pool.blueprints.find((b) => b.replaces_blueprint_document_id === BLUEPRINT_ID)?.id ?? ''
     expect(pool.measurements.filter((m) => m.blueprint_document_id === newBlueprintId)).toHaveLength(5)
+    const copiedPage = pool.pages.find((p) => p.blueprint_document_id === newBlueprintId && p.page_number === 1)
+    expect(copiedPage?.calibration_world_distance).toBe('20')
+    expect(
+      pool.measurements.filter((m) => m.blueprint_document_id === newBlueprintId && m.page_id === copiedPage?.id),
+    ).toHaveLength(5)
     // N+1 guard: count the takeoff_measurements INSERT calls in the SQL
     // dispatch log — must be 1, not 5. This assertion would have caught
     // the pre-fix per-row INSERT loop.

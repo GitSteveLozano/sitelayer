@@ -147,6 +147,10 @@ reviews it, and the deterministic preview extrudes that reviewed geometry into a
 - `apps/web/src/screens/projects/takeoff-preview-demo-fixtures.ts`: synthetic
   public demo fixtures for house-plan, floor-plan, and exterior-reference
   critique loops.
+- Measurement fixtures include `page_id`, so the smoke path exercises
+  blueprint-page filtering and page-calibration binding rather than only
+  document-level filtering. Legacy null `page_id` rows remain page-1 fallback
+  coverage in the pure mapper tests.
 
 Command:
 
@@ -162,3 +166,8 @@ The public route at `/demo/takeoff-preview-3d` is the current manual bridge for
 that workflow. It does not embed third-party images yet; instead it provides
 fixture switching plus exportable JSON so model critiques can be run before we
 commit to asset provenance, storage, or customer-data handling.
+
+The authenticated route at `/projects/:id/takeoff-preview` is now the page-aware
+bridge for real projects. The next useful rendering increment is to show the
+selected blueprint page image behind the measurement-derived 3D/2.5D scene so a
+reviewer can compare the extruded draft against the source sheet.

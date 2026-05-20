@@ -71,7 +71,7 @@ function countBlueprintPages(takeoffResult: unknown): number {
   return typeof pages === 'number' && Number.isFinite(pages) && pages > 0 ? Math.floor(pages) : 0
 }
 const RETURNING_COLUMNS = `id, company_id, project_id, name, type, status, source, takeoff_result_blob_uri, review_required, pipeline_version, version, deleted_at, created_at, updated_at`
-const PROMOTED_MEASUREMENT_COLUMNS = `id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at`
+const PROMOTED_MEASUREMENT_COLUMNS = `id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at`
 
 /**
  * Resolve the canonical `service_item_code` for a captured `TakeoffQuantity`.
@@ -948,11 +948,11 @@ export async function handleTakeoffDraftRoutes(
       // the duplicated draft renders identically to the source.
       const copiedMeasurements = await client.query<{ id: string }>(
         `insert into takeoff_measurements (
-            company_id, project_id, blueprint_document_id, service_item_code,
+            company_id, project_id, blueprint_document_id, page_id, service_item_code,
             quantity, unit, notes, geometry, version, division_code,
             elevation, image_thumbnail, draft_id
           )
-          select company_id, project_id, blueprint_document_id, service_item_code,
+          select company_id, project_id, blueprint_document_id, page_id, service_item_code,
                  quantity, unit, notes, geometry, 1, division_code,
                  elevation, image_thumbnail, $2
             from takeoff_measurements

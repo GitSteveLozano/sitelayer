@@ -113,6 +113,7 @@ class FakePool {
         id: `m-${this.measurements.length + 1}`,
         project_id: projectId,
         blueprint_document_id: null,
+        page_id: null,
         service_item_code: serviceItemCode,
         quantity: String(quantity),
         unit,

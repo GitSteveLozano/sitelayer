@@ -15,8 +15,9 @@ trusting a model to invent construction geometry.
 - Blueprint uploads and downloads already exist in `apps/api/src/routes/blueprints.ts`.
 - Draft-scoped takeoff measurements already exist in `takeoff_measurements`.
 - Manual geometry is stored as normalized board-space `0..100` points.
-- Blueprint pages store two-point calibration, but manual measurements do not
-  currently expose `page_id` to the web payload.
+- Blueprint pages store two-point calibration, and manual measurements now
+  carry `page_id` through create/list/patch payloads. Legacy rows with null
+  `page_id` are treated as page 1 by convention.
 - Capture drafts already support `blueprint_vision`, `roomplan`,
   `photogrammetry`, and `drone`.
 - `@sitelayer/capture-schema` already has `TakeoffGeometry`, `SourceArtifact`,
@@ -30,7 +31,7 @@ Properties:
 
 - Read-only.
 - Derived from `useProjectMeasurements(projectId, { draftId })`.
-- Filters to the selected blueprint document.
+- Filters to the selected blueprint document and selected blueprint page.
 - Uses the selected page calibration when available.
 - Uses Three.js in a lazy project route so the main app shell does not pay the
   WebGL cost.
@@ -108,13 +109,12 @@ captured before this could represent the real structure.
 
 ## Later Phases
 
-1. Carry `page_id` through manual measurement writes and the web API.
-2. Render actual blueprint page imagery behind the 2D canvas.
-3. Normalize `takeoff_drafts.takeoff_result_json.geometry` into the preview,
+1. Render actual blueprint page imagery behind the 2D canvas.
+2. Normalize `takeoff_drafts.takeoff_result_json.geometry` into the preview,
    especially RoomPlan walls and drone roof planes.
-4. Add a read-only derived endpoint if the web payload needs capture geometry
+3. Add a read-only derived endpoint if the web payload needs capture geometry
    without overfetching full draft JSON.
-5. Only add physics if there is a concrete scaffold/layout/safety workflow.
+4. Only add physics if there is a concrete scaffold/layout/safety workflow.
 
 ## Language Guardrail
 

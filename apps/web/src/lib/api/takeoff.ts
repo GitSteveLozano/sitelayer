@@ -47,6 +47,7 @@ export interface TakeoffMeasurement {
   id: string
   project_id: string
   blueprint_document_id: string | null
+  page_id: string | null
   service_item_code: string
   quantity: string
   unit: string
@@ -93,6 +94,7 @@ export function useProjectMeasurements(
 
 export interface CreateMeasurementInput {
   blueprint_document_id?: string | null
+  page_id?: string | null
   service_item_code: string
   quantity?: number
   unit?: string

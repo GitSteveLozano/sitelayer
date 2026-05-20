@@ -307,6 +307,7 @@ function measurement(
     id,
     project_id: 'demo-project',
     blueprint_document_id: blueprintId,
+    page_id: blueprintId.replace('demo-blueprint', 'demo-page'),
     service_item_code: serviceItemCode,
     quantity,
     unit,

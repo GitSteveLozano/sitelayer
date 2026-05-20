@@ -73,6 +73,7 @@ export async function handleTakeoffImportRoutes(
     ctx.sendJson(400, { error: 'page_id must be a valid uuid when supplied' })
     return true
   }
+  let blueprintDocumentId: string | null = null
 
   const rows: ImportRow[] = []
   for (let i = 0; i < rawRows.length; i++) {
@@ -108,12 +109,20 @@ export async function handleTakeoffImportRoutes(
   // imported measurements with a blueprint page from another company.
   if (pageId) {
     const pageCheck = await withCompanyClient(ctx.company.id, (c) =>
-      c.query<{ exists: boolean }>(
-        `select exists(select 1 from blueprint_pages where company_id = $1 and id = $2) as exists`,
-        [ctx.company.id, pageId],
+      c.query<{ blueprint_document_id: string }>(
+        `select p.blueprint_document_id
+           from blueprint_pages p
+           join blueprint_documents d on d.company_id = p.company_id and d.id = p.blueprint_document_id
+          where p.company_id = $1
+            and p.id = $2
+            and d.project_id = $3
+            and d.deleted_at is null
+          limit 1`,
+        [ctx.company.id, pageId, projectId],
       ),
     )
-    if (!pageCheck.rows[0]?.exists) {
+    blueprintDocumentId = pageCheck.rows[0]?.blueprint_document_id ?? null
+    if (!blueprintDocumentId) {
       ctx.sendJson(404, { error: 'page not found' })
       return true
     }
@@ -129,12 +138,21 @@ export async function handleTakeoffImportRoutes(
       // see the row sensibly.
       const measurement = await client.query<{ id: string }>(
         `insert into takeoff_measurements (
-           company_id, project_id, page_id, service_item_code, geometry_kind,
+           company_id, project_id, blueprint_document_id, page_id, service_item_code, geometry_kind,
            geometry, quantity, unit, notes
          )
-         values ($1, $2, $3, $4, 'count', '{}'::jsonb, $5, $6, $7)
+         values ($1, $2, $3, $4, $5, 'count', '{}'::jsonb, $6, $7, $8)
          returning id`,
-        [ctx.company.id, projectId, pageId, row.service_item_code, row.quantity, row.unit, importedNote],
+        [
+          ctx.company.id,
+          projectId,
+          blueprintDocumentId,
+          pageId,
+          row.service_item_code,
+          row.quantity,
+          row.unit,
+          importedNote,
+        ],
       )
       const measurementRow = measurement.rows[0]
       if (!measurementRow) throw new HttpError(500, 'takeoff measurement insert returned no row')

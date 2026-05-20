@@ -265,8 +265,13 @@ export function TakeoffCanvasScreen() {
   const items = serviceItems.data?.serviceItems ?? []
   const selectedItem = items.find((i) => i.code === serviceItemCode) ?? null
   const blueprintMeasurements = (measurements.data?.measurements ?? []).filter(
-    (m) => activeBlueprint && m.blueprint_document_id === activeBlueprint.id,
+    (m) => activeBlueprint && m.blueprint_document_id === activeBlueprint.id && measurementBelongsToPage(m, activePage),
   )
+  const previewParams = new URLSearchParams()
+  if (activeBlueprint) previewParams.set('blueprint', activeBlueprint.id)
+  if (activeDraftId) previewParams.set('draft', activeDraftId)
+  if (activePage) previewParams.set('page', activePage.id)
+  const previewSearch = previewParams.toString()
 
   const onCanvasTap = (e: ReactPointerEvent<SVGSVGElement>) => {
     const svg = svgRef.current
@@ -322,6 +327,7 @@ export function TakeoffCanvasScreen() {
         unit: selectedItem?.unit ?? (tool === 'polygon' ? 'sqft' : tool === 'lineal' ? 'lf' : 'ea'),
         geometry,
         elevation: elevation === 'none' ? null : elevation,
+        page_id: activePage?.id ?? null,
         // Land the measurement on the currently-selected draft. Falls
         // back to the project's default server-side when null.
         draft_id: activeDraftId,
@@ -347,7 +353,7 @@ export function TakeoffCanvasScreen() {
               Compare
             </button>
             <Link
-              to={`/projects/${projectId}/takeoff-preview${activeBlueprint ? `?blueprint=${encodeURIComponent(activeBlueprint.id)}` : ''}${activeDraftId ? `${activeBlueprint ? '&' : '?'}draft=${encodeURIComponent(activeDraftId)}` : ''}`}
+              to={`/projects/${projectId}/takeoff-preview${previewSearch ? `?${previewSearch}` : ''}`}
               className="text-[12px] font-medium text-accent"
             >
               3D →
@@ -701,6 +707,12 @@ export function TakeoffCanvasScreen() {
       />
     </div>
   )
+}
+
+function measurementBelongsToPage(measurement: TakeoffMeasurement, page: BlueprintPage | null): boolean {
+  if (!page) return true
+  if (measurement.page_id) return measurement.page_id === page.id
+  return page.page_number === 1
 }
 
 interface CanvasSurfaceProps {
