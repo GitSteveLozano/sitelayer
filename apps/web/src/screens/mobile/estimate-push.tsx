@@ -10,7 +10,12 @@
  */
 import { useNavigate, useParams } from 'react-router-dom'
 import { useEstimatePush } from '../../machines/estimate-push.js'
-import { type EstimatePushHumanEvent, type EstimatePushState } from '@/lib/api'
+import {
+  estimatePushLineRate,
+  estimatePushLineUnit,
+  type EstimatePushHumanEvent,
+  type EstimatePushState,
+} from '@/lib/api'
 import {
   MBanner,
   MBody,
@@ -136,14 +141,18 @@ export function MobileEstimatePush({ companySlug }: { companySlug: string }) {
           <div style={{ padding: '0 16px', color: 'var(--m-ink-3)', fontSize: 13 }}>No lines on this push.</div>
         ) : (
           <MListInset>
-            {lines.map((line) => (
-              <MListRow
-                key={line.id}
-                headline={line.description || line.service_item_code || '(unnamed)'}
-                supporting={`${line.quantity} ${line.unit || ''} @ ${formatMoney(Number(line.rate))}`}
-                trailing={<span className="num">{formatMoney(Number(line.amount))}</span>}
-              />
-            ))}
+            {lines.map((line) => {
+              const unit = estimatePushLineUnit(line)
+              const rate = estimatePushLineRate(line)
+              return (
+                <MListRow
+                  key={line.id}
+                  headline={line.description || line.service_item_code || '(unnamed)'}
+                  supporting={`${line.quantity}${unit ? ` ${unit}` : ''} @ ${formatMoney(Number(rate))}`}
+                  trailing={<span className="num">{formatMoney(Number(line.amount))}</span>}
+                />
+              )
+            })}
           </MListInset>
         )}
         {ctx.error ? (

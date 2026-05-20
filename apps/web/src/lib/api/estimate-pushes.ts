@@ -37,11 +37,25 @@ export interface EstimatePushLine {
   estimate_push_id: string
   description: string
   quantity: string
-  unit: string
-  rate: string
+  unit?: string | null
+  /**
+   * Older mocks/client types used `rate`; the current API row comes from
+   * `estimate_push_lines.unit_price`. Accept both so deployed rows do not
+   * render `NaN` while the server schema keeps its captured column name.
+   */
+  rate?: string | null
+  unit_price?: string | null
   amount: string
   service_item_code: string | null
   sort_order: number
+}
+
+export function estimatePushLineRate(line: EstimatePushLine): string {
+  return line.rate ?? line.unit_price ?? '0'
+}
+
+export function estimatePushLineUnit(line: EstimatePushLine): string {
+  return typeof line.unit === 'string' ? line.unit.trim() : ''
 }
 
 export interface EstimatePushSnapshot {

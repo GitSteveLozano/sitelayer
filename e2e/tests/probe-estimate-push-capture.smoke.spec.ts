@@ -28,8 +28,7 @@ const snapshot = {
         estimate_push_id: PUSH_ID,
         description: 'Frame scaffold bay',
         quantity: '2.00',
-        unit: 'each',
-        rate: '640.00',
+        unit_price: '640.00',
         amount: '1280.00',
         service_item_code: 'SCAF-FRAME',
         sort_order: 1,
@@ -81,6 +80,7 @@ test('captures estimate-push Probe payload from the real financial route', async
   await page.goto(`/financial/estimate-pushes/${PUSH_ID}`)
   await expect(page.getByText('approved', { exact: true })).toBeVisible()
   await expect(page.getByText('Frame scaffold bay')).toBeVisible()
+  await expect(page.getByText('2.00 × $640.00 · SCAF-FRAME')).toBeVisible()
   await page.getByRole('button', { name: 'Inspect Capture (dev)' }).click()
 
   const capture = await captureJson
@@ -103,6 +103,7 @@ test('exposes estimate-push Probe payload through the gated browser diagnostic s
   await page.goto(`/financial/estimate-pushes/${PUSH_ID}`)
   await expect(page.getByText('approved', { exact: true })).toBeVisible()
   await expect(page.getByText('Frame scaffold bay')).toBeVisible()
+  await expect(page.getByText('2.00 × $640.00 · SCAF-FRAME')).toBeVisible()
 
   await expect
     .poll(

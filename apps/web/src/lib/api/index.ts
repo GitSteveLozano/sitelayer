@@ -235,6 +235,8 @@ export {
 
 export {
   dispatchEstimatePushEvent,
+  estimatePushLineRate,
+  estimatePushLineUnit,
   estimatePushQueryKeys,
   fetchEstimatePush,
   fetchEstimatePushes,
