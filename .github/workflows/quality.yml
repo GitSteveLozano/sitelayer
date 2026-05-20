@@ -240,6 +240,15 @@ jobs:
       - name: Run integration tests
         env:
           RUN_API_INTEGRATION: '1'
+          # Constrained DB URL exposes the Phase 3 RLS runtime probe
+          # (apps/api/src/routes/rls-phase3-audit.test.ts) to a
+          # NOBYPASSRLS role so it actually exercises RLS instead of
+          # skipping. Computed by substituting the user in DATABASE_URL.
+          # The `sitelayer_constrained` role is provisioned by migration
+          # 087 (tier-gated; never created in prod). Format is kept
+          # explicit instead of derived so a future DATABASE_URL change
+          # (e.g. host/port/database swap) is reflected here too.
+          CONSTRAINED_DB_URL: postgres://sitelayer_constrained:sitelayer_constrained@localhost:5432/sitelayer
         run: npm run test --workspace @sitelayer/api
 
       - name: Capture API logs on failure

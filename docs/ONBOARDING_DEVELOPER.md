@@ -195,6 +195,35 @@ npm run test:e2e
 
 E2E and the bundle budget run in CI; you can skip them for docs-only or comment-only PRs. Typecheck + test + lint are non-negotiable — ESLint runs with `--max-warnings=0`.
 
+### 7a. Optional: exercise the Phase 3 RLS runtime probe locally
+
+`apps/api/src/routes/rls-phase3-audit.test.ts` has two halves. The static
+audit (1 test) runs unconditionally. The runtime probe (4 tests) connects
+as a non-`BYPASSRLS` role to prove RLS policies actually scope rows; it
+skips cleanly when `CONSTRAINED_DB_URL` is unset.
+
+The `sitelayer_constrained` role is provisioned automatically by
+migration `087_constrained_role_for_rls_probe.sql` in every non-prod
+database (local docker, `sitelayer_dev`, `sitelayer_preview`). Once your
+local stack is up, the runtime probe can be exercised with:
+
+```bash
+CONSTRAINED_DB_URL=postgres://sitelayer_constrained:sitelayer_constrained@localhost:5432/sitelayer \
+  npm run test --workspace @sitelayer/api -- src/routes/rls-phase3-audit.test.ts
+```
+
+You can also export `CONSTRAINED_DB_URL` in your shell profile or local
+`.env.test` so the probe runs whenever you `npm run test`. The role is
+intentionally never created against the prod database (the migration's
+DO block checks `current_database() ~ '^sitelayer_prod'`), so this
+credential is not a leak risk if it ends up in a developer shell history.
+
+CI wires the same variable into the `test-integration` job; if you see
+the probe go red in CI but green locally, the difference is almost
+always a missed `withCompanyClient` / `withMutationTx` on a freshly
+added route — see `docs/SECURITY_RLS.md` for the audit's per-route
+heuristics.
+
 ---
 
 ## 8. First branch + PR workflow
