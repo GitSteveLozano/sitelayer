@@ -7,6 +7,7 @@ import { recordMutationLedger, withCompanyClient } from '../mutation-tx.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
 import { resolveDefaultDraftId } from './takeoff-drafts.js'
+import { assertBlueprintPagesBelongToProject } from './takeoff-write.js'
 
 const ELEVATION_VOCAB_PATCH = new Set(['east', 'south', 'west', 'north', 'roof', 'other'])
 
@@ -83,7 +84,7 @@ export async function handleTakeoffMeasurementRoutes(
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query(
         `
-      select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
+      select id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
       from takeoff_measurements
       where company_id = $1 and project_id = $2 and deleted_at is null ${draftFilter}
       order by created_at desc
@@ -135,24 +136,46 @@ export async function handleTakeoffMeasurementRoutes(
       body.blueprint_document_id === ''
         ? null
         : String(body.blueprint_document_id)
+    const patchPageId =
+      body.page_id === undefined || body.page_id === null || body.page_id === '' ? null : String(body.page_id)
     if (patchBlueprintDocumentId) {
       if (!isValidUuid(patchBlueprintDocumentId)) {
         ctx.sendJson(400, { error: 'blueprint_document_id must be a valid uuid' })
         return true
       }
+    }
+    if (patchPageId) {
+      if (!isValidUuid(patchPageId)) {
+        ctx.sendJson(400, { error: 'page_id must be a valid uuid' })
+        return true
+      }
+    }
+    if (patchBlueprintDocumentId || patchPageId) {
       const measurementProjectResult = await withCompanyClient(ctx.company.id, (c) =>
-        c.query<{ project_id: string }>(
-          'select project_id from takeoff_measurements where company_id = $1 and id = $2 and deleted_at is null limit 1',
+        c.query<{ project_id: string; blueprint_document_id: string | null; page_id: string | null }>(
+          `select project_id, blueprint_document_id, page_id
+           from takeoff_measurements
+           where company_id = $1 and id = $2 and deleted_at is null
+           limit 1`,
           [ctx.company.id, measurementId],
         ),
       )
-      const measurementProjectId = measurementProjectResult.rows[0]?.project_id
-      if (!measurementProjectId) {
+      const currentMeasurement = measurementProjectResult.rows[0]
+      if (!currentMeasurement) {
         ctx.sendJson(404, { error: 'measurement not found' })
         return true
       }
-      await ctx.assertBlueprintDocumentsBelongToProject(ctx.company.id, measurementProjectId, [
+      const nextBlueprintDocumentId = patchBlueprintDocumentId ?? currentMeasurement.blueprint_document_id
+      const nextPageId = patchPageId ?? currentMeasurement.page_id
+      if (nextPageId && !nextBlueprintDocumentId) {
+        ctx.sendJson(400, { error: 'blueprint_document_id is required when page_id is supplied' })
+        return true
+      }
+      await ctx.assertBlueprintDocumentsBelongToProject(ctx.company.id, currentMeasurement.project_id, [
         patchBlueprintDocumentId,
+      ])
+      await assertBlueprintPagesBelongToProject(ctx.pool, ctx.company.id, currentMeasurement.project_id, [
+        { blueprintDocumentId: nextBlueprintDocumentId, pageId: nextPageId },
       ])
     }
 
@@ -173,7 +196,7 @@ export async function handleTakeoffMeasurementRoutes(
           created_at: string
           updated_at: string
         }>(
-          `select id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes,
+          `select id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes,
                 geometry, elevation, version, deleted_at, created_at, updated_at
          from takeoff_measurements
          where company_id = $1 and id = $2`,
@@ -223,10 +246,11 @@ export async function handleTakeoffMeasurementRoutes(
             blueprint_document_id = coalesce($7, blueprint_document_id),
             geometry = coalesce($8::jsonb, geometry),
             elevation = coalesce($10, elevation),
+            page_id = coalesce($11, page_id),
             version = version + 1,
             updated_at = now()
           where company_id = $1 and id = $2 and deleted_at is null and ($9::int is null or version = $9)
-          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at, updated_at
+          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at, updated_at
           `,
           [
             ctx.company.id,
@@ -247,6 +271,7 @@ export async function handleTakeoffMeasurementRoutes(
                   }
                   return v
                 })(),
+            patchPageId,
           ],
         )
         const row = result.rows[0]
@@ -286,7 +311,7 @@ export async function handleTakeoffMeasurementRoutes(
           update takeoff_measurements
           set deleted_at = now(), version = version + 1
           where company_id = $1 and id = $2 and deleted_at is null and ($3::int is null or version = $3)
-          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at
+          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at
           `,
           [ctx.company.id, measurementId, expectedVersion],
         )

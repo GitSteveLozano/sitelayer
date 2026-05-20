@@ -28,6 +28,7 @@ type PreparedTakeoffMeasurementInput = {
   notes: string | null
   geometryJson: string | null
   blueprintDocumentId: string | null
+  pageId: string | null
   divisionCode: string | null
   // Sitemap §5 panel 1 — first-class elevation tag (East / South /
   // West / North / Roof / Other / null = untagged).
@@ -61,6 +62,8 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     input.blueprint_document_id === ''
       ? null
       : String(input.blueprint_document_id)
+  const pageId =
+    input.page_id === undefined || input.page_id === null || input.page_id === '' ? null : String(input.page_id)
   const divisionCode =
     input.division_code === undefined || input.division_code === null || String(input.division_code).trim() === ''
       ? null
@@ -100,6 +103,12 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
   if (blueprintDocumentId && !isValidUuid(blueprintDocumentId)) {
     throw new HttpError(400, `${label}.blueprint_document_id must be a valid uuid`)
   }
+  if (pageId && !isValidUuid(pageId)) {
+    throw new HttpError(400, `${label}.page_id must be a valid uuid`)
+  }
+  if (pageId && !blueprintDocumentId) {
+    throw new HttpError(400, `${label}.blueprint_document_id is required when page_id is supplied`)
+  }
 
   const rawGeometry = input.geometry
   let quantity = Number(input.quantity ?? 0)
@@ -133,6 +142,7 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     notes,
     geometryJson,
     blueprintDocumentId,
+    pageId,
     divisionCode,
     elevation,
     imageThumbnail,
@@ -163,6 +173,43 @@ export async function assertBlueprintDocumentsBelongToProject(
   const invalidIds = uniqueIds.filter((id) => !validIds.has(id))
   if (invalidIds.length) {
     throw new HttpError(400, 'blueprint_document_id must belong to the project')
+  }
+}
+
+export async function assertBlueprintPagesBelongToProject(
+  pool: Pool,
+  companyId: string,
+  projectId: string,
+  references: Array<{ blueprintDocumentId: string | null; pageId: string | null }>,
+) {
+  const pageRefs = references.filter(
+    (ref): ref is { blueprintDocumentId: string | null; pageId: string } => ref.pageId !== null,
+  )
+  if (!pageRefs.length) return
+
+  const uniquePageIds = Array.from(new Set(pageRefs.map((ref) => ref.pageId)))
+  const result = await pool.query<{ id: string; blueprint_document_id: string }>(
+    `
+    select p.id, p.blueprint_document_id
+    from blueprint_pages p
+    join blueprint_documents d on d.company_id = p.company_id and d.id = p.blueprint_document_id
+    where p.company_id = $1
+      and d.project_id = $2
+      and p.id = any($3::uuid[])
+      and d.deleted_at is null
+    `,
+    [companyId, projectId, uniquePageIds],
+  )
+  const pagesById = new Map(result.rows.map((row) => [row.id, row.blueprint_document_id]))
+  const invalidPageId = uniquePageIds.find((id) => !pagesById.has(id))
+  if (invalidPageId) {
+    throw new HttpError(400, 'page_id must belong to the project')
+  }
+  const mismatchedRef = pageRefs.find(
+    (ref) => ref.blueprintDocumentId !== null && pagesById.get(ref.pageId) !== ref.blueprintDocumentId,
+  )
+  if (mismatchedRef) {
+    throw new HttpError(400, 'page_id must belong to blueprint_document_id')
   }
 }
 
@@ -215,6 +262,9 @@ export async function handleTakeoffWriteRoutes(
 
     await assertBlueprintDocumentsBelongToProject(ctx.pool, ctx.company.id, projectId, [
       measurementInput.blueprintDocumentId,
+    ])
+    await assertBlueprintPagesBelongToProject(ctx.pool, ctx.company.id, projectId, [
+      { blueprintDocumentId: measurementInput.blueprintDocumentId, pageId: measurementInput.pageId },
     ])
 
     // Resolve target draft. Explicit body.draft_id wins (validated against
@@ -270,15 +320,16 @@ export async function handleTakeoffWriteRoutes(
       const insertResult = await client.query(
         `
         insert into takeoff_measurements (
-          company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id
+          company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id
         )
-        values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9, $10, $11, $12)
-        returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
+        values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13)
+        returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
         `,
         [
           ctx.company.id,
           projectId,
           measurementInput.blueprintDocumentId,
+          measurementInput.pageId,
           measurementInput.serviceItemCode,
           measurementInput.quantity,
           measurementInput.unit,
@@ -346,6 +397,15 @@ export async function handleTakeoffWriteRoutes(
       ctx.company.id,
       projectId,
       preparedMeasurements.map((measurement) => measurement.blueprintDocumentId),
+    )
+    await assertBlueprintPagesBelongToProject(
+      ctx.pool,
+      ctx.company.id,
+      projectId,
+      preparedMeasurements.map((measurement) => ({
+        blueprintDocumentId: measurement.blueprintDocumentId,
+        pageId: measurement.pageId,
+      })),
     )
 
     // Resolve target draft for the bulk-replace. The destructive soft-delete
@@ -418,15 +478,16 @@ export async function handleTakeoffWriteRoutes(
         const insertResult = await client.query(
           `
           insert into takeoff_measurements (
-            company_id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id
+            company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id
           )
-          values ($1, $2, $3, $4, $5, $6, $7, coalesce($8::jsonb, '{}'::jsonb), 1, $9, $10, $11, $12)
-          returning id, project_id, blueprint_document_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
+          values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13)
+          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
           `,
           [
             ctx.company.id,
             projectId,
             measurement.blueprintDocumentId,
+            measurement.pageId,
             measurement.serviceItemCode,
             measurement.quantity,
             measurement.unit,

@@ -20,12 +20,14 @@ export function TakeoffPreviewScreen() {
   const drafts = useTakeoffDrafts(projectId)
   const blueprintParam = searchParams.get('blueprint')
   const draftParam = searchParams.get('draft')
+  const pageParam = searchParams.get('page')
 
   const blueprintList = blueprints.data?.blueprints ?? []
   const activeBlueprint: BlueprintDocument | null =
     blueprintList.find((blueprint) => blueprint.id === blueprintParam) ?? blueprintList[0] ?? null
   const blueprintPages = useBlueprintPages(activeBlueprint?.id)
-  const activePage = blueprintPages.data?.pages[0] ?? null
+  const pageList = blueprintPages.data?.pages ?? []
+  const activePage = pageList.find((page) => page.id === pageParam) ?? pageList[0] ?? null
 
   const draftList = drafts.data?.drafts ?? []
   const activeDraft: TakeoffDraft | null = draftList.find((draft) => draft.id === draftParam) ?? draftList[0] ?? null
@@ -43,9 +45,10 @@ export function TakeoffPreviewScreen() {
 
   const selected = scene.items.find((item) => item.id === selectedId) ?? null
 
-  const setParam = (key: 'blueprint' | 'draft', value: string) => {
+  const setParam = (key: 'blueprint' | 'draft' | 'page', value: string) => {
     const next = new URLSearchParams(searchParams)
     next.set(key, value)
+    if (key === 'blueprint') next.delete('page')
     setSearchParams(next, { replace: true })
     setSelectedId(null)
   }
@@ -80,7 +83,7 @@ export function TakeoffPreviewScreen() {
           </div>
         </div>
 
-        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
           <label className="text-[11px] uppercase tracking-[0.06em] text-white/50">
             Blueprint
             <select
@@ -92,6 +95,21 @@ export function TakeoffPreviewScreen() {
               {blueprintList.map((blueprint) => (
                 <option key={blueprint.id} value={blueprint.id}>
                   {blueprint.file_name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-[11px] uppercase tracking-[0.06em] text-white/50">
+            Page
+            <select
+              value={activePage?.id ?? ''}
+              onChange={(event) => setParam('page', event.target.value)}
+              className="mt-1 block w-full rounded border border-white/15 bg-[#161b22] px-2 py-2 text-[13px] normal-case tracking-normal text-white"
+            >
+              {pageList.length === 0 ? <option value="">No pages</option> : null}
+              {pageList.map((page) => (
+                <option key={page.id} value={page.id}>
+                  Page {page.page_number}
                 </option>
               ))}
             </select>
