@@ -65,6 +65,10 @@ export interface WorkflowEventLogRow {
   actor_user_id: string | null
   /** When the row landed in the DB. */
   created_at: Iso8601
+  /** API request id that produced this transition, when available. */
+  request_id?: string | null
+  /** Sentry trace header attached to the transition, when available. */
+  sentry_trace?: string | null
   /** Optional inline event payload (kept small; large bodies elided). */
   event_payload?: Record<string, unknown> | null
 }

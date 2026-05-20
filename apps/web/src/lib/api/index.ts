@@ -44,6 +44,8 @@ export {
   type ProjectLifecycleState,
 } from './project-lifecycle'
 
+export { createSupportPacket, type CreateSupportPacketInput, type CreateSupportPacketResponse } from './support-packets'
+
 export {
   clockIn,
   clockOut,

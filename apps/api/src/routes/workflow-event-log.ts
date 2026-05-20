@@ -60,6 +60,8 @@ export const WorkflowEventLogRowSchema = z.object({
   to_state_version: z.number().int(),
   actor_user_id: z.string().nullable(),
   created_at: z.string(),
+  request_id: z.string().nullable().optional(),
+  sentry_trace: z.string().nullable().optional(),
   event_payload: z.unknown().nullable().optional(),
 })
 
@@ -97,6 +99,8 @@ type WorkflowEventLogDbRow = {
   from_state: string | null
   actor_user_id: string | null
   applied_at: string
+  request_id: string | null
+  sentry_trace: string | null
   event_payload: unknown
 }
 
@@ -153,6 +157,8 @@ export async function handleWorkflowEventLogRoutes(
         snapshot_after,
         actor_user_id,
         applied_at,
+        request_id,
+        sentry_trace,
         event_payload,
         lag(snapshot_after->>'state') over (
           partition by entity_id order by state_version asc
@@ -173,6 +179,8 @@ export async function handleWorkflowEventLogRoutes(
       from_state,
       actor_user_id,
       applied_at,
+      request_id,
+      sentry_trace,
       event_payload
     from stream
     order by state_version desc
@@ -207,6 +215,8 @@ export async function handleWorkflowEventLogRoutes(
     to_state_version: row.to_state_version ?? row.state_version + 1,
     actor_user_id: row.actor_user_id,
     created_at: row.applied_at,
+    request_id: row.request_id,
+    sentry_trace: row.sentry_trace,
     event_payload: (row.event_payload as Record<string, unknown> | null) ?? null,
   }))
 

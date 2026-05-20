@@ -35,6 +35,11 @@ type SupportPacketRow = {
   redaction_version: string
 }
 
+export type SupportPacketEntityRef = {
+  entity_type: string
+  entity_id: string
+}
+
 const REDACTION_VERSION = 'support-packet-v1'
 const MAX_STRING_LENGTH = 4000
 const MAX_ARRAY_LENGTH = 100
@@ -139,10 +144,45 @@ function collectProjectIds(client: unknown, limit = 20): string[] {
 function readClientRoute(client: JsonRecord): string | null {
   const page = client.page
   if (isRecord(page) && typeof page.path === 'string') return page.path
+  const path = client.path
+  if (isRecord(path) && typeof path.route === 'string') return path.route
   return getRequestContext()?.route ?? null
 }
 
-async function fetchAuditContext(_pool: Pool, companyId: string, actorUserId: string, requestIds: string[]) {
+function addEntityRef(refs: Map<string, SupportPacketEntityRef>, entityType: unknown, entityId: unknown): void {
+  if (typeof entityType !== 'string' || typeof entityId !== 'string') return
+  const type = entityType.trim()
+  const id = entityId.trim()
+  if (!type || !id || type.length > 120 || id.length > 160) return
+  refs.set(`${type}:${id}`, { entity_type: type, entity_id: id })
+}
+
+export function collectEntityRefs(client: unknown, limit = 20): SupportPacketEntityRef[] {
+  const refs = new Map<string, SupportPacketEntityRef>()
+
+  function walk(value: unknown): void {
+    if (refs.size >= limit) return
+    if (Array.isArray(value)) {
+      for (const entry of value.slice(0, MAX_ARRAY_LENGTH)) walk(entry)
+      return
+    }
+    if (!isRecord(value)) return
+
+    addEntityRef(refs, value.entity_type, value.entity_id)
+    for (const entry of Object.values(value).slice(0, MAX_OBJECT_KEYS)) walk(entry)
+  }
+
+  walk(client)
+  return Array.from(refs.values()).slice(0, limit)
+}
+
+async function fetchAuditContext(
+  _pool: Pool,
+  companyId: string,
+  actorUserId: string,
+  requestIds: string[],
+  entityRefs: SupportPacketEntityRef[],
+) {
   const values: unknown[] = [companyId]
   const clauses: string[] = []
   if (requestIds.length) {
@@ -152,6 +192,13 @@ async function fetchAuditContext(_pool: Pool, companyId: string, actorUserId: st
   values.push(actorUserId)
   const actorParam = values.length
   clauses.push(`(actor_user_id = $${actorParam} and created_at >= now() - interval '2 hours')`)
+  if (entityRefs.length) {
+    values.push(entityRefs.map((ref) => ref.entity_type))
+    const entityTypesParam = values.length
+    values.push(entityRefs.map((ref) => ref.entity_id))
+    const entityIdsParam = values.length
+    clauses.push(`(entity_type = any($${entityTypesParam}::text[]) and entity_id = any($${entityIdsParam}::text[]))`)
+  }
   values.push(100)
   const limitParam = values.length
   const result = await withCompanyClient(companyId, (c) =>
@@ -161,6 +208,35 @@ async function fetchAuditContext(_pool: Pool, companyId: string, actorUserId: st
       where company_id = $1 and (${clauses.join(' or ')})
       order by created_at desc
       limit $${limitParam}`,
+      values,
+    ),
+  )
+  return sanitizeSupportJson(result.rows)
+}
+
+async function fetchWorkflowContext(_pool: Pool, companyId: string, entityRefs: SupportPacketEntityRef[]) {
+  const workflowRefs = entityRefs.filter((ref) => UUID_RE.test(ref.entity_id)).slice(0, 5)
+  if (!workflowRefs.length) return []
+  const values: unknown[] = [companyId]
+  const clauses: string[] = []
+  for (const ref of workflowRefs) {
+    values.push(ref.entity_type)
+    const typeParam = values.length
+    values.push(ref.entity_id)
+    const idParam = values.length
+    clauses.push(`(entity_type = $${typeParam} and entity_id = $${idParam}::uuid)`)
+  }
+  values.push(25)
+  const limitParam = values.length
+  const result = await withCompanyClient(companyId, (c) =>
+    c.query(
+      `select id, workflow_name, entity_type, entity_id::text as entity_id, state_version,
+              event_type, event_payload, snapshot_after, actor_user_id, request_id,
+              sentry_trace, applied_at
+         from workflow_event_log
+        where company_id = $1 and (${clauses.join(' or ')})
+        order by applied_at desc
+        limit $${limitParam}`,
       values,
     ),
   )
@@ -335,13 +411,15 @@ export async function buildSupportServerContext({
 }) {
   const requestIds = collectRequestIds(client, getRequestContext()?.requestId)
   const projectIds = collectProjectIds(client)
-  const [auditEvents, queue, queueDepth, domainSnapshot] = await Promise.all([
-    fetchAuditContext(pool, company.id, identity.userId, requestIds),
+  const entityRefs = collectEntityRefs(client)
+  const [auditEvents, queue, queueDepth, domainSnapshot, workflowEvents] = await Promise.all([
+    fetchAuditContext(pool, company.id, identity.userId, requestIds, entityRefs),
     fetchQueueContext(pool, company.id, requestIds),
     fetchQueueDepth(pool, company.id),
     fetchDomainSnapshot(pool, company.id, projectIds),
+    fetchWorkflowContext(pool, company.id, entityRefs),
   ])
-  const traceIds = collectTraceIds({ auditEvents, queue })
+  const traceIds = collectTraceIds({ client, auditEvents, queue, workflowEvents })
   return {
     captured_at: new Date().toISOString(),
     tier,
@@ -357,8 +435,10 @@ export async function buildSupportServerContext({
     },
     request_ids: requestIds,
     trace_ids: traceIds,
+    entity_refs: entityRefs,
     queue_depth: queueDepth,
     audit_events: auditEvents,
+    workflow_events: workflowEvents,
     queue,
     domain_snapshot: sanitizeSupportJson(domainSnapshot),
   }
