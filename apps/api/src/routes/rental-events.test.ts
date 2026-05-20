@@ -258,11 +258,7 @@ describe('handleRentalEventRoutes — GET /api/rentals/:id', () => {
   it('returns 400 when id is not a uuid', async () => {
     const pool = new FakePool()
     const { ctx, responses } = makeCtx(pool)
-    const handled = await handleRentalEventRoutes(
-      { method: 'GET' } as never,
-      buildUrl('/api/rentals/not-a-uuid'),
-      ctx,
-    )
+    const handled = await handleRentalEventRoutes({ method: 'GET' } as never, buildUrl('/api/rentals/not-a-uuid'), ctx)
     expect(handled).toBe(true)
     expect(responses[0]?.status).toBe(400)
   })
@@ -273,22 +269,14 @@ describe('handleRentalEventRoutes — POST /api/rentals/:id/events', () => {
     const pool = new FakePool()
     seedRental(pool)
     const { ctx, responses } = makeCtx(pool, { event: 'RETURN', state_version: 1 }, 'member')
-    await handleRentalEventRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/rentals/${RENTAL_ID}/events`),
-      ctx,
-    )
+    await handleRentalEventRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/events`), ctx)
     expect(responses[0]?.status).toBe(403)
   })
 
   it('rejects invalid uuids with 400', async () => {
     const pool = new FakePool()
     const { ctx, responses } = makeCtx(pool, { event: 'RETURN', state_version: 1 })
-    await handleRentalEventRoutes(
-      { method: 'POST' } as never,
-      buildUrl('/api/rentals/not-a-uuid/events'),
-      ctx,
-    )
+    await handleRentalEventRoutes({ method: 'POST' } as never, buildUrl('/api/rentals/not-a-uuid/events'), ctx)
     expect(responses[0]?.status).toBe(400)
   })
 
@@ -296,11 +284,7 @@ describe('handleRentalEventRoutes — POST /api/rentals/:id/events', () => {
     const pool = new FakePool()
     seedRental(pool, { status: 'returned', state_version: 2 })
     const { ctx, responses } = makeCtx(pool, { event: 'INVOICE_QUEUED', state_version: 2 })
-    await handleRentalEventRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/rentals/${RENTAL_ID}/events`),
-      ctx,
-    )
+    await handleRentalEventRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/events`), ctx)
     expect(responses[0]?.status).toBe(400)
     expect(pool.workflowEvents).toHaveLength(0)
   })
@@ -309,11 +293,7 @@ describe('handleRentalEventRoutes — POST /api/rentals/:id/events', () => {
     const pool = new FakePool()
     seedRental(pool)
     const { ctx, responses } = makeCtx(pool, { event: 'RETURN', state_version: 1 })
-    await handleRentalEventRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/rentals/${RENTAL_ID}/events`),
-      ctx,
-    )
+    await handleRentalEventRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/events`), ctx)
     expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
     expect(pool.rentals[0]?.status).toBe('returned')
     expect(pool.rentals[0]?.state_version).toBe(2)
@@ -348,11 +328,7 @@ describe('handleRentalEventRoutes — POST /api/rentals/:id/events', () => {
     const pool = new FakePool()
     seedRental(pool)
     const { ctx, responses } = makeCtx(pool, { event: 'CLOSE', state_version: 1 })
-    await handleRentalEventRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/rentals/${RENTAL_ID}/events`),
-      ctx,
-    )
+    await handleRentalEventRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/events`), ctx)
     expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
     expect(pool.rentals[0]?.status).toBe('closed')
     expect(pool.rentals[0]?.state_version).toBe(2)
@@ -365,11 +341,7 @@ describe('handleRentalEventRoutes — POST /api/rentals/:id/events', () => {
       const pool = new FakePool()
       seedRental(pool, { status: fromState, state_version: 2 })
       const { ctx, responses } = makeCtx(pool, { event: 'CLOSE', state_version: 2 })
-      await handleRentalEventRoutes(
-        { method: 'POST' } as never,
-        buildUrl(`/api/rentals/${RENTAL_ID}/events`),
-        ctx,
-      )
+      await handleRentalEventRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/events`), ctx)
       expect(responses[0]?.status, `from ${fromState}: ${JSON.stringify(responses[0]?.body)}`).toBe(200)
       expect(pool.rentals[0]?.status).toBe('closed')
     }
@@ -379,11 +351,7 @@ describe('handleRentalEventRoutes — POST /api/rentals/:id/events', () => {
     const pool = new FakePool()
     seedRental(pool, { state_version: 5 })
     const { ctx, responses } = makeCtx(pool, { event: 'CLOSE', state_version: 1 })
-    await handleRentalEventRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/rentals/${RENTAL_ID}/events`),
-      ctx,
-    )
+    await handleRentalEventRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/events`), ctx)
     expect(responses[0]?.status).toBe(409)
     const body = responses[0]?.body as { snapshot: { state_version: number } }
     expect(body.snapshot.state_version).toBe(5)
@@ -394,11 +362,7 @@ describe('handleRentalEventRoutes — POST /api/rentals/:id/events', () => {
     const pool = new FakePool()
     seedRental(pool, { status: 'closed', state_version: 4 })
     const { ctx, responses } = makeCtx(pool, { event: 'RETURN', state_version: 4 })
-    await handleRentalEventRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/rentals/${RENTAL_ID}/events`),
-      ctx,
-    )
+    await handleRentalEventRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/events`), ctx)
     expect(responses[0]?.status).toBe(409)
     expect(pool.workflowEvents).toHaveLength(0)
   })
@@ -406,11 +370,7 @@ describe('handleRentalEventRoutes — POST /api/rentals/:id/events', () => {
   it('returns 404 when rental not found', async () => {
     const pool = new FakePool()
     const { ctx, responses } = makeCtx(pool, { event: 'CLOSE', state_version: 1 })
-    await handleRentalEventRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/rentals/${RENTAL_ID}/events`),
-      ctx,
-    )
+    await handleRentalEventRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/events`), ctx)
     expect(responses[0]?.status).toBe(404)
   })
 })
@@ -419,20 +379,14 @@ describe('handleRentalEventRoutes — non-matching paths', () => {
   it('returns false for non-rental paths', async () => {
     const pool = new FakePool()
     const { ctx } = makeCtx(pool)
-    expect(
-      await handleRentalEventRoutes({ method: 'GET' } as never, buildUrl('/api/projects/x'), ctx),
-    ).toBe(false)
+    expect(await handleRentalEventRoutes({ method: 'GET' } as never, buildUrl('/api/projects/x'), ctx)).toBe(false)
   })
 
   it('returns false for POST /api/rentals/:id/return (legacy route — defer)', async () => {
     const pool = new FakePool()
     const { ctx } = makeCtx(pool)
     expect(
-      await handleRentalEventRoutes(
-        { method: 'POST' } as never,
-        buildUrl(`/api/rentals/${RENTAL_ID}/return`),
-        ctx,
-      ),
+      await handleRentalEventRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/return`), ctx),
     ).toBe(false)
   })
 })
