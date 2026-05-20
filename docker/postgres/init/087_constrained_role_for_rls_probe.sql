@@ -150,6 +150,19 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sitelayer') THEN
     EXECUTE 'GRANT sitelayer TO sitelayer_constrained';
   END IF;
+EXCEPTION
+  -- Managed Postgres (DigitalOcean) preview/prod migrator users are not
+  -- granted CREATEROLE — the `doadmin` superuser is, but per-app role
+  -- runners are restricted to schema/object DDL. The Phase 3 runtime
+  -- probe is a CI/local feature; on environments where the migrator
+  -- can't provision the role, skip cleanly with a NOTICE rather than
+  -- failing the whole migration (which blocks every deploy). The probe
+  -- tests stay skipped on those environments (CONSTRAINED_DB_URL is
+  -- only set in CI's quality.yml against the ephemeral service
+  -- Postgres where the migrator IS the superuser).
+  WHEN insufficient_privilege THEN
+    RAISE NOTICE 'constrained role: skipping in database % - migrator lacks CREATEROLE/GRANT privilege (expected on Managed Postgres preview/prod; RLS runtime probe will skip)', current_db;
+    RETURN;
 END
 $constrained_role$;
 
