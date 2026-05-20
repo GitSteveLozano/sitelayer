@@ -41,7 +41,7 @@
 - [x] Clerk auth cut over in production; unauthenticated app APIs return `401`
 - [x] DO Spaces enabled in production for blueprint object storage
 - [x] Blueprint upload streaming via multipart → Spaces (`apps/api/src/blueprint-upload.ts`, busboy + lib-storage); 30–80MB PDFs no longer fight the JSON body cap. Cap is `MAX_BLUEPRINT_UPLOAD_BYTES` (default 200MB).
-- [x] Presigned download URL plumbing in place (`@aws-sdk/s3-request-presigner`); 302 redirect gated on `BLUEPRINT_DOWNLOAD_PRESIGNED=1` until Spaces CORS is validated for PDF.js fetches.
+- [x] Presigned download URL plumbing in place (`@aws-sdk/s3-request-presigner`); 302 redirect gated on `BLUEPRINT_DOWNLOAD_PRESIGNED=1` until Spaces CORS is validated for PDF.js fetches. Validation procedure + apply script: [`docs/RUNBOOK_SPACES_CORS.md`](docs/RUNBOOK_SPACES_CORS.md) + `scripts/apply-spaces-cors.sh`.
 
 ### ⏳ In Progress
 
