@@ -194,7 +194,8 @@ export function useRentalsPortal(shareToken: string): RentalsPortalHookResult {
   // reads/writes flow through the machine.
   const input = useMemo(
     () => ({ shareToken, initialCart: readCart() }),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // The react-hooks/exhaustive-deps rule is not enabled in this repo's
+    // eslint config; intentionally omitting it. See repo eslint.config.
     [shareToken],
   )
   const [state, send] = useMachine(rentalsPortalMachine, { input })
