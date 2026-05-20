@@ -125,22 +125,17 @@ docker/
 ## Quickstart
 
 ```bash
-npm ci
-npm run dev
+npm install
+docker compose up --build
 ```
 
 Local ports: web `:3000`, API `:3001`, MinIO `:9000` (console `:9001`)
 
-Frontend-only with fixture data:
+Host-process loop after Docker services are up:
 
 ```bash
-VITE_FIXTURES=1 npm run dev:web
-```
-
-Full Docker stack:
-
-```bash
-docker compose up --build
+docker compose up -d db minio minio-init
+npm run dev
 ```
 
 ## Quality
@@ -150,7 +145,7 @@ npm run ci:quality    # Full release gate
 npm run typecheck     # Type checking only
 npm run test          # Unit tests
 npm run build         # Full build
-npm run e2e           # Playwright e2e tests
+npm run test:e2e      # Playwright e2e tests
 ```
 
 ## Environment

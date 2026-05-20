@@ -2,6 +2,20 @@
 
 Construction operations platform: blueprint takeoff, estimation, crew scheduling, and QBO sync.
 
+## Collaborator Workstation Override
+
+If this checkout lives under `~/projects/collaborator-system/`, treat the
+machine as a collaborator Mac, not Taylor's operator workstation. In that mode:
+
+- do not require Mesh, control-plane, Tailscale, Bitbucket, browser-bridge, or
+  Taylor's private credentials;
+- do not add Mesh planning notes or upsert Mesh runtime dependencies unless
+  Taylor explicitly assigned an infra/deploy task;
+- use this repo, `AGENTS.md`, and `docs/ONBOARDING_DEVELOPER.md` as the local
+  source of truth;
+- report missing GitHub, Docker, browser-profile, Clerk, or production access
+  as blockers instead of trying to recreate Taylor's setup.
+
 ## ⚠️ Architecture at a glance
 
 **One web app: `apps/web/`.** The old parallel frontend track was removed on 2026-05-05 (ADR 0003). New screens, primitives, and machines all go under `apps/web/src/`.
