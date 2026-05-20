@@ -9,17 +9,16 @@
  *   - an optional user-selected role mode
  *
  * Resolution order (first match wins):
- *   1. Valid explicit mode override → that shell.
- *   2. Company admin / office → 'admin' shell by default.
- *   3. The caller is in a foreman assignment for the current project → 'foreman'
- *   4. The caller is in a worker assignment for the current project → 'worker'
- *   5. The caller has any active foreman assignment → 'foreman' (their default home)
- *   6. The caller has any active worker assignment → 'worker'
- *   7. Fallback → 'admin' (company-level role member without assignments;
- *      they see a stripped-down admin home that politely says "no projects
- *      assigned to you yet").
+ *   1. Valid explicit mode override -> that shell.
+ *   2. Company admin / office -> 'admin' shell by default.
+ *   3. The caller is in a foreman assignment for the current project -> 'foreman'
+ *   4. The caller is in a worker assignment for the current project -> 'worker'
+ *   5. The caller has any active foreman assignment -> 'foreman' (their default home)
+ *   6. The caller has any active worker assignment -> 'worker'
+ *   7. Fallback -> 'worker' (company-level member without assignments;
+ *      field users should never see the admin shell by accident).
  *
- * This is a pure function — no I/O, no React. Bootstrap response shape
+ * This is a pure function -- no I/O, no React. Bootstrap response shape
  * lives in api.ts.
  */
 import type { ProjectAssignmentRow } from '@/lib/api'
@@ -53,7 +52,7 @@ export type ComputeActiveContextArgs = {
  * Coerce an arbitrary string from /api/session into the CompanyRole union.
  * Unknown values fall through to 'member'. 'office' is preserved here
  * (computeActiveContext aliases it to admin) so call sites that branch on
- * the raw role still see what came off the wire — distinct from the
+ * the raw role still see what came off the wire -- distinct from the
  * server-side `normalizeCompanyRole` in @sitelayer/domain which collapses
  * 'office' to 'admin' at the auth boundary.
  */
@@ -84,9 +83,8 @@ export function availableRoleModes({
   if (hasForeman) modes.push('foreman')
   if (hasWorker) modes.push('worker')
 
-  // Preserve the old empty-member scaffold behavior: there is no field
-  // permission yet, but the user still needs a shell instead of a dead end.
-  return modes.length > 0 ? modes : ['admin']
+  // Plain members without project assignment still belong in the field app.
+  return modes.length > 0 ? modes : ['worker']
 }
 
 export function computeActiveContext({
@@ -115,11 +113,14 @@ export function computeActiveContext({
     }
   }
 
-  // No current-project context — pick the user's default shell from their
+  // No current-project context -- pick the user's default shell from their
   // assignment portfolio. Foreman wins over worker since foremen typically
   // need the wider triage surface to manage their crew.
   const hasForemanAssignment = assignments.some((a) => a.role === 'foreman')
   if (hasForemanAssignment) {
+    return { kind: 'foreman', projectId: null }
+  }
+  if (companyRole === 'foreman') {
     return { kind: 'foreman', projectId: null }
   }
   const hasWorkerAssignment = assignments.some((a) => a.role === 'worker')
@@ -127,7 +128,7 @@ export function computeActiveContext({
     return { kind: 'worker', projectId: null }
   }
 
-  // Member with no assignments — render the admin shell scaffold; the home
-  // screen handles the empty-list copy.
-  return { kind: 'admin', projectId: null }
+  // Member with no assignments stays in the field shell. Admin belongs to
+  // explicit admin/office permissions only.
+  return { kind: 'worker', projectId: null }
 }
