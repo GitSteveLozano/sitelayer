@@ -2,7 +2,13 @@ import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
-import { useDispatchEstimatePushEvent, useEstimatePush, type EstimatePushHumanEvent } from '@/lib/api'
+import {
+  estimatePushLineRate,
+  estimatePushLineUnit,
+  useDispatchEstimatePushEvent,
+  useEstimatePush,
+  type EstimatePushHumanEvent,
+} from '@/lib/api'
 import {
   isEstimatePushProbeDiagnosticsEnabled,
   registerEstimatePushProbeDiagnostics,
@@ -102,20 +108,25 @@ export function EstimatePushDetailScreen() {
             <div className="text-[12px] text-ink-3">No lines.</div>
           </Card>
         ) : (
-          lines.map((line) => (
-            <Card key={line.id} tight>
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <div className="text-[13px] font-semibold truncate">{line.description}</div>
-                  <div className="text-[11px] text-ink-3 mt-0.5">
-                    {Number(line.quantity).toFixed(2)} {line.unit} × ${Number(line.rate).toFixed(2)}
-                    {line.service_item_code ? ` · ${line.service_item_code}` : ''}
+          lines.map((line) => {
+            const unit = estimatePushLineUnit(line)
+            const rate = estimatePushLineRate(line)
+            return (
+              <Card key={line.id} tight>
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="text-[13px] font-semibold truncate">{line.description}</div>
+                    <div className="text-[11px] text-ink-3 mt-0.5">
+                      {Number(line.quantity).toFixed(2)}
+                      {unit ? ` ${unit}` : ''} × ${Number(rate).toFixed(2)}
+                      {line.service_item_code ? ` · ${line.service_item_code}` : ''}
+                    </div>
                   </div>
+                  <div className="text-[13px] font-semibold num">${Number(line.amount).toFixed(2)}</div>
                 </div>
-                <div className="text-[13px] font-semibold num">${Number(line.amount).toFixed(2)}</div>
-              </div>
-            </Card>
-          ))
+              </Card>
+            )
+          })
         )}
       </div>
 
