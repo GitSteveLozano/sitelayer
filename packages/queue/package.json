@@ -14,11 +14,11 @@
   },
   "dependencies": {
     "@sitelayer/domain": "file:../domain",
-    "pg": "^8.13.1"
+    "pg": "^8.21.0"
   },
   "devDependencies": {
     "@types/pg": "^8.11.11",
-    "@vitest/coverage-v8": "^4.1.5",
+    "@vitest/coverage-v8": "^4.1.6",
     "vitest": "^4.1.5"
   }
 }
