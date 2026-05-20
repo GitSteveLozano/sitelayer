@@ -83,17 +83,16 @@ function workflowNextEvents(state: CrewScheduleWorkflowState): Array<{ type: str
 function snapshotResponse(row: CrewScheduleRow): {
   state: CrewScheduleWorkflowState
   state_version: number
-  context: Omit<CrewScheduleRow, 'status' | 'state_version' | 'deleted_at'>
+  context: Omit<CrewScheduleRow, 'state_version' | 'deleted_at'>
   next_events: ReturnType<typeof workflowNextEvents>
 } {
   const { status, state_version, deleted_at, ...rest } = row
   void deleted_at
-  // The context preserves `status` for backwards-compat with the
-  // existing JSON response shape; the declared `Omit<..., 'status'>`
-  // return type predates that addition. TODO: tighten the return type
-  // to include `status` (or migrate clients off relying on it) so the
-  // cast can go away.
-  const context = { ...rest, status } as Omit<CrewScheduleRow, 'status' | 'state_version' | 'deleted_at'>
+  // `status` is preserved for backwards-compat with the existing JSON
+  // response shape (some clients still read it instead of `state`); the
+  // declared return type now includes it so callers see the same shape
+  // the runtime emits. Cast no longer needed.
+  const context = { ...rest, status }
   return {
     state: status,
     state_version,
