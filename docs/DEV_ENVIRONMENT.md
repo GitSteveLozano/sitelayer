@@ -13,12 +13,12 @@ PR previews are ephemeral and per-PR (`sitelayer_pr_42` schema, dropped on PR cl
 
 ## Hierarchy
 
-| URL                                              | Tier      | Database              | Lifecycle                          |
-| ------------------------------------------------ | --------- | --------------------- | ---------------------------------- |
-| `https://sitelayer.sandolab.xyz`                 | `prod`    | `sitelayer_prod`      | Permanent. Real customers.         |
-| `https://dev.sitelayer.sandolab.xyz`             | `dev`     | `sitelayer_dev`       | Permanent. Tracks `dev` branch.    |
-| `https://main.preview.sitelayer.sandolab.xyz`    | `preview` | `sitelayer_preview`†  | Permanent smoke. Tracks `main`.    |
-| `https://pr-N.preview.sitelayer.sandolab.xyz`    | `preview` | `sitelayer_preview`†  | Per PR; dropped on close.          |
+| URL                                           | Tier      | Database             | Lifecycle                       |
+| --------------------------------------------- | --------- | -------------------- | ------------------------------- |
+| `https://sitelayer.sandolab.xyz`              | `prod`    | `sitelayer_prod`     | Permanent. Real customers.      |
+| `https://dev.sitelayer.sandolab.xyz`          | `dev`     | `sitelayer_dev`      | Permanent. Tracks `dev` branch. |
+| `https://main.preview.sitelayer.sandolab.xyz` | `preview` | `sitelayer_preview`† | Permanent smoke. Tracks `main`. |
+| `https://pr-N.preview.sitelayer.sandolab.xyz` | `preview` | `sitelayer_preview`† | Per PR; dropped on close.       |
 
 † Each preview slug owns an isolated schema `sitelayer_<slug>` inside the shared DB.
 
