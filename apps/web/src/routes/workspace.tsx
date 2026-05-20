@@ -1,7 +1,6 @@
 import { useEffect, useMemo } from 'react'
-import { Navigate, Route, Routes } from 'react-router-dom'
+import { Navigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { AppShell } from '@/components/shell/AppShell'
 import { ColdStartSplash } from '@/components/shell/ColdStartSplash'
 import {
   ApiError,
@@ -16,14 +15,6 @@ import { ACTIVE_COMPANY_STORAGE_KEY } from '@/lib/api/client'
 import { normalizeMobileShellRole } from '@/lib/active-context'
 import { membershipRoleToPersona, RoleContext } from '@/lib/role'
 import { MobileShell } from '@/screens/mobile-shell'
-import HomeRoute from './home'
-import ProjectsRoute from './projects'
-import ScheduleRoute from './schedule'
-import RentalsRoute from './rentals'
-import CrewRoute from './crew'
-import TimeRoute from './time'
-import LogRoute from './log'
-import MoreRoute from './more'
 
 type MembershipRow = {
   company_id: string
@@ -48,8 +39,9 @@ type ActiveCompany = {
  *
  * The old root went straight at `/api/bootstrap` for `la-operations`.
  * That was fine for a demo tenant, but a real multi-company app needs to
- * resolve the caller's memberships first. Admin/office users then get the
- * admin-first shell; field-only users keep the mobile role shell.
+ * resolve the caller's memberships first. The canonical role shell still
+ * owns navigation: admins land in admin mode, and field-only users stay in
+ * foreman/worker mode.
  */
 export default function WorkspaceRoute() {
   const membershipsQuery = useQuery({
@@ -109,41 +101,14 @@ function CompanyWorkspace({ activeCompany }: { activeCompany: ActiveCompany }) {
     session?.user?.role ??
     null
   const companyRole = normalizeMobileShellRole(sessionRole)
-  const persona = membershipRoleToPersona(companyRole)
+  const persona = companyRole === 'admin' || companyRole === 'office' ? 'owner' : membershipRoleToPersona(companyRole)
 
   if (bootstrapQuery.isPending || sessionQuery.isPending) return <ColdStartSplash />
-
-  if (companyRole === 'admin' || companyRole === 'office') {
-    return (
-      <RoleContext.Provider value="owner">
-        <AdminWorkspaceRoutes />
-      </RoleContext.Provider>
-    )
-  }
 
   return (
     <RoleContext.Provider value={persona}>
       <MobileShell bootstrap={bootstrapQuery.data ?? null} companyRole={companyRole} companySlug={companySlug} />
     </RoleContext.Provider>
-  )
-}
-
-function AdminWorkspaceRoutes() {
-  return (
-    <Routes>
-      <Route element={<AppShell />}>
-        <Route index element={<HomeRoute />} />
-        <Route path="today" element={<Navigate to="/" replace />} />
-        <Route path="projects/*" element={<ProjectsRoute />} />
-        <Route path="schedule/*" element={<ScheduleRoute />} />
-        <Route path="rentals/*" element={<RentalsRoute />} />
-        <Route path="crew/*" element={<CrewRoute />} />
-        <Route path="time/*" element={<TimeRoute />} />
-        <Route path="log/*" element={<LogRoute />} />
-        <Route path="more/*" element={<MoreRoute />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Route>
-    </Routes>
   )
 }
 
