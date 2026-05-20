@@ -55,7 +55,7 @@ jobs:
         # Postgres migrator user; prod is tier-gated). The script's documented
         # escape hatch.
         env:
-          MIGRATION_GUARD_OVERRIDE: "1"
+          MIGRATION_GUARD_OVERRIDE: '1'
         run: bash scripts/check-migrations-immutable.sh
 
       - name: Prettier check
