@@ -1,3 +1,4 @@
+import { createContext, useContext } from 'react'
 import { useUser } from '@clerk/clerk-react'
 import { isClerkConfigured } from './auth'
 
@@ -7,10 +8,10 @@ import { isClerkConfigured } from './auth'
  * (admin/foreman/office/member/bookkeeper).
  *
  * Mapping:
- *   - admin, office     → 'owner'      (Owner / PM persona)
- *   - foreman           → 'foreman'
- *   - bookkeeper        → 'bookkeeper' (finance-only views)
- *   - member            → 'worker'
+ *   - admin, office     -> 'owner'      (Owner / PM persona)
+ *   - foreman           -> 'foreman'
+ *   - bookkeeper        -> 'bookkeeper' (finance-only views)
+ *   - member            -> 'worker'
  *
  * Phase 1+ will read this from the Clerk org membership; for now the
  * Phase 0 substrate falls back to a localStorage override so dev can
@@ -19,6 +20,8 @@ import { isClerkConfigured } from './auth'
 export type Role = 'owner' | 'foreman' | 'worker' | 'bookkeeper'
 
 const LOCAL_OVERRIDE_KEY = 'sitelayer.v2.role-override'
+
+export const RoleContext = createContext<Role | null>(null)
 
 export function readRoleOverride(): Role | null {
   if (typeof window === 'undefined') return null
@@ -36,7 +39,7 @@ export function writeRoleOverride(role: Role | null): void {
   }
 }
 
-function membershipRoleToPersona(role: string | null | undefined): Role {
+export function membershipRoleToPersona(role: string | null | undefined): Role {
   switch (role) {
     case 'admin':
     case 'org:admin':
@@ -59,15 +62,14 @@ function membershipRoleToPersona(role: string | null | undefined): Role {
  * primary org membership role from Clerk; otherwise default to worker.
  *
  * Note: `useUser()` is always called (rules of hooks) but only when
- * Clerk is configured — `isClerkConfigured()` is a build-time constant
+ * Clerk is configured -- `isClerkConfigured()` is a build-time constant
  * resolved from `import.meta.env.VITE_CLERK_PUBLISHABLE_KEY`, so the
  * branch is stable across the app lifetime.
  */
 export function useRole(): Role {
-  if (isClerkConfigured()) {
-    return useRoleWithClerk()
-  }
-  return useRoleWithoutClerk()
+  const contextRole = useContext(RoleContext)
+  const fallbackRole = isClerkConfigured() ? useRoleWithClerk() : useRoleWithoutClerk()
+  return contextRole ?? fallbackRole
 }
 
 function useRoleWithClerk(): Role {
