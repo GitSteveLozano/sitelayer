@@ -1,7 +1,14 @@
 # Sitelayer Preview Deployments
 
 **Status:** Preview droplet, Traefik routing, shared preview DB with per-preview schemas, deploy scripts, GitHub self-hosted runner, TTL cleanup timer, and `main` smoke preview are live
-**Last updated:** 2026-04-25
+**Last updated:** 2026-05-20
+
+> **Related:** The persistent dev environment (`dev.sitelayer.sandolab.xyz`,
+> backed by the dedicated `sitelayer_dev` database, tracking the `dev` branch)
+> reuses the preview droplet + Traefik + self-hosted runner, but is documented
+> separately in [`docs/DEV_ENVIRONMENT.md`](./DEV_ENVIRONMENT.md). It uses
+> `scripts/deploy-preview.sh` with `PREVIEW_TIER=dev`, which skips per-slug
+> schema isolation.
 
 ## Goal
 

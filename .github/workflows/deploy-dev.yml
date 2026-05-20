@@ -1,0 +1,55 @@
+name: Deploy Dev
+
+# Persistent dev environment at https://dev.sitelayer.sandolab.xyz.
+#
+# Unlike PR previews (which are ephemeral and per-PR), this stack tracks the
+# `dev` branch on a long-running named project (`sitelayer-dev`) on the
+# preview droplet and targets the dedicated `sitelayer_dev` database. See
+# docs/DEV_ENVIRONMENT.md for the full operational contract.
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy (defaults to current dev branch)
+        required: false
+      mode:
+        description: dev (watch-mode, fast) or prod (full bundle build)
+        required: false
+        default: dev
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, sitelayer-preview]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+
+      - name: Deploy dev stack
+        env:
+          PREVIEW_SLUG: dev
+          PREVIEW_HOST: dev.sitelayer.sandolab.xyz
+          PREVIEW_TIER: dev
+          PREVIEW_SHARED_ENV: /app/previews/.env.dev.shared
+          PREVIEW_MODE: ${{ inputs.mode || 'dev' }}
+          PREVIEW_SOURCE_DIR: ${{ github.workspace }}
+          # Workers are enabled on dev so QBO sync paths and notification
+          # delivery can be exercised against the persistent dev DB.
+          PREVIEW_ENABLE_WORKER: '1'
+          # The pre-flight orphan reap targets `sitelayer-pr-*` only, so the
+          # `sitelayer-dev` stack is unaffected. Skip the reap anyway since
+          # the daily preview-gc.yml workflow is the durable backstop and
+          # this job doesn't need to fetch the open-PR list.
+          PREVIEW_DEPLOY_SKIP_REAP: '1'
+        run: scripts/deploy-preview.sh
