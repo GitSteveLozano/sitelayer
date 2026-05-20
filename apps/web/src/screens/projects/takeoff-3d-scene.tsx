@@ -6,19 +6,32 @@ interface TakeoffThreeSceneProps {
   scene: TakeoffPreviewScene
   selectedId: string | null
   onSelect: (id: string | null) => void
+  blueprintTextureUrl?: string | null
 }
 
-export function TakeoffThreeScene({ scene, selectedId, onSelect }: TakeoffThreeSceneProps) {
+export function TakeoffThreeScene({ scene, selectedId, onSelect, blueprintTextureUrl }: TakeoffThreeSceneProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const onSelectRef = useRef(onSelect)
+  const selectedIdRef = useRef(selectedId)
+  const selectionStateRef = useRef<{ root: THREE.Group; render: () => void } | null>(null)
 
   useEffect(() => {
     onSelectRef.current = onSelect
   }, [onSelect])
 
   useEffect(() => {
+    selectedIdRef.current = selectedId
+    const state = selectionStateRef.current
+    if (!state) return
+    applyMeasurementSelection(state.root, selectedId)
+    state.render()
+  }, [selectedId])
+
+  useEffect(() => {
     const mount = mountRef.current
     if (!mount) return
+    let disposed = false
+    const ownedTextures: THREE.Texture[] = []
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
@@ -36,8 +49,31 @@ export function TakeoffThreeScene({ scene, selectedId, onSelect }: TakeoffThreeS
 
     const root = new THREE.Group()
     threeScene.add(root)
+    const render = () => renderer.render(threeScene, camera)
 
     const gridSize = Math.max(80, span * 1.35)
+    if (blueprintTextureUrl) {
+      const loader = new THREE.TextureLoader()
+      loader.load(
+        blueprintTextureUrl,
+        (texture) => {
+          if (disposed) {
+            texture.dispose()
+            return
+          }
+          texture.colorSpace = THREE.SRGBColorSpace
+          texture.anisotropy = Math.min(4, renderer.capabilities.getMaxAnisotropy())
+          ownedTextures.push(texture)
+          root.add(buildBlueprintPlane(scene, texture))
+          render()
+        },
+        undefined,
+        () => {
+          // The adjacent source-status copy tells the user when an image
+          // underlay did not load; keep the WebGL scene alive.
+        },
+      )
+    }
     const grid = new THREE.GridHelper(gridSize, 20, 0x3b4350, 0x242b36)
     root.add(grid)
 
@@ -49,9 +85,10 @@ export function TakeoffThreeScene({ scene, selectedId, onSelect }: TakeoffThreeS
 
     const clickable: THREE.Object3D[] = []
     for (const item of scene.items) {
-      const objects = buildItemObjects(item, item.id === selectedId, scene)
+      const objects = buildItemObjects(item, false, scene)
       for (const object of objects) {
         object.userData.measurementId = item.id
+        rememberMeasurementMaterialDefaults(object)
         root.add(object)
         clickable.push(object)
       }
@@ -70,8 +107,6 @@ export function TakeoffThreeScene({ scene, selectedId, onSelect }: TakeoffThreeS
       camera.updateProjectionMatrix()
       render()
     }
-
-    const render = () => renderer.render(threeScene, camera)
 
     const onPointerDown = (event: PointerEvent) => {
       drag.active = true
@@ -129,10 +164,14 @@ export function TakeoffThreeScene({ scene, selectedId, onSelect }: TakeoffThreeS
 
     const observer = new ResizeObserver(resize)
     observer.observe(mount)
+    selectionStateRef.current = { root, render }
+    applyMeasurementSelection(root, selectedIdRef.current)
     resize()
     render()
 
     return () => {
+      disposed = true
+      if (selectionStateRef.current?.root === root) selectionStateRef.current = null
       observer.disconnect()
       renderer.domElement.removeEventListener('pointerdown', onPointerDown)
       renderer.domElement.removeEventListener('pointermove', onPointerMove)
@@ -140,10 +179,11 @@ export function TakeoffThreeScene({ scene, selectedId, onSelect }: TakeoffThreeS
       renderer.domElement.removeEventListener('wheel', onWheel)
       mount.removeChild(renderer.domElement)
       disposeObject(root)
+      for (const texture of ownedTextures) texture.dispose()
       grid.geometry.dispose()
       renderer.dispose()
     }
-  }, [scene, selectedId])
+  }, [scene, blueprintTextureUrl])
 
   return (
     <div
@@ -155,12 +195,88 @@ export function TakeoffThreeScene({ scene, selectedId, onSelect }: TakeoffThreeS
   )
 }
 
+function buildBlueprintPlane(scene: TakeoffPreviewScene, texture: THREE.Texture): THREE.Object3D {
+  const group = new THREE.Group()
+  const boardSize = Math.max(24, 100 * scene.worldPerBoardUnit)
+  const geometry = new THREE.PlaneGeometry(boardSize, boardSize)
+  geometry.rotateX(-Math.PI / 2)
+
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    opacity: 0.42,
+    depthWrite: false,
+  })
+  const plane = new THREE.Mesh(geometry, material)
+  plane.position.y = -0.04
+  plane.renderOrder = -2
+  group.add(plane)
+
+  const borderGeometry = new THREE.EdgesGeometry(geometry)
+  const border = new THREE.LineSegments(borderGeometry, new THREE.LineBasicMaterial({ color: 0x9fb3c8 }))
+  border.position.y = -0.035
+  border.renderOrder = -1
+  group.add(border)
+  return group
+}
+
 function buildItemObjects(item: TakeoffPreviewItem, selected: boolean, scene: TakeoffPreviewScene): THREE.Object3D[] {
   if (item.kind === 'polygon') return buildPolygonObjects(item, selected)
   if (item.kind === 'lineal') return buildLinealObjects(item, selected)
   if (item.kind === 'count') return buildCountObjects(item, selected, scene)
   if (item.kind === 'volume') return buildVolumeObjects(item, selected)
   return []
+}
+
+function rememberMeasurementMaterialDefaults(object: THREE.Object3D): void {
+  object.traverse((child) => {
+    const material = (child as THREE.Mesh).material
+    for (const entry of Array.isArray(material) ? material : material ? [material] : []) {
+      if (entry.userData.selectionBase) continue
+      entry.userData.selectionBase = {
+        opacity: entry.opacity,
+        transparent: entry.transparent,
+        color: materialColor(entry)?.getHex() ?? null,
+        emissive: entry instanceof THREE.MeshStandardMaterial ? entry.emissive.getHex() : null,
+      }
+    }
+  })
+}
+
+function applyMeasurementSelection(root: THREE.Object3D, selectedId: string | null): void {
+  root.traverse((child) => {
+    const measurementId = findMeasurementId(child)
+    if (!measurementId) return
+    const selected = selectedId === measurementId
+    const material = (child as THREE.Mesh).material
+    for (const entry of Array.isArray(material) ? material : material ? [material] : []) {
+      applyMaterialSelection(entry, selected)
+    }
+  })
+}
+
+function applyMaterialSelection(material: THREE.Material, selected: boolean): void {
+  const base = material.userData.selectionBase as
+    | { opacity: number; transparent: boolean; color: number | null; emissive: number | null }
+    | undefined
+  if (!base) return
+
+  material.opacity = selected ? Math.min(1, base.opacity + 0.2) : base.opacity
+  material.transparent = base.transparent || material.opacity < 1
+  material.needsUpdate = true
+
+  const color = materialColor(material)
+  if (color && base.color != null) {
+    color.setHex(selected ? 0xffffff : base.color)
+  }
+  if (material instanceof THREE.MeshStandardMaterial && base.emissive != null) {
+    material.emissive.setHex(selected ? 0x1f2a44 : base.emissive)
+  }
+}
+
+function materialColor(material: THREE.Material): THREE.Color | null {
+  const candidate = (material as THREE.Material & { color?: unknown }).color
+  return candidate instanceof THREE.Color ? candidate : null
 }
 
 function buildPolygonObjects(item: TakeoffPreviewItem, selected: boolean): THREE.Object3D[] {

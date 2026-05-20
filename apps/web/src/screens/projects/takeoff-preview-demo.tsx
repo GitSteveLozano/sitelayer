@@ -120,7 +120,12 @@ export function TakeoffPreviewDemo() {
       </header>
 
       <main className="relative flex-1 min-h-[560px] overflow-hidden">
-        <TakeoffThreeScene scene={scene} selectedId={selectedId} onSelect={setSelectedId} />
+        <TakeoffThreeScene
+          scene={scene}
+          selectedId={selectedId}
+          onSelect={setSelectedId}
+          blueprintTextureUrl={fixture.referenceImageUrl}
+        />
 
         <aside className="absolute left-3 top-3 w-[min(390px,calc(100vw-24px))] max-h-[calc(100%-24px)] overflow-y-auto rounded border border-white/12 bg-[#0d1117]/90 shadow-2xl backdrop-blur">
           <div className="border-b border-white/10 px-3 py-2">
@@ -128,6 +133,7 @@ export function TakeoffPreviewDemo() {
             <div className="mt-0.5 text-[11px] text-white/55">
               Scale: {scene.worldPerBoardUnit.toFixed(3)} ft / board unit
             </div>
+            <div className="mt-0.5 text-[11px] text-white/50">Source sheet: synthetic image underlay loaded</div>
             <div className="mt-2 grid grid-cols-3 gap-1" role="group" aria-label="Demo fixture">
               {TAKEOFF_DEMO_FIXTURES.map((candidate) => (
                 <button

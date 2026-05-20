@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointer
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { AgentSurface, AiEyebrow, Attribution, Spark, useRejectSheet, type SparkState } from '@/components/ai'
+import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
 import {
   useBlueprintPages,
   useCaptureTakeoffDraft,
@@ -24,6 +25,7 @@ import {
   type TakeoffDraft,
   type TakeoffMeasurement,
 } from '@/lib/api'
+import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { CalibrationBanner, PageCalibrationOverlay } from './page-calibration-overlay'
 import { PageStrip } from './page-strip'
 import { RevisionCompareStub } from './revision-compare-stub'
@@ -250,6 +252,12 @@ export function TakeoffCanvasScreen() {
       setActivePageId(activePage.id)
     }
   }, [activePage, activePageId])
+
+  const blueprintReference = useMemo(
+    () => buildBlueprintReference(activeBlueprint, activePage),
+    [activeBlueprint, activePage],
+  )
+  const canvasSourceImage = useAuthenticatedObjectUrl(blueprintReference?.texturePath)
 
   if (!projectId) {
     return (
@@ -524,8 +532,25 @@ export function TakeoffCanvasScreen() {
                 onTap={onCanvasTap}
                 draftPoints={draftPoints}
                 measurements={blueprintMeasurements}
+                sourceImageUrl={canvasSourceImage.url}
                 onMeasurementContext={(measurement) => setTagSheetMeasurementId(measurement.id)}
               />
+              {blueprintReference ? (
+                <div className="mt-1 text-[11px] text-ink-3" data-testid="takeoff-canvas-source-sheet-status">
+                  Source sheet:{' '}
+                  {blueprintReference.kind === 'image'
+                    ? canvasSourceImage.loading
+                      ? 'loading image underlay'
+                      : canvasSourceImage.error
+                        ? 'image underlay failed'
+                        : canvasSourceImage.url
+                          ? 'image underlay loaded'
+                          : 'image underlay pending'
+                    : blueprintReference.kind === 'pdf'
+                      ? 'PDF rasterization needed before it can be underlaid'
+                      : 'unsupported file type for image underlay'}
+                </div>
+              ) : null}
             </div>
             <RunningTotalsRail measurements={blueprintMeasurements} serviceItems={items} />
           </div>
@@ -722,6 +747,7 @@ interface CanvasSurfaceProps {
   onTap: (e: ReactPointerEvent<SVGSVGElement>) => void
   draftPoints: Array<{ x: number; y: number }>
   measurements: TakeoffMeasurement[]
+  sourceImageUrl?: string | null
   /**
    * Right-click / context-menu / long-press on a saved measurement —
    * the canvas raises this so the parent can open the multi-condition
@@ -737,12 +763,22 @@ function CanvasSurface({
   onTap,
   draftPoints,
   measurements,
+  sourceImageUrl,
   onMeasurementContext,
 }: CanvasSurfaceProps) {
   const viewBoxSize = 100 / zoom
   const viewBoxOrigin = (100 - viewBoxSize) / 2
   return (
     <div className="relative w-full aspect-square bg-card-soft rounded-md overflow-hidden border border-line">
+      {sourceImageUrl ? (
+        <img
+          src={sourceImageUrl}
+          alt=""
+          data-testid="takeoff-canvas-source-image"
+          className="absolute inset-0 h-full w-full object-fill opacity-70"
+          draggable={false}
+        />
+      ) : null}
       <svg
         ref={svgRef}
         viewBox={`${viewBoxOrigin} ${viewBoxOrigin} ${viewBoxSize} ${viewBoxSize}`}

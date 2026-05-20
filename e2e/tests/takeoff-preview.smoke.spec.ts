@@ -7,7 +7,7 @@ const PAGE_ID = '00000000-0000-4000-8000-000000000303'
 const DRAFT_ID = '00000000-0000-4000-8000-000000000304'
 
 test('renders a nonblank WebGL 3D takeoff preview from mocked measurements', async ({ page }) => {
-  const mockState = { sawDraftScopedMeasurements: false }
+  const mockState = { sawDraftScopedMeasurements: false, sawAuthenticatedPageFileFetch: false }
   await installApiMocks(page, mockState)
   await page.addInitScript(() => {
     window.localStorage.setItem('sitelayer.act-as', 'e2e-admin')
@@ -20,7 +20,9 @@ test('renders a nonblank WebGL 3D takeoff preview from mocked measurements', asy
   await expect(page.getByText('4', { exact: true })).toBeVisible()
   await expect(page.getByText('drawable measurements')).toBeVisible()
   await expect(page.getByText(/Scale:\s+0\.500 ft \/ board unit/)).toBeVisible()
+  await expect(page.getByTestId('takeoff-preview-source-sheet-status')).toContainText('image underlay')
   await expect.poll(() => mockState.sawDraftScopedMeasurements).toBe(true)
+  await expect.poll(() => mockState.sawAuthenticatedPageFileFetch).toBe(true)
 
   const canvas = page.getByTestId('takeoff-preview-canvas')
   await expect(canvas).toBeVisible()
@@ -66,7 +68,10 @@ test('renders the public demo fixture switcher and export payload', async ({ pag
   expectImageHasSignal(png)
 })
 
-async function installApiMocks(page: Page, state: { sawDraftScopedMeasurements: boolean }): Promise<void> {
+async function installApiMocks(
+  page: Page,
+  state: { sawDraftScopedMeasurements: boolean; sawAuthenticatedPageFileFetch: boolean },
+): Promise<void> {
   await page.route('http://localhost:3001/api/**', async (route) => {
     const url = new URL(route.request().url())
     const path = url.pathname
@@ -87,9 +92,9 @@ async function installApiMocks(page: Page, state: { sawDraftScopedMeasurements: 
           {
             id: BLUEPRINT_ID,
             project_id: PROJECT_ID,
-            file_name: 'Public-domain house plan fixture.pdf',
-            storage_path: 'fixtures/public-domain-house-plan.pdf',
-            preview_type: 'pdf',
+            file_name: 'Public-domain house plan fixture.png',
+            storage_path: 'fixtures/public-domain-house-plan.png',
+            preview_type: 'image',
             calibration_length: null,
             calibration_unit: null,
             sheet_scale: null,
@@ -110,7 +115,7 @@ async function installApiMocks(page: Page, state: { sawDraftScopedMeasurements: 
             id: PAGE_ID,
             blueprint_document_id: BLUEPRINT_ID,
             page_number: 1,
-            storage_path: null,
+            storage_path: 'fixtures/public-domain-house-plan-page-1.png',
             calibration_world_distance: '20',
             calibration_world_unit: 'ft',
             calibration_x1: '10',
@@ -121,6 +126,21 @@ async function installApiMocks(page: Page, state: { sawDraftScopedMeasurements: 
             measurement_count: 4,
           },
         ],
+      })
+      return
+    }
+
+    if (path === `/api/blueprint-pages/${PAGE_ID}/file`) {
+      expect(route.request().headers()['x-sitelayer-company-slug']).toBe('e2e-fixtures')
+      expect(route.request().headers()['x-sitelayer-act-as']).toBe('e2e-admin')
+      state.sawAuthenticatedPageFileFetch = true
+      await route.fulfill({
+        status: 200,
+        contentType: 'image/png',
+        headers: {
+          'access-control-allow-origin': 'http://localhost:3100',
+        },
+        body: blueprintPngFixture(),
       })
       return
     }
@@ -162,6 +182,22 @@ async function installApiMocks(page: Page, state: { sawDraftScopedMeasurements: 
       body: JSON.stringify({ error: `unmocked takeoff preview smoke API path: ${path}` }),
     })
   })
+}
+
+function blueprintPngFixture(): Buffer {
+  const png = new PNG({ width: 96, height: 96 })
+  for (let y = 0; y < png.height; y += 1) {
+    for (let x = 0; x < png.width; x += 1) {
+      const idx = (png.width * y + x) * 4
+      const grid = x % 12 === 0 || y % 12 === 0
+      const room = x > 18 && x < 78 && y > 16 && y < 74
+      png.data[idx] = grid ? 190 : room ? 224 : 248
+      png.data[idx + 1] = grid ? 204 : room ? 236 : 250
+      png.data[idx + 2] = grid ? 224 : room ? 255 : 252
+      png.data[idx + 3] = 255
+    }
+  }
+  return PNG.sync.write(png)
 }
 
 const measurementsFixture = [
