@@ -84,6 +84,41 @@ test('captures estimate-push Probe payload from the real financial route', async
   await page.getByRole('button', { name: 'Inspect Capture (dev)' }).click()
 
   const capture = await captureJson
+  expectEstimatePushCapture(capture)
+})
+
+test('exposes estimate-push Probe payload through the gated browser diagnostic surface', async ({ page }) => {
+  await installApiMocks(page)
+
+  await page.addInitScript(() => {
+    window.localStorage.setItem('sitelayer.act-as', 'e2e-admin')
+    window.localStorage.setItem('sitelayer.active-company-slug', 'e2e-fixtures')
+    window.localStorage.setItem('sitelayer.probe.diagnostics', '1')
+    window.localStorage.setItem(
+      'sitelayer.probe.acting-as',
+      JSON.stringify({ role: 'admin', company_slug: 'e2e-fixtures', note: 'local Probe smoke' }),
+    )
+  })
+
+  await page.goto(`/financial/estimate-pushes/${PUSH_ID}`)
+  await expect(page.getByText('approved', { exact: true })).toBeVisible()
+  await expect(page.getByText('Frame scaffold bay')).toBeVisible()
+
+  await expect
+    .poll(
+      async () => {
+        const capture = await readDiagnosticCapture(page)
+        return Array.isArray(capture.path?.workflow_event_log_tail) ? capture.path.workflow_event_log_tail.length : 0
+      },
+      { timeout: 5_000 },
+    )
+    .toBe(1)
+
+  const capture = await readDiagnosticCapture(page)
+  expectEstimatePushCapture(capture)
+})
+
+function expectEstimatePushCapture(capture: CaptureSmoke): void {
   const path = capture.path
   expect(path).toBeTruthy()
 
@@ -117,7 +152,7 @@ test('captures estimate-push Probe payload from the real financial route', async
     note: 'local Probe smoke',
   })
   expect(capture.deploy).toEqual({ app_build_sha: BUILD_SHA, env: null })
-})
+}
 
 async function installApiMocks(page: Page): Promise<void> {
   await page.route('http://localhost:3001/api/**', async (route) => {
@@ -180,4 +215,18 @@ async function waitForCaptureJson(page: Page): Promise<CaptureSmoke> {
   const raw = args[1] ? await args[1].jsonValue() : message.text().replace('[ADR-0019 Capture JSON]', '').trim()
   expect(typeof raw).toBe('string')
   return JSON.parse(raw as string) as CaptureSmoke
+}
+
+async function readDiagnosticCapture(page: Page): Promise<CaptureSmoke> {
+  return page.evaluate(() => {
+    const probe = (
+      window as Window & {
+        __sitelayerProbe?: {
+          estimatePushCapture?: () => unknown
+        }
+      }
+    ).__sitelayerProbe
+    if (!probe?.estimatePushCapture) throw new Error('estimate-push Probe diagnostic surface is not registered')
+    return probe.estimatePushCapture()
+  }) as Promise<CaptureSmoke>
 }

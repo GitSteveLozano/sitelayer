@@ -56,6 +56,47 @@ export const ESTIMATE_PUSH_TAIL_LIMIT = 3
 /** localStorage key the operator can use to declare an `acting_as` override. */
 export const ACTING_AS_STORAGE_KEY = 'sitelayer.probe.acting-as'
 
+/** localStorage flag that enables headless Probe capture in deployed builds. */
+export const PROBE_DIAGNOSTICS_STORAGE_KEY = 'sitelayer.probe.diagnostics'
+
+declare global {
+  interface Window {
+    __sitelayerProbe?: {
+      estimatePushCapture?: () => Capture
+    }
+  }
+}
+
+export function isEstimatePushProbeDiagnosticsEnabled(): boolean {
+  if (typeof window === 'undefined') return false
+  if (import.meta.env.DEV) return true
+
+  try {
+    const params = new URLSearchParams(window.location.search)
+    if (params.get('probeCapture') === '1') return true
+    const raw = window.localStorage.getItem(PROBE_DIAGNOSTICS_STORAGE_KEY)
+    return raw === '1' || raw === 'true'
+  } catch {
+    return false
+  }
+}
+
+export function registerEstimatePushProbeDiagnostics(capture: () => Capture): () => void {
+  if (typeof window === 'undefined') return () => {}
+
+  const probe = window.__sitelayerProbe ?? {}
+  probe.estimatePushCapture = capture
+  window.__sitelayerProbe = probe
+
+  return () => {
+    if (window.__sitelayerProbe?.estimatePushCapture !== capture) return
+    delete window.__sitelayerProbe.estimatePushCapture
+    if (Object.keys(window.__sitelayerProbe).length === 0) {
+      delete window.__sitelayerProbe
+    }
+  }
+}
+
 /* -------------------------------------------------------------------------- */
 /* Deploy info — read off the cached `x-sitelayer-build-sha` response header. */
 /* -------------------------------------------------------------------------- */
