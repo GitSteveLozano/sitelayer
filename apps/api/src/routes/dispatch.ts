@@ -64,6 +64,7 @@ import { handleEstimateShareRoutes } from './estimate-shares-admin.js'
 import { handleInventoryForecastRoutes } from './inventory-forecast.js'
 import { handleWorkflowEventLogRoutes } from './workflow-event-log.js'
 import { getBuildSha } from '../lib/build-sha.js'
+import { rasterizePdfPageToPng } from '../blueprint-rasterize.js'
 
 /**
  * Cross-cutting deps the route cascade needs from server.ts. Constructed
@@ -841,6 +842,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         blueprintDownloadPresigned: ctx.blueprintDownloadPresigned,
         sendFileContent: ctx.sendFileContent,
         sendFileRedirect: ctx.sendFileRedirect,
+        rasterizePdfPage: rasterizePdfPageToPng,
       }),
 
     // Debug trace lookup (Bearer DEBUG_TRACE_TOKEN, prod-gated)

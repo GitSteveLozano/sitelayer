@@ -54,6 +54,21 @@ export function buildBlueprintStorageKey(companyId: string, blueprintId: string,
   return `${companyId}/${blueprintId}/${sanitizeFileName(fileName)}`
 }
 
+export function buildBlueprintPageStorageKey(
+  companyId: string,
+  blueprintId: string,
+  pageNumber: number,
+  extension = 'png',
+): string {
+  const safePage = Number.isInteger(pageNumber) && pageNumber > 0 ? pageNumber : 1
+  const safeExtension = extension
+    .trim()
+    .replace(/^\.+/, '')
+    .replace(/[^a-zA-Z0-9]+/g, '')
+    .toLowerCase()
+  return `${companyId}/${blueprintId}/pages/page-${safePage}.${safeExtension || 'png'}`
+}
+
 /**
  * Storage key for daily-log photos. Lives under a `/daily-logs/` prefix
  * inside the same bucket so a single bucket policy covers everything;
