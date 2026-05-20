@@ -23,6 +23,7 @@ function manualChunks(id: string): string | undefined {
   if (normalized.includes('/@clerk/') || normalized.includes('/scheduler/') || /\/react(?:-dom)?\//.test(normalized)) {
     return 'vendor-react'
   }
+  if (normalized.includes('/three/')) return 'vendor-three'
   if (normalized.includes('/lucide-react/')) return 'vendor-icons'
   return undefined
 }

@@ -166,9 +166,12 @@ export function TakeoffSummaryScreen() {
               <SummaryRow key={g.code} group={g} maxQty={maxQty} projectId={projectId} />
             ))}
             <Attribution source="Live from /api/projects/:id/takeoff/measurements + /api/service-items" />
-            <div className="pt-2">
+            <div className="pt-2 grid grid-cols-2 gap-2">
               <Link to={`/projects/${projectId}/takeoff-canvas`} className="block">
                 <MobileButton variant="primary">Add measurement</MobileButton>
+              </Link>
+              <Link to={`/projects/${projectId}/takeoff-preview`} className="block">
+                <MobileButton variant="ghost">3D view</MobileButton>
               </Link>
             </div>
           </>

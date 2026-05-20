@@ -49,6 +49,13 @@ jobs:
         run: bash -n scripts/*.sh
 
       - name: Migration immutability
+        # One-time override for the 087 permission-tolerance fix. Migration 087
+        # has never successfully applied to a persistent environment (preview
+        # bombs at CREATE ROLE due to lack of CREATEROLE on the DO Managed
+        # Postgres migrator user; prod is tier-gated). The script's documented
+        # escape hatch.
+        env:
+          MIGRATION_GUARD_OVERRIDE: '1'
         run: bash scripts/check-migrations-immutable.sh
 
       - name: Prettier check
