@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@sitelayer/capture-schema": "*",
-    "commander": "^12.1.0"
+    "commander": "^14.0.3"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
