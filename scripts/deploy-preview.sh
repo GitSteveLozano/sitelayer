@@ -16,6 +16,21 @@ SHARED_ENV="${PREVIEW_SHARED_ENV:-$PREVIEW_ROOT/.env.shared}"
 PREVIEW_DOMAIN="${PREVIEW_DOMAIN:-preview.sitelayer.sandolab.xyz}"
 PREVIEW_ENABLE_WORKER="${PREVIEW_ENABLE_WORKER:-0}"
 PREVIEW_MODE="${PREVIEW_MODE:-dev}"
+# PREVIEW_TIER selects the deployment shape:
+#   preview (default) — per-PR stack with an isolated `sitelayer_<slug>` schema
+#                       inside the shared sitelayer_preview database.
+#   dev               — long-running named stack against a dedicated database
+#                       (sitelayer_dev). No schema-per-slug; migrations land in
+#                       `public`. Used by .github/workflows/deploy-dev.yml.
+PREVIEW_TIER="${PREVIEW_TIER:-preview}"
+
+case "$PREVIEW_TIER" in
+  preview|dev) ;;
+  *)
+    echo "ERROR: PREVIEW_TIER must be 'preview' or 'dev' (got '$PREVIEW_TIER')" >&2
+    exit 1
+    ;;
+esac
 
 case "$PREVIEW_MODE" in
   dev)  compose_file="docker-compose.preview.yml"      ;;
@@ -36,11 +51,17 @@ fi
 preview_host="${PREVIEW_HOST:-$preview_slug.$PREVIEW_DOMAIN}"
 project_name="sitelayer-${preview_slug}"
 target_dir="$PREVIEW_ROOT/$preview_slug"
-schema_slug="$(printf '%s' "$preview_slug" | tr '-' '_' | sed -E 's/[^a-z0-9_]+/_/g; s/^_+//; s/_+$//; s/_+/_/g')"
-preview_db_schema="${PREVIEW_DB_SCHEMA:-sitelayer_${schema_slug}}"
-if [[ ! "$preview_db_schema" =~ ^[a-z_][a-z0-9_]*$ ]]; then
-  echo "ERROR: invalid preview database schema: $preview_db_schema" >&2
-  exit 1
+
+# Per-slug schema isolation only applies to the `preview` tier. The `dev` tier
+# targets a dedicated database (sitelayer_dev) and uses its public schema, so
+# we skip schema-name derivation and the schema-create step in this branch.
+if [ "$PREVIEW_TIER" = "preview" ]; then
+  schema_slug="$(printf '%s' "$preview_slug" | tr '-' '_' | sed -E 's/[^a-z0-9_]+/_/g; s/^_+//; s/_+$//; s/_+/_/g')"
+  preview_db_schema="${PREVIEW_DB_SCHEMA:-sitelayer_${schema_slug}}"
+  if [[ ! "$preview_db_schema" =~ ^[a-z_][a-z0-9_]*$ ]]; then
+    echo "ERROR: invalid preview database schema: $preview_db_schema" >&2
+    exit 1
+  fi
 fi
 
 if [ ! -f "$SOURCE_DIR/$compose_file" ]; then
@@ -134,9 +155,11 @@ rsync -az --delete \
   printf 'PREVIEW_SLUG=%s\n' "$preview_slug"
   printf 'PREVIEW_HOST=%s\n' "$preview_host"
   printf 'PREVIEW_MODE=%s\n' "$PREVIEW_MODE"
-  printf 'PREVIEW_DB_SCHEMA=%s\n' "$preview_db_schema"
-  printf 'DB_SCHEMA=%s\n' "$preview_db_schema"
-  printf 'PGOPTIONS=-c search_path=%s,public\n' "$preview_db_schema"
+  if [ "$PREVIEW_TIER" = "preview" ]; then
+    printf 'PREVIEW_DB_SCHEMA=%s\n' "$preview_db_schema"
+    printf 'DB_SCHEMA=%s\n' "$preview_db_schema"
+    printf 'PGOPTIONS=-c search_path=%s,public\n' "$preview_db_schema"
+  fi
   printf 'PREVIEW_IMAGE_TAG=%s\n' "${PREVIEW_IMAGE_TAG:-$preview_slug}"
   printf 'SENTRY_RELEASE=%s\n' "${SENTRY_RELEASE:-$(git -C "$SOURCE_DIR" rev-parse --short HEAD 2>/dev/null || printf '%s' "$preview_slug")}"
   printf 'VITE_SENTRY_RELEASE=%s\n' "${VITE_SENTRY_RELEASE:-${SENTRY_RELEASE:-$(git -C "$SOURCE_DIR" rev-parse --short HEAD 2>/dev/null || printf '%s' "$preview_slug")}}"
@@ -144,7 +167,7 @@ rsync -az --delete \
   printf 'QBO_REDIRECT_URI=https://%s/api/integrations/qbo/callback\n' "$preview_host"
   printf 'QBO_SUCCESS_REDIRECT_URI=https://%s/?qbo=connected\n' "$preview_host"
   printf 'VITE_API_URL=https://%s\n' "$preview_host"
-  printf 'VITE_SENTRY_ENVIRONMENT=preview\n'
+  printf 'VITE_SENTRY_ENVIRONMENT=%s\n' "$PREVIEW_TIER"
 } >"$target_dir/.env"
 chmod 600 "$target_dir/.env"
 
@@ -184,7 +207,9 @@ if [ -n "$current_sha" ] && [ -f "$migrations_marker" ] && [ "$(cat "$migrations
   echo "Migrations already applied for $current_sha — skipping"
 else
   psql_env=(PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" ENV_FILE="$target_dir/.env")
-  env "${psql_env[@]}" "$target_dir/scripts/ensure-preview-schema.sh"
+  if [ "$PREVIEW_TIER" = "preview" ]; then
+    env "${psql_env[@]}" "$target_dir/scripts/ensure-preview-schema.sh"
+  fi
   env "${psql_env[@]}" MIGRATION_FILES="$(preview_migration_files)" "$target_dir/scripts/migrate-db.sh"
   env "${psql_env[@]}" "$target_dir/scripts/check-db-schema.sh"
   [ -n "$current_sha" ] && printf '%s' "$current_sha" >"$migrations_marker"

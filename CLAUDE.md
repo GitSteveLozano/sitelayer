@@ -151,6 +151,19 @@ paired with _why_ it exists (often a real footgun) and _how to apply_ it.
 docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
    are private only — never expose them publicly.
 
+4. **The persistent dev environment (`dev.sitelayer.sandolab.xyz`) is
+   driven by push to the `dev` branch via
+   `.github/workflows/deploy-dev.yml`.** _Why:_ PR previews share
+   `sitelayer_preview` and get an ephemeral schema, which is the wrong
+   shape for iterating on a migration (immutable in `main`) or running a
+   persistent demo/agent sandbox. The dev stack targets the dedicated
+   `sitelayer_dev` database against its `public` schema, with
+   `scripts/reset-dev-db.sh` as the "rebuild from scratch" lever. _How
+   to apply:_ work on `dev` for in-flight schema design; once a
+   migration file is right, open a PR against `main`. Don't promote
+   `dev → main` blindly — `dev` is a scratch lane, not a release
+   candidate. See [`docs/DEV_ENVIRONMENT.md`](./docs/DEV_ENVIRONMENT.md).
+
 ### Env management
 
 1. **The `APP_TIER` startup guard is load-bearing — never bypass it.**
@@ -340,6 +353,7 @@ and both have unit-test coverage (`apps/api/src/auth.test.ts`,
 | Managed Postgres trusted sources | Droplet `566798325` (`sitelayer`) and droplet `566806040` (`sitelayer-preview`)                                                                                                                                                                           |
 | Production deploy path           | GitHub Actions runs on the self-hosted `sitelayer-preview` runner, renders `ops/env/production.env.json` from the `production` environment, SSHs to `sitelayer@10.118.0.4`, deploys `/app/sitelayer` with Docker Compose, `.env` at `/app/sitelayer/.env` |
 | Preview deploy path              | `docker-compose.preview.yml` behind Traefik on `sitelayer-preview`; shared env at `/app/previews/.env.shared`; smoke stack at `main.preview.sitelayer.sandolab.xyz`                                                                                       |
+| Dev deploy path                  | Same droplet/Traefik as preview but `PREVIEW_TIER=dev`; shared env at `/app/previews/.env.dev.shared`; tracks `dev` branch via `.github/workflows/deploy-dev.yml`; URL `https://dev.sitelayer.sandolab.xyz`; backed by dedicated `sitelayer_dev` DB       |
 | Public edge                      | Containerized Caddy on ports 80/443; automatic Let's Encrypt TLS for `sitelayer.sandolab.xyz`; HTTP redirects to HTTPS                                                                                                                                    |
 | Backups                          | DO managed Postgres automatic backups exist; logical Postgres backup, Postgres off-host copy, blueprint-volume fallback copy, restore-drill, and timer-monitor timers are active                                                                          |
 | Object storage                   | DO Spaces bucket `sitelayer-blueprints-prod` in `tor1`, versioning enabled, scoped prod read/write key in GitHub production secrets and rendered to `/app/sitelayer/.env`                                                                                 |
