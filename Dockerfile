@@ -58,6 +58,8 @@ ENV NODE_ENV=production
 ENV APP_BUILD_SHA=$GIT_SHA
 ENV SENTRY_RELEASE=$GIT_SHA
 
+RUN apk add --no-cache poppler-utils
+
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/api/package.json /app/apps/api/package.json

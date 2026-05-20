@@ -5,6 +5,7 @@ import { Readable } from 'node:stream'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   assertKeyInCompany,
+  buildBlueprintPageStorageKey,
   buildBlueprintStorageKey,
   createBlueprintStorage,
   formatS3CopySource,
@@ -29,6 +30,15 @@ describe('blueprint storage', () => {
   it('builds company-scoped keys with sanitized filenames', () => {
     expect(buildBlueprintStorageKey('company-1', 'blueprint-1', '../bad plan.pdf')).toBe(
       'company-1/blueprint-1/bad-plan.pdf',
+    )
+  })
+
+  it('builds page raster keys under the owning blueprint prefix', () => {
+    expect(buildBlueprintPageStorageKey('company-1', 'blueprint-1', 2, '.PNG')).toBe(
+      'company-1/blueprint-1/pages/page-2.png',
+    )
+    expect(buildBlueprintPageStorageKey('company-1', 'blueprint-1', 0, '../webp')).toBe(
+      'company-1/blueprint-1/pages/page-1.webp',
     )
   })
 

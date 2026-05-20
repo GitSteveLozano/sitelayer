@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto'
 import type { Pool } from 'pg'
 import {
   assertKeyInCompany,
+  buildBlueprintPageStorageKey,
   buildBlueprintStorageKey,
   getBlueprintMimeType,
   StorageError,
   type BlueprintStorage,
 } from '../storage.js'
 import { isMultipartRequest, parseBlueprintMultipart, type BlueprintMultipartResult } from '../blueprint-upload.js'
+import type { PdfPageRasterizer } from '../blueprint-rasterize.js'
 import type { ActiveCompany } from '../auth-types.js'
 import { recordMutationLedger, recordMutationOutbox, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, parseExpectedVersion } from '../http-utils.js'
@@ -29,6 +31,8 @@ type BlueprintDocumentRow = {
   file_url: string
   created_at: string
 }
+
+const DEFAULT_MAX_RASTERIZE_PDF_BYTES = 25 * 1024 * 1024
 
 export type BlueprintRouteCtx = {
   pool: Pool
@@ -51,6 +55,7 @@ export type BlueprintRouteCtx = {
    * already applied.
    */
   sendFileRedirect: (location: string) => void
+  rasterizePdfPage?: PdfPageRasterizer | undefined
 }
 
 function sanitizeFileName(fileName: string): string {
@@ -82,16 +87,25 @@ function resolveBlueprintStoragePath(
   return assertBlueprintFilePath(companyId, cleanRequested)
 }
 
+function maxRasterizePdfBytes(): number {
+  const parsed = Number(process.env.MAX_BLUEPRINT_RASTERIZE_BYTES ?? DEFAULT_MAX_RASTERIZE_PDF_BYTES)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_RASTERIZE_PDF_BYTES
+}
+
+function decodeBlueprintFileBase64(contentsBase64: string): Buffer {
+  const source = contentsBase64.includes(',') ? (contentsBase64.split(',', 2)[1] ?? '') : contentsBase64
+  return Buffer.from(source, 'base64')
+}
+
 async function persistBlueprintFile(
   storage: BlueprintStorage,
   companyId: string,
   blueprintId: string,
   fileName: string,
-  contentsBase64: string,
+  contents: Buffer,
 ): Promise<string> {
   const key = buildBlueprintStorageKey(companyId, blueprintId, fileName)
-  const source = contentsBase64.includes(',') ? (contentsBase64.split(',', 2)[1] ?? '') : contentsBase64
-  await storage.put(key, Buffer.from(source, 'base64'), getBlueprintMimeType(fileName))
+  await storage.put(key, contents, getBlueprintMimeType(fileName))
   return key
 }
 
@@ -106,6 +120,49 @@ async function copyBlueprintFile(
   const destKey = buildBlueprintStorageKey(companyId, blueprintId, fileName)
   await storage.copy(sourceKey, destKey)
   return destKey
+}
+
+async function maybeRasterizeFirstPdfPage(
+  ctx: BlueprintRouteCtx,
+  blueprintId: string,
+  fileName: string,
+  documentStoragePath: string,
+  source: { pdfBytes?: Buffer | null; sourceBytes?: number | null } = {},
+): Promise<string | null> {
+  if (!ctx.rasterizePdfPage || !fileName.toLowerCase().endsWith('.pdf')) return null
+  const maxBytes = maxRasterizePdfBytes()
+  if (!source.pdfBytes && source.sourceBytes == null) return null
+  if (source.sourceBytes != null && source.sourceBytes > maxBytes) return null
+  if (source.pdfBytes && source.pdfBytes.length > maxBytes) return null
+  try {
+    const documentStorageKey = assertBlueprintFilePath(ctx.company.id, documentStoragePath)
+    const pdfBytes = source.pdfBytes ?? (await ctx.storage.get(documentStorageKey))
+    if (pdfBytes.length > maxBytes) return null
+    const rasterBytes = await ctx.rasterizePdfPage(pdfBytes, { pageNumber: 1 })
+    const rasterStoragePath = buildBlueprintPageStorageKey(ctx.company.id, blueprintId, 1, 'png')
+    await ctx.storage.put(rasterStoragePath, rasterBytes, 'image/png')
+    return rasterStoragePath
+  } catch (err) {
+    console.warn('[blueprints] first-page rasterization failed; keeping PDF fallback', {
+      blueprintId,
+      companyId: ctx.company.id,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    return null
+  }
+}
+
+async function cleanupGeneratedRaster(ctx: BlueprintRouteCtx, storagePath: string | null): Promise<void> {
+  if (!storagePath) return
+  try {
+    await ctx.storage.deleteObject(storagePath)
+  } catch (err) {
+    console.warn('[blueprints] failed to clean up generated page raster after transaction failure', {
+      companyId: ctx.company.id,
+      storagePath,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
 }
 
 async function listBlueprintDocuments(_pool: Pool, companyId: string, projectId: string) {
@@ -198,60 +255,77 @@ export async function handleBlueprintRoutes(
     )
     const version = Number(body.version ?? versionResult.rows[0]?.version ?? 1)
     const resolvedFileName = fileName || multipartResult?.fileName || 'blueprint.pdf'
+    const fileContents = fileContentsBase64 ? decodeBlueprintFileBase64(fileContentsBase64) : null
     let resolvedStoragePath = multipartResult
       ? multipartResult.storagePath
       : resolveBlueprintStoragePath(ctx.company.id, blueprintId, resolvedFileName, requestedStoragePath)
-    if (!multipartResult && fileContentsBase64) {
+    if (!multipartResult && fileContents) {
       resolvedStoragePath = await persistBlueprintFile(
         ctx.storage,
         ctx.company.id,
         blueprintId,
         resolvedFileName,
-        fileContentsBase64,
+        fileContents,
       )
     }
-    const blueprint = await withMutationTx(async (client) => {
-      const inserted = await client.query(
-        `
+    const firstPageStoragePath = await maybeRasterizeFirstPdfPage(
+      ctx,
+      blueprintId,
+      resolvedFileName,
+      resolvedStoragePath,
+      {
+        pdfBytes: fileContents,
+        sourceBytes: multipartResult?.bytes ?? fileContents?.length ?? null,
+      },
+    )
+    let blueprint: unknown
+    try {
+      blueprint = await withMutationTx(async (client) => {
+        const inserted = await client.query(
+          `
         insert into blueprint_documents (
           id, company_id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, replaces_blueprint_document_id
         )
         values ($1, $2, $3, $4, $5, coalesce($6, 'storage_path'), $7, $8, $9, $10, $11)
         returning id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, deleted_at, replaces_blueprint_document_id, concat('/api/blueprints/', id, '/file') as file_url, created_at
         `,
-        [
-          blueprintId,
-          ctx.company.id,
-          projectId,
-          resolvedFileName,
-          resolvedStoragePath,
-          body.preview_type ?? null,
-          body.calibration_length ?? null,
-          body.calibration_unit ?? null,
-          body.sheet_scale ?? null,
-          version,
-          body.replaces_blueprint_document_id ?? null,
-        ],
-      )
-      const row = inserted.rows[0]
-      await client.query(
-        `
+          [
+            blueprintId,
+            ctx.company.id,
+            projectId,
+            resolvedFileName,
+            resolvedStoragePath,
+            body.preview_type ?? null,
+            body.calibration_length ?? null,
+            body.calibration_unit ?? null,
+            body.sheet_scale ?? null,
+            version,
+            body.replaces_blueprint_document_id ?? null,
+          ],
+        )
+        const row = inserted.rows[0]
+        await client.query(
+          `
         insert into blueprint_pages (company_id, blueprint_document_id, page_number, storage_path)
         values ($1, $2, 1, $3)
         on conflict (blueprint_document_id, page_number) do nothing
         `,
-        [ctx.company.id, row.id, row.storage_path],
-      )
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'blueprint_document',
-        entityId: row.id,
-        action: 'create',
-        row,
-        syncPayload: { action: 'create', blueprint: row },
+          [ctx.company.id, row.id, firstPageStoragePath ?? row.storage_path],
+        )
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'blueprint_document',
+          entityId: row.id,
+          action: 'create',
+          row,
+          syncPayload: { action: 'create', blueprint: row },
+        })
+        return row
       })
-      return row
-    })
+    } catch (err) {
+      await cleanupGeneratedRaster(ctx, firstPageStoragePath)
+      throw err
+    }
     ctx.sendJson(201, blueprint)
     return true
   }
@@ -346,7 +420,7 @@ export async function handleBlueprintRoutes(
         ctx.company.id,
         blueprintId,
         String(updated.file_name ?? body.file_name ?? 'blueprint.pdf'),
-        fileContentsBase64,
+        decodeBlueprintFileBase64(fileContentsBase64),
       )
     }
     ctx.sendJson(200, updated)
@@ -395,6 +469,7 @@ export async function handleBlueprintRoutes(
     const copyMeasurements = body.copy_measurements !== false
     const fileName = String(body.file_name ?? multipartResult?.fileName ?? source.file_name ?? 'blueprint.pdf').trim()
     const fileContentsBase64 = String(body.file_contents_base64 ?? body.file_contents ?? '').trim()
+    const fileContents = fileContentsBase64 ? decodeBlueprintFileBase64(fileContentsBase64) : null
     const versionResult = await withCompanyClient(ctx.company.id, (c) =>
       c.query<{ version: number }>(
         'select coalesce(max(version), 0) + 1 as version from blueprint_documents where company_id = $1 and project_id = $2',
@@ -408,8 +483,8 @@ export async function handleBlueprintRoutes(
       : requestedStoragePath
         ? resolveBlueprintStoragePath(ctx.company.id, blueprintId, fileName, requestedStoragePath)
         : ''
-    if (!multipartResult && fileContentsBase64) {
-      storagePath = await persistBlueprintFile(ctx.storage, ctx.company.id, blueprintId, fileName, fileContentsBase64)
+    if (!multipartResult && fileContents) {
+      storagePath = await persistBlueprintFile(ctx.storage, ctx.company.id, blueprintId, fileName, fileContents)
     } else if (!multipartResult && source.storage_path) {
       try {
         storagePath = await copyBlueprintFile(ctx.storage, ctx.company.id, blueprintId, source.storage_path, fileName)
@@ -419,32 +494,45 @@ export async function handleBlueprintRoutes(
     } else if (!storagePath) {
       storagePath = getBlueprintFilePath(ctx.company.id, blueprintId, fileName)
     }
-    const newBlueprint = await withMutationTx(async (client) => {
-      const inserted = await client.query(
-        `
+    const rasterSource = {
+      pdfBytes: fileContents,
+      sourceBytes: multipartResult?.bytes ?? fileContents?.length ?? null,
+    }
+    const versionFirstPageStoragePath = await maybeRasterizeFirstPdfPage(
+      ctx,
+      blueprintId,
+      fileName,
+      storagePath,
+      rasterSource,
+    )
+    let newBlueprint: unknown
+    try {
+      newBlueprint = await withMutationTx(async (client) => {
+        const inserted = await client.query(
+          `
         insert into blueprint_documents (
           id, company_id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, replaces_blueprint_document_id
         )
         values ($1, $2, $3, $4, $5, coalesce($6, 'storage_path'), $7, $8, $9, $10, $11)
         returning id, project_id, file_name, storage_path, preview_type, calibration_length, calibration_unit, sheet_scale, version, deleted_at, replaces_blueprint_document_id, concat('/api/blueprints/', id, '/file') as file_url, created_at
         `,
-        [
-          blueprintId,
-          ctx.company.id,
-          source.project_id,
-          fileName,
-          storagePath,
-          body.preview_type ?? source.preview_type ?? null,
-          body.calibration_length ?? source.calibration_length ?? null,
-          body.calibration_unit ?? source.calibration_unit ?? null,
-          body.sheet_scale ?? source.sheet_scale ?? null,
-          version,
-          source.id,
-        ],
-      )
-      const row = inserted.rows[0]
-      const copiedPages = await client.query<{ source_page_id: string; new_page_id: string }>(
-        `
+          [
+            blueprintId,
+            ctx.company.id,
+            source.project_id,
+            fileName,
+            storagePath,
+            body.preview_type ?? source.preview_type ?? null,
+            body.calibration_length ?? source.calibration_length ?? null,
+            body.calibration_unit ?? source.calibration_unit ?? null,
+            body.sheet_scale ?? source.sheet_scale ?? null,
+            version,
+            source.id,
+          ],
+        )
+        const row = inserted.rows[0]
+        const copiedPages = await client.query<{ source_page_id: string; new_page_id: string }>(
+          `
         with source_pages as (
           select id, company_id, page_number, storage_path,
                  calibration_world_distance, calibration_world_unit,
@@ -459,7 +547,7 @@ export async function handleBlueprintRoutes(
             calibration_x1, calibration_y1, calibration_x2, calibration_y2
           )
           select
-            company_id, $3::uuid, page_number, coalesce(storage_path, $4),
+            company_id, $3::uuid, page_number, coalesce(case when page_number = 1 then $5::text end, storage_path, $4),
             calibration_world_distance, calibration_world_unit,
             calibration_x1, calibration_y1, calibration_x2, calibration_y2
           from source_pages
@@ -478,56 +566,56 @@ export async function handleBlueprintRoutes(
         from source_pages s
         join inserted_pages i on i.page_number = s.page_number
         `,
-        [ctx.company.id, source.id, row.id, row.storage_path],
-      )
-      if (copiedPages.rows.length === 0) {
-        await client.query(
-          `
+          [ctx.company.id, source.id, row.id, row.storage_path, versionFirstPageStoragePath],
+        )
+        if (copiedPages.rows.length === 0) {
+          await client.query(
+            `
           insert into blueprint_pages (company_id, blueprint_document_id, page_number, storage_path)
           values ($1, $2, 1, $3)
           on conflict (blueprint_document_id, page_number) do nothing
           `,
-          [ctx.company.id, row.id, row.storage_path],
-        )
-      }
-      if (copyMeasurements) {
-        const sourceMeasurements = await client.query(
-          `
+            [ctx.company.id, row.id, versionFirstPageStoragePath ?? row.storage_path],
+          )
+        }
+        if (copyMeasurements) {
+          const sourceMeasurements = await client.query(
+            `
           select project_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code
           from takeoff_measurements
           where company_id = $1 and blueprint_document_id = $2 and deleted_at is null
           order by created_at asc
           `,
-          [ctx.company.id, source.id],
-        )
-        // Batched copy: build parallel arrays for each column, then a
-        // single multi-row INSERT via unnest. Previously this was a
-        // for/await loop issuing one INSERT per row (N+1) — at N=1000
-        // measurements that's a 1000-round-trip per blueprint version.
-        if (sourceMeasurements.rows.length > 0) {
-          const projectIds: string[] = []
-          const serviceItemCodes: string[] = []
-          const quantities: string[] = []
-          const units: string[] = []
-          const notesArr: string[] = []
-          const geometries: string[] = []
-          const divisionCodes: Array<string | null> = []
-          const pageIds: Array<string | null> = []
-          const copiedPageBySourceId = new Map(copiedPages.rows.map((p) => [p.source_page_id, p.new_page_id]))
-          for (const measurement of sourceMeasurements.rows) {
-            projectIds.push(measurement.project_id)
-            serviceItemCodes.push(measurement.service_item_code)
-            quantities.push(String(measurement.quantity))
-            units.push(measurement.unit)
-            notesArr.push(
-              `${measurement.notes ?? ''}${measurement.notes ? ' · ' : ''}copied from blueprint v${source.version}`,
-            )
-            geometries.push(JSON.stringify(measurement.geometry ?? {}))
-            divisionCodes.push(measurement.division_code ?? null)
-            pageIds.push(measurement.page_id ? (copiedPageBySourceId.get(measurement.page_id) ?? null) : null)
-          }
-          await client.query(
-            `
+            [ctx.company.id, source.id],
+          )
+          // Batched copy: build parallel arrays for each column, then a
+          // single multi-row INSERT via unnest. Previously this was a
+          // for/await loop issuing one INSERT per row (N+1) — at N=1000
+          // measurements that's a 1000-round-trip per blueprint version.
+          if (sourceMeasurements.rows.length > 0) {
+            const projectIds: string[] = []
+            const serviceItemCodes: string[] = []
+            const quantities: string[] = []
+            const units: string[] = []
+            const notesArr: string[] = []
+            const geometries: string[] = []
+            const divisionCodes: Array<string | null> = []
+            const pageIds: Array<string | null> = []
+            const copiedPageBySourceId = new Map(copiedPages.rows.map((p) => [p.source_page_id, p.new_page_id]))
+            for (const measurement of sourceMeasurements.rows) {
+              projectIds.push(measurement.project_id)
+              serviceItemCodes.push(measurement.service_item_code)
+              quantities.push(String(measurement.quantity))
+              units.push(measurement.unit)
+              notesArr.push(
+                `${measurement.notes ?? ''}${measurement.notes ? ' · ' : ''}copied from blueprint v${source.version}`,
+              )
+              geometries.push(JSON.stringify(measurement.geometry ?? {}))
+              divisionCodes.push(measurement.division_code ?? null)
+              pageIds.push(measurement.page_id ? (copiedPageBySourceId.get(measurement.page_id) ?? null) : null)
+            }
+            await client.query(
+              `
             insert into takeoff_measurements (
               company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code
             )
@@ -548,31 +636,35 @@ export async function handleBlueprintRoutes(
               $7::text[], $8::text[], $9::text[], $10::text[]
             ) as t(project_id, service_item_code, quantity, unit, notes, geometry, division_code, page_id)
             `,
-            [
-              ctx.company.id,
-              row.id,
-              projectIds,
-              serviceItemCodes,
-              quantities,
-              units,
-              notesArr,
-              geometries,
-              divisionCodes,
-              pageIds,
-            ],
-          )
+              [
+                ctx.company.id,
+                row.id,
+                projectIds,
+                serviceItemCodes,
+                quantities,
+                units,
+                notesArr,
+                geometries,
+                divisionCodes,
+                pageIds,
+              ],
+            )
+          }
         }
-      }
-      await recordMutationLedger(client, {
-        companyId: ctx.company.id,
-        entityType: 'blueprint_document',
-        entityId: row.id,
-        action: 'version',
-        row,
-        syncPayload: { action: 'version', source_blueprint_id: source.id, blueprint: row },
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'blueprint_document',
+          entityId: row.id,
+          action: 'version',
+          row,
+          syncPayload: { action: 'version', source_blueprint_id: source.id, blueprint: row },
+        })
+        return row
       })
-      return row
-    })
+    } catch (err) {
+      await cleanupGeneratedRaster(ctx, versionFirstPageStoragePath)
+      throw err
+    }
     ctx.sendJson(201, newBlueprint)
     return true
   }
@@ -665,6 +757,30 @@ export async function handleBlueprintRoutes(
             'delete_blueprint_storage_object',
             { storage_path: row.storage_path },
             `blueprint_storage_delete:${blueprintId}`,
+            'server',
+            null,
+            client,
+          )
+        }
+        const pageStorage = await client.query<{ storage_path: string }>(
+          `
+          select distinct storage_path
+          from blueprint_pages
+          where company_id = $1
+            and blueprint_document_id = $2
+            and storage_path is not null
+            and storage_path <> $3
+          `,
+          [ctx.company.id, blueprintId, row.storage_path],
+        )
+        for (const page of pageStorage.rows) {
+          await recordMutationOutbox(
+            ctx.company.id,
+            'blueprint_page',
+            blueprintId,
+            'delete_blueprint_storage_object',
+            { storage_path: page.storage_path },
+            `blueprint_page_storage_delete:${blueprintId}:${page.storage_path}`,
             'server',
             null,
             client,

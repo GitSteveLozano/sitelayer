@@ -16,6 +16,16 @@ Do not use random web images or current commercial plan-set PDFs unless the
 license is explicit. For a customer-facing product, ambiguous fixture provenance
 creates unnecessary cleanup work later.
 
+## Current Underlay Path
+
+Sitelayer serves selected page assets through
+`GET /api/blueprint-pages/:id/file`. Image-backed pages render beneath the SVG
+takeoff canvas and the Three.js preview through authenticated object URLs. New
+PDF uploads also attempt a first-page server rasterization using `pdftoppm`;
+the generated PNG is stored at `blueprint_pages.storage_path`. If rasterization
+is unavailable or a PDF is malformed, the upload stays usable and the UI falls
+back to the explicit PDF-rasterization-needed state.
+
 ## Recommended Public Blueprint Sources
 
 ### 1. Library of Congress HABS/HAER/HALS

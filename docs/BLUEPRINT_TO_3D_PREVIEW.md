@@ -37,8 +37,10 @@ Properties:
   WebGL cost.
 - Loads selected image-backed blueprint pages through an authenticated blob
   fetch, then renders the source sheet as a muted underlay beneath the 3D scene.
-  PDF-backed pages explicitly report that rasterization is still needed before
-  they can be underlaid.
+- New PDF uploads rasterize page 1 server-side into
+  `blueprint_pages.storage_path` when `pdftoppm` is available, so the same
+  authenticated image-underlay path works for uploaded PDFs. If rasterization
+  fails, upload still succeeds and the page reports the PDF fallback state.
 - Shows polygons as flat floor/area highlights, lineal runs as vertical
   wall/trim panels, door/window counts as elevated opening markers oriented
   toward the nearest lineal run, and volume rows as dimension boxes.
@@ -113,9 +115,9 @@ captured before this could represent the real structure.
 
 ## Later Phases
 
-1. Rasterize PDF blueprint pages into image-backed `blueprint_pages.storage_path`
-   objects so uploaded PDFs can use the same underlay path as PNG/JPG/WebP
-   sheets.
+1. Expand PDF rasterization beyond the first page: detect page count, create one
+   `blueprint_pages` row per sheet, and rasterize selected pages on upload or
+   background backfill.
 2. Normalize `takeoff_drafts.takeoff_result_json.geometry` into the preview,
    especially RoomPlan walls and drone roof planes.
 3. Add a read-only derived endpoint if the web payload needs capture geometry

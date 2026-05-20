@@ -4,6 +4,7 @@ import type pino from 'pino'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleBlueprintRoutes, type BlueprintRouteCtx } from './blueprints.js'
 import type { BlueprintStorage } from '../storage.js'
+import type { PdfPageRasterizer } from '../blueprint-rasterize.js'
 
 // ---------------------------------------------------------------------------
 // blueprint_documents CRUD + version-copy. Multipart upload paths are
@@ -18,11 +19,13 @@ class FakeStorage implements BlueprintStorage {
   backend = 'local-fs' as const
   bucket: string | null = null
   files = new Map<string, Buffer>()
+  contentTypes = new Map<string, string | undefined>()
   copies: Array<{ from: string; to: string }> = []
   deletes: string[] = []
 
-  async put(key: string, contents: Buffer) {
+  async put(key: string, contents: Buffer, contentType?: string) {
     this.files.set(key, contents)
+    this.contentTypes.set(key, contentType)
   }
   async putStream() {
     /* not exercised */
@@ -290,6 +293,26 @@ class FakePool {
       return { rows: [{ ...row, file_url: `/api/blueprints/${row.id}/file` }], rowCount: 1 }
     }
 
+    if (/select distinct storage_path\s+from blueprint_pages/i.test(sql)) {
+      const [companyId, blueprintDocumentId, documentStoragePath] = params as [string, string, string]
+      const seen = new Set<string>()
+      const rows = this.pages
+        .filter(
+          (p) =>
+            p.company_id === companyId &&
+            p.blueprint_document_id === blueprintDocumentId &&
+            p.storage_path &&
+            p.storage_path !== documentStoragePath,
+        )
+        .flatMap((p) => {
+          const storagePath = p.storage_path!
+          if (seen.has(storagePath)) return []
+          seen.add(storagePath)
+          return [{ storage_path: storagePath }]
+        })
+      return { rows, rowCount: rows.length }
+    }
+
     // takeoff_measurements: source select for version copy
     if (/from takeoff_measurements/i.test(sql) && /select project_id, page_id, service_item_code/i.test(sql)) {
       const [companyId, sourceBlueprintId] = params as [string, string]
@@ -374,6 +397,7 @@ function makeCtx(
   body: Record<string, unknown> = {},
   role: 'admin' | 'foreman' | 'member' = 'admin',
   companyOverride?: { id: string; slug: string; name?: string },
+  rasterizePdfPage?: PdfPageRasterizer,
 ): { ctx: BlueprintRouteCtx; responses: Array<{ status: number; body: unknown }>; redirects: string[] } {
   pool.attach()
   const responses: Array<{ status: number; body: unknown }> = []
@@ -415,6 +439,7 @@ function makeCtx(
       sendFileRedirect: (location) => {
         redirects.push(location)
       },
+      rasterizePdfPage,
     },
   }
 }
@@ -486,6 +511,63 @@ describe('handleBlueprintRoutes — POST /api/projects/:id/blueprints', () => {
     // Storage actually received the file.
     const persisted = Array.from(storage.files.values())[0]
     expect(persisted?.toString()).toBe('hello')
+  })
+
+  it('rasterizes the first PDF page into blueprint_pages.storage_path when a rasterizer is available', async () => {
+    const pool = new FakePool()
+    const storage = new FakeStorage()
+    const rasterizeCalls: Buffer[] = []
+    const rasterizePdfPage: PdfPageRasterizer = async (pdfBytes) => {
+      rasterizeCalls.push(pdfBytes)
+      return Buffer.from('png-page-1')
+    }
+    const { ctx, responses } = makeCtx(
+      pool,
+      storage,
+      {
+        id: BLUEPRINT_ID,
+        file_name: 'plan.pdf',
+        file_contents_base64: Buffer.from('%PDF-1.7\nhello').toString('base64'),
+      },
+      'admin',
+      undefined,
+      rasterizePdfPage,
+    )
+
+    await handleBlueprintRoutes(mockReq('POST'), buildUrl(`/api/projects/${PROJECT_ID}/blueprints`), ctx)
+
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
+    expect(rasterizeCalls).toHaveLength(1)
+    expect(rasterizeCalls[0]?.subarray(0, 5).toString()).toBe('%PDF-')
+    expect(pool.pages[0]?.storage_path).toBe(`co-1/${BLUEPRINT_ID}/pages/page-1.png`)
+    expect(storage.files.get(`co-1/${BLUEPRINT_ID}/pages/page-1.png`)?.toString()).toBe('png-page-1')
+    expect(storage.contentTypes.get(`co-1/${BLUEPRINT_ID}/pages/page-1.png`)).toBe('image/png')
+  })
+
+  it('keeps the PDF upload usable when first-page rasterization fails', async () => {
+    const pool = new FakePool()
+    const storage = new FakeStorage()
+    const rasterizePdfPage: PdfPageRasterizer = async () => {
+      throw new Error('pdftoppm unavailable')
+    }
+    const { ctx, responses } = makeCtx(
+      pool,
+      storage,
+      {
+        id: BLUEPRINT_ID,
+        file_name: 'plan.pdf',
+        file_contents_base64: Buffer.from('%PDF-1.7\nhello').toString('base64'),
+      },
+      'admin',
+      undefined,
+      rasterizePdfPage,
+    )
+
+    await handleBlueprintRoutes(mockReq('POST'), buildUrl(`/api/projects/${PROJECT_ID}/blueprints`), ctx)
+
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
+    expect(pool.pages[0]?.storage_path).toBe(`co-1/${BLUEPRINT_ID}/plan.pdf`)
+    expect(storage.files.has(`co-1/${BLUEPRINT_ID}/pages/page-1.png`)).toBe(false)
   })
 })
 
@@ -731,5 +813,57 @@ describe('handleBlueprintRoutes — DELETE /api/blueprints/:id', () => {
     expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
     expect(pool.blueprints[0]?.deleted_at).not.toBeNull()
     expect(pool.blueprints[0]?.version).toBe(3)
+  })
+
+  it('enqueues GC for generated page raster objects on delete', async () => {
+    const pool = new FakePool()
+    pool.blueprints.push({
+      id: BLUEPRINT_ID,
+      company_id: 'co-1',
+      project_id: PROJECT_ID,
+      file_name: 'plan.pdf',
+      storage_path: `co-1/${BLUEPRINT_ID}/plan.pdf`,
+      preview_type: 'storage_path',
+      calibration_length: null,
+      calibration_unit: null,
+      sheet_scale: null,
+      version: 2,
+      deleted_at: null,
+      replaces_blueprint_document_id: null,
+      created_at: '',
+    })
+    pool.pages.push(
+      {
+        id: 'pg-1',
+        company_id: 'co-1',
+        blueprint_document_id: BLUEPRINT_ID,
+        page_number: 1,
+        storage_path: `co-1/${BLUEPRINT_ID}/pages/page-1.png`,
+      },
+      {
+        id: 'pg-2',
+        company_id: 'co-1',
+        blueprint_document_id: BLUEPRINT_ID,
+        page_number: 2,
+        storage_path: `co-1/${BLUEPRINT_ID}/plan.pdf`,
+      },
+    )
+    const { ctx, responses } = makeCtx(pool, new FakeStorage())
+
+    await handleBlueprintRoutes(mockReq('DELETE'), buildUrl(`/api/blueprints/${BLUEPRINT_ID}`), ctx)
+
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    expect(pool.outbox.filter((row) => row.mutation_type === 'delete_blueprint_storage_object')).toEqual([
+      {
+        entity_type: 'blueprint_document',
+        entity_id: BLUEPRINT_ID,
+        mutation_type: 'delete_blueprint_storage_object',
+      },
+      {
+        entity_type: 'blueprint_page',
+        entity_id: BLUEPRINT_ID,
+        mutation_type: 'delete_blueprint_storage_object',
+      },
+    ])
   })
 })
