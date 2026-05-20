@@ -36,9 +36,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useUser } from '@clerk/clerk-react'
 import { Sentry } from '@/instrument'
-import { ACTIVE_COMPANY_STORAGE_KEY, API_URL, getActiveCompanySlug, getBuildSha, request } from '@/lib/api/client'
+import { ACTIVE_COMPANY_STORAGE_KEY, getActiveCompanySlug, getBuildSha, request } from '@/lib/api/client'
 import { isClerkConfigured } from '@/lib/auth'
-import { useRole } from '@/lib/role'
 import type {
   Capture,
   CaptureActingAs,
@@ -101,6 +100,12 @@ interface FeaturesResponse {
   ribbon: unknown
 }
 
+interface SessionRoleResponse {
+  activeCompany?: {
+    role?: string | null
+  } | null
+}
+
 let featuresCache: CaptureFeatureFlags | null = null
 let featuresFetchInFlight: Promise<CaptureFeatureFlags | null> | null = null
 
@@ -124,16 +129,13 @@ export async function fetchFeatureFlags(signal?: AbortSignal): Promise<CaptureFe
   if (featuresFetchInFlight) return featuresFetchInFlight
   featuresFetchInFlight = (async () => {
     try {
-      // The /api/features endpoint requires the company slug header but
-      // not auth (server caches per-tier). We mirror the minimum the
-      // SPA already sends to keep CORS happy.
-      const init: RequestInit = {
-        headers: { 'x-sitelayer-company-slug': getActiveCompanySlug() },
+      // Use the normal API client so the request carries the same auth,
+      // company slug, trace headers, and x-sitelayer-build-sha latching
+      // behaviour as the rest of the SPA.
+      const body = await request<FeaturesResponse>('/api/features', {
+        method: 'GET',
         ...(signal ? { signal } : {}),
-      }
-      const res = await fetch(`${API_URL}/api/features`, init)
-      if (!res.ok) return null
-      const body = (await res.json()) as FeaturesResponse
+      })
       const setOfFlags = new Set(body.flags ?? [])
       const out: CaptureFeatureFlags = {}
       for (const name of RELEVANT_FLAGS_FOR_ESTIMATE_PUSH) {
@@ -148,6 +150,24 @@ export async function fetchFeatureFlags(signal?: AbortSignal): Promise<CaptureFe
     }
   })()
   return featuresFetchInFlight
+}
+
+export async function fetchActiveCompanyRole(signal?: AbortSignal): Promise<string | null> {
+  try {
+    const body = await request<SessionRoleResponse>('/api/session', {
+      method: 'GET',
+      ...(signal ? { signal } : {}),
+    })
+    const role = body.activeCompany?.role
+    return typeof role === 'string' && role.trim() ? role.trim() : null
+  } catch {
+    return null
+  }
+}
+
+export function __resetEstimatePushProbeCachesForTests(): void {
+  featuresCache = null
+  featuresFetchInFlight = null
 }
 
 /* -------------------------------------------------------------------------- */
@@ -348,7 +368,8 @@ export function captureEstimatePush(args: CaptureEstimatePushArgs): Capture {
  * conditionally invoking the hook.
  */
 export function useEstimatePushProbe(pushId: string, snapshot: EstimatePushSnapshot | null): () => Capture {
-  const principal = useCapturePrincipal()
+  const [activeCompanyRole, setActiveCompanyRole] = useState<string | null>(null)
+  const principal = useCapturePrincipal(activeCompanyRole)
   const [deploy, setDeploy] = useState<CaptureDeploy | null>(readDeployCache())
   const [features, setFeatures] = useState<CaptureFeatureFlags | null>(featuresCache)
   const [tail, setTail] = useState<{ rows: WorkflowEventLogRow[]; error: string | null }>({
@@ -361,11 +382,20 @@ export function useEstimatePushProbe(pushId: string, snapshot: EstimatePushSnaps
   useEffect(() => {
     const ac = new AbortController()
     let cancelled = false
+    const refreshDeploy = () => {
+      const current = readDeployCache()
+      if (!cancelled && current) setDeploy(current)
+    }
     void fetchDeployInfo(ac.signal).then((d) => {
       if (!cancelled && d) setDeploy(d)
     })
     void fetchFeatureFlags(ac.signal).then((f) => {
       if (!cancelled && f) setFeatures(f)
+      refreshDeploy()
+    })
+    void fetchActiveCompanyRole(ac.signal).then((role) => {
+      if (!cancelled) setActiveCompanyRole(role)
+      refreshDeploy()
     })
     return () => {
       cancelled = true
@@ -396,7 +426,7 @@ export function useEstimatePushProbe(pushId: string, snapshot: EstimatePushSnaps
       snapshot,
       principal,
       trace: readTraceCapture(),
-      deploy,
+      deploy: readDeployCache() ?? deploy,
       featureFlags: features,
       tail: tail.rows,
       tailError: tail.error,
@@ -406,18 +436,18 @@ export function useEstimatePushProbe(pushId: string, snapshot: EstimatePushSnaps
 }
 
 /**
- * Resolve the Capture principal from Clerk + lib/role + localStorage.
+ * Resolve the Capture principal from Clerk + the active company role returned
+ * by `/api/session`. This is intentionally the raw `company_memberships.role`
+ * value (admin / office / foreman / member), not the UI persona returned by
+ * `useRole()`.
  *
- * Branches around `useUser` the same way `useRole` does: Clerk is a
- * build-time constant, so `isClerkConfigured()` returning false means
- * the hook never tries to read from a missing provider.
+ * Branches around `useUser`: Clerk is a build-time constant, so
+ * `isClerkConfigured()` returning false means the hook never tries to read
+ * from a missing provider.
  */
-function useCapturePrincipal(): CapturePrincipal {
-  // We always call useRole to satisfy hook ordering — it internally
-  // branches on isClerkConfigured() too.
-  const role = useRole()
+function useCapturePrincipal(activeCompanyRole: string | null): CapturePrincipal {
   if (isClerkConfigured()) {
-    return useClerkPrincipal(role)
+    return useClerkPrincipal(activeCompanyRole)
   }
   return {
     source: 'dev-fallback',
@@ -425,11 +455,11 @@ function useCapturePrincipal(): CapturePrincipal {
     email: null,
     display_name: null,
     active_company_slug: getActiveCompanySlug(),
-    active_company_role: role,
+    active_company_role: activeCompanyRole,
   }
 }
 
-function useClerkPrincipal(role: string): CapturePrincipal {
+function useClerkPrincipal(activeCompanyRole: string | null): CapturePrincipal {
   const { user, isSignedIn } = useUser()
   if (!isSignedIn || !user) {
     return {
@@ -438,7 +468,7 @@ function useClerkPrincipal(role: string): CapturePrincipal {
       email: null,
       display_name: null,
       active_company_slug: getActiveCompanySlug(),
-      active_company_role: role,
+      active_company_role: activeCompanyRole,
     }
   }
   // Clerk's `primaryEmailAddress` is the canonical signed-in email.
@@ -450,7 +480,7 @@ function useClerkPrincipal(role: string): CapturePrincipal {
     email,
     display_name: displayName,
     active_company_slug: getActiveCompanySlug(),
-    active_company_role: role,
+    active_company_role: activeCompanyRole,
   }
 }
 
