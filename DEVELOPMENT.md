@@ -1,16 +1,24 @@
 # Development
 
-## Fastest UI Loop
+## First 30 Minutes
 
-Use fixtures when you only need to review frontend work:
+The collaborator default is the Docker-backed stack, not fixture mode. Create a
+minimal `.env` so the SPA renders the local RoleSwitcher instead of Clerk:
 
 ```bash
 npm install
-VITE_FIXTURES=1 npm run dev:web
+cat > .env <<'EOF'
+APP_TIER=local
+VITE_CLERK_PUBLISHABLE_KEY=
+CLERK_JWT_KEY=
+EOF
+docker compose up --build
 open http://localhost:3000
 ```
 
-If port `3000` is busy, Vite prints the next available URL.
+On first boot, use the RoleSwitcher in the bottom-right of the SPA and select
+one of the seeded `e2e-*` roles. Keep Clerk, QBO, Sentry, Spaces, and production
+credentials empty unless an operator explicitly asks you to test that path.
 
 ## Full Local Stack
 
@@ -30,6 +38,19 @@ The local database image matches production on Postgres 18. If you have an old l
 docker compose down -v
 docker compose up --build
 ```
+
+## Optional UI-Only Fixture Loop
+
+Fixture mode is useful for isolated frontend polish when you deliberately do not
+need auth, API routes, worker behavior, migrations, or seeded tenancy. It is not
+the new-collaborator default.
+
+```bash
+VITE_FIXTURES=1 npm run dev:web
+open http://localhost:3000
+```
+
+If port `3000` is busy, Vite prints the next available URL.
 
 ## App Routes
 
@@ -77,4 +98,4 @@ npm run e2e
 
 `npm run ci:quality` is the full local mirror of the Quality workflow: shell syntax, lint, format, typecheck, tests, build, web bundle budget, fixture build, and Playwright e2e.
 
-For architecture and deployment rules, use `CLAUDE.md`. For release gate details, use `docs/RELEASE_GATES.md`. For first-30-minutes setup, use this file.
+For release gate details, use `docs/RELEASE_GATES.md`. For first-30-minutes setup, use this file and `docs/ONBOARDING_DEVELOPER.md`. Operator-only architecture/deploy notes can wait until after the local stack is working.

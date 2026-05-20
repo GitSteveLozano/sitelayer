@@ -16,6 +16,12 @@ without storing broad request/response bodies.
    server-side context.
 4. The response returns a `support_id` that can be shared with support.
 
+For estimate-push debugging, the ADR-0019 Probe already assembles the client
+packet. Open `/financial/estimate-pushes/:id` in local/dev with Probe controls
+enabled, then use **Create Support Packet**. The packet stores the Capture under
+`support_packet.client` and the API adds the matching audit, queue, workflow,
+domain, request, and trace context.
+
 ## Agent Flow
 
 Give the agent a support ID, then fetch:
@@ -29,8 +35,8 @@ The response includes:
 - `support_packet.client`: browser timeline, request timeline, state snapshots,
   browser/build metadata, and offline queue summary.
 - `support_packet.server_context`: request IDs, trace IDs, queue depth, audit
-  events, mutation outbox rows, sync event rows, and a safe project-domain
-  snapshot when a project ID was visible.
+  events, workflow event rows, mutation outbox rows, sync event rows, entity
+  refs, and a safe project-domain snapshot when a project ID was visible.
 - `agent_prompt`: a compact investigation prompt that names the problem, route,
   build, actor, request IDs, and trace IDs.
 

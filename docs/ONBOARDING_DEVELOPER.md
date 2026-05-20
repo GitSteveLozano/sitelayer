@@ -1,6 +1,6 @@
 # Sitelayer Developer Onboarding (Mac)
 
-**Audience:** a new engineering collaborator getting Sitelayer running on a Mac and shipping a first PR. For onboarding a paying construction company through the product, see [`ONBOARDING_CONTRACTOR.md`](./ONBOARDING_CONTRACTOR.md). For architecture and operating rules, read [`CLAUDE.md`](../CLAUDE.md) once setup is done.
+**Audience:** a new engineering collaborator getting Sitelayer running on a Mac and shipping a first PR. For onboarding a paying construction company through the product, see [`ONBOARDING_CONTRACTOR.md`](./ONBOARDING_CONTRACTOR.md). Operator-only architecture and deployment notes can wait until after this local path works.
 
 This doc is intentionally narrow. It covers the path from a blank Mac to a green local stack to a PR; it does not introduce or require mesh-lite, telemetry ingress, HUD, DNS, Tailscale, browser-bridge, or any new auth/infra. Those are operator concerns, not collaborator prerequisites.
 
@@ -20,9 +20,42 @@ This doc is intentionally narrow. It covers the path from a blank Mac to a green
 
 You do **not** need: Postgres installed on the host (Docker provides it), AWS CLI, DigitalOcean access, Clerk dashboard access, or QBO credentials.
 
+### Optional: BYO AI subscriptions
+
+Use your own Claude, Codex, ChatGPT, Gemini, or other coding subscriptions from
+your own browser/CLI profile. Do not ask for Taylor's provider tokens and do not
+commit provider keys to this repo. The Sitelayer collaborator path only assumes
+that you can run the app, inspect failures, and open PRs; AI tooling is a local
+accelerator, not a repo dependency.
+
+Quick smoke checks, if you use the CLIs:
+
+```bash
+claude --version || true
+codex --version || true
+gemini --version || true
+```
+
 ---
 
 ## 2. Clone & install
+
+Taylor must grant repo access before this step. The repo remote is SSH by
+default, so verify GitHub access before spending time on Node or Docker:
+
+```bash
+# One-time Mac setup if SSH is not configured yet.
+ssh-keygen -t ed25519 -C "your-email@example.com"
+pbcopy < ~/.ssh/id_ed25519.pub
+# Add the copied key in GitHub → Settings → SSH and GPG keys.
+
+ssh -T git@github.com
+git ls-remote --heads git@github.com:GitSteveLozano/sitelayer.git main
+```
+
+If you prefer HTTPS, run `gh auth login`, choose GitHub.com, and clone with the
+HTTPS URL from GitHub instead. Use one path or the other; do not mix remotes on
+the first setup.
 
 ```bash
 # 1. Clone (replace with your fork if you're external).
@@ -117,7 +150,7 @@ need to see the app in Chrome.
 
 The repo ships a structurally-prod-safe dev auth bypass so you don't need Clerk creds to exercise RBAC paths.
 
-**Default (no Clerk creds):** Leave `VITE_CLERK_PUBLISHABLE_KEY` and `CLERK_JWT_KEY` empty. On boot, a `<RoleSwitcher />` panel renders bottom-right of the SPA. Tap a role — `e2e-admin`, `e2e-foreman`, `e2e-office`, `e2e-member`, or `e2e-bookkeeper` — and the SPA sends `x-sitelayer-act-as: e2e-<role>` on every API call. The API honors the header **only when `APP_TIER !== 'prod'`**. See `CLAUDE.md` → "Local/preview role testing" for the full mechanism.
+**Default (no Clerk creds):** Leave `VITE_CLERK_PUBLISHABLE_KEY` and `CLERK_JWT_KEY` empty. On boot, a `<RoleSwitcher />` panel renders bottom-right of the SPA. Tap a role — `e2e-admin`, `e2e-foreman`, `e2e-office`, `e2e-member`, or `e2e-bookkeeper` — and the SPA sends `x-sitelayer-act-as: e2e-<role>` on every API call. The API honors the header **only when `APP_TIER !== 'prod'`**.
 
 **With Clerk (preview-tier credentials, optional):** Set `VITE_CLERK_PUBLISHABLE_KEY=pk_test_…` (preview key is documented in `.env.example`) and the SPA mounts the real `/sign-in` and `/sign-up` Clerk components. If you need the API to resolve the real Clerk user id, set the matching `CLERK_JWT_KEY` too. If `CLERK_JWT_KEY` is left empty, the API cannot verify the Clerk bearer token and will use the local header/default fallback path instead; that is fine for UI sign-in smoke tests, but it is not a real Clerk-authenticated API session.
 
@@ -269,7 +302,7 @@ gh pr create --base main
 
 ## 9. Coordination: takeoff edits are last-write-wins
 
-Sitelayer's offline-first design resolves replay conflicts on `takeoff_measurements` via **last-write-wins (LWW)** plus a diagnostic toast. Mechanics live in [`CLAUDE.md`](../CLAUDE.md) → Decision #4. Other entities, including estimate-line flows, may rely on optimistic version checks instead. None of this is a collaborative merge UI. Procedural rule for collaborators:
+Sitelayer's offline-first design resolves replay conflicts on `takeoff_measurements` via **last-write-wins (LWW)** plus a diagnostic toast. Other entities, including estimate-line flows, may rely on optimistic version checks instead. None of this is a collaborative merge UI. Procedural rule for collaborators:
 
 - **Do not edit takeoff drafts, blueprint measurements, or estimate lines on a shared dev/preview tenant unless explicitly assigned.** Two people editing the same draft can cause the older write to be silently discarded; the diagnostic toast only fires on the offline replay path.
 - **For PR work that touches the takeoff/measurement code path,** use your own seeded company (Section 6b) instead of the shared `la-operations` template. That way an integration test or manual click-through cannot stomp on someone else's in-flight measurement.
@@ -293,7 +326,7 @@ docker compose down -v
 docker compose logs -f api
 docker compose logs -f worker
 
-# Reset host-only host-process loop (Section 4c) — Ctrl-C the `npm run dev`,
+# Reset host-only host-process loop (Section 4b) — Ctrl-C the `npm run dev`,
 # then docker compose stop db minio if you want the DB down too.
 ```
 
@@ -308,7 +341,6 @@ Common gotchas:
 
 ## Where to go next
 
-- [`CLAUDE.md`](../CLAUDE.md) — operating rules, deploy procedure, env management, QBO conventions.
 - [`AGENTS.md`](../AGENTS.md) — short guide for agent-authored changes.
 - [`CONTRIBUTING.md`](../CONTRIBUTING.md) — PR checklist, test conventions, where new code goes.
 - [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) and [`docs/adr/`](./adr/) — durable design.
