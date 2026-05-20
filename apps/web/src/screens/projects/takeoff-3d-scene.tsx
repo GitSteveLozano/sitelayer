@@ -23,6 +23,7 @@ export function TakeoffThreeScene({ scene, selectedId, onSelect }: TakeoffThreeS
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2))
     renderer.setClearColor(0x0d1117, 1)
+    renderer.domElement.dataset.testid = 'takeoff-preview-canvas'
     mount.appendChild(renderer.domElement)
 
     const threeScene = new THREE.Scene()
@@ -144,7 +145,14 @@ export function TakeoffThreeScene({ scene, selectedId, onSelect }: TakeoffThreeS
     }
   }, [scene, selectedId])
 
-  return <div ref={mountRef} className="absolute inset-0" aria-label="3D takeoff preview viewport" />
+  return (
+    <div
+      ref={mountRef}
+      data-testid="takeoff-preview-viewport"
+      className="absolute inset-0"
+      aria-label="3D takeoff preview viewport"
+    />
+  )
 }
 
 function buildItemObjects(item: TakeoffPreviewItem, selected: boolean): THREE.Object3D[] {
