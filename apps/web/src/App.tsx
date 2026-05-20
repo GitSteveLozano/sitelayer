@@ -58,6 +58,9 @@ const TakeoffCanvasScreen = lazy(() =>
 const TakeoffSummaryScreen = lazy(() =>
   import('@/screens/projects/takeoff-summary').then((m) => ({ default: m.TakeoffSummaryScreen })),
 )
+const TakeoffPreviewScreen = lazy(() =>
+  import('@/screens/projects/takeoff-preview').then((m) => ({ default: m.TakeoffPreviewScreen })),
+)
 const TakeoffDetailScreen = lazy(() =>
   import('@/screens/projects/takeoff-detail').then((m) => ({ default: m.TakeoffDetailScreen })),
 )
@@ -203,6 +206,7 @@ function AppShellRoutes() {
       <Route path="/projects/:id/setup" element={<ProjectSetupScreen />} />
       <Route path="/projects/:id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />
       <Route path="/projects/:id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
+      <Route path="/projects/:id/takeoff-preview" element={<TakeoffPreviewScreen />} />
       <Route path="/projects/:id/takeoff-summary" element={<TakeoffSummaryScreen />} />
       <Route path="/projects/:id/photo-measure" element={<PhotoMeasureScreen />} />
       <Route path="/projects/:id/rental-contract" element={<ProjectRentalContractScreen />} />
