@@ -162,6 +162,20 @@ if [ "$PREVIEW_ENABLE_WORKER" = "1" ]; then
   services=(api web worker)
 fi
 
+preview_migration_files() {
+  local skip_role_migration="${PREVIEW_SKIP_CONSTRAINED_ROLE_MIGRATION:-1}"
+  local find_args=(-maxdepth 1 -type f -name '*.sql')
+
+  # The constrained-role migration is local/CI-only in practice. Preview
+  # deploys run as the managed-DB app role, which cannot CREATE ROLE, and
+  # the preview app does not need the RLS runtime probe login role.
+  if [ "$skip_role_migration" = "1" ]; then
+    find_args+=(! -name '087_constrained_role_for_rls_probe.sql')
+  fi
+
+  find docker/postgres/init "${find_args[@]}" | sort | tr '\n' ' '
+}
+
 # Apply migrations on a fresh schema. If the SHA hasn't moved since last deploy,
 # skip — the schema is already current.
 current_sha="$(git -C "$SOURCE_DIR" rev-parse HEAD 2>/dev/null || printf '')"
@@ -169,9 +183,10 @@ migrations_marker="$target_dir/.migrations-applied-sha"
 if [ -n "$current_sha" ] && [ -f "$migrations_marker" ] && [ "$(cat "$migrations_marker")" = "$current_sha" ]; then
   echo "Migrations already applied for $current_sha — skipping"
 else
-  PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" ENV_FILE="$target_dir/.env" "$target_dir/scripts/ensure-preview-schema.sh"
-  PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" ENV_FILE="$target_dir/.env" "$target_dir/scripts/migrate-db.sh"
-  PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" ENV_FILE="$target_dir/.env" "$target_dir/scripts/check-db-schema.sh"
+  psql_env=(PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" ENV_FILE="$target_dir/.env")
+  env "${psql_env[@]}" "$target_dir/scripts/ensure-preview-schema.sh"
+  env "${psql_env[@]}" MIGRATION_FILES="$(preview_migration_files)" "$target_dir/scripts/migrate-db.sh"
+  env "${psql_env[@]}" "$target_dir/scripts/check-db-schema.sh"
   [ -n "$current_sha" ] && printf '%s' "$current_sha" >"$migrations_marker"
 fi
 
