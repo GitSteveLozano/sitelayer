@@ -1,0 +1,255 @@
+import { expect, test, type Page, type Route } from '@playwright/test'
+import { PNG } from 'pngjs'
+
+const PROJECT_ID = '00000000-0000-4000-8000-000000000301'
+const BLUEPRINT_ID = '00000000-0000-4000-8000-000000000302'
+const PAGE_ID = '00000000-0000-4000-8000-000000000303'
+const DRAFT_ID = '00000000-0000-4000-8000-000000000304'
+
+test('renders a nonblank WebGL 3D takeoff preview from mocked measurements', async ({ page }) => {
+  const mockState = { sawDraftScopedMeasurements: false }
+  await installApiMocks(page, mockState)
+  await page.addInitScript(() => {
+    window.localStorage.setItem('sitelayer.act-as', 'e2e-admin')
+    window.localStorage.setItem('sitelayer.active-company-slug', 'e2e-fixtures')
+  })
+
+  await page.goto(`/projects/${PROJECT_ID}/takeoff-preview?blueprint=${BLUEPRINT_ID}&draft=${DRAFT_ID}`)
+
+  await expect(page.getByRole('heading', { name: '3D takeoff view' })).toBeVisible()
+  await expect(page.getByText('4', { exact: true })).toBeVisible()
+  await expect(page.getByText('drawable measurements')).toBeVisible()
+  await expect(page.getByText(/Scale:\s+0\.500 ft \/ board unit/)).toBeVisible()
+  await expect.poll(() => mockState.sawDraftScopedMeasurements).toBe(true)
+
+  const canvas = page.getByTestId('takeoff-preview-canvas')
+  await expect(canvas).toBeVisible()
+  await expect
+    .poll(() => canvas.evaluate((node) => (node as HTMLCanvasElement).width * (node as HTMLCanvasElement).height))
+    .toBeGreaterThan(0)
+
+  await page.getByRole('button', { name: /09 29 00/ }).click()
+  await expect(page.getByText('Selected', { exact: true })).toBeVisible()
+  await expect(page.getByText('240.00 sqft')).toBeVisible()
+  await expect(page.getByRole('link', { name: 'Open measurement' })).toHaveAttribute(
+    'href',
+    `/projects/${PROJECT_ID}/takeoff/measure-1`,
+  )
+
+  const png = PNG.sync.read(await canvas.screenshot())
+  expectImageHasSignal(png)
+})
+
+async function installApiMocks(page: Page, state: { sawDraftScopedMeasurements: boolean }): Promise<void> {
+  await page.route('http://localhost:3001/api/**', async (route) => {
+    const url = new URL(route.request().url())
+    const path = url.pathname
+
+    if (path === '/api/features') {
+      await fulfillJson(route, { tier: 'local', flags: ['read-prod-ro'], ribbon: null })
+      return
+    }
+
+    if (path === '/api/session') {
+      await fulfillJson(route, { activeCompany: { role: 'admin' } })
+      return
+    }
+
+    if (path === `/api/projects/${PROJECT_ID}/blueprints`) {
+      await fulfillJson(route, {
+        blueprints: [
+          {
+            id: BLUEPRINT_ID,
+            project_id: PROJECT_ID,
+            file_name: 'Public-domain house plan fixture.pdf',
+            storage_path: 'fixtures/public-domain-house-plan.pdf',
+            preview_type: 'pdf',
+            calibration_length: null,
+            calibration_unit: null,
+            sheet_scale: null,
+            version: 1,
+            deleted_at: null,
+            replaces_blueprint_document_id: null,
+            created_at: '2026-05-20T00:00:00.000Z',
+          },
+        ],
+      })
+      return
+    }
+
+    if (path === `/api/blueprints/${BLUEPRINT_ID}/pages`) {
+      await fulfillJson(route, {
+        pages: [
+          {
+            id: PAGE_ID,
+            blueprint_document_id: BLUEPRINT_ID,
+            page_number: 1,
+            storage_path: null,
+            calibration_world_distance: '20',
+            calibration_world_unit: 'ft',
+            calibration_x1: '10',
+            calibration_y1: '10',
+            calibration_x2: '50',
+            calibration_y2: '10',
+            calibration_set_at: '2026-05-20T00:00:00.000Z',
+            measurement_count: 4,
+          },
+        ],
+      })
+      return
+    }
+
+    if (path === `/api/projects/${PROJECT_ID}/takeoff-drafts`) {
+      await fulfillJson(route, {
+        drafts: [
+          {
+            id: DRAFT_ID,
+            company_id: 'company-e2e',
+            project_id: PROJECT_ID,
+            name: '3D smoke draft',
+            type: 'measurement',
+            status: 'active',
+            version: 1,
+            source: 'manual',
+            review_required: false,
+            pipeline_version: null,
+            deleted_at: null,
+            created_at: '2026-05-20T00:00:00.000Z',
+            updated_at: '2026-05-20T00:00:00.000Z',
+          },
+        ],
+      })
+      return
+    }
+
+    if (path === `/api/projects/${PROJECT_ID}/takeoff/measurements`) {
+      const draftId = url.searchParams.get('draft_id')
+      if (draftId !== null) expect(draftId).toBe(DRAFT_ID)
+      if (draftId === DRAFT_ID) state.sawDraftScopedMeasurements = true
+      await fulfillJson(route, { measurements: measurementsFixture })
+      return
+    }
+
+    await route.fulfill({
+      status: 404,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: `unmocked takeoff preview smoke API path: ${path}` }),
+    })
+  })
+}
+
+const measurementsFixture = [
+  {
+    id: 'measure-1',
+    project_id: PROJECT_ID,
+    blueprint_document_id: BLUEPRINT_ID,
+    service_item_code: '09 29 00',
+    quantity: '240.00',
+    unit: 'sqft',
+    notes: 'south wall area',
+    elevation: 'south',
+    image_thumbnail: null,
+    geometry: {
+      kind: 'polygon',
+      points: [
+        { x: 22, y: 22 },
+        { x: 70, y: 22 },
+        { x: 70, y: 38 },
+        { x: 22, y: 38 },
+      ],
+    },
+    version: 1,
+    created_at: '2026-05-20T00:00:00.000Z',
+  },
+  {
+    id: 'measure-2',
+    project_id: PROJECT_ID,
+    blueprint_document_id: BLUEPRINT_ID,
+    service_item_code: '07 21 00',
+    quantity: '52.00',
+    unit: 'lf',
+    notes: null,
+    elevation: 'east',
+    image_thumbnail: null,
+    geometry: {
+      kind: 'lineal',
+      points: [
+        { x: 18, y: 70 },
+        { x: 42, y: 76 },
+        { x: 66, y: 72 },
+      ],
+    },
+    version: 1,
+    created_at: '2026-05-20T00:01:00.000Z',
+  },
+  {
+    id: 'measure-3',
+    project_id: PROJECT_ID,
+    blueprint_document_id: BLUEPRINT_ID,
+    service_item_code: '08 50 00',
+    quantity: '3.00',
+    unit: 'ea',
+    notes: null,
+    elevation: 'north',
+    image_thumbnail: null,
+    geometry: {
+      kind: 'count',
+      points: [
+        { x: 30, y: 48 },
+        { x: 52, y: 48 },
+        { x: 74, y: 48 },
+      ],
+    },
+    version: 1,
+    created_at: '2026-05-20T00:02:00.000Z',
+  },
+  {
+    id: 'measure-4',
+    project_id: PROJECT_ID,
+    blueprint_document_id: BLUEPRINT_ID,
+    service_item_code: '03 30 00',
+    quantity: '18.00',
+    unit: 'cy',
+    notes: null,
+    elevation: null,
+    image_thumbnail: null,
+    geometry: { kind: 'volume', length: 8, width: 6, height: 4 },
+    version: 1,
+    created_at: '2026-05-20T00:03:00.000Z',
+  },
+] as const
+
+async function fulfillJson(route: Route, body: unknown): Promise<void> {
+  await route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    headers: {
+      'access-control-allow-origin': 'http://localhost:3100',
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+function expectImageHasSignal(png: PNG): void {
+  let nonBackground = 0
+  const unique = new Set<string>()
+  let minLuma = 255
+  let maxLuma = 0
+
+  for (let index = 0; index < png.data.length; index += 4 * 17) {
+    const r = png.data[index] ?? 0
+    const g = png.data[index + 1] ?? 0
+    const b = png.data[index + 2] ?? 0
+    const a = png.data[index + 3] ?? 0
+    const backgroundDistance = Math.abs(r - 13) + Math.abs(g - 17) + Math.abs(b - 23)
+    if (a > 0 && backgroundDistance > 18) nonBackground += 1
+    const luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
+    minLuma = Math.min(minLuma, luma)
+    maxLuma = Math.max(maxLuma, luma)
+    unique.add(`${r},${g},${b},${a}`)
+  }
+
+  expect(nonBackground).toBeGreaterThan(100)
+  expect(unique.size).toBeGreaterThan(8)
+  expect(maxLuma - minLuma).toBeGreaterThan(12)
+}

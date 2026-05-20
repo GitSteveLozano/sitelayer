@@ -203,9 +203,11 @@ as a non-`BYPASSRLS` role to prove RLS policies actually scope rows; it
 skips cleanly when `CONSTRAINED_DB_URL` is unset.
 
 The `sitelayer_constrained` role is provisioned automatically by
-migration `087_constrained_role_for_rls_probe.sql` in every non-prod
-database (local docker, `sitelayer_dev`, `sitelayer_preview`). Once your
-local stack is up, the runtime probe can be exercised with:
+migration `087_constrained_role_for_rls_probe.sql` in local Docker and CI.
+Preview deployments skip that migration because the managed preview database
+app role cannot create roles, and the preview app does not need the runtime
+probe login role. Once your local stack is up, the runtime probe can be
+exercised with:
 
 ```bash
 CONSTRAINED_DB_URL=postgres://sitelayer_constrained:sitelayer_constrained@localhost:5432/sitelayer \
