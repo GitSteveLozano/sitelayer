@@ -34,8 +34,9 @@ Properties:
 - Uses the selected page calibration when available.
 - Uses Three.js in a lazy project route so the main app shell does not pay the
   WebGL cost.
-- Shows polygons as low extrusions, lineal runs as tubes, count points as posts,
-  and volume rows as dimension boxes.
+- Shows polygons as flat floor/area highlights, lineal runs as vertical
+  wall/trim panels, door/window counts as elevated opening markers oriented
+  toward the nearest lineal run, and volume rows as dimension boxes.
 - Emits explicit warnings when scale/page ownership is ambiguous.
 
 No new write path, no new backend API, no physics library, and no new model
@@ -62,6 +63,47 @@ Example:
 ```bash
 gemini --approval-mode plan -m gemini-3-flash-preview --output-format json \
   -p '@input/blueprint.png Extract rooms, walls, openings, dimensions, scale clues, confidence, and uncertainty notes as strict JSON for a review-gated 3D takeoff preview. Do not edit files.'
+```
+
+## Public Demo Harness
+
+Route: `/demo/takeoff-preview-3d`
+
+This route is intentionally outside the authenticated Sitelayer project flow. It
+uses synthetic fixture data only, so it is safe to send to a collaborator or run
+through model critique without exposing customer data or requiring a Clerk
+session.
+
+The public demo has three fixture modes:
+
+- **House plan**: baseline mixed takeoff rows for walls, lineal runs, count
+  markers, and volume boxes.
+- **Floor plan**: room-shaped polygons plus doors/windows/partitions. Use this
+  for blueprint-extraction critique.
+- **Exterior**: simple massing, roof, facade, porch, and opening cues. Use this
+  for photo-reference critique.
+
+The route exposes a deterministic scene payload through **Copy JSON** and
+**Download** controls. That payload contains the selected fixture, calibration
+page, source measurements, and derived scene items. The intended loop is:
+
+1. Open the public demo and select a fixture.
+2. Capture a screenshot of the rendered scene.
+3. Copy or download the JSON payload.
+4. Give the screenshot plus JSON to Gemini/Claude/Codex and ask what the scene
+   fails to preserve from the intended blueprint/photo interpretation.
+5. Convert only reviewable, deterministic improvements into fixture rows or
+   mapper changes.
+
+Suggested prompt:
+
+```text
+You are reviewing a Sitelayer 3D takeoff preview. Inputs: a screenshot of the
+rendered scene and the JSON scene payload. Identify concrete mismatches between
+the intended fixture and the rendered 2.5D takeoff visualization. Do not propose
+new auth, backend storage, BIM, or physics work. Focus on measurement geometry,
+calibration, selection affordances, labels, and what data would need to be
+captured before this could represent the real structure.
 ```
 
 ## Later Phases

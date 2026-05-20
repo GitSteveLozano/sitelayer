@@ -142,7 +142,11 @@ reviews it, and the deterministic preview extrudes that reviewed geometry into a
 ## Current In-Repo Coverage
 
 - `apps/web/src/lib/takeoff/geometry-3d.test.ts`: pure mapper coverage.
-- `e2e/tests/takeoff-preview.smoke.spec.ts`: mocked API + WebGL canvas smoke.
+- `e2e/tests/takeoff-preview.smoke.spec.ts`: mocked API + WebGL canvas smoke,
+  plus public demo fixture switching and debug-payload coverage.
+- `apps/web/src/screens/projects/takeoff-preview-demo-fixtures.ts`: synthetic
+  public demo fixtures for house-plan, floor-plan, and exterior-reference
+  critique loops.
 
 Command:
 
@@ -153,3 +157,8 @@ npm run takeoff-preview:smoke
 The smoke fixture intentionally does not download public blueprints. It proves
 that Sitelayer can render a deterministic project/draft/blueprint scene. Public
 blueprints should be used in a separate manual/model-evaluation workflow.
+
+The public route at `/demo/takeoff-preview-3d` is the current manual bridge for
+that workflow. It does not embed third-party images yet; instead it provides
+fixture switching plus exportable JSON so model critiques can be run before we
+commit to asset provenance, storage, or customer-data handling.
