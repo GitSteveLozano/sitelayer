@@ -49,7 +49,7 @@ export function TakeoffThreeScene({ scene, selectedId, onSelect }: TakeoffThreeS
 
     const clickable: THREE.Object3D[] = []
     for (const item of scene.items) {
-      const objects = buildItemObjects(item, item.id === selectedId)
+      const objects = buildItemObjects(item, item.id === selectedId, scene)
       for (const object of objects) {
         object.userData.measurementId = item.id
         root.add(object)
@@ -155,10 +155,10 @@ export function TakeoffThreeScene({ scene, selectedId, onSelect }: TakeoffThreeS
   )
 }
 
-function buildItemObjects(item: TakeoffPreviewItem, selected: boolean): THREE.Object3D[] {
+function buildItemObjects(item: TakeoffPreviewItem, selected: boolean, scene: TakeoffPreviewScene): THREE.Object3D[] {
   if (item.kind === 'polygon') return buildPolygonObjects(item, selected)
   if (item.kind === 'lineal') return buildLinealObjects(item, selected)
-  if (item.kind === 'count') return buildCountObjects(item, selected)
+  if (item.kind === 'count') return buildCountObjects(item, selected, scene)
   if (item.kind === 'volume') return buildVolumeObjects(item, selected)
   return []
 }
@@ -201,19 +201,38 @@ function buildLinealObjects(item: TakeoffPreviewItem, selected: boolean): THREE.
     const start = item.points[index - 1]
     const end = item.points[index]
     if (!start || !end) continue
-    objects.push(cylinderBetween(start, end, selected ? 0.28 : 0.2, item.color, selected))
+    objects.push(...wallBetween(start, end, selected ? 0.42 : 0.3, item.heightFt, item.color, selected))
   }
   return objects
 }
 
-function buildCountObjects(item: TakeoffPreviewItem, selected: boolean): THREE.Object3D[] {
-  return item.points.map((point) => {
-    const geometry = new THREE.CylinderGeometry(selected ? 0.75 : 0.55, selected ? 0.75 : 0.55, item.heightFt, 20)
-    const material = new THREE.MeshStandardMaterial({ color: item.color, roughness: 0.55 })
+function buildCountObjects(item: TakeoffPreviewItem, selected: boolean, scene: TakeoffPreviewScene): THREE.Object3D[] {
+  const objects: THREE.Object3D[] = []
+  for (const point of item.points) {
+    const marker = countMarkerDimensions(item, selected)
+    const geometry = new THREE.BoxGeometry(marker.width, marker.height, marker.depth)
+    const isOpening = isOpeningCount(item)
+    const material = new THREE.MeshStandardMaterial({
+      color: item.color,
+      roughness: 0.48,
+      transparent: true,
+      opacity: selected ? 0.86 : isOpening ? 0.48 : 0.82,
+      wireframe: isOpening,
+      emissive: selected ? new THREE.Color(0x101826) : new THREE.Color(0x000000),
+    })
     const mesh = new THREE.Mesh(geometry, material)
-    mesh.position.set(point.x, item.heightFt / 2, point.z)
-    return mesh
-  })
+    mesh.position.set(point.x, marker.baseY + marker.height / 2, point.z)
+    mesh.rotation.y = nearestLinealRotation(point, scene)
+
+    const edges = new THREE.LineSegments(
+      new THREE.EdgesGeometry(geometry),
+      new THREE.LineBasicMaterial({ color: selected ? 0xffffff : 0xd7e8ff }),
+    )
+    edges.position.copy(mesh.position)
+    edges.rotation.copy(mesh.rotation)
+    objects.push(mesh, edges)
+  }
+  return objects
 }
 
 function buildVolumeObjects(item: TakeoffPreviewItem, selected: boolean): THREE.Object3D[] {
@@ -239,23 +258,106 @@ function buildVolumeObjects(item: TakeoffPreviewItem, selected: boolean): THREE.
   return [mesh, edges]
 }
 
-function cylinderBetween(
+function wallBetween(
   start: TakeoffPreviewPoint,
   end: TakeoffPreviewPoint,
-  radius: number,
+  thickness: number,
+  height: number,
   color: string,
   selected: boolean,
-): THREE.Mesh {
-  const a = new THREE.Vector3(start.x, Math.max(0.2, radius), start.z)
-  const b = new THREE.Vector3(end.x, Math.max(0.2, radius), end.z)
-  const direction = b.clone().sub(a)
-  const length = direction.length()
-  const geometry = new THREE.CylinderGeometry(radius, radius, Math.max(0.01, length), selected ? 18 : 12)
-  const material = new THREE.MeshStandardMaterial({ color, roughness: 0.5 })
+): THREE.Object3D[] {
+  const dx = end.x - start.x
+  const dz = end.z - start.z
+  const length = Math.hypot(dx, dz)
+  if (!Number.isFinite(length) || length <= 0) return []
+
+  const geometry = new THREE.BoxGeometry(length, Math.max(0.5, height), thickness)
+  const material = new THREE.MeshStandardMaterial({
+    color,
+    roughness: 0.58,
+    transparent: true,
+    opacity: selected ? 0.88 : 0.64,
+    emissive: selected ? new THREE.Color(0x24170a) : new THREE.Color(0x000000),
+  })
   const mesh = new THREE.Mesh(geometry, material)
-  mesh.position.copy(a.clone().add(b).multiplyScalar(0.5))
-  mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), direction.normalize())
-  return mesh
+  mesh.position.set((start.x + end.x) / 2, Math.max(0.5, height) / 2, (start.z + end.z) / 2)
+  mesh.rotation.y = -Math.atan2(dz, dx)
+
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(geometry),
+    new THREE.LineBasicMaterial({ color: selected ? 0xffffff : 0x1f2933 }),
+  )
+  edges.position.copy(mesh.position)
+  edges.rotation.copy(mesh.rotation)
+  return [mesh, edges]
+}
+
+function countMarkerDimensions(
+  item: TakeoffPreviewItem,
+  selected: boolean,
+): { width: number; height: number; depth: number; baseY: number } {
+  if (item.serviceItemCode.startsWith('08 14')) {
+    return {
+      width: selected ? 1.35 : 1.05,
+      height: Math.max(6.5, item.heightFt),
+      depth: selected ? 0.34 : 0.24,
+      baseY: 0.05,
+    }
+  }
+  if (item.serviceItemCode.startsWith('08 50')) {
+    return {
+      width: selected ? 1.45 : 1.15,
+      height: Math.max(3, item.heightFt),
+      depth: selected ? 0.32 : 0.22,
+      baseY: 3,
+    }
+  }
+  return {
+    width: selected ? 1 : 0.72,
+    height: Math.max(0.8, item.heightFt),
+    depth: selected ? 1 : 0.72,
+    baseY: 0.2,
+  }
+}
+
+function isOpeningCount(item: TakeoffPreviewItem): boolean {
+  return item.serviceItemCode.startsWith('08 14') || item.serviceItemCode.startsWith('08 50')
+}
+
+function nearestLinealRotation(point: TakeoffPreviewPoint, scene: TakeoffPreviewScene): number {
+  let bestDistance = Number.POSITIVE_INFINITY
+  let bestRotation = 0
+
+  for (const item of scene.items) {
+    if (item.kind !== 'lineal') continue
+    for (let index = 1; index < item.points.length; index += 1) {
+      const start = item.points[index - 1]
+      const end = item.points[index]
+      if (!start || !end) continue
+      const distance = pointToSegmentDistanceSq(point, start, end)
+      if (distance < bestDistance) {
+        bestDistance = distance
+        bestRotation = -Math.atan2(end.z - start.z, end.x - start.x)
+      }
+    }
+  }
+
+  return bestRotation
+}
+
+function pointToSegmentDistanceSq(
+  point: TakeoffPreviewPoint,
+  start: TakeoffPreviewPoint,
+  end: TakeoffPreviewPoint,
+): number {
+  const dx = end.x - start.x
+  const dz = end.z - start.z
+  const lengthSq = dx * dx + dz * dz
+  if (lengthSq <= 0) return (point.x - start.x) ** 2 + (point.z - start.z) ** 2
+  const t = THREE.MathUtils.clamp(((point.x - start.x) * dx + (point.z - start.z) * dz) / lengthSq, 0, 1)
+  const projectedX = start.x + t * dx
+  const projectedZ = start.z + t * dz
+  return (point.x - projectedX) ** 2 + (point.z - projectedZ) ** 2
 }
 
 function sceneSpan(scene: TakeoffPreviewScene): number {

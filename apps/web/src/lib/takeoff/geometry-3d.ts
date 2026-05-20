@@ -47,6 +47,7 @@ export interface BuildTakeoffPreviewSceneOptions {
 
 const DEFAULT_WORLD_PER_BOARD_UNIT = 1
 const DEFAULT_WALL_HEIGHT_FT = 9
+const POLYGON_VISUAL_THICKNESS_FT = 0.08
 const PALETTE = ['#d9904a', '#4f9f89', '#6d7ed7', '#c75f75', '#8e735b', '#4b9ed6', '#9b7bd8', '#7d9253'] as const
 
 export function buildTakeoffPreviewScene(
@@ -100,7 +101,7 @@ export function buildTakeoffPreviewScene(
         ...base,
         kind: 'polygon',
         points,
-        heightFt: polygonVisualHeight(base.quantity, defaultWallHeightFt),
+        heightFt: POLYGON_VISUAL_THICKNESS_FT,
       })
       continue
     }
@@ -115,7 +116,7 @@ export function buildTakeoffPreviewScene(
         ...base,
         kind: 'lineal',
         points,
-        heightFt: Math.max(0.25, defaultWallHeightFt * 0.04),
+        heightFt: defaultWallHeightFt,
       })
       continue
     }
@@ -130,7 +131,7 @@ export function buildTakeoffPreviewScene(
         ...base,
         kind: 'count',
         points,
-        heightFt: Math.max(0.5, defaultWallHeightFt * 0.08),
+        heightFt: countVisualHeight(base.serviceItemCode, defaultWallHeightFt),
       })
       continue
     }
@@ -222,9 +223,10 @@ function pointsToWorld(
     .filter((point): point is TakeoffPreviewPoint => point != null)
 }
 
-function polygonVisualHeight(quantity: number, defaultWallHeightFt: number): number {
-  if (!Number.isFinite(quantity) || quantity <= 0) return 0.35
-  return clamp(Math.sqrt(quantity) * 0.04, 0.35, Math.max(0.75, defaultWallHeightFt * 0.35))
+function countVisualHeight(serviceItemCode: string, defaultWallHeightFt: number): number {
+  if (serviceItemCode.startsWith('08 14')) return Math.max(6.5, defaultWallHeightFt * 0.72)
+  if (serviceItemCode.startsWith('08 50')) return Math.max(3, defaultWallHeightFt * 0.36)
+  return Math.max(0.8, defaultWallHeightFt * 0.12)
 }
 
 function finitePositive(value: unknown): number | null {
@@ -263,8 +265,4 @@ function computeBounds(items: TakeoffPreviewItem[]): TakeoffPreviewScene['bounds
     minZ: Math.min(...zs),
     maxZ: Math.max(...zs),
   }
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.max(min, Math.min(max, value))
 }
