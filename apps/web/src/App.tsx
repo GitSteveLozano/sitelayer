@@ -15,25 +15,28 @@ import {
 /**
  * The dev role-switcher is gated by two independent checks so it
  * never escapes into a real deployment:
- *   1. `!isClerkConfigured()` — once a Clerk publishable key is wired
+ *   1. `!isClerkConfigured()` -- once a Clerk publishable key is wired
  *      the SPA is on real auth and the override loses authority.
- *   2. `import.meta.env.MODE !== 'production'` — Vite drops this branch
+ *   2. `import.meta.env.MODE !== 'production'` -- Vite drops this branch
  *      from the production bundle entirely (dead-code elimination on
  *      the `false` literal).
  * The API enforces the matching guarantee on its side (auth.ts).
  */
 const SHOW_ROLE_SWITCHER = !isClerkConfigured() && import.meta.env.MODE !== 'production'
 
-// Canonical mobile shell from PR #229. Promoted from /m/* to the app
-// root on 2026-05-05 (Option A) when the desktop AppShell was retired —
-// production is mobile-first, so the role-aware shell with bottom tabs
-// is what every user sees by default.
+// Authenticated workspace router. It resolves the caller's company first,
+// then picks the admin shell or the field shell from permissions.
+const WorkspaceRoute = lazy(() => import('@/routes/workspace'))
+
+// Canonical field shell from PR #229. `/m/*` remains as a legacy alias
+// for links that pointed directly at the mobile shell before the
+// admin-first workspace router became the root.
 const MRoute = lazy(() => import('@/routes/m'))
 const MPreviewRoute = lazy(() => import('@/screens/mobile-preview').then((m) => ({ default: m.MPreviewView })))
 
 // Specialized full-screen routes that don't fit the bottom-tab chrome.
 // These must match before the mobile-shell catch-all below. /more is
-// intentionally not in this list — it's wired as a tab in m-shell so
+// intentionally not in this list -- it's wired as a tab in m-shell so
 // the bottom-tab chrome stays visible from settings/catalog/integrations.
 const FinancialRoute = lazy(() => import('@/routes/financial'))
 const BidAccuracyRoute = lazy(() => import('@/routes/bid-accuracy'))
@@ -43,7 +46,7 @@ const OnboardingRoute = lazy(() => import('@/routes/onboarding'))
 const LocationPrimeRoute = lazy(() => import('@/routes/permissions-location'))
 const NotificationsPrimeRoute = lazy(() => import('@/routes/permissions-notifications'))
 
-// Project deep routes — drawing/measure/contract surfaces that need the
+// Project deep routes -- drawing/measure/contract surfaces that need the
 // full viewport. Mounted at the root so they take precedence over the
 // mobile shell's `projects/:projectId/*` catch-all.
 const ProjectSetupScreen = lazy(() =>
@@ -125,8 +128,8 @@ function FirstRunGate({ children }: { children: React.ReactNode }) {
  * mobile shell promoted to the canonical root.
  *
  * When Clerk isn't configured (local dev without `VITE_CLERK_PUBLISHABLE_KEY`,
- * fixture mode), `ClerkProvider` isn't mounted — `<SignedIn>`/`<SignedOut>`
- * would throw — so we render children directly. The API's header
+ * fixture mode), `ClerkProvider` isn't mounted -- `<SignedIn>`/`<SignedOut>`
+ * would throw -- so we render children directly. The API's header
  * fallback path keeps that flow working.
  */
 function ClerkAuthGate({ children }: { children: React.ReactNode }) {
@@ -163,7 +166,7 @@ export default function App() {
           <Suspense fallback={<ColdStartSplash />}>
             <Routes>
               {/* Public client portal routes. Sales loop (signed estimate
-                  share-link) and rentals customer portal. NO Clerk auth —
+                  share-link) and rentals customer portal. NO Clerk auth --
                   recipients hold an HMAC-signed token in the URL. Mounted
                   above FirstRunGate so customers don't see the iOS Safari
                   install prompt either. */}
@@ -173,7 +176,7 @@ export default function App() {
               <Route path="/portal/rentals/:shareToken/cart" element={<PortalRentalsCart />} />
               <Route path="/portal/rentals/:shareToken/confirm" element={<PortalRentalsConfirm />} />
 
-              {/* Authenticated app — Clerk-gated. */}
+              {/* Authenticated app -- Clerk-gated. */}
               <Route
                 path="/*"
                 element={
@@ -205,7 +208,7 @@ function AppShellRoutes() {
       <Route path="/projects/:id/rental-contract" element={<ProjectRentalContractScreen />} />
       <Route path="/projects/:id/estimate-builder" element={<EstimateBuilderScreen />} />
 
-      {/* Admin / specialized full-screen routes — no bottom-tab
+      {/* Admin / specialized full-screen routes -- no bottom-tab
                       chrome. Linked from the mobile shell elsewhere. /more
                       lives inside the shell instead so the 5-tab IA stays
                       intact when the user is in settings/catalog. */}
@@ -214,7 +217,7 @@ function AppShellRoutes() {
       <Route path="/photo" element={<PhotoRoute />} />
       <Route path="/live-crew" element={<LiveCrewRoute />} />
 
-      {/* Onboarding + permission primes — full-screen takeovers. */}
+      {/* Onboarding + permission primes -- full-screen takeovers. */}
       <Route path="/onboarding" element={<OnboardingRoute />} />
       <Route path="/permissions/location" element={<LocationPrimeRoute />} />
       <Route path="/permissions/notifications" element={<NotificationsPrimeRoute />} />
@@ -222,11 +225,11 @@ function AppShellRoutes() {
       {/* Dev-only primitive showcase. */}
       <Route path="/m-preview" element={<MPreviewRoute />} />
 
-      {/* Legacy alias — original mount of the mobile shell. */}
+      {/* Legacy alias -- original mount of the mobile shell. */}
       <Route path="/m/*" element={<MRoute basePath="/m" />} />
 
-      {/* Mobile shell — canonical UX, claims everything else. */}
-      <Route path="/*" element={<MRoute />} />
+      {/* Workspace shell -- canonical UX, claims everything else. */}
+      <Route path="/*" element={<WorkspaceRoute />} />
     </Routes>
   )
 }
