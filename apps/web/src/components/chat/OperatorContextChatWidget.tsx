@@ -1,0 +1,161 @@
+import { useEffect } from 'react'
+import { useChatWidget } from '@/machines/chat-widget'
+import { useOperatorContext } from '@/lib/operator-context'
+
+/**
+ * Operator-context chat widget — v0 floating panel that consumes
+ * `window.__operatorContext` (set by the control-plane browser-bridge
+ * content script on operator-owned origins) and lets the operator stage
+ * draft messages grounded in the active project.
+ *
+ * v0 is renderer-only: it shows the latest packet and accepts a draft.
+ * It does NOT POST anywhere yet — /api/ai/chat is a follow-up. The
+ * statechart (machines/chat-widget.ts) already has the seam.
+ *
+ * Visibility gate: the widget is hidden entirely for non-operator
+ * visitors (no packet ever arrives), so this surface is invisible to
+ * the public.
+ *
+ * Design: digital-ontology/operator-context-handshake-design.md
+ */
+export function OperatorContextChatWidget() {
+  const packet = useOperatorContext()
+  const widget = useChatWidget()
+
+  // Mirror the global operator-context into the chat-widget machine so
+  // anything the machine renders reads from a single, statechart-owned
+  // snapshot rather than the global window state directly.
+  useEffect(() => {
+    widget.syncContext(packet ?? null)
+  }, [packet, widget])
+
+  // Non-operator visitor: never render.
+  if (!packet) {
+    return null
+  }
+
+  return (
+    <div
+      className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2 print:hidden"
+      data-testid="operator-context-chat-widget"
+    >
+      {widget.isOpen ? (
+        <section
+          aria-label="Operator context chat"
+          className="w-[22rem] max-w-[calc(100vw-2rem)] bg-white shadow-lg rounded-md border border-sand-3 flex flex-col overflow-hidden"
+        >
+          <header className="px-3 py-2 border-b border-sand-3 flex items-center gap-2">
+            <span className="text-xs uppercase tracking-wide text-ink-2">
+              Operator context · {packet.origin_context.label}
+            </span>
+            <span className="ml-auto text-xs text-ink-3 tabular-nums">
+              {formatRelative(packet.generated_at)}
+            </span>
+            <button
+              type="button"
+              onClick={widget.close}
+              aria-label="Close operator context chat"
+              className="text-ink-2 hover:text-ink-1 text-sm leading-none px-1"
+            >
+              ×
+            </button>
+          </header>
+
+          <div className="px-3 py-2 text-xs text-ink-2 space-y-1 max-h-40 overflow-y-auto">
+            <div>
+              <span className="font-medium text-ink-1">Focus:</span>{' '}
+              {packet.current_focus.label}
+              <span className="text-ink-3"> ({Math.round(packet.current_focus.confidence * 100)}%)</span>
+            </div>
+            {packet.origin_context.repo_branch ? (
+              <div>
+                <span className="font-medium text-ink-1">Branch:</span>{' '}
+                {packet.origin_context.repo_branch}
+                {packet.origin_context.repo_dirty ? (
+                  <span className="text-amber-700"> · dirty</span>
+                ) : null}
+              </div>
+            ) : null}
+            {packet.recent_activity.length ? (
+              <details>
+                <summary className="cursor-pointer text-ink-2">
+                  Recent activity ({packet.recent_activity.length})
+                </summary>
+                <ul className="mt-1 pl-3 space-y-0.5">
+                  {packet.recent_activity.slice(0, 6).map((a, i) => (
+                    <li key={i} className="text-ink-3 truncate">
+                      <span className="text-ink-2">{a.kind}</span>{' '}
+                      {a.summary}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+          </div>
+
+          {widget.messages.length ? (
+            <ul className="border-t border-sand-3 px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
+              {widget.messages.map((m) => (
+                <li key={m.id} className="text-sm">
+                  <span className="text-xs uppercase tracking-wide text-ink-3 mr-1">
+                    {m.role}
+                  </span>
+                  {m.body}
+                </li>
+              ))}
+            </ul>
+          ) : null}
+
+          <div className="border-t border-sand-3 px-3 py-2 flex gap-2">
+            <input
+              type="text"
+              value={widget.draft}
+              onChange={(e) => widget.setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  widget.send()
+                }
+              }}
+              placeholder="Ask about this project…"
+              className="flex-1 text-sm border border-sand-3 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-amber-400"
+              data-testid="operator-context-chat-input"
+            />
+            <button
+              type="button"
+              onClick={widget.send}
+              disabled={!widget.draft.trim()}
+              className="text-sm px-2 py-1 rounded bg-amber-500 text-white disabled:opacity-50"
+              data-testid="operator-context-chat-send"
+            >
+              Stage
+            </button>
+          </div>
+          <footer className="px-3 py-1 text-[10px] text-ink-3 border-t border-sand-3 bg-sand-1">
+            v0 · drafts are staged locally; /api/ai/chat wiring is pending.
+          </footer>
+        </section>
+      ) : null}
+
+      <button
+        type="button"
+        onClick={widget.toggle}
+        aria-label={widget.isOpen ? 'Close operator context chat' : 'Open operator context chat'}
+        className="bg-amber-500 hover:bg-amber-600 text-white text-sm rounded-full px-3 py-2 shadow-md"
+        data-testid="operator-context-chat-toggle"
+      >
+        {widget.isOpen ? 'Hide' : 'Operator ▴'}
+      </button>
+    </div>
+  )
+}
+
+function formatRelative(iso: string): string {
+  const ms = Date.parse(iso)
+  if (Number.isNaN(ms)) return ''
+  const deltaSec = Math.max(0, Math.round((Date.now() - ms) / 1000))
+  if (deltaSec < 60) return `${deltaSec}s ago`
+  if (deltaSec < 3600) return `${Math.floor(deltaSec / 60)}m ago`
+  if (deltaSec < 86_400) return `${Math.floor(deltaSec / 3600)}h ago`
+  return `${Math.floor(deltaSec / 86_400)}d ago`
+}
