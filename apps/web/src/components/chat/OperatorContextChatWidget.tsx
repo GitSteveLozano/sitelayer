@@ -31,8 +31,10 @@ export function OperatorContextChatWidget() {
   }, [packet, syncContext])
 
   // Tick a once-per-second timer so the "responding for Ns" elapsed
-  // counter rerenders while polling. Only runs when polling is active;
-  // ride free when idle to avoid the runtime cost of a 1-Hz interval.
+  // counter rerenders while the subscription is open. Only runs while
+  // awaiting; ride free when idle to avoid the runtime cost of a 1-Hz
+  // interval. This is purely a UI clock — the transport itself is
+  // server-push (SSE), not polling.
   const [, forceTick] = useState(0)
   useEffect(() => {
     if (!widget.isAwaitingResponse) return
@@ -45,17 +47,18 @@ export function OperatorContextChatWidget() {
     return null
   }
 
-  // Polling elapsed-time + stall classification.
+  // Awaiting elapsed-time + stall classification.
   // Computed once per render so every awaiting message footer shares
   // the same source-of-truth; the 1Hz forceTick effect drives the
-  // rerender while polling is active.
+  // rerender while the subscription is open.
   const pollingElapsedSec =
     widget.isAwaitingResponse && widget.awaitingResponseSince
       ? Math.max(0, Math.round((Date.now() - widget.awaitingResponseSince) / 1000))
       : null
   // 30s is past the healthy 5–15s range for the subscription-CLI lane;
-  // switch the indicator to red so the operator notices. pollChatResponse
-  // gives up at 60s, so the warning fires well before the auto-fail.
+  // switch the indicator to red so the operator notices. The
+  // subscription's safety timeout fires at 60s, so this warning lands
+  // well before the auto-fail.
   const pollingStalled = pollingElapsedSec !== null && pollingElapsedSec >= 30
 
   return (

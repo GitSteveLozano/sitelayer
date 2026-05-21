@@ -1,9 +1,12 @@
 import { useCallback } from 'react'
 import { useMachine } from '@xstate/react'
-import { assign, fromPromise, setup } from 'xstate'
+import { assign, fromCallback, fromPromise, setup } from 'xstate'
 import {
   fetchOperatorContextChatResponse,
   stageOperatorContextChatMessage,
+  subscribeChatResponse,
+  type ChatResponseDelta,
+  type ChatSubscriptionHandlers,
   type FetchOperatorContextChatResponseResult,
   type OperatorContextChatMessage,
   type StageOperatorContextChatResponse,
@@ -69,6 +72,12 @@ type ChatWidgetEvent =
   | { type: 'SEND' }
   | { type: 'RETRY'; auditEventId: string }
   | { type: 'DISMISS_ERROR' }
+  // Internal events fanned out by the subscription actor. Not part of the
+  // public hook surface but typed so the machine's transition table is
+  // exhaustive.
+  | { type: 'STREAM_DELTA'; delta: ChatResponseDelta }
+  | { type: 'STREAM_ERROR'; message: string }
+  | { type: 'STREAM_TIMEOUT' }
 
 const initialContext: ChatWidgetContext = {
   packet: null,
@@ -92,6 +101,12 @@ type PollInput = { auditEventId: string }
  * Default: 20 attempts × 3s = 60s max wait. The subscription-CLI lane
  * typically completes a short chat response in 5–15s; 60s is the right
  * upper bound before the widget shows a "still working…" UX.
+ *
+ * KEPT as the polling fallback for the streaming subscriber. The widget
+ * now defaults to `subscribeChatResponse` (SSE) for low-latency delta
+ * push; if the stream errors (older API build, proxy stripping
+ * `text/event-stream`), `pollSubscriber()` below adapts this function
+ * to the same callback-shaped contract the machine expects.
  *
  * Exported for testing — the machine factory accepts an override so
  * tests can pin a faster poller.
@@ -135,6 +150,62 @@ export function pollChatResponse(
   })
 }
 
+/**
+ * Subscriber contract the chat-widget machine consumes during the
+ * `awaitingResponse` state. The streaming SSE path implements this
+ * natively; the polling fallback wraps `pollChatResponse` so the same
+ * machine actor handles both transports without branching on flags.
+ *
+ * Implementations MUST call exactly one of `onDelta(status: 'responded')`
+ * or `onError` per subscription, then stop emitting. Callers invoke the
+ * returned `unsubscribe` to dispose early (machine state exit, retry).
+ */
+export type ChatResponseSubscriber = (
+  auditEventId: string,
+  handlers: ChatSubscriptionHandlers,
+) => () => void
+
+/**
+ * Default subscriber = SSE stream. Re-exported under the more
+ * domain-meaningful name so the chat-widget machine factory's signature
+ * reads naturally (`createChatWidgetMachine(submitter, subscriber)`).
+ */
+export const defaultChatResponseSubscriber: ChatResponseSubscriber = subscribeChatResponse
+
+/**
+ * Polling-fallback adapter. Wraps `pollChatResponse` so it presents the
+ * same callback shape as the streaming subscriber. Exposed so the
+ * widget host can opt in to the polling lane via a runtime flag
+ * (`VITE_CHAT_WIDGET_TRANSPORT=poll`) without having to touch the
+ * machine's invoke wiring.
+ */
+export function makePollingSubscriber(
+  opts: { intervalMs?: number; maxAttempts?: number } = {},
+): ChatResponseSubscriber {
+  return (auditEventId, handlers) => {
+    let cancelled = false
+    void pollChatResponse(auditEventId, opts).then(
+      (resp) => {
+        if (cancelled) return
+        handlers.onDelta({
+          audit_event_id: resp.audit_event_id,
+          status: 'responded',
+          response_audit_event_id: resp.response_audit_event_id,
+          body: resp.body,
+          created_at: resp.created_at,
+        })
+      },
+      (err) => {
+        if (cancelled) return
+        handlers.onError(err instanceof Error ? err : new Error('chat response poll failed'))
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }
+}
+
 type StageInput = {
   messages: OperatorContextChatMessage[]
   operatorContext: OperatorContextPacket
@@ -173,10 +244,40 @@ function isAwaitingResponseState(value: unknown): boolean {
   )
 }
 
+/**
+ * Optional knobs for the chat-widget machine factory. Most callers only
+ * override the staging actor + subscriber; the safety timeout is
+ * exposed so tests can fire it deterministically without waiting 60s of
+ * wall-clock.
+ */
+export type CreateChatWidgetMachineOptions = {
+  submitter?: (input: StageInput) => Promise<StageOperatorContextChatResponse>
+  subscriber?: ChatResponseSubscriber
+  /**
+   * Client-side safety timeout for the awaitingResponse state. The
+   * server's SSE handler also enforces 60s — both sides give up at the
+   * same wall-clock so the operator sees a deterministic "responding
+   * for Ns" ceiling. Tests pass a small value to assert the timeout
+   * path without sleeping.
+   */
+  awaitingTimeoutMs?: number
+}
+
 export function createChatWidgetMachine(
-  submitter: (input: StageInput) => Promise<StageOperatorContextChatResponse> = stageOperatorContextChatMessage,
-  poller: (auditEventId: string) => Promise<ChatWidgetResponse> = pollChatResponse,
+  submitterOrOptions: CreateChatWidgetMachineOptions | ((input: StageInput) => Promise<StageOperatorContextChatResponse>) = {},
+  legacySubscriber?: ChatResponseSubscriber,
 ) {
+  // Back-compat: older callers pass (submitter, poller-or-subscriber)
+  // positionally. The first overload is the new options-object shape;
+  // the second mirrors the historical 2-arg form so existing tests
+  // continue to compile after the polling→streaming swap.
+  const options: CreateChatWidgetMachineOptions =
+    typeof submitterOrOptions === 'function'
+      ? { submitter: submitterOrOptions, ...(legacySubscriber ? { subscriber: legacySubscriber } : {}) }
+      : submitterOrOptions
+  const submitter = options.submitter ?? stageOperatorContextChatMessage
+  const subscriber = options.subscriber ?? defaultChatResponseSubscriber
+  const awaitingTimeoutMs = options.awaitingTimeoutMs ?? 60_000
   return setup({
     types: {
       context: {} as ChatWidgetContext,
@@ -184,7 +285,38 @@ export function createChatWidgetMachine(
     },
     actors: {
       stageMessage: fromPromise<StageOperatorContextChatResponse, StageInput>(({ input }) => submitter(input)),
-      pollResponse: fromPromise<ChatWidgetResponse, PollInput>(({ input }) => poller(input.auditEventId)),
+      /**
+       * Subscription actor — wraps the SSE (or polling fallback)
+       * transport. The actor lives for the duration of the
+       * `awaitingResponse` state: opens the subscription on entry,
+       * fans `onDelta`/`onError` out as STREAM_* events, and disposes
+       * its handle when xstate stops it.
+       *
+       * This replaces the prior `pollResponse` Promise-based actor.
+       * The shift from fromPromise→fromCallback is required because
+       * the subscription pushes potentially multiple events per
+       * connection (subscribe-confirm, intermediate partials, terminal
+       * 'responded'), and only `fromCallback` lets us forward each
+       * event to the machine.
+       */
+      subscribeResponse: fromCallback<ChatWidgetEvent, PollInput>(({ input, sendBack }) => {
+        const handlers: ChatSubscriptionHandlers = {
+          onDelta: (delta) => sendBack({ type: 'STREAM_DELTA', delta }),
+          onError: (err) => sendBack({ type: 'STREAM_ERROR', message: err.message }),
+        }
+        const unsubscribe = subscriber(input.auditEventId, handlers)
+        const timer = setTimeout(() => {
+          sendBack({ type: 'STREAM_TIMEOUT' })
+        }, awaitingTimeoutMs)
+        return () => {
+          clearTimeout(timer)
+          try {
+            unsubscribe()
+          } catch {
+            /* defensive cleanup; unsubscribe contract is best-effort */
+          }
+        }
+      }),
     },
     actions: {
       syncPacket: assign({
@@ -335,53 +467,109 @@ export function createChatWidgetMachine(
             },
           },
           awaitingResponse: {
+            // Subscription actor (SSE by default, polling fallback when
+            // injected). The actor sends STREAM_* events back into the
+            // machine; the state transitions on the terminal ones below.
+            // Compared to the prior pollResponse Promise actor, this lets
+            // the server push the delta as soon as the response audit
+            // row lands instead of waiting up to 3s for the next poll.
             invoke: {
-              id: 'pollResponse',
-              src: 'pollResponse',
+              id: 'subscribeResponse',
+              src: 'subscribeResponse',
               input: ({ context }) => ({
                 auditEventId: context.awaitingResponseFor ?? '',
               }),
-              onDone: {
-                target: 'idle',
-                actions: assign({
-                  // Attach response to the matching staged message (by
-                  // audit_event_id), append a separate agent-role
-                  // message so the chat history reads as a turn.
-                  messages: ({ context, event }) => {
-                    const responseMsg: ChatWidgetMessage = {
-                      id: `r-${event.output.response_audit_event_id}`,
-                      role: 'agent',
-                      body: event.output.body,
-                      audit_event_id: event.output.response_audit_event_id,
-                    }
-                    return [
-                      ...context.messages.map((m) =>
-                        m.audit_event_id === event.output.audit_event_id
-                          ? {
-                              ...m,
-                              status: 'responded' as const,
-                              response_body: event.output.body,
-                              response_audit_event_id: event.output.response_audit_event_id,
-                            }
+              // Source-of-truth disposal happens through xstate's normal
+              // actor lifecycle: the subscription actor returns a
+              // cleanup function from its setup callback, which xstate
+              // invokes on every state exit. No onError needed because
+              // errors arrive through the STREAM_ERROR event below.
+            },
+            on: {
+              STREAM_DELTA: [
+                {
+                  // Terminal delta — `status: 'responded'` means the
+                  // response audit row landed. Flip the staged message
+                  // to 'responded', append the agent reply, clear the
+                  // awaiting pointer, and return to idle. Intermediate
+                  // `status: 'partial'` deltas (streaming-token mode,
+                  // not yet emitted by the server) would land in the
+                  // second branch below once the wire shape is
+                  // extended.
+                  guard: ({ event }) => event.type === 'STREAM_DELTA' && event.delta.status === 'responded',
+                  target: 'idle',
+                  actions: assign({
+                    messages: ({ context, event }) => {
+                      if (event.type !== 'STREAM_DELTA') return context.messages
+                      const delta = event.delta
+                      const body = typeof delta.body === 'string' ? delta.body : ''
+                      const respId = delta.response_audit_event_id ?? `r-${Date.now()}`
+                      const responseMsg: ChatWidgetMessage = {
+                        id: `r-${respId}`,
+                        role: 'agent',
+                        body,
+                        audit_event_id: respId,
+                      }
+                      return [
+                        ...context.messages.map((m) =>
+                          m.audit_event_id === delta.audit_event_id
+                            ? {
+                                ...m,
+                                status: 'responded' as const,
+                                response_body: body,
+                                response_audit_event_id: respId,
+                              }
+                            : m,
+                        ),
+                        responseMsg,
+                      ]
+                    },
+                    awaitingResponseFor: () => null,
+                    awaitingResponseSince: () => null,
+                    error: () => null,
+                  }),
+                },
+                {
+                  // Non-terminal delta (partial / progress). Currently
+                  // unused — the SSE server only emits 'responded' as
+                  // of this CL — but the branch exists so a future
+                  // server-side streaming-token rollout doesn't require
+                  // re-architecting the machine. Append-as-we-go would
+                  // mutate the staged message body_delta.
+                  guard: ({ event }) => event.type === 'STREAM_DELTA' && event.delta.status === 'partial',
+                  actions: assign({
+                    messages: ({ context, event }) => {
+                      if (event.type !== 'STREAM_DELTA') return context.messages
+                      const delta = event.delta
+                      const incremental = typeof delta.body_delta === 'string' ? delta.body_delta : ''
+                      if (!incremental) return context.messages
+                      return context.messages.map((m) =>
+                        m.audit_event_id === delta.audit_event_id
+                          ? { ...m, response_body: (m.response_body ?? '') + incremental }
                           : m,
-                      ),
-                      responseMsg,
-                    ]
-                  },
-                  awaitingResponseFor: () => null,
-                  awaitingResponseSince: () => null,
-                  error: () => null,
-                }),
-              },
-              onError: {
+                      )
+                    },
+                  }),
+                },
+              ],
+              STREAM_ERROR: {
                 target: 'idle',
                 actions: assign({
                   awaitingResponseFor: () => null,
                   awaitingResponseSince: () => null,
                   error: ({ event }) =>
-                    event.error instanceof Error
-                      ? event.error.message
+                    event.type === 'STREAM_ERROR' && event.message
+                      ? event.message
                       : 'Chat response did not arrive in time.',
+                }),
+              },
+              STREAM_TIMEOUT: {
+                target: 'idle',
+                actions: assign({
+                  awaitingResponseFor: () => null,
+                  awaitingResponseSince: () => null,
+                  error: () =>
+                    'chat response timeout — subscription-CLI runner did not respond in time',
                 }),
               },
             },
@@ -402,28 +590,31 @@ export type ChatWidgetHookResult = {
   messages: ChatWidgetMessage[]
   error: string | null
   isSending: boolean
-  /** True while the machine is polling /api/ai/chat/:id/response for the
-   * subscription-CLI runner's reply. UIs render a "responding…" indicator
-   * on the staged message during this state. */
+  /** True while the machine is subscribed to /api/ai/chat/:id/stream for
+   * the subscription-CLI runner's reply (SSE by default; polling
+   * fallback wraps the legacy /response endpoint with the same shape).
+   * UIs render a "responding…" indicator on the staged message during
+   * this state. */
   isAwaitingResponse: boolean
-  /** Audit_event_id we're polling for, or null when idle. UIs can mark
-   * the corresponding staged message with a thinking indicator. */
+  /** Audit_event_id we're subscribed for, or null when idle. UIs can
+   * mark the corresponding staged message with a thinking indicator. */
   awaitingResponseFor: string | null
-  /** Date.now() value captured the moment polling started for the
-   * current audit_event_id, or null when idle. UIs can subtract from
-   * Date.now() to render "responding for Xs" so the operator can see
-   * whether the subscription-CLI lane is healthy (5–15s typical) or
-   * stalling. */
+  /** Date.now() value captured the moment the subscription opened for
+   * the current audit_event_id, or null when idle. UIs can subtract
+   * from Date.now() to render "responding for Xs" so the operator can
+   * see whether the subscription-CLI lane is healthy (5–15s typical)
+   * or stalling. */
   awaitingResponseSince: number | null
   open: () => void
   close: () => void
   toggle: () => void
   setDraft: (value: string) => void
   send: () => void
-  /** Re-arm the polling actor for an existing staged audit_event_id.
-   * Used when a previous poll timed out but the operator wants another
-   * attempt. The chat-widget machine does not re-dispatch the mesh task;
-   * the operator can re-dispatch via mcp__mesh__create_task if needed. */
+  /** Re-arm the subscription actor for an existing staged
+   * audit_event_id. Used when a previous attempt timed out but the
+   * operator wants another try. The chat-widget machine does not
+   * re-dispatch the mesh task; the operator can re-dispatch via
+   * mcp__mesh__create_task if needed. */
   retry: (auditEventId: string) => void
   syncContext: (packet: OperatorContextPacket | null) => void
 }

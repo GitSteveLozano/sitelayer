@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
+import { EventEmitter } from 'node:events'
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import type pino from 'pino'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { attachMutationTx } from '../mutation-tx.js'
+import { __resetForTests as resetChatBus, __subscriberCountForTests } from '../chat-response-bus.js'
 import { handleAiChatRoutes, type AiChatRouteCtx } from './ai-chat.js'
 
 type JsonRecord = Record<string, unknown>
@@ -154,6 +156,44 @@ class FakePool {
 
 function buildReq(method = 'POST'): http.IncomingMessage {
   return { method } as http.IncomingMessage
+}
+
+/**
+ * Minimal stub of http.ServerResponse used by the SSE stream test. The
+ * route writes header + frames via writeHead/write/end — we capture the
+ * frames so the test can assert the wire shape without spinning up a
+ * real HTTP server.
+ */
+class FakeServerResponse extends EventEmitter {
+  status: number | null = null
+  headers: Record<string, string | number> = {}
+  chunks: string[] = []
+  writableEnded = false
+  writeHead(status: number, headers: Record<string, string | number>): void {
+    this.status = status
+    this.headers = { ...headers }
+  }
+  write(chunk: string): boolean {
+    if (this.writableEnded) return false
+    this.chunks.push(chunk)
+    return true
+  }
+  end(): void {
+    this.writableEnded = true
+  }
+}
+
+/**
+ * Stub of http.IncomingMessage that lets the test fire `req.emit('close')`
+ * to simulate a client disconnect.
+ */
+class FakeIncomingMessage extends EventEmitter {
+  method: string
+  headers: Record<string, string> = {}
+  constructor(method = 'GET') {
+    super()
+    this.method = method
+  }
 }
 
 function buildUrl(path = '/api/ai/chat'): URL {
@@ -627,5 +667,181 @@ describe('handleAiChatRoutes — POST /api/ai/chat/:id/respond (webhook)', () =>
     } finally {
       delete process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
     }
+  })
+
+  it('publishes a delta to in-process subscribers after persisting the response', async () => {
+    // Asserts the bus wiring that replaces the 3s poll loop with
+    // server-pushed deltas. The webhook handler should call publish()
+    // AFTER the audit_events insert succeeds; a subscriber registered
+    // beforehand should see the event with status='responded'.
+    process.env.SITELAYER_CHAT_WEBHOOK_TOKEN = webhookToken
+    try {
+      resetChatBus()
+      const pool = new FakePool()
+      pool.auditEvents.push({
+        id: validUuid,
+        companyId: 'co-1',
+        actorUserId: 'user-1',
+        after: { chat_message: { body: 'staged' } },
+      })
+      const { ctx } = makeCtx(pool, validRespondBody)
+      // Register a manual subscriber before the webhook fires.
+      const { subscribe } = await import('../chat-response-bus.js')
+      const received: Array<{ status: string; body?: string | null }> = []
+      const unsubscribe = subscribe(validUuid, (event) => {
+        received.push({ status: event.status, body: event.body ?? null })
+      })
+      try {
+        await handleAiChatRoutes(
+          buildWebhookReq(`Bearer ${webhookToken}`),
+          buildUrl(`/api/ai/chat/${validUuid}/respond`),
+          ctx,
+        )
+        expect(received).toHaveLength(1)
+        expect(received[0]).toEqual({ status: 'responded', body: 'Hello back, operator.' })
+      } finally {
+        unsubscribe()
+      }
+    } finally {
+      delete process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
+    }
+  })
+})
+
+describe('handleAiChatRoutes — GET /api/ai/chat/:id/stream (SSE)', () => {
+  const validUuid = '00000000-0000-4000-8000-000000000001'
+
+  /** Build an SSE request + response pair the route can stream into. */
+  function buildSseCtx(pool: FakePool): {
+    req: FakeIncomingMessage
+    res: FakeServerResponse
+    ctx: AiChatRouteCtx
+    responses: Array<{ status: number; body: unknown }>
+  } {
+    const { ctx, responses } = makeCtx(pool)
+    const req = new FakeIncomingMessage('GET')
+    const res = new FakeServerResponse()
+    return { req, res, ctx: { ...ctx, res: res as unknown as http.ServerResponse }, responses }
+  }
+
+  it('opens SSE, sends subscribed frame, and delivers a server-pushed delta', async () => {
+    resetChatBus()
+    const pool = new FakePool()
+    pool.auditEvents.push({
+      id: validUuid,
+      companyId: 'co-1',
+      actorUserId: 'user-1',
+      after: { chat_message: { body: 'staged' } },
+    })
+    const { req, res, ctx } = buildSseCtx(pool)
+    const handled = await handleAiChatRoutes(
+      req as unknown as http.IncomingMessage,
+      buildUrl(`/api/ai/chat/${validUuid}/stream`),
+      ctx,
+    )
+    expect(handled).toBe(true)
+    // Headers + opening 'subscribed' frame.
+    expect(res.status).toBe(200)
+    expect(res.headers['Content-Type']).toMatch(/text\/event-stream/)
+    expect(res.chunks.join('')).toMatch(/event: subscribed[\s\S]+data: \{"audit_event_id":"[^"]+"\}/)
+    expect(__subscriberCountForTests(validUuid)).toBe(1)
+
+    // Server-pushed delta. The webhook would normally land this; we
+    // publish directly to keep this test transport-only.
+    const { publish } = await import('../chat-response-bus.js')
+    publish({
+      audit_event_id: validUuid,
+      status: 'responded',
+      response_audit_event_id: 'resp-stream-1',
+      body: 'Streamed back',
+      created_at: '2026-05-21T03:14:15.000Z',
+    })
+
+    const all = res.chunks.join('')
+    expect(all).toMatch(/event: delta/)
+    expect(all).toMatch(/"status":"responded"/)
+    expect(all).toMatch(/"body":"Streamed back"/)
+    expect(res.writableEnded).toBe(true)
+    // Subscriber should have been disposed after the terminal delta.
+    expect(__subscriberCountForTests(validUuid)).toBe(0)
+  })
+
+  it('emits the terminal delta immediately when the response row already exists (race-check)', async () => {
+    resetChatBus()
+    const pool = new FakePool()
+    pool.auditEvents.push({
+      id: validUuid,
+      companyId: 'co-1',
+      actorUserId: 'user-1',
+      after: { chat_message: { body: 'staged' } },
+    })
+    pool.seedResponse({
+      id: 'audit-race-resp',
+      companyId: 'co-1',
+      parentAuditEventId: validUuid,
+      body: 'I was already here',
+    })
+    const { req, res, ctx } = buildSseCtx(pool)
+    await handleAiChatRoutes(
+      req as unknown as http.IncomingMessage,
+      buildUrl(`/api/ai/chat/${validUuid}/stream`),
+      ctx,
+    )
+    const all = res.chunks.join('')
+    expect(all).toMatch(/event: subscribed/)
+    expect(all).toMatch(/event: delta/)
+    expect(all).toMatch(/"response_audit_event_id":"audit-race-resp"/)
+    expect(res.writableEnded).toBe(true)
+  })
+
+  it('returns 404 JSON (not SSE) when the staged row does not exist', async () => {
+    resetChatBus()
+    const pool = new FakePool()
+    const { req, res, ctx, responses } = buildSseCtx(pool)
+    await handleAiChatRoutes(
+      req as unknown as http.IncomingMessage,
+      buildUrl(`/api/ai/chat/${validUuid}/stream`),
+      ctx,
+    )
+    expect(res.writableEnded).toBe(false)
+    expect(responses[0]).toEqual({
+      status: 404,
+      body: { error: 'staged chat message not found for this company' },
+    })
+  })
+
+  it('requires admin role', async () => {
+    resetChatBus()
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool, validBody, 'member')
+    const req = new FakeIncomingMessage('GET')
+    const res = new FakeServerResponse()
+    await handleAiChatRoutes(
+      req as unknown as http.IncomingMessage,
+      buildUrl(`/api/ai/chat/${validUuid}/stream`),
+      { ...ctx, res: res as unknown as http.ServerResponse },
+    )
+    expect(responses[0]).toEqual({ status: 403, body: { error: 'forbidden' } })
+  })
+
+  it('client disconnect cleans up the bus subscriber', async () => {
+    resetChatBus()
+    const pool = new FakePool()
+    pool.auditEvents.push({
+      id: validUuid,
+      companyId: 'co-1',
+      actorUserId: 'user-1',
+      after: { chat_message: { body: 'staged' } },
+    })
+    const { req, res, ctx } = buildSseCtx(pool)
+    await handleAiChatRoutes(
+      req as unknown as http.IncomingMessage,
+      buildUrl(`/api/ai/chat/${validUuid}/stream`),
+      ctx,
+    )
+    expect(__subscriberCountForTests(validUuid)).toBe(1)
+    req.emit('close')
+    expect(__subscriberCountForTests(validUuid)).toBe(0)
+    expect(res.writableEnded).toBe(true)
   })
 })
