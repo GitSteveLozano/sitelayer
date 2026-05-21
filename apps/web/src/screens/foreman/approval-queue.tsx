@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { memo, useCallback, useMemo, useState, useTransition } from 'react'
 import { Link } from 'react-router-dom'
 import { Card } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
@@ -30,6 +30,10 @@ export function ApprovalQueueScreen() {
   // null = "All projects". Workspace-wide rows (project_id===null)
   // get a synthetic key so they can be filtered alongside real ones.
   const [projectFilter, setProjectFilter] = useState<string | null>(null)
+  // Filter/tab toggles fan out into ~50 memo recomputes + row
+  // reconciliations. Mark those updates as transitions so the
+  // tab/chip click paints immediately and the row pass is interruptible.
+  const [, startTransition] = useTransition()
   const allRuns = useTimeReviewRuns()
   const projects = useProjects()
   const projectById = useMemo(() => new Map((projects.data?.projects ?? []).map((p) => [p.id, p])), [projects.data])
@@ -45,14 +49,36 @@ export function ApprovalQueueScreen() {
   const cleanPending = useMemo(() => byState.pending.filter((r) => r.anomaly_count === 0), [byState.pending])
   const reviewPending = useMemo(() => byState.pending.filter((r) => r.anomaly_count > 0), [byState.pending])
 
-  const pendingEntryTotal = byState.pending.reduce((sum, r) => sum + r.total_entries, 0)
-  const pendingAnomalyTotal = byState.pending.reduce((sum, r) => sum + r.anomaly_count, 0)
+  const pendingEntryTotal = useMemo(
+    () => byState.pending.reduce((sum, r) => sum + r.total_entries, 0),
+    [byState.pending],
+  )
+  const pendingAnomalyTotal = useMemo(
+    () => byState.pending.reduce((sum, r) => sum + r.anomaly_count, 0),
+    [byState.pending],
+  )
+  // "All" chip's pending count over the unfiltered set — used to
+  // size the chip without re-scanning rows each render.
+  const allPendingCount = useMemo(() => rows.filter((r) => r.state === 'pending').length, [rows])
 
   // Chip set: every project that has at least one pending run, plus a
   // workspace-wide chip when any pending row has no project_id. We
   // derive the chip list from the unfiltered set so toggling chips
   // never empties the row that produced them.
   const chips = useMemo(() => buildProjectChips(rows, projectById), [rows, projectById])
+
+  // Stable handlers — recreated only when the transition function
+  // changes (never, in practice) so memoized children (chips, rows)
+  // don't reconcile when their parent re-renders.
+  const onSelectAllProjects = useCallback(() => {
+    startTransition(() => setProjectFilter(null))
+  }, [])
+  const onSelectProject = useCallback((key: string) => {
+    startTransition(() => setProjectFilter(key))
+  }, [])
+  const onSelectTab = useCallback((next: TimeReviewState) => {
+    startTransition(() => setTab(next))
+  }, [])
 
   return (
     <div className="flex flex-col">
@@ -95,18 +121,22 @@ export function ApprovalQueueScreen() {
         <div className="px-4 pb-3 -mx-1 overflow-x-auto scrollbar-hide">
           <div className="flex gap-1.5 mx-1 whitespace-nowrap">
             <ProjectChip
+              chipKey={null}
               label="All"
-              count={rows.filter((r) => r.state === 'pending').length}
+              count={allPendingCount}
               active={projectFilter === null}
-              onClick={() => setProjectFilter(null)}
+              onSelectAll={onSelectAllProjects}
+              onSelect={onSelectProject}
             />
             {chips.map((c) => (
               <ProjectChip
                 key={c.key}
+                chipKey={c.key}
                 label={c.label}
                 count={c.pendingCount}
                 active={projectFilter === c.key}
-                onClick={() => setProjectFilter(c.key)}
+                onSelectAll={onSelectAllProjects}
+                onSelect={onSelectProject}
               />
             ))}
           </div>
@@ -119,7 +149,7 @@ export function ApprovalQueueScreen() {
             <button
               key={t}
               type="button"
-              onClick={() => setTab(t)}
+              onClick={() => onSelectTab(t)}
               className={`relative flex-1 py-3 text-[13px] font-medium ${tab === t ? 'text-ink' : 'text-ink-3'}`}
             >
               {timeReviewStateLabel(t)}
@@ -239,21 +269,33 @@ function buildProjectChips(rows: TimeReviewRunRow[], projectById: Map<string, Pr
   return entries
 }
 
-function ProjectChip({
+// Memoized so a tab change (or any unrelated parent re-render) doesn't
+// reconcile every chip. The handler is forwarded via stable parent
+// callbacks (onSelectAll / onSelect) instead of an inline closure so
+// React.memo's shallow equality holds.
+const ProjectChip = memo(function ProjectChip({
+  chipKey,
   label,
   count,
   active,
-  onClick,
+  onSelectAll,
+  onSelect,
 }: {
+  chipKey: string | null
   label: string
   count: number
   active: boolean
-  onClick: () => void
+  onSelectAll: () => void
+  onSelect: (key: string) => void
 }) {
+  const handleClick = () => {
+    if (chipKey === null) onSelectAll()
+    else onSelect(chipKey)
+  }
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={handleClick}
       className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-[12px] font-medium border ${
         active ? 'bg-ink text-white border-ink' : 'bg-card text-ink-2 border-line'
       }`}
@@ -268,7 +310,7 @@ function ProjectChip({
       </span>
     </button>
   )
-}
+})
 
 interface ReviewGroup {
   key: string
