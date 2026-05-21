@@ -209,6 +209,68 @@ describe('handleAiChatRoutes — operator-context chat staging', () => {
     expect(pool.auditEvents).toEqual([])
   })
 
+  it('rejects message arrays larger than the per-request cap', async () => {
+    // MAX_MESSAGES_PER_REQUEST = 8. Pad to 9 operator-role entries; the
+    // route should refuse before any audit_events write.
+    const pool = new FakePool()
+    const oversized = Array.from({ length: 9 }, (_, i) => ({
+      id: `m-${i}`,
+      role: 'operator' as const,
+      body: `msg ${i}`,
+    }))
+    const { ctx, responses } = makeCtx(pool, { ...validBody, messages: oversized })
+    await handleAiChatRoutes(buildReq(), buildUrl(), ctx)
+
+    expect(responses[0]).toEqual({
+      status: 400,
+      body: {
+        error: 'messages capped at 8; trim history before sending',
+      },
+    })
+    expect(pool.auditEvents).toEqual([])
+  })
+
+  it('rejects bodies larger than the per-message byte cap', async () => {
+    // MAX_BODY_BYTES = 4000. A 4001-char body must 413.
+    const pool = new FakePool()
+    const huge = 'x'.repeat(4001)
+    const { ctx, responses } = makeCtx(pool, {
+      ...validBody,
+      messages: [{ id: 'operator-huge', role: 'operator', body: huge }],
+    })
+    await handleAiChatRoutes(buildReq(), buildUrl(), ctx)
+
+    expect(responses[0]).toEqual({
+      status: 413,
+      body: {
+        error: 'message body exceeds 4000 chars; trim before sending',
+      },
+    })
+    expect(pool.auditEvents).toEqual([])
+  })
+
+  it('picks the latest operator-role message when history contains agent replies', async () => {
+    // The route should walk the array backward and skip non-operator
+    // roles + empty bodies. Crafted history: [operator stale, agent
+    // reply, operator empty, operator latest].
+    const pool = new FakePool()
+    const history = [
+      { id: 'op-stale', role: 'operator' as const, body: 'stale question' },
+      { id: 'agent-1', role: 'agent' as const, body: 'agent reply' },
+      { id: 'op-empty', role: 'operator' as const, body: '   ' },
+      { id: 'op-latest', role: 'operator' as const, body: 'real latest question' },
+    ]
+    const { ctx, responses } = makeCtx(pool, { ...validBody, messages: history })
+    await handleAiChatRoutes(buildReq(), buildUrl(), ctx)
+
+    expect(responses[0]?.status).toBe(202)
+    expect(pool.auditEvents).toHaveLength(1)
+    expect(pool.auditEvents[0]?.after?.chat_message).toMatchObject({
+      message_id: 'op-latest',
+      body: 'real latest question',
+    })
+  })
+
   it('persists the latest operator message to audit_events and mutation ledgers', async () => {
     const pool = new FakePool()
     const { ctx, responses } = makeCtx(pool)
