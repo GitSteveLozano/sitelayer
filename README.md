@@ -136,9 +136,9 @@ docker compose up --build
 
 Local ports: web `:3000`, API `:3001`, MinIO `:9000` (console `:9001`)
 
-Leave Clerk variables empty for local development. The web app renders the
-RoleSwitcher so collaborators can use seeded `e2e-*` roles without Clerk,
-QBO, provider tokens, or private infrastructure access.
+Leaving Clerk variables empty is only for local smoke work. Real collaborator
+deployments need the operator-provided Clerk, QBO, storage, and provider
+credentials for the target environment.
 
 Host-process loop after Docker services are up:
 
