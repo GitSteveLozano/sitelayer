@@ -88,7 +88,7 @@ export function OperatorContextChatWidget() {
           </div>
 
           {widget.messages.length ? (
-            <ul className="border-t border-sand-3 px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
+            <ol className="border-t border-sand-3 px-3 py-2 space-y-2 max-h-64 overflow-y-auto" data-testid="operator-context-chat-thread">
               {widget.messages.map((m) => {
                 const isAwaiting =
                   widget.isAwaitingResponse &&
@@ -106,40 +106,64 @@ export function OperatorContextChatWidget() {
                   m.status === 'staged' &&
                   typeof m.audit_event_id === 'string' &&
                   m.audit_event_id.length > 0
+                const isAgent = m.role === 'agent'
+                // Bubble styling: operator messages anchor right (amber);
+                // agent replies anchor left (sand). Mirrors the standard
+                // chat-UI convention without dragging in a chat library.
+                const bubbleClass = isAgent
+                  ? 'self-start bg-sand-2 border border-sand-3 text-ink-1'
+                  : 'self-end bg-amber-50 border border-amber-200 text-ink-1'
                 return (
-                  <li key={m.id} className="text-sm">
-                    <span className="text-xs uppercase tracking-wide text-ink-3 mr-1">{m.role}</span>
-                    {m.body}
-                    {m.status ? <span className="ml-1 text-xs text-ink-3">({m.status})</span> : null}
-                    {isAwaiting ? (
-                      <span
-                        className="ml-1 inline-flex items-center gap-0.5 text-xs text-amber-700"
-                        aria-live="polite"
-                        aria-label="agent responding"
-                        data-testid="operator-context-chat-responding"
-                      >
-                        <span className="opacity-70">·</span>
-                        <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse" />
-                        <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse [animation-delay:120ms]" />
-                        <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse [animation-delay:240ms]" />
-                        <span className="ml-1">responding</span>
-                      </span>
-                    ) : null}
-                    {canRetry ? (
-                      <button
-                        type="button"
-                        onClick={() => widget.retry(m.audit_event_id!)}
-                        className="ml-2 text-xs text-amber-700 underline hover:text-amber-900"
-                        data-testid="operator-context-chat-retry"
-                        aria-label="retry polling for this message"
-                      >
-                        ↻ retry
-                      </button>
-                    ) : null}
+                  <li
+                    key={m.id}
+                    className={`flex flex-col ${isAgent ? 'items-start' : 'items-end'}`}
+                    data-testid={`operator-context-chat-msg-${m.role}`}
+                  >
+                    <div className={`max-w-[85%] rounded-lg px-3 py-1.5 text-sm ${bubbleClass}`}>
+                      <header className="flex items-baseline gap-2 text-[10px] uppercase tracking-wide text-ink-3 mb-0.5">
+                        <span>{isAgent ? 'agent' : 'operator'}</span>
+                        {isAgent && m.audit_event_id ? (
+                          <span className="font-mono normal-case opacity-70" title={`response audit ${m.audit_event_id}`}>
+                            {m.audit_event_id.slice(0, 8)}
+                          </span>
+                        ) : null}
+                      </header>
+                      <div className="whitespace-pre-wrap">{m.body}</div>
+                      {/* Status row: shown only for non-agent messages while the loop is in flight. */}
+                      {!isAgent && (m.status || isAwaiting || canRetry) ? (
+                        <footer className="flex items-center gap-2 mt-1 text-[10px] text-ink-3">
+                          {m.status ? <span>({m.status})</span> : null}
+                          {isAwaiting ? (
+                            <span
+                              className="inline-flex items-center gap-0.5 text-amber-700"
+                              aria-live="polite"
+                              aria-label="agent responding"
+                              data-testid="operator-context-chat-responding"
+                            >
+                              <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse" />
+                              <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse [animation-delay:120ms]" />
+                              <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse [animation-delay:240ms]" />
+                              <span className="ml-1">responding</span>
+                            </span>
+                          ) : null}
+                          {canRetry ? (
+                            <button
+                              type="button"
+                              onClick={() => widget.retry(m.audit_event_id!)}
+                              className="text-amber-700 underline hover:text-amber-900"
+                              data-testid="operator-context-chat-retry"
+                              aria-label="retry polling for this message"
+                            >
+                              ↻ retry
+                            </button>
+                          ) : null}
+                        </footer>
+                      ) : null}
+                    </div>
                   </li>
                 )
               })}
-            </ul>
+            </ol>
           ) : null}
 
           {widget.error ? (
