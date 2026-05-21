@@ -48,6 +48,7 @@ import { handleQboCustomFieldRoutes } from './qbo-custom-fields.js'
 import { handleInventoryUtilizationRoutes } from './inventory-utilization.js'
 import { handleBidAccuracyRoutes } from './bid-accuracy.js'
 import { handleAiInsightRoutes } from './ai-insights.js'
+import { handleAiChatRoutes } from './ai-chat.js'
 import { handleTakeoffImportRoutes } from './takeoff-import.js'
 import { handleTakeoffDraftRoutes } from './takeoff-drafts.js'
 import { handleTakeoffMeasurementRoutes } from './takeoff-measurements.js'
@@ -467,6 +468,19 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     // AI Layer — insights CRUD + agent triggers (Phase 5).
     () =>
       handleAiInsightRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // AI Layer — operator-context chat staging (consumer of the
+    // browser-bridge operator-context handshake; see
+    // digital-ontology/operator-context-handshake-design.md).
+    () =>
+      handleAiChatRoutes(req, url, {
         pool,
         company,
         currentUserId,
