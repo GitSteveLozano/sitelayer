@@ -8,9 +8,9 @@ import { useOperatorContext } from '@/lib/operator-context'
  * content script on operator-owned origins) and lets the operator stage
  * draft messages grounded in the active project.
  *
- * v0 is renderer-only: it shows the latest packet and accepts a draft.
- * It does NOT POST anywhere yet — /api/ai/chat is a follow-up. The
- * statechart (machines/chat-widget.ts) already has the seam.
+ * v0 shows the latest packet and persists staged messages through
+ * POST /api/ai/chat. The endpoint logs the message for audit/follow-up;
+ * LLM response generation is still a later worker.
  *
  * Visibility gate: the widget is hidden entirely for non-operator
  * visitors (no packet ever arrives), so this surface is invisible to
@@ -21,13 +21,14 @@ import { useOperatorContext } from '@/lib/operator-context'
 export function OperatorContextChatWidget() {
   const packet = useOperatorContext()
   const widget = useChatWidget()
+  const { syncContext } = widget
 
   // Mirror the global operator-context into the chat-widget machine so
   // anything the machine renders reads from a single, statechart-owned
   // snapshot rather than the global window state directly.
   useEffect(() => {
-    widget.syncContext(packet ?? null)
-  }, [packet, widget])
+    syncContext(packet ?? null)
+  }, [packet, syncContext])
 
   // Non-operator visitor: never render.
   if (!packet) {
@@ -92,9 +93,16 @@ export function OperatorContextChatWidget() {
                 <li key={m.id} className="text-sm">
                   <span className="text-xs uppercase tracking-wide text-ink-3 mr-1">{m.role}</span>
                   {m.body}
+                  {m.status ? <span className="ml-1 text-xs text-ink-3">({m.status})</span> : null}
                 </li>
               ))}
             </ul>
+          ) : null}
+
+          {widget.error ? (
+            <div className="border-t border-sand-3 px-3 py-2 text-xs text-red-700" role="alert">
+              {widget.error}
+            </div>
           ) : null}
 
           <div className="border-t border-sand-3 px-3 py-2 flex gap-2">
@@ -103,27 +111,28 @@ export function OperatorContextChatWidget() {
               value={widget.draft}
               onChange={(e) => widget.setDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === 'Enter' && !e.shiftKey && !widget.isSending) {
                   e.preventDefault()
                   widget.send()
                 }
               }}
               placeholder="Ask about this project…"
+              disabled={widget.isSending}
               className="flex-1 text-sm border border-sand-3 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-amber-400"
               data-testid="operator-context-chat-input"
             />
             <button
               type="button"
               onClick={widget.send}
-              disabled={!widget.draft.trim()}
-              className="text-sm px-2 py-1 rounded bg-amber-500 text-white disabled:opacity-50"
+              disabled={!widget.draft.trim() || widget.isSending}
+              className="text-sm min-w-[4.5rem] px-2 py-1 rounded bg-amber-500 text-white disabled:opacity-50"
               data-testid="operator-context-chat-send"
             >
-              Stage
+              {widget.isSending ? 'Sending...' : 'Stage'}
             </button>
           </div>
           <footer className="px-3 py-1 text-[10px] text-ink-3 border-t border-sand-3 bg-sand-1">
-            v0 · drafts are staged locally; /api/ai/chat wiring is pending.
+            v0 · staged messages are logged for operator follow-up.
           </footer>
         </section>
       ) : null}

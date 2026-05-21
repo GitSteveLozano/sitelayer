@@ -1,15 +1,20 @@
 import { useCallback } from 'react'
 import { useMachine } from '@xstate/react'
-import { assign, setup } from 'xstate'
+import { assign, fromPromise, setup } from 'xstate'
+import {
+  stageOperatorContextChatMessage,
+  type OperatorContextChatMessage,
+  type StageOperatorContextChatResponse,
+} from '@/lib/api/operator-context-chat'
 import type { OperatorContextPacket } from '@/lib/operator-context'
 
 /**
  * Chat-widget UI machine — sitelayer side of the operator-context handshake.
  *
  * v0 scope: the widget opens/closes, shows the latest operator-context
- * packet, and lets the operator stage a draft message. We DO NOT yet
- * wire send→backend; that lands once /api/ai/chat exists on sitelayer.
- * The state shape is forward-looking so we can extend without rewiring.
+ * packet, and lets the operator persist a staged message through
+ * POST /api/ai/chat. The endpoint logs the message for auditability; a
+ * later LLM-response worker can consume that audit event.
  *
  * Sitelayer CLAUDE.md (xstate-discipline rule): non-trivial UI state
  * must be a real statechart, not raw useState lifecycles. Even the
@@ -17,13 +22,9 @@ import type { OperatorContextPacket } from '@/lib/operator-context'
  * sending/streaming/error transitions slot in cleanly.
  */
 
-export type ChatWidgetMessage = {
-  id: string
-  role: 'operator' | 'agent'
-  body: string
-  /** Optional reference back to the operator-context packet the
-   * operator saw when sending this message. Helps audit grounding. */
-  packet_generated_at?: string
+export type ChatWidgetMessage = OperatorContextChatMessage & {
+  status?: 'pending' | 'staged' | 'failed'
+  audit_event_id?: string
 }
 
 type ChatWidgetContext = {
@@ -33,6 +34,8 @@ type ChatWidgetContext = {
   packetMissing: boolean
   draft: string
   messages: ChatWidgetMessage[]
+  pendingMessageId: string | null
+  lastStage: StageOperatorContextChatResponse | null
   error: string | null
 }
 
@@ -50,86 +53,174 @@ const initialContext: ChatWidgetContext = {
   packetMissing: true,
   draft: '',
   messages: [],
+  pendingMessageId: null,
+  lastStage: null,
   error: null,
 }
 
-export const chatWidgetMachine = setup({
-  types: {
-    context: {} as ChatWidgetContext,
-    events: {} as ChatWidgetEvent,
-  },
-  actions: {
-    syncPacket: assign({
-      packet: ({ event }) => (event.type === 'CONTEXT_UPDATED' ? event.packet : null),
-      packetMissing: ({ event }) => (event.type === 'CONTEXT_UPDATED' ? !event.packet : true),
-    }),
-    setDraft: assign({
-      draft: ({ event }) => (event.type === 'SET_DRAFT' ? event.value : ''),
-    }),
-    enqueueDraft: assign({
-      messages: ({ context }) => {
+type StageInput = {
+  messages: OperatorContextChatMessage[]
+  operatorContext: OperatorContextPacket
+}
+
+function stageableMessages(messages: ChatWidgetMessage[]): OperatorContextChatMessage[] {
+  return messages.slice(-8).map((m) => {
+    const message: OperatorContextChatMessage = {
+      id: m.id,
+      role: m.role,
+      body: m.body,
+    }
+    if (m.packet_generated_at) {
+      message.packet_generated_at = m.packet_generated_at
+    }
+    return message
+  })
+}
+
+function isOpenState(value: unknown): boolean {
+  return typeof value === 'object' && value !== null && 'open' in value
+}
+
+function isSendingState(value: unknown): boolean {
+  return (
+    typeof value === 'object' && value !== null && 'open' in value && (value as { open?: unknown }).open === 'sending'
+  )
+}
+
+export function createChatWidgetMachine(
+  submitter: (input: StageInput) => Promise<StageOperatorContextChatResponse> = stageOperatorContextChatMessage,
+) {
+  return setup({
+    types: {
+      context: {} as ChatWidgetContext,
+      events: {} as ChatWidgetEvent,
+    },
+    actors: {
+      stageMessage: fromPromise<StageOperatorContextChatResponse, StageInput>(({ input }) => submitter(input)),
+    },
+    actions: {
+      syncPacket: assign({
+        packet: ({ event }) => (event.type === 'CONTEXT_UPDATED' ? event.packet : null),
+        packetMissing: ({ event }) => (event.type === 'CONTEXT_UPDATED' ? !event.packet : true),
+      }),
+      setDraft: assign({
+        draft: ({ event }) => (event.type === 'SET_DRAFT' ? event.value : ''),
+        error: () => null,
+      }),
+      prepareDraftForSend: assign(({ context }) => {
         const trimmed = context.draft.trim()
-        if (!trimmed) return context.messages
+        if (!trimmed) return {}
         const id = `m-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
         const message: ChatWidgetMessage = {
           id,
           role: 'operator',
           body: trimmed,
+          status: 'pending',
         }
         if (context.packet?.generated_at) {
           message.packet_generated_at = context.packet.generated_at
         }
-        return [...context.messages, message]
-      },
-      draft: () => '',
-    }),
-    dismissError: assign({ error: () => null }),
-  },
-  guards: {
-    hasDraft: ({ context }) => context.draft.trim().length > 0,
-  },
-}).createMachine({
-  id: 'chatWidget',
-  initial: 'closed',
-  context: initialContext,
-  // Context updates and SET_DRAFT can land in any state.
-  on: {
-    CONTEXT_UPDATED: { actions: 'syncPacket' },
-    SET_DRAFT: { actions: 'setDraft' },
-    DISMISS_ERROR: { actions: 'dismissError' },
-  },
-  states: {
-    closed: {
-      on: {
-        OPEN: { target: 'open' },
-        TOGGLE: { target: 'open' },
-      },
+        return {
+          messages: [...context.messages, message],
+          pendingMessageId: id,
+          draft: '',
+          error: null,
+          lastStage: null,
+        }
+      }),
+      missingPacketError: assign({
+        error: () => 'Operator context is not available yet.',
+      }),
+      dismissError: assign({ error: () => null }),
     },
-    open: {
-      initial: 'idle',
-      on: {
-        CLOSE: { target: 'closed' },
-        TOGGLE: { target: 'closed' },
+    guards: {
+      hasDraft: ({ context }) => context.draft.trim().length > 0,
+    },
+  }).createMachine({
+    id: 'chatWidget',
+    initial: 'closed',
+    context: initialContext,
+    // Context updates and SET_DRAFT can land in any state.
+    on: {
+      CONTEXT_UPDATED: { actions: 'syncPacket' },
+      SET_DRAFT: { actions: 'setDraft' },
+      DISMISS_ERROR: { actions: 'dismissError' },
+    },
+    states: {
+      closed: {
+        on: {
+          OPEN: { target: 'open' },
+          TOGGLE: { target: 'open' },
+        },
       },
-      states: {
-        idle: {
-          on: {
-            SEND: {
-              guard: 'hasDraft',
-              actions: 'enqueueDraft',
-              // v0 stub: enqueue locally; do NOT transition to a
-              // 'sending' state because /api/ai/chat isn't wired yet.
-              // When it lands, change this to `target: 'sending'`
-              // and let an actor POST + stream.
-              target: 'idle',
-              reenter: true,
+      open: {
+        initial: 'idle',
+        on: {
+          CLOSE: { target: 'closed' },
+          TOGGLE: { target: 'closed' },
+        },
+        states: {
+          idle: {
+            on: {
+              SEND: [
+                {
+                  guard: ({ context }) => context.draft.trim().length > 0 && context.packet !== null,
+                  target: 'sending',
+                  actions: 'prepareDraftForSend',
+                },
+                {
+                  guard: 'hasDraft',
+                  actions: 'missingPacketError',
+                },
+              ],
+            },
+          },
+          sending: {
+            invoke: {
+              id: 'stageMessage',
+              src: 'stageMessage',
+              input: ({ context }) => {
+                if (!context.packet) {
+                  throw new Error('missing operator context')
+                }
+                return {
+                  operatorContext: context.packet,
+                  messages: stageableMessages(context.messages),
+                }
+              },
+              onDone: {
+                target: 'idle',
+                actions: assign({
+                  messages: ({ context, event }) =>
+                    context.messages.map((m) =>
+                      m.id === context.pendingMessageId
+                        ? { ...m, status: 'staged', audit_event_id: event.output.audit_event_id }
+                        : m,
+                    ),
+                  pendingMessageId: () => null,
+                  lastStage: ({ event }) => event.output,
+                  error: () => null,
+                }),
+              },
+              onError: {
+                target: 'idle',
+                actions: assign({
+                  messages: ({ context }) =>
+                    context.messages.map((m) => (m.id === context.pendingMessageId ? { ...m, status: 'failed' } : m)),
+                  pendingMessageId: () => null,
+                  error: ({ event }) =>
+                    event.error instanceof Error ? event.error.message : 'Could not stage chat message.',
+                }),
+              },
             },
           },
         },
       },
     },
-  },
-})
+  })
+}
+
+export const chatWidgetMachine = createChatWidgetMachine()
 
 export type ChatWidgetHookResult = {
   isOpen: boolean
@@ -138,6 +229,7 @@ export type ChatWidgetHookResult = {
   draft: string
   messages: ChatWidgetMessage[]
   error: string | null
+  isSending: boolean
   open: () => void
   close: () => void
   toggle: () => void
@@ -158,12 +250,13 @@ export function useChatWidget(): ChatWidgetHookResult {
     [send],
   )
   return {
-    isOpen: state.matches('open'),
+    isOpen: isOpenState(state.value),
     packet: state.context.packet,
     packetMissing: state.context.packetMissing,
     draft: state.context.draft,
     messages: state.context.messages,
     error: state.context.error,
+    isSending: isSendingState(state.value),
     open,
     close,
     toggle,
