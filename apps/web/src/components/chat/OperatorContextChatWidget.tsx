@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useChatWidget } from '@/machines/chat-widget'
 import { useOperatorContext } from '@/lib/operator-context'
 
@@ -30,10 +30,33 @@ export function OperatorContextChatWidget() {
     syncContext(packet ?? null)
   }, [packet, syncContext])
 
+  // Tick a once-per-second timer so the "responding for Ns" elapsed
+  // counter rerenders while polling. Only runs when polling is active;
+  // ride free when idle to avoid the runtime cost of a 1-Hz interval.
+  const [, forceTick] = useState(0)
+  useEffect(() => {
+    if (!widget.isAwaitingResponse) return
+    const id = window.setInterval(() => forceTick((n) => n + 1), 1000)
+    return () => window.clearInterval(id)
+  }, [widget.isAwaitingResponse])
+
   // Non-operator visitor: never render.
   if (!packet) {
     return null
   }
+
+  // Polling elapsed-time + stall classification.
+  // Computed once per render so every awaiting message footer shares
+  // the same source-of-truth; the 1Hz forceTick effect drives the
+  // rerender while polling is active.
+  const pollingElapsedSec =
+    widget.isAwaitingResponse && widget.awaitingResponseSince
+      ? Math.max(0, Math.round((Date.now() - widget.awaitingResponseSince) / 1000))
+      : null
+  // 30s is past the healthy 5–15s range for the subscription-CLI lane;
+  // switch the indicator to red so the operator notices. pollChatResponse
+  // gives up at 60s, so the warning fires well before the auto-fail.
+  const pollingStalled = pollingElapsedSec !== null && pollingElapsedSec >= 30
 
   return (
     <div
@@ -135,15 +158,18 @@ export function OperatorContextChatWidget() {
                           {m.status ? <span>({m.status})</span> : null}
                           {isAwaiting ? (
                             <span
-                              className="inline-flex items-center gap-0.5 text-amber-700"
+                              className={`inline-flex items-center gap-0.5 ${pollingStalled ? 'text-red-700' : 'text-amber-700'}`}
                               aria-live="polite"
-                              aria-label="agent responding"
+                              aria-label={pollingStalled ? 'agent responding (stalled)' : 'agent responding'}
                               data-testid="operator-context-chat-responding"
                             >
-                              <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse" />
-                              <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse [animation-delay:120ms]" />
-                              <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse [animation-delay:240ms]" />
-                              <span className="ml-1">responding</span>
+                              <span className={`inline-block w-1 h-1 rounded-full ${pollingStalled ? 'bg-red-600' : 'bg-amber-600'} animate-pulse`} />
+                              <span className={`inline-block w-1 h-1 rounded-full ${pollingStalled ? 'bg-red-600' : 'bg-amber-600'} animate-pulse [animation-delay:120ms]`} />
+                              <span className={`inline-block w-1 h-1 rounded-full ${pollingStalled ? 'bg-red-600' : 'bg-amber-600'} animate-pulse [animation-delay:240ms]`} />
+                              <span className="ml-1">
+                                responding
+                                {pollingElapsedSec !== null ? ` · ${pollingElapsedSec}s` : null}
+                              </span>
                             </span>
                           ) : null}
                           {canRetry ? (

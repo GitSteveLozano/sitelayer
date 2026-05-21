@@ -51,6 +51,11 @@ type ChatWidgetContext = {
    * Set when sending succeeds; cleared when awaitingResponse resolves
    * or aborts. */
   awaitingResponseFor: string | null
+  /** Date.now() captured the moment the widget enters awaitingResponse.
+   * Lets the renderer surface "responding for Xs" so the operator can
+   * tell at a glance whether the subscription-CLI lane is healthy
+   * (typical 5–15s) or stalling (>30s). Cleared on every exit. */
+  awaitingResponseSince: number | null
   lastStage: StageOperatorContextChatResponse | null
   error: string | null
 }
@@ -72,6 +77,7 @@ const initialContext: ChatWidgetContext = {
   messages: [],
   pendingMessageId: null,
   awaitingResponseFor: null,
+  awaitingResponseSince: null,
   lastStage: null,
   error: null,
 }
@@ -220,6 +226,12 @@ export function createChatWidgetMachine(
         // have completed since, or a re-dispatch happened out-of-band).
         awaitingResponseFor: ({ event }) =>
           event.type === 'RETRY' ? event.auditEventId : null,
+        // Re-arm the elapsed counter from zero on each retry. Old
+        // timestamp from the timed-out attempt would otherwise show
+        // a misleading "responding for 90s+" right after the operator
+        // hit the retry button.
+        awaitingResponseSince: ({ event }) =>
+          event.type === 'RETRY' ? Date.now() : null,
         error: () => null,
       }),
       missingPacketError: assign({
@@ -303,6 +315,7 @@ export function createChatWidgetMachine(
                     ),
                   pendingMessageId: () => null,
                   awaitingResponseFor: ({ event }) => event.output.audit_event_id,
+                  awaitingResponseSince: () => Date.now(),
                   lastStage: ({ event }) => event.output,
                   error: () => null,
                 }),
@@ -314,6 +327,7 @@ export function createChatWidgetMachine(
                     context.messages.map((m) => (m.id === context.pendingMessageId ? { ...m, status: 'failed' } : m)),
                   pendingMessageId: () => null,
                   awaitingResponseFor: () => null,
+                  awaitingResponseSince: () => null,
                   error: ({ event }) =>
                     event.error instanceof Error ? event.error.message : 'Could not stage chat message.',
                 }),
@@ -355,6 +369,7 @@ export function createChatWidgetMachine(
                     ]
                   },
                   awaitingResponseFor: () => null,
+                  awaitingResponseSince: () => null,
                   error: () => null,
                 }),
               },
@@ -362,6 +377,7 @@ export function createChatWidgetMachine(
                 target: 'idle',
                 actions: assign({
                   awaitingResponseFor: () => null,
+                  awaitingResponseSince: () => null,
                   error: ({ event }) =>
                     event.error instanceof Error
                       ? event.error.message
@@ -393,6 +409,12 @@ export type ChatWidgetHookResult = {
   /** Audit_event_id we're polling for, or null when idle. UIs can mark
    * the corresponding staged message with a thinking indicator. */
   awaitingResponseFor: string | null
+  /** Date.now() value captured the moment polling started for the
+   * current audit_event_id, or null when idle. UIs can subtract from
+   * Date.now() to render "responding for Xs" so the operator can see
+   * whether the subscription-CLI lane is healthy (5–15s typical) or
+   * stalling. */
+  awaitingResponseSince: number | null
   open: () => void
   close: () => void
   toggle: () => void
@@ -431,6 +453,7 @@ export function useChatWidget(): ChatWidgetHookResult {
     isSending: isSendingState(state.value),
     isAwaitingResponse: isAwaitingResponseState(state.value),
     awaitingResponseFor: state.context.awaitingResponseFor,
+    awaitingResponseSince: state.context.awaitingResponseSince,
     open,
     close,
     toggle,
