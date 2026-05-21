@@ -38,17 +38,17 @@ covers them.
 
 ## Inputs
 
-| What                 | Value                                                       | Source                          |
-| -------------------- | ----------------------------------------------------------- | ------------------------------- |
-| Bucket               | `sitelayer-blueprints-prod`                                 | `docker-compose.prod.yml:28`    |
-| Region               | `tor1`                                                      | `INFRASTRUCTURE_READY.md`       |
-| Endpoint             | `https://tor1.digitaloceanspaces.com`                       | `DEPLOYMENT.md:144`             |
-| Web origin (prod)    | `https://sitelayer.sandolab.xyz`                            | `apps/api/src/server.ts:149`    |
-| Preview origin       | `https://main.preview.sitelayer.sandolab.xyz`               | `CRITICAL_PATH.md:29`           |
-| Required HTTP verbs  | `GET`, `HEAD`                                               | PDF.js + browser image fetch    |
-| Required req headers | `Range`, `If-Match`, `If-Modified-Since`, `If-None-Match`   | PDF.js range fetch              |
-| Required exp headers | `Content-Range`, `Content-Length`, `ETag`, `Last-Modified`, `Accept-Ranges`, `Content-Disposition` | PDF.js |
-| Max age              | `3600` (seconds; cap preflight churn)                       | n/a — recommended               |
+| What                 | Value                                                                                              | Source                       |
+| -------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------- |
+| Bucket               | `sitelayer-blueprints-prod`                                                                        | `docker-compose.prod.yml:28` |
+| Region               | `tor1`                                                                                             | `INFRASTRUCTURE_READY.md`    |
+| Endpoint             | `https://tor1.digitaloceanspaces.com`                                                              | `DEPLOYMENT.md:144`          |
+| Web origin (prod)    | `https://sitelayer.sandolab.xyz`                                                                   | `apps/api/src/server.ts:149` |
+| Preview origin       | `https://main.preview.sitelayer.sandolab.xyz`                                                      | `CRITICAL_PATH.md:29`        |
+| Required HTTP verbs  | `GET`, `HEAD`                                                                                      | PDF.js + browser image fetch |
+| Required req headers | `Range`, `If-Match`, `If-Modified-Since`, `If-None-Match`                                          | PDF.js range fetch           |
+| Required exp headers | `Content-Range`, `Content-Length`, `ETag`, `Last-Modified`, `Accept-Ranges`, `Content-Disposition` | PDF.js                       |
+| Max age              | `3600` (seconds; cap preflight churn)                                                              | n/a — recommended            |
 
 ## Step 1: Inspect the current CORS rule
 
@@ -93,18 +93,9 @@ Save this JSON to `/tmp/sitelayer-cors.json`:
   "CORSRules": [
     {
       "ID": "sitelayer-blueprint-pdfjs",
-      "AllowedOrigins": [
-        "https://sitelayer.sandolab.xyz",
-        "https://main.preview.sitelayer.sandolab.xyz"
-      ],
+      "AllowedOrigins": ["https://sitelayer.sandolab.xyz", "https://main.preview.sitelayer.sandolab.xyz"],
       "AllowedMethods": ["GET", "HEAD"],
-      "AllowedHeaders": [
-        "Range",
-        "If-Match",
-        "If-Modified-Since",
-        "If-None-Match",
-        "Authorization"
-      ],
+      "AllowedHeaders": ["Range", "If-Match", "If-Modified-Since", "If-None-Match", "Authorization"],
       "ExposeHeaders": [
         "Accept-Ranges",
         "Content-Range",
