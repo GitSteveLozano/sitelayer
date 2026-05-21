@@ -31,3 +31,34 @@ export function stageOperatorContextChatMessage(
     },
   })
 }
+
+/**
+ * Shape of the polling endpoint that the chat-widget machine consumes
+ * during the awaitingResponse state. Returns 202 with status='staged'
+ * while the response is pending, 200 with status='responded' once the
+ * subscription-CLI runner has written the respond_message audit row
+ * back via the webhook.
+ */
+export type FetchOperatorContextChatResponseResult =
+  | {
+      status: 'staged'
+      response_pending: true
+      audit_event_id: string
+      followup_hint?: string
+    }
+  | {
+      status: 'responded'
+      audit_event_id: string
+      response_audit_event_id: string
+      body: string | null
+      created_at: string
+      raw?: Record<string, unknown>
+    }
+
+export async function fetchOperatorContextChatResponse(
+  auditEventId: string,
+): Promise<FetchOperatorContextChatResponseResult> {
+  return request(`/api/ai/chat/${encodeURIComponent(auditEventId)}/response`, {
+    method: 'GET',
+  })
+}

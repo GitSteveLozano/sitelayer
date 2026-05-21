@@ -2,7 +2,9 @@ import { useCallback } from 'react'
 import { useMachine } from '@xstate/react'
 import { assign, fromPromise, setup } from 'xstate'
 import {
+  fetchOperatorContextChatResponse,
   stageOperatorContextChatMessage,
+  type FetchOperatorContextChatResponseResult,
   type OperatorContextChatMessage,
   type StageOperatorContextChatResponse,
 } from '@/lib/api/operator-context-chat'
@@ -23,8 +25,18 @@ import type { OperatorContextPacket } from '@/lib/operator-context'
  */
 
 export type ChatWidgetMessage = OperatorContextChatMessage & {
-  status?: 'pending' | 'staged' | 'failed'
+  status?: 'pending' | 'staged' | 'responded' | 'failed'
   audit_event_id?: string
+  response_body?: string
+  response_audit_event_id?: string
+}
+
+/** Polled-response payload assembled when awaitingResponse resolves. */
+export type ChatWidgetResponse = {
+  audit_event_id: string
+  response_audit_event_id: string
+  body: string
+  created_at: string
 }
 
 type ChatWidgetContext = {
@@ -35,6 +47,10 @@ type ChatWidgetContext = {
   draft: string
   messages: ChatWidgetMessage[]
   pendingMessageId: string | null
+  /** The audit_event_id we're awaiting the CLI runner's response for.
+   * Set when sending succeeds; cleared when awaitingResponse resolves
+   * or aborts. */
+  awaitingResponseFor: string | null
   lastStage: StageOperatorContextChatResponse | null
   error: string | null
 }
@@ -54,8 +70,62 @@ const initialContext: ChatWidgetContext = {
   draft: '',
   messages: [],
   pendingMessageId: null,
+  awaitingResponseFor: null,
   lastStage: null,
   error: null,
+}
+
+type PollInput = { auditEventId: string }
+
+/**
+ * Polls /api/ai/chat/:audit_event_id/response until the subscription-
+ * CLI runner has written the respond_message audit row (status flips
+ * to 'responded'), or until we give up after maxAttempts.
+ *
+ * Default: 20 attempts × 3s = 60s max wait. The subscription-CLI lane
+ * typically completes a short chat response in 5–15s; 60s is the right
+ * upper bound before the widget shows a "still working…" UX.
+ *
+ * Exported for testing — the machine factory accepts an override so
+ * tests can pin a faster poller.
+ */
+export function pollChatResponse(
+  auditEventId: string,
+  opts: { fetchOnce?: typeof fetchOperatorContextChatResponse; intervalMs?: number; maxAttempts?: number } = {},
+): Promise<ChatWidgetResponse> {
+  const fetchOnce = opts.fetchOnce ?? fetchOperatorContextChatResponse
+  const intervalMs = opts.intervalMs ?? 3000
+  const maxAttempts = opts.maxAttempts ?? 20
+  return new Promise((resolve, reject) => {
+    let attempts = 0
+    const tick = async () => {
+      attempts += 1
+      let result: FetchOperatorContextChatResponseResult
+      try {
+        result = await fetchOnce(auditEventId)
+      } catch (err) {
+        reject(err instanceof Error ? err : new Error('chat response fetch failed'))
+        return
+      }
+      if (result.status === 'responded') {
+        resolve({
+          audit_event_id: result.audit_event_id,
+          response_audit_event_id: result.response_audit_event_id,
+          body: result.body ?? '',
+          created_at: result.created_at,
+        })
+        return
+      }
+      if (attempts >= maxAttempts) {
+        reject(new Error('chat response timeout — subscription-CLI runner did not respond in time'))
+        return
+      }
+      setTimeout(() => {
+        void tick()
+      }, intervalMs)
+    }
+    void tick()
+  })
 }
 
 type StageInput = {
@@ -89,6 +159,7 @@ function isSendingState(value: unknown): boolean {
 
 export function createChatWidgetMachine(
   submitter: (input: StageInput) => Promise<StageOperatorContextChatResponse> = stageOperatorContextChatMessage,
+  poller: (auditEventId: string) => Promise<ChatWidgetResponse> = pollChatResponse,
 ) {
   return setup({
     types: {
@@ -97,6 +168,7 @@ export function createChatWidgetMachine(
     },
     actors: {
       stageMessage: fromPromise<StageOperatorContextChatResponse, StageInput>(({ input }) => submitter(input)),
+      pollResponse: fromPromise<ChatWidgetResponse, PollInput>(({ input }) => poller(input.auditEventId)),
     },
     actions: {
       syncPacket: assign({
@@ -189,7 +261,7 @@ export function createChatWidgetMachine(
                 }
               },
               onDone: {
-                target: 'idle',
+                target: 'awaitingResponse',
                 actions: assign({
                   messages: ({ context, event }) =>
                     context.messages.map((m) =>
@@ -198,6 +270,7 @@ export function createChatWidgetMachine(
                         : m,
                     ),
                   pendingMessageId: () => null,
+                  awaitingResponseFor: ({ event }) => event.output.audit_event_id,
                   lastStage: ({ event }) => event.output,
                   error: () => null,
                 }),
@@ -208,8 +281,59 @@ export function createChatWidgetMachine(
                   messages: ({ context }) =>
                     context.messages.map((m) => (m.id === context.pendingMessageId ? { ...m, status: 'failed' } : m)),
                   pendingMessageId: () => null,
+                  awaitingResponseFor: () => null,
                   error: ({ event }) =>
                     event.error instanceof Error ? event.error.message : 'Could not stage chat message.',
+                }),
+              },
+            },
+          },
+          awaitingResponse: {
+            invoke: {
+              id: 'pollResponse',
+              src: 'pollResponse',
+              input: ({ context }) => ({
+                auditEventId: context.awaitingResponseFor ?? '',
+              }),
+              onDone: {
+                target: 'idle',
+                actions: assign({
+                  // Attach response to the matching staged message (by
+                  // audit_event_id), append a separate agent-role
+                  // message so the chat history reads as a turn.
+                  messages: ({ context, event }) => {
+                    const responseMsg: ChatWidgetMessage = {
+                      id: `r-${event.output.response_audit_event_id}`,
+                      role: 'agent',
+                      body: event.output.body,
+                      audit_event_id: event.output.response_audit_event_id,
+                    }
+                    return [
+                      ...context.messages.map((m) =>
+                        m.audit_event_id === event.output.audit_event_id
+                          ? {
+                              ...m,
+                              status: 'responded' as const,
+                              response_body: event.output.body,
+                              response_audit_event_id: event.output.response_audit_event_id,
+                            }
+                          : m,
+                      ),
+                      responseMsg,
+                    ]
+                  },
+                  awaitingResponseFor: () => null,
+                  error: () => null,
+                }),
+              },
+              onError: {
+                target: 'idle',
+                actions: assign({
+                  awaitingResponseFor: () => null,
+                  error: ({ event }) =>
+                    event.error instanceof Error
+                      ? event.error.message
+                      : 'Chat response did not arrive in time.',
                 }),
               },
             },
