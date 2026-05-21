@@ -489,7 +489,11 @@ describe('handleAiChatRoutes — POST /api/ai/chat/:id/respond (webhook)', () =>
     try {
       const pool = new FakePool()
       const { ctx, responses } = makeCtx(pool, validRespondBody)
-      await handleAiChatRoutes(buildWebhookReq(`Bearer ${webhookToken}`), buildUrl(`/api/ai/chat/${validUuid}/respond`), ctx)
+      await handleAiChatRoutes(
+        buildWebhookReq(`Bearer ${webhookToken}`),
+        buildUrl(`/api/ai/chat/${validUuid}/respond`),
+        ctx,
+      )
       expect(responses[0]?.status).toBe(503)
     } finally {
       if (prev) process.env.SITELAYER_CHAT_WEBHOOK_TOKEN = prev
@@ -513,7 +517,11 @@ describe('handleAiChatRoutes — POST /api/ai/chat/:id/respond (webhook)', () =>
     try {
       const pool = new FakePool()
       const { ctx, responses } = makeCtx(pool, validRespondBody)
-      await handleAiChatRoutes(buildWebhookReq('Bearer wrong-token-zzz'), buildUrl(`/api/ai/chat/${validUuid}/respond`), ctx)
+      await handleAiChatRoutes(
+        buildWebhookReq('Bearer wrong-token-zzz'),
+        buildUrl(`/api/ai/chat/${validUuid}/respond`),
+        ctx,
+      )
       expect(responses[0]).toEqual({ status: 401, body: { error: 'invalid bearer token' } })
     } finally {
       delete process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
