@@ -17,13 +17,13 @@ ops-readiness audit identified as likely.
 
 ## Runbooks
 
-| File                                                                   | Symptom                                                                                                     |
-| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| [`RUNBOOK_QBO_CIRCUIT.md`](./RUNBOOK_QBO_CIRCUIT.md)                   | QBO push halted; `CircuitOpenError` in Sentry; mutation_outbox depth growing for QBO types.                 |
-| [`RUNBOOK_NOTIFICATION_BACKLOG.md`](./RUNBOOK_NOTIFICATION_BACKLOG.md) | `notifications.status='pending'` count > 100; users say confirmations never arrived.                        |
-| [`RUNBOOK_CONNECTION_POOL.md`](./RUNBOOK_CONNECTION_POOL.md)           | API 503s; `Connection terminated unexpectedly` / `timeout exceeded when trying to connect`.                 |
-| [`RUNBOOK_SPACES_UPLOAD.md`](./RUNBOOK_SPACES_UPLOAD.md)               | Blueprint upload 500s; `Failed to upload to Spaces` in API logs.                                            |
-| [`RUNBOOK_SPACES_CORS.md`](./RUNBOOK_SPACES_CORS.md)                   | Web client throws CORS errors fetching presigned blueprint URLs; flipping `BLUEPRINT_DOWNLOAD_PRESIGNED=1`. |
+| File                                                                   | Symptom                                                                                                                                   |
+| ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| [`RUNBOOK_QBO_CIRCUIT.md`](./RUNBOOK_QBO_CIRCUIT.md)                   | QBO push halted; `CircuitOpenError` in Sentry; mutation_outbox depth growing for QBO types.                                               |
+| [`RUNBOOK_NOTIFICATION_BACKLOG.md`](./RUNBOOK_NOTIFICATION_BACKLOG.md) | `notifications.status='pending'` count > 100; users say confirmations never arrived.                                                      |
+| [`RUNBOOK_CONNECTION_POOL.md`](./RUNBOOK_CONNECTION_POOL.md)           | API 503s; `Connection terminated unexpectedly` / `timeout exceeded when trying to connect`.                                               |
+| [`RUNBOOK_SPACES_UPLOAD.md`](./RUNBOOK_SPACES_UPLOAD.md)               | Blueprint upload 500s; `Failed to upload to Spaces` in API logs.                                                                          |
+| [`RUNBOOK_SPACES_CORS.md`](./RUNBOOK_SPACES_CORS.md)                   | Web client throws CORS errors fetching presigned blueprint URLs; flipping `BLUEPRINT_DOWNLOAD_PRESIGNED=1`.                               |
 | [`RUNBOOK_CHAT_DISPATCH.md`](./RUNBOOK_CHAT_DISPATCH.md)               | Operator-context chat widget reply loop wiring (MESH_API_URL, SITELAYER_PUBLIC_BASE, SITELAYER_CHAT_WEBHOOK_TOKEN) + rotation discipline. |
 
 ## Existing runbooks

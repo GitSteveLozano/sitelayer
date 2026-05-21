@@ -111,7 +111,10 @@ export function OperatorContextChatWidget() {
           </div>
 
           {widget.messages.length ? (
-            <ol className="border-t border-sand-3 px-3 py-2 space-y-2 max-h-64 overflow-y-auto" data-testid="operator-context-chat-thread">
+            <ol
+              className="border-t border-sand-3 px-3 py-2 space-y-2 max-h-64 overflow-y-auto"
+              data-testid="operator-context-chat-thread"
+            >
               {widget.messages.map((m) => {
                 const isAwaiting =
                   widget.isAwaitingResponse &&
@@ -146,7 +149,10 @@ export function OperatorContextChatWidget() {
                       <header className="flex items-baseline gap-2 text-[10px] uppercase tracking-wide text-ink-3 mb-0.5">
                         <span>{isAgent ? 'agent' : 'operator'}</span>
                         {isAgent && m.audit_event_id ? (
-                          <span className="font-mono normal-case opacity-70" title={`response audit ${m.audit_event_id}`}>
+                          <span
+                            className="font-mono normal-case opacity-70"
+                            title={`response audit ${m.audit_event_id}`}
+                          >
                             {m.audit_event_id.slice(0, 8)}
                           </span>
                         ) : null}
@@ -163,9 +169,15 @@ export function OperatorContextChatWidget() {
                               aria-label={pollingStalled ? 'agent responding (stalled)' : 'agent responding'}
                               data-testid="operator-context-chat-responding"
                             >
-                              <span className={`inline-block w-1 h-1 rounded-full ${pollingStalled ? 'bg-red-600' : 'bg-amber-600'} animate-pulse`} />
-                              <span className={`inline-block w-1 h-1 rounded-full ${pollingStalled ? 'bg-red-600' : 'bg-amber-600'} animate-pulse [animation-delay:120ms]`} />
-                              <span className={`inline-block w-1 h-1 rounded-full ${pollingStalled ? 'bg-red-600' : 'bg-amber-600'} animate-pulse [animation-delay:240ms]`} />
+                              <span
+                                className={`inline-block w-1 h-1 rounded-full ${pollingStalled ? 'bg-red-600' : 'bg-amber-600'} animate-pulse`}
+                              />
+                              <span
+                                className={`inline-block w-1 h-1 rounded-full ${pollingStalled ? 'bg-red-600' : 'bg-amber-600'} animate-pulse [animation-delay:120ms]`}
+                              />
+                              <span
+                                className={`inline-block w-1 h-1 rounded-full ${pollingStalled ? 'bg-red-600' : 'bg-amber-600'} animate-pulse [animation-delay:240ms]`}
+                              />
                               <span className="ml-1">
                                 responding
                                 {pollingElapsedSec !== null ? ` · ${pollingElapsedSec}s` : null}

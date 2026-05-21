@@ -26,15 +26,15 @@ Field crews on spotty connectivity are the **primary user-facing constraint**. E
 
 Resources that satisfy **all four** of: (a) field-edit-heavy, (b) currently routed through the offline queue OR have aggressive `invalidateQueries`, (c) have a stable per-row identity, (d) fit in IndexedDB quota for a typical project:
 
-| Resource                | Volume estimate (per active project) | Why it's in the pool                                                                                                  |
-| ----------------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `projects`              | 10–200 active rows / company         | Read every screen; current `invalidateQueries({queryKey: ['projects']})` is the worst offender for refetch storms.    |
-| `takeoff_measurements`  | 50–2000 / project                    | High write volume, polygon canvas, **already offline-queued** (`takeoff_measurement_create`). The pilot.              |
-| `daily_logs` (rows)     | 1 / project / day                    | Field-edit, photos, multiple kinds in offline queue (`daily_log_*`).                                                  |
-| `daily_log_photos`      | 10–50 / log                          | Metadata only — photo blobs stay in Spaces; pool holds the row.                                                       |
-| `clock_events`          | ~5 / worker / day                    | Geofence-triggered, already offline-queued (`clock_in`, `clock_out`, `clock_void`, `clock_event_photo_upload`).       |
-| `labor_entries`         | ~5 / worker / day                    | Derived from clock_out; show on review screens.                                                                       |
-| `time_review_runs`      | ~50 pending / company                | Approval-queue screen reads/updates every refresh; XState workflow already exposes a clean `state_version` for OCC.   |
+| Resource               | Volume estimate (per active project) | Why it's in the pool                                                                                                |
+| ---------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
+| `projects`             | 10–200 active rows / company         | Read every screen; current `invalidateQueries({queryKey: ['projects']})` is the worst offender for refetch storms.  |
+| `takeoff_measurements` | 50–2000 / project                    | High write volume, polygon canvas, **already offline-queued** (`takeoff_measurement_create`). The pilot.            |
+| `daily_logs` (rows)    | 1 / project / day                    | Field-edit, photos, multiple kinds in offline queue (`daily_log_*`).                                                |
+| `daily_log_photos`     | 10–50 / log                          | Metadata only — photo blobs stay in Spaces; pool holds the row.                                                     |
+| `clock_events`         | ~5 / worker / day                    | Geofence-triggered, already offline-queued (`clock_in`, `clock_out`, `clock_void`, `clock_event_photo_upload`).     |
+| `labor_entries`        | ~5 / worker / day                    | Derived from clock_out; show on review screens.                                                                     |
+| `time_review_runs`     | ~50 pending / company                | Approval-queue screen reads/updates every refresh; XState workflow already exposes a clean `state_version` for OCC. |
 
 ### 2.2 Stays on TanStack Query
 
@@ -212,10 +212,15 @@ JSON Patch is **not idempotent** by default (`{op:add, path:/byId/X}` fails if X
 **Cross-row delta** (POST `/api/projects/:id/takeoff/measurement` recomputes the estimate):
 
 ```json
-{ "delta": { "resource": "takeoff_measurements", "ops": [
-  { "op": "replace", "path": "/byId/01HM.../version", "value": 8 },
-  { "op": "replace", "path": "/byId/01HM.../quantity", "value": "143.5" }
-] } }
+{
+  "delta": {
+    "resource": "takeoff_measurements",
+    "ops": [
+      { "op": "replace", "path": "/byId/01HM.../version", "value": 8 },
+      { "op": "replace", "path": "/byId/01HM.../quantity", "value": "143.5" }
+    ]
+  }
+}
 ```
 
 Plus, if the estimate also moves, a **second envelope** on `estimate_lines` flows in the same response. (See §5.4.)
@@ -244,32 +249,32 @@ These are the endpoints whose response bodies need to grow a `deltas` field. **A
 
 ### 5.1 Pilot (Phase 2 — `takeoff_measurements`)
 
-| Endpoint                                                         | Route file                                                      | Notes                                          |
-| ---------------------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------- |
-| `POST /api/projects/:id/takeoff/measurement`                     | `apps/api/src/routes/takeoff-write.ts`                          | Return delta for both measurement + estimate.  |
-| `POST /api/projects/:id/takeoff/measurements`                    | `apps/api/src/routes/takeoff-write.ts`                          | Bulk replace — single big delta for the set.   |
-| `PATCH /api/takeoff/measurements/:id`                            | `apps/api/src/routes/takeoff-measurements.ts`                   | Already does LWW 412 — return delta on success. |
-| `DELETE /api/takeoff/measurements/:id`                           | `apps/api/src/routes/takeoff-measurements.ts`                   | `{op: 'remove'}`.                              |
-| `GET /api/projects/:id/takeoff/measurements` (list — hydration)  | same                                                            | No change — pool hydrates from this on boot.   |
+| Endpoint                                                        | Route file                                    | Notes                                           |
+| --------------------------------------------------------------- | --------------------------------------------- | ----------------------------------------------- |
+| `POST /api/projects/:id/takeoff/measurement`                    | `apps/api/src/routes/takeoff-write.ts`        | Return delta for both measurement + estimate.   |
+| `POST /api/projects/:id/takeoff/measurements`                   | `apps/api/src/routes/takeoff-write.ts`        | Bulk replace — single big delta for the set.    |
+| `PATCH /api/takeoff/measurements/:id`                           | `apps/api/src/routes/takeoff-measurements.ts` | Already does LWW 412 — return delta on success. |
+| `DELETE /api/takeoff/measurements/:id`                          | `apps/api/src/routes/takeoff-measurements.ts` | `{op: 'remove'}`.                               |
+| `GET /api/projects/:id/takeoff/measurements` (list — hydration) | same                                          | No change — pool hydrates from this on boot.    |
 
 ### 5.2 Phase 3 (next resource — pick one of `clock_events` or `daily_logs`)
 
-| Endpoint                                                  | Route file                                                                              |
-| --------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `POST /api/clock/in`, `/out`, `/events/:id/void`          | `apps/api/src/routes/clock.ts`                                                          |
-| `POST /api/clock/events/:id/photo`                        | `apps/api/src/clock-event-photo-upload.ts`                                              |
-| `POST /api/daily-logs`, `PATCH /api/daily-logs/:id`       | `apps/api/src/routes/daily-logs.ts`                                                     |
-| `POST /api/daily-logs/:id/submit`                         | same                                                                                    |
-| `POST/DELETE /api/daily-logs/:id/photos`                  | same + `apps/api/src/daily-log-photo-upload.ts`                                         |
-| `POST /api/clock/out` (also writes labor_entry)            | `apps/api/src/routes/clock.ts` — emit **two** deltas (`clock_events` + `labor_entries`) |
+| Endpoint                                            | Route file                                                                              |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `POST /api/clock/in`, `/out`, `/events/:id/void`    | `apps/api/src/routes/clock.ts`                                                          |
+| `POST /api/clock/events/:id/photo`                  | `apps/api/src/clock-event-photo-upload.ts`                                              |
+| `POST /api/daily-logs`, `PATCH /api/daily-logs/:id` | `apps/api/src/routes/daily-logs.ts`                                                     |
+| `POST /api/daily-logs/:id/submit`                   | same                                                                                    |
+| `POST/DELETE /api/daily-logs/:id/photos`            | same + `apps/api/src/daily-log-photo-upload.ts`                                         |
+| `POST /api/clock/out` (also writes labor_entry)     | `apps/api/src/routes/clock.ts` — emit **two** deltas (`clock_events` + `labor_entries`) |
 
 ### 5.3 Phase 4 (`projects`, `labor_entries`, `time_review_runs`)
 
-| Endpoint                                              | Route file                                                               |
-| ----------------------------------------------------- | ------------------------------------------------------------------------ |
-| `POST/PATCH /api/projects`, `/api/projects/:id`       | `apps/api/src/routes/projects.ts`                                        |
-| `POST/PATCH /api/labor-entries`                       | `apps/api/src/routes/labor-entries.ts`                                   |
-| `POST /api/time-review-runs/:id/events`               | `apps/api/src/routes/time-review-runs.ts`                                |
+| Endpoint                                        | Route file                                |
+| ----------------------------------------------- | ----------------------------------------- |
+| `POST/PATCH /api/projects`, `/api/projects/:id` | `apps/api/src/routes/projects.ts`         |
+| `POST/PATCH /api/labor-entries`                 | `apps/api/src/routes/labor-entries.ts`    |
+| `POST /api/time-review-runs/:id/events`         | `apps/api/src/routes/time-review-runs.ts` |
 
 ### 5.4 Shared API-side plumbing
 
@@ -417,18 +422,18 @@ Existing tests (`queue.test.ts`, `replay.test.ts`) cover the current offline pat
 
 ## 8. Estimates
 
-| Phase                                                                                   | Effort        |
-| --------------------------------------------------------------------------------------- | ------------- |
-| 0 — Foundations (mobx, store class, persist, jsonpatch, tests)                          | 1 week        |
-| 1 — Shadow pool for `takeoff_measurements`                                              | 1 week        |
-| 2 — Pilot writer + server delta for `takeoff_measurements`                              | 3 weeks       |
-| 3 — Pilot readers migrate; pool is sole source for measurements                         | 1 week        |
-| 4a — `clock_events` + `labor_entries`                                                   | 2 weeks       |
-| 4b — `daily_logs` + `daily_log_photos`                                                  | 2 weeks       |
-| 4c — `time_review_runs`                                                                 | 1.5 weeks     |
-| 4d — `projects`                                                                         | 1.5 weeks     |
-| 5 — Remove legacy queue                                                                 | 0.5 week      |
-| **Total**                                                                               | **~13.5 weeks** |
+| Phase                                                           | Effort          |
+| --------------------------------------------------------------- | --------------- |
+| 0 — Foundations (mobx, store class, persist, jsonpatch, tests)  | 1 week          |
+| 1 — Shadow pool for `takeoff_measurements`                      | 1 week          |
+| 2 — Pilot writer + server delta for `takeoff_measurements`      | 3 weeks         |
+| 3 — Pilot readers migrate; pool is sole source for measurements | 1 week          |
+| 4a — `clock_events` + `labor_entries`                           | 2 weeks         |
+| 4b — `daily_logs` + `daily_log_photos`                          | 2 weeks         |
+| 4c — `time_review_runs`                                         | 1.5 weeks       |
+| 4d — `projects`                                                 | 1.5 weeks       |
+| 5 — Remove legacy queue                                         | 0.5 week        |
+| **Total**                                                       | **~13.5 weeks** |
 
 These are working weeks for **one engineer familiar with the codebase**, not calendar weeks. Real calendar time will be longer with reviews, dogfood cycles, and pilot customer feedback windows.
 
