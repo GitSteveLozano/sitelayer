@@ -1,7 +1,14 @@
 name: Deploy to DigitalOcean Droplet
 
+# Production deploys are gated on Quality. The previous `push: [main]` trigger
+# fired the deploy regardless of CI outcome, so a red Quality run could (and
+# did, since 2026-05-21 a7b927a) ship to production. We now wait for the
+# Quality workflow on main to complete and only deploy when it succeeded.
+# `workflow_dispatch` is preserved as the manual override for incidents.
 on:
-  push:
+  workflow_run:
+    workflows: [Quality]
+    types: [completed]
     branches: [main]
   workflow_dispatch:
 
@@ -14,6 +21,10 @@ concurrency:
 
 jobs:
   deploy:
+    # Skip when the triggering Quality run failed. `workflow_dispatch` events
+    # don't carry a workflow_run payload, so the null comparison evaluates true
+    # and the manual override still works.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: [self-hosted, sitelayer-preview]
     timeout-minutes: 45
     environment:
@@ -21,6 +32,11 @@ jobs:
       url: https://sitelayer.sandolab.xyz
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # workflow_run checks out the default branch by default. Pin to the
+          # SHA Quality actually validated so the image we build matches the
+          # tree Quality signed off on.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: digitalocean/action-doctl@3cb3953159719656269e044e0e24ca16dd2a690f # v2.5.2
         with:
