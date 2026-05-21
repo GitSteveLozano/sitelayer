@@ -169,7 +169,7 @@ export type DispatchContext = {
  * Returns true if a handler responded; false to let the caller emit 404.
  */
 export async function dispatch(ctx: DispatchContext): Promise<boolean> {
-  const { req, url, pool, company, identity, sendJson, requireRole, readBody, checkVersion, sendRedirect } = ctx
+  const { req, res, url, pool, company, identity, sendJson, requireRole, readBody, checkVersion, sendRedirect } = ctx
   const currentUserId = ctx.getCurrentUserId()
 
   // Handlers take `readonly string[]`; DispatchContext narrows to
@@ -487,6 +487,11 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         requireRole: requireRoleStr,
         readBody,
         sendJson,
+        // Raw response handle for the SSE stream route. JSON endpoints
+        // ignore this; the streaming endpoint refuses to start without
+        // it (defense in depth — it can never legitimately be missing
+        // through dispatch.ts).
+        res,
       }),
 
     // Rental inventory + billing workflow
