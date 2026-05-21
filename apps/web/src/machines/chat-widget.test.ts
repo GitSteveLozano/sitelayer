@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createActor } from 'xstate'
-import { chatWidgetMachine } from './chat-widget'
+import { createChatWidgetMachine } from './chat-widget'
+import type { StageOperatorContextChatInput, StageOperatorContextChatResponse } from '@/lib/api/operator-context-chat'
 import type { OperatorContextPacket } from '@/lib/operator-context'
 
 // Tests the chat-widget XState machine in isolation. The widget UI
@@ -11,8 +12,8 @@ import type { OperatorContextPacket } from '@/lib/operator-context'
 //   - open(.idle) → closed via CLOSE, TOGGLE
 //   - CONTEXT_UPDATED + SET_DRAFT land in any state
 //   - SEND with empty draft is rejected by hasDraft guard
-//   - SEND with non-empty draft enqueues the message + clears the draft
-//   - enqueueDraft attaches packet_generated_at when a packet is present
+//   - SEND with a packet stages through /api/ai/chat and marks the message
+//   - failed staging keeps an inline failed message + error
 
 function makePacket(overrides: Partial<OperatorContextPacket> = {}): OperatorContextPacket {
   return {
@@ -28,9 +29,31 @@ function makePacket(overrides: Partial<OperatorContextPacket> = {}): OperatorCon
   }
 }
 
+function makeStageOk(auditEventId = 'audit-1') {
+  return vi.fn<(input: StageOperatorContextChatInput) => Promise<StageOperatorContextChatResponse>>(async () => ({
+    status: 'staged' as const,
+    audit_event_id: auditEventId,
+    response_pending: true,
+    followup_hint: 'test follow-up',
+  }))
+}
+
+function startActor(stage = makeStageOk()) {
+  const actor = createActor(createChatWidgetMachine(stage)).start()
+  return { actor, stage }
+}
+
+async function settle() {
+  for (let i = 0; i < 6; i += 1) await Promise.resolve()
+}
+
+function expectValue(actor: ReturnType<typeof startActor>['actor'], value: unknown) {
+  expect(actor.getSnapshot().value).toEqual(value)
+}
+
 describe('chatWidgetMachine', () => {
   it('starts in closed with empty context', () => {
-    const actor = createActor(chatWidgetMachine).start()
+    const { actor } = startActor()
     expect(actor.getSnapshot().value).toBe('closed')
     expect(actor.getSnapshot().context.draft).toBe('')
     expect(actor.getSnapshot().context.messages).toEqual([])
@@ -39,28 +62,28 @@ describe('chatWidgetMachine', () => {
   })
 
   it('OPEN transitions closed → open.idle', () => {
-    const actor = createActor(chatWidgetMachine).start()
+    const { actor } = startActor()
     actor.send({ type: 'OPEN' })
-    expect(actor.getSnapshot().matches({ open: 'idle' })).toBe(true)
+    expectValue(actor, { open: 'idle' })
   })
 
   it('TOGGLE flips closed ↔ open both ways', () => {
-    const actor = createActor(chatWidgetMachine).start()
+    const { actor } = startActor()
     actor.send({ type: 'TOGGLE' })
-    expect(actor.getSnapshot().matches('open')).toBe(true)
+    expectValue(actor, { open: 'idle' })
     actor.send({ type: 'TOGGLE' })
-    expect(actor.getSnapshot().matches('closed')).toBe(true)
+    expectValue(actor, 'closed')
   })
 
   it('CLOSE from open returns to closed', () => {
-    const actor = createActor(chatWidgetMachine).start()
+    const { actor } = startActor()
     actor.send({ type: 'OPEN' })
     actor.send({ type: 'CLOSE' })
-    expect(actor.getSnapshot().matches('closed')).toBe(true)
+    expectValue(actor, 'closed')
   })
 
   it('CONTEXT_UPDATED syncs the packet and clears packetMissing', () => {
-    const actor = createActor(chatWidgetMachine).start()
+    const { actor } = startActor()
     const packet = makePacket()
     actor.send({ type: 'CONTEXT_UPDATED', packet })
     const ctx = actor.getSnapshot().context
@@ -69,7 +92,7 @@ describe('chatWidgetMachine', () => {
   })
 
   it('CONTEXT_UPDATED with null packet flips packetMissing back on', () => {
-    const actor = createActor(chatWidgetMachine).start()
+    const { actor } = startActor()
     actor.send({ type: 'CONTEXT_UPDATED', packet: makePacket() })
     actor.send({ type: 'CONTEXT_UPDATED', packet: null })
     const ctx = actor.getSnapshot().context
@@ -78,69 +101,107 @@ describe('chatWidgetMachine', () => {
   })
 
   it('SET_DRAFT stores the value verbatim', () => {
-    const actor = createActor(chatWidgetMachine).start()
+    const { actor } = startActor()
     actor.send({ type: 'SET_DRAFT', value: 'hello ' })
     expect(actor.getSnapshot().context.draft).toBe('hello ')
   })
 
   it('SEND with empty draft is rejected by the hasDraft guard', () => {
-    const actor = createActor(chatWidgetMachine).start()
+    const { actor, stage } = startActor()
     actor.send({ type: 'OPEN' })
     actor.send({ type: 'SEND' })
     // Guard blocks the transition; no message enqueued.
     expect(actor.getSnapshot().context.messages).toEqual([])
+    expect(stage).not.toHaveBeenCalled()
   })
 
   it('SEND with whitespace-only draft is rejected by the hasDraft guard', () => {
-    const actor = createActor(chatWidgetMachine).start()
+    const { actor, stage } = startActor()
     actor.send({ type: 'OPEN' })
     actor.send({ type: 'SET_DRAFT', value: '   \t  ' })
     actor.send({ type: 'SEND' })
     expect(actor.getSnapshot().context.messages).toEqual([])
+    expect(stage).not.toHaveBeenCalled()
   })
 
-  it('SEND with a real draft enqueues and clears the draft', () => {
-    const actor = createActor(chatWidgetMachine).start()
+  it('SEND with a real draft but no packet records a context error', () => {
+    const { actor, stage } = startActor()
     actor.send({ type: 'OPEN' })
     actor.send({ type: 'SET_DRAFT', value: '  what is the focus?  ' })
     actor.send({ type: 'SEND' })
     const ctx = actor.getSnapshot().context
-    expect(ctx.draft).toBe('')
-    expect(ctx.messages).toHaveLength(1)
-    expect(ctx.messages[0]).toMatchObject({
-      role: 'operator',
-      body: 'what is the focus?',
-    })
-    expect(ctx.messages[0]!.id).toMatch(/^m-\d+/)
-    // No packet was synced; the optional field is absent (not undefined).
-    expect('packet_generated_at' in ctx.messages[0]!).toBe(false)
+    expect(ctx.draft).toBe('  what is the focus?  ')
+    expect(ctx.messages).toEqual([])
+    expect(ctx.error).toBe('Operator context is not available yet.')
+    expect(stage).not.toHaveBeenCalled()
   })
 
-  it('SEND attaches packet_generated_at when a packet is in context', () => {
-    const actor = createActor(chatWidgetMachine).start()
+  it('SEND with a packet stages through the API actor', async () => {
     const packet = makePacket({ generated_at: '2026-05-21T01:23:45Z' })
+    const { actor, stage } = startActor(makeStageOk('audit-123'))
     actor.send({ type: 'CONTEXT_UPDATED', packet })
+    actor.send({ type: 'OPEN' })
+    actor.send({ type: 'SET_DRAFT', value: '  what is the focus?  ' })
+    actor.send({ type: 'SEND' })
+
+    expectValue(actor, { open: 'sending' })
+    expect(actor.getSnapshot().context.draft).toBe('')
+    expect(actor.getSnapshot().context.messages[0]).toMatchObject({
+      role: 'operator',
+      body: 'what is the focus?',
+      packet_generated_at: '2026-05-21T01:23:45Z',
+      status: 'pending',
+    })
+
+    await settle()
+    const ctx = actor.getSnapshot().context
+    expectValue(actor, { open: 'idle' })
+    expect(stage).toHaveBeenCalledTimes(1)
+    const call = stage.mock.calls[0]
+    expect(call).toBeDefined()
+    expect(call![0].operatorContext).toBe(packet)
+    expect(call![0].messages.at(-1)).toMatchObject({
+      role: 'operator',
+      body: 'what is the focus?',
+      packet_generated_at: '2026-05-21T01:23:45Z',
+    })
+    expect(ctx.messages[0]).toMatchObject({ status: 'staged', audit_event_id: 'audit-123' })
+    expect(ctx.error).toBeNull()
+  })
+
+  it('marks the pending message failed when staging rejects', async () => {
+    const stage = vi.fn<(input: StageOperatorContextChatInput) => Promise<StageOperatorContextChatResponse>>(
+      async () => {
+        throw new Error('network down')
+      },
+    )
+    const { actor } = startActor(stage)
+    actor.send({ type: 'CONTEXT_UPDATED', packet: makePacket() })
     actor.send({ type: 'OPEN' })
     actor.send({ type: 'SET_DRAFT', value: 'do the thing' })
     actor.send({ type: 'SEND' })
+
+    await settle()
     const ctx = actor.getSnapshot().context
-    expect(ctx.messages).toHaveLength(1)
-    expect(ctx.messages[0]?.packet_generated_at).toBe('2026-05-21T01:23:45Z')
+    expectValue(actor, { open: 'idle' })
+    expect(ctx.messages[0]).toMatchObject({ status: 'failed' })
+    expect(ctx.error).toBe('network down')
   })
 
   it('CONTEXT_UPDATED can fire while open without changing the state', () => {
-    const actor = createActor(chatWidgetMachine).start()
+    const { actor } = startActor()
     actor.send({ type: 'OPEN' })
     actor.send({ type: 'CONTEXT_UPDATED', packet: makePacket() })
-    expect(actor.getSnapshot().matches({ open: 'idle' })).toBe(true)
+    expectValue(actor, { open: 'idle' })
     expect(actor.getSnapshot().context.packet).not.toBeNull()
   })
 
   it('DISMISS_ERROR clears the context.error', () => {
-    const actor = createActor(chatWidgetMachine).start()
-    // No public event sets error, so write context directly via snapshot
-    // is not allowed in v5 — instead, verify DISMISS_ERROR is a no-op
-    // when error is already null (the path the UI hits after a retry).
+    const { actor } = startActor()
+    actor.send({ type: 'OPEN' })
+    actor.send({ type: 'SET_DRAFT', value: 'needs context' })
+    actor.send({ type: 'SEND' })
+    expect(actor.getSnapshot().context.error).toBe('Operator context is not available yet.')
     actor.send({ type: 'DISMISS_ERROR' })
     expect(actor.getSnapshot().context.error).toBeNull()
   })
