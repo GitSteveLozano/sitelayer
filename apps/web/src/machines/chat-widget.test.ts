@@ -333,9 +333,7 @@ describe('chatWidgetMachine', () => {
     // Second poll also fires (and fails again in this test).
     expect(pollCallCount).toBe(2)
     // Staged message stays staged across the retry round-trip.
-    const stagedMsg = actor
-      .getSnapshot()
-      .context.messages.find((m) => m.audit_event_id === 'audit-retry-1')
+    const stagedMsg = actor.getSnapshot().context.messages.find((m) => m.audit_event_id === 'audit-retry-1')
     expect(stagedMsg).toMatchObject({ status: 'staged' })
   })
 })
@@ -363,25 +361,23 @@ describe('pollChatResponse', () => {
 
   it('keeps polling on 202 and resolves once the response lands', async () => {
     let calls = 0
-    const fetchOnce = vi.fn(
-      async (_auditEventId: string): Promise<FetchOperatorContextChatResponseResult> => {
-        calls += 1
-        if (calls < 3) {
-          return {
-            status: 'staged',
-            response_pending: true,
-            audit_event_id: 'audit-x',
-          }
-        }
+    const fetchOnce = vi.fn(async (_auditEventId: string): Promise<FetchOperatorContextChatResponseResult> => {
+      calls += 1
+      if (calls < 3) {
         return {
-          status: 'responded',
+          status: 'staged',
+          response_pending: true,
           audit_event_id: 'audit-x',
-          response_audit_event_id: 'resp-x',
-          body: 'finally',
-          created_at: '2026-05-21T03:14:15Z',
         }
-      },
-    )
+      }
+      return {
+        status: 'responded',
+        audit_event_id: 'audit-x',
+        response_audit_event_id: 'resp-x',
+        body: 'finally',
+        created_at: '2026-05-21T03:14:15Z',
+      }
+    })
     const result = await pollChatResponse('audit-x', { fetchOnce, intervalMs: 1, maxAttempts: 5 })
     expect(result.body).toBe('finally')
     expect(fetchOnce).toHaveBeenCalledTimes(3)
@@ -403,7 +399,9 @@ describe('pollChatResponse', () => {
     const fetchOnce = vi.fn(async () => {
       throw new Error('network down')
     })
-    await expect(pollChatResponse('audit-x', { fetchOnce, intervalMs: 1, maxAttempts: 5 })).rejects.toThrow('network down')
+    await expect(pollChatResponse('audit-x', { fetchOnce, intervalMs: 1, maxAttempts: 5 })).rejects.toThrow(
+      'network down',
+    )
     expect(fetchOnce).toHaveBeenCalledTimes(1)
   })
 })
