@@ -53,7 +53,7 @@ const initialContext: ChatWidgetContext = {
   error: null,
 }
 
-const chatWidgetMachine = setup({
+export const chatWidgetMachine = setup({
   types: {
     context: {} as ChatWidgetContext,
     events: {} as ChatWidgetEvent,
