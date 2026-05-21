@@ -10,7 +10,8 @@ import { FIXTURE_IDS } from '../fixtures/ids'
  *
  * Wire: POST /api/rental-billing-runs/:id/events
  * UI:   `/financial/billing-runs/:id` — billing-run-detail renders the
- *       literal `state` string in a Pill.
+ *       literal `state` string in a Pill. The e2e worker may advance the
+ *       run from posting to posted before the detail route paints.
  *       (apps/web/src/screens/financial/billing-run-detail.tsx)
  */
 
@@ -41,7 +42,8 @@ runSpec('office user approves and requests a rental billing post', async ({ offi
   })
   expect(posting.state).toBe('posting')
 
-  // UI assertion — billing-run-detail screen reflects posting state.
+  // UI assertion — billing-run-detail screen reflects the handoff or
+  // worker-advanced state.
   await officePage.goto(`/financial/billing-runs/${runId}`)
-  await expect(officePage.getByText('posting', { exact: true })).toBeVisible()
+  await expect(officePage.getByText(/^(posting|posted)$/)).toBeVisible()
 })

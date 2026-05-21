@@ -17,8 +17,8 @@ import { FIXTURE_IDS } from '../fixtures/ids'
  *   3. Admin POST_REQUESTED → `posting`.
  *
  * `POST_SUCCEEDED` is worker-only and covered by queue/workflow tests.
- * This browser spec stops at the human-controlled QBO handoff so it
- * does not depend on background worker timing.
+ * This browser spec verifies the human-controlled QBO handoff and tolerates
+ * the e2e worker advancing the run before the detail route paints.
  */
 
 type TimeReviewSnapshot = {
@@ -71,7 +71,8 @@ runSpec('admin approves time review then requests labor payroll post', async ({ 
   expect(payrollPosting.state).toBe('posting')
 
   // UI cross-check: labor-payroll-run-detail renders the literal state
-  // string in a Pill (mirrors estimate-push-detail).
+  // string in a Pill (mirrors estimate-push-detail). The e2e worker may
+  // advance posting -> posted before the detail route paints.
   await adminPage.goto(`/financial/labor-payroll-runs/${payrollId}`)
-  await expect(adminPage.getByText('posting', { exact: true })).toBeVisible()
+  await expect(adminPage.getByText(/^(posting|posted)$/)).toBeVisible()
 })
