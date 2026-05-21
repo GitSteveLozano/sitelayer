@@ -91,11 +91,7 @@ function looksLikeRegisteredOrigin(origin: string | undefined): boolean {
   return false
 }
 
-export async function handleAiChatRoutes(
-  req: http.IncomingMessage,
-  url: URL,
-  ctx: AiChatRouteCtx,
-): Promise<boolean> {
+export async function handleAiChatRoutes(req: http.IncomingMessage, url: URL, ctx: AiChatRouteCtx): Promise<boolean> {
   if (!(req.method === 'POST' && url.pathname === '/api/ai/chat')) return false
 
   if (!ctx.requireRole(['admin'])) return true
@@ -146,15 +142,13 @@ export async function handleAiChatRoutes(
       role: 'operator',
       body: latest.body,
       message_id: typeof latest.id === 'string' ? latest.id : null,
-      packet_generated_at:
-        typeof latest.packet_generated_at === 'string' ? latest.packet_generated_at : null,
+      packet_generated_at: typeof latest.packet_generated_at === 'string' ? latest.packet_generated_at : null,
     },
     operator_context: {
       origin: packet.origin,
       project: packet.origin_context?.project ?? null,
       focus_label: packet.current_focus?.label ?? null,
-      focus_confidence:
-        typeof packet.current_focus?.confidence === 'number' ? packet.current_focus.confidence : null,
+      focus_confidence: typeof packet.current_focus?.confidence === 'number' ? packet.current_focus.confidence : null,
       repo_branch: packet.origin_context?.repo_branch ?? null,
       generated_at: packet.generated_at ?? null,
     },
