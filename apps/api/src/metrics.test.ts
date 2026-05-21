@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { metricsRegistry, observeWorkflowEvent, workflowEventOutcome } from './metrics.js'
+import { metricsRegistry, observeContextHandoff, observeWorkflowEvent, workflowEventOutcome } from './metrics.js'
 
 // Tests run against the singleton registry. Because vitest module
 // state persists across `it` blocks within the same file, each
@@ -22,6 +22,20 @@ function valueFor(
   outcome: string,
 ): number {
   return rows.find((r) => r.workflow === workflow && r.outcome === outcome)?.value ?? 0
+}
+
+async function readContextHandoffCounter(): Promise<Array<{ action: string; value: number }>> {
+  const metric = metricsRegistry().getSingleMetric('sitelayer_context_handoff_total')
+  if (!metric) throw new Error('sitelayer_context_handoff_total not registered')
+  const snapshot = await metric.get()
+  return snapshot.values.map((v) => ({
+    action: String(v.labels.action ?? ''),
+    value: v.value,
+  }))
+}
+
+function contextValueFor(rows: Array<{ action: string; value: number }>, action: string): number {
+  return rows.find((r) => r.action === action)?.value ?? 0
 }
 
 describe('workflowEventTotal counter', () => {
@@ -56,6 +70,29 @@ describe('workflowEventTotal counter', () => {
     const after = await readWorkflowEventCounter()
     expect(valueFor(after, 'qbo_sync_run', 'succeeded')).toBe(baselineSucceeded + 1)
     expect(valueFor(after, 'qbo_sync_run', 'failed')).toBe(baselineFailed + 2)
+  })
+})
+
+describe('contextHandoffTotal counter', () => {
+  it('increments for bounded work-request action labels', async () => {
+    const before = await readContextHandoffCounter()
+    const baseline = contextValueFor(before, 'agent.dispatch_requested')
+
+    observeContextHandoff('agent.dispatch_requested')
+    observeContextHandoff('agent.dispatch_requested', 2)
+
+    const after = await readContextHandoffCounter()
+    expect(contextValueFor(after, 'agent.dispatch_requested')).toBe(baseline + 3)
+  })
+})
+
+describe('contextDispatchOutboxCount gauge', () => {
+  it('is registered for context-dispatch backpressure', async () => {
+    const metric = metricsRegistry().getSingleMetric('sitelayer_context_dispatch_outbox_count')
+    expect(metric).toBeDefined()
+    const snapshot = await metric!.get()
+    expect(snapshot.name).toBe('sitelayer_context_dispatch_outbox_count')
+    expect(snapshot.type).toBe('gauge')
   })
 })
 
