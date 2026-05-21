@@ -52,12 +52,12 @@ All five variables MUST be exported in the same shell that runs the
 smoke script. Append to `~/projects/sitelayer/.env.local` (gitignored)
 or export inline.
 
-| Variable                    | Where to find it                                                                                                                      | Sensitivity |
-| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
-| `QBO_SANDBOX_BASE_URL`      | Already set: `https://sandbox-quickbooks.api.intuit.com`                                                                              | low         |
-| `QBO_SANDBOX_CLIENT_ID`     | Intuit Developer → My Apps → sitelayer app → Keys & OAuth tab → "Development Settings" Client ID. Same value as `QBO_CLIENT_ID` already in `.env.local`. | low         |
-| `QBO_SANDBOX_CLIENT_SECRET` | Same screen, "Development Settings" Client Secret. Same value as `QBO_CLIENT_SECRET` already in `.env.local`.                          | high        |
-| `QBO_SANDBOX_REALM_ID`      | Numeric Company ID of the sandbox company. Visible in the sandbox QBO UI (gear icon → Your Company → Account and Settings → Billing & Subscription → Company ID). | low         |
+| Variable                    | Where to find it                                                                                                                                                                                                 | Sensitivity |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------- |
+| `QBO_SANDBOX_BASE_URL`      | Already set: `https://sandbox-quickbooks.api.intuit.com`                                                                                                                                                         | low         |
+| `QBO_SANDBOX_CLIENT_ID`     | Intuit Developer → My Apps → sitelayer app → Keys & OAuth tab → "Development Settings" Client ID. Same value as `QBO_CLIENT_ID` already in `.env.local`.                                                         | low         |
+| `QBO_SANDBOX_CLIENT_SECRET` | Same screen, "Development Settings" Client Secret. Same value as `QBO_CLIENT_SECRET` already in `.env.local`.                                                                                                    | high        |
+| `QBO_SANDBOX_REALM_ID`      | Numeric Company ID of the sandbox company. Visible in the sandbox QBO UI (gear icon → Your Company → Account and Settings → Billing & Subscription → Company ID).                                                | low         |
 | `QBO_SANDBOX_REFRESH_TOKEN` | Obtained once via OAuth Playground: Intuit Developer → API Docs → OAuth 2.0 Playground → select sandbox app → "Get authorization code" → "Get tokens". Copy the `refresh_token` value. Rotates on every refresh. | high        |
 
 ### Fastest path to capture (no in-app OAuth dance needed)
@@ -118,6 +118,7 @@ bash scripts/qbo-sandbox-smoke.sh   # MODE B auto-selected
 ## Why this is NOT an in-process automated test
 
 The harness is intentionally hand-run, not CI:
+
 - The refresh_token rotates on every exchange; a CI cron would burn
   through tokens unless it commits the rotated value back, which is a
   secrets-handling antipattern.

@@ -8,15 +8,14 @@ import { FIXTURE_IDS } from '../fixtures/ids'
  * QBO handoff:
  *   drafted → reviewed → approved → posting
  *
- * The QBO side-effect itself is mocked at the seed layer (the worker
- * that drains the outbox isn't running in the e2e env), so the spec
- * drives the workflow state machine directly via the events endpoint:
+ * The QBO side-effect itself is stubbed by the worker in the e2e env.
+ * The spec drives the human workflow state machine directly via the events endpoint:
  *   POST /api/estimate-pushes/:id/events
  *
  * `POST_REQUESTED` is the last human event. The worker-only
  * `POST_SUCCEEDED` transition is covered in queue/workflow tests; this
- * browser spec should not depend on the background worker draining QBO
- * outbox rows inside Playwright's timing window.
+ * browser spec should tolerate the background worker draining QBO outbox
+ * rows inside Playwright's timing window.
  *
  * Per `apps/web/src/screens/financial/estimate-push-detail.tsx` the
  * detail screen renders the literal state string in a Pill, and the
@@ -61,7 +60,8 @@ runSpec('admin requests an estimate push through the QBO handoff', async ({ admi
   expect(snap.state).toBe('posting')
 
   // UI assertion — the EstimatePushDetail screen shows the literal
-  // state string ("posting") inside a Pill.
+  // state string inside a Pill. The e2e worker may advance posting -> posted
+  // before the detail route paints.
   await adminPage.goto(`/financial/estimate-pushes/${pushId}`)
-  await expect(adminPage.getByText('posting', { exact: true })).toBeVisible()
+  await expect(adminPage.getByText(/^(posting|posted)$/)).toBeVisible()
 })

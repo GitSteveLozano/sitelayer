@@ -1,5 +1,6 @@
 import { Outlet } from 'react-router-dom'
 import { BottomTabBar } from '@/components/nav/BottomTabBar'
+import { OperatorContextChatWidget } from '@/components/chat/OperatorContextChatWidget'
 import { DesktopSideRail } from '@/components/nav/DesktopSideRail'
 import { InstallPromptBanner } from './InstallPromptBanner'
 import { OfflineBanner } from './OfflineBanner'
@@ -33,6 +34,7 @@ export function AppShell() {
           <BottomTabBar />
         </div>
       </main>
+      <OperatorContextChatWidget />
     </div>
   )
 }
