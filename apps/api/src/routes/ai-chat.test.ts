@@ -102,26 +102,20 @@ class FakePool {
       // Poll endpoint's first query: confirm the staged message exists
       // for this company.
       const [companyId, auditId] = params as [string, string]
-      const hit = this.auditEvents.find(
-        (a) => a.id === auditId && a.companyId === companyId,
-      )
+      const hit = this.auditEvents.find((a) => a.id === auditId && a.companyId === companyId)
       return { rows: hit ? [{ id: hit.id }] : [], rowCount: hit ? 1 : 0 }
     }
 
-    if (normalized.startsWith("select id, after, created_at from audit_events")) {
+    if (normalized.startsWith('select id, after, created_at from audit_events')) {
       // Poll endpoint's second query: find a sibling response row.
       const [companyId, parentId] = params as [string, string]
       const hit = [...this.responseRows]
         .reverse()
         .find(
-          (r) =>
-            r.companyId === companyId &&
-            (r.after as Record<string, unknown>)?.parent_audit_event_id === parentId,
+          (r) => r.companyId === companyId && (r.after as Record<string, unknown>)?.parent_audit_event_id === parentId,
         )
       return {
-        rows: hit
-          ? [{ id: hit.id, after: hit.after, created_at: hit.createdAt }]
-          : [],
+        rows: hit ? [{ id: hit.id, after: hit.after, created_at: hit.createdAt }] : [],
         rowCount: hit ? 1 : 0,
       }
     }
@@ -130,13 +124,7 @@ class FakePool {
   }
 
   /** Test helper: seed a response row for the poll endpoint to find. */
-  seedResponse(input: {
-    id: string
-    companyId: string
-    parentAuditEventId: string
-    body: string
-    createdAt?: Date
-  }) {
+  seedResponse(input: { id: string; companyId: string; parentAuditEventId: string; body: string; createdAt?: Date }) {
     this.responseRows.push({
       id: input.id,
       companyId: input.companyId,
