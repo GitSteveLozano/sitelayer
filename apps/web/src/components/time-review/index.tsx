@@ -4,7 +4,7 @@
 // surfaces — keeping the bulk-approve and per-run card logic in one
 // place avoids a slow drift between them.
 
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import {
@@ -23,7 +23,7 @@ import {
  * failures surface in-card and the list refreshes either way so the
  * screen never holds stale state_versions after a 409.
  */
-export function CleanBulkCard({ runs, label }: { runs: TimeReviewRunRow[]; label?: string }) {
+function CleanBulkCardInner({ runs, label }: { runs: TimeReviewRunRow[]; label?: string }) {
   const qc = useQueryClient()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -91,7 +91,7 @@ function CheckIcon() {
  * Pass `hideProject=true` from the per-project Crew tab to drop the
  * redundant project name (the screen header already has it).
  */
-export function TimeReviewRunCard({
+function TimeReviewRunCardInner({
   row,
   projectById,
   hideProject = false,
@@ -231,6 +231,14 @@ export function TimeReviewRunCard({
     </Card>
   )
 }
+
+// Field-level reactivity: wrap row + bulk cards in React.memo so the
+// approval-queue list doesn't reconcile every row on tab/filter change.
+// Equality is shallow on (row, projectById, hideProject) — row identity
+// is stable per TanStack Query response, projectById is memoized at
+// the screen, and hideProject is a literal boolean.
+export const CleanBulkCard = memo(CleanBulkCardInner)
+export const TimeReviewRunCard = memo(TimeReviewRunCardInner)
 
 export function groupRunsByState(rows: TimeReviewRunRow[]): Record<TimeReviewState, TimeReviewRunRow[]> {
   const groups: Record<TimeReviewState, TimeReviewRunRow[]> = { pending: [], approved: [], rejected: [] }
