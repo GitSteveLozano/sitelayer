@@ -1,15 +1,16 @@
 # Contributing to Sitelayer
 
-This file is the human entry point. It summarizes conventions that are spelled out in more depth in [`CLAUDE.md`](./CLAUDE.md) (operating rules), [`AGENTS.md`](./AGENTS.md) (agent guide), and [`SKILL.md`](./SKILL.md) (engineering workflow). It does not replace them — when in doubt, read the source.
+This file is the human entry point. It links the first-30-minute collaborator
+path and summarizes code conventions. Operator-only deployment and private
+infrastructure notes are intentionally not prerequisites for a first PR.
 
 ## Quick start
 
 Where to read what:
 
 - [`README.md`](./README.md) — architecture at a glance, where new code goes.
-- [`DEVELOPMENT.md`](./DEVELOPMENT.md) — first-30-minutes setup, fixtures, app routes.
+- [`DEVELOPMENT.md`](./DEVELOPMENT.md) — first-30-minutes setup, Docker stack, app routes.
 - [`docs/ONBOARDING_DEVELOPER.md`](./docs/ONBOARDING_DEVELOPER.md) — new-collaborator path: Mac prerequisites, env scaffold, sign-in via RoleSwitcher or Clerk, first PR workflow.
-- [`CLAUDE.md`](./CLAUDE.md) — operating posture, deploy procedure, env management, QBO/storage conventions.
 - [`AGENTS.md`](./AGENTS.md) — short version of the rules for any agent or new contributor.
 - [`SKILL.md`](./SKILL.md) — engineering skill: how to debug, implement, test, scope.
 - [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md), [`docs/DETERMINISTIC_WORKFLOWS.md`](./docs/DETERMINISTIC_WORKFLOWS.md), [`docs/adr/`](./docs/adr/) — durable design.
@@ -19,9 +20,18 @@ Local dev:
 
 ```bash
 npm install
-VITE_FIXTURES=1 npm run dev:web        # UI-only loop
-docker compose up --build              # full stack with API, worker, Postgres, MinIO
+cat > .env <<'EOF'
+APP_TIER=local
+VITE_CLERK_PUBLISHABLE_KEY=
+CLERK_JWT_KEY=
+EOF
+docker compose up --build              # web, API, worker, Postgres, MinIO
 ```
+
+Leave Clerk variables empty for the default local RoleSwitcher. Use your own
+Claude, Codex, ChatGPT, Gemini, or other AI subscriptions from your local
+browser/CLI profile; provider tokens and private infrastructure are not repo
+setup inputs.
 
 ## Architectural patterns
 
@@ -34,7 +44,7 @@ State management has fixed homes:
 - **Backend workflows** → deterministic temporal.io-style reducers in `packages/workflows/`. Pure transition function, state version, headless UI. See [`docs/DETERMINISTIC_WORKFLOWS.md`](./docs/DETERMINISTIC_WORKFLOWS.md).
 - **Single HTTP client** → `apps/web/src/lib/api/client.ts:request<T>()`. Never invent a parallel fetcher. `api-v1-compat.ts` is closed for new exports — it delegates to `request<T>()` for legacy XState machines.
 
-Mutations cross-system through the **outbox**: API writes to `mutation_outbox` (with a stable idempotency key), worker drains it, external pushes (QBO, notifications, Spaces GC) come back through reducer events. Never call QBO or another external system from a request handler — see [`CLAUDE.md`](./CLAUDE.md) "QBO sync conventions".
+Mutations cross-system through the **outbox**: API writes to `mutation_outbox` (with a stable idempotency key), worker drains it, external pushes (QBO, notifications, Spaces GC) come back through reducer events. Never call QBO or another external system from a request handler.
 
 Where new code goes:
 
@@ -79,7 +89,7 @@ When you fix a bug, add a regression test at the real seam — usually a route t
 
 ## Coordination on shared dev tenants
 
-`takeoff_measurements` is the only path currently wired through the **last-write-wins** offline replay check (see [`CLAUDE.md`](./CLAUDE.md) → Decision #4). Other shared draft/estimate flows may use optimistic version checks instead, but none of these are a multi-user merge UI. The diagnostic toast only fires on the offline replay path; two collaborators editing the same live surface can still lose time or hit conflicts.
+`takeoff_measurements` is the only path currently wired through the **last-write-wins** offline replay check. Other shared draft/estimate flows may use optimistic version checks instead, but none of these are a multi-user merge UI. The diagnostic toast only fires on the offline replay path; two collaborators editing the same live surface can still lose time or hit conflicts.
 
 Procedural v1 rule (no merge UI today):
 

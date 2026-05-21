@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { collectRequestIds, sanitizeSupportJson } from './support-packets.js'
+import { collectEntityRefs, collectRequestIds, sanitizeSupportJson } from './support-packets.js'
 
 describe('support packet sanitization', () => {
   it('redacts obvious secrets and contact details', () => {
@@ -29,5 +29,22 @@ describe('support packet sanitization', () => {
         'api-current',
       ),
     ).toEqual(['api-current', 'web-one', 'api-one', 'web-two'])
+  })
+
+  it('collects entity refs from Probe path payloads', () => {
+    expect(
+      collectEntityRefs({
+        path: {
+          route: '/financial/estimate-pushes/11111111-1111-4111-8111-111111111111',
+          entity_type: 'estimate_push',
+          entity_id: '11111111-1111-4111-8111-111111111111',
+        },
+      }),
+    ).toEqual([
+      {
+        entity_type: 'estimate_push',
+        entity_id: '11111111-1111-4111-8111-111111111111',
+      },
+    ])
   })
 })

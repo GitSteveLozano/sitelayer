@@ -41,7 +41,7 @@
 - [x] Clerk auth cut over in production; unauthenticated app APIs return `401`
 - [x] DO Spaces enabled in production for blueprint object storage
 - [x] Blueprint upload streaming via multipart → Spaces (`apps/api/src/blueprint-upload.ts`, busboy + lib-storage); 30–80MB PDFs no longer fight the JSON body cap. Cap is `MAX_BLUEPRINT_UPLOAD_BYTES` (default 200MB).
-- [x] Presigned download URL plumbing in place (`@aws-sdk/s3-request-presigner`); 302 redirect gated on `BLUEPRINT_DOWNLOAD_PRESIGNED=1` until Spaces CORS is validated for PDF.js fetches.
+- [x] Presigned download URL plumbing in place (`@aws-sdk/s3-request-presigner`); 302 redirect gated on `BLUEPRINT_DOWNLOAD_PRESIGNED=1` until Spaces CORS is validated for PDF.js fetches. Validation procedure + apply script: [`docs/RUNBOOK_SPACES_CORS.md`](docs/RUNBOOK_SPACES_CORS.md) + `scripts/apply-spaces-cors.sh`.
 
 ### ⏳ In Progress
 
@@ -52,6 +52,7 @@
 These are configuration / validation blockers; the underlying code is shipped.
 
 1. **Live QBO sync validation** — `mutation_outbox` + `sync_events` worker drain is unit-tested; real QBO sandbox credentials still need to be exercised end-to-end.
+   - **2026-05-20 validation attempt (`agent/claude/qbo-sync-e2e-validation`):** `scripts/qbo-sandbox-smoke.sh` exits 1 at env-validation. `.env.local` has `QBO_SANDBOX_BASE_URL` only; the operator must capture `QBO_SANDBOX_REFRESH_TOKEN` + `QBO_SANDBOX_REALM_ID` via Intuit OAuth Playground and copy `QBO_CLIENT_ID/SECRET` to `QBO_SANDBOX_CLIENT_ID/SECRET`. Five-minute manual step; see `scripts/qbo-sandbox-e2e-validation.md` for the exact recipe. Code, harness, and runbook are all already shipped; nothing in this repo is blocking.
 
 ---
 

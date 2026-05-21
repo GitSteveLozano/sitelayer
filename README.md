@@ -126,10 +126,19 @@ docker/
 
 ```bash
 npm install
+cat > .env <<'EOF'
+APP_TIER=local
+VITE_CLERK_PUBLISHABLE_KEY=
+CLERK_JWT_KEY=
+EOF
 docker compose up --build
 ```
 
 Local ports: web `:3000`, API `:3001`, MinIO `:9000` (console `:9001`)
+
+Leaving Clerk variables empty is only for local smoke work. Real collaborator
+deployments need the operator-provided Clerk, QBO, storage, and provider
+credentials for the target environment.
 
 Host-process loop after Docker services are up:
 
@@ -150,7 +159,7 @@ npm run test:e2e      # Playwright e2e tests
 
 ## Environment
 
-Env files loaded from cwd upward: `.env` -> `.env.local` -> `.env.sentry.local` -> `.env.qbo.local`. See `.env.example` for the full scaffold.
+Env files loaded from cwd upward: `.env` -> `.env.local` -> `.env.sentry.local` -> `.env.qbo.local`. For the collaborator path, start with the minimal `.env` above. See `.env.example` only when you need the full operator scaffold.
 
 **Key variables**: `APP_TIER` (local/dev/preview/prod), `DATABASE_URL`, `CLERK_JWT_KEY`, `QBO_CLIENT_ID`/`QBO_CLIENT_SECRET`, `DO_SPACES_KEY`/`DO_SPACES_SECRET`/`DO_SPACES_BUCKET`, `SENTRY_DSN`, `API_METRICS_TOKEN`.
 
@@ -159,7 +168,6 @@ Env files loaded from cwd upward: `.env` -> `.env.local` -> `.env.sentry.local` 
 - `DEVELOPMENT.md` — Local development loop and routes
 - `docs/ONBOARDING_DEVELOPER.md` — Mac collaborator setup (clone → local stack → first PR)
 - `DEPLOYMENT.md` — Production deploy, tiers, caching, backups
-- `CLAUDE.md` — Architecture and agent coordination source of truth
 - `docs/RELEASE_GATES.md` — CI/release requirements
 - `docs/PREVIEW_DEPLOYMENTS.md` — Preview droplet and PR preview flow
 - `docs/SECRET_ROTATION.md` — Credential rotation
