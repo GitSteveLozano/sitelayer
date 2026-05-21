@@ -11,7 +11,33 @@
     <link rel="apple-touch-icon" href="/icons/icon.svg" />
     <title>Sitelayer</title>
     <script>
-      (function(){try{var d=document.documentElement,s=d.style,l=localStorage,g=function(k){try{return l.getItem(k)}catch(e){return null}},v=g('sitelayer.active-company-slug');if(v&&(v=v.trim()))d.dataset.companySlug=v;var t=g('sitelayer.theme');if(t!=='dark'&&t!=='light')t=matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light';d.dataset.theme=t;s.setProperty('--theme-bg',t==='dark'?'#1c1816':'#f5f1ec');s.setProperty('--theme-fg',t==='dark'?'#f3ecdf':'#1c1816');var w=parseInt(g('sitelayer.sidebar-width'),10);s.setProperty('--sidebar-width',(w>=0&&w<=600?w:0)+'px');var c=g('sitelayer.sidebar-collapsed');if(c==='1'||c==='true')d.dataset.sidebarCollapsed='1';var a=g('sitelayer.act-as');if(a)d.dataset.actAs=a}catch(e){}})();
+      ;(function () {
+        try {
+          var d = document.documentElement,
+            s = d.style,
+            l = localStorage,
+            g = function (k) {
+              try {
+                return l.getItem(k)
+              } catch (e) {
+                return null
+              }
+            },
+            v = g('sitelayer.active-company-slug')
+          if (v && (v = v.trim())) d.dataset.companySlug = v
+          var t = g('sitelayer.theme')
+          if (t !== 'dark' && t !== 'light') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+          d.dataset.theme = t
+          s.setProperty('--theme-bg', t === 'dark' ? '#1c1816' : '#f5f1ec')
+          s.setProperty('--theme-fg', t === 'dark' ? '#f3ecdf' : '#1c1816')
+          var w = parseInt(g('sitelayer.sidebar-width'), 10)
+          s.setProperty('--sidebar-width', (w >= 0 && w <= 600 ? w : 0) + 'px')
+          var c = g('sitelayer.sidebar-collapsed')
+          if (c === '1' || c === 'true') d.dataset.sidebarCollapsed = '1'
+          var a = g('sitelayer.act-as')
+          if (a) d.dataset.actAs = a
+        } catch (e) {}
+      })()
     </script>
     <style>
       /* Cold-start splash from Sitemap §1 panel 5. Renders before any
