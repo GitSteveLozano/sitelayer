@@ -571,8 +571,7 @@ async function handleAiChatRespondWebhook(
     ctx.sendJson(503, { error: 'webhook disabled (SITELAYER_CHAT_WEBHOOK_TOKEN not configured)' })
     return true
   }
-  const authHeader =
-    typeof req.headers['authorization'] === 'string' ? req.headers['authorization'] : ''
+  const authHeader = typeof req.headers['authorization'] === 'string' ? req.headers['authorization'] : ''
   const presented = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : ''
   if (!presented) {
     ctx.sendJson(401, { error: 'missing bearer token' })

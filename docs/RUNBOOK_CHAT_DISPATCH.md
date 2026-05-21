@@ -33,13 +33,14 @@ GET  /api/ai/chat/:audit_event_id/response (widget polling)
 
 ## Required env vars
 
-| Var | Where | Purpose |
-|---|---|---|
-| `MESH_API_URL` | sitelayer API | Where to POST mesh tasks (e.g. `http://mesh-hetzner:8713` from inside the prod droplet's Tailnet) |
-| `SITELAYER_PUBLIC_BASE` | sitelayer API | The PUBLIC URL the CLI runner uses to reach the webhook (e.g. `https://sitelayer.sandolab.xyz`). Must be reachable from any worker host on the fleet. |
+| Var                            | Where                                                          | Purpose                                                                                                                                                                        |
+| ------------------------------ | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `MESH_API_URL`                 | sitelayer API                                                  | Where to POST mesh tasks (e.g. `http://mesh-hetzner:8713` from inside the prod droplet's Tailnet)                                                                              |
+| `SITELAYER_PUBLIC_BASE`        | sitelayer API                                                  | The PUBLIC URL the CLI runner uses to reach the webhook (e.g. `https://sitelayer.sandolab.xyz`). Must be reachable from any worker host on the fleet.                          |
 | `SITELAYER_CHAT_WEBHOOK_TOKEN` | sitelayer API **+ every CLI runner that picks up these tasks** | Bearer token the runner presents on the webhook POST. Mesh's runner-secret-injection path provides this to the runner; sitelayer's webhook verifies it with `timingSafeEqual`. |
 
 If any of these are unset:
+
 - **`MESH_API_URL` missing** → `dispatchChatResponseToMesh` returns `ok:false`. The widget still receives `status:'staged'` (audit row landed) but `mesh_task_id:null` and `dispatch_error:'MESH_API_URL not configured'`. UX: operator's message stages but no agent reply arrives — the polling actor will time out at 60s with "subscription-CLI runner did not respond in time".
 - **`SITELAYER_PUBLIC_BASE` missing** → same as above; the dispatch prompt has no webhook URL so the runner couldn't reply even if it tried.
 - **`SITELAYER_CHAT_WEBHOOK_TOKEN` missing** → the webhook endpoint returns `503 webhook disabled`. The runner sees the 503 in its task body and fails the task; the widget times out.
@@ -101,6 +102,7 @@ it on the webhook POST. Add to the runner-credential rotation flow:
   ```
 
 - After updating `~/.config/mesh/env` on each worker:
+
   ```
   systemctl --user restart mesh-worker.service
   ```
@@ -143,6 +145,7 @@ If the smoke fails, see the troubleshooting section.
 
 The webhook token is a long-lived shared secret. Rotate quarterly OR
 immediately after any of:
+
 - A worker host is decommissioned
 - A runner credential leak is suspected
 - The operator changes the Tailnet membership
@@ -169,13 +172,13 @@ gap.
 
 ## Troubleshooting
 
-| Symptom | Cause | Fix |
-|---|---|---|
-| Widget shows "Sending…" → "Awaiting…" forever, no reply | `MESH_API_URL` empty OR mesh authority unreachable from prod droplet | `curl http://mesh-hetzner:8713/api/health` from the droplet. If unreachable, check Tailnet routing. If reachable, check `/app/sitelayer/.env` for `MESH_API_URL=`. |
-| Widget shows reply error: "subscription-CLI runner did not respond in time" | Mesh task created but no CLI runner picked it up within 60s | `curl "$MESH_API_URL/api/orchestrate/tasks?q=operator-chat-response&limit=5" | jq '.[] | {id,state,agent}'` — if state=pending and agent=null, no runner is claiming. Check `mcp__mesh__fleet_status` for Claude runners. |
-| Sitelayer logs: webhook returning 401 | Token mismatch between sitelayer env + worker env | Rotate (above) and confirm same value lands on both sides. |
-| Sitelayer logs: webhook returning 503 | `SITELAYER_CHAT_WEBHOOK_TOKEN` empty in prod env | Check `/app/sitelayer/.env`; re-render via deploy if missing. |
-| Stage button works but no audit row appears | Mutation outbox stuck | Check `/api/sync/outbox` for failed rows. Not related to chat dispatch wiring. |
+| Symptom                                                                     | Cause                                                                | Fix                                                                                                                                                                |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Widget shows "Sending…" → "Awaiting…" forever, no reply                     | `MESH_API_URL` empty OR mesh authority unreachable from prod droplet | `curl http://mesh-hetzner:8713/api/health` from the droplet. If unreachable, check Tailnet routing. If reachable, check `/app/sitelayer/.env` for `MESH_API_URL=`. |
+| Widget shows reply error: "subscription-CLI runner did not respond in time" | Mesh task created but no CLI runner picked it up within 60s          | `curl "$MESH_API_URL/api/orchestrate/tasks?q=operator-chat-response&limit=5"                                                                                       | jq '.[] | {id,state,agent}'`— if state=pending and agent=null, no runner is claiming. Check`mcp**mesh**fleet_status` for Claude runners. |
+| Sitelayer logs: webhook returning 401                                       | Token mismatch between sitelayer env + worker env                    | Rotate (above) and confirm same value lands on both sides.                                                                                                         |
+| Sitelayer logs: webhook returning 503                                       | `SITELAYER_CHAT_WEBHOOK_TOKEN` empty in prod env                     | Check `/app/sitelayer/.env`; re-render via deploy if missing.                                                                                                      |
+| Stage button works but no audit row appears                                 | Mutation outbox stuck                                                | Check `/api/sync/outbox` for failed rows. Not related to chat dispatch wiring.                                                                                     |
 
 ## Cost posture
 

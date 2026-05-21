@@ -160,10 +160,7 @@ export function pollChatResponse(
  * or `onError` per subscription, then stop emitting. Callers invoke the
  * returned `unsubscribe` to dispose early (machine state exit, retry).
  */
-export type ChatResponseSubscriber = (
-  auditEventId: string,
-  handlers: ChatSubscriptionHandlers,
-) => () => void
+export type ChatResponseSubscriber = (auditEventId: string, handlers: ChatSubscriptionHandlers) => () => void
 
 /**
  * Default subscriber = SSE stream. Re-exported under the more
@@ -264,7 +261,9 @@ export type CreateChatWidgetMachineOptions = {
 }
 
 export function createChatWidgetMachine(
-  submitterOrOptions: CreateChatWidgetMachineOptions | ((input: StageInput) => Promise<StageOperatorContextChatResponse>) = {},
+  submitterOrOptions:
+    | CreateChatWidgetMachineOptions
+    | ((input: StageInput) => Promise<StageOperatorContextChatResponse>) = {},
   legacySubscriber?: ChatResponseSubscriber,
 ) {
   // Back-compat: older callers pass (submitter, poller-or-subscriber)
@@ -356,14 +355,12 @@ export function createChatWidgetMachine(
         // audit_event_id. Used when the polling timed out but the
         // operator wants another attempt (the underlying mesh task may
         // have completed since, or a re-dispatch happened out-of-band).
-        awaitingResponseFor: ({ event }) =>
-          event.type === 'RETRY' ? event.auditEventId : null,
+        awaitingResponseFor: ({ event }) => (event.type === 'RETRY' ? event.auditEventId : null),
         // Re-arm the elapsed counter from zero on each retry. Old
         // timestamp from the timed-out attempt would otherwise show
         // a misleading "responding for 90s+" right after the operator
         // hit the retry button.
-        awaitingResponseSince: ({ event }) =>
-          event.type === 'RETRY' ? Date.now() : null,
+        awaitingResponseSince: ({ event }) => (event.type === 'RETRY' ? Date.now() : null),
         error: () => null,
       }),
       missingPacketError: assign({
@@ -568,8 +565,7 @@ export function createChatWidgetMachine(
                 actions: assign({
                   awaitingResponseFor: () => null,
                   awaitingResponseSince: () => null,
-                  error: () =>
-                    'chat response timeout — subscription-CLI runner did not respond in time',
+                  error: () => 'chat response timeout — subscription-CLI runner did not respond in time',
                 }),
               },
             },
@@ -626,10 +622,7 @@ export function useChatWidget(): ChatWidgetHookResult {
   const toggle = useCallback(() => send({ type: 'TOGGLE' }), [send])
   const setDraft = useCallback((value: string) => send({ type: 'SET_DRAFT', value }), [send])
   const submit = useCallback(() => send({ type: 'SEND' }), [send])
-  const retry = useCallback(
-    (auditEventId: string) => send({ type: 'RETRY', auditEventId }),
-    [send],
-  )
+  const retry = useCallback((auditEventId: string) => send({ type: 'RETRY', auditEventId }), [send])
   const syncContext = useCallback(
     (packet: OperatorContextPacket | null) => send({ type: 'CONTEXT_UPDATED', packet }),
     [send],

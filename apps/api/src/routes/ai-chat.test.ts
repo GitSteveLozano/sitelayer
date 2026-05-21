@@ -529,7 +529,11 @@ describe('handleAiChatRoutes — POST /api/ai/chat/:id/respond (webhook)', () =>
     try {
       const pool = new FakePool()
       const { ctx, responses } = makeCtx(pool, validRespondBody)
-      await handleAiChatRoutes(buildWebhookReq(`Bearer ${webhookToken}`), buildUrl(`/api/ai/chat/${validUuid}/respond`), ctx)
+      await handleAiChatRoutes(
+        buildWebhookReq(`Bearer ${webhookToken}`),
+        buildUrl(`/api/ai/chat/${validUuid}/respond`),
+        ctx,
+      )
       expect(responses[0]?.status).toBe(503)
     } finally {
       if (prev) process.env.SITELAYER_CHAT_WEBHOOK_TOKEN = prev
@@ -553,7 +557,11 @@ describe('handleAiChatRoutes — POST /api/ai/chat/:id/respond (webhook)', () =>
     try {
       const pool = new FakePool()
       const { ctx, responses } = makeCtx(pool, validRespondBody)
-      await handleAiChatRoutes(buildWebhookReq('Bearer wrong-token-zzz'), buildUrl(`/api/ai/chat/${validUuid}/respond`), ctx)
+      await handleAiChatRoutes(
+        buildWebhookReq('Bearer wrong-token-zzz'),
+        buildUrl(`/api/ai/chat/${validUuid}/respond`),
+        ctx,
+      )
       expect(responses[0]).toEqual({ status: 401, body: { error: 'invalid bearer token' } })
     } finally {
       delete process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
@@ -782,11 +790,7 @@ describe('handleAiChatRoutes — GET /api/ai/chat/:id/stream (SSE)', () => {
       body: 'I was already here',
     })
     const { req, res, ctx } = buildSseCtx(pool)
-    await handleAiChatRoutes(
-      req as unknown as http.IncomingMessage,
-      buildUrl(`/api/ai/chat/${validUuid}/stream`),
-      ctx,
-    )
+    await handleAiChatRoutes(req as unknown as http.IncomingMessage, buildUrl(`/api/ai/chat/${validUuid}/stream`), ctx)
     const all = res.chunks.join('')
     expect(all).toMatch(/event: subscribed/)
     expect(all).toMatch(/event: delta/)
@@ -798,11 +802,7 @@ describe('handleAiChatRoutes — GET /api/ai/chat/:id/stream (SSE)', () => {
     resetChatBus()
     const pool = new FakePool()
     const { req, res, ctx, responses } = buildSseCtx(pool)
-    await handleAiChatRoutes(
-      req as unknown as http.IncomingMessage,
-      buildUrl(`/api/ai/chat/${validUuid}/stream`),
-      ctx,
-    )
+    await handleAiChatRoutes(req as unknown as http.IncomingMessage, buildUrl(`/api/ai/chat/${validUuid}/stream`), ctx)
     expect(res.writableEnded).toBe(false)
     expect(responses[0]).toEqual({
       status: 404,
@@ -816,11 +816,10 @@ describe('handleAiChatRoutes — GET /api/ai/chat/:id/stream (SSE)', () => {
     const { ctx, responses } = makeCtx(pool, validBody, 'member')
     const req = new FakeIncomingMessage('GET')
     const res = new FakeServerResponse()
-    await handleAiChatRoutes(
-      req as unknown as http.IncomingMessage,
-      buildUrl(`/api/ai/chat/${validUuid}/stream`),
-      { ...ctx, res: res as unknown as http.ServerResponse },
-    )
+    await handleAiChatRoutes(req as unknown as http.IncomingMessage, buildUrl(`/api/ai/chat/${validUuid}/stream`), {
+      ...ctx,
+      res: res as unknown as http.ServerResponse,
+    })
     expect(responses[0]).toEqual({ status: 403, body: { error: 'forbidden' } })
   })
 
@@ -834,11 +833,7 @@ describe('handleAiChatRoutes — GET /api/ai/chat/:id/stream (SSE)', () => {
       after: { chat_message: { body: 'staged' } },
     })
     const { req, res, ctx } = buildSseCtx(pool)
-    await handleAiChatRoutes(
-      req as unknown as http.IncomingMessage,
-      buildUrl(`/api/ai/chat/${validUuid}/stream`),
-      ctx,
-    )
+    await handleAiChatRoutes(req as unknown as http.IncomingMessage, buildUrl(`/api/ai/chat/${validUuid}/stream`), ctx)
     expect(__subscriberCountForTests(validUuid)).toBe(1)
     req.emit('close')
     expect(__subscriberCountForTests(validUuid)).toBe(0)

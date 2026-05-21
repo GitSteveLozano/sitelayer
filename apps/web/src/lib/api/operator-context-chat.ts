@@ -106,10 +106,7 @@ export type ChatSubscriptionHandlers = {
  * The implementation tolerates back-pressure (large frames split across
  * chunks) by buffering until it sees the SSE record-terminator `\n\n`.
  */
-export function subscribeChatResponse(
-  auditEventId: string,
-  handlers: ChatSubscriptionHandlers,
-): () => void {
+export function subscribeChatResponse(auditEventId: string, handlers: ChatSubscriptionHandlers): () => void {
   const controller = new AbortController()
   let disposed = false
   const unsubscribe = (): void => {
@@ -130,18 +127,15 @@ export function subscribeChatResponse(
       // future content-negotiation logic distinguish stream requests
       // from JSON requests on the same path namespace.
       headers.set('Accept', 'text/event-stream')
-      response = await fetch(
-        `${API_URL}/api/ai/chat/${encodeURIComponent(auditEventId)}/stream`,
-        {
-          method: 'GET',
-          headers,
-          signal: controller.signal,
-          // Disable browser caching — streams must never be cached and a
-          // stale cached 200 with no body would silently look like an
-          // immediate close.
-          cache: 'no-store',
-        },
-      )
+      response = await fetch(`${API_URL}/api/ai/chat/${encodeURIComponent(auditEventId)}/stream`, {
+        method: 'GET',
+        headers,
+        signal: controller.signal,
+        // Disable browser caching — streams must never be cached and a
+        // stale cached 200 with no body would silently look like an
+        // immediate close.
+        cache: 'no-store',
+      })
     } catch (err) {
       if (disposed) return
       handlers.onError(err instanceof Error ? err : new Error('chat stream connect failed'))
@@ -229,8 +223,7 @@ export function subscribeChatResponse(
       // AbortError fires when unsubscribe() is invoked normally — that's
       // not an application error; the caller knows it tore the stream
       // down.
-      const isAbort =
-        err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted'))
+      const isAbort = err instanceof Error && (err.name === 'AbortError' || err.message.includes('aborted'))
       if (!isAbort) {
         handlers.onError(err instanceof Error ? err : new Error('chat stream read failed'))
       }
