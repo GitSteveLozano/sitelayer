@@ -48,9 +48,7 @@ export function OperatorContextChatWidget() {
             <span className="text-xs uppercase tracking-wide text-ink-2">
               Operator context · {packet.origin_context.label}
             </span>
-            <span className="ml-auto text-xs text-ink-3 tabular-nums">
-              {formatRelative(packet.generated_at)}
-            </span>
+            <span className="ml-auto text-xs text-ink-3 tabular-nums">{formatRelative(packet.generated_at)}</span>
             <button
               type="button"
               onClick={widget.close}
@@ -63,17 +61,13 @@ export function OperatorContextChatWidget() {
 
           <div className="px-3 py-2 text-xs text-ink-2 space-y-1 max-h-40 overflow-y-auto">
             <div>
-              <span className="font-medium text-ink-1">Focus:</span>{' '}
-              {packet.current_focus.label}
+              <span className="font-medium text-ink-1">Focus:</span> {packet.current_focus.label}
               <span className="text-ink-3"> ({Math.round(packet.current_focus.confidence * 100)}%)</span>
             </div>
             {packet.origin_context.repo_branch ? (
               <div>
-                <span className="font-medium text-ink-1">Branch:</span>{' '}
-                {packet.origin_context.repo_branch}
-                {packet.origin_context.repo_dirty ? (
-                  <span className="text-amber-700"> · dirty</span>
-                ) : null}
+                <span className="font-medium text-ink-1">Branch:</span> {packet.origin_context.repo_branch}
+                {packet.origin_context.repo_dirty ? <span className="text-amber-700"> · dirty</span> : null}
               </div>
             ) : null}
             {packet.recent_activity.length ? (
@@ -84,8 +78,7 @@ export function OperatorContextChatWidget() {
                 <ul className="mt-1 pl-3 space-y-0.5">
                   {packet.recent_activity.slice(0, 6).map((a, i) => (
                     <li key={i} className="text-ink-3 truncate">
-                      <span className="text-ink-2">{a.kind}</span>{' '}
-                      {a.summary}
+                      <span className="text-ink-2">{a.kind}</span> {a.summary}
                     </li>
                   ))}
                 </ul>
@@ -97,9 +90,7 @@ export function OperatorContextChatWidget() {
             <ul className="border-t border-sand-3 px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
               {widget.messages.map((m) => (
                 <li key={m.id} className="text-sm">
-                  <span className="text-xs uppercase tracking-wide text-ink-3 mr-1">
-                    {m.role}
-                  </span>
+                  <span className="text-xs uppercase tracking-wide text-ink-3 mr-1">{m.role}</span>
                   {m.body}
                 </li>
               ))}
