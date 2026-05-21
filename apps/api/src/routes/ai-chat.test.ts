@@ -98,8 +98,59 @@ class FakePool {
       return { rows: [], rowCount: 1 }
     }
 
+    if (normalized.startsWith('select id from audit_events')) {
+      // Poll endpoint's first query: confirm the staged message exists
+      // for this company.
+      const [companyId, auditId] = params as [string, string]
+      const hit = this.auditEvents.find(
+        (a) => a.id === auditId && a.companyId === companyId,
+      )
+      return { rows: hit ? [{ id: hit.id }] : [], rowCount: hit ? 1 : 0 }
+    }
+
+    if (normalized.startsWith("select id, after, created_at from audit_events")) {
+      // Poll endpoint's second query: find a sibling response row.
+      const [companyId, parentId] = params as [string, string]
+      const hit = [...this.responseRows]
+        .reverse()
+        .find(
+          (r) =>
+            r.companyId === companyId &&
+            (r.after as Record<string, unknown>)?.parent_audit_event_id === parentId,
+        )
+      return {
+        rows: hit
+          ? [{ id: hit.id, after: hit.after, created_at: hit.createdAt }]
+          : [],
+        rowCount: hit ? 1 : 0,
+      }
+    }
+
     throw new Error(`unexpected SQL: ${normalized.slice(0, 200)}`)
   }
+
+  /** Test helper: seed a response row for the poll endpoint to find. */
+  seedResponse(input: {
+    id: string
+    companyId: string
+    parentAuditEventId: string
+    body: string
+    createdAt?: Date
+  }) {
+    this.responseRows.push({
+      id: input.id,
+      companyId: input.companyId,
+      after: { parent_audit_event_id: input.parentAuditEventId, body: input.body },
+      createdAt: input.createdAt ?? new Date(),
+    })
+  }
+
+  private responseRows: Array<{
+    id: string
+    companyId: string
+    after: JsonRecord
+    createdAt: Date
+  }> = []
 }
 
 function buildReq(method = 'POST'): http.IncomingMessage {
@@ -316,5 +367,104 @@ describe('handleAiChatRoutes — operator-context chat staging', () => {
       mutationType: 'stage_message',
       idempotencyKey: 'ai_chat:stage_message:audit-1',
     })
+  })
+})
+
+describe('handleAiChatRoutes — GET /api/ai/chat/:id/response (poll)', () => {
+  const validUuid = '00000000-0000-4000-8000-000000000001'
+
+  it('rejects non-UUID audit_event_id', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool)
+    await handleAiChatRoutes(buildReq('GET'), buildUrl(`/api/ai/chat/not-a-uuid/response`), ctx)
+    expect(responses[0]).toEqual({
+      status: 400,
+      body: { error: 'audit_event_id must be a valid uuid' },
+    })
+  })
+
+  it('returns 404 when the staged message does not exist for this company', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool)
+    await handleAiChatRoutes(buildReq('GET'), buildUrl(`/api/ai/chat/${validUuid}/response`), ctx)
+    expect(responses[0]).toEqual({
+      status: 404,
+      body: { error: 'staged chat message not found for this company' },
+    })
+  })
+
+  it('returns 202 staged when message exists but no response yet', async () => {
+    const pool = new FakePool()
+    pool.auditEvents.push({
+      id: validUuid,
+      companyId: 'co-1',
+      actorUserId: 'user-1',
+      after: { chat_message: { body: 'hi' } },
+    })
+    const { ctx, responses } = makeCtx(pool)
+    await handleAiChatRoutes(buildReq('GET'), buildUrl(`/api/ai/chat/${validUuid}/response`), ctx)
+    expect(responses[0]?.status).toBe(202)
+    const body = responses[0]?.body as Record<string, unknown>
+    expect(body.status).toBe('staged')
+    expect(body.response_pending).toBe(true)
+    expect(body.audit_event_id).toBe(validUuid)
+  })
+
+  it('returns 200 responded when a sibling respond_message row exists', async () => {
+    const pool = new FakePool()
+    pool.auditEvents.push({
+      id: validUuid,
+      companyId: 'co-1',
+      actorUserId: 'user-1',
+      after: { chat_message: { body: 'hi' } },
+    })
+    const respondAt = new Date('2026-05-21T03:14:15.000Z')
+    pool.seedResponse({
+      id: 'audit-resp-1',
+      companyId: 'co-1',
+      parentAuditEventId: validUuid,
+      body: 'Hello back, operator.',
+      createdAt: respondAt,
+    })
+    const { ctx, responses } = makeCtx(pool)
+    await handleAiChatRoutes(buildReq('GET'), buildUrl(`/api/ai/chat/${validUuid}/response`), ctx)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as Record<string, unknown>
+    expect(body.status).toBe('responded')
+    expect(body.audit_event_id).toBe(validUuid)
+    expect(body.response_audit_event_id).toBe('audit-resp-1')
+    expect(body.body).toBe('Hello back, operator.')
+    expect(body.created_at).toBe(respondAt.toISOString())
+  })
+
+  it('isolates poll lookups by company', async () => {
+    const pool = new FakePool()
+    // Seed a staged + response row under a DIFFERENT company; this
+    // operator (co-1) must NOT see them.
+    pool.auditEvents.push({
+      id: validUuid,
+      companyId: 'co-other',
+      actorUserId: 'user-other',
+      after: {},
+    })
+    pool.seedResponse({
+      id: 'audit-resp-other',
+      companyId: 'co-other',
+      parentAuditEventId: validUuid,
+      body: 'should not surface',
+    })
+    const { ctx, responses } = makeCtx(pool)
+    await handleAiChatRoutes(buildReq('GET'), buildUrl(`/api/ai/chat/${validUuid}/response`), ctx)
+    expect(responses[0]).toEqual({
+      status: 404,
+      body: { error: 'staged chat message not found for this company' },
+    })
+  })
+
+  it('requires admin role to poll', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool, validBody, 'member')
+    await handleAiChatRoutes(buildReq('GET'), buildUrl(`/api/ai/chat/${validUuid}/response`), ctx)
+    expect(responses[0]).toEqual({ status: 403, body: { error: 'forbidden' } })
   })
 })
