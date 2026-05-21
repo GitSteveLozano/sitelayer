@@ -295,6 +295,49 @@ describe('chatWidgetMachine', () => {
     actor.send({ type: 'DISMISS_ERROR' })
     expect(actor.getSnapshot().context.error).toBeNull()
   })
+
+  it('RETRY from idle re-arms the polling actor for the staged audit_event_id', async () => {
+    // Drive the machine through: send (stage) → polling times out →
+    // idle with error → RETRY → back to awaitingResponse with the
+    // same audit_event_id pinned.
+    const packet = makePacket()
+    let pollCallCount = 0
+    const failingPoller = vi.fn(async () => {
+      pollCallCount += 1
+      throw new Error('chat response timeout — subscription-CLI runner did not respond in time')
+    })
+    const { actor } = startActor(makeStageOk('audit-retry-1'), failingPoller)
+    actor.send({ type: 'CONTEXT_UPDATED', packet })
+    actor.send({ type: 'OPEN' })
+    actor.send({ type: 'SET_DRAFT', value: 'first attempt' })
+    actor.send({ type: 'SEND' })
+
+    await settle()
+    await settle()
+    // After first poll fails: idle + error set + staged message preserved.
+    expectValue(actor, { open: 'idle' })
+    expect(actor.getSnapshot().context.error).toMatch(/timeout/)
+    expect(pollCallCount).toBe(1)
+
+    // Operator clicks Retry on the staged message.
+    actor.send({ type: 'RETRY', auditEventId: 'audit-retry-1' })
+
+    // Should be back in awaitingResponse with the SAME audit_event_id;
+    // error cleared.
+    expectValue(actor, { open: 'awaitingResponse' })
+    expect(actor.getSnapshot().context.awaitingResponseFor).toBe('audit-retry-1')
+    expect(actor.getSnapshot().context.error).toBeNull()
+
+    await settle()
+    await settle()
+    // Second poll also fires (and fails again in this test).
+    expect(pollCallCount).toBe(2)
+    // Staged message stays staged across the retry round-trip.
+    const stagedMsg = actor
+      .getSnapshot()
+      .context.messages.find((m) => m.audit_event_id === 'audit-retry-1')
+    expect(stagedMsg).toMatchObject({ status: 'staged' })
+  })
 })
 
 describe('pollChatResponse', () => {

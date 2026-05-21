@@ -94,6 +94,18 @@ export function OperatorContextChatWidget() {
                   widget.isAwaitingResponse &&
                   widget.awaitingResponseFor !== null &&
                   m.audit_event_id === widget.awaitingResponseFor
+                // A retry slot exists when the staged operator message has
+                // an audit_event_id but the response never landed AND we're
+                // not currently polling for any other message. Lets the
+                // operator re-poll without typing the message again.
+                const canRetry =
+                  !isAwaiting &&
+                  !widget.isAwaitingResponse &&
+                  !widget.isSending &&
+                  m.role === 'operator' &&
+                  m.status === 'staged' &&
+                  typeof m.audit_event_id === 'string' &&
+                  m.audit_event_id.length > 0
                 return (
                   <li key={m.id} className="text-sm">
                     <span className="text-xs uppercase tracking-wide text-ink-3 mr-1">{m.role}</span>
@@ -112,6 +124,17 @@ export function OperatorContextChatWidget() {
                         <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse [animation-delay:240ms]" />
                         <span className="ml-1">responding</span>
                       </span>
+                    ) : null}
+                    {canRetry ? (
+                      <button
+                        type="button"
+                        onClick={() => widget.retry(m.audit_event_id!)}
+                        className="ml-2 text-xs text-amber-700 underline hover:text-amber-900"
+                        data-testid="operator-context-chat-retry"
+                        aria-label="retry polling for this message"
+                      >
+                        ↻ retry
+                      </button>
                     ) : null}
                   </li>
                 )

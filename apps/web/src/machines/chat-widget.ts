@@ -62,6 +62,7 @@ type ChatWidgetEvent =
   | { type: 'CONTEXT_UPDATED'; packet: OperatorContextPacket | null }
   | { type: 'SET_DRAFT'; value: string }
   | { type: 'SEND' }
+  | { type: 'RETRY'; auditEventId: string }
   | { type: 'DISMISS_ERROR' }
 
 const initialContext: ChatWidgetContext = {
@@ -209,6 +210,18 @@ export function createChatWidgetMachine(
           lastStage: null,
         }
       }),
+      armRetryPolling: assign({
+        // Re-arm the polling actor for an existing staged audit_event_id.
+        // The staged message itself stays as-is (status='staged') — only
+        // the awaitingResponseFor pointer flips back so the
+        // awaitingResponse state's invoke fires fresh against the same
+        // audit_event_id. Used when the polling timed out but the
+        // operator wants another attempt (the underlying mesh task may
+        // have completed since, or a re-dispatch happened out-of-band).
+        awaitingResponseFor: ({ event }) =>
+          event.type === 'RETRY' ? event.auditEventId : null,
+        error: () => null,
+      }),
       missingPacketError: assign({
         error: () => 'Operator context is not available yet.',
       }),
@@ -254,6 +267,16 @@ export function createChatWidgetMachine(
                   actions: 'missingPacketError',
                 },
               ],
+              RETRY: {
+                // Re-poll for a staged message whose response timed out.
+                // Pointer goes to the awaitingResponseFor field; the
+                // awaitingResponse state's invoke picks it up. No new
+                // mesh task is created — we're betting the operator's
+                // re-dispatched it manually OR the original runner just
+                // finished slowly.
+                target: 'awaitingResponse',
+                actions: 'armRetryPolling',
+              },
             },
           },
           sending: {
@@ -375,6 +398,11 @@ export type ChatWidgetHookResult = {
   toggle: () => void
   setDraft: (value: string) => void
   send: () => void
+  /** Re-arm the polling actor for an existing staged audit_event_id.
+   * Used when a previous poll timed out but the operator wants another
+   * attempt. The chat-widget machine does not re-dispatch the mesh task;
+   * the operator can re-dispatch via mcp__mesh__create_task if needed. */
+  retry: (auditEventId: string) => void
   syncContext: (packet: OperatorContextPacket | null) => void
 }
 
@@ -385,6 +413,10 @@ export function useChatWidget(): ChatWidgetHookResult {
   const toggle = useCallback(() => send({ type: 'TOGGLE' }), [send])
   const setDraft = useCallback((value: string) => send({ type: 'SET_DRAFT', value }), [send])
   const submit = useCallback(() => send({ type: 'SEND' }), [send])
+  const retry = useCallback(
+    (auditEventId: string) => send({ type: 'RETRY', auditEventId }),
+    [send],
+  )
   const syncContext = useCallback(
     (packet: OperatorContextPacket | null) => send({ type: 'CONTEXT_UPDATED', packet }),
     [send],
@@ -404,6 +436,7 @@ export function useChatWidget(): ChatWidgetHookResult {
     toggle,
     setDraft,
     send: submit,
+    retry,
     syncContext,
   }
 }
