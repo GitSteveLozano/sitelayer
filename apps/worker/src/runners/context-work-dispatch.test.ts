@@ -103,12 +103,39 @@ describe('createContextWorkDispatchRunner', () => {
     expect(url).toBe('https://mesh.example.test/api/orchestrate/tasks')
     expect(init.headers).toMatchObject({ authorization: 'Bearer mesh-secret' })
     expect(JSON.parse(String(init.body))).toMatchObject({
-      company_id: 'company-1',
-      work_item_id: '00000000-0000-4000-8000-000000000001',
-      support_packet_id: '00000000-0000-4000-8000-000000000002',
+      subject: '[Sitelayer] Investigate estimate push',
+      created_by: 'sitelayer-worker',
+      source: 'sitelayer-context-handoff',
+      task_type: 'audit',
+      auto_dispatch: true,
+      tags: 'sitelayer,context-handoff,work-request,triage:ready-for-agent,audit',
+      project_hint: 'sitelayer',
+      idempotency_key: 'sitelayer:context_work_item:00000000-0000-4000-8000-000000000001',
+      reversibility_window_seconds: 86400,
+      properties: {
+        project_hint: 'sitelayer',
+        source_system: 'sitelayer',
+        source_kind: 'context_work_item',
+        company_id: 'company-1',
+        work_item_id: '00000000-0000-4000-8000-000000000001',
+        support_packet_id: '00000000-0000-4000-8000-000000000002',
+        route: '/projects/p/estimate-push/x',
+        callback_path: '/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
+        readonly: true,
+      },
       execution_context: {
+        project_hint: 'sitelayer',
+        source_system: 'sitelayer',
+        work_item_id: '00000000-0000-4000-8000-000000000001',
+        support_packet_id: '00000000-0000-4000-8000-000000000002',
+        route: '/projects/p/estimate-push/x',
+        callback_path: '/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
+        dispatch_mode: 'steerer',
+        claim_mode: 'steerer',
         context_handoff: {
           version: 'context-handoff-v1',
+          source_system: 'sitelayer',
+          company_id: 'company-1',
           work_item_id: '00000000-0000-4000-8000-000000000001',
           support_packet_id: '00000000-0000-4000-8000-000000000002',
           callback: {
@@ -119,6 +146,9 @@ describe('createContextWorkDispatchRunner', () => {
         },
       },
     })
+    expect(JSON.parse(String(init.body)).description).toContain(
+      'Treat this as read-only triage unless a separate implementation task',
+    )
     expect(calls.some((call) => call.sql.includes('insert into context_handoff_events'))).toBe(true)
     const ackCall = calls.find((call) => call.sql.includes('insert into context_handoff_events'))
     expect(JSON.parse(String(ackCall?.params[2]))).toMatchObject({

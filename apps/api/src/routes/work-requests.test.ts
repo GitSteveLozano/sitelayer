@@ -943,6 +943,15 @@ describe('handleWorkRequestRoutes', () => {
     }
   })
 
+  it('keeps member users out of company-wide work queue health', async () => {
+    const pool = new FakePool()
+    const health = makeCtx(pool, {}, 'member')
+
+    await handleWorkRequestRoutes(buildReq('GET'), buildUrl('/api/work-requests/queue-health'), health.ctx)
+
+    expect(health.responses[0]).toEqual({ status: 403, body: { error: 'forbidden' } })
+  })
+
   it('accepts agent callbacks and moves proposals to review', async () => {
     const previous = process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN
     process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN = 'callback-secret'

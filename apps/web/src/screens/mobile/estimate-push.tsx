@@ -9,6 +9,7 @@
  * outOfSync UI state. No business logic mirrored on the client.
  */
 import { useNavigate, useParams } from 'react-router-dom'
+import type { CompanyRole } from '@sitelayer/domain'
 import { useEstimatePush } from '../../machines/estimate-push.js'
 import {
   estimatePushLineRate,
@@ -56,7 +57,7 @@ const STATE_TONE: Record<EstimatePushState, PillTone> = {
 
 type BannerTone = 'info' | 'error' | 'ok' | 'warn'
 
-export function MobileEstimatePush({ companySlug }: { companySlug: string }) {
+export function MobileEstimatePush({ companySlug, companyRole }: { companySlug: string; companyRole: CompanyRole }) {
   const params = useParams<{ projectId: string; pushId: string }>()
   const navigate = useNavigate()
   const projectId = params.projectId ?? ''
@@ -155,6 +156,7 @@ export function MobileEstimatePush({ companySlug }: { companySlug: string }) {
           </div>
         ) : null}
         <WorkRequestAction
+          companyRole={companyRole}
           defaultTitle="Estimate push issue"
           defaultSummary={ctx.error ? `QBO push failed: ${ctx.error}` : ''}
           category="estimate_push"

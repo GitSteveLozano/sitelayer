@@ -27,8 +27,10 @@ import {
   retryWorkRequestMeshDispatch,
   type AppendWorkRequestEventInput,
 } from '@/lib/api'
+import { canTriageWorkRequests } from '@/lib/work-request-permissions'
+import type { CompanyRole } from '@sitelayer/domain'
 
-export function MobileWorkRequestDetail() {
+export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyRole }) {
   const params = useParams<{ workItemId: string }>()
   const navigate = useNavigate()
   const qc = useQueryClient()
@@ -63,6 +65,7 @@ export function MobileWorkRequestDetail() {
   })
 
   const workItem = detail.data?.work_item ?? null
+  const canTriage = canTriageWorkRequests(companyRole)
   const busy = appendEvent.isPending || dispatch.isPending || retryDispatch.isPending || githubExport.isPending
   const isClosed = workItem?.status === 'resolved' || workItem?.status === 'wont_do'
   const dispatchOutbox = detail.data?.dispatch_outbox ?? null
@@ -109,41 +112,47 @@ export function MobileWorkRequestDetail() {
               </div>
             ) : null}
 
-            <MSectionH>Actions</MSectionH>
-            <div style={{ padding: '0 16px', display: 'grid', gap: 10 }}>
-              <MButtonStack>
-                {canRetryDispatch ? (
-                  <MButton variant="primary" disabled={busy} onClick={() => retryDispatch.mutate()}>
-                    {retryDispatch.isPending ? 'Retrying...' : 'Retry dispatch'}
-                  </MButton>
-                ) : (
-                  <MButton
-                    variant="primary"
-                    disabled={busy || workItem.status === 'agent_running'}
-                    onClick={() => dispatch.mutate()}
-                  >
-                    {dispatch.isPending ? 'Dispatching...' : 'Dispatch agent'}
-                  </MButton>
-                )}
-                {isClosed ? (
-                  <MButton
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={() => appendEvent.mutate({ event_type: 'resolution.reopened' })}
-                  >
-                    Reopen
-                  </MButton>
-                ) : (
-                  <MButton
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={() => appendEvent.mutate({ event_type: 'resolution.accepted' })}
-                  >
-                    Mark resolved
-                  </MButton>
-                )}
-              </MButtonStack>
-            </div>
+            {canTriage || isClosed ? (
+              <>
+                <MSectionH>Actions</MSectionH>
+                <div style={{ padding: '0 16px', display: 'grid', gap: 10 }}>
+                  <MButtonStack>
+                    {canTriage ? (
+                      canRetryDispatch ? (
+                        <MButton variant="primary" disabled={busy} onClick={() => retryDispatch.mutate()}>
+                          {retryDispatch.isPending ? 'Retrying...' : 'Retry dispatch'}
+                        </MButton>
+                      ) : (
+                        <MButton
+                          variant="primary"
+                          disabled={busy || workItem.status === 'agent_running'}
+                          onClick={() => dispatch.mutate()}
+                        >
+                          {dispatch.isPending ? 'Dispatching...' : 'Dispatch agent'}
+                        </MButton>
+                      )
+                    ) : null}
+                    {isClosed ? (
+                      <MButton
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => appendEvent.mutate({ event_type: 'resolution.reopened' })}
+                      >
+                        Reopen
+                      </MButton>
+                    ) : canTriage ? (
+                      <MButton
+                        variant="ghost"
+                        disabled={busy}
+                        onClick={() => appendEvent.mutate({ event_type: 'resolution.accepted' })}
+                      >
+                        Mark resolved
+                      </MButton>
+                    ) : null}
+                  </MButtonStack>
+                </div>
+              </>
+            ) : null}
 
             <MSectionH>Message</MSectionH>
             <div style={{ padding: '0 16px', display: 'grid', gap: 10 }}>
@@ -170,39 +179,43 @@ export function MobileWorkRequestDetail() {
               </MButton>
             </div>
 
-            <MSectionH>External</MSectionH>
-            <div style={{ padding: '0 16px', display: 'grid', gap: 10 }}>
-              <MButton variant="ghost" disabled={busy} onClick={() => githubExport.mutate()}>
-                {githubExport.isPending ? 'Preparing...' : 'Prepare GitHub export'}
-              </MButton>
-              {githubExportBody ? (
-                <MTextarea aria-label="GitHub export body" readOnly value={githubExportBody} rows={8} />
-              ) : null}
-              <MInput
-                aria-label="GitHub issue URL"
-                value={githubUrl}
-                onChange={(event) => setGithubUrl(event.currentTarget.value)}
-                placeholder="GitHub issue URL"
-              />
-              <MButton
-                variant="ghost"
-                disabled={busy || !githubUrl.trim()}
-                onClick={() =>
-                  appendEvent.mutate(
-                    {
-                      event_type: 'external.github_linked',
-                      url: githubUrl,
-                      metadata: { source: 'manual_link' },
-                    },
-                    {
-                      onSuccess: () => setGithubUrl(''),
-                    },
-                  )
-                }
-              >
-                Link GitHub
-              </MButton>
-            </div>
+            {canTriage ? (
+              <>
+                <MSectionH>External</MSectionH>
+                <div style={{ padding: '0 16px', display: 'grid', gap: 10 }}>
+                  <MButton variant="ghost" disabled={busy} onClick={() => githubExport.mutate()}>
+                    {githubExport.isPending ? 'Preparing...' : 'Prepare GitHub export'}
+                  </MButton>
+                  {githubExportBody ? (
+                    <MTextarea aria-label="GitHub export body" readOnly value={githubExportBody} rows={8} />
+                  ) : null}
+                  <MInput
+                    aria-label="GitHub issue URL"
+                    value={githubUrl}
+                    onChange={(event) => setGithubUrl(event.currentTarget.value)}
+                    placeholder="GitHub issue URL"
+                  />
+                  <MButton
+                    variant="ghost"
+                    disabled={busy || !githubUrl.trim()}
+                    onClick={() =>
+                      appendEvent.mutate(
+                        {
+                          event_type: 'external.github_linked',
+                          url: githubUrl,
+                          metadata: { source: 'manual_link' },
+                        },
+                        {
+                          onSuccess: () => setGithubUrl(''),
+                        },
+                      )
+                    }
+                  >
+                    Link GitHub
+                  </MButton>
+                </div>
+              </>
+            ) : null}
 
             <WorkRequestContextPreview workItem={workItem} supportPacket={detail.data.support_packet} />
 

@@ -561,7 +561,7 @@ async function listWorkRequests(ctx: WorkRequestRouteCtx, url: URL) {
 }
 
 async function getWorkRequestQueueHealth(ctx: WorkRequestRouteCtx) {
-  if (!ctx.requireRole(LIST_ROLES)) return
+  if (!ctx.requireRole(TRIAGE_ROLES)) return
   const health = await withCompanyClient(ctx.company.id, async (c) => {
     const workStatuses = await c.query<{ status: string; count: number }>(
       `select status, count(*)::int as count

@@ -57,7 +57,7 @@ export type ComputeActiveContextArgs = {
  * 'office' to 'admin' at the auth boundary.
  */
 export function normalizeMobileShellRole(value: string | null | undefined): CompanyRole {
-  if (value === 'admin' || value === 'foreman' || value === 'office' || value === 'member') {
+  if (value === 'admin' || value === 'foreman' || value === 'office' || value === 'member' || value === 'bookkeeper') {
     return value
   }
   return 'member'

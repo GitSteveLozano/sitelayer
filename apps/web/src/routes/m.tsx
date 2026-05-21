@@ -83,6 +83,7 @@ export default function MRoute({ basePath = '' }: MRouteProps) {
       bootstrap={bootstrapQuery.data ?? null}
       companyRole={normalizeMobileShellRole(sessionRole)}
       companySlug={companySlug}
+      currentUserId={session?.user.id ?? null}
       basePath={basePath}
     />
   )

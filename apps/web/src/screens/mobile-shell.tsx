@@ -111,6 +111,7 @@ export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
   companyRole: CompanyRole
   companySlug: string
+  currentUserId?: string | null
   /**
    * Where the shell is mounted. '/m' is the legacy alias kept for any
    * external links that point at the original mobile-only entry; '' (or
@@ -150,7 +151,13 @@ const ROLE_MODE_LABEL: Record<RoleMode, string> = {
   worker: 'Worker',
 }
 
-export function MobileShell({ bootstrap, companyRole, companySlug, basePath = '' }: MobileShellProps) {
+export function MobileShell({
+  bootstrap,
+  companyRole,
+  companySlug,
+  currentUserId = null,
+  basePath = '',
+}: MobileShellProps) {
   const params = useParams<{ projectId?: string }>()
   const location = useLocation()
   const navigate = useNavigate()
@@ -250,17 +257,23 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
             <Route path="projects" element={<MobileProjectsList bootstrap={bootstrap} />} />
             <Route path="projects/sent" element={<MobileEstimatesSent />} />
             <Route path="projects/new" element={<MobileProjectNew companySlug={companySlug} />} />
-            <Route path="projects/:projectId" element={<MobileProjectDetail bootstrap={bootstrap} />} />
+            <Route
+              path="projects/:projectId"
+              element={<MobileProjectDetail bootstrap={bootstrap} companyRole={companyRole} />}
+            />
             <Route path="projects/:projectId/takeoff" element={<MobileTakeoffList companySlug={companySlug} />} />
             <Route path="projects/:projectId/estimate" element={<MobileEstimateReview companySlug={companySlug} />} />
             <Route
               path="projects/:projectId/estimate-push/:pushId"
-              element={<MobileEstimatePush companySlug={companySlug} />}
+              element={<MobileEstimatePush companySlug={companySlug} companyRole={companyRole} />}
             />
-            <Route path="projects/:projectId/*" element={<MobileProjectDetail bootstrap={bootstrap} />} />
+            <Route
+              path="projects/:projectId/*"
+              element={<MobileProjectDetail bootstrap={bootstrap} companyRole={companyRole} />}
+            />
             <Route path="schedule" element={<MobileSchedule bootstrap={bootstrap} companySlug={companySlug} />} />
             <Route path="schedule/*" element={<MobileSchedule bootstrap={bootstrap} companySlug={companySlug} />} />
-            <Route path="rentals" element={<MobileRentals companySlug={companySlug} />} />
+            <Route path="rentals" element={<MobileRentals companySlug={companySlug} companyRole={companyRole} />} />
             <Route
               path="rentals/dispatch"
               element={<MobileRentalDispatch bootstrap={bootstrap} companySlug={companySlug} />}
@@ -278,10 +291,13 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
             <Route path="scaffold-inspections/:token" element={<MobileScaffoldInspectionScreen />} />
             <Route path="rentals/portal" element={<MobileRentalsPortal companySlug={companySlug} />} />
             <Route path="rentals/requests" element={<RentalRequestsQueueScreen />} />
-            <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} />} />
+            <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} companyRole={companyRole} />} />
             <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
-            <Route path="work" element={<MobileWorkRequests />} />
-            <Route path="work/:workItemId" element={<MobileWorkRequestDetail />} />
+            <Route
+              path="work"
+              element={<MobileWorkRequests companyRole={companyRole} currentUserId={currentUserId} />}
+            />
+            <Route path="work/:workItemId" element={<MobileWorkRequestDetail companyRole={companyRole} />} />
             <Route path="more/*" element={<MoreRoute />} />
             <Route path="crew" element={<ForemanCrew bootstrap={bootstrap} />} />
             <Route path="crew/*" element={<ForemanCrew bootstrap={bootstrap} />} />

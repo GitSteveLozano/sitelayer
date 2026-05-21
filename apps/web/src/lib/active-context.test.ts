@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { availableRoleModes, computeActiveContext, normalizeRoleMode } from './active-context.js'
+import {
+  availableRoleModes,
+  computeActiveContext,
+  normalizeMobileShellRole,
+  normalizeRoleMode,
+} from './active-context.js'
 
 describe('computeActiveContext', () => {
   it('admin is the default for admin users regardless of assignments or geofence', () => {
@@ -171,5 +176,16 @@ describe('normalizeRoleMode', () => {
     expect(normalizeRoleMode('worker')).toBe('worker')
     expect(normalizeRoleMode('member')).toBeNull()
     expect(normalizeRoleMode(null)).toBeNull()
+  })
+})
+
+describe('normalizeMobileShellRole', () => {
+  it('preserves the company roles that drive work-request permissions', () => {
+    expect(normalizeMobileShellRole('admin')).toBe('admin')
+    expect(normalizeMobileShellRole('foreman')).toBe('foreman')
+    expect(normalizeMobileShellRole('office')).toBe('office')
+    expect(normalizeMobileShellRole('member')).toBe('member')
+    expect(normalizeMobileShellRole('bookkeeper')).toBe('bookkeeper')
+    expect(normalizeMobileShellRole('owner')).toBe('member')
   })
 })

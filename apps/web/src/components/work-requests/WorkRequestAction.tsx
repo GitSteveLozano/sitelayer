@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
+import type { CompanyRole } from '@sitelayer/domain'
 import { MBanner, MButton, MButtonStack, MInput, MSectionH, MSelect, MTextarea } from '../m/index.js'
 import { buildBrowserWorkRequestContext, type WorkRequestClientContext } from './context.js'
 import { nextRequestId } from '@/lib/api/client'
+import { canCreateWorkRequests } from '@/lib/work-request-permissions'
 import {
   createWorkRequest,
   queryKeys,
@@ -21,6 +23,7 @@ export function WorkRequestAction({
   submitLabel = 'Create work item',
   collapsedLabel = 'Report issue',
   navigateOnCreate = true,
+  companyRole,
   onCreated,
 }: {
   defaultTitle: string
@@ -31,6 +34,7 @@ export function WorkRequestAction({
   submitLabel?: string
   collapsedLabel?: string
   navigateOnCreate?: boolean
+  companyRole?: CompanyRole
   onCreated?: (response: CreateWorkRequestResponse) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -63,6 +67,8 @@ export function WorkRequestAction({
       setClientRequestId(nextRequestId())
     },
   })
+
+  if (companyRole !== undefined && !canCreateWorkRequests(companyRole)) return null
 
   if (!open) {
     return (

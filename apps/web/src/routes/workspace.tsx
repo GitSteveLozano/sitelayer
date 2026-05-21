@@ -107,7 +107,12 @@ function CompanyWorkspace({ activeCompany }: { activeCompany: ActiveCompany }) {
 
   return (
     <RoleContext.Provider value={persona}>
-      <MobileShell bootstrap={bootstrapQuery.data ?? null} companyRole={companyRole} companySlug={companySlug} />
+      <MobileShell
+        bootstrap={bootstrapQuery.data ?? null}
+        companyRole={companyRole}
+        companySlug={companySlug}
+        currentUserId={session?.user.id ?? null}
+      />
     </RoleContext.Provider>
   )
 }

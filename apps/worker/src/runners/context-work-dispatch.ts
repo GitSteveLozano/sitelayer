@@ -107,17 +107,7 @@ function extractMeshTaskId(responseText: string): string | null {
 function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPayload): Record<string, unknown> {
   const contextHandoff = {
     version: 'context-handoff-v1',
-    work_item_id: payload.work_item_id,
-    support_packet_id: payload.support_packet_id ?? null,
-    title: payload.title ?? null,
-    summary: payload.summary ?? null,
-    route: payload.route ?? null,
-    entity_type: payload.entity_type ?? null,
-    entity_id: payload.entity_id ?? null,
-    support_packet: payload.support_packet ?? null,
-    callback: payload.callback ?? null,
-  }
-  return {
+    source_system: 'sitelayer',
     company_id: companyId,
     work_item_id: payload.work_item_id,
     support_packet_id: payload.support_packet_id ?? null,
@@ -128,10 +118,110 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
     entity_id: payload.entity_id ?? null,
     support_packet: payload.support_packet ?? null,
     callback: payload.callback ?? null,
+  }
+  const route = cleanString(payload.route)
+  const entityType = cleanString(payload.entity_type)
+  const entityId = cleanString(payload.entity_id)
+  const summary = cleanString(payload.summary)
+  const title = cleanString(payload.title) ?? `Sitelayer work request ${payload.work_item_id.slice(0, 8)}`
+  const callbackPath = cleanString(payload.callback?.path)
+
+  return {
+    subject: `[Sitelayer] ${title}`,
+    description: buildMeshTaskDescription({
+      companyId,
+      workItemId: payload.work_item_id,
+      supportPacketId: cleanString(payload.support_packet_id),
+      title,
+      summary,
+      route,
+      entityType,
+      entityId,
+      callbackPath,
+    }),
+    created_by: 'sitelayer-worker',
+    source: 'sitelayer-context-handoff',
+    task_type: 'audit',
+    auto_dispatch: true,
+    tags: 'sitelayer,context-handoff,work-request,triage:ready-for-agent,audit',
+    project_hint: 'sitelayer',
+    idempotency_key: `sitelayer:context_work_item:${payload.work_item_id}`,
+    reversibility_window_seconds: 86_400,
+    properties: {
+      project_hint: 'sitelayer',
+      source_system: 'sitelayer',
+      source_kind: 'context_work_item',
+      company_id: companyId,
+      work_item_id: payload.work_item_id,
+      support_packet_id: cleanString(payload.support_packet_id),
+      route,
+      entity_type: entityType,
+      entity_id: entityId,
+      callback_path: callbackPath,
+      readonly: true,
+      acceptance_criteria: [
+        'Read the attached Sitelayer context handoff before acting.',
+        'Record the observed issue, likely cause, and recommended owner or next action.',
+        'Use the callback path when updating the Sitelayer work request status.',
+      ],
+    },
     execution_context: {
+      project_hint: 'sitelayer',
+      source_system: 'sitelayer',
+      work_item_id: payload.work_item_id,
+      support_packet_id: cleanString(payload.support_packet_id),
+      route,
+      entity_type: entityType,
+      entity_id: entityId,
+      callback_path: callbackPath,
+      dispatch_mode: 'steerer',
+      claim_mode: 'steerer',
       context_handoff: contextHandoff,
     },
   }
+}
+
+function buildMeshTaskDescription(input: {
+  companyId: string
+  workItemId: string
+  supportPacketId?: string | null
+  title: string
+  summary?: string | null
+  route?: string | null
+  entityType?: string | null
+  entityId?: string | null
+  callbackPath?: string | null
+}): string {
+  const lines = [
+    'Sitelayer context handoff work request.',
+    '',
+    `Title: ${input.title}`,
+    `Company: ${input.companyId}`,
+    `Work item: ${input.workItemId}`,
+  ]
+  appendLine(lines, 'Support packet', input.supportPacketId)
+  appendLine(lines, 'Route', input.route)
+  if (input.entityType || input.entityId) {
+    lines.push(`Entity: ${input.entityType ?? 'unknown'}:${input.entityId ?? 'unknown'}`)
+  }
+  appendLine(lines, 'Summary', input.summary)
+  appendLine(lines, 'Callback', input.callbackPath)
+  lines.push(
+    '',
+    'Instructions:',
+    '- Inspect execution_context.context_handoff for the captured route, entity, UI state, events, and support packet.',
+    '- Treat this as read-only triage unless a separate implementation task with target_files and acceptance_criteria is created.',
+    '- If you update Sitelayer, use the scoped callback from execution_context.context_handoff.callback.',
+  )
+  return lines.join('\n')
+}
+
+function appendLine(lines: string[], label: string, value?: string | null): void {
+  if (value) lines.push(`${label}: ${value}`)
+}
+
+function cleanString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
 }
 
 function buildDispatchHeaders(): Record<string, string> {

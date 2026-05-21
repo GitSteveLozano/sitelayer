@@ -11,8 +11,10 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
+import type { CompanyRole } from '@sitelayer/domain'
 import { MBody, MTopBar } from '../../components/m/index.js'
 import { MEmptyState } from '../../components/m-states/index.js'
+import { WorkRequestAction } from '../../components/work-requests/WorkRequestAction.js'
 import { ProjectHero } from './project-detail/project-hero.js'
 import { TabBar } from './project-detail/tab-bar.js'
 import { Overview } from './project-detail/overview-tab.js'
@@ -35,7 +37,13 @@ export const TABS: ReadonlyArray<{ key: TabKey; label: string }> = [
   { key: 'files', label: 'Files' },
 ]
 
-export function MobileProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
+export function MobileProjectDetail({
+  bootstrap,
+  companyRole,
+}: {
+  bootstrap: BootstrapResponse | null
+  companyRole: CompanyRole
+}) {
   const params = useParams<{ projectId: string }>()
   const navigate = useNavigate()
   const [tab, setTab] = useState<TabKey>('overview')
@@ -85,6 +93,39 @@ export function MobileProjectDetail({ bootstrap }: { bootstrap: BootstrapRespons
       />
       <MBody>
         <ProjectHero project={project} pctSpent={pctSpent} onTrack={onTrack} spent={spent} bid={bid} />
+        <WorkRequestAction
+          companyRole={companyRole}
+          defaultTitle="Project issue"
+          category="project"
+          route={`/projects/${project.id}`}
+          client={{
+            source: 'project_detail_mobile',
+            page: {
+              path: `/projects/${project.id}`,
+              route: `/projects/${project.id}`,
+              tab,
+            },
+            entity: {
+              entity_type: 'project',
+              entity_id: project.id,
+            },
+            project: {
+              id: project.id,
+              name: project.name,
+              status: project.status,
+              customer_name: project.customer_name,
+              division_code: project.division_code,
+            },
+            state: {
+              total_hours: totalHours,
+              bid_total: bid,
+              spent,
+              percent_spent: pctSpent,
+              schedule_count: schedules.length,
+              material_bill_count: materialBills.length,
+            },
+          }}
+        />
         <TabBar active={tab} onChange={setTab} />
         {tab === 'overview' && (
           <Overview

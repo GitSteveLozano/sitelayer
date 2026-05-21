@@ -15,6 +15,8 @@ import {
 import { WorkRequestAction } from '../../components/work-requests/WorkRequestAction.js'
 import { WorkRequestSeverityPill, WorkRequestStatusPill } from '../../components/work-requests/status.js'
 import { fetchWorkRequestQueueHealth, fetchWorkRequests, queryKeys, type WorkItemStatus } from '@/lib/api'
+import { canTriageWorkRequests } from '@/lib/work-request-permissions'
+import type { CompanyRole } from '@sitelayer/domain'
 import { MSkeletonList } from '../../components/m-states/index.js'
 
 const FILTERS: ReadonlyArray<{ id: 'open' | 'mine' | WorkItemStatus; label: string }> = [
@@ -36,15 +38,24 @@ const OPEN_STATUSES = new Set<WorkItemStatus>([
   'reopened',
 ])
 
-export function MobileWorkRequests() {
+export function MobileWorkRequests({
+  companyRole,
+  currentUserId,
+}: {
+  companyRole: CompanyRole
+  currentUserId: string | null
+}) {
   const [filter, setFilter] = useState<(typeof FILTERS)[number]['id']>('open')
   const navigate = useNavigate()
+  const canTriage = canTriageWorkRequests(companyRole)
+  const filters = currentUserId ? FILTERS : FILTERS.filter((entry) => entry.id !== 'mine')
   const params = useMemo(
     () => ({
       limit: 75,
       ...(filter !== 'open' && filter !== 'mine' ? { status: filter } : {}),
+      ...(filter === 'mine' && currentUserId ? { created_by_user_id: currentUserId } : {}),
     }),
-    [filter],
+    [currentUserId, filter],
   )
   const query = useQuery({
     queryKey: queryKeys.workRequests.list(params),
@@ -53,6 +64,7 @@ export function MobileWorkRequests() {
   const health = useQuery({
     queryKey: queryKeys.workRequests.health(),
     queryFn: fetchWorkRequestQueueHealth,
+    enabled: canTriage,
     refetchInterval: 30_000,
   })
   const rows =
@@ -64,15 +76,20 @@ export function MobileWorkRequests() {
     <>
       <MTopBar title="Work" />
       <MBody>
-        <WorkRequestAction defaultTitle="New work item" defaultSummary="" collapsedLabel="New work item" />
+        <WorkRequestAction
+          companyRole={companyRole}
+          defaultTitle="New work item"
+          defaultSummary=""
+          collapsedLabel="New work item"
+        />
         <MChipRow>
-          {FILTERS.map((entry) => (
+          {filters.map((entry) => (
             <MChip key={entry.id} active={filter === entry.id} onClick={() => setFilter(entry.id)}>
               {entry.label}
             </MChip>
           ))}
         </MChipRow>
-        {health.data ? <WorkQueueHealthStrip health={health.data} /> : null}
+        {canTriage && health.data ? <WorkQueueHealthStrip health={health.data} /> : null}
         {query.error ? (
           <div style={{ padding: '0 16px 8px' }}>
             <MBanner

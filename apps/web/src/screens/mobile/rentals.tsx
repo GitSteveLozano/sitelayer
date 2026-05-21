@@ -5,6 +5,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import type { CompanyRole } from '@sitelayer/domain'
 import {
   fetchInventoryUtilizationSummary,
   listInventoryItems,
@@ -29,11 +30,12 @@ import {
   MTopBar,
 } from '../../components/m/index.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
+import { WorkRequestAction } from '../../components/work-requests/WorkRequestAction.js'
 import { formatMoney } from './format.js'
 
 type Filter = 'all' | 'out' | 'available' | 'service'
 
-export function MobileRentals({ companySlug }: { companySlug: string }) {
+export function MobileRentals({ companySlug, companyRole }: { companySlug: string; companyRole: CompanyRole }) {
   const navigate = useNavigate()
   const [items, setItems] = useState<readonly InventoryItem[] | null>(null)
   const [utilization, setUtilization] = useState<InventoryUtilizationSummary | null>(null)
@@ -158,6 +160,31 @@ export function MobileRentals({ companySlug }: { companySlug: string }) {
           <MStat label="Daily revenue" value={formatMoney(dailyRevenue)} />
           <MStat label="Util" value={`${utilizationPct}%`} />
         </MStatStrip>
+        <WorkRequestAction
+          companyRole={companyRole}
+          defaultTitle="Rental issue"
+          category="rentals"
+          route="/rentals"
+          client={{
+            source: 'rentals_mobile',
+            page: {
+              path: '/rentals',
+              route: '/rentals',
+              filter,
+              query: query.trim() || null,
+            },
+            entity: {
+              entity_type: 'rental_catalog',
+              entity_id: companySlug,
+            },
+            state: {
+              counts,
+              visible_count: visible.length,
+              daily_revenue: dailyRevenue,
+              utilization_percent: utilizationPct,
+            },
+          }}
+        />
         <UtilizationCard
           utilization={utilization}
           showTopUtilized={showTopUtilized}
