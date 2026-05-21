@@ -120,6 +120,17 @@ class FakePool {
       }
     }
 
+    if (normalized.startsWith('select id, company_id from audit_events')) {
+      // Webhook's audit-row resolution query (cross-tenant: looks up
+      // the staged row by audit_event_id alone, returns company_id).
+      const [auditId] = params as [string]
+      const hit = this.auditEvents.find((a) => a.id === auditId)
+      return {
+        rows: hit ? [{ id: hit.id, company_id: hit.companyId }] : [],
+        rowCount: hit ? 1 : 0,
+      }
+    }
+
     throw new Error(`unexpected SQL: ${normalized.slice(0, 200)}`)
   }
 
@@ -315,15 +326,18 @@ describe('handleAiChatRoutes — operator-context chat staging', () => {
     const { ctx, responses } = makeCtx(pool)
     await handleAiChatRoutes(buildReq(), buildUrl(), ctx)
 
-    expect(responses[0]).toEqual({
-      status: 202,
-      body: {
-        status: 'staged',
-        audit_event_id: 'audit-1',
-        response_pending: true,
-        followup_hint: 'v0 stages the message; LLM response will land via a future audit_events row.',
-      },
-    })
+    expect(responses[0]?.status).toBe(202)
+    const stagedBody = responses[0]?.body as Record<string, unknown>
+    expect(stagedBody.status).toBe('staged')
+    expect(stagedBody.audit_event_id).toBe('audit-1')
+    expect(stagedBody.response_pending).toBe(true)
+    // Mesh dispatch is best-effort — without MESH_API_URL configured in
+    // the test env, the dispatcher returns ok=false and the response
+    // surfaces dispatch_error + null mesh_task_id. Production wiring
+    // sets MESH_API_URL on sitelayer's prod env.
+    expect(stagedBody.mesh_task_id).toBeNull()
+    expect(typeof stagedBody.dispatch_error).toBe('string')
+    expect(stagedBody.followup_hint).toMatch(/Subscription-CLI dispatch enqueued/)
     expect(pool.auditEvents).toHaveLength(1)
     expect(pool.auditEvents[0]?.companyId).toBe('co-1')
     expect(pool.auditEvents[0]?.actorUserId).toBe('user-1')
@@ -454,5 +468,164 @@ describe('handleAiChatRoutes — GET /api/ai/chat/:id/response (poll)', () => {
     const { ctx, responses } = makeCtx(pool, validBody, 'member')
     await handleAiChatRoutes(buildReq('GET'), buildUrl(`/api/ai/chat/${validUuid}/response`), ctx)
     expect(responses[0]).toEqual({ status: 403, body: { error: 'forbidden' } })
+  })
+})
+
+describe('handleAiChatRoutes — POST /api/ai/chat/:id/respond (webhook)', () => {
+  const validUuid = '00000000-0000-4000-8000-000000000001'
+  const webhookToken = 'test-webhook-token-abc123'
+  const validRespondBody = { body: 'Hello back, operator.', model: 'claude-sonnet-4-6' }
+
+  function buildWebhookReq(authHeader?: string): http.IncomingMessage {
+    return {
+      method: 'POST',
+      headers: authHeader ? { authorization: authHeader } : {},
+    } as unknown as http.IncomingMessage
+  }
+
+  it('rejects when SITELAYER_CHAT_WEBHOOK_TOKEN not configured', async () => {
+    const prev = process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
+    delete process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
+    try {
+      const pool = new FakePool()
+      const { ctx, responses } = makeCtx(pool, validRespondBody)
+      await handleAiChatRoutes(buildWebhookReq(`Bearer ${webhookToken}`), buildUrl(`/api/ai/chat/${validUuid}/respond`), ctx)
+      expect(responses[0]?.status).toBe(503)
+    } finally {
+      if (prev) process.env.SITELAYER_CHAT_WEBHOOK_TOKEN = prev
+    }
+  })
+
+  it('rejects missing bearer token', async () => {
+    process.env.SITELAYER_CHAT_WEBHOOK_TOKEN = webhookToken
+    try {
+      const pool = new FakePool()
+      const { ctx, responses } = makeCtx(pool, validRespondBody)
+      await handleAiChatRoutes(buildWebhookReq(), buildUrl(`/api/ai/chat/${validUuid}/respond`), ctx)
+      expect(responses[0]).toEqual({ status: 401, body: { error: 'missing bearer token' } })
+    } finally {
+      delete process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
+    }
+  })
+
+  it('rejects invalid bearer token (timing-safe compare)', async () => {
+    process.env.SITELAYER_CHAT_WEBHOOK_TOKEN = webhookToken
+    try {
+      const pool = new FakePool()
+      const { ctx, responses } = makeCtx(pool, validRespondBody)
+      await handleAiChatRoutes(buildWebhookReq('Bearer wrong-token-zzz'), buildUrl(`/api/ai/chat/${validUuid}/respond`), ctx)
+      expect(responses[0]).toEqual({ status: 401, body: { error: 'invalid bearer token' } })
+    } finally {
+      delete process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
+    }
+  })
+
+  it('rejects when audit_event_id is not a valid UUID', async () => {
+    process.env.SITELAYER_CHAT_WEBHOOK_TOKEN = webhookToken
+    try {
+      const pool = new FakePool()
+      const { ctx, responses } = makeCtx(pool, validRespondBody)
+      await handleAiChatRoutes(
+        buildWebhookReq(`Bearer ${webhookToken}`),
+        buildUrl(`/api/ai/chat/not-a-uuid/respond`),
+        ctx,
+      )
+      expect(responses[0]).toEqual({
+        status: 400,
+        body: { error: 'audit_event_id must be a valid uuid' },
+      })
+    } finally {
+      delete process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
+    }
+  })
+
+  it('rejects empty response body', async () => {
+    process.env.SITELAYER_CHAT_WEBHOOK_TOKEN = webhookToken
+    try {
+      const pool = new FakePool()
+      const { ctx, responses } = makeCtx(pool, { body: '   ', model: 'x' })
+      await handleAiChatRoutes(
+        buildWebhookReq(`Bearer ${webhookToken}`),
+        buildUrl(`/api/ai/chat/${validUuid}/respond`),
+        ctx,
+      )
+      expect(responses[0]).toEqual({
+        status: 400,
+        body: { error: 'body field is required and non-empty' },
+      })
+    } finally {
+      delete process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
+    }
+  })
+
+  it('rejects oversize response body', async () => {
+    process.env.SITELAYER_CHAT_WEBHOOK_TOKEN = webhookToken
+    try {
+      const pool = new FakePool()
+      const { ctx, responses } = makeCtx(pool, { body: 'x'.repeat(8001), model: 'x' })
+      await handleAiChatRoutes(
+        buildWebhookReq(`Bearer ${webhookToken}`),
+        buildUrl(`/api/ai/chat/${validUuid}/respond`),
+        ctx,
+      )
+      expect(responses[0]?.status).toBe(413)
+    } finally {
+      delete process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
+    }
+  })
+
+  it('rejects when staged audit row does not exist', async () => {
+    process.env.SITELAYER_CHAT_WEBHOOK_TOKEN = webhookToken
+    try {
+      const pool = new FakePool()
+      const { ctx, responses } = makeCtx(pool, validRespondBody)
+      await handleAiChatRoutes(
+        buildWebhookReq(`Bearer ${webhookToken}`),
+        buildUrl(`/api/ai/chat/${validUuid}/respond`),
+        ctx,
+      )
+      expect(responses[0]).toEqual({
+        status: 404,
+        body: { error: 'staged chat message not found for this audit_event_id' },
+      })
+    } finally {
+      delete process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
+    }
+  })
+
+  it('writes respond_message audit row and returns 201', async () => {
+    process.env.SITELAYER_CHAT_WEBHOOK_TOKEN = webhookToken
+    try {
+      const pool = new FakePool()
+      pool.auditEvents.push({
+        id: validUuid,
+        companyId: 'co-1',
+        actorUserId: 'user-1',
+        after: { chat_message: { body: 'staged' } },
+      })
+      const { ctx, responses } = makeCtx(pool, validRespondBody)
+      await handleAiChatRoutes(
+        buildWebhookReq(`Bearer ${webhookToken}`),
+        buildUrl(`/api/ai/chat/${validUuid}/respond`),
+        ctx,
+      )
+      expect(responses[0]?.status).toBe(201)
+      const body = responses[0]?.body as Record<string, unknown>
+      expect(body.status).toBe('recorded')
+      expect(body.parent_audit_event_id).toBe(validUuid)
+      expect(typeof body.response_audit_event_id).toBe('string')
+      // Second audit_events row was inserted (the response).
+      expect(pool.auditEvents.length).toBe(2)
+      const respondRow = pool.auditEvents[1]!
+      expect(respondRow.after).toMatchObject({
+        body: 'Hello back, operator.',
+        model: 'claude-sonnet-4-6',
+        parent_audit_event_id: validUuid,
+      })
+      // Mutation ledger logged the write.
+      expect(pool.mutationOutbox.some((m) => m.mutationType === 'respond_message')).toBe(true)
+    } finally {
+      delete process.env.SITELAYER_CHAT_WEBHOOK_TOKEN
+    }
   })
 })

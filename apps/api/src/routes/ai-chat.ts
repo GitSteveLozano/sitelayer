@@ -1,8 +1,10 @@
 import type http from 'node:http'
+import { timingSafeEqual } from 'node:crypto'
 import type { Pool, PoolClient } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { isValidUuid } from '../http-utils.js'
+import { dispatchChatResponseToMesh } from '../mesh-dispatcher.js'
 
 /**
  * POST /api/ai/chat — operator-context chat staging endpoint.
@@ -105,6 +107,15 @@ export async function handleAiChatRoutes(req: http.IncomingMessage, url: URL, ct
     return handleAiChatResponsePoll(ctx, responseMatch[1]!)
   }
 
+  // POST /api/ai/chat/:audit_event_id/respond — webhook the mesh-side
+  // subscription-CLI runner POSTs its generated chat response to.
+  // Bearer-authed via SITELAYER_CHAT_WEBHOOK_TOKEN. Public per the
+  // dispatcher's prompt — the runner reaches us at SITELAYER_PUBLIC_BASE.
+  const respondMatch = url.pathname.match(/^\/api\/ai\/chat\/([^/]+)\/respond$/)
+  if (req.method === 'POST' && respondMatch) {
+    return handleAiChatRespondWebhook(req, ctx, respondMatch[1]!)
+  }
+
   if (!(req.method === 'POST' && url.pathname === '/api/ai/chat')) return false
 
   if (!ctx.requireRole(['admin'])) return true
@@ -193,16 +204,30 @@ export async function handleAiChatRoutes(req: http.IncomingMessage, url: URL, ct
     return true
   }
 
-  // v0 ack: no LLM response yet. The widget's chat-widget.ts machine
-  // displays the staged message; this endpoint confirms the durable
-  // write. A follow-up wires the actual LLM dispatch (likely via the
-  // mesh counsel-of-models registry's operator_assistant class, which
-  // names Claude Haiku as the primary lane).
+  // Path A (subscription-CLI only, no metered API key): enqueue a mesh
+  // task that an existing Claude/Codex CLI runner picks up and uses to
+  // POST the response back to /api/ai/chat/:audit_event_id/respond.
+  // See digital-ontology/operator-action-triage-2026-05-21.md §5.
+  //
+  // Best-effort: if mesh is unreachable we still return 202 staged so
+  // the widget shows the message persisted; the operator can re-dispatch
+  // manually or the planned mesh-side keeper picks up unhandled audit
+  // rows on its next tick.
+  const dispatch = await dispatchChatResponseToMesh({
+    auditEventId: audit.id,
+    companyId: ctx.company.id,
+    message: latest.body,
+    operatorContext: auditPayload.operator_context,
+  })
+
   ctx.sendJson(202, {
     status: 'staged',
     audit_event_id: audit.id,
     response_pending: true,
-    followup_hint: 'v0 stages the message; LLM response will land via a future audit_events row.',
+    mesh_task_id: dispatch.ok ? dispatch.mesh_task_id : null,
+    dispatch_error: dispatch.ok ? null : dispatch.error,
+    followup_hint:
+      'Subscription-CLI dispatch enqueued. Widget should poll GET /api/ai/chat/:audit_event_id/response; mesh CLI runner writes the respond_message audit row via the webhook.',
   })
   return true
 }
@@ -293,6 +318,134 @@ async function handleAiChatResponsePoll(ctx: AiChatRouteCtx, rawId: string): Pro
     body,
     raw: after,
     created_at: row.created_at instanceof Date ? row.created_at.toISOString() : row.created_at,
+  })
+  return true
+}
+
+interface WebhookBody {
+  body?: string
+  model?: string
+}
+
+/**
+ * Handles POST /api/ai/chat/:audit_event_id/respond. The mesh-side
+ * subscription-CLI runner POSTs here with the generated response. We
+ * land a sibling audit_events row with action='respond_message' +
+ * after.parent_audit_event_id, which the widget's polling GET
+ * endpoint then surfaces.
+ *
+ * Auth: Bearer token from env SITELAYER_CHAT_WEBHOOK_TOKEN. The mesh
+ * task prompt instructs the runner to use $SITELAYER_CHAT_WEBHOOK_TOKEN;
+ * mesh sets that env on the runner via the standard secret-injection
+ * path. No body-signing yet (operator can rotate token if needed).
+ *
+ * Company scoping: the audit_event_id maps to exactly one company via
+ * the staged audit_events row. The webhook does not accept a company
+ * from the caller — it derives it from the staged row so a leaked token
+ * can't write responses against the wrong company.
+ */
+async function handleAiChatRespondWebhook(
+  req: http.IncomingMessage,
+  ctx: AiChatRouteCtx,
+  rawId: string,
+): Promise<boolean> {
+  const expected = process.env.SITELAYER_CHAT_WEBHOOK_TOKEN?.trim() || ''
+  if (!expected) {
+    ctx.sendJson(503, { error: 'webhook disabled (SITELAYER_CHAT_WEBHOOK_TOKEN not configured)' })
+    return true
+  }
+  const authHeader =
+    typeof req.headers['authorization'] === 'string' ? req.headers['authorization'] : ''
+  const presented = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : ''
+  if (!presented) {
+    ctx.sendJson(401, { error: 'missing bearer token' })
+    return true
+  }
+  const a = Buffer.from(presented)
+  const b = Buffer.from(expected)
+  if (a.length !== b.length || !timingSafeEqual(a, b)) {
+    ctx.sendJson(401, { error: 'invalid bearer token' })
+    return true
+  }
+
+  const auditId = String(rawId || '').trim()
+  if (!isValidUuid(auditId)) {
+    ctx.sendJson(400, { error: 'audit_event_id must be a valid uuid' })
+    return true
+  }
+
+  let body: WebhookBody
+  try {
+    body = (await ctx.readBody()) as WebhookBody
+  } catch {
+    ctx.sendJson(400, { error: 'invalid JSON body' })
+    return true
+  }
+  const responseBody = typeof body.body === 'string' ? body.body.trim() : ''
+  if (!responseBody) {
+    ctx.sendJson(400, { error: 'body field is required and non-empty' })
+    return true
+  }
+  if (responseBody.length > 8000) {
+    ctx.sendJson(413, { error: 'response body exceeds 8000 chars; trim before sending' })
+    return true
+  }
+  const model = typeof body.model === 'string' ? body.model.slice(0, 200) : ''
+
+  // Resolve the staged row to find its company_id. The runner can hit
+  // us from anywhere; we trust the audit_event_id lookup, not the
+  // runner's claim about which company this belongs to.
+  const staged = await ctx.pool.query<{ id: string; company_id: string }>(
+    `select id, company_id from audit_events
+      where id = $1
+        and entity_type = 'ai_chat'
+        and action = 'stage_message'
+      limit 1`,
+    [auditId],
+  )
+  if (!staged.rows.length) {
+    ctx.sendJson(404, { error: 'staged chat message not found for this audit_event_id' })
+    return true
+  }
+  const stagedRow = staged.rows[0]!
+
+  const respondPayload = {
+    body: responseBody,
+    model,
+    parent_audit_event_id: auditId,
+    responded_at: new Date().toISOString(),
+  }
+
+  const responseAudit = await withMutationTx(async (client: PoolClient) => {
+    const result = await client.query<AuditEventRow>(
+      `insert into audit_events
+         (company_id, actor_user_id, actor_role, entity_type, entity_id, action, before, after)
+       values ($1, $2, 'agent', 'ai_chat', null, 'respond_message', null, $3)
+       returning id`,
+      [stagedRow.company_id, null, JSON.stringify(respondPayload)],
+    )
+    const row = result.rows[0]
+    if (!row) return null
+    await recordMutationLedger(client, {
+      companyId: stagedRow.company_id,
+      entityType: 'ai_chat',
+      entityId: row.id,
+      action: 'respond_message',
+      row: { id: row.id, ...respondPayload },
+      actorUserId: null,
+    })
+    return row
+  })
+
+  if (!responseAudit) {
+    ctx.sendJson(500, { error: 'failed to persist response audit row' })
+    return true
+  }
+
+  ctx.sendJson(201, {
+    status: 'recorded',
+    response_audit_event_id: responseAudit.id,
+    parent_audit_event_id: auditId,
   })
   return true
 }
