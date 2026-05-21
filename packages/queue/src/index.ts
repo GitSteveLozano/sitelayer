@@ -181,6 +181,10 @@ export const DEDICATED_HANDLER_MUTATION_TYPES = [
   // drain from racing the GC runner (the generic drain just marks
   // applied without actually deleting the Spaces object).
   'delete_blueprint_storage_object',
+  // Context handoff dispatch — drained by apps/worker/src/runners/
+  // context-work-dispatch.ts so the generic drain cannot mark the
+  // Mesh handoff applied before an agent system has actually accepted it.
+  'dispatch_mesh_work_request',
 ] as const
 
 /**

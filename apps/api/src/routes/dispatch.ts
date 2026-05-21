@@ -41,6 +41,7 @@ import { handleScheduleRoutes } from './schedules.js'
 import { handleCrewScheduleEventRoutes } from './crew-schedule-events.js'
 import { handleServiceItemRoutes } from './service-items.js'
 import { handleSupportPacketRoutes } from './support-packets.js'
+import { handleWorkRequestRoutes } from './work-requests.js'
 import { handleSyncRoutes } from './sync.js'
 import { handleAssemblyRoutes } from './assemblies.js'
 import { handleBlueprintPageRoutes } from './blueprint-pages.js'
@@ -279,6 +280,19 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         tier: ctx.tier,
         buildSha: getBuildSha(),
         requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Work Requests — context-aware support/task handoff timeline.
+    () =>
+      handleWorkRequestRoutes(req, url, {
+        pool,
+        company,
+        identity,
+        tier: ctx.tier,
+        buildSha: getBuildSha(),
+        requireRole,
         readBody,
         sendJson,
       }),

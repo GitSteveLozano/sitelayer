@@ -301,7 +301,10 @@ type CompanyRow = {
   created_at: string
 }
 
-async function getCompany(req?: http.IncomingMessage): Promise<ActiveCompany | null> {
+async function getCompany(
+  req?: http.IncomingMessage,
+  opts: { membershipBypassRole?: CompanyRole } = {},
+): Promise<ActiveCompany | null> {
   const headerSlug = req?.headers['x-sitelayer-company-slug']
   const headerId = req?.headers['x-sitelayer-company-id']
   const requestedSlug = Array.isArray(headerSlug) ? headerSlug[0] : headerSlug
@@ -326,6 +329,16 @@ async function getCompany(req?: http.IncomingMessage): Promise<ActiveCompany | n
   }
 
   if (!companyRow) return null
+
+  if (opts.membershipBypassRole) {
+    return {
+      id: companyRow.id,
+      slug: companyRow.slug,
+      name: companyRow.name,
+      created_at: companyRow.created_at,
+      role: opts.membershipBypassRole,
+    }
+  }
 
   // Verify membership and surface the role so handlers can enforce RBAC
   // without re-querying. See `requireRole()`.
@@ -604,11 +617,16 @@ const server = http.createServer(async (req, res) => {
             if (publicPortalHandled) return
 
             const PUBLIC_PATHS = new Set(['/api/integrations/qbo/callback', '/api/webhooks/clerk', '/api/webhooks/qbo'])
-            const isPublicPath = PUBLIC_PATHS.has(url.pathname)
+            const isWorkRequestCallback =
+              req.method === 'POST' && /^\/api\/work-requests\/[^/]+\/agent-callback$/.test(url.pathname)
+            const isPublicPath = PUBLIC_PATHS.has(url.pathname) || isWorkRequestCallback
             let identity: Identity
             try {
               identity = isPublicPath
-                ? { userId: 'qbo-oauth-redirect', source: 'default' }
+                ? {
+                    userId: isWorkRequestCallback ? 'work-request-agent-callback' : 'qbo-oauth-redirect',
+                    source: 'default',
+                  }
                 : resolveIdentity(req, authConfig)
             } catch (err) {
               if (err instanceof AuthError) {
@@ -649,7 +667,7 @@ const server = http.createServer(async (req, res) => {
               return
             }
 
-            let company = await getCompany(req)
+            let company = await getCompany(req, isWorkRequestCallback ? { membershipBypassRole: 'admin' } : {})
             // First-user self-onboard. The Clerk webhook that mirrors
             // org membership into `company_memberships` isn't wired
             // (CLERK_WEBHOOK_SECRET unset) and ADR 0003 marks the install
@@ -660,7 +678,7 @@ const server = http.createServer(async (req, res) => {
             // role gate stays honest (otherwise every test fixture user
             // gets promoted to admin and the role-rejection tests fail).
             // Drop this block once the Clerk webhook ships.
-            if (!company && activeCompanySlug && identity.userId) {
+            if (!company && !isPublicPath && activeCompanySlug && identity.userId) {
               try {
                 await pool.query(
                   `insert into company_memberships (company_id, clerk_user_id, role)

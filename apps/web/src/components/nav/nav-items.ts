@@ -67,6 +67,7 @@ export const PRIMARY_NAV: ReadonlyArray<NavItem> = [
 ]
 
 export const WORKFLOW_NAV: ReadonlyArray<NavItem> = [
+  { key: 'work', to: '/work', label: 'Work queue', icon: ScrollText },
   { key: 'takeoff', to: '/projects?focus=takeoff', label: 'Measurements', icon: Layers },
   { key: 'estimates', to: '/projects?focus=estimate', label: 'Estimates', icon: FileText },
   { key: 'live-crew', to: '/live-crew', label: 'Live crew', icon: Users },

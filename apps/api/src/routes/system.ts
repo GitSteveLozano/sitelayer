@@ -338,6 +338,46 @@ async function fetchAuditRowsForTraceOrRequest(
   return audit.rows
 }
 
+async function fetchWorkRequestRowsForTraceOrRequest(
+  pool: Pool,
+  companyId: string,
+  params: { traceId?: string; requestId?: string },
+): Promise<unknown[]> {
+  const values: unknown[] = [companyId]
+  const correlationClauses: string[] = []
+  if (params.requestId) {
+    values.push(params.requestId)
+    const requestParam = values.length
+    correlationClauses.push(`e.request_id = $${requestParam}`)
+    correlationClauses.push(`s.request_id = $${requestParam}`)
+  }
+  if (params.traceId) {
+    values.push(`%${params.traceId}%`)
+    correlationClauses.push(`e.sentry_trace like $${values.length}`)
+  }
+  if (!correlationClauses.length) return []
+  const rows = await pool.query(
+    `select w.id as work_item_id, w.title, w.status, w.lane, w.severity,
+            w.route, w.entity_type, w.entity_id, w.support_packet_id,
+            s.request_id as support_request_id,
+            e.id as event_id, e.event_type, e.actor_kind, e.actor_user_id,
+            e.actor_ref, e.source_system, e.payload, e.metadata,
+            e.request_id, e.sentry_trace, e.build_sha, e.recorded_at
+       from context_work_items w
+       left join support_debug_packets s
+         on s.company_id = w.company_id
+        and s.id = w.support_packet_id
+       left join context_handoff_events e
+         on e.company_id = w.company_id
+        and e.work_item_id = w.id
+      where w.company_id = $1 and (${correlationClauses.join(' or ')})
+      order by coalesce(e.recorded_at, w.updated_at) asc
+      limit 200`,
+    values,
+  )
+  return rows.rows
+}
+
 /**
  * GET /api/debug/traces/:id — proxies Sentry's events-trace API and joins
  * matching mutation_outbox / sync_events / audit_events rows. Bearer-gated
@@ -387,10 +427,19 @@ export async function handleDebugTraceRoute(ctx: DebugTraceRouteCtx): Promise<bo
       pool,
       byRequest ? { requestId: lookupId } : { traceId: lookupId },
     )
+    const workRequestRows = await fetchWorkRequestRowsForTraceOrRequest(
+      pool,
+      company.id,
+      byRequest ? { requestId: lookupId } : { traceId: lookupId },
+    )
     if (byRequest && !traceId) {
       const hintRow = queueRows.outbox[0] ?? queueRows.syncEvents[0]
       const hintTrace = hintRow ? (hintRow as { sentry_trace: string | null }).sentry_trace : null
-      traceId = parseTraceIdFromSentryTraceHeader(hintTrace)
+      const handoffHint = workRequestRows.find(
+        (row): row is { sentry_trace: string | null } =>
+          typeof row === 'object' && row !== null && 'sentry_trace' in row,
+      )
+      traceId = parseTraceIdFromSentryTraceHeader(hintTrace ?? handoffHint?.sentry_trace ?? null)
     }
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 8_000)
@@ -425,6 +474,7 @@ export async function handleDebugTraceRoute(ctx: DebugTraceRouteCtx): Promise<bo
       sentry_error: sentryError,
       queue: queueRows,
       audit_events: auditRows,
+      work_requests: workRequestRows,
     })
   } catch (err) {
     logger.error({ err, scope: 'debug_trace' }, 'debug trace lookup failed')

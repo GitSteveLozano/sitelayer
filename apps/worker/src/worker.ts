@@ -22,6 +22,8 @@ import { createWelcomeEmailRunner } from './runners/welcome-email.js'
 import { createStuckWorkflowAlertsRunner } from './runners/stuck-workflow-alerts.js'
 import { createBlueprintStorageGcClient, createBlueprintStorageGcRunner } from './runners/blueprint-storage-gc.js'
 import { createQueuePruneRunner } from './runners/queue-prune.js'
+import { createContextWorkDispatchRunner } from './runners/context-work-dispatch.js'
+import { createWorkRequestStaleRunner } from './runners/work-request-stale.js'
 import type { AgentDrainSummary } from './runner-utils.js'
 
 const logger = createLogger('worker')
@@ -99,6 +101,8 @@ const blueprintStorageGc = createBlueprintStorageGcRunner({
   storage: await createBlueprintStorageGcClient(),
 })
 const queuePruneRunner = createQueuePruneRunner({ pool, logger })
+const contextWorkDispatchRunner = createContextWorkDispatchRunner({ pool })
+const workRequestStaleRunner = createWorkRequestStaleRunner({ pool })
 
 async function heartbeat(): Promise<{ idle: boolean }> {
   const companyId = await getCompanyId()
@@ -281,6 +285,26 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
   })
 
+  const contextWorkDispatchSummary = await contextWorkDispatchRunner(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] context_work_dispatch drain failed')
+    captureWithEntityContext(error, {
+      scope: 'context_work_dispatch',
+      entity_type: 'context_work_item',
+      company_id: companyId,
+    })
+    return { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary
+  })
+
+  const workRequestStaleSummary = await workRequestStaleRunner.maybeSweep(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] work_request_stale_sweep failed')
+    captureWithEntityContext(error, {
+      scope: 'work_request_stale_sweep',
+      entity_type: 'context_work_item',
+      company_id: companyId,
+    })
+    return { ran: false, updated: 0, failed: 1 }
+  })
+
   // Daily prune of long-applied mutation_outbox / sync_events rows.
   // Gated by a process-local lastRunAt; safe to invoke every heartbeat.
   const queuePruneSummary = await queuePruneRunner.maybePrune().catch((error) => {
@@ -344,6 +368,11 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     welcome_email_failed: welcomeEmailSummary.failed,
     blueprint_storage_gc_processed: blueprintStorageGcSummary.processed,
     blueprint_storage_gc_failed: blueprintStorageGcSummary.failed,
+    context_work_dispatch_processed: contextWorkDispatchSummary.processed,
+    context_work_dispatch_failed: contextWorkDispatchSummary.failed,
+    work_request_stale_sweep_ran: workRequestStaleSummary.ran,
+    work_request_stale_sweep_updated: workRequestStaleSummary.updated,
+    work_request_stale_sweep_failed: workRequestStaleSummary.failed,
     queue_prune_ran: queuePruneSummary.ran,
     queue_prune_mutation_outbox: queuePruneSummary.mutation_outbox,
     queue_prune_sync_events: queuePruneSummary.sync_events,
@@ -379,6 +408,8 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     companyCamSummary.processed > 0 ||
     welcomeEmailSummary.processed > 0 ||
     blueprintStorageGcSummary.processed > 0 ||
+    contextWorkDispatchSummary.processed > 0 ||
+    workRequestStaleSummary.ran ||
     queuePruneSummary.ran
   ) {
     logger.info(

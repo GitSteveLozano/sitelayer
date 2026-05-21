@@ -47,6 +47,34 @@ export {
 export { createSupportPacket, type CreateSupportPacketInput, type CreateSupportPacketResponse } from './support-packets'
 
 export {
+  appendWorkRequestEvent,
+  createWorkRequest,
+  dispatchWorkRequestToMesh,
+  fetchWorkRequest,
+  fetchWorkRequestGithubExport,
+  fetchWorkRequestQueueHealth,
+  fetchWorkRequests,
+  retryWorkRequestMeshDispatch,
+  type AppendWorkRequestEventInput,
+  type AppendWorkRequestEventResponse,
+  type ContextHandoffEvent,
+  type ContextWorkItem,
+  type CreateWorkRequestInput,
+  type CreateWorkRequestResponse,
+  type DispatchWorkRequestResponse,
+  type HandoffEventType,
+  type ListWorkRequestsParams,
+  type ListWorkRequestsResponse,
+  type WorkItemLane,
+  type WorkItemSeverity,
+  type WorkItemStatus,
+  type WorkRequestDetailResponse,
+  type WorkRequestGithubExportResponse,
+  type WorkRequestQueueHealthResponse,
+  type WorkRequestSupportPacketSummary,
+} from './work-requests'
+
+export {
   clockIn,
   clockOut,
   fetchClockTimeline,

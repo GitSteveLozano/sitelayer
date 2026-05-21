@@ -1,5 +1,5 @@
 import type http from 'node:http'
-import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { withCompanyClient, withMutationTx, type LedgerExecutor } from '../mutation-tx.js'
 import { getRequestContext } from '@sitelayer/logger'
 import type { Pool } from 'pg'
 import type { ActiveCompany } from '../auth-types.js'
@@ -7,7 +7,7 @@ import type { Identity } from '../auth.js'
 import { parseTraceIdFromSentryTraceHeader } from '../debug-trace.js'
 import { observeSupportPacket } from '../metrics.js'
 
-type JsonRecord = Record<string, unknown>
+export type JsonRecord = Record<string, unknown>
 
 export type SupportPacketRouteCtx = {
   pool: Pool
@@ -20,7 +20,7 @@ export type SupportPacketRouteCtx = {
   sendJson: (status: number, body: unknown) => void
 }
 
-type SupportPacketRow = {
+export type SupportPacketRow = {
   id: string
   company_id: string
   actor_user_id: string
@@ -38,6 +38,19 @@ type SupportPacketRow = {
 export type SupportPacketEntityRef = {
   entity_type: string
   entity_id: string
+}
+
+type SupportPacketAccessType = 'read' | 'list' | 'agent_prompt' | 'export'
+
+type SupportPacketAccessLogRow = {
+  id: string
+  support_packet_id: string
+  actor_user_id: string
+  access_type: SupportPacketAccessType
+  route: string | null
+  request_id: string | null
+  created_at: string
+  metadata: JsonRecord
 }
 
 const REDACTION_VERSION = 'support-packet-v1'
@@ -78,7 +91,7 @@ export function sanitizeSupportJson(value: unknown, depth = 0): unknown {
   return String(value)
 }
 
-function jsonRecord(value: unknown): JsonRecord {
+export function supportJsonRecord(value: unknown): JsonRecord {
   const sanitized = sanitizeSupportJson(value)
   return isRecord(sanitized) ? sanitized : { value: sanitized }
 }
@@ -141,12 +154,52 @@ function collectProjectIds(client: unknown, limit = 20): string[] {
   return Array.from(projectIds)
 }
 
-function readClientRoute(client: JsonRecord): string | null {
+export function readClientRoute(client: JsonRecord): string | null {
   const page = client.page
   if (isRecord(page) && typeof page.path === 'string') return page.path
   const path = client.path
   if (isRecord(path) && typeof path.route === 'string') return path.route
   return getRequestContext()?.route ?? null
+}
+
+export type InsertSupportPacketInput = {
+  companyId: string
+  actorUserId: string
+  requestId: string | null
+  route: string | null
+  buildSha: string | null
+  problem: string | null
+  client: JsonRecord
+  serverContext: JsonRecord
+  expiresAt: string | null
+  redactionVersion?: string
+}
+
+export async function insertSupportPacket(
+  executor: LedgerExecutor,
+  input: InsertSupportPacketInput,
+): Promise<{ id: string; created_at: string; expires_at: string | null }> {
+  const result = await executor.query<{ id: string; created_at: string; expires_at: string | null }>(
+    `insert into support_debug_packets (
+       company_id, actor_user_id, request_id, route, build_sha, problem, client, server_context, expires_at, redaction_version
+     ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::timestamptz, $10)
+     returning id, created_at, expires_at`,
+    [
+      input.companyId,
+      input.actorUserId,
+      input.requestId,
+      input.route,
+      input.buildSha,
+      input.problem,
+      JSON.stringify(input.client),
+      JSON.stringify(input.serverContext),
+      input.expiresAt,
+      input.redactionVersion ?? REDACTION_VERSION,
+    ],
+  )
+  const row = result.rows[0]
+  if (!row) throw new Error('support packet insert failed')
+  return row
 }
 
 function addEntityRef(refs: Map<string, SupportPacketEntityRef>, entityType: unknown, entityId: unknown): void {
@@ -241,6 +294,78 @@ async function fetchWorkflowContext(_pool: Pool, companyId: string, entityRefs: 
     ),
   )
   return sanitizeSupportJson(result.rows)
+}
+
+async function fetchWorkItemContext(
+  _pool: Pool,
+  companyId: string,
+  requestIds: string[],
+  entityRefs: SupportPacketEntityRef[],
+) {
+  if (!requestIds.length && !entityRefs.length) return { work_items: [], events: [] }
+  const values: unknown[] = [companyId]
+  const clauses: string[] = []
+  if (requestIds.length) {
+    values.push(requestIds)
+    const requestIdsParam = values.length
+    clauses.push(
+      `(s.request_id = any($${requestIdsParam}::text[]) or exists (
+         select 1 from context_handoff_events e
+          where e.company_id = w.company_id
+            and e.work_item_id = w.id
+            and e.request_id = any($${requestIdsParam}::text[])
+       ))`,
+    )
+  }
+  if (entityRefs.length) {
+    values.push(entityRefs.map((ref) => ref.entity_type))
+    const entityTypesParam = values.length
+    values.push(entityRefs.map((ref) => ref.entity_id))
+    const entityIdsParam = values.length
+    clauses.push(
+      `(w.entity_type = any($${entityTypesParam}::text[]) and w.entity_id = any($${entityIdsParam}::text[]))`,
+    )
+  }
+  if (!clauses.length) return { work_items: [], events: [] }
+  values.push(20)
+  const limitParam = values.length
+  const workItems = await withCompanyClient(companyId, (c) =>
+    c.query(
+      `select distinct on (w.id)
+              w.id, w.support_packet_id, w.title, w.summary, w.status, w.lane,
+              w.severity, w.route, w.entity_type, w.entity_id, w.assignee_user_id,
+              w.created_by_user_id, w.created_at, w.updated_at, w.resolved_at,
+              w.metadata, s.request_id as support_request_id
+         from context_work_items w
+         left join support_debug_packets s
+           on s.company_id = w.company_id
+          and s.id = w.support_packet_id
+        where w.company_id = $1 and (${clauses.join(' or ')})
+        order by w.id, w.updated_at desc
+        limit $${limitParam}`,
+      values,
+    ),
+  )
+  const itemIds = workItems.rows
+    .map((row) => (isRecord(row) && typeof row.id === 'string' ? row.id : null))
+    .filter((id): id is string => Boolean(id))
+  if (!itemIds.length) return { work_items: sanitizeSupportJson(workItems.rows), events: [] }
+  const events = await withCompanyClient(companyId, (c) =>
+    c.query(
+      `select id, work_item_id, event_type, actor_kind, actor_user_id, actor_ref,
+              source_system, payload, metadata, request_id, sentry_trace,
+              build_sha, occurred_at, recorded_at
+         from context_handoff_events
+        where company_id = $1 and work_item_id = any($2::uuid[])
+        order by recorded_at desc
+        limit 80`,
+      [companyId, itemIds],
+    ),
+  )
+  return {
+    work_items: sanitizeSupportJson(workItems.rows),
+    events: sanitizeSupportJson(events.rows),
+  }
 }
 
 async function fetchQueueContext(_pool: Pool, companyId: string, requestIds: string[]) {
@@ -412,12 +537,13 @@ export async function buildSupportServerContext({
   const requestIds = collectRequestIds(client, getRequestContext()?.requestId)
   const projectIds = collectProjectIds(client)
   const entityRefs = collectEntityRefs(client)
-  const [auditEvents, queue, queueDepth, domainSnapshot, workflowEvents] = await Promise.all([
+  const [auditEvents, queue, queueDepth, domainSnapshot, workflowEvents, workItemContext] = await Promise.all([
     fetchAuditContext(pool, company.id, identity.userId, requestIds, entityRefs),
     fetchQueueContext(pool, company.id, requestIds),
     fetchQueueDepth(pool, company.id),
     fetchDomainSnapshot(pool, company.id, projectIds),
     fetchWorkflowContext(pool, company.id, entityRefs),
+    fetchWorkItemContext(pool, company.id, requestIds, entityRefs),
   ])
   const traceIds = collectTraceIds({ client, auditEvents, queue, workflowEvents })
   return {
@@ -439,6 +565,8 @@ export async function buildSupportServerContext({
     queue_depth: queueDepth,
     audit_events: auditEvents,
     workflow_events: workflowEvents,
+    work_items: workItemContext.work_items,
+    work_item_events: workItemContext.events,
     queue,
     domain_snapshot: sanitizeSupportJson(domainSnapshot),
   }
@@ -463,11 +591,41 @@ function buildAgentPrompt(row: SupportPacketRow): string {
   ].join('\n')
 }
 
+async function recordSupportPacketAccess(
+  ctx: SupportPacketRouteCtx,
+  supportPacketId: string,
+  accessType: SupportPacketAccessType,
+  metadata: JsonRecord = {},
+): Promise<void> {
+  const requestContext = getRequestContext()
+  try {
+    await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `insert into support_packet_access_log (
+           company_id, support_packet_id, actor_user_id, access_type,
+           route, request_id, metadata
+         ) values ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+        [
+          ctx.company.id,
+          supportPacketId,
+          ctx.identity.userId,
+          accessType,
+          requestContext?.route ?? null,
+          requestContext?.requestId ?? null,
+          JSON.stringify(supportJsonRecord(metadata)),
+        ],
+      ),
+    )
+  } catch {
+    // Support packet reads are more important than this secondary audit row.
+  }
+}
+
 async function createSupportPacket(ctx: SupportPacketRouteCtx) {
   const body = await ctx.readBody()
   const problemSource = typeof body.problem === 'string' ? body.problem : ''
   const problem = problemSource.trim() ? redactString(problemSource.trim(), 4000) : null
-  const client = jsonRecord(body.client ?? body)
+  const client = supportJsonRecord(body.client ?? body)
   const serverContext = await buildSupportServerContext({
     pool: ctx.pool,
     company: ctx.company,
@@ -480,31 +638,20 @@ async function createSupportPacket(ctx: SupportPacketRouteCtx) {
   const route = readClientRoute(client)
   const retentionDays = Math.max(1, Math.min(90, Number(process.env.SUPPORT_PACKET_RETENTION_DAYS ?? 30)))
   const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString()
-  const result = await withMutationTx(ctx.company.id, (c) =>
-    c.query<{ id: string; created_at: string; expires_at: string | null }>(
-      `insert into support_debug_packets (
-       company_id, actor_user_id, request_id, route, build_sha, problem, client, server_context, expires_at, redaction_version
-     ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::timestamptz, $10)
-     returning id, created_at, expires_at`,
-      [
-        ctx.company.id,
-        ctx.identity.userId,
-        requestId,
-        route,
-        ctx.buildSha,
-        problem,
-        JSON.stringify(client),
-        JSON.stringify(serverContext),
-        expiresAt,
-        REDACTION_VERSION,
-      ],
-    ),
+  const row = await withMutationTx(ctx.company.id, (c) =>
+    insertSupportPacket(c, {
+      companyId: ctx.company.id,
+      actorUserId: ctx.identity.userId,
+      requestId,
+      route,
+      buildSha: ctx.buildSha,
+      problem,
+      client,
+      serverContext,
+      expiresAt,
+      redactionVersion: REDACTION_VERSION,
+    }),
   )
-  const row = result.rows[0]
-  if (!row) {
-    ctx.sendJson(500, { error: 'support packet insert failed', request_id: requestId })
-    return
-  }
   observeSupportPacket('created')
   ctx.sendJson(201, {
     support_id: row.id,
@@ -534,7 +681,37 @@ async function getSupportPacket(ctx: SupportPacketRouteCtx, id: string) {
     ctx.sendJson(404, { error: 'support packet not found' })
     return
   }
+  await recordSupportPacketAccess(ctx, row.id, 'agent_prompt', {
+    redaction_version: row.redaction_version,
+    packet_created_at: row.created_at,
+  })
   ctx.sendJson(200, { support_packet: row, agent_prompt: buildAgentPrompt(row) })
+}
+
+async function listSupportPacketAccessLog(ctx: SupportPacketRouteCtx, id: string, url: URL) {
+  if (!ctx.requireRole(['admin'])) return
+  if (!UUID_RE.test(id)) {
+    ctx.sendJson(400, { error: 'invalid support packet id' })
+    return
+  }
+  const limit = Math.max(1, Math.min(250, Number(url.searchParams.get('limit') ?? 100)))
+  const result = await withCompanyClient(ctx.company.id, (c) =>
+    c.query<SupportPacketAccessLogRow>(
+      `select l.id, l.support_packet_id, l.actor_user_id, l.access_type,
+              l.route, l.request_id, l.created_at, l.metadata
+         from support_packet_access_log l
+         join support_debug_packets p
+           on p.company_id = l.company_id
+          and p.id = l.support_packet_id
+        where l.company_id = $1
+          and l.support_packet_id = $2
+          and (p.expires_at is null or p.expires_at > now())
+        order by l.created_at desc
+        limit $3`,
+      [ctx.company.id, id, limit],
+    ),
+  )
+  ctx.sendJson(200, { access_log: result.rows })
 }
 
 async function listSupportPackets(ctx: SupportPacketRouteCtx, url: URL) {
@@ -565,6 +742,12 @@ export async function handleSupportPacketRoutes(
 
   if (url.pathname === '/api/support-packets' && req.method === 'GET') {
     await listSupportPackets(ctx, url)
+    return true
+  }
+
+  const accessLogMatch = url.pathname.match(/^\/api\/support-packets\/([^/]+)\/access-log$/)
+  if (accessLogMatch && req.method === 'GET') {
+    await listSupportPacketAccessLog(ctx, decodeURIComponent(accessLogMatch[1]!), url)
     return true
   }
 

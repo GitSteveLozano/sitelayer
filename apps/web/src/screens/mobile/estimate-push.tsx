@@ -30,6 +30,7 @@ import {
   MTopBar,
 } from '../../components/m/index.js'
 import { MSkeletonList } from '../../components/m-states/index.js'
+import { WorkRequestAction } from '../../components/work-requests/WorkRequestAction.js'
 import { formatMoney } from './format.js'
 
 const STATE_LABEL: Record<EstimatePushState, string> = {
@@ -94,6 +95,32 @@ export function MobileEstimatePush({ companySlug }: { companySlug: string }) {
   const ctx = snapshot.context
   const lines = ctx.lines
   const subtotal = Number(ctx.subtotal)
+  const workRequestContext = {
+    source: 'estimate_push_mobile',
+    page: {
+      path: `/projects/${projectId}/estimate-push/${pushId}`,
+      route: `/projects/${projectId}/estimate-push/${pushId}`,
+    },
+    entity: {
+      entity_type: 'estimate_push',
+      entity_id: pushId,
+    },
+    project: {
+      entity_type: 'project',
+      entity_id: projectId,
+    },
+    workflow: {
+      name: 'estimate_push',
+      state: snapshot.state,
+      next_events: snapshot.next_events.map((evt) => evt.type),
+      line_count: lines.length,
+      subtotal,
+      qbo_estimate_id: ctx.qbo_estimate_id ?? null,
+      posted_at: ctx.posted_at ?? null,
+      failed_at: ctx.failed_at ?? null,
+      error: ctx.error ?? null,
+    },
+  }
 
   return (
     <>
@@ -127,6 +154,13 @@ export function MobileEstimatePush({ companySlug }: { companySlug: string }) {
             />
           </div>
         ) : null}
+        <WorkRequestAction
+          defaultTitle="Estimate push issue"
+          defaultSummary={ctx.error ? `QBO push failed: ${ctx.error}` : ''}
+          category="estimate_push"
+          route={`/projects/${projectId}/estimate-push/${pushId}`}
+          client={workRequestContext}
+        />
         <MKpiRow cols={2}>
           <MKpi label="Subtotal" value={formatMoney(subtotal)} />
           <MKpi

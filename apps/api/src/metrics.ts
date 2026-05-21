@@ -68,6 +68,20 @@ const supportPacketsTotal = new client.Counter({
   registers: [registry],
 })
 
+const contextHandoffTotal = new client.Counter({
+  name: 'sitelayer_context_handoff_total',
+  help: 'Context work request and handoff actions',
+  labelNames: ['action'],
+  registers: [registry],
+})
+
+const contextDispatchOutboxCount = new client.Gauge({
+  name: 'sitelayer_context_dispatch_outbox_count',
+  help: 'Context work request Mesh dispatch outbox rows by status',
+  labelNames: ['status'],
+  registers: [registry],
+})
+
 // Workflow lifecycle events. One counter with two labels (workflow + outcome)
 // so operators can graph success/fail rates per workflow uniformly. Cardinality
 // is bounded: ~15 known workflow names × 5 outcomes ≈ 75 series.
@@ -117,6 +131,10 @@ export function observeAudit(entityType: string, action: string): void {
 
 export function observeSupportPacket(action: string): void {
   supportPacketsTotal.inc({ action })
+}
+
+export function observeContextHandoff(action: string, count = 1): void {
+  contextHandoffTotal.inc({ action }, count)
 }
 
 /**
@@ -198,6 +216,7 @@ const QUEUE_TABLES: ReadonlyArray<{ queue: string; table: string; deadStatuses: 
   { queue: 'sync_events', table: 'sync_events', deadStatuses: ['dead', 'failed'] },
   { queue: 'notifications', table: 'notifications', deadStatuses: ['failed'] },
 ]
+const CONTEXT_DISPATCH_STATUSES = ['pending', 'processing', 'applied', 'failed', 'dead'] as const
 
 let lastQueueRefreshAt = 0
 async function refreshQueueGauges(): Promise<void> {
@@ -236,6 +255,19 @@ async function refreshQueueGauges(): Promise<void> {
         queueDeadCount.set({ queue }, Number(row?.dead_count ?? 0))
       }),
     )
+
+    for (const status of CONTEXT_DISPATCH_STATUSES) {
+      contextDispatchOutboxCount.set({ status }, 0)
+    }
+    const dispatchRows = await attachedPool.query<{ status: string; count: string }>(
+      `select status, count(*)::text as count
+         from mutation_outbox
+        where mutation_type = 'dispatch_mesh_work_request'
+        group by status`,
+    )
+    for (const row of dispatchRows.rows) {
+      contextDispatchOutboxCount.set({ status: row.status }, Number(row.count))
+    }
 
     // Circuit breaker state is written by the worker via
     // `integration_circuit_state` (migration 074). The API reads the

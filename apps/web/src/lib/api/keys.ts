@@ -35,6 +35,20 @@ export const queryKeys = {
     all: () => ['notification-preferences'] as const,
     current: () => [...queryKeys.notificationPreferences.all(), 'current'] as const,
   },
+  workRequests: {
+    all: () => ['work-requests'] as const,
+    list: (params?: {
+      status?: string | null
+      entity_type?: string | null
+      entity_id?: string | null
+      created_by_user_id?: string | null
+      assignee_user_id?: string | null
+      limit?: number
+      offset?: number
+    }) => [...queryKeys.workRequests.all(), 'list', params ?? {}] as const,
+    detail: (id: string) => [...queryKeys.workRequests.all(), 'detail', id] as const,
+    health: () => [...queryKeys.workRequests.all(), 'health'] as const,
+  },
   bootstrap: (companySlug: string) => ['bootstrap', companySlug] as const,
   session: (companySlug: string) => ['session', companySlug] as const,
 } as const

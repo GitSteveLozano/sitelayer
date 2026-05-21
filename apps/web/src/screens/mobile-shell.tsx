@@ -100,6 +100,12 @@ const RentalRequestsQueueScreen = lazy(() =>
 const MobileQuickInvoice = lazy(() =>
   import('./mobile/invoice-quick.js').then((m) => ({ default: m.MobileQuickInvoice })),
 )
+const MobileWorkRequests = lazy(() =>
+  import('./mobile/work-requests.js').then((m) => ({ default: m.MobileWorkRequests })),
+)
+const MobileWorkRequestDetail = lazy(() =>
+  import('./mobile/work-request-detail.js').then((m) => ({ default: m.MobileWorkRequestDetail })),
+)
 
 export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
@@ -274,6 +280,8 @@ export function MobileShell({ bootstrap, companyRole, companySlug, basePath = ''
             <Route path="rentals/requests" element={<RentalRequestsQueueScreen />} />
             <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} />} />
             <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
+            <Route path="work" element={<MobileWorkRequests />} />
+            <Route path="work/:workItemId" element={<MobileWorkRequestDetail />} />
             <Route path="more/*" element={<MoreRoute />} />
             <Route path="crew" element={<ForemanCrew bootstrap={bootstrap} />} />
             <Route path="crew/*" element={<ForemanCrew bootstrap={bootstrap} />} />
@@ -371,7 +379,8 @@ function inferRoleModeFromPath(pathname: string, basePath: string): RoleMode | n
     segment === 'schedule' ||
     segment === 'rentals' ||
     segment === 'more' ||
-    segment === 'invoice'
+    segment === 'invoice' ||
+    segment === 'work'
   ) {
     return 'admin'
   }
