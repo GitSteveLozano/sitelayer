@@ -157,6 +157,15 @@ function isSendingState(value: unknown): boolean {
   )
 }
 
+function isAwaitingResponseState(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'open' in value &&
+    (value as { open?: unknown }).open === 'awaitingResponse'
+  )
+}
+
 export function createChatWidgetMachine(
   submitter: (input: StageInput) => Promise<StageOperatorContextChatResponse> = stageOperatorContextChatMessage,
   poller: (auditEventId: string) => Promise<ChatWidgetResponse> = pollChatResponse,
@@ -354,6 +363,13 @@ export type ChatWidgetHookResult = {
   messages: ChatWidgetMessage[]
   error: string | null
   isSending: boolean
+  /** True while the machine is polling /api/ai/chat/:id/response for the
+   * subscription-CLI runner's reply. UIs render a "responding…" indicator
+   * on the staged message during this state. */
+  isAwaitingResponse: boolean
+  /** Audit_event_id we're polling for, or null when idle. UIs can mark
+   * the corresponding staged message with a thinking indicator. */
+  awaitingResponseFor: string | null
   open: () => void
   close: () => void
   toggle: () => void
@@ -381,6 +397,8 @@ export function useChatWidget(): ChatWidgetHookResult {
     messages: state.context.messages,
     error: state.context.error,
     isSending: isSendingState(state.value),
+    isAwaitingResponse: isAwaitingResponseState(state.value),
+    awaitingResponseFor: state.context.awaitingResponseFor,
     open,
     close,
     toggle,

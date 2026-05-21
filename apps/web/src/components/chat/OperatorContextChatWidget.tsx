@@ -89,13 +89,33 @@ export function OperatorContextChatWidget() {
 
           {widget.messages.length ? (
             <ul className="border-t border-sand-3 px-3 py-2 space-y-1 max-h-48 overflow-y-auto">
-              {widget.messages.map((m) => (
-                <li key={m.id} className="text-sm">
-                  <span className="text-xs uppercase tracking-wide text-ink-3 mr-1">{m.role}</span>
-                  {m.body}
-                  {m.status ? <span className="ml-1 text-xs text-ink-3">({m.status})</span> : null}
-                </li>
-              ))}
+              {widget.messages.map((m) => {
+                const isAwaiting =
+                  widget.isAwaitingResponse &&
+                  widget.awaitingResponseFor !== null &&
+                  m.audit_event_id === widget.awaitingResponseFor
+                return (
+                  <li key={m.id} className="text-sm">
+                    <span className="text-xs uppercase tracking-wide text-ink-3 mr-1">{m.role}</span>
+                    {m.body}
+                    {m.status ? <span className="ml-1 text-xs text-ink-3">({m.status})</span> : null}
+                    {isAwaiting ? (
+                      <span
+                        className="ml-1 inline-flex items-center gap-0.5 text-xs text-amber-700"
+                        aria-live="polite"
+                        aria-label="agent responding"
+                        data-testid="operator-context-chat-responding"
+                      >
+                        <span className="opacity-70">·</span>
+                        <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse" />
+                        <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse [animation-delay:120ms]" />
+                        <span className="inline-block w-1 h-1 rounded-full bg-amber-600 animate-pulse [animation-delay:240ms]" />
+                        <span className="ml-1">responding</span>
+                      </span>
+                    ) : null}
+                  </li>
+                )
+              })}
             </ul>
           ) : null}
 
@@ -111,24 +131,24 @@ export function OperatorContextChatWidget() {
               value={widget.draft}
               onChange={(e) => widget.setDraft(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey && !widget.isSending) {
+                if (e.key === 'Enter' && !e.shiftKey && !widget.isSending && !widget.isAwaitingResponse) {
                   e.preventDefault()
                   widget.send()
                 }
               }}
-              placeholder="Ask about this project…"
-              disabled={widget.isSending}
+              placeholder={widget.isAwaitingResponse ? 'Waiting for the agent reply…' : 'Ask about this project…'}
+              disabled={widget.isSending || widget.isAwaitingResponse}
               className="flex-1 text-sm border border-sand-3 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-amber-400"
               data-testid="operator-context-chat-input"
             />
             <button
               type="button"
               onClick={widget.send}
-              disabled={!widget.draft.trim() || widget.isSending}
+              disabled={!widget.draft.trim() || widget.isSending || widget.isAwaitingResponse}
               className="text-sm min-w-[4.5rem] px-2 py-1 rounded bg-amber-500 text-white disabled:opacity-50"
               data-testid="operator-context-chat-send"
             >
-              {widget.isSending ? 'Sending...' : 'Stage'}
+              {widget.isSending ? 'Sending...' : widget.isAwaitingResponse ? 'Awaiting…' : 'Stage'}
             </button>
           </div>
           <footer className="px-3 py-1 text-[10px] text-ink-3 border-t border-sand-3 bg-sand-1">
