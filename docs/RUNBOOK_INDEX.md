@@ -25,6 +25,7 @@ ops-readiness audit identified as likely.
 | [`RUNBOOK_SPACES_UPLOAD.md`](./RUNBOOK_SPACES_UPLOAD.md)               | Blueprint upload 500s; `Failed to upload to Spaces` in API logs.                                                                          |
 | [`RUNBOOK_SPACES_CORS.md`](./RUNBOOK_SPACES_CORS.md)                   | Web client throws CORS errors fetching presigned blueprint URLs; flipping `BLUEPRINT_DOWNLOAD_PRESIGNED=1`.                               |
 | [`RUNBOOK_CHAT_DISPATCH.md`](./RUNBOOK_CHAT_DISPATCH.md)               | Operator-context chat widget reply loop wiring (MESH_API_URL, SITELAYER_PUBLIC_BASE, SITELAYER_CHAT_WEBHOOK_TOKEN) + rotation discipline. |
+| [`RUNBOOK_CONTEXT_HANDOFF.md`](./RUNBOOK_CONTEXT_HANDOFF.md)           | `/work` items stuck in agent/review states; Mesh dispatch/callback failures; context handoff timeline diagnosis.                          |
 
 ## Existing runbooks
 
