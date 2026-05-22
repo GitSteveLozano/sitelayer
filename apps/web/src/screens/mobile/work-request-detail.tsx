@@ -22,6 +22,7 @@ import {
   appendWorkRequestEvent,
   dispatchWorkRequestToMesh,
   fetchSupportPacket,
+  fetchSupportPacketAccessLog,
   fetchWorkRequest,
   fetchWorkRequestGithubExport,
   queryKeys,
@@ -66,11 +67,20 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
   })
   const supportPacket = useMutation({
     mutationFn: (id: string) => fetchSupportPacket(id),
+    onSuccess: (_, id) => {
+      void qc.invalidateQueries({ queryKey: queryKeys.supportPackets.accessLog(id) })
+    },
   })
-
   const workItem = detail.data?.work_item ?? null
   const canTriage = canTriageWorkRequests(companyRole)
   const isAdmin = companyRole === 'admin'
+  const supportPacketId = detail.data?.support_packet?.id ?? workItem?.support_packet_id ?? ''
+  const supportPacketAccessLog = useQuery({
+    queryKey: queryKeys.supportPackets.accessLog(supportPacketId),
+    queryFn: () => fetchSupportPacketAccessLog(supportPacketId),
+    enabled: isAdmin && Boolean(supportPacketId),
+  })
+
   const busy =
     appendEvent.isPending ||
     dispatch.isPending ||
@@ -246,8 +256,8 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
                   ) : null}
                   <MButton
                     variant="ghost"
-                    disabled={busy}
-                    onClick={() => supportPacket.mutate(detail.data.support_packet?.id ?? workItem.support_packet_id)}
+                    disabled={busy || !supportPacketId}
+                    onClick={() => supportPacket.mutate(supportPacketId)}
                   >
                     {supportPacket.isPending ? 'Loading...' : 'Load packet'}
                   </MButton>
@@ -267,7 +277,35 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
                       />
                     </>
                   ) : null}
+                  {supportPacketAccessLog.error ? (
+                    <MBanner
+                      tone="error"
+                      title="Access log failed"
+                      body={
+                        supportPacketAccessLog.error instanceof Error
+                          ? supportPacketAccessLog.error.message
+                          : 'Support packet access log could not be loaded.'
+                      }
+                    />
+                  ) : null}
                 </div>
+                <MListInset>
+                  {supportPacketAccessLog.isPending ? (
+                    <MListRow headline="Access log" supporting="Loading packet access history" />
+                  ) : supportPacketAccessLog.data?.access_log.length ? (
+                    supportPacketAccessLog.data.access_log.map((entry) => (
+                      <MListRow
+                        key={entry.id}
+                        leading={<MI.ShieldAlert size={18} />}
+                        leadingTone="blue"
+                        headline={`${formatAccessType(entry.access_type)} by ${entry.actor_user_id}`}
+                        supporting={formatAccessLogEntry(entry)}
+                      />
+                    ))
+                  ) : (
+                    <MListRow headline="Access log" supporting="No packet reads recorded yet" />
+                  )}
+                </MListInset>
               </>
             ) : null}
 
@@ -320,4 +358,21 @@ function formatDispatchOutbox(outbox: {
   }
   if (outbox.error) parts.push(outbox.error)
   return parts.join(' - ')
+}
+
+function formatAccessType(value: string): string {
+  return value
+    .split('_')
+    .map((part) => (part ? part[0]!.toUpperCase() + part.slice(1) : part))
+    .join(' ')
+}
+
+function formatAccessLogEntry(entry: { created_at: string; route: string | null; request_id: string | null }): string {
+  return [
+    formatDateTime(entry.created_at),
+    entry.route ? `route ${entry.route}` : null,
+    entry.request_id ? `request ${entry.request_id}` : null,
+  ]
+    .filter(Boolean)
+    .join(' - ')
 }

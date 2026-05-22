@@ -46,7 +46,10 @@ export {
 
 export {
   createSupportPacket,
+  fetchSupportPacketAccessLog,
   fetchSupportPacket,
+  type SupportPacketAccessLogEntry,
+  type SupportPacketAccessLogResponse,
   type CreateSupportPacketInput,
   type CreateSupportPacketResponse,
   type SupportPacketDetail,

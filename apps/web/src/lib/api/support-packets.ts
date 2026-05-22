@@ -31,6 +31,21 @@ export interface SupportPacketDetailResponse {
   agent_prompt: string
 }
 
+export interface SupportPacketAccessLogEntry {
+  id: string
+  support_packet_id: string
+  actor_user_id: string
+  access_type: 'read' | 'list' | 'agent_prompt' | 'export'
+  route: string | null
+  request_id: string | null
+  created_at: string
+  metadata: Record<string, unknown>
+}
+
+export interface SupportPacketAccessLogResponse {
+  access_log: SupportPacketAccessLogEntry[]
+}
+
 export function createSupportPacket(input: CreateSupportPacketInput): Promise<CreateSupportPacketResponse> {
   return request<CreateSupportPacketResponse>('/api/support-packets', {
     method: 'POST',
@@ -40,4 +55,8 @@ export function createSupportPacket(input: CreateSupportPacketInput): Promise<Cr
 
 export function fetchSupportPacket(id: string): Promise<SupportPacketDetailResponse> {
   return request<SupportPacketDetailResponse>(`/api/support-packets/${encodeURIComponent(id)}`)
+}
+
+export function fetchSupportPacketAccessLog(id: string): Promise<SupportPacketAccessLogResponse> {
+  return request<SupportPacketAccessLogResponse>(`/api/support-packets/${encodeURIComponent(id)}/access-log`)
 }
