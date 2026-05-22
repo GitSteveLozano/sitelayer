@@ -3,12 +3,7 @@ import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import type { Identity } from '../auth.js'
 import { withCompanyClient } from '../mutation-tx.js'
-import {
-  WORK_ITEM_LANES,
-  type WorkItemLane,
-  type WorkItemSeverity,
-  type WorkItemStatus,
-} from '../context-handoff.js'
+import { WORK_ITEM_LANES, type WorkItemLane, type WorkItemSeverity, type WorkItemStatus } from '../context-handoff.js'
 
 // Wedge 4 — Obstruction signals as first-class queryable rows.
 //
@@ -32,12 +27,7 @@ const DISPATCH_MUTATION_TYPE = 'dispatch_mesh_work_request'
 const OBSTRUCTION_WORK_ITEM_STATUSES = ['review_stale', 'proposal_expired', 'wont_do'] as const
 
 type ObstructionStatus = (typeof OBSTRUCTION_WORK_ITEM_STATUSES)[number] | 'dead'
-const ALL_OBSTRUCTION_STATUSES: readonly ObstructionStatus[] = [
-  'review_stale',
-  'proposal_expired',
-  'wont_do',
-  'dead',
-]
+const ALL_OBSTRUCTION_STATUSES: readonly ObstructionStatus[] = ['review_stale', 'proposal_expired', 'wont_do', 'dead']
 
 const LANE_FILTERS = ['agent', 'human', 'both'] as const
 type LaneFilter = (typeof LANE_FILTERS)[number]
@@ -63,13 +53,11 @@ export type ObstructionRow = {
   assignee_user_id: string | null
   suggested_action: string
   reversibility_available: boolean
-  last_event:
-    | {
-        type: string
-        occurred_at: string
-        actor_kind: string
-      }
-    | null
+  last_event: {
+    type: string
+    occurred_at: string
+    actor_kind: string
+  } | null
 }
 
 export type ObstructionsResponse = {

@@ -128,8 +128,7 @@ describe('createWorkRequestStaleRunner', () => {
     process.env.MESH_OBSERVATION_SECRET_HEX = '00112233445566778899aabbccddeeff'
 
     const fetchImpl = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response('{"ok":true}', { status: 202 }),
+      async (_input: string | URL | Request, _init?: RequestInit) => new Response('{"ok":true}', { status: 202 }),
     )
     try {
       const runner = createWorkRequestStaleRunner({
@@ -195,8 +194,7 @@ describe('createWorkRequestStaleRunner', () => {
     const originalUrl = process.env.MESH_OBSERVATION_INGRESS_URL
     delete process.env.MESH_OBSERVATION_INGRESS_URL
     const fetchImpl = vi.fn(
-      async (_input: string | URL | Request, _init?: RequestInit) =>
-        new Response('{"ok":true}', { status: 202 }),
+      async (_input: string | URL | Request, _init?: RequestInit) => new Response('{"ok":true}', { status: 202 }),
     )
     try {
       const runner = createWorkRequestStaleRunner({

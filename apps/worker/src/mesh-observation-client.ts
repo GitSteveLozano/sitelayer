@@ -99,11 +99,7 @@ export async function postObservationEvent(
     })
     if (!response.ok) {
       const responseText = await response.text().catch(() => '')
-      log.warn?.(
-        'mesh observation ingest non-2xx',
-        response.status,
-        responseText.slice(0, 240),
-      )
+      log.warn?.('mesh observation ingest non-2xx', response.status, responseText.slice(0, 240))
       return { attempted: true, ok: false, status: response.status, error: `mesh ingest ${response.status}` }
     }
     return { attempted: true, ok: true, status: response.status }

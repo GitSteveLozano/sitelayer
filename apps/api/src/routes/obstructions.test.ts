@@ -324,12 +324,7 @@ describe('handleObstructionsRoutes', () => {
     expect(body.total).toBe(4)
     // Sorted by blocked_since asc: wi-wont (2026-05-18), wi-expired (05-19),
     // wi-stale (05-20), wi-dead (05-21).
-    expect(body.obstructions.map((row) => row.work_item_id)).toEqual([
-      'wi-wont',
-      'wi-expired',
-      'wi-stale',
-      'wi-dead',
-    ])
+    expect(body.obstructions.map((row) => row.work_item_id)).toEqual(['wi-wont', 'wi-expired', 'wi-stale', 'wi-dead'])
     expect(body.by_status).toEqual({ review_stale: 1, proposal_expired: 1, wont_do: 1, dead: 1 })
 
     const stale = body.obstructions.find((row) => row.work_item_id === 'wi-stale')!
@@ -383,11 +378,7 @@ describe('handleObstructionsRoutes', () => {
       },
     ]
     const { ctx, responses } = makeCtx(pool)
-    await handleObstructionsRoutes(
-      buildReq(),
-      buildUrl('/api/work-requests/obstructions?lane=human'),
-      ctx,
-    )
+    await handleObstructionsRoutes(buildReq(), buildUrl('/api/work-requests/obstructions?lane=human'), ctx)
     const body = responses[0]?.body as ObstructionsResponse
     expect(body.obstructions.map((row) => row.work_item_id)).toEqual(['wi-human'])
     expect(body.by_status).toEqual({ review_stale: 1, proposal_expired: 0, wont_do: 0, dead: 0 })
@@ -396,11 +387,7 @@ describe('handleObstructionsRoutes', () => {
   it('rejects an invalid lane filter with 400', async () => {
     const pool = new FakePool()
     const { ctx, responses } = makeCtx(pool)
-    await handleObstructionsRoutes(
-      buildReq(),
-      buildUrl('/api/work-requests/obstructions?lane=bogus'),
-      ctx,
-    )
+    await handleObstructionsRoutes(buildReq(), buildUrl('/api/work-requests/obstructions?lane=bogus'), ctx)
     expect(responses[0]?.status).toBe(400)
   })
 
