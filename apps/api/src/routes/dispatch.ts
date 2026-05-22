@@ -7,6 +7,7 @@ import type { BlueprintStorage } from '../storage.js'
 import type { LedgerExecutor } from '../mutation-tx.js'
 
 import { handleAnalyticsRoutes } from './analytics.js'
+import { handleAuditEscrowRoutes } from './audit-escrow.js'
 import { handleAuditEventRoutes } from './audit-events.js'
 import { handleBonusRuleRoutes } from './bonus-rules.js'
 import { handleBlueprintRoutes } from './blueprints.js'
@@ -240,6 +241,16 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       handleAuditEventRoutes(req, url, {
         pool,
         company,
+        requireRole: requireRoleStr,
+        sendJson,
+      }),
+
+    // Audit Escrow verification (admin-only GET /api/audit/escrow/...)
+    // Wedge 2 of the proving-ground plan — see migration 095 and
+    // packages/queue/src/audit-escrow.ts for the primitive.
+    () =>
+      handleAuditEscrowRoutes(req, url, {
+        pool,
         requireRole: requireRoleStr,
         sendJson,
       }),
