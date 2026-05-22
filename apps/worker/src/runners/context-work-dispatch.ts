@@ -155,9 +155,7 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
   const featureBrief = summary ?? title
   const affectedPackages = deriveAffectedPackages({ route, entityType })
   const baseTags = 'sitelayer,context-handoff,work-request,triage:ready-for-agent'
-  const tags = isAgentLane
-    ? `${baseTags},implementation,sitelayer:lane:agent`
-    : `${baseTags},audit`
+  const tags = isAgentLane ? `${baseTags},implementation,sitelayer:lane:agent` : `${baseTags},audit`
   const properties: Record<string, unknown> = {
     project_hint: 'sitelayer',
     source_system: 'sitelayer',

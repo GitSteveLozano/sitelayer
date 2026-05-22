@@ -242,9 +242,7 @@ describe('createContextWorkDispatchRunner', () => {
       context_handoff_ref: '00000000-0000-4000-8000-0000000000aa',
     })
     expect(Array.isArray(body.properties.affected_packages)).toBe(true)
-    expect(body.properties.affected_packages).toEqual(
-      expect.arrayContaining(['apps/api', 'apps/web']),
-    )
+    expect(body.properties.affected_packages).toEqual(expect.arrayContaining(['apps/api', 'apps/web']))
     expect(body.description).toContain('steerer_workflow_id=sitelayer_implementation_fan')
     expect(body.description).toContain('sitelayer_implementation')
     expect(body.description).not.toContain('Treat this as read-only triage')
