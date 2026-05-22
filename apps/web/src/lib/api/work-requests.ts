@@ -11,6 +11,7 @@ export type WorkItemStatus =
   | 'resolved'
   | 'reopened'
   | 'wont_do'
+  | 'reversed'
 
 export type WorkItemLane = 'triage' | 'human' | 'agent' | 'both' | 'done'
 export type WorkItemSeverity = 'low' | 'normal' | 'high' | 'urgent'
@@ -35,6 +36,7 @@ export type HandoffEventType =
   | 'external.github_linked'
   | 'resolution.accepted'
   | 'resolution.reopened'
+  | 'work_item.reversed'
 
 export interface ContextWorkItem {
   id: string
@@ -52,7 +54,21 @@ export interface ContextWorkItem {
   created_at: string
   updated_at: string
   resolved_at: string | null
+  reversed_at: string | null
+  reversibility_window_seconds: number
+  expires_at: string | null
   metadata: Record<string, unknown>
+}
+
+export interface ReverseWorkRequestInput {
+  reason: string
+}
+
+export interface ReverseWorkRequestResponse {
+  work_item: ContextWorkItem
+  event: ContextHandoffEvent | null
+  mesh_cancel: { ok: boolean; status?: number | null; error?: string | null } | null
+  idempotent_replay?: boolean
 }
 
 export interface ContextHandoffEvent {
@@ -259,5 +275,12 @@ export function fetchWorkRequestGithubExport(id: string): Promise<WorkRequestGit
   return request<WorkRequestGithubExportResponse>(`/api/work-requests/${encodeURIComponent(id)}/github-export`, {
     method: 'POST',
     json: {},
+  })
+}
+
+export function reverseWorkRequest(id: string, input: ReverseWorkRequestInput): Promise<ReverseWorkRequestResponse> {
+  return request<ReverseWorkRequestResponse>(`/api/work-requests/${encodeURIComponent(id)}/reverse`, {
+    method: 'POST',
+    json: input,
   })
 }

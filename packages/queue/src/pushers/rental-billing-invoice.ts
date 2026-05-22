@@ -19,6 +19,10 @@ export type RentalBillingInvoicePushInput = {
   companyId: string
   runId: string
   payload: Record<string, unknown>
+  // Trace continuation hints from the originating mutation_outbox row.
+  // See EstimatePushInput for the rationale; same wire shape.
+  sentry_trace?: string | null
+  sentry_baggage?: string | null
 }
 
 export type RentalBillingInvoicePushResult = {
@@ -298,7 +302,14 @@ export async function processRentalBillingInvoicePush(
         continue
       }
 
-      const result = await push({ client, companyId, runId, payload: row.payload })
+      const result = await push({
+        client,
+        companyId,
+        runId,
+        payload: row.payload,
+        sentry_trace: row.sentry_trace,
+        sentry_baggage: row.sentry_baggage,
+      })
       const updated = await applyWorkerEmittedEvent(
         client,
         companyId,

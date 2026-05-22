@@ -9,6 +9,9 @@ export interface ContextWorkDispatchPayload {
   route?: string | null
   entity_type?: string | null
   entity_id?: string | null
+  reversibility_window_seconds?: number | null
+  status?: string | null
+  lane?: string | null
   support_packet?: unknown
   callback?: {
     path?: string | null
@@ -18,6 +21,28 @@ export interface ContextWorkDispatchPayload {
     expires_at?: string | null
   } | null
 }
+
+// Mesh round-trips a numeric reversibility window per task (mesh migration 261).
+// Sitelayer's authoritative value is the column on context_work_items
+// (sitelayer migration 093); if the payload omits it we fall back to the
+// 24h default to stay backward-compatible with in-flight outbox rows.
+const DEFAULT_REVERSIBILITY_WINDOW_SECONDS = 86_400
+
+// Mesh routing for the sitelayer implementation lane. Registered in
+// control-plane mesh as:
+//   - steerer_workflow_id: 'sitelayer_implementation_fan'
+//     (claude/sonnet primary, sequential fan, code-work tier)
+//   - counsel_class: 'sitelayer_implementation'
+//     (claude/sonnet primary, NOT haiku — operator_assistant is the
+//     wrong tier for code work).
+// See ~/projects/control-plane/mesh/core/steerer_workflows.go and
+// counsel_of_models_registry.go (commit 00edbfe1, branch
+// mesh-sitelayer-routing). Day-1 Capability Foundation piece B of
+// docs/PROVING_GROUND_PLAN.md: without this wiring the registry
+// entries are dead weight and lane=agent tasks still land in
+// operator_assistant -> Claude Haiku.
+export const SITELAYER_IMPLEMENTATION_STEERER_WORKFLOW_ID = 'sitelayer_implementation_fan'
+export const SITELAYER_IMPLEMENTATION_COUNSEL_CLASS = 'sitelayer_implementation'
 
 export function createContextWorkDispatchRunner(deps: { pool: Pool }) {
   const { pool } = deps
@@ -128,6 +153,78 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
   const title = cleanString(payload.title) ?? `Sitelayer work request ${payload.work_item_id.slice(0, 8)}`
   const callbackPath = cleanString(payload.callback?.path)
   const callbackUrl = cleanString(payload.callback?.url)
+  const lane = cleanString(payload.lane)
+  const isAgentLane = lane === 'agent'
+
+  // featureBrief drives the steerer workflow's brief template — prefer
+  // the operator-authored summary over the generated title because the
+  // summary captures intent, while the title is often the route hint.
+  const featureBrief = summary ?? title
+  const affectedPackages = deriveAffectedPackages({ route, entityType })
+  const baseTags = 'sitelayer,context-handoff,work-request,triage:ready-for-agent'
+  const tags = isAgentLane ? `${baseTags},implementation,sitelayer:lane:agent` : `${baseTags},audit`
+  const properties: Record<string, unknown> = {
+    project_hint: 'sitelayer',
+    source_system: 'sitelayer',
+    source_kind: 'context_work_item',
+    company_id: companyId,
+    work_item_id: payload.work_item_id,
+    support_packet_id: cleanString(payload.support_packet_id),
+    route,
+    entity_type: entityType,
+    entity_id: entityId,
+    callback_path: callbackPath,
+    callback_url: callbackUrl,
+    lane,
+  }
+  const executionContext: Record<string, unknown> = {
+    project_hint: 'sitelayer',
+    source_system: 'sitelayer',
+    work_item_id: payload.work_item_id,
+    support_packet_id: cleanString(payload.support_packet_id),
+    route,
+    entity_type: entityType,
+    entity_id: entityId,
+    callback_path: callbackPath,
+    callback_url: callbackUrl,
+    dispatch_mode: 'steerer',
+    claim_mode: 'steerer',
+    context_handoff: contextHandoff,
+  }
+
+  if (isAgentLane) {
+    properties.steerer_workflow_id = SITELAYER_IMPLEMENTATION_STEERER_WORKFLOW_ID
+    properties.counsel_class = SITELAYER_IMPLEMENTATION_COUNSEL_CLASS
+    properties.readonly = false
+    // Inputs declared on the mesh steerer workflow registry entry
+    // (required: project_task_id, feature_brief, affected_packages;
+    // optional: acceptance_criteria, branch_prefix, context_handoff_ref,
+    // target_files). project_task_id is filled in by mesh once the
+    // task row is created — we surface context_handoff_ref so the
+    // implementer can fetch the full timeline from
+    // /api/work-requests/:id.
+    properties.feature_brief = featureBrief
+    properties.affected_packages = affectedPackages
+    properties.context_handoff_ref = payload.work_item_id
+    properties.acceptance_criteria = [
+      'Read the attached Sitelayer context handoff (execution_context.context_handoff) before changing code.',
+      'Implement the change scoped to affected_packages; run targeted typecheck + tests before committing.',
+      'Push to an agent/<runner>/sitelayer-* branch and report branch + test verdict in the output envelope. Do NOT merge to main.',
+      'Use the scoped callback URL when reporting status back to Sitelayer.',
+    ]
+    executionContext.steerer_workflow_id = SITELAYER_IMPLEMENTATION_STEERER_WORKFLOW_ID
+    executionContext.counsel_class = SITELAYER_IMPLEMENTATION_COUNSEL_CLASS
+    executionContext.feature_brief = featureBrief
+    executionContext.affected_packages = affectedPackages
+    executionContext.context_handoff_ref = payload.work_item_id
+  } else {
+    properties.readonly = true
+    properties.acceptance_criteria = [
+      'Read the attached Sitelayer context handoff before acting.',
+      'Record the observed issue, likely cause, and recommended owner or next action.',
+      'Use the scoped callback URL when updating the Sitelayer work request status.',
+    ]
+  }
 
   return {
     subject: `[Sitelayer] ${title}`,
@@ -141,49 +238,57 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
       entityType,
       entityId,
       callbackPath: callbackUrl ?? callbackPath,
+      isAgentLane,
+      affectedPackages,
     }),
     created_by: 'sitelayer-worker',
     source: 'sitelayer-context-handoff',
-    task_type: 'audit',
+    task_type: isAgentLane ? 'implementation' : 'audit',
     auto_dispatch: true,
-    tags: 'sitelayer,context-handoff,work-request,triage:ready-for-agent,audit',
+    tags,
     project_hint: 'sitelayer',
     idempotency_key: `sitelayer:context_work_item:${payload.work_item_id}`,
-    reversibility_window_seconds: 86_400,
-    properties: {
-      project_hint: 'sitelayer',
-      source_system: 'sitelayer',
-      source_kind: 'context_work_item',
-      company_id: companyId,
-      work_item_id: payload.work_item_id,
-      support_packet_id: cleanString(payload.support_packet_id),
-      route,
-      entity_type: entityType,
-      entity_id: entityId,
-      callback_path: callbackPath,
-      callback_url: callbackUrl,
-      readonly: true,
-      acceptance_criteria: [
-        'Read the attached Sitelayer context handoff before acting.',
-        'Record the observed issue, likely cause, and recommended owner or next action.',
-        'Use the scoped callback URL when updating the Sitelayer work request status.',
-      ],
-    },
-    execution_context: {
-      project_hint: 'sitelayer',
-      source_system: 'sitelayer',
-      work_item_id: payload.work_item_id,
-      support_packet_id: cleanString(payload.support_packet_id),
-      route,
-      entity_type: entityType,
-      entity_id: entityId,
-      callback_path: callbackPath,
-      callback_url: callbackUrl,
-      dispatch_mode: 'steerer',
-      claim_mode: 'steerer',
-      context_handoff: contextHandoff,
-    },
+    reversibility_window_seconds:
+      typeof payload.reversibility_window_seconds === 'number' && Number.isFinite(payload.reversibility_window_seconds)
+        ? payload.reversibility_window_seconds
+        : DEFAULT_REVERSIBILITY_WINDOW_SECONDS,
+    properties,
+    execution_context: executionContext,
   }
+}
+
+// deriveAffectedPackages takes the best signal we have at dispatch time
+// — the work item's route (e.g. /projects/p/foo) and entity_type (e.g.
+// project, rental_workflow, chat_widget) — and maps to sitelayer's
+// monorepo workspace names. Sitelayer is a Node monorepo with apps/
+// (api, web, worker) and packages/. The mesh steerer workflow's input
+// schema requires `affected_packages`; we default to `['*']` when we
+// can't infer, per the task spec ("better than blocking on perfect
+// inference"). The implementer reads the context_handoff to figure
+// out the actual scope from there.
+function deriveAffectedPackages(hint: { route: string | null; entityType: string | null }): string[] {
+  const route = hint.route ?? ''
+  const entityType = hint.entityType ?? ''
+  const matches = new Set<string>()
+  // Chat widget changes live in apps/web + apps/api (per CLAUDE.md
+  // operator note: chat-widget machine + ai-chat route are the most-
+  // touched pair).
+  if (/chat|widget|ai-chat/i.test(route) || /chat|widget/i.test(entityType)) {
+    matches.add('apps/web')
+    matches.add('apps/api')
+  }
+  if (route.startsWith('/api/') || /api|route|endpoint/i.test(entityType)) {
+    matches.add('apps/api')
+  }
+  if (route.startsWith('/projects/') || /project|rental_workflow|estimate/i.test(entityType)) {
+    matches.add('apps/web')
+    matches.add('apps/api')
+  }
+  if (/worker|job|outbox|drain/i.test(route) || /worker|job/i.test(entityType)) {
+    matches.add('apps/worker')
+  }
+  if (matches.size === 0) return ['*']
+  return [...matches].sort()
 }
 
 function buildMeshTaskDescription(input: {
@@ -196,6 +301,8 @@ function buildMeshTaskDescription(input: {
   entityType?: string | null
   entityId?: string | null
   callbackPath?: string | null
+  isAgentLane?: boolean
+  affectedPackages?: string[]
 }): string {
   const lines = [
     'Sitelayer context handoff work request.',
@@ -211,13 +318,30 @@ function buildMeshTaskDescription(input: {
   }
   appendLine(lines, 'Summary', input.summary)
   appendLine(lines, 'Callback', input.callbackPath)
-  lines.push(
-    '',
-    'Instructions:',
-    '- Inspect execution_context.context_handoff for the captured route, entity, UI state, events, and support packet.',
-    '- Treat this as read-only triage unless a separate implementation task with target_files and acceptance_criteria is created.',
-    '- If you update Sitelayer, use the scoped callback from execution_context.context_handoff.callback.',
-  )
+  if (input.isAgentLane) {
+    appendLine(lines, 'Lane', 'agent (implementation)')
+    if (input.affectedPackages?.length) {
+      lines.push(`Affected packages: ${input.affectedPackages.join(', ')}`)
+    }
+    lines.push(
+      '',
+      'Instructions (implementation lane):',
+      `- Routed via steerer_workflow_id=${SITELAYER_IMPLEMENTATION_STEERER_WORKFLOW_ID} (Claude sonnet implementer, sequential fan).`,
+      `- Counsel class ${SITELAYER_IMPLEMENTATION_COUNSEL_CLASS} (Claude/Sonnet primary; explicitly NOT haiku).`,
+      '- Inspect execution_context.context_handoff for the captured route, entity, UI state, events, and support packet.',
+      '- Implement the change scoped to affected_packages; run targeted typecheck + tests before committing.',
+      '- Push to an agent/<runner>/sitelayer-* branch and return the JSON envelope declared by the workflow output contract. Do NOT merge to main (CLAUDE.md rule 13).',
+      '- Use the scoped callback from execution_context.context_handoff.callback when reporting status back to Sitelayer.',
+    )
+  } else {
+    lines.push(
+      '',
+      'Instructions:',
+      '- Inspect execution_context.context_handoff for the captured route, entity, UI state, events, and support packet.',
+      '- Treat this as read-only triage unless a separate implementation task with target_files and acceptance_criteria is created.',
+      '- If you update Sitelayer, use the scoped callback from execution_context.context_handoff.callback.',
+    )
+  }
   return lines.join('\n')
 }
 

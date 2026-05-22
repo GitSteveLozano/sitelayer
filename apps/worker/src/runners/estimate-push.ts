@@ -9,6 +9,7 @@ import {
 } from '@sitelayer/queue'
 import { observeWorkflowEvent } from '../metrics.js'
 import { createQboEstimatePush } from '../qbo-estimate-push.js'
+import { withRowTrace } from '../trace.js'
 
 const stubEstimatePush: EstimatePushFn = async ({ pushId }) => {
   return { qbo_estimate_id: `STUB-EST-${pushId.slice(0, 8)}-${Date.now()}` }
@@ -19,7 +20,17 @@ export function createEstimatePushRunner(deps: { pool: Pool; logger: Logger; qbo
 
   const liveEstimatePushEnabled = process.env.QBO_LIVE_ESTIMATE_PUSH === '1'
   const estimatePushBase: EstimatePushFn = liveEstimatePushEnabled ? createQboEstimatePush() : stubEstimatePush
-  const estimatePush: EstimatePushFn = (input) => withCircuitBreaker(qboCircuit, 'qbo', () => estimatePushBase(input))
+  // Wrap the QBO push (and the circuit breaker around it) inside the row's
+  // originating Sentry trace. The pusher loop in @sitelayer/queue passes
+  // sentry_trace + sentry_baggage from the claimed mutation_outbox row into
+  // the EstimatePushInput; withRowTrace continues the trace if those fields
+  // are present so the external HTTP call inherits the originating API
+  // request's trace_id. Without this, the worker generated a fresh trace
+  // per row and the API→DB→worker handoff visible in audit_events looked
+  // like two disconnected traces. See apps/api/src/trace-ingress.ts for the
+  // matching API-ingress side.
+  const estimatePush: EstimatePushFn = (input) =>
+    withRowTrace(input, () => withCircuitBreaker(qboCircuit, 'qbo', () => estimatePushBase(input)))
 
   if (liveEstimatePushEnabled) {
     logger.info('[estimate-push] live QBO estimate push enabled')

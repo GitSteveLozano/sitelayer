@@ -87,6 +87,7 @@ type DispatchPayload = {
   entity_id: string | null
   status: WorkItemStatus
   lane: WorkItemLane
+  reversibility_window_seconds: number
   support_packet: unknown
   callback: {
     path: string
@@ -238,6 +239,9 @@ function workItemResponse(row: ContextWorkItemRow) {
     created_at: row.created_at,
     updated_at: row.updated_at,
     resolved_at: row.resolved_at,
+    reversed_at: row.reversed_at,
+    reversibility_window_seconds: Number(row.reversibility_window_seconds),
+    expires_at: row.expires_at,
     metadata: row.metadata,
   }
 }
@@ -523,6 +527,7 @@ function buildDispatchPayload(
     entity_id: row.entity_id,
     status: row.status,
     lane: row.lane,
+    reversibility_window_seconds: Number(row.reversibility_window_seconds),
     support_packet: row.support_packet ?? null,
     callback: {
       path: callbackPath,
@@ -1217,6 +1222,160 @@ async function receiveAgentCallback(req: http.IncomingMessage, ctx: WorkRequestR
   observeContextHandoff(eventType)
 }
 
+function isTerminalForReverse(status: WorkItemStatus): boolean {
+  // 'cancelled' is not a sitelayer status (the CHECK constraint never accepted
+  // it), so we treat the terminal set as resolved/wont_do/reversed. 'reversed'
+  // catches idempotent re-reverse attempts.
+  return status === 'resolved' || status === 'wont_do' || status === 'reversed'
+}
+
+function pickLatestMeshTaskId(events: ContextHandoffEventRow[]): string | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i]
+    if (!event) continue
+    if (event.event_type !== 'agent.dispatch_acknowledged') continue
+    const candidate = (event.payload as Record<string, unknown>).mesh_task_id
+    if (typeof candidate === 'string' && candidate.trim()) return candidate.trim()
+    if (typeof candidate === 'number' && Number.isFinite(candidate)) return String(candidate)
+  }
+  return null
+}
+
+async function callMeshCancelTask(meshTaskId: string): Promise<{ ok: boolean; status?: number; error?: string }> {
+  const meshApi = process.env.MESH_API_URL?.trim() || ''
+  if (!meshApi) return { ok: false, error: 'MESH_API_URL not configured' }
+  const url = `${meshApi.replace(/\/+$/, '')}/api/orchestrate/tasks/${encodeURIComponent(meshTaskId)}`
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 3000)
+  try {
+    const response = await fetch(url, { method: 'DELETE', signal: controller.signal })
+    if (response.ok || response.status === 404) return { ok: true, status: response.status }
+    const text = await response.text().catch(() => '')
+    return { ok: false, status: response.status, error: text.slice(0, 200) }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'mesh cancel failed' }
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+async function reverseWorkRequest(ctx: WorkRequestRouteCtx, id: string) {
+  // Same role gate as markResolved / other state mutations: TRIAGE_ROLES.
+  // Member-level callers cannot reverse arbitrary items (they can still
+  // reopen their own through resolution.reopened, which is unchanged).
+  if (!ctx.requireRole(TRIAGE_ROLES)) return
+  if (!isValidUuid(id)) {
+    ctx.sendJson(400, { error: 'invalid work request id' })
+    return
+  }
+  let body: Record<string, unknown>
+  try {
+    body = await ctx.readBody()
+  } catch {
+    ctx.sendJson(400, { error: 'invalid JSON body' })
+    return
+  }
+  const reason = optionalText(body.reason, MAX_SUMMARY_LENGTH)
+  if (!reason) {
+    ctx.sendJson(400, { error: 'reason is required' })
+    return
+  }
+
+  const detail = await getContextWorkItemWithEvents(ctx.company.id, id)
+  if (!detail) {
+    ctx.sendJson(404, { error: 'work request not found' })
+    return
+  }
+  if (!canReadWorkItem(ctx.company.role, ctx.identity.userId, detail.work_item)) {
+    ctx.sendJson(403, { error: 'forbidden' })
+    return
+  }
+
+  // Idempotent re-reverse: if already reversed, return the current row + the
+  // existing event, do not insert a duplicate handoff event.
+  if (detail.work_item.status === 'reversed') {
+    const existingReverseEvent = detail.events.find((event) => event.event_type === 'work_item.reversed') ?? null
+    ctx.sendJson(200, {
+      work_item: workItemResponse(detail.work_item),
+      event: existingReverseEvent,
+      idempotent_replay: true,
+    })
+    return
+  }
+  if (isTerminalForReverse(detail.work_item.status)) {
+    ctx.sendJson(409, { error: `work item is ${detail.work_item.status} and cannot be reversed` })
+    return
+  }
+
+  // expires_at is a computed column (created_at + reversibility_window_seconds);
+  // if it is null something is wrong upstream — treat as closed window so we
+  // never silently let an unguarded reverse through.
+  const expiresAt = detail.work_item.expires_at ? Date.parse(detail.work_item.expires_at) : NaN
+  if (!Number.isFinite(expiresAt) || Date.now() > expiresAt) {
+    ctx.sendJson(410, { error: 'reversibility window closed' })
+    return
+  }
+
+  const reversedWithinSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(detail.work_item.created_at)) / 1000))
+  const meshTaskId = pickLatestMeshTaskId(detail.events)
+
+  // Local DB is source of truth: do the state change first, then attempt the
+  // mesh cancel as a best-effort follow-up. A mesh failure does NOT fail the
+  // reverse request — we log warnings via the event metadata instead.
+  let meshCancelOutcome: { ok: boolean; status?: number; error?: string } | null = null
+  if (meshTaskId) {
+    meshCancelOutcome = await callMeshCancelTask(meshTaskId)
+    if (!meshCancelOutcome.ok) {
+      console.warn(
+        `[reverseWorkRequest] mesh cancel failed for work_item=${id} mesh_task_id=${meshTaskId}: ${meshCancelOutcome.error ?? meshCancelOutcome.status ?? 'unknown'}`,
+      )
+    }
+  }
+
+  const idempotencyKey = `context_work_item:reverse:${id}`
+  const reversedAt = new Date().toISOString()
+  const result = await withMutationTx(ctx.company.id, async (c) =>
+    updateContextWorkItemWithEventTx(c, {
+      companyId: ctx.company.id,
+      workItemId: id,
+      eventType: 'work_item.reversed',
+      actorKind: 'user',
+      actorUserId: ctx.identity.userId,
+      status: 'reversed',
+      lane: 'done',
+      payload: {
+        reason,
+        reversed_within_seconds: reversedWithinSeconds,
+        previous_status: detail.work_item.status,
+        previous_lane: detail.work_item.lane,
+        mesh_task_id: meshTaskId,
+        mesh_cancel: meshCancelOutcome
+          ? {
+              ok: meshCancelOutcome.ok,
+              status: meshCancelOutcome.status ?? null,
+              error: meshCancelOutcome.error ?? null,
+            }
+          : null,
+      },
+      metadata: { evidence_refs: [{ type: 'support_debug_packet', id: detail.work_item.support_packet_id }] },
+      resolvedAt: reversedAt,
+      reversedAt,
+      idempotencyKey,
+    }),
+  )
+  if (!result) {
+    ctx.sendJson(404, { error: 'work request not found' })
+    return
+  }
+
+  ctx.sendJson(200, {
+    work_item: workItemResponse(result.workItem),
+    event: result.event,
+    mesh_cancel: meshCancelOutcome,
+  })
+  observeContextHandoff('work_item.reversed')
+}
+
 async function sweepStaleWorkRequests(ctx: WorkRequestRouteCtx) {
   if (!ctx.requireRole(TRIAGE_ROLES)) return
   let body: Record<string, unknown>
@@ -1386,6 +1545,12 @@ export async function handleWorkRequestRoutes(
   const callbackMatch = url.pathname.match(/^\/api\/work-requests\/([^/]+)\/agent-callback$/)
   if (callbackMatch && req.method === 'POST') {
     await receiveAgentCallback(req, ctx, decodeURIComponent(callbackMatch[1]!))
+    return true
+  }
+
+  const reverseMatch = url.pathname.match(/^\/api\/work-requests\/([^/]+)\/reverse$/)
+  if (reverseMatch && req.method === 'POST') {
+    await reverseWorkRequest(ctx, decodeURIComponent(reverseMatch[1]!))
     return true
   }
 

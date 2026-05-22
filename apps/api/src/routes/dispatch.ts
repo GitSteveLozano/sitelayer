@@ -7,6 +7,7 @@ import type { BlueprintStorage } from '../storage.js'
 import type { LedgerExecutor } from '../mutation-tx.js'
 
 import { handleAnalyticsRoutes } from './analytics.js'
+import { handleAuditEscrowRoutes } from './audit-escrow.js'
 import { handleAuditEventRoutes } from './audit-events.js'
 import { handleDispatchLaneRoutes } from './dispatch-lanes.js'
 import { handleBonusRuleRoutes } from './bonus-rules.js'
@@ -43,6 +44,7 @@ import { handleCrewScheduleEventRoutes } from './crew-schedule-events.js'
 import { handleServiceItemRoutes } from './service-items.js'
 import { handleSupportPacketRoutes } from './support-packets.js'
 import { handleWorkRequestRoutes } from './work-requests.js'
+import { handleObstructionsRoutes } from './obstructions.js'
 import { handleSyncRoutes } from './sync.js'
 import { handleAssemblyRoutes } from './assemblies.js'
 import { handleBlueprintPageRoutes } from './blueprint-pages.js'
@@ -257,6 +259,16 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         getCurrentUserId: ctx.getCurrentUserId,
       }),
 
+    // Audit Escrow verification (admin-only GET /api/audit/escrow/...)
+    // Wedge 2 of the proving-ground plan — see migration 095 and
+    // packages/queue/src/audit-escrow.ts for the primitive.
+    () =>
+      handleAuditEscrowRoutes(req, url, {
+        pool,
+        requireRole: requireRoleStr,
+        sendJson,
+      }),
+
     // Worker issues — wk-issue ping (any role POSTs; admin/foreman/office GET)
     () =>
       handleWorkerIssueRoutes(req, url, {
@@ -294,6 +306,21 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         buildSha: getBuildSha(),
         requireRole: requireRoleStr,
         readBody,
+        sendJson,
+      }),
+
+    // Obstruction signals — first-class queryable view over work items
+    // that are stuck (review_stale / proposal_expired / wont_do / dispatch
+    // outbox dead). Mounted BEFORE handleWorkRequestRoutes so the
+    // /api/work-requests/obstructions GET wins against the
+    // /api/work-requests/:id detail matcher (which would otherwise treat
+    // 'obstructions' as a work-item id and return 400).
+    () =>
+      handleObstructionsRoutes(req, url, {
+        pool,
+        company,
+        identity,
+        requireRole,
         sendJson,
       }),
 

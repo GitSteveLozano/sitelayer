@@ -17,7 +17,12 @@ import {
 import { MSkeletonList } from '../../components/m-states/index.js'
 import { WorkRequestContextPreview } from '../../components/work-requests/WorkRequestContextPreview.js'
 import { WorkRequestTimeline } from '../../components/work-requests/WorkRequestTimeline.js'
-import { WorkRequestSeverityPill, WorkRequestStatusPill } from '../../components/work-requests/status.js'
+import {
+  WorkRequestReversibilityBadge,
+  WorkRequestSeverityPill,
+  WorkRequestStatusPill,
+  reversibilityBadgeState,
+} from '../../components/work-requests/status.js'
 import {
   appendWorkRequestEvent,
   dispatchWorkRequestToMesh,
@@ -28,6 +33,7 @@ import {
   fetchWorkRequestQueueHealth,
   queryKeys,
   retryWorkRequestMeshDispatch,
+  reverseWorkRequest,
   type AppendWorkRequestEventInput,
 } from '@/lib/api'
 import { canTriageWorkRequests } from '@/lib/work-request-permissions'
@@ -41,6 +47,7 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
   const [message, setMessage] = useState('')
   const [githubUrl, setGithubUrl] = useState('')
   const [githubExportBody, setGithubExportBody] = useState('')
+  const [reverseReason, setReverseReason] = useState('')
   const detail = useQuery({
     queryKey: queryKeys.workRequests.detail(workItemId),
     queryFn: () => fetchWorkRequest(workItemId),
@@ -60,6 +67,10 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
   })
   const retryDispatch = useMutation({
     mutationFn: () => retryWorkRequestMeshDispatch(workItemId),
+    onSuccess: invalidate,
+  })
+  const reverse = useMutation({
+    mutationFn: (reason: string) => reverseWorkRequest(workItemId, { reason }),
     onSuccess: invalidate,
   })
   const githubExport = useMutation({
@@ -93,8 +104,17 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
     dispatch.isPending ||
     retryDispatch.isPending ||
     githubExport.isPending ||
-    supportPacket.isPending
-  const isClosed = workItem?.status === 'resolved' || workItem?.status === 'wont_do'
+    supportPacket.isPending ||
+    reverse.isPending
+  const isClosed = workItem?.status === 'resolved' || workItem?.status === 'wont_do' || workItem?.status === 'reversed'
+  const reversibility = workItem ? reversibilityBadgeState(workItem) : null
+  const canReverse =
+    canTriage &&
+    workItem !== null &&
+    !isClosed &&
+    reversibility !== null &&
+    reversibility.mode !== 'closed' &&
+    reversibility.mode !== 'reversed'
   const dispatchOutbox = detail.data?.dispatch_outbox ?? null
   const canRetryDispatch = dispatchOutbox?.status === 'failed' || dispatchOutbox?.status === 'dead'
   const dispatchUnavailable = Boolean(
@@ -121,6 +141,7 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <WorkRequestStatusPill status={workItem.status} />
                 <WorkRequestSeverityPill severity={workItem.severity} />
+                <WorkRequestReversibilityBadge workItem={workItem} />
               </div>
               <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.15, fontWeight: 750 }}>{workItem.title}</h1>
               {workItem.summary ? (
@@ -128,14 +149,14 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
               ) : null}
             </div>
 
-            {appendEvent.error || dispatch.error || retryDispatch.error ? (
+            {appendEvent.error || dispatch.error || retryDispatch.error || reverse.error ? (
               <div style={{ padding: '8px 16px' }}>
                 <MBanner
                   tone="error"
                   title="Update failed"
                   body={
-                    (appendEvent.error ?? dispatch.error ?? retryDispatch.error) instanceof Error
-                      ? (appendEvent.error ?? dispatch.error ?? retryDispatch.error)?.message
+                    (appendEvent.error ?? dispatch.error ?? retryDispatch.error ?? reverse.error) instanceof Error
+                      ? (appendEvent.error ?? dispatch.error ?? retryDispatch.error ?? reverse.error)?.message
                       : 'Request failed.'
                   }
                 />
@@ -191,6 +212,27 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
                       </MButton>
                     ) : null}
                   </MButtonStack>
+                  {canReverse ? (
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      <MInput
+                        aria-label="Reverse reason"
+                        value={reverseReason}
+                        onChange={(event) => setReverseReason(event.currentTarget.value)}
+                        placeholder="Why reverse?"
+                      />
+                      <MButton
+                        variant="ghost"
+                        disabled={busy || !reverseReason.trim()}
+                        onClick={() =>
+                          reverse.mutate(reverseReason.trim(), {
+                            onSuccess: () => setReverseReason(''),
+                          })
+                        }
+                      >
+                        {reverse.isPending ? 'Reversing...' : 'Reverse'}
+                      </MButton>
+                    </div>
+                  ) : null}
                 </div>
               </>
             ) : null}
@@ -350,6 +392,12 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
               <MListRow headline="Updated" supporting={formatDateTime(workItem.updated_at)} />
               {workItem.resolved_at ? (
                 <MListRow headline="Resolved" supporting={formatDateTime(workItem.resolved_at)} />
+              ) : null}
+              {workItem.reversed_at ? (
+                <MListRow headline="Reversed" supporting={formatDateTime(workItem.reversed_at)} />
+              ) : null}
+              {workItem.expires_at && !workItem.reversed_at ? (
+                <MListRow headline="Recall window" supporting={`closes ${formatDateTime(workItem.expires_at)}`} />
               ) : null}
             </MListInset>
 

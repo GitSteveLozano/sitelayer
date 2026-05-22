@@ -9,6 +9,7 @@ import {
 } from '@sitelayer/queue'
 import { observeWorkflowEvent } from '../metrics.js'
 import { createQboRentalInvoicePush } from '../qbo-invoice-push.js'
+import { withRowTrace } from '../trace.js'
 
 const stubRentalBillingInvoicePush: RentalBillingInvoicePushFn = async ({ runId }) => {
   // Deterministic synthetic id: same runId → same stub invoice id, so replay
@@ -34,8 +35,10 @@ export function createRentalBillingPushRunner(deps: { pool: Pool; logger: Logger
   const rentalBillingInvoiceBasePush: RentalBillingInvoicePushFn = liveRentalBillingInvoicePushEnabled
     ? createQboRentalInvoicePush()
     : stubRentalBillingInvoicePush
+  // Continue the originating API trace into the QBO call. See
+  // estimate-push.ts for the matching pattern and rationale.
   const rentalBillingInvoicePush: RentalBillingInvoicePushFn = (input) =>
-    withCircuitBreaker(qboCircuit, 'qbo', () => rentalBillingInvoiceBasePush(input))
+    withRowTrace(input, () => withCircuitBreaker(qboCircuit, 'qbo', () => rentalBillingInvoiceBasePush(input)))
 
   if (liveRentalBillingInvoicePushEnabled) {
     logger.info('[rental-billing] live QBO invoice push enabled')

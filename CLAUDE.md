@@ -61,11 +61,15 @@ Domain language lives in `CONTEXT.md` when present; durable architectural decisi
 
 ## Agent Coordination Source of Truth
 
-**Last reconciled:** 2026-05-17
+**Last reconciled:** 2026-05-22
 
 **Mesh project:** `sitelayer` / project ID `282`
 
-**Open Mesh deployment task chain:** `sitelayer-deploy-reconcile-20260423`
+The historical task chain `sitelayer-deploy-reconcile-20260423` is no longer
+present in mesh — pilot-onboarding state has moved past it. Use
+[`CRITICAL_PATH.md`](./CRITICAL_PATH.md) and the project's open health-emitter
+tasks in mesh as the live source of truth for what's still required before
+pilot launch.
 
 This repo has historical planning docs that drift from the current deployment state. Use this order of authority:
 
