@@ -106,8 +106,7 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
     githubExport.isPending ||
     supportPacket.isPending ||
     reverse.isPending
-  const isClosed =
-    workItem?.status === 'resolved' || workItem?.status === 'wont_do' || workItem?.status === 'reversed'
+  const isClosed = workItem?.status === 'resolved' || workItem?.status === 'wont_do' || workItem?.status === 'reversed'
   const reversibility = workItem ? reversibilityBadgeState(workItem) : null
   const canReverse =
     canTriage &&
@@ -398,10 +397,7 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
                 <MListRow headline="Reversed" supporting={formatDateTime(workItem.reversed_at)} />
               ) : null}
               {workItem.expires_at && !workItem.reversed_at ? (
-                <MListRow
-                  headline="Recall window"
-                  supporting={`closes ${formatDateTime(workItem.expires_at)}`}
-                />
+                <MListRow headline="Recall window" supporting={`closes ${formatDateTime(workItem.expires_at)}`} />
               ) : null}
             </MListInset>
 

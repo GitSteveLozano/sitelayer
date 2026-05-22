@@ -1316,10 +1316,7 @@ async function reverseWorkRequest(ctx: WorkRequestRouteCtx, id: string) {
     return
   }
 
-  const reversedWithinSeconds = Math.max(
-    0,
-    Math.floor((Date.now() - Date.parse(detail.work_item.created_at)) / 1000),
-  )
+  const reversedWithinSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(detail.work_item.created_at)) / 1000))
   const meshTaskId = pickLatestMeshTaskId(detail.events)
 
   // Local DB is source of truth: do the state change first, then attempt the

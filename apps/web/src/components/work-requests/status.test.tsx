@@ -1,9 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
-import {
-  WorkRequestReversibilityBadge,
-  reversibilityBadgeState,
-} from './status'
+import { WorkRequestReversibilityBadge, reversibilityBadgeState } from './status'
 import type { ContextWorkItem } from '@/lib/api'
 
 afterEach(() => {
@@ -79,9 +76,7 @@ describe('WorkRequestReversibilityBadge', () => {
   })
 
   it('renders nothing when neither expires_at nor reversed_at is set', () => {
-    const { container } = render(
-      <WorkRequestReversibilityBadge workItem={{ expires_at: null, reversed_at: null }} />,
-    )
+    const { container } = render(<WorkRequestReversibilityBadge workItem={{ expires_at: null, reversed_at: null }} />)
     expect(container.firstChild).toBeNull()
   })
 })

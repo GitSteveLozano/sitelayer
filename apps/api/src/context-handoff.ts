@@ -172,8 +172,7 @@ const WORK_ITEM_COLUMN_NAMES = [
 // Computed `expires_at` (created_at + reversibility_window_seconds seconds) is
 // always selected alongside the base columns so the index defined in
 // migration 093 can be used by future filters.
-const WORK_ITEM_EXPIRES_AT_EXPR =
-  "(created_at + reversibility_window_seconds * interval '1 second') as expires_at"
+const WORK_ITEM_EXPIRES_AT_EXPR = "(created_at + reversibility_window_seconds * interval '1 second') as expires_at"
 const PREFIXED_WORK_ITEM_EXPIRES_AT_EXPR =
   "(w.created_at + w.reversibility_window_seconds * interval '1 second') as expires_at"
 

@@ -278,10 +278,7 @@ export function fetchWorkRequestGithubExport(id: string): Promise<WorkRequestGit
   })
 }
 
-export function reverseWorkRequest(
-  id: string,
-  input: ReverseWorkRequestInput,
-): Promise<ReverseWorkRequestResponse> {
+export function reverseWorkRequest(id: string, input: ReverseWorkRequestInput): Promise<ReverseWorkRequestResponse> {
   return request<ReverseWorkRequestResponse>(`/api/work-requests/${encodeURIComponent(id)}/reverse`, {
     method: 'POST',
     json: input,

@@ -20,14 +20,8 @@ describe('reversibilityWindowForSeverity', () => {
   })
 
   it('exposes the severity table for callers that need the full mapping', () => {
-    expect(REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY.urgent).toBeLessThan(
-      REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY.high,
-    )
-    expect(REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY.high).toBeLessThan(
-      REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY.normal,
-    )
-    expect(REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY.normal).toBeLessThan(
-      REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY.low,
-    )
+    expect(REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY.urgent).toBeLessThan(REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY.high)
+    expect(REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY.high).toBeLessThan(REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY.normal)
+    expect(REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY.normal).toBeLessThan(REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY.low)
   })
 })

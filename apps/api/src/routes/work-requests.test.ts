@@ -164,11 +164,7 @@ class FakePool {
       this.workItemCounter += 1
       const createdAt = '2026-05-21T12:00:01.000Z'
       const reversibilityWindowSeconds =
-        typeof params[13] === 'number'
-          ? (params[13] as number)
-          : params[13] != null
-            ? Number(params[13])
-            : 86400
+        typeof params[13] === 'number' ? (params[13] as number) : params[13] != null ? Number(params[13]) : 86400
       const row: WorkItem = {
         id: uuid(200 + this.workItemCounter),
         company_id: params[0] as string,
@@ -1308,7 +1304,9 @@ describe('handleWorkRequestRoutes', () => {
 
     expect(create.responses[0]?.status).toBe(201)
     expect(pool.workItems[0]?.reversibility_window_seconds).toBe(3600)
-    const body = create.responses[0]?.body as { work_item: { reversibility_window_seconds: number; expires_at: string } }
+    const body = create.responses[0]?.body as {
+      work_item: { reversibility_window_seconds: number; expires_at: string }
+    }
     expect(body.work_item.reversibility_window_seconds).toBe(3600)
     expect(typeof body.work_item.expires_at).toBe('string')
     // expires_at = created_at + 1h => 2026-05-21T13:00:01.000Z
@@ -1325,11 +1323,7 @@ describe('handleWorkRequestRoutes', () => {
     const workItemId = workItem.id
     const reverse = makeCtx(pool, { reason: 'wrong action, recall before agent runs' })
 
-    await handleWorkRequestRoutes(
-      buildReq('POST'),
-      buildUrl(`/api/work-requests/${workItemId}/reverse`),
-      reverse.ctx,
-    )
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItemId}/reverse`), reverse.ctx)
 
     expect(reverse.responses[0]?.status).toBe(200)
     const body = reverse.responses[0]?.body as {
@@ -1345,9 +1339,7 @@ describe('handleWorkRequestRoutes', () => {
       previous_status: 'new',
       previous_lane: 'triage',
     })
-    expect(typeof (body.event.payload as { reversed_within_seconds?: unknown }).reversed_within_seconds).toBe(
-      'number',
-    )
+    expect(typeof (body.event.payload as { reversed_within_seconds?: unknown }).reversed_within_seconds).toBe('number')
     expect(pool.workItems[0]).toMatchObject({ status: 'reversed', lane: 'done' })
     expect(pool.workItems[0]?.reversed_at).not.toBeNull()
   })
@@ -1359,11 +1351,7 @@ describe('handleWorkRequestRoutes', () => {
     const workItemId = pool.workItems[0]!.id
     const reverse = makeCtx(pool, { reason: '   ' })
 
-    await handleWorkRequestRoutes(
-      buildReq('POST'),
-      buildUrl(`/api/work-requests/${workItemId}/reverse`),
-      reverse.ctx,
-    )
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItemId}/reverse`), reverse.ctx)
 
     expect(reverse.responses[0]).toEqual({ status: 400, body: { error: 'reason is required' } })
     expect(pool.workItems[0]).toMatchObject({ status: 'new' })
@@ -1383,11 +1371,7 @@ describe('handleWorkRequestRoutes', () => {
     )
 
     const reverse = makeCtx(pool, { reason: 'too late' })
-    await handleWorkRequestRoutes(
-      buildReq('POST'),
-      buildUrl(`/api/work-requests/${workItemId}/reverse`),
-      reverse.ctx,
-    )
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItemId}/reverse`), reverse.ctx)
 
     expect(reverse.responses[0]?.status).toBe(409)
     expect(pool.workItems[0]?.status).toBe('resolved')
@@ -1402,11 +1386,7 @@ describe('handleWorkRequestRoutes', () => {
     workItem.created_at = new Date(Date.now() - 7200_000).toISOString()
     const reverse = makeCtx(pool, { reason: 'too late' })
 
-    await handleWorkRequestRoutes(
-      buildReq('POST'),
-      buildUrl(`/api/work-requests/${workItem.id}/reverse`),
-      reverse.ctx,
-    )
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItem.id}/reverse`), reverse.ctx)
 
     expect(reverse.responses[0]).toEqual({ status: 410, body: { error: 'reversibility window closed' } })
     expect(workItem.status).toBe('new')
@@ -1427,17 +1407,11 @@ describe('handleWorkRequestRoutes', () => {
     const reverseCount = pool.handoffEvents.filter((event) => event.event_type === 'work_item.reversed').length
     const second = makeCtx(pool, { reason: 'retry' })
 
-    await handleWorkRequestRoutes(
-      buildReq('POST'),
-      buildUrl(`/api/work-requests/${workItemId}/reverse`),
-      second.ctx,
-    )
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItemId}/reverse`), second.ctx)
 
     expect(second.responses[0]?.status).toBe(200)
     expect((second.responses[0]?.body as { idempotent_replay?: boolean }).idempotent_replay).toBe(true)
-    expect(
-      pool.handoffEvents.filter((event) => event.event_type === 'work_item.reversed').length,
-    ).toBe(reverseCount)
+    expect(pool.handoffEvents.filter((event) => event.event_type === 'work_item.reversed').length).toBe(reverseCount)
   })
 
   it('rejects reverse for members (TRIAGE_ROLES gate)', async () => {
@@ -1447,11 +1421,7 @@ describe('handleWorkRequestRoutes', () => {
     const workItemId = pool.workItems[0]!.id
     const reverse = makeCtx(pool, { reason: 'I want this back' }, 'member', 'member-1')
 
-    await handleWorkRequestRoutes(
-      buildReq('POST'),
-      buildUrl(`/api/work-requests/${workItemId}/reverse`),
-      reverse.ctx,
-    )
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItemId}/reverse`), reverse.ctx)
 
     expect(reverse.responses[0]?.status).toBe(403)
     expect(pool.workItems[0]?.status).toBe('new')
