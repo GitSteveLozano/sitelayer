@@ -42,12 +42,15 @@ Any one of:
 1. `MESH_WORK_REQUEST_DISPATCH_URL` is unset or points at the wrong Mesh
    endpoint.
 2. `MESH_WORK_REQUEST_DISPATCH_TOKEN` or Mesh-side auth changed.
-3. The agent callback replay omitted the per-dispatch scoped token from the
+3. `SITELAYER_PUBLIC_BASE` is unset or wrong, so Mesh receives only a relative
+   callback path instead of a usable callback URL.
+4. The agent callback replay omitted the per-dispatch scoped token from the
    Mesh payload. `SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN` is only a legacy
    fallback for rows created before scoped callback tokens.
-4. Mesh accepted the job but did not call back.
-5. The work item was stale-swept to `proposal_expired` or `review_stale`.
-6. GitHub linking was attempted by a role without export permission.
+5. Mesh accepted the job but did not call back before
+   `WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS`.
+6. The work item was stale-swept to `proposal_expired` or `review_stale`.
+7. GitHub linking was attempted by a role without export permission.
 
 ## Failure Semantics
 
@@ -151,7 +154,19 @@ Check env on the host:
 
 ```bash
 ssh sitelayer@10.118.0.4 \
-  "grep -E '^(MESH_WORK_REQUEST_DISPATCH_URL|SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN|WORK_REQUEST_)=' /app/sitelayer/.env | sed 's/=.*/=***/'"
+  "grep -E '^(SITELAYER_PUBLIC_BASE|MESH_WORK_REQUEST_DISPATCH_URL|SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN|WORK_REQUEST_)=' /app/sitelayer/.env | sed 's/=.*/=***/'"
+```
+
+Check env inside the running containers after deploy. This matters because a
+rendered `/app/sitelayer/.env` is not enough if `docker-compose.prod.yml` does
+not pass the variables into `api` and `worker`.
+
+```bash
+ssh sitelayer@10.118.0.4 \
+  "cd /app/sitelayer && docker compose -f docker-compose.prod.yml exec -T api env | grep -E '^(SITELAYER_PUBLIC_BASE|MESH_WORK_REQUEST_DISPATCH_URL|WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS)=' | sed 's/=.*/=***/'"
+
+ssh sitelayer@10.118.0.4 \
+  "cd /app/sitelayer && docker compose -f docker-compose.prod.yml exec -T worker env | grep -E '^(SITELAYER_PUBLIC_BASE|MESH_WORK_REQUEST_DISPATCH_URL|MESH_WORK_REQUEST_DISPATCH_TOKEN|WORK_REQUEST_)=' | sed 's/=.*/=***/'"
 ```
 
 ## Mitigation
@@ -209,6 +224,22 @@ detail reads return a bounded event page by default; use `limit` and `offset`
 when inspecting long timelines.
 
 ## Verifying Recovery
+
+For a dev/preview end-to-end smoke, use:
+
+```bash
+SITELAYER_API_URL=https://dev.sitelayer.sandolab.xyz \
+SITELAYER_AUTH_TOKEN=e2e-admin \
+SITELAYER_COMPANY_SLUG=la-operations \
+./scripts/test-context-work-request.sh
+```
+
+Set `DATABASE_URL` to also replay the scoped callback token from
+`mutation_outbox` and verify that the work item reaches `review_ready`.
+Set `MESH_API_URL` to also probe Mesh for the dispatched task. The smoke
+refuses production by default because it creates a real work item and queues a
+real Mesh task; use `ALLOW_PROD_WORK_REQUEST_SMOKE=1` only for deliberate prod
+validation.
 
 ```sql
 -- Dispatch accepted and callback/proposal returned:
