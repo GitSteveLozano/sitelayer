@@ -44,7 +44,14 @@ export {
   type ProjectLifecycleState,
 } from './project-lifecycle'
 
-export { createSupportPacket, type CreateSupportPacketInput, type CreateSupportPacketResponse } from './support-packets'
+export {
+  createSupportPacket,
+  fetchSupportPacket,
+  type CreateSupportPacketInput,
+  type CreateSupportPacketResponse,
+  type SupportPacketDetail,
+  type SupportPacketDetailResponse,
+} from './support-packets'
 
 export {
   appendWorkRequestEvent,

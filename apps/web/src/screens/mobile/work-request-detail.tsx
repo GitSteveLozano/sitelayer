@@ -21,6 +21,7 @@ import { WorkRequestSeverityPill, WorkRequestStatusPill } from '../../components
 import {
   appendWorkRequestEvent,
   dispatchWorkRequestToMesh,
+  fetchSupportPacket,
   fetchWorkRequest,
   fetchWorkRequestGithubExport,
   queryKeys,
@@ -63,10 +64,19 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
     mutationFn: () => fetchWorkRequestGithubExport(workItemId),
     onSuccess: (response) => setGithubExportBody(response.body),
   })
+  const supportPacket = useMutation({
+    mutationFn: (id: string) => fetchSupportPacket(id),
+  })
 
   const workItem = detail.data?.work_item ?? null
   const canTriage = canTriageWorkRequests(companyRole)
-  const busy = appendEvent.isPending || dispatch.isPending || retryDispatch.isPending || githubExport.isPending
+  const isAdmin = companyRole === 'admin'
+  const busy =
+    appendEvent.isPending ||
+    dispatch.isPending ||
+    retryDispatch.isPending ||
+    githubExport.isPending ||
+    supportPacket.isPending
   const isClosed = workItem?.status === 'resolved' || workItem?.status === 'wont_do'
   const dispatchOutbox = detail.data?.dispatch_outbox ?? null
   const canRetryDispatch = dispatchOutbox?.status === 'failed' || dispatchOutbox?.status === 'dead'
@@ -218,6 +228,48 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
             ) : null}
 
             <WorkRequestContextPreview workItem={workItem} supportPacket={detail.data.support_packet} />
+
+            {isAdmin ? (
+              <>
+                <MSectionH>Support packet</MSectionH>
+                <div style={{ padding: '0 16px', display: 'grid', gap: 10 }}>
+                  {supportPacket.error ? (
+                    <MBanner
+                      tone="error"
+                      title="Packet load failed"
+                      body={
+                        supportPacket.error instanceof Error
+                          ? supportPacket.error.message
+                          : 'Support packet could not be loaded.'
+                      }
+                    />
+                  ) : null}
+                  <MButton
+                    variant="ghost"
+                    disabled={busy}
+                    onClick={() => supportPacket.mutate(detail.data.support_packet?.id ?? workItem.support_packet_id)}
+                  >
+                    {supportPacket.isPending ? 'Loading...' : 'Load packet'}
+                  </MButton>
+                  {supportPacket.data ? (
+                    <>
+                      <MTextarea
+                        aria-label="Support packet agent prompt"
+                        readOnly
+                        value={supportPacket.data.agent_prompt}
+                        rows={8}
+                      />
+                      <MTextarea
+                        aria-label="Support packet JSON"
+                        readOnly
+                        value={JSON.stringify(supportPacket.data.support_packet, null, 2)}
+                        rows={10}
+                      />
+                    </>
+                  ) : null}
+                </div>
+              </>
+            ) : null}
 
             <MSectionH>State</MSectionH>
             <MListInset>
