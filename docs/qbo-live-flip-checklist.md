@@ -144,6 +144,35 @@ Follow `DEPLOY_RUNBOOK.md` -> "Live-flag flip protocol":
 5. Update `DEPLOY_RUNBOOK.md` -> "Pilot-readiness checklist" to tick
    the QBO smoke item.
 
+## Dispatch-lane belt-and-suspenders (Wedge 5)
+
+The `estimate_push`, `rental_billing_push`, `labor_payroll_push`, and
+`damage_charges` runners are wrapped by the `dispatch_lanes` primitive
+(migration 094, `apps/worker/src/dispatch-lanes.ts`). The lane is a
+second kill-switch *layered above* the env flag — the env flag still
+controls live vs stub at boot; the lane controls whether the runner
+drains at all.
+
+- **Before flipping live:** confirm the relevant lane is `active` in
+  `/more/dispatch-lanes`. A live env + paused lane means the worker
+  short-circuits the drain (lane wins) — the env flip will look
+  inert.
+- **After flipping live:** if the first push goes wrong, **pause the
+  lane** with reason `qbo_live_flip:<incident-id>` from
+  `/more/dispatch-lanes` for a graceful stop. This halts drains within
+  the lane-cache TTL (~5s) without redeploying. Roll back the env flag
+  in a follow-up deploy once the immediate bleeding is stopped.
+- **For rollback to stub-mode:** flip the env flag back AND keep the
+  lane `paused` until the next deploy renders the new env. The
+  startup-time check in `worker.ts` warns loudly when env-state and
+  lane-state disagree (`[lane-startup]` log line) so the next operator
+  can spot the drift.
+- **Auto-pause keeper** flips the QBO lanes to `paused` automatically
+  when the QBO circuit breaker opens; the lane resumes on its own
+  when the circuit closes. Operator pauses (any non-`qbo_circuit_open`
+  reason) are NOT cleared by the keeper — only an operator-issued
+  `/resume` POST flips them back.
+
 ## Notes
 
 - CLAUDE.md operating rule #1: the smoke script will fail loud if

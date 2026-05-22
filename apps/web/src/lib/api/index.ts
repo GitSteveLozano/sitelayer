@@ -360,6 +360,21 @@ export {
 } from './audit'
 
 export {
+  dispatchLaneQueryKeys,
+  fetchDispatchLanes,
+  pauseDispatchLane,
+  resumeDispatchLane,
+  useDispatchLanes,
+  usePauseDispatchLane,
+  useResumeDispatchLane,
+  type DispatchLane,
+  type DispatchLaneListResponse,
+  type DispatchLaneState,
+  type PauseLaneRequest,
+  type ResumeLaneRequest,
+} from './dispatch-lanes'
+
+export {
   createWorkerIssue,
   useCreateWorkerIssue,
   type CreateWorkerIssueRequest,
