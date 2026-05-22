@@ -15,10 +15,14 @@ function result(rows: FakeRow[] = [], rowCount = rows.length): QueryResult<FakeR
   }
 }
 
-function makePool(claimedRows: FakeRow[]): { pool: Pool; calls: FakeCall[]; released: boolean[] } {
+function makePool(
+  claimedRows: FakeRow[],
+  opts: { workItemStatus?: string } = {},
+): { pool: Pool; calls: FakeCall[]; released: boolean[] } {
   const calls: FakeCall[] = []
   const released: boolean[] = []
   let claimed = false
+  const workItemStatus = opts.workItemStatus ?? 'new'
   const client = {
     query: async (...args: unknown[]) => {
       const sql = String(args[0])
@@ -37,6 +41,9 @@ function makePool(claimedRows: FakeRow[]): { pool: Pool; calls: FakeCall[]; rele
         if (claimed) return result()
         claimed = true
         return result(claimedRows)
+      }
+      if (normalized.startsWith('select status') && normalized.includes('from context_work_items')) {
+        return result([{ status: workItemStatus }])
       }
       if (normalized.includes('insert into context_handoff_events')) return result()
       if (normalized.startsWith('update context_work_items')) return result([], 1)
@@ -301,5 +308,41 @@ describe('createContextWorkDispatchRunner', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(calls).toEqual([])
     expect(released).toEqual([])
+  })
+
+  it('skips terminal work items without dispatching to Mesh', async () => {
+    process.env.MESH_WORK_REQUEST_DISPATCH_URL = 'https://mesh.example.test/api/orchestrate/tasks'
+    process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN = 'mesh-secret'
+    const fetchSpy = vi.fn()
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+    const { pool, calls } = makePool(
+      [
+        {
+          id: 'outbox-1',
+          payload: {
+            work_item_id: '00000000-0000-4000-8000-000000000001',
+            title: 'Already reversed',
+          },
+        },
+      ],
+      { workItemStatus: 'reversed' },
+    )
+    const runner = createContextWorkDispatchRunner({ pool })
+
+    const summary = await runner('company-1')
+
+    expect(summary).toEqual({ processed: 1, insightsCreated: 0, failed: 0 })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    const cancelEventCall = calls.find((call) => call.sql.includes("'agent.dispatch_cancel_requested'"))
+    expect(cancelEventCall).toBeDefined()
+    expect(JSON.parse(String(cancelEventCall?.params[2]))).toMatchObject({
+      skipped: true,
+      reason: 'terminal_work_item',
+      status: 'reversed',
+    })
+    expect(calls.some((call) => call.sql.startsWith('update context_work_items'))).toBe(false)
+    expect(
+      calls.some((call) => call.sql.startsWith("update mutation_outbox\n             set status = 'applied'")),
+    ).toBe(true)
   })
 })

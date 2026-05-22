@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   fetchWorkRequestGithubExport: vi.fn(),
   fetchWorkRequestQueueHealth: vi.fn(),
   retryWorkRequestMeshDispatch: vi.fn(),
+  reverseWorkRequest: vi.fn(),
 }))
 
 vi.mock('@/lib/api', async () => {
@@ -31,6 +32,7 @@ vi.mock('@/lib/api', async () => {
     fetchWorkRequestGithubExport: mocks.fetchWorkRequestGithubExport,
     fetchWorkRequestQueueHealth: mocks.fetchWorkRequestQueueHealth,
     retryWorkRequestMeshDispatch: mocks.retryWorkRequestMeshDispatch,
+    reverseWorkRequest: mocks.reverseWorkRequest,
   }
 })
 
@@ -161,5 +163,25 @@ describe('MobileWorkRequestDetail', () => {
     // The seed expires_at (2026-05-21T18:00:00) is before "now" (2026-05-22)
     // so the badge should render the closed-window label.
     expect(await screen.findByText('Recall window closed')).toBeTruthy()
+  })
+
+  it('does not expose dispatch or reopen actions for a reversed work item', async () => {
+    mocks.fetchWorkRequest.mockResolvedValue({
+      ...detailResponse,
+      work_item: {
+        ...detailResponse.work_item,
+        status: 'reversed',
+        lane: 'done',
+        reversed_at: '2026-05-21T12:30:00.000Z',
+        resolved_at: '2026-05-21T12:30:00.000Z',
+      },
+    })
+    const Wrapper = makeWrapper()
+    render(<MobileWorkRequestDetail companyRole="admin" />, { wrapper: Wrapper })
+
+    expect((await screen.findAllByText('Reversed')).length).toBeGreaterThan(0)
+    expect(screen.queryByText('Dispatch agent')).toBeNull()
+    expect(screen.queryByText('Retry dispatch')).toBeNull()
+    expect(screen.queryByText('Reopen')).toBeNull()
   })
 })

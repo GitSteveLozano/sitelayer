@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import type pino from 'pino'
@@ -12,8 +12,11 @@ type JsonRecord = Record<string, unknown>
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
 const TEST_MESH_DISPATCH_URL = 'https://mesh.example.test/api/orchestrate/tasks'
 const ORIGINAL_MESH_DISPATCH_URL = process.env.MESH_WORK_REQUEST_DISPATCH_URL
+const ORIGINAL_MESH_DISPATCH_TOKEN = process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN
+const ORIGINAL_MESH_API_URL = process.env.MESH_API_URL
 const ORIGINAL_DISPATCH_MAX_PENDING = process.env.WORK_REQUEST_DISPATCH_MAX_PENDING
 const ORIGINAL_DISPATCH_MAX_FAILED = process.env.WORK_REQUEST_DISPATCH_MAX_FAILED
+const ORIGINAL_FETCH = globalThis.fetch
 
 type SupportPacket = {
   id: string
@@ -582,17 +585,26 @@ const clientContext = {
 describe('handleWorkRequestRoutes', () => {
   beforeEach(() => {
     process.env.MESH_WORK_REQUEST_DISPATCH_URL = TEST_MESH_DISPATCH_URL
+    delete process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN
+    delete process.env.MESH_API_URL
     delete process.env.WORK_REQUEST_DISPATCH_MAX_PENDING
     delete process.env.WORK_REQUEST_DISPATCH_MAX_FAILED
+    globalThis.fetch = ORIGINAL_FETCH
   })
 
   afterEach(() => {
     if (ORIGINAL_MESH_DISPATCH_URL === undefined) delete process.env.MESH_WORK_REQUEST_DISPATCH_URL
     else process.env.MESH_WORK_REQUEST_DISPATCH_URL = ORIGINAL_MESH_DISPATCH_URL
+    if (ORIGINAL_MESH_DISPATCH_TOKEN === undefined) delete process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN
+    else process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN = ORIGINAL_MESH_DISPATCH_TOKEN
+    if (ORIGINAL_MESH_API_URL === undefined) delete process.env.MESH_API_URL
+    else process.env.MESH_API_URL = ORIGINAL_MESH_API_URL
     if (ORIGINAL_DISPATCH_MAX_PENDING === undefined) delete process.env.WORK_REQUEST_DISPATCH_MAX_PENDING
     else process.env.WORK_REQUEST_DISPATCH_MAX_PENDING = ORIGINAL_DISPATCH_MAX_PENDING
     if (ORIGINAL_DISPATCH_MAX_FAILED === undefined) delete process.env.WORK_REQUEST_DISPATCH_MAX_FAILED
     else process.env.WORK_REQUEST_DISPATCH_MAX_FAILED = ORIGINAL_DISPATCH_MAX_FAILED
+    globalThis.fetch = ORIGINAL_FETCH
+    vi.restoreAllMocks()
   })
 
   it('creates a support packet, work item, and first handoff event in one route call', async () => {
@@ -1188,6 +1200,67 @@ describe('handleWorkRequestRoutes', () => {
     }
   })
 
+  it('rejects agent callbacks that try to set reversed status', async () => {
+    const previous = process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN
+    process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN = 'callback-secret'
+    try {
+      const pool = new FakePool()
+      const created = makeCtx(pool, { title: 'Agent callback reversed bypass', client: clientContext })
+      await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+      const workItemId = pool.workItems[0]!.id
+      const callback = makeCtx(pool, {
+        event_type: 'agent.proposal_ready',
+        status: 'reversed',
+        idempotency_key: 'agent-callback-reversed',
+      })
+
+      await handleWorkRequestRoutes(
+        buildReq('POST', { authorization: 'Bearer callback-secret' }),
+        buildUrl(`/api/work-requests/${workItemId}/agent-callback`),
+        callback.ctx,
+      )
+
+      expect(callback.responses[0]).toEqual({
+        status: 400,
+        body: { error: 'status reversed must use the reverse endpoint' },
+      })
+      expect(pool.workItems[0]?.status).toBe('new')
+    } finally {
+      if (previous === undefined) delete process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN
+      else process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN = previous
+    }
+  })
+
+  it('rejects agent callbacks after a work item has been reversed', async () => {
+    const previous = process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN
+    process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN = 'callback-secret'
+    try {
+      const pool = new FakePool()
+      const created = makeCtx(pool, { title: 'Reversed callback race', client: clientContext })
+      await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+      const workItem = pool.workItems[0]!
+      workItem.status = 'reversed'
+      workItem.lane = 'done'
+      workItem.reversed_at = new Date().toISOString()
+      const callback = makeCtx(pool, { event_type: 'agent.proposal_ready', idempotency_key: 'callback-after-reverse' })
+
+      await handleWorkRequestRoutes(
+        buildReq('POST', { authorization: 'Bearer callback-secret' }),
+        buildUrl(`/api/work-requests/${workItem.id}/agent-callback`),
+        callback.ctx,
+      )
+
+      expect(callback.responses[0]).toEqual({
+        status: 409,
+        body: { error: 'work item is reversed and cannot accept agent callbacks' },
+      })
+      expect(pool.workItems[0]).toMatchObject({ status: 'reversed', lane: 'done' })
+    } finally {
+      if (previous === undefined) delete process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN
+      else process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN = previous
+    }
+  })
+
   it('requires the scoped dispatch callback token once one has been issued', async () => {
     const previous = process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN
     process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN = 'global-callback-secret'
@@ -1344,6 +1417,105 @@ describe('handleWorkRequestRoutes', () => {
     expect(pool.workItems[0]?.reversed_at).not.toBeNull()
   })
 
+  it('commits reversal before best-effort Mesh cancellation and records the cancel attempt', async () => {
+    process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN = 'mesh-secret'
+    const fetchSpy = vi.fn(async () => new Response('{}', { status: 202 }))
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+    const pool = new FakePool()
+    const create = makeCtx(pool, { title: 'Reverse dispatched task', severity: 'normal', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), create.ctx)
+    const workItem = pool.workItems[0]!
+    workItem.created_at = new Date().toISOString()
+    pool.handoffEvents.push({
+      id: uuid(900),
+      company_id: COMPANY_ID,
+      work_item_id: workItem.id,
+      event_type: 'agent.dispatch_acknowledged',
+      actor_kind: 'system',
+      actor_user_id: null,
+      actor_ref: 'sitelayer-worker',
+      source_system: 'mesh',
+      payload: { mesh_task_id: 123 },
+      metadata: {},
+      idempotency_key: 'ack',
+      causation_event_id: null,
+      correlation_id: null,
+      request_id: null,
+      sentry_trace: null,
+      sentry_baggage: null,
+      build_sha: null,
+      redaction_version: 'context-handoff-v1',
+      occurred_at: new Date().toISOString(),
+      recorded_at: new Date().toISOString(),
+    })
+
+    const reverse = makeCtx(pool, { reason: 'recall delegated task' })
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItem.id}/reverse`), reverse.ctx)
+
+    expect(reverse.responses[0]?.status).toBe(200)
+    expect(pool.workItems[0]).toMatchObject({ status: 'reversed', lane: 'done' })
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toBe('https://mesh.example.test/api/orchestrate/tasks/123')
+    expect(init.method).toBe('DELETE')
+    expect(init.headers).toMatchObject({ authorization: 'Bearer mesh-secret' })
+    const cancelEvent = pool.handoffEvents.find((event) => event.event_type === 'agent.dispatch_cancel_requested')
+    expect(cancelEvent?.payload).toMatchObject({
+      mesh_task_id: '123',
+      reason: 'work_item.reversed',
+      ok: true,
+      status: 202,
+    })
+  })
+
+  it('keeps the reversal when best-effort Mesh cancellation fails', async () => {
+    process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN = 'mesh-secret'
+    const fetchSpy = vi.fn(async () => new Response('unavailable', { status: 503 }))
+    globalThis.fetch = fetchSpy as unknown as typeof fetch
+    const pool = new FakePool()
+    const create = makeCtx(pool, { title: 'Reverse despite Mesh failure', severity: 'normal', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), create.ctx)
+    const workItem = pool.workItems[0]!
+    workItem.created_at = new Date().toISOString()
+    pool.handoffEvents.push({
+      id: uuid(901),
+      company_id: COMPANY_ID,
+      work_item_id: workItem.id,
+      event_type: 'agent.dispatch_acknowledged',
+      actor_kind: 'system',
+      actor_user_id: null,
+      actor_ref: 'sitelayer-worker',
+      source_system: 'mesh',
+      payload: { mesh_task_id: 'mesh-456' },
+      metadata: {},
+      idempotency_key: 'ack-failed-cancel',
+      causation_event_id: null,
+      correlation_id: null,
+      request_id: null,
+      sentry_trace: null,
+      sentry_baggage: null,
+      build_sha: null,
+      redaction_version: 'context-handoff-v1',
+      occurred_at: new Date().toISOString(),
+      recorded_at: new Date().toISOString(),
+    })
+
+    const reverse = makeCtx(pool, { reason: 'mesh can fail independently' })
+    await handleWorkRequestRoutes(buildReq('POST'), buildUrl(`/api/work-requests/${workItem.id}/reverse`), reverse.ctx)
+
+    expect(reverse.responses[0]?.status).toBe(200)
+    expect(pool.workItems[0]?.status).toBe('reversed')
+    const body = reverse.responses[0]?.body as { mesh_cancel: { ok: boolean; status?: number; error?: string } }
+    expect(body.mesh_cancel).toMatchObject({ ok: false, status: 503, error: 'unavailable' })
+    const cancelEvent = pool.handoffEvents.find((event) => event.event_type === 'agent.dispatch_cancel_requested')
+    expect(cancelEvent?.payload).toMatchObject({
+      mesh_task_id: 'mesh-456',
+      ok: false,
+      status: 503,
+      error: 'unavailable',
+    })
+  })
+
   it('returns 400 when the reverse reason is missing or blank', async () => {
     const pool = new FakePool()
     const create = makeCtx(pool, { title: 'Need reason', client: clientContext })
@@ -1356,6 +1528,40 @@ describe('handleWorkRequestRoutes', () => {
     expect(reverse.responses[0]).toEqual({ status: 400, body: { error: 'reason is required' } })
     expect(pool.workItems[0]).toMatchObject({ status: 'new' })
     expect(pool.handoffEvents.filter((event) => event.event_type === 'work_item.reversed')).toHaveLength(0)
+  })
+
+  it('rejects generic attempts to set reversed status', async () => {
+    const pool = new FakePool()
+    const create = makeCtx(pool, { title: 'Bypass reverse', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), create.ctx)
+    const workItemId = pool.workItems[0]!.id
+    const statusChanged = makeCtx(pool, {
+      event_type: 'work_item.status_changed',
+      status: 'reversed',
+      message: 'try to bypass the reverse endpoint',
+    })
+
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/events`),
+      statusChanged.ctx,
+    )
+
+    expect(statusChanged.responses[0]).toEqual({
+      status: 400,
+      body: { error: 'status reversed must use the reverse endpoint' },
+    })
+    expect(pool.workItems[0]?.status).toBe('new')
+    const directReverse = makeCtx(pool, { event_type: 'work_item.reversed', reason: 'not through endpoint' })
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/events`),
+      directReverse.ctx,
+    )
+    expect(directReverse.responses[0]).toEqual({
+      status: 400,
+      body: { error: 'use the reverse endpoint for work_item.reversed' },
+    })
   })
 
   it('returns 409 when reversing a resolved work item', async () => {
