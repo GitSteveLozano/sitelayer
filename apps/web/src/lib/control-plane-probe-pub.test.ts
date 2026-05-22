@@ -30,8 +30,7 @@ describe('useControlPlaneProbePublish', () => {
 
   it('updates the published value when the snapshot changes', () => {
     const { rerender } = renderHook(
-      ({ snapshot }: { snapshot: string }) =>
-        useControlPlaneProbePublish('projectState', snapshot),
+      ({ snapshot }: { snapshot: string }) => useControlPlaneProbePublish('projectState', snapshot),
       { initialProps: { snapshot: 'estimating' } },
     )
     expect(readProbePublishRegistry().projectState).toBe('estimating')
@@ -40,12 +39,8 @@ describe('useControlPlaneProbePublish', () => {
   })
 
   it('last-write-wins on key collision between two publishers', () => {
-    const { unmount: unmountA } = renderHook(() =>
-      useControlPlaneProbePublish('billingReviewState', 'generated'),
-    )
-    const { unmount: unmountB } = renderHook(() =>
-      useControlPlaneProbePublish('billingReviewState', 'approved'),
-    )
+    const { unmount: unmountA } = renderHook(() => useControlPlaneProbePublish('billingReviewState', 'generated'))
+    const { unmount: unmountB } = renderHook(() => useControlPlaneProbePublish('billingReviewState', 'approved'))
     expect(readProbePublishRegistry().billingReviewState).toBe('approved')
     unmountA()
     expect(readProbePublishRegistry().billingReviewState).toBe('approved')

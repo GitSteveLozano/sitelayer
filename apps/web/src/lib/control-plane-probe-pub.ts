@@ -24,10 +24,7 @@
 
 import { useEffect, useRef } from 'react'
 
-const probePublishRegistry = new Map<
-  string,
-  { value: unknown; publishedAt: number; token: symbol }
->()
+const probePublishRegistry = new Map<string, { value: unknown; publishedAt: number; token: symbol }>()
 
 /**
  * Snapshot of every key currently published. Called by
@@ -46,9 +43,7 @@ export function readProbePublishRegistry(): Record<string, unknown> {
  * key was last written, `ageMs` is the elapsed time since. Returns
  * `null` when the key is absent.
  */
-export function getProbePublishMetadata(
-  key: string,
-): { publishedAt: number; ageMs: number } | null {
+export function getProbePublishMetadata(key: string): { publishedAt: number; ageMs: number } | null {
   const entry = probePublishRegistry.get(key)
   if (!entry) return null
   return {
