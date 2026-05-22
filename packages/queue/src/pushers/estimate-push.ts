@@ -20,6 +20,14 @@ export type EstimatePushInput = {
   companyId: string
   pushId: string
   payload: Record<string, unknown>
+  // Trace continuation hints from the originating mutation_outbox row.
+  // Passed through to the worker-side push fn so it can wrap the
+  // external HTTP call in Sentry.continueTrace and keep the originating
+  // API request's trace_id active across the API→DB→worker boundary.
+  // Both nullable: rows enqueued before migration 079 (or by code paths
+  // without Sentry context) won't carry trace headers.
+  sentry_trace?: string | null
+  sentry_baggage?: string | null
 }
 
 export type EstimatePushResult = {
@@ -292,7 +300,14 @@ export async function processEstimatePush(
         continue
       }
 
-      const result = await push({ client, companyId, pushId, payload: row.payload })
+      const result = await push({
+        client,
+        companyId,
+        pushId,
+        payload: row.payload,
+        sentry_trace: row.sentry_trace,
+        sentry_baggage: row.sentry_baggage,
+      })
       const updated = await applyEstimatePushWorkerEvent(
         client,
         companyId,

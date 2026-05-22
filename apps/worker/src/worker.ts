@@ -24,6 +24,7 @@ import { createBlueprintStorageGcClient, createBlueprintStorageGcRunner } from '
 import { createQueuePruneRunner } from './runners/queue-prune.js'
 import { createContextWorkDispatchRunner } from './runners/context-work-dispatch.js'
 import { createWorkRequestStaleRunner } from './runners/work-request-stale.js'
+import { createAuditEscrowTickRunner } from './runners/audit-escrow-tick.js'
 import type { AgentDrainSummary } from './runner-utils.js'
 
 const logger = createLogger('worker')
@@ -103,6 +104,10 @@ const blueprintStorageGc = createBlueprintStorageGcRunner({
 const queuePruneRunner = createQueuePruneRunner({ pool, logger })
 const contextWorkDispatchRunner = createContextWorkDispatchRunner({ pool })
 const workRequestStaleRunner = createWorkRequestStaleRunner({ pool })
+// Wedge 2 audit-escrow tick — hourly forward-anchor of audit_events +
+// context_handoff_events into the signed chain (migration 095). Has
+// its own internal cadence gate; safe to invoke each heartbeat.
+const auditEscrowTickRunner = createAuditEscrowTickRunner({ pool, logger })
 
 async function heartbeat(): Promise<{ idle: boolean }> {
   const companyId = await getCompanyId()
@@ -305,6 +310,26 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     return { ran: false, updated: 0, failed: 1 }
   })
 
+  // Audit-escrow tick — hourly forward-anchor of audit_events +
+  // context_handoff_events into the signed chain. Cadence is gated
+  // inside the runner; safe to invoke each heartbeat.
+  const auditEscrowSummary = await auditEscrowTickRunner.maybeTick(companyId).catch((error) => {
+    logger.error({ err: error }, '[worker] audit_escrow_tick failed')
+    captureWithEntityContext(error, {
+      scope: 'audit_escrow_tick',
+      entity_type: 'audit_event',
+      company_id: companyId,
+    })
+    return {
+      ran: false,
+      audit_event_entries_created: 0,
+      audit_events_anchored: 0,
+      context_handoff_entries_created: 0,
+      context_handoff_events_anchored: 0,
+      failed: 1,
+    }
+  })
+
   // Daily prune of long-applied mutation_outbox / sync_events rows.
   // Gated by a process-local lastRunAt; safe to invoke every heartbeat.
   const queuePruneSummary = await queuePruneRunner.maybePrune().catch((error) => {
@@ -378,6 +403,12 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     queue_prune_sync_events: queuePruneSummary.sync_events,
     rental_billing_stuck_posting: stuckSummary.rentalBillingStuck,
     estimate_push_stuck_posting: stuckSummary.estimatePushStuck,
+    audit_escrow_ran: auditEscrowSummary.ran,
+    audit_escrow_audit_event_entries: auditEscrowSummary.audit_event_entries_created,
+    audit_escrow_audit_events_anchored: auditEscrowSummary.audit_events_anchored,
+    audit_escrow_context_handoff_entries: auditEscrowSummary.context_handoff_entries_created,
+    audit_escrow_context_handoff_events_anchored: auditEscrowSummary.context_handoff_events_anchored,
+    audit_escrow_failed: auditEscrowSummary.failed,
   }
 
   if (pendingOutbox || pendingSyncEvents) {
@@ -410,7 +441,8 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     blueprintStorageGcSummary.processed > 0 ||
     contextWorkDispatchSummary.processed > 0 ||
     workRequestStaleSummary.ran ||
-    queuePruneSummary.ran
+    queuePruneSummary.ran ||
+    auditEscrowSummary.ran
   ) {
     logger.info(
       {

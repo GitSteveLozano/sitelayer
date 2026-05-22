@@ -23,6 +23,7 @@ import {
   sendRedirect,
 } from './http-utils.js'
 import { attachMutationTx } from './mutation-tx.js'
+import { continueRequestTrace, shouldBypassTraceContinuation } from './trace-ingress.js'
 import { createBlueprintStorage, readStorageEnv, type BlueprintStorage } from './storage.js'
 import { BlueprintUploadError } from './blueprint-upload.js'
 import { renderEstimatePdf } from './pdf.js'
@@ -535,153 +536,168 @@ const server = http.createServer(async (req, res) => {
     observeRequest(method, requestContext.route ?? initialRoute, res.statusCode || 0, Date.now() - requestStartedAt)
   })
 
-  await runWithRequestContext(requestContext, () =>
-    Sentry.withIsolationScope((scope) => {
-      scope.setTag('request_id', requestId)
-      scope.setTag('route', initialRoute)
-      scope.setTag('method', method)
-      if (companySlugHeader) scope.setTag('company_slug', companySlugHeader)
-      if (userIdHeader) scope.setUser({ id: userIdHeader })
-      return Sentry.startSpan(
-        {
-          name: `${method} ${initialRoute}`,
-          op: 'http.server',
-          attributes: {
-            'http.method': method,
-            'http.route': initialRoute,
-            request_id: requestId,
-            ...(companySlugHeader ? { company_slug: companySlugHeader } : {}),
+  // Continue the upstream trace if the client supplied `sentry-trace` +
+  // `baggage` headers. Done BEFORE the isolation scope so the scope, the
+  // root span, and every captureException downstream inherit the upstream
+  // trace_id. Health/metrics probes bypass to keep them cheap and off the
+  // trace timeline. See trace-ingress.ts for the rationale.
+  const traceBypass = shouldBypassTraceContinuation(initialRoute)
+  const traceWrapper = traceBypass
+    ? <T>(fn: () => T): T => fn()
+    : <T>(fn: () => T): T => continueRequestTrace(req.headers, fn)
+
+  await traceWrapper(() =>
+    runWithRequestContext(requestContext, () =>
+      Sentry.withIsolationScope((scope) => {
+        scope.setTag('request_id', requestId)
+        scope.setTag('route', initialRoute)
+        scope.setTag('method', method)
+        if (companySlugHeader) scope.setTag('company_slug', companySlugHeader)
+        if (userIdHeader) scope.setUser({ id: userIdHeader })
+        return Sentry.startSpan(
+          {
+            name: `${method} ${initialRoute}`,
+            op: 'http.server',
+            attributes: {
+              'http.method': method,
+              'http.route': initialRoute,
+              request_id: requestId,
+              ...(companySlugHeader ? { company_slug: companySlugHeader } : {}),
+            },
           },
-        },
-        async (rootSpan) => {
-          try {
-            if (!req.url || !req.method) {
-              sendJson(res, 400, { error: 'bad request' })
-              return
-            }
-
-            const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`)
-            rootSpan?.setAttribute('http.route', url.pathname)
-
-            // Pre-auth public routes (CORS preflight, /health, /api/version,
-            // /api/metrics, /api/features, /api/webhooks/{clerk,qbo}).
-            // These run BEFORE Clerk identity resolution because they have
-            // their own auth boundary (Bearer-metrics-token, svix HMAC,
-            // Intuit HMAC) or no auth at all (CORS preflight, health probe).
-            // See routes/public.ts for the registry.
-            const publicHandled = await handlePublicRoutes(req, url, res, {
-              pool,
-              tier: appConfig.tier,
-              buildSha,
-              startedAt,
-              metricsToken,
-              clerkWebhookSecret,
-              qboWebhookVerifier,
-              pgHealthProbeTimeoutMs,
-              features: { flags: appConfig.flags, ribbon: appConfig.ribbon },
-              getCorsOrigin: () => getCorsOrigin(req),
-              sendJson: (status, body) => sendJson(res, status, body, req),
-              readRawBody: () => readRawBody(req),
-            })
-            if (publicHandled) return
-
-            // Public client-portal routes (sales loop + rentals catalog). No
-            // Clerk auth — recipients hold an HMAC-signed share token. Handled
-            // BEFORE identity resolution so customers without a Clerk session
-            // can land on /portal/estimates/:token and /portal/rentals/:token.
-            const portalEstimateHandled = await handlePublicEstimateShareRoutes(req, url, {
-              pool,
-              shareSecret: estimateShareSecret,
-              resolveClientIp: () => {
-                const xff = req.headers['x-forwarded-for']
-                if (typeof xff === 'string' && xff.length > 0) return xff.split(',')[0]!.trim()
-                if (Array.isArray(xff) && xff.length > 0) return xff[0]!.split(',')[0]!.trim()
-                return req.socket.remoteAddress ?? null
-              },
-              readBody: () => readBody(req),
-              sendJson: (status, body) => sendJson(res, status, body, req),
-            })
-            if (portalEstimateHandled) return
-
-            const portalRentalHandled = await handlePortalRentalRoutes(req, url, {
-              pool,
-              sendJson: (status, body) => sendJson(res, status, body, req),
-              readBody: () => readBody(req),
-            })
-            if (portalRentalHandled) return
-
-            const publicPortalHandled = await handlePublicPortalRoutes(req, url, {
-              pool,
-              sendJson: (status, body) => sendJson(res, status, body, req),
-            })
-            if (publicPortalHandled) return
-
-            const PUBLIC_PATHS = new Set(['/api/integrations/qbo/callback', '/api/webhooks/clerk', '/api/webhooks/qbo'])
-            const isWorkRequestCallback =
-              req.method === 'POST' && /^\/api\/work-requests\/[^/]+\/agent-callback$/.test(url.pathname)
-            const isPublicPath = PUBLIC_PATHS.has(url.pathname) || isWorkRequestCallback
-            let identity: Identity
+          async (rootSpan) => {
             try {
-              identity = isPublicPath
-                ? {
-                    userId: isWorkRequestCallback ? 'work-request-agent-callback' : 'qbo-oauth-redirect',
-                    source: 'default',
-                  }
-                : resolveIdentity(req, authConfig)
-            } catch (err) {
-              if (err instanceof AuthError) {
-                if (err.status === 401) {
-                  res.setHeader('www-authenticate', 'Bearer realm="sitelayer"')
-                }
-                sendJson(res, err.status, { error: err.message, request_id: requestId })
+              if (!req.url || !req.method) {
+                sendJson(res, 400, { error: 'bad request' })
                 return
               }
-              throw err
-            }
-            requestContext.actorUserId = identity.userId
-            scope.setUser({ id: identity.userId })
-            scope.setTag('auth_source', identity.source)
 
-            // Rate limit /api/* (except /health and /api/webhooks/*). We resolve
-            // the bucket key after identity so authenticated calls share a
-            // per-user bucket regardless of source IP, and unauthenticated
-            // public-path callers get a per-IP bucket.
-            if (!isRateLimitExempt(url.pathname)) {
-              const rateLimitUserId = identity.source === 'default' ? null : identity.userId
-              if (applyRateLimit(rateLimiter, req, res, url.pathname, rateLimitUserId)) {
-                return
-              }
-            }
+              const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`)
+              rootSpan?.setAttribute('http.route', url.pathname)
 
-            // Company routes (GET/POST /api/companies,
-            // POST /api/companies/:id/memberships) handled by the extracted
-            // route module. See routes/companies.ts.
-            if (
-              await handleCompanyRoutes(req, url, {
+              // Pre-auth public routes (CORS preflight, /health, /api/version,
+              // /api/metrics, /api/features, /api/webhooks/{clerk,qbo}).
+              // These run BEFORE Clerk identity resolution because they have
+              // their own auth boundary (Bearer-metrics-token, svix HMAC,
+              // Intuit HMAC) or no auth at all (CORS preflight, health probe).
+              // See routes/public.ts for the registry.
+              const publicHandled = await handlePublicRoutes(req, url, res, {
                 pool,
-                userId: identity.userId,
+                tier: appConfig.tier,
+                buildSha,
+                startedAt,
+                metricsToken,
+                clerkWebhookSecret,
+                qboWebhookVerifier,
+                pgHealthProbeTimeoutMs,
+                features: { flags: appConfig.flags, ribbon: appConfig.ribbon },
+                getCorsOrigin: () => getCorsOrigin(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                readRawBody: () => readRawBody(req),
+              })
+              if (publicHandled) return
+
+              // Public client-portal routes (sales loop + rentals catalog). No
+              // Clerk auth — recipients hold an HMAC-signed share token. Handled
+              // BEFORE identity resolution so customers without a Clerk session
+              // can land on /portal/estimates/:token and /portal/rentals/:token.
+              const portalEstimateHandled = await handlePublicEstimateShareRoutes(req, url, {
+                pool,
+                shareSecret: estimateShareSecret,
+                resolveClientIp: () => {
+                  const xff = req.headers['x-forwarded-for']
+                  if (typeof xff === 'string' && xff.length > 0) return xff.split(',')[0]!.trim()
+                  if (Array.isArray(xff) && xff.length > 0) return xff[0]!.split(',')[0]!.trim()
+                  return req.socket.remoteAddress ?? null
+                },
+                readBody: () => readBody(req),
+                sendJson: (status, body) => sendJson(res, status, body, req),
+              })
+              if (portalEstimateHandled) return
+
+              const portalRentalHandled = await handlePortalRentalRoutes(req, url, {
+                pool,
                 sendJson: (status, body) => sendJson(res, status, body, req),
                 readBody: () => readBody(req),
               })
-            ) {
-              return
-            }
+              if (portalRentalHandled) return
 
-            let company = await getCompany(req, isWorkRequestCallback ? { membershipBypassRole: 'admin' } : {})
-            // First-user self-onboard. The Clerk webhook that mirrors
-            // org membership into `company_memberships` isn't wired
-            // (CLERK_WEBHOOK_SECRET unset) and ADR 0003 marks the install
-            // as zero-customer, so the first authenticated user against
-            // a company slug that has *no memberships at all* auto-claims
-            // admin. After that the upsert no-ops — additional users must
-            // be invited via POST /api/companies/:id/memberships, and the
-            // role gate stays honest (otherwise every test fixture user
-            // gets promoted to admin and the role-rejection tests fail).
-            // Drop this block once the Clerk webhook ships.
-            if (!company && !isPublicPath && activeCompanySlug && identity.userId) {
+              const publicPortalHandled = await handlePublicPortalRoutes(req, url, {
+                pool,
+                sendJson: (status, body) => sendJson(res, status, body, req),
+              })
+              if (publicPortalHandled) return
+
+              const PUBLIC_PATHS = new Set([
+                '/api/integrations/qbo/callback',
+                '/api/webhooks/clerk',
+                '/api/webhooks/qbo',
+              ])
+              const isWorkRequestCallback =
+                req.method === 'POST' && /^\/api\/work-requests\/[^/]+\/agent-callback$/.test(url.pathname)
+              const isPublicPath = PUBLIC_PATHS.has(url.pathname) || isWorkRequestCallback
+              let identity: Identity
               try {
-                await pool.query(
-                  `insert into company_memberships (company_id, clerk_user_id, role)
+                identity = isPublicPath
+                  ? {
+                      userId: isWorkRequestCallback ? 'work-request-agent-callback' : 'qbo-oauth-redirect',
+                      source: 'default',
+                    }
+                  : resolveIdentity(req, authConfig)
+              } catch (err) {
+                if (err instanceof AuthError) {
+                  if (err.status === 401) {
+                    res.setHeader('www-authenticate', 'Bearer realm="sitelayer"')
+                  }
+                  sendJson(res, err.status, { error: err.message, request_id: requestId })
+                  return
+                }
+                throw err
+              }
+              requestContext.actorUserId = identity.userId
+              scope.setUser({ id: identity.userId })
+              scope.setTag('auth_source', identity.source)
+
+              // Rate limit /api/* (except /health and /api/webhooks/*). We resolve
+              // the bucket key after identity so authenticated calls share a
+              // per-user bucket regardless of source IP, and unauthenticated
+              // public-path callers get a per-IP bucket.
+              if (!isRateLimitExempt(url.pathname)) {
+                const rateLimitUserId = identity.source === 'default' ? null : identity.userId
+                if (applyRateLimit(rateLimiter, req, res, url.pathname, rateLimitUserId)) {
+                  return
+                }
+              }
+
+              // Company routes (GET/POST /api/companies,
+              // POST /api/companies/:id/memberships) handled by the extracted
+              // route module. See routes/companies.ts.
+              if (
+                await handleCompanyRoutes(req, url, {
+                  pool,
+                  userId: identity.userId,
+                  sendJson: (status, body) => sendJson(res, status, body, req),
+                  readBody: () => readBody(req),
+                })
+              ) {
+                return
+              }
+
+              let company = await getCompany(req, isWorkRequestCallback ? { membershipBypassRole: 'admin' } : {})
+              // First-user self-onboard. The Clerk webhook that mirrors
+              // org membership into `company_memberships` isn't wired
+              // (CLERK_WEBHOOK_SECRET unset) and ADR 0003 marks the install
+              // as zero-customer, so the first authenticated user against
+              // a company slug that has *no memberships at all* auto-claims
+              // admin. After that the upsert no-ops — additional users must
+              // be invited via POST /api/companies/:id/memberships, and the
+              // role gate stays honest (otherwise every test fixture user
+              // gets promoted to admin and the role-rejection tests fail).
+              // Drop this block once the Clerk webhook ships.
+              if (!company && !isPublicPath && activeCompanySlug && identity.userId) {
+                try {
+                  await pool.query(
+                    `insert into company_memberships (company_id, clerk_user_id, role)
                    select c.id, $1, 'admin'
                    from companies c
                    where c.slug = $2
@@ -689,192 +705,193 @@ const server = http.createServer(async (req, res) => {
                        select 1 from company_memberships m where m.company_id = c.id
                      )
                    on conflict (company_id, clerk_user_id) do nothing`,
-                  [identity.userId, activeCompanySlug],
-                )
-                company = await getCompany(req)
-              } catch (err) {
-                logger.warn(
-                  { err, route: url.pathname, slug: activeCompanySlug, userId: identity.userId },
-                  'auto-onboard membership insert failed',
-                )
+                    [identity.userId, activeCompanySlug],
+                  )
+                  company = await getCompany(req)
+                } catch (err) {
+                  logger.warn(
+                    { err, route: url.pathname, slug: activeCompanySlug, userId: identity.userId },
+                    'auto-onboard membership insert failed',
+                  )
+                }
               }
-            }
-            if (!company) {
-              sendJson(res, 404, {
-                error: `company slug ${activeCompanySlug} not found`,
-                user_id: identity.userId,
+              if (!company) {
+                sendJson(res, 404, {
+                  error: `company slug ${activeCompanySlug} not found`,
+                  user_id: identity.userId,
+                })
+                return
+              }
+
+              // Bind the resolved company id into the AsyncLocalStorage request
+              // context. mutation-tx.ts reads this to `SET LOCAL app.company_id`
+              // on every withMutationTx() and withCompanyClient() tx, which the
+              // RLS policies created by migration 066 use to scope rows.
+              requestContext.companyId = company.id
+              scope.setTag('company_id', company.id)
+
+              // HTTP-layer idempotency. Resolve the Idempotency-Key header (if
+              // present) and either short-circuit with the cached response or
+              // wrap the dispatch `sendJson` to capture the first response for
+              // future replays. See apps/api/src/idempotency.ts for the path
+              // wire-list rationale.
+              let idempotencyKey: string | null = null
+              if (req.method === 'POST' && isIdempotentPostPath(url.pathname)) {
+                const rawIdempotencyHeader = req.headers['idempotency-key']
+                if (rawIdempotencyHeader !== undefined) {
+                  const validated = validateIdempotencyKey(rawIdempotencyHeader)
+                  if (!validated.ok) {
+                    sendJson(res, 400, { error: validated.error, request_id: requestId })
+                    return
+                  }
+                  idempotencyKey = validated.key
+                  const cached = idempotencyCache.get(company.id, idempotencyKey)
+                  if (cached) {
+                    res.setHeader('idempotent-replay', 'true')
+                    sendJson(res, cached.status, cached.body, req)
+                    return
+                  }
+                }
+              }
+              const dispatchSendJson = (status: number, body: unknown): void => {
+                if (idempotencyKey) {
+                  const captured: IdempotencyCachedResponse = { status, body }
+                  idempotencyCache.set(company.id, idempotencyKey, captured)
+                }
+                sendJson(res, status, body, req)
+              }
+
+              // Post-auth route cascade (system + entity routes + debug trace).
+              // Order matches the pre-extraction inline cascade so behaviour is
+              // preserved. See routes/dispatch.ts for the registry; route
+              // modules in routes/* still own their own SQL, role gates, and
+              // ledger writes — dispatch.ts only walks the list.
+              const handled = await dispatch({
+                req,
+                res,
+                url,
+                pool,
+                company,
+                identity,
+                tier: appConfig.tier,
+                requestId,
+                requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
+                readBody: () => readBody(req),
+                sendJson: dispatchSendJson,
+                sendRedirect: (location) => sendRedirect(res, location),
+                checkVersion: (table, where, params, expectedVersion) =>
+                  checkVersion(table, where, params, expectedVersion, res, req),
+                getCurrentUserId: () => getCurrentUserId(req),
+                storage,
+                maxBlueprintUploadBytes,
+                blueprintDownloadPresigned,
+                qboConfig: {
+                  clientId: qboClientId,
+                  clientSecret: qboClientSecret,
+                  redirectUri: qboRedirectUri,
+                  successRedirectUri: qboSuccessRedirectUri,
+                  stateSecret: qboStateSecret,
+                  baseUrl: qboBaseUrl,
+                  environment: qboEnvironment,
+                },
+                estimateShareConfig: {
+                  secret: estimateShareSecret,
+                  portalBaseUrl: portalBaseUrl,
+                },
+                backfillCustomerMapping: (companyId, customer, executor) =>
+                  backfillCustomerMapping(pool, companyId, customer, executor),
+                listIntegrationMappings: (companyId, provider, entityType, pagination) =>
+                  listIntegrationMappings(pool, companyId, provider, entityType, pagination),
+                upsertIntegrationMapping: (companyId, provider, values, executor) =>
+                  upsertIntegrationMapping(pool, companyId, provider, values, executor),
+                assertBlueprintDocumentsBelongToProject: (companyId, projectId, blueprintDocumentIds) =>
+                  assertBlueprintDocumentsBelongToProject(pool, companyId, projectId, blueprintDocumentIds),
+                assertDivisionAllowedForServiceItem: (companyId, serviceItemCode, divisionCode) =>
+                  assertDivisionAllowedForServiceItem(companyId, serviceItemCode, divisionCode),
+                sendPdf: async (contentDisposition, input) => {
+                  res.writeHead(200, {
+                    'content-type': 'application/pdf',
+                    'content-disposition': contentDisposition,
+                    'cache-control': 'no-store',
+                    'access-control-allow-origin': getCorsOrigin(req),
+                    'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
+                    'access-control-allow-headers': CORS_ALLOW_HEADERS,
+                    'access-control-allow-credentials': 'true',
+                    'x-request-id': getRequestContext()?.requestId ?? '',
+                  })
+                  await renderEstimatePdf(input as Parameters<typeof renderEstimatePdf>[0], res)
+                },
+                sendFileContent: (mimeType, fileName, content) => {
+                  res.writeHead(200, {
+                    'content-type': mimeType,
+                    'content-disposition': `inline; filename="${fileName}"`,
+                    'access-control-allow-origin': getCorsOrigin(req),
+                    'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+                    'access-control-allow-headers': CORS_ALLOW_HEADERS,
+                  })
+                  res.end(content)
+                },
+                sendFileRedirect: (location) => {
+                  res.writeHead(302, {
+                    location,
+                    'cache-control': 'no-store',
+                    'access-control-allow-origin': getCorsOrigin(req),
+                    'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+                    'access-control-allow-headers': CORS_ALLOW_HEADERS,
+                  })
+                  res.end()
+                },
+                setHeader: (name, value) => {
+                  res.setHeader(name, value)
+                },
+                send304: (etag) => {
+                  res.writeHead(304, {
+                    ETag: etag,
+                    'access-control-allow-origin': getCorsOrigin(req),
+                  })
+                  res.end()
+                },
               })
-              return
-            }
+              if (handled) return
 
-            // Bind the resolved company id into the AsyncLocalStorage request
-            // context. mutation-tx.ts reads this to `SET LOCAL app.company_id`
-            // on every withMutationTx() and withCompanyClient() tx, which the
-            // RLS policies created by migration 066 use to scope rows.
-            requestContext.companyId = company.id
-            scope.setTag('company_id', company.id)
-
-            // HTTP-layer idempotency. Resolve the Idempotency-Key header (if
-            // present) and either short-circuit with the cached response or
-            // wrap the dispatch `sendJson` to capture the first response for
-            // future replays. See apps/api/src/idempotency.ts for the path
-            // wire-list rationale.
-            let idempotencyKey: string | null = null
-            if (req.method === 'POST' && isIdempotentPostPath(url.pathname)) {
-              const rawIdempotencyHeader = req.headers['idempotency-key']
-              if (rawIdempotencyHeader !== undefined) {
-                const validated = validateIdempotencyKey(rawIdempotencyHeader)
-                if (!validated.ok) {
-                  sendJson(res, 400, { error: validated.error, request_id: requestId })
-                  return
-                }
-                idempotencyKey = validated.key
-                const cached = idempotencyCache.get(company.id, idempotencyKey)
-                if (cached) {
-                  res.setHeader('idempotent-replay', 'true')
-                  sendJson(res, cached.status, cached.body, req)
-                  return
-                }
+              sendJson(res, 404, { error: 'not found' })
+            } catch (error) {
+              logger.error({ err: error }, 'unhandled request error')
+              // Scope tags (route, request_id, company_id) are already set on
+              // the Sentry isolation scope above; adding scope='unhandled' so
+              // it shares the same captureWithEntityContext taxonomy as the
+              // sub-handlers. We ALSO pass request_id + route + method
+              // explicitly so the captured event keeps these dimensions
+              // even if the isolation scope is somehow swapped (e.g. an
+              // integration cleared the active scope before the catch
+              // fired). Defensive: bare Sentry.captureException dropped
+              // request_id in the 2026-05-16 verification audit, so we
+              // belt-and-suspenders the load-bearing fields here. Entity
+              // context (company_id / entity_id) intentionally NOT set —
+              // the top-level catch may fire BEFORE getCompany() resolves
+              // and inventing tags would be misleading.
+              Sentry.captureException(error, {
+                tags: {
+                  scope: 'unhandled',
+                  request_id: requestId,
+                  route: requestContext.route ?? initialRoute,
+                  method,
+                },
+              })
+              const status =
+                error instanceof HttpError ? error.status : error instanceof BlueprintUploadError ? error.status : 500
+              if (rootSpan) {
+                rootSpan.setStatus({ code: 2, message: error instanceof Error ? error.message : 'internal_error' })
               }
-            }
-            const dispatchSendJson = (status: number, body: unknown): void => {
-              if (idempotencyKey) {
-                const captured: IdempotencyCachedResponse = { status, body }
-                idempotencyCache.set(company.id, idempotencyKey, captured)
-              }
-              sendJson(res, status, body, req)
-            }
-
-            // Post-auth route cascade (system + entity routes + debug trace).
-            // Order matches the pre-extraction inline cascade so behaviour is
-            // preserved. See routes/dispatch.ts for the registry; route
-            // modules in routes/* still own their own SQL, role gates, and
-            // ledger writes — dispatch.ts only walks the list.
-            const handled = await dispatch({
-              req,
-              res,
-              url,
-              pool,
-              company,
-              identity,
-              tier: appConfig.tier,
-              requestId,
-              requireRole: (allowed) => requireRole(res, company, allowed as readonly CompanyRole[], req),
-              readBody: () => readBody(req),
-              sendJson: dispatchSendJson,
-              sendRedirect: (location) => sendRedirect(res, location),
-              checkVersion: (table, where, params, expectedVersion) =>
-                checkVersion(table, where, params, expectedVersion, res, req),
-              getCurrentUserId: () => getCurrentUserId(req),
-              storage,
-              maxBlueprintUploadBytes,
-              blueprintDownloadPresigned,
-              qboConfig: {
-                clientId: qboClientId,
-                clientSecret: qboClientSecret,
-                redirectUri: qboRedirectUri,
-                successRedirectUri: qboSuccessRedirectUri,
-                stateSecret: qboStateSecret,
-                baseUrl: qboBaseUrl,
-                environment: qboEnvironment,
-              },
-              estimateShareConfig: {
-                secret: estimateShareSecret,
-                portalBaseUrl: portalBaseUrl,
-              },
-              backfillCustomerMapping: (companyId, customer, executor) =>
-                backfillCustomerMapping(pool, companyId, customer, executor),
-              listIntegrationMappings: (companyId, provider, entityType, pagination) =>
-                listIntegrationMappings(pool, companyId, provider, entityType, pagination),
-              upsertIntegrationMapping: (companyId, provider, values, executor) =>
-                upsertIntegrationMapping(pool, companyId, provider, values, executor),
-              assertBlueprintDocumentsBelongToProject: (companyId, projectId, blueprintDocumentIds) =>
-                assertBlueprintDocumentsBelongToProject(pool, companyId, projectId, blueprintDocumentIds),
-              assertDivisionAllowedForServiceItem: (companyId, serviceItemCode, divisionCode) =>
-                assertDivisionAllowedForServiceItem(companyId, serviceItemCode, divisionCode),
-              sendPdf: async (contentDisposition, input) => {
-                res.writeHead(200, {
-                  'content-type': 'application/pdf',
-                  'content-disposition': contentDisposition,
-                  'cache-control': 'no-store',
-                  'access-control-allow-origin': getCorsOrigin(req),
-                  'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
-                  'access-control-allow-headers': CORS_ALLOW_HEADERS,
-                  'access-control-allow-credentials': 'true',
-                  'x-request-id': getRequestContext()?.requestId ?? '',
-                })
-                await renderEstimatePdf(input as Parameters<typeof renderEstimatePdf>[0], res)
-              },
-              sendFileContent: (mimeType, fileName, content) => {
-                res.writeHead(200, {
-                  'content-type': mimeType,
-                  'content-disposition': `inline; filename="${fileName}"`,
-                  'access-control-allow-origin': getCorsOrigin(req),
-                  'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-                  'access-control-allow-headers': CORS_ALLOW_HEADERS,
-                })
-                res.end(content)
-              },
-              sendFileRedirect: (location) => {
-                res.writeHead(302, {
-                  location,
-                  'cache-control': 'no-store',
-                  'access-control-allow-origin': getCorsOrigin(req),
-                  'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
-                  'access-control-allow-headers': CORS_ALLOW_HEADERS,
-                })
-                res.end()
-              },
-              setHeader: (name, value) => {
-                res.setHeader(name, value)
-              },
-              send304: (etag) => {
-                res.writeHead(304, {
-                  ETag: etag,
-                  'access-control-allow-origin': getCorsOrigin(req),
-                })
-                res.end()
-              },
-            })
-            if (handled) return
-
-            sendJson(res, 404, { error: 'not found' })
-          } catch (error) {
-            logger.error({ err: error }, 'unhandled request error')
-            // Scope tags (route, request_id, company_id) are already set on
-            // the Sentry isolation scope above; adding scope='unhandled' so
-            // it shares the same captureWithEntityContext taxonomy as the
-            // sub-handlers. We ALSO pass request_id + route + method
-            // explicitly so the captured event keeps these dimensions
-            // even if the isolation scope is somehow swapped (e.g. an
-            // integration cleared the active scope before the catch
-            // fired). Defensive: bare Sentry.captureException dropped
-            // request_id in the 2026-05-16 verification audit, so we
-            // belt-and-suspenders the load-bearing fields here. Entity
-            // context (company_id / entity_id) intentionally NOT set —
-            // the top-level catch may fire BEFORE getCompany() resolves
-            // and inventing tags would be misleading.
-            Sentry.captureException(error, {
-              tags: {
-                scope: 'unhandled',
+              sendJson(res, status, {
+                error: error instanceof Error ? error.message : 'internal server error',
                 request_id: requestId,
-                route: requestContext.route ?? initialRoute,
-                method,
-              },
-            })
-            const status =
-              error instanceof HttpError ? error.status : error instanceof BlueprintUploadError ? error.status : 500
-            if (rootSpan) {
-              rootSpan.setStatus({ code: 2, message: error instanceof Error ? error.message : 'internal_error' })
+              })
             }
-            sendJson(res, status, {
-              error: error instanceof Error ? error.message : 'internal server error',
-              request_id: requestId,
-            })
-          }
-        },
-      )
-    }),
+          },
+        )
+      }),
+    ),
   )
 })
 
