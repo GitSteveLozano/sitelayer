@@ -23,6 +23,7 @@ import {
   sendRedirect,
 } from './http-utils.js'
 import { attachMutationTx } from './mutation-tx.js'
+import { continueRequestTrace, shouldBypassTraceContinuation } from './trace-ingress.js'
 import { createBlueprintStorage, readStorageEnv, type BlueprintStorage } from './storage.js'
 import { BlueprintUploadError } from './blueprint-upload.js'
 import { renderEstimatePdf } from './pdf.js'
@@ -535,7 +536,18 @@ const server = http.createServer(async (req, res) => {
     observeRequest(method, requestContext.route ?? initialRoute, res.statusCode || 0, Date.now() - requestStartedAt)
   })
 
-  await runWithRequestContext(requestContext, () =>
+  // Continue the upstream trace if the client supplied `sentry-trace` +
+  // `baggage` headers. Done BEFORE the isolation scope so the scope, the
+  // root span, and every captureException downstream inherit the upstream
+  // trace_id. Health/metrics probes bypass to keep them cheap and off the
+  // trace timeline. See trace-ingress.ts for the rationale.
+  const traceBypass = shouldBypassTraceContinuation(initialRoute)
+  const traceWrapper = traceBypass
+    ? <T,>(fn: () => T): T => fn()
+    : <T,>(fn: () => T): T => continueRequestTrace(req.headers, fn)
+
+  await traceWrapper(() =>
+    runWithRequestContext(requestContext, () =>
     Sentry.withIsolationScope((scope) => {
       scope.setTag('request_id', requestId)
       scope.setTag('route', initialRoute)
@@ -875,6 +887,7 @@ const server = http.createServer(async (req, res) => {
         },
       )
     }),
+  ),
   )
 })
 
