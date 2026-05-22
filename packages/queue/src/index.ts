@@ -20,6 +20,33 @@ export {
   type CircuitBreakerConfig,
 } from './circuit-breaker.js'
 
+// Audit Escrow MVP — signed, chained, append-only evidence anchor for
+// sitelayer's audit chain. Wedge 2 of docs/PROVING_GROUND_PLAN.md.
+// Lives in the queue package because both apps/api (verification routes)
+// and apps/worker (hourly tick) need to import it; queue is the
+// established shared infrastructure layer for cross-app primitives.
+export {
+  AUDIT_ESCROW_ALGORITHM,
+  AUDIT_ESCROW_VERSION,
+  appendEntry as appendAuditEscrowEntry,
+  canonicalizeJSON as canonicalizeAuditEscrowJSON,
+  getChainHead as getAuditEscrowChainHead,
+  getEntryById as getAuditEscrowEntryById,
+  getOrCreateActiveSigningKey as getOrCreateAuditEscrowSigningKey,
+  hashCanonicalJSON as hashAuditEscrowCanonicalJSON,
+  hashSHA256 as hashAuditEscrowSHA256,
+  sealEntry as sealAuditEscrowEntry,
+  signEd25519 as signAuditEscrowEd25519,
+  verifyEd25519 as verifyAuditEscrowEd25519,
+  verifyEntry as verifyAuditEscrowEntry,
+  type AppendEntryParams as AppendAuditEscrowEntryParams,
+  type AuditEscrowEntry,
+  type AuditEscrowKey,
+  type AuditEscrowMaterial,
+  type SealMetadataInput as SealAuditEscrowMetadataInput,
+  type VerificationReport as AuditEscrowVerificationReport,
+} from './audit-escrow.js'
+
 /**
  * Prune long-applied rows out of `mutation_outbox` and `sync_events`.
  * Both tables grow forever once a row is `applied_at IS NOT NULL`
