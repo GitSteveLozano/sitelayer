@@ -65,6 +65,7 @@ export const HANDOFF_EVENT_TYPES = [
   'agent.dispatch_requested',
   'agent.dispatch_acknowledged',
   'agent.dispatch_retried',
+  'agent.dispatch_cancel_requested',
   'agent.message_received',
   'agent.artifact_attached',
   'agent.proposal_ready',
@@ -170,8 +171,9 @@ const WORK_ITEM_COLUMN_NAMES = [
 ] as const
 
 // Computed `expires_at` (created_at + reversibility_window_seconds seconds) is
-// always selected alongside the base columns so the index defined in
-// migration 093 can be used by future filters.
+// selected alongside the base columns for API/UI callers. Migration 093 indexes
+// the underlying columns because Postgres cannot expression-index timestamptz
+// arithmetic.
 const WORK_ITEM_EXPIRES_AT_EXPR = "(created_at + reversibility_window_seconds * interval '1 second') as expires_at"
 const PREFIXED_WORK_ITEM_EXPIRES_AT_EXPR =
   "(w.created_at + w.reversibility_window_seconds * interval '1 second') as expires_at"

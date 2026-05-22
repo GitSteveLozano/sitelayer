@@ -25,6 +25,7 @@ export type HandoffEventType =
   | 'agent.dispatch_requested'
   | 'agent.dispatch_acknowledged'
   | 'agent.dispatch_retried'
+  | 'agent.dispatch_cancel_requested'
   | 'agent.message_received'
   | 'agent.artifact_attached'
   | 'agent.proposal_ready'

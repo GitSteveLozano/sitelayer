@@ -166,6 +166,23 @@ function dispatchMaxFailed(): number {
   )
 }
 
+function meshBearerToken(): string | null {
+  return (
+    optionalText(process.env.MESH_WORK_REQUEST_DISPATCH_TOKEN, 10_000) ??
+    optionalText(process.env.MESH_API_TOKEN, 10_000) ??
+    null
+  )
+}
+
+function meshTaskCancelUrl(meshTaskId: string): string | null {
+  const meshApi = process.env.MESH_API_URL?.trim() || ''
+  if (meshApi) return `${meshApi.replace(/\/+$/, '')}/api/orchestrate/tasks/${encodeURIComponent(meshTaskId)}`
+
+  const dispatchUrl = process.env.MESH_WORK_REQUEST_DISPATCH_URL?.trim() || ''
+  if (!dispatchUrl) return null
+  return `${dispatchUrl.replace(/\/+$/, '')}/${encodeURIComponent(meshTaskId)}`
+}
+
 function callbackTokenExpiresAt(now = Date.now()): string {
   return new Date(now + callbackTokenTtlHours() * 60 * 60 * 1000).toISOString()
 }
@@ -895,6 +912,10 @@ async function appendWorkRequestEvent(ctx: WorkRequestRouteCtx, id: string) {
     ctx.sendJson(400, { error: `event_type must be one of ${HANDOFF_EVENT_TYPES.join(', ')}` })
     return
   }
+  if (eventType === 'work_item.reversed') {
+    ctx.sendJson(400, { error: 'use the reverse endpoint for work_item.reversed' })
+    return
+  }
   if (eventType !== 'message.added' && eventType !== 'resolution.reopened' && !ctx.requireRole(TRIAGE_ROLES)) {
     return
   }
@@ -907,10 +928,18 @@ async function appendWorkRequestEvent(ctx: WorkRequestRouteCtx, id: string) {
     ctx.sendJson(403, { error: 'forbidden' })
     return
   }
+  if (isReversedTerminal(detail.work_item.status) && eventType !== 'message.added') {
+    ctx.sendJson(409, { error: `work item is ${detail.work_item.status} and cannot be changed` })
+    return
+  }
   const status = parseAllowed(body.status, WORK_ITEM_STATUSES) as WorkItemStatus | null
   const lane = parseAllowed(body.lane, WORK_ITEM_LANES) as WorkItemLane | null
   if (body.status !== undefined && body.status !== null && !status) {
     ctx.sendJson(400, { error: `status must be one of ${WORK_ITEM_STATUSES.join(', ')}` })
+    return
+  }
+  if (status === 'reversed') {
+    ctx.sendJson(400, { error: 'status reversed must use the reverse endpoint' })
     return
   }
   if (body.lane !== undefined && body.lane !== null && !lane) {
@@ -1189,7 +1218,20 @@ async function receiveAgentCallback(req: http.IncomingMessage, ctx: WorkRequestR
     ctx.sendJson(400, { error: 'event_type must be an agent callback event' })
     return
   }
+  const detail = await getContextWorkItemWithEvents(ctx.company.id, id)
+  if (!detail) {
+    ctx.sendJson(404, { error: 'work request not found' })
+    return
+  }
+  if (isReversedTerminal(detail.work_item.status)) {
+    ctx.sendJson(409, { error: `work item is ${detail.work_item.status} and cannot accept agent callbacks` })
+    return
+  }
   const next = deriveAgentCallbackState(eventType, body)
+  if (next.status === 'reversed') {
+    ctx.sendJson(400, { error: 'status reversed must use the reverse endpoint' })
+    return
+  }
   const updated = await withMutationTx(ctx.company.id, (c) =>
     updateContextWorkItemWithEventTx(c, {
       companyId: ctx.company.id,
@@ -1229,6 +1271,10 @@ function isTerminalForReverse(status: WorkItemStatus): boolean {
   return status === 'resolved' || status === 'wont_do' || status === 'reversed'
 }
 
+function isReversedTerminal(status: WorkItemStatus): boolean {
+  return status === 'reversed'
+}
+
 function pickLatestMeshTaskId(events: ContextHandoffEventRow[]): string | null {
   for (let i = events.length - 1; i >= 0; i -= 1) {
     const event = events[i]
@@ -1242,13 +1288,15 @@ function pickLatestMeshTaskId(events: ContextHandoffEventRow[]): string | null {
 }
 
 async function callMeshCancelTask(meshTaskId: string): Promise<{ ok: boolean; status?: number; error?: string }> {
-  const meshApi = process.env.MESH_API_URL?.trim() || ''
-  if (!meshApi) return { ok: false, error: 'MESH_API_URL not configured' }
-  const url = `${meshApi.replace(/\/+$/, '')}/api/orchestrate/tasks/${encodeURIComponent(meshTaskId)}`
+  const url = meshTaskCancelUrl(meshTaskId)
+  if (!url) return { ok: false, error: 'MESH_API_URL or MESH_WORK_REQUEST_DISPATCH_URL not configured' }
+  const headers: Record<string, string> = {}
+  const token = meshBearerToken()
+  if (token) headers.authorization = `Bearer ${token}`
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 3000)
   try {
-    const response = await fetch(url, { method: 'DELETE', signal: controller.signal })
+    const response = await fetch(url, { method: 'DELETE', headers, signal: controller.signal })
     if (response.ok || response.status === 404) return { ok: true, status: response.status }
     const text = await response.text().catch(() => '')
     return { ok: false, status: response.status, error: text.slice(0, 200) }
@@ -1290,14 +1338,22 @@ async function reverseWorkRequest(ctx: WorkRequestRouteCtx, id: string) {
     ctx.sendJson(403, { error: 'forbidden' })
     return
   }
+  const latestDetail = detail.events_truncated
+    ? await getContextWorkItemWithEvents(ctx.company.id, id, {
+        eventsLimit: 500,
+        eventsOffset: Math.max(0, detail.events_total - 500),
+      })
+    : detail
+  const events = latestDetail?.events ?? detail.events
 
   // Idempotent re-reverse: if already reversed, return the current row + the
   // existing event, do not insert a duplicate handoff event.
   if (detail.work_item.status === 'reversed') {
-    const existingReverseEvent = detail.events.find((event) => event.event_type === 'work_item.reversed') ?? null
+    const existingReverseEvent = events.find((event) => event.event_type === 'work_item.reversed') ?? null
     ctx.sendJson(200, {
       work_item: workItemResponse(detail.work_item),
       event: existingReverseEvent,
+      mesh_cancel: null,
       idempotent_replay: true,
     })
     return
@@ -1316,26 +1372,36 @@ async function reverseWorkRequest(ctx: WorkRequestRouteCtx, id: string) {
     return
   }
 
-  const reversedWithinSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(detail.work_item.created_at)) / 1000))
-  const meshTaskId = pickLatestMeshTaskId(detail.events)
-
-  // Local DB is source of truth: do the state change first, then attempt the
-  // mesh cancel as a best-effort follow-up. A mesh failure does NOT fail the
-  // reverse request — we log warnings via the event metadata instead.
-  let meshCancelOutcome: { ok: boolean; status?: number; error?: string } | null = null
-  if (meshTaskId) {
-    meshCancelOutcome = await callMeshCancelTask(meshTaskId)
-    if (!meshCancelOutcome.ok) {
-      console.warn(
-        `[reverseWorkRequest] mesh cancel failed for work_item=${id} mesh_task_id=${meshTaskId}: ${meshCancelOutcome.error ?? meshCancelOutcome.status ?? 'unknown'}`,
-      )
-    }
-  }
+  const meshTaskId = pickLatestMeshTaskId(events)
 
   const idempotencyKey = `context_work_item:reverse:${id}`
   const reversedAt = new Date().toISOString()
-  const result = await withMutationTx(ctx.company.id, async (c) =>
-    updateContextWorkItemWithEventTx(c, {
+  const result = await withMutationTx(ctx.company.id, async (c) => {
+    const locked = await c.query<{
+      status: WorkItemStatus
+      lane: WorkItemLane
+      created_at: string
+      expires_at: string | null
+    }>(
+      `select status,
+              lane,
+              created_at,
+              (created_at + reversibility_window_seconds * interval '1 second') as expires_at
+         from context_work_items
+        where company_id = $1 and id = $2
+        for update`,
+      [ctx.company.id, id],
+    )
+    const current = locked.rows[0]
+    if (!current) return { kind: 'not_found' as const }
+    if (current.status === 'reversed') return { kind: 'already_reversed' as const }
+    if (isTerminalForReverse(current.status)) return { kind: 'terminal' as const, status: current.status }
+    const lockedExpiresAt = current.expires_at ? Date.parse(current.expires_at) : NaN
+    if (!Number.isFinite(lockedExpiresAt) || Date.now() > lockedExpiresAt) {
+      return { kind: 'expired' as const }
+    }
+    const lockedReversedWithinSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(current.created_at)) / 1000))
+    const updated = await updateContextWorkItemWithEventTx(c, {
       companyId: ctx.company.id,
       workItemId: id,
       eventType: 'work_item.reversed',
@@ -1345,32 +1411,89 @@ async function reverseWorkRequest(ctx: WorkRequestRouteCtx, id: string) {
       lane: 'done',
       payload: {
         reason,
-        reversed_within_seconds: reversedWithinSeconds,
-        previous_status: detail.work_item.status,
-        previous_lane: detail.work_item.lane,
+        reversed_within_seconds: lockedReversedWithinSeconds,
+        previous_status: current.status,
+        previous_lane: current.lane,
         mesh_task_id: meshTaskId,
-        mesh_cancel: meshCancelOutcome
-          ? {
-              ok: meshCancelOutcome.ok,
-              status: meshCancelOutcome.status ?? null,
-              error: meshCancelOutcome.error ?? null,
-            }
-          : null,
+        mesh_cancel_deferred: Boolean(meshTaskId),
       },
       metadata: { evidence_refs: [{ type: 'support_debug_packet', id: detail.work_item.support_packet_id }] },
       resolvedAt: reversedAt,
       reversedAt,
       idempotencyKey,
-    }),
-  )
-  if (!result) {
+    })
+    return updated ? { kind: 'ok' as const, updated } : { kind: 'not_found' as const }
+  })
+  if (result.kind === 'not_found') {
     ctx.sendJson(404, { error: 'work request not found' })
     return
   }
+  if (result.kind === 'already_reversed') {
+    const latest = await getContextWorkItemWithEvents(ctx.company.id, id, {
+      eventsLimit: 500,
+      eventsOffset: Math.max(0, detail.events_total - 500),
+    })
+    const existingReverseEvent = latest?.events.find((event) => event.event_type === 'work_item.reversed') ?? null
+    ctx.sendJson(200, {
+      work_item: latest ? workItemResponse(latest.work_item) : workItemResponse(detail.work_item),
+      event: existingReverseEvent,
+      mesh_cancel: null,
+      idempotent_replay: true,
+    })
+    return
+  }
+  if (result.kind === 'terminal') {
+    ctx.sendJson(409, { error: `work item is ${result.status} and cannot be reversed` })
+    return
+  }
+  if (result.kind === 'expired') {
+    ctx.sendJson(410, { error: 'reversibility window closed' })
+    return
+  }
+
+  let meshCancelOutcome: { ok: boolean; status?: number; error?: string } | null = null
+  if (meshTaskId) {
+    const outcome = await callMeshCancelTask(meshTaskId)
+    meshCancelOutcome = outcome
+    if (!outcome.ok) {
+      console.warn(
+        `[reverseWorkRequest] mesh cancel failed for work_item=${id} mesh_task_id=${meshTaskId}: ${outcome.error ?? outcome.status ?? 'unknown'}`,
+      )
+    }
+    try {
+      await withMutationTx(ctx.company.id, (c) =>
+        appendContextHandoffEventTx(c, {
+          companyId: ctx.company.id,
+          workItemId: id,
+          eventType: 'agent.dispatch_cancel_requested',
+          actorKind: 'system',
+          actorRef: 'sitelayer-api',
+          sourceSystem: 'mesh',
+          payload: {
+            mesh_task_id: meshTaskId,
+            reason: 'work_item.reversed',
+            reverse_event_id: result.updated.event.id,
+            ok: outcome.ok,
+            status: outcome.status ?? null,
+            error: outcome.error ?? null,
+          },
+          metadata: { dispatcher: 'mesh' },
+          idempotencyKey: `context_work_item:mesh_cancel:${id}:${meshTaskId}`,
+        }),
+      )
+      observeContextHandoff('agent.dispatch_cancel_requested')
+    } catch (err) {
+      console.warn(
+        `[reverseWorkRequest] failed to append mesh cancel event for work_item=${id} mesh_task_id=${meshTaskId}: ${
+          err instanceof Error ? err.message : 'unknown'
+        }`,
+      )
+    }
+  }
 
   ctx.sendJson(200, {
-    work_item: workItemResponse(result.workItem),
-    event: result.event,
+    work_item: workItemResponse(result.updated.workItem),
+    event: result.updated.event,
     mesh_cancel: meshCancelOutcome,
   })
   observeContextHandoff('work_item.reversed')

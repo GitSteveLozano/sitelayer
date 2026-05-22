@@ -74,6 +74,34 @@ async function processContextWorkDispatch(
     throw new Error('MESH_WORK_REQUEST_DISPATCH_URL is not configured')
   }
 
+  const gate = await client.query<{ status: string }>(
+    `select status
+       from context_work_items
+      where company_id = $1 and id = $2
+      for update`,
+    [companyId, workItemId],
+  )
+  const status = gate.rows[0]?.status
+  if (!status) throw new Error(`context work item not found: ${workItemId}`)
+  if (status === 'resolved' || status === 'wont_do' || status === 'reversed') {
+    await client.query(
+      `insert into context_handoff_events (
+         company_id, work_item_id, event_type, actor_kind, actor_ref,
+         source_system, payload, metadata, idempotency_key, redaction_version
+       ) values ($1, $2, 'agent.dispatch_cancel_requested', 'system', 'sitelayer-worker',
+         'sitelayer', $3::jsonb, $4::jsonb, $5, 'context-handoff-v1')
+       on conflict (company_id, idempotency_key) where idempotency_key is not null do nothing`,
+      [
+        companyId,
+        workItemId,
+        JSON.stringify({ skipped: true, reason: 'terminal_work_item', status }),
+        JSON.stringify({ dispatcher: 'mesh' }),
+        `context_work_item:dispatch_skip_terminal:${workItemId}`,
+      ],
+    )
+    return { insightsCreated: 0 }
+  }
+
   const response = await fetch(dispatchUrl, {
     method: 'POST',
     headers: buildDispatchHeaders(),

@@ -10,6 +10,7 @@ const EVENT_LABEL: Partial<Record<ContextHandoffEvent['event_type'], string>> = 
   'agent.dispatch_requested': 'Agent requested',
   'agent.dispatch_acknowledged': 'Agent acknowledged',
   'agent.dispatch_retried': 'Agent retry',
+  'agent.dispatch_cancel_requested': 'Agent cancel requested',
   'agent.message_received': 'Agent message',
   'agent.artifact_attached': 'Artifact attached',
   'agent.proposal_ready': 'Proposal ready',

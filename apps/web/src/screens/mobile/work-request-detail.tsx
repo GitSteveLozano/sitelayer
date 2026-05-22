@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
@@ -48,6 +48,11 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
   const [githubUrl, setGithubUrl] = useState('')
   const [githubExportBody, setGithubExportBody] = useState('')
   const [reverseReason, setReverseReason] = useState('')
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
   const detail = useQuery({
     queryKey: queryKeys.workRequests.detail(workItemId),
     queryFn: () => fetchWorkRequest(workItemId),
@@ -106,8 +111,10 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
     githubExport.isPending ||
     supportPacket.isPending ||
     reverse.isPending
-  const isClosed = workItem?.status === 'resolved' || workItem?.status === 'wont_do' || workItem?.status === 'reversed'
-  const reversibility = workItem ? reversibilityBadgeState(workItem) : null
+  const isReversed = workItem?.status === 'reversed'
+  const canReopen = workItem?.status === 'resolved' || workItem?.status === 'wont_do'
+  const isClosed = canReopen || isReversed
+  const reversibility = workItem ? reversibilityBadgeState(workItem, now) : null
   const canReverse =
     canTriage &&
     workItem !== null &&
@@ -116,10 +123,13 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
     reversibility.mode !== 'closed' &&
     reversibility.mode !== 'reversed'
   const dispatchOutbox = detail.data?.dispatch_outbox ?? null
-  const canRetryDispatch = dispatchOutbox?.status === 'failed' || dispatchOutbox?.status === 'dead'
+  const canDispatch = canTriage && !isClosed
+  const canRetryDispatch = canDispatch && (dispatchOutbox?.status === 'failed' || dispatchOutbox?.status === 'dead')
+  const canResolve = canTriage && !isClosed
   const dispatchUnavailable = Boolean(
     health.data && (!health.data.config.mesh_dispatch_configured || !health.data.config.scoped_callbacks_enabled),
   )
+  const hasActions = canDispatch || canReopen || canResolve || canReverse
 
   return (
     <>
@@ -141,7 +151,7 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <WorkRequestStatusPill status={workItem.status} />
                 <WorkRequestSeverityPill severity={workItem.severity} />
-                <WorkRequestReversibilityBadge workItem={workItem} />
+                <WorkRequestReversibilityBadge workItem={workItem} now={now} />
               </div>
               <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.15, fontWeight: 750 }}>{workItem.title}</h1>
               {workItem.summary ? (
@@ -163,11 +173,11 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
               </div>
             ) : null}
 
-            {canTriage || isClosed ? (
+            {hasActions ? (
               <>
                 <MSectionH>Actions</MSectionH>
                 <div style={{ padding: '0 16px', display: 'grid', gap: 10 }}>
-                  {dispatchUnavailable ? (
+                  {canDispatch && dispatchUnavailable ? (
                     <MBanner
                       tone="warn"
                       title="Agent dispatch unavailable"
@@ -175,7 +185,7 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
                     />
                   ) : null}
                   <MButtonStack>
-                    {canTriage ? (
+                    {canDispatch ? (
                       canRetryDispatch ? (
                         <MButton
                           variant="primary"
@@ -194,7 +204,7 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
                         </MButton>
                       )
                     ) : null}
-                    {isClosed ? (
+                    {canReopen ? (
                       <MButton
                         variant="ghost"
                         disabled={busy}
@@ -202,7 +212,7 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
                       >
                         Reopen
                       </MButton>
-                    ) : canTriage ? (
+                    ) : canResolve ? (
                       <MButton
                         variant="ghost"
                         disabled={busy}
