@@ -47,10 +47,10 @@ header-override mechanics.
 
 **Common questions:**
 
-- *"How do I move a schedule to a different day?"* — Tap the schedule
+- _"How do I move a schedule to a different day?"_ — Tap the schedule
   card, edit the date field. No special action; underlying row updates
   in place. Offline LWW: see [Decision 4 in CLAUDE.md](../CLAUDE.md#4-offline-sync-conflict-resolution--last-write-wins--diagnostic-toast-2026-04-24).
-- *"What if the foreman is sick?"* — Reassign `crew_lead_worker_id`
+- _"What if the foreman is sick?"_ — Reassign `crew_lead_worker_id`
   from the same edit sheet. Reassignment fires
   `notify_foreman_assignment` if the project_lifecycle workflow is
   past `accepted` (see [`apps/api/src/routes/schedules.ts`](../apps/api/src/routes/schedules.ts)).
@@ -74,10 +74,10 @@ for the desktop live view).
 
 **Common questions:**
 
-- *"A worker didn't show up — can I swap mid-day?"* — Yes; remove
+- _"A worker didn't show up — can I swap mid-day?"_ — Yes; remove
   them from the crew sheet. Their open `clock_events` row stays in
   the timeline (no retroactive edit); foreman handles in time review.
-- *"How do I flag a site problem?"* — **Flag a problem** button → opens
+- _"How do I flag a site problem?"_ — **Flag a problem** button → opens
   the `field_event` workflow (`open → resolved | escalated | dismissed`).
   Reducer in [`packages/workflows/src/field-event.ts`](../packages/workflows/src/field-event.ts).
   Escalation pages the estimator; dismissal closes silently.
@@ -104,15 +104,16 @@ for the desktop live view).
 
 **Common questions:**
 
-- *"My phone's GPS is off / I'm in a basement"* — Worker can tap
+- _"My phone's GPS is off / I'm in a basement"_ — Worker can tap
   **Manual clock-in** which posts the same endpoint without a geofence
   fix. The row is flagged with `manual=true` for foreman review.
-- *"I forgot to clock out last night"* — Foreman edits in time review
+- _"I forgot to clock out last night"_ — Foreman edits in time review
   the next day. There's no auto-cap; the row sits open until edited.
 
 ## 4. End-of-week — time review + payroll
 
 **Screens:**
+
 - Time review: [`apps/web/src/screens/financial/labor-payroll-run-list.tsx`](../apps/web/src/screens/financial/labor-payroll-run-list.tsx)
   → detail at [`labor-payroll-run-detail.tsx`](../apps/web/src/screens/financial/labor-payroll-run-detail.tsx).
 - Labor burden: [`apps/web/src/screens/owner/labor-burden.tsx`](../apps/web/src/screens/owner/labor-burden.tsx).
