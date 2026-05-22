@@ -48,6 +48,8 @@ export const queryKeys = {
     }) => [...queryKeys.workRequests.all(), 'list', params ?? {}] as const,
     detail: (id: string) => [...queryKeys.workRequests.all(), 'detail', id] as const,
     brief: (id: string) => [...queryKeys.workRequests.all(), 'brief', id] as const,
+    handoffPacket: (id: string, audience: string) =>
+      [...queryKeys.workRequests.all(), 'handoff-packet', id, audience] as const,
     health: () => [...queryKeys.workRequests.all(), 'health'] as const,
   },
   supportPackets: {

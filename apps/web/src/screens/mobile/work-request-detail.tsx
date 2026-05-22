@@ -11,6 +11,7 @@ import {
   MListInset,
   MListRow,
   MSectionH,
+  MSelect,
   MTextarea,
   MTopBar,
   Spark,
@@ -27,19 +28,24 @@ import {
 import {
   appendWorkRequestEvent,
   dispatchWorkRequestToMesh,
+  exportWorkRequestHandoffPacket,
   fetchSupportPacket,
   fetchSupportPacketAccessLog,
   fetchWorkRequest,
   fetchWorkRequestGithubExport,
+  fetchWorkRequestHandoffPacket,
   fetchWorkRequestQueueHealth,
   queryKeys,
   retryWorkRequestMeshDispatch,
   reverseWorkRequest,
   type AppendWorkRequestEventInput,
   type WorkRequestBrief,
+  type WorkRequestHandoffPacketAudience,
 } from '@/lib/api'
 import { canTriageWorkRequests } from '@/lib/work-request-permissions'
 import type { CompanyRole } from '@sitelayer/domain'
+
+const HANDOFF_PACKET_AUDIENCES: WorkRequestHandoffPacketAudience[] = ['collaborator', 'github', 'mesh', 'operator']
 
 export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyRole }) {
   const params = useParams<{ workItemId: string }>()
@@ -49,6 +55,10 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
   const [message, setMessage] = useState('')
   const [githubUrl, setGithubUrl] = useState('')
   const [githubExportBody, setGithubExportBody] = useState('')
+  const [handoffAudience, setHandoffAudience] = useState<WorkRequestHandoffPacketAudience>('collaborator')
+  const [handoffPacketJson, setHandoffPacketJson] = useState('')
+  const [handoffPacketHash, setHandoffPacketHash] = useState('')
+  const [handoffCopyStatus, setHandoffCopyStatus] = useState('')
   const [reverseReason, setReverseReason] = useState('')
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
@@ -84,6 +94,27 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
     mutationFn: () => fetchWorkRequestGithubExport(workItemId),
     onSuccess: (response) => setGithubExportBody(response.body),
   })
+  const handoffPreview = useMutation({
+    mutationFn: () => fetchWorkRequestHandoffPacket(workItemId, handoffAudience),
+    onSuccess: (response) => {
+      setHandoffPacketJson(JSON.stringify(response.handoff_packet, null, 2))
+      setHandoffPacketHash(response.handoff_packet.packet_sha256)
+      setHandoffCopyStatus('')
+    },
+  })
+  const handoffExport = useMutation({
+    mutationFn: () =>
+      exportWorkRequestHandoffPacket(workItemId, {
+        audience: handoffAudience,
+        purpose: `${handoffAudience} handoff from work detail`,
+      }),
+    onSuccess: (response) => {
+      setHandoffPacketJson(JSON.stringify(response.handoff_packet, null, 2))
+      setHandoffPacketHash(response.handoff_packet.packet_sha256)
+      setHandoffCopyStatus('')
+      invalidate()
+    },
+  })
   const supportPacket = useMutation({
     mutationFn: (id: string) => fetchSupportPacket(id),
     onSuccess: (_, id) => {
@@ -111,6 +142,8 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
     dispatch.isPending ||
     retryDispatch.isPending ||
     githubExport.isPending ||
+    handoffPreview.isPending ||
+    handoffExport.isPending ||
     supportPacket.isPending ||
     reverse.isPending
   const isReversed = workItem?.status === 'reversed'
@@ -278,6 +311,78 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
               <>
                 <MSectionH>External</MSectionH>
                 <div style={{ padding: '0 16px', display: 'grid', gap: 10 }}>
+                  {githubExport.error || handoffPreview.error || handoffExport.error ? (
+                    <MBanner
+                      tone="error"
+                      title="Export failed"
+                      body={
+                        (githubExport.error ?? handoffPreview.error ?? handoffExport.error) instanceof Error
+                          ? (githubExport.error ?? handoffPreview.error ?? handoffExport.error)?.message
+                          : 'Export request failed.'
+                      }
+                    />
+                  ) : null}
+                  <MSelect
+                    aria-label="Handoff packet audience"
+                    value={handoffAudience}
+                    onChange={(event) => {
+                      setHandoffAudience(event.currentTarget.value as WorkRequestHandoffPacketAudience)
+                      setHandoffCopyStatus('')
+                    }}
+                  >
+                    {HANDOFF_PACKET_AUDIENCES.map((audience) => (
+                      <option key={audience} value={audience}>
+                        {formatBriefAction(audience)}
+                      </option>
+                    ))}
+                  </MSelect>
+                  <MButtonStack>
+                    <MButton variant="ghost" disabled={busy} onClick={() => handoffPreview.mutate()}>
+                      {handoffPreview.isPending ? 'Preparing...' : 'Preview handoff packet'}
+                    </MButton>
+                    <MButton variant="ghost" disabled={busy} onClick={() => handoffExport.mutate()}>
+                      {handoffExport.isPending ? 'Recording...' : 'Record packet export'}
+                    </MButton>
+                  </MButtonStack>
+                  {handoffPacketJson ? (
+                    <>
+                      <MListInset>
+                        <MListRow
+                          leading={<MI.FileText size={18} />}
+                          leadingTone="blue"
+                          headline="Packet hash"
+                          supporting={handoffPacketHash}
+                        />
+                      </MListInset>
+                      <MButton
+                        variant="ghost"
+                        disabled={busy || !handoffPacketJson}
+                        onClick={() => {
+                          void navigator.clipboard
+                            ?.writeText(handoffPacketJson)
+                            .then(() => setHandoffCopyStatus('Copied'))
+                            .catch(() => setHandoffCopyStatus('Copy unavailable'))
+                        }}
+                      >
+                        Copy packet JSON
+                      </MButton>
+                      {handoffCopyStatus ? (
+                        <div style={{ color: 'var(--m-ink-2)', fontSize: 13 }}>{handoffCopyStatus}</div>
+                      ) : null}
+                      <MTextarea
+                        aria-label="Handoff packet JSON"
+                        readOnly
+                        value={handoffPacketJson}
+                        rows={10}
+                        style={{
+                          fontFamily:
+                            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                          fontSize: 12,
+                          lineHeight: 1.45,
+                        }}
+                      />
+                    </>
+                  ) : null}
                   <MButton variant="ghost" disabled={busy} onClick={() => githubExport.mutate()}>
                     {githubExport.isPending ? 'Preparing...' : 'Prepare GitHub export'}
                   </MButton>

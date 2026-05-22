@@ -20,6 +20,7 @@ const EVENT_LABEL: Partial<Record<ContextHandoffEvent['event_type'], string>> = 
   'human.reviewed': 'Reviewed',
   'external.github_export_prepared': 'GitHub export prepared',
   'external.github_linked': 'GitHub linked',
+  'handoff_packet.exported': 'Handoff packet exported',
   'resolution.accepted': 'Resolved',
   'resolution.reopened': 'Reopened',
   'work_item.reversed': 'Reversed',

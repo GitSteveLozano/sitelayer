@@ -35,6 +35,7 @@ export type HandoffEventType =
   | 'human.reviewed'
   | 'external.github_export_prepared'
   | 'external.github_linked'
+  | 'handoff_packet.exported'
   | 'resolution.accepted'
   | 'resolution.reopened'
   | 'work_item.reversed'
@@ -159,6 +160,53 @@ export interface WorkRequestBrief {
 
 export interface WorkRequestBriefResponse {
   work_request_brief: WorkRequestBrief
+}
+
+export type WorkRequestHandoffPacketAudience = 'operator' | 'mesh' | 'collaborator' | 'github'
+
+export interface WorkRequestHandoffPacket {
+  schema: 'sitelayer.context_handoff_packet.v1'
+  generated_at: string
+  audience: WorkRequestHandoffPacketAudience
+  redaction_version: 'context-handoff-v1'
+  source: {
+    system: 'sitelayer'
+    company_id: string
+    work_item_id: string
+    support_packet_id: string
+    public_path: string
+  }
+  permissions: {
+    intended_use: string
+    raw_support_packet_included: boolean
+    callback_token_included: false
+    callback_available_after_dispatch: boolean
+  }
+  state: WorkRequestBrief['state']
+  work_item: WorkRequestBrief['work_item']
+  diagnostics: WorkRequestBrief['diagnostics']
+  support_packet: WorkRequestSupportPacketSummary | null
+  evidence_refs: WorkRequestBrief['diagnostics']['evidence_refs']
+  timeline: WorkRequestBrief['timeline']
+  timeline_total: number
+  timeline_truncated: boolean
+  agent_brief_markdown: string
+  callback?: WorkRequestBrief['callback']
+  packet_sha256: string
+}
+
+export interface WorkRequestHandoffPacketResponse {
+  handoff_packet: WorkRequestHandoffPacket
+}
+
+export interface ExportWorkRequestHandoffPacketInput {
+  audience?: WorkRequestHandoffPacketAudience
+  purpose?: string | null
+  idempotency_key?: string | null
+}
+
+export interface ExportWorkRequestHandoffPacketResponse extends WorkRequestHandoffPacketResponse {
+  event: ContextHandoffEvent
 }
 
 export interface DispatchOutboxSummary {
@@ -304,6 +352,16 @@ export function fetchWorkRequestBrief(id: string): Promise<WorkRequestBriefRespo
   return request<WorkRequestBriefResponse>(`/api/work-requests/${encodeURIComponent(id)}/brief`)
 }
 
+export function fetchWorkRequestHandoffPacket(
+  id: string,
+  audience: WorkRequestHandoffPacketAudience = 'collaborator',
+): Promise<WorkRequestHandoffPacketResponse> {
+  const search = new URLSearchParams({ audience })
+  return request<WorkRequestHandoffPacketResponse>(
+    `/api/work-requests/${encodeURIComponent(id)}/handoff-packet?${search.toString()}`,
+  )
+}
+
 export function fetchWorkRequestQueueHealth(): Promise<WorkRequestQueueHealthResponse> {
   return request<WorkRequestQueueHealthResponse>('/api/work-requests/queue-health')
 }
@@ -337,6 +395,19 @@ export function fetchWorkRequestGithubExport(id: string): Promise<WorkRequestGit
     method: 'POST',
     json: {},
   })
+}
+
+export function exportWorkRequestHandoffPacket(
+  id: string,
+  input: ExportWorkRequestHandoffPacketInput = {},
+): Promise<ExportWorkRequestHandoffPacketResponse> {
+  return request<ExportWorkRequestHandoffPacketResponse>(
+    `/api/work-requests/${encodeURIComponent(id)}/handoff-packet`,
+    {
+      method: 'POST',
+      json: input,
+    },
+  )
 }
 
 export function reverseWorkRequest(id: string, input: ReverseWorkRequestInput): Promise<ReverseWorkRequestResponse> {

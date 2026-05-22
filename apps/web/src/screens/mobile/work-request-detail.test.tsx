@@ -1,20 +1,23 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import type {
   SupportPacketAccessLogResponse,
   WorkRequestDetailResponse,
+  WorkRequestHandoffPacket,
   WorkRequestQueueHealthResponse,
 } from '@/lib/api'
 
 const mocks = vi.hoisted(() => ({
   appendWorkRequestEvent: vi.fn(),
   dispatchWorkRequestToMesh: vi.fn(),
+  exportWorkRequestHandoffPacket: vi.fn(),
   fetchSupportPacket: vi.fn(),
   fetchSupportPacketAccessLog: vi.fn(),
   fetchWorkRequest: vi.fn(),
   fetchWorkRequestGithubExport: vi.fn(),
+  fetchWorkRequestHandoffPacket: vi.fn(),
   fetchWorkRequestQueueHealth: vi.fn(),
   retryWorkRequestMeshDispatch: vi.fn(),
   reverseWorkRequest: vi.fn(),
@@ -26,10 +29,12 @@ vi.mock('@/lib/api', async () => {
     ...actual,
     appendWorkRequestEvent: mocks.appendWorkRequestEvent,
     dispatchWorkRequestToMesh: mocks.dispatchWorkRequestToMesh,
+    exportWorkRequestHandoffPacket: mocks.exportWorkRequestHandoffPacket,
     fetchSupportPacket: mocks.fetchSupportPacket,
     fetchSupportPacketAccessLog: mocks.fetchSupportPacketAccessLog,
     fetchWorkRequest: mocks.fetchWorkRequest,
     fetchWorkRequestGithubExport: mocks.fetchWorkRequestGithubExport,
+    fetchWorkRequestHandoffPacket: mocks.fetchWorkRequestHandoffPacket,
     fetchWorkRequestQueueHealth: mocks.fetchWorkRequestQueueHealth,
     retryWorkRequestMeshDispatch: mocks.retryWorkRequestMeshDispatch,
     reverseWorkRequest: mocks.reverseWorkRequest,
@@ -176,6 +181,36 @@ const disabledHealth: WorkRequestQueueHealthResponse = {
   },
 }
 
+const handoffPacket: WorkRequestHandoffPacket = {
+  schema: 'sitelayer.context_handoff_packet.v1',
+  generated_at: '2026-05-21T12:07:00.000Z',
+  audience: 'collaborator',
+  redaction_version: 'context-handoff-v1',
+  source: {
+    system: 'sitelayer',
+    company_id: 'company-1',
+    work_item_id: detailResponse.work_item.id,
+    support_packet_id: detailResponse.work_item.support_packet_id,
+    public_path: `/work/${detailResponse.work_item.id}`,
+  },
+  permissions: {
+    intended_use: 'human_handoff',
+    raw_support_packet_included: false,
+    callback_token_included: false,
+    callback_available_after_dispatch: true,
+  },
+  state: detailResponse.work_request_brief.state,
+  work_item: detailResponse.work_request_brief.work_item,
+  diagnostics: detailResponse.work_request_brief.diagnostics,
+  support_packet: null,
+  evidence_refs: detailResponse.work_request_brief.diagnostics.evidence_refs,
+  timeline: detailResponse.work_request_brief.timeline,
+  timeline_total: detailResponse.work_request_brief.timeline_total,
+  timeline_truncated: detailResponse.work_request_brief.timeline_truncated,
+  agent_brief_markdown: detailResponse.work_request_brief.agent_brief_markdown,
+  packet_sha256: 'abc123',
+}
+
 const accessLog: SupportPacketAccessLogResponse = {
   access_log: [
     {
@@ -195,6 +230,32 @@ beforeEach(() => {
   mocks.fetchWorkRequest.mockResolvedValue(detailResponse)
   mocks.fetchWorkRequestQueueHealth.mockResolvedValue(disabledHealth)
   mocks.fetchSupportPacketAccessLog.mockResolvedValue(accessLog)
+  mocks.fetchWorkRequestHandoffPacket.mockResolvedValue({ handoff_packet: handoffPacket })
+  mocks.exportWorkRequestHandoffPacket.mockResolvedValue({
+    handoff_packet: handoffPacket,
+    event: {
+      id: 'event-handoff',
+      company_id: 'company-1',
+      work_item_id: detailResponse.work_item.id,
+      event_type: 'handoff_packet.exported',
+      actor_kind: 'user',
+      actor_user_id: 'admin-1',
+      actor_ref: null,
+      source_system: 'sitelayer',
+      payload: { packet_sha256: handoffPacket.packet_sha256 },
+      metadata: {},
+      idempotency_key: 'export-1',
+      causation_event_id: null,
+      correlation_id: null,
+      request_id: null,
+      sentry_trace: null,
+      sentry_baggage: null,
+      build_sha: 'test-build',
+      redaction_version: 'context-handoff-v1',
+      occurred_at: '2026-05-21T12:07:00.000Z',
+      recorded_at: '2026-05-21T12:07:00.000Z',
+    },
+  })
 })
 
 afterEach(() => {
@@ -222,6 +283,27 @@ describe('MobileWorkRequestDetail', () => {
     expect(await screen.findByText('Dispatch Agent')).toBeTruthy()
     const markdown = await screen.findByLabelText('Agent brief markdown')
     expect(markdown).toHaveProperty('value', detailResponse.work_request_brief.agent_brief_markdown)
+  })
+
+  it('previews a collaborator-safe handoff packet from the work detail screen', async () => {
+    const Wrapper = makeWrapper()
+    render(<MobileWorkRequestDetail companyRole="admin" />, { wrapper: Wrapper })
+
+    expect(await screen.findByText('Estimate push failed')).toBeTruthy()
+    const previewButton = screen.getByText('Preview handoff packet') as HTMLButtonElement
+    expect(previewButton.disabled).toBe(false)
+    fireEvent.click(previewButton)
+
+    await waitFor(() =>
+      expect(mocks.fetchWorkRequestHandoffPacket).toHaveBeenCalledWith(
+        '00000000-0000-4000-8000-000000000001',
+        'collaborator',
+      ),
+    )
+    const packetJson = await screen.findByLabelText('Handoff packet JSON')
+    expect(packetJson).toHaveProperty('value', expect.stringContaining('"audience": "collaborator"'))
+    expect(packetJson).toHaveProperty('value', expect.stringContaining('"raw_support_packet_included": false'))
+    expect(await screen.findByText('abc123')).toBeTruthy()
   })
 
   it('renders the closed reversibility badge when expires_at is in the past', async () => {
