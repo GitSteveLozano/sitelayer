@@ -104,15 +104,30 @@ type MutationOutbox = {
   request_id: string | null
 }
 
+type SupportPacketAccessLog = {
+  id: string
+  company_id: string
+  support_packet_id: string
+  actor_user_id: string
+  access_type: string
+  route: string | null
+  request_id: string | null
+  created_at: string
+  metadata: JsonRecord
+}
+
 class FakePool {
   supportPackets: SupportPacket[] = []
   workItems: WorkItem[] = []
   handoffEvents: HandoffEvent[] = []
   mutationOutbox: MutationOutbox[] = []
+  supportPacketAccessLog: SupportPacketAccessLog[] = []
+  failSupportPacketAccessLog = false
   private supportPacketCounter = 0
   private workItemCounter = 0
   private eventCounter = 0
   private outboxCounter = 0
+  private supportPacketAccessCounter = 0
 
   attach() {
     attachMutationTx({
@@ -261,6 +276,24 @@ class FakePool {
       }
       if (existing) Object.assign(existing, next)
       else this.mutationOutbox.push(next)
+      return { rows: [], rowCount: 1 }
+    }
+
+    if (normalized.startsWith('insert into support_packet_access_log')) {
+      if (this.failSupportPacketAccessLog) throw new Error('support packet access log unavailable')
+      this.supportPacketAccessCounter += 1
+      const row: SupportPacketAccessLog = {
+        id: uuid(500 + this.supportPacketAccessCounter),
+        company_id: params[0] as string,
+        support_packet_id: params[1] as string,
+        actor_user_id: params[2] as string,
+        access_type: normalized.includes("'export'") ? 'export' : (params[3] as string),
+        route: (normalized.includes("'export'") ? params[3] : params[4]) as string | null,
+        request_id: (normalized.includes("'export'") ? params[4] : params[5]) as string | null,
+        metadata: JSON.parse((normalized.includes("'export'") ? params[5] : params[6]) as string) as JsonRecord,
+        created_at: '2026-05-21T12:00:05.000Z',
+      }
+      this.supportPacketAccessLog.push(row)
       return { rows: [], rowCount: 1 }
     }
 
@@ -802,6 +835,21 @@ describe('handleWorkRequestRoutes', () => {
     expect(JSON.stringify(body.handoff_packet)).not.toContain('Bearer secret')
   })
 
+  it('rejects handoff packet reads for member users even when they own the item', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Member packet', client: clientContext }, 'member', 'member-1')
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const packetCtx = makeCtx(pool, {}, 'member', 'member-1')
+
+    await handleWorkRequestRoutes(
+      buildReq('GET'),
+      buildUrl(`/api/work-requests/${pool.workItems[0]!.id}/handoff-packet?audience=collaborator`),
+      packetCtx.ctx,
+    )
+
+    expect(packetCtx.responses[0]?.status).toBe(403)
+  })
+
   it('records an audit event when a handoff packet is exported', async () => {
     const pool = new FakePool()
     const created = makeCtx(pool, { title: 'Export packet', client: clientContext })
@@ -842,6 +890,43 @@ describe('handleWorkRequestRoutes', () => {
       'work_item.created',
       'handoff_packet.exported',
     ])
+    expect(pool.supportPacketAccessLog).toMatchObject([
+      {
+        support_packet_id: pool.workItems[0]!.support_packet_id,
+        actor_user_id: 'user-1',
+        access_type: 'export',
+        metadata: {
+          work_item_id: workItemId,
+          audience: 'github',
+          purpose: 'create external issue for review',
+          packet_sha256: body.handoff_packet.packet_sha256,
+          redaction_version: 'context-handoff-v1',
+          intended_use: 'external_issue_export',
+        },
+      },
+    ])
+  })
+
+  it('does not block handoff packet export when support packet access logging fails', async () => {
+    const pool = new FakePool()
+    pool.failSupportPacketAccessLog = true
+    const created = makeCtx(pool, { title: 'Export packet despite audit failure', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItemId = pool.workItems[0]!.id
+    const exportCtx = makeCtx(pool, { audience: 'collaborator', idempotency_key: 'handoff-export-audit-fails' })
+
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/handoff-packet`),
+      exportCtx.ctx,
+    )
+
+    expect(exportCtx.responses[0]?.status).toBe(200)
+    expect(pool.handoffEvents.map((event) => event.event_type)).toEqual([
+      'work_item.created',
+      'handoff_packet.exported',
+    ])
+    expect(pool.supportPacketAccessLog).toHaveLength(0)
   })
 
   it('rejects cross-role triage actions for members', async () => {
@@ -909,6 +994,17 @@ describe('handleWorkRequestRoutes', () => {
       entity_id: workItemId,
       mutation_type: 'dispatch_mesh_work_request',
       idempotency_key: `context_work_item:dispatch_mesh:${workItemId}`,
+      payload: {
+        status: 'agent_running',
+        lane: 'agent',
+        work_request_brief: {
+          state: {
+            status: 'agent_running',
+            lane: 'agent',
+            next_action: 'monitor_agent_callback',
+          },
+        },
+      },
     })
     expect((pool.mutationOutbox[0]?.payload.callback as JsonRecord | undefined)?.token_type).toBe('scoped_bearer')
     expect((pool.mutationOutbox[0]?.payload.callback as JsonRecord | undefined)?.path).toBe(

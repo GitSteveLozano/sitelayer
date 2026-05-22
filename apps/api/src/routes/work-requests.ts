@@ -829,6 +829,16 @@ function buildDispatchPayload(
   callbackToken: string,
 ): DispatchPayload {
   const row = detail.work_item
+  const dispatchStatus: WorkItemStatus = 'agent_running'
+  const dispatchLane: WorkItemLane = 'agent'
+  const dispatchDetail: ContextWorkItemDetail = {
+    ...detail,
+    work_item: {
+      ...row,
+      status: dispatchStatus,
+      lane: dispatchLane,
+    },
+  }
   const callbackPath = `/api/work-requests/${row.id}/agent-callback`
   const callback = {
     path: callbackPath,
@@ -837,7 +847,7 @@ function buildDispatchPayload(
     token_type: 'scoped_bearer' as const,
     expires_at: callbackTokenExpiresAt(),
   }
-  const brief = buildWorkRequestBrief(detail, null, {
+  const brief = buildWorkRequestBrief(dispatchDetail, null, {
     callback: {
       path: callback.path,
       url: callback.url,
@@ -853,8 +863,8 @@ function buildDispatchPayload(
     route: row.route,
     entity_type: row.entity_type,
     entity_id: row.entity_id,
-    status: row.status,
-    lane: row.lane,
+    status: dispatchStatus,
+    lane: dispatchLane,
     reversibility_window_seconds: Number(row.reversibility_window_seconds),
     support_packet: row.support_packet ?? null,
     work_request_brief: brief,
@@ -1131,6 +1141,7 @@ async function getWorkRequestBrief(ctx: WorkRequestRouteCtx, id: string, url: UR
 }
 
 async function getWorkRequestHandoffPacket(ctx: WorkRequestRouteCtx, id: string, url: URL) {
+  if (!ctx.requireRole(TRIAGE_ROLES)) return
   if (!isValidUuid(id)) {
     ctx.sendJson(400, { error: 'invalid work request id' })
     return
@@ -1162,6 +1173,45 @@ async function getWorkRequestHandoffPacket(ctx: WorkRequestRouteCtx, id: string,
       audience,
     }),
   })
+}
+
+async function recordHandoffPacketExportAccess(
+  ctx: WorkRequestRouteCtx,
+  detail: ContextWorkItemDetail,
+  packet: WorkRequestHandoffPacket,
+  purpose: string,
+): Promise<void> {
+  const requestContext = getRequestContext()
+  try {
+    await withMutationTx(ctx.company.id, (c) =>
+      c.query(
+        `insert into support_packet_access_log (
+           company_id, support_packet_id, actor_user_id, access_type,
+           route, request_id, metadata
+         ) values ($1, $2, $3, 'export', $4, $5, $6::jsonb)`,
+        [
+          ctx.company.id,
+          detail.work_item.support_packet_id,
+          ctx.identity.userId,
+          requestContext?.route ?? null,
+          requestContext?.requestId ?? null,
+          JSON.stringify(
+            supportJsonRecord({
+              work_item_id: detail.work_item.id,
+              audience: packet.audience,
+              purpose,
+              packet_sha256: packet.packet_sha256,
+              redaction_version: packet.redaction_version,
+              intended_use: packet.permissions.intended_use,
+            }),
+          ),
+        ],
+      ),
+    )
+  } catch {
+    // Export is already represented in context_handoff_events; this secondary
+    // support-packet access trail must not block the handoff.
+  }
 }
 
 async function exportWorkRequestHandoffPacket(ctx: WorkRequestRouteCtx, id: string) {
@@ -1229,6 +1279,7 @@ async function exportWorkRequestHandoffPacket(ctx: WorkRequestRouteCtx, id: stri
         )}`,
     }),
   )
+  await recordHandoffPacketExportAccess(ctx, detail, packet, purpose)
   ctx.sendJson(200, { handoff_packet: packet, event })
   observeContextHandoff('handoff_packet.exported')
 }
