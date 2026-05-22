@@ -35,8 +35,10 @@ ALTER TABLE context_work_items
     )
   );
 
--- Reversibility window expiry index for "expires soon" / obstruction-style queries.
--- Skip terminal items (resolved/cancelled/wont_do/reversed) because they cannot be reversed.
+-- Reversibility window support index for "expires soon" / obstruction-style queries.
+-- Do not index the timestamptz expiry expression directly: Postgres treats
+-- timestamptz arithmetic as STABLE, so expression indexes reject it.
+-- Skip terminal items (resolved/wont_do/reversed) because they cannot be reversed.
 CREATE INDEX IF NOT EXISTS idx_context_work_items_reversibility_active
-  ON context_work_items ((created_at + reversibility_window_seconds * interval '1 second'))
+  ON context_work_items (company_id, created_at, reversibility_window_seconds)
   WHERE status NOT IN ('resolved', 'wont_do', 'reversed');
