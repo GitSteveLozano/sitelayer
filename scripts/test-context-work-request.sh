@@ -19,7 +19,7 @@
 #
 # Optional env:
 #   SITELAYER_TOKEN         Backcompat alias for SITELAYER_AUTH_TOKEN
-#   SITELAYER_COMPANY_SLUG  default: la-operations
+#   SITELAYER_COMPANY_SLUG  default: e2e-fixtures for e2e-* users, otherwise la-operations
 #   DATABASE_URL            Enables scoped callback replay by reading mutation_outbox
 #   MESH_API_URL            Enables Mesh task probe
 #   MESH_API_TOKEN          Optional Bearer token for Mesh probe
@@ -73,7 +73,13 @@ require_cmd jq
 
 SITELAYER_API_URL="${SITELAYER_API_URL:-}"
 SITELAYER_AUTH_TOKEN="${SITELAYER_AUTH_TOKEN:-${SITELAYER_TOKEN:-}}"
-SITELAYER_COMPANY_SLUG="${SITELAYER_COMPANY_SLUG:-la-operations}"
+if [ -z "${SITELAYER_COMPANY_SLUG:-}" ]; then
+  if [[ "$SITELAYER_AUTH_TOKEN" =~ ^e2e- ]]; then
+    SITELAYER_COMPANY_SLUG="e2e-fixtures"
+  else
+    SITELAYER_COMPANY_SLUG="la-operations"
+  fi
+fi
 
 if [ -z "$SITELAYER_API_URL" ] || [ -z "$SITELAYER_AUTH_TOKEN" ]; then
   err "Set SITELAYER_API_URL and SITELAYER_AUTH_TOKEN (or SITELAYER_TOKEN)."

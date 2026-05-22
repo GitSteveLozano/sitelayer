@@ -230,7 +230,7 @@ For a dev/preview end-to-end smoke, use:
 ```bash
 SITELAYER_API_URL=https://dev.sitelayer.sandolab.xyz \
 SITELAYER_AUTH_TOKEN=e2e-admin \
-SITELAYER_COMPANY_SLUG=la-operations \
+SITELAYER_COMPANY_SLUG=e2e-fixtures \
 ./scripts/test-context-work-request.sh
 ```
 
