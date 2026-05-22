@@ -7,11 +7,11 @@ not just when an individual request fails.
 
 ## Monitor list
 
-| # | Type | Target | Interval | Failure threshold | Owner |
-|---|------|--------|----------|-------------------|-------|
-| 1 | HTTPS keyword | `https://sitelayer.sandolab.xyz/health` — must return `200` AND body contains `"ok":true` | 60s | 2 consecutive failures (~2 min) | Taylor |
-| 2 | HTTPS keyword | `https://sitelayer.sandolab.xyz/api/version` — must return `200` AND body contains `"commit"` | 5 min | 3 consecutive failures (~15 min) | Taylor |
-| 3 | HTTPS status | `https://dev.sitelayer.sandolab.xyz/health` — must return `200` | 5 min | 5 consecutive failures (~25 min) | Taylor |
+| #   | Type          | Target                                                                                        | Interval | Failure threshold                | Owner  |
+| --- | ------------- | --------------------------------------------------------------------------------------------- | -------- | -------------------------------- | ------ |
+| 1   | HTTPS keyword | `https://sitelayer.sandolab.xyz/health` — must return `200` AND body contains `"ok":true`     | 60s      | 2 consecutive failures (~2 min)  | Taylor |
+| 2   | HTTPS keyword | `https://sitelayer.sandolab.xyz/api/version` — must return `200` AND body contains `"commit"` | 5 min    | 3 consecutive failures (~15 min) | Taylor |
+| 3   | HTTPS status  | `https://dev.sitelayer.sandolab.xyz/health` — must return `200`                               | 5 min    | 5 consecutive failures (~25 min) | Taylor |
 
 **Why these three:**
 
