@@ -3,7 +3,7 @@ import type { Pool } from 'pg'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import type { Identity } from '../auth.js'
 import { withCompanyClient } from '../mutation-tx.js'
-import { WORK_ITEM_LANES, type WorkItemLane, type WorkItemSeverity, type WorkItemStatus } from '../context-handoff.js'
+import { WORK_ITEM_LANES, type WorkItemLane, type WorkItemSeverity } from '../context-handoff.js'
 
 // Wedge 4 — Obstruction signals as first-class queryable rows.
 //
