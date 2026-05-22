@@ -692,16 +692,17 @@ async function listWorkRequests(ctx: WorkRequestRouteCtx, url: URL) {
     ctx.sendJson(400, { error: pagination.error })
     return
   }
+  const memberVisibleUserId = ctx.company.role === 'member' ? ctx.identity.userId : null
   const rows = await listContextWorkItems(ctx.company.id, {
     status: url.searchParams.get('status'),
     entityType: url.searchParams.get('entity_type'),
     entityId: url.searchParams.get('entity_id'),
-    createdByUserId: roleScopedCreatedBy(
-      ctx.company.role,
-      ctx.identity.userId,
-      url.searchParams.get('created_by_user_id'),
-    ),
-    assigneeUserId: url.searchParams.get('assignee_user_id'),
+    createdByUserId:
+      memberVisibleUserId === null
+        ? roleScopedCreatedBy(ctx.company.role, ctx.identity.userId, url.searchParams.get('created_by_user_id'))
+        : null,
+    assigneeUserId: memberVisibleUserId === null ? url.searchParams.get('assignee_user_id') : null,
+    visibleToUserId: memberVisibleUserId,
     limit: pagination.value.limit,
     offset: pagination.value.offset,
   })

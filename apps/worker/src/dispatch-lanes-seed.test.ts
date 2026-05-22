@@ -25,6 +25,14 @@ function readMigrationSeedLanes(): string[] {
   return nameMatches
 }
 
+function readFollowupLaneSeeds(): string[] {
+  const path = resolve(__dirname, '..', '..', '..', 'docker', 'postgres', 'init', '095_audit_escrow.sql')
+  const sql = readFileSync(path, 'utf-8')
+  return Array.from(sql.matchAll(/VALUES\s*\(\s*'([a-z_]+)'\s*,\s*'active'\s*,\s*'system:seed'\s*\)/gi)).map(
+    (m) => m[1] as string,
+  )
+}
+
 function readWorkerLaneReferences(): string[] {
   const path = resolve(__dirname, 'worker.ts')
   const ts = readFileSync(path, 'utf-8')
@@ -38,7 +46,7 @@ function readWorkerLaneReferences(): string[] {
 
 describe('dispatch-lanes migration / worker parity', () => {
   it('every lane referenced in worker.ts is seeded in migration 094', () => {
-    const seeded = new Set(readMigrationSeedLanes())
+    const seeded = new Set([...readMigrationSeedLanes(), ...readFollowupLaneSeeds()])
     const referenced = readWorkerLaneReferences()
     const missing = referenced.filter((name) => !seeded.has(name))
     expect(missing, `worker.ts references lanes not seeded in 094: ${missing.join(', ')}`).toEqual([])

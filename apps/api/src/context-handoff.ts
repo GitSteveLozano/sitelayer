@@ -450,6 +450,7 @@ export async function listContextWorkItems(
     entityId?: string | null
     createdByUserId?: string | null
     assigneeUserId?: string | null
+    visibleToUserId?: string | null
     limit: number
     offset: number
   },
@@ -475,6 +476,10 @@ export async function listContextWorkItems(
   if (filters.assigneeUserId) {
     values.push(filters.assigneeUserId)
     clauses.push(`assignee_user_id = $${values.length}`)
+  }
+  if (filters.visibleToUserId) {
+    values.push(filters.visibleToUserId)
+    clauses.push(`(created_by_user_id = $${values.length} or assignee_user_id = $${values.length})`)
   }
   values.push(filters.limit)
   values.push(filters.offset)

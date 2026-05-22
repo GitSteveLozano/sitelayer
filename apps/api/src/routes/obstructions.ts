@@ -150,12 +150,9 @@ async function getObstructions(ctx: ObstructionsRouteCtx, url: URL): Promise<voi
   // dead-dispatch obstructions, then left-join the latest event for the
   // (work_item) so we can fill last_event without a per-row follow-up.
   //
-  // The reversibility_window_seconds column is added by Wedge 1
-  // (`reversibility-wedge1` branch). We read it via metadata->>'reversibility_window_seconds'
-  // as a graceful-degradation fallback — when Wedge 1 hasn't merged yet,
-  // metadata doesn't have it set and we treat the window as effectively
-  // open (true) only when the row has been blocked recently enough.
-  // Defensive: we compute reversibility_available in app code, not SQL.
+  // Reversibility is now a first-class context_work_items column. Keep the
+  // availability calculation in app code so the response can explain an
+  // obstruction without duplicating timer semantics in SQL.
   const rows = await withCompanyClient(ctx.company.id, async (c) => {
     const result = await c.query<RawObstructionRow>(
       `with status_obstructions as (
@@ -171,7 +168,7 @@ async function getObstructions(ctx: ObstructionsRouteCtx, url: URL): Promise<voi
            w.assignee_user_id,
            w.updated_at as blocked_since,
            w.status::text as derived_status,
-           coalesce((w.metadata->>'reversibility_window_seconds')::int, null) as reversibility_window_seconds
+           w.reversibility_window_seconds as reversibility_window_seconds
          from context_work_items w
          where w.company_id = $1
            and w.status in ('review_stale', 'proposal_expired', 'wont_do')
@@ -189,7 +186,7 @@ async function getObstructions(ctx: ObstructionsRouteCtx, url: URL): Promise<voi
            w.assignee_user_id,
            coalesce(o.next_attempt_at, o.applied_at, w.updated_at) as blocked_since,
            'dead'::text as derived_status,
-           coalesce((w.metadata->>'reversibility_window_seconds')::int, null) as reversibility_window_seconds
+           w.reversibility_window_seconds as reversibility_window_seconds
          from context_work_items w
          join mutation_outbox o
            on o.company_id = w.company_id
@@ -294,9 +291,8 @@ function computeReversibilityAvailable(row: RawObstructionRow, status: Obstructi
   // 'wont_do' is an operator-declined decision; per the wedge spec, the
   // reversibility window is closed regardless of the timer.
   if (status === 'wont_do') return false
-  // No reversibility data on the row → optimistically open (Wedge 1 is
-  // still rolling out; not all rows have a window populated). Once Wedge
-  // 1 lands fully this should never be null on new writes.
+  // No reversibility data on the row → optimistically open for historical rows
+  // or partially migrated environments. New rows should always carry it.
   if (row.reversibility_window_seconds === null) return true
   if (row.reversibility_window_seconds <= 0) return false
   const blockedAt = Date.parse(row.blocked_since)

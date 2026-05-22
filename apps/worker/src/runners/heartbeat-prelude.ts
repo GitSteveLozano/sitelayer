@@ -54,7 +54,7 @@ export function createHeartbeatPrelude(deps: HeartbeatPreludeDeps) {
           `update mutation_outbox
              set next_attempt_at = greatest(next_attempt_at, now() + ($2 || ' milliseconds')::interval)
              where company_id = $1
-               and mutation_type in ('post_qbo_invoice', 'post_qbo_estimate', 'post_qbo_time_activity')
+               and mutation_type in ('post_qbo_invoice', 'post_qbo_estimate', 'post_qbo_time_activities')
                and status in ('pending', 'processing')`,
           [companyId, String(qboCircuitCooldownMs)],
         )

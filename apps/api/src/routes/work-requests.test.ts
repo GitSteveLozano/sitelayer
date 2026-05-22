@@ -502,7 +502,12 @@ class FakePool {
     if (normalized.includes('from context_work_items')) {
       const companyId = params[0] as string
       let rows = this.workItems.filter((item) => item.company_id === companyId)
-      if (normalized.includes('created_by_user_id =')) {
+      if (normalized.includes('created_by_user_id =') && normalized.includes('or assignee_user_id =')) {
+        const visibleTo = params[1] as string | undefined
+        if (visibleTo) {
+          rows = rows.filter((item) => item.created_by_user_id === visibleTo || item.assignee_user_id === visibleTo)
+        }
+      } else if (normalized.includes('created_by_user_id =')) {
         const createdBy = params[1] as string | undefined
         if (createdBy) rows = rows.filter((item) => item.created_by_user_id === createdBy)
       }
@@ -680,7 +685,7 @@ describe('handleWorkRequestRoutes', () => {
     expect(pool.workItems.map((item) => item.created_by_user_id)).toEqual(['user-1', 'user-2'])
   })
 
-  it('lists member-visible work items as creator-scoped rows', async () => {
+  it('lists member-visible work items as created or assigned rows', async () => {
     const pool = new FakePool()
     const created = makeCtx(pool, { title: 'Mine', client: clientContext }, 'member', 'member-1')
     await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
@@ -690,13 +695,20 @@ describe('handleWorkRequestRoutes', () => {
       id: uuid(999),
       created_by_user_id: 'other-user',
     })
+    pool.workItems.push({
+      ...pool.workItems[0]!,
+      id: uuid(998),
+      title: 'Assigned to me',
+      created_by_user_id: 'other-user',
+      assignee_user_id: 'member-1',
+    })
     const listed = makeCtx(pool, {}, 'member', 'member-1')
 
     await handleWorkRequestRoutes(buildReq('GET'), buildUrl('/api/work-requests'), listed.ctx)
 
     expect(listed.responses[0]?.status).toBe(200)
     const body = listed.responses[0]?.body as { work_items: WorkItem[] }
-    expect(body.work_items.map((item) => item.created_by_user_id)).toEqual(['member-1'])
+    expect(body.work_items.map((item) => item.id)).toEqual([pool.workItems[0]!.id, uuid(998)])
   })
 
   it('appends a resolution event and updates status transactionally', async () => {

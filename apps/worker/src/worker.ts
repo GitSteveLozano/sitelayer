@@ -463,22 +463,33 @@ async function heartbeat(): Promise<{ idle: boolean }> {
   // Audit-escrow tick — hourly forward-anchor of audit_events +
   // context_handoff_events into the signed chain. Cadence is gated
   // inside the runner; safe to invoke each heartbeat.
-  const auditEscrowSummary = await auditEscrowTickRunner.maybeTick(companyId).catch((error) => {
-    logger.error({ err: error }, '[worker] audit_escrow_tick failed')
-    captureWithEntityContext(error, {
-      scope: 'audit_escrow_tick',
-      entity_type: 'audit_event',
-      company_id: companyId,
-    })
-    return {
-      ran: false,
-      audit_event_entries_created: 0,
-      audit_events_anchored: 0,
-      context_handoff_entries_created: 0,
-      context_handoff_events_anchored: 0,
-      failed: 1,
-    }
-  })
+  const auditEscrowFallback = {
+    ran: false,
+    audit_event_entries_created: 0,
+    audit_events_anchored: 0,
+    context_handoff_entries_created: 0,
+    context_handoff_events_anchored: 0,
+    failed: 0,
+  }
+  const auditEscrowSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'audit_escrow_tick',
+    () =>
+      auditEscrowTickRunner.maybeTick(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] audit_escrow_tick failed')
+        captureWithEntityContext(error, {
+          scope: 'audit_escrow_tick',
+          entity_type: 'audit_event',
+          company_id: companyId,
+        })
+        return {
+          ...auditEscrowFallback,
+          failed: 1,
+        }
+      }),
+    auditEscrowFallback,
+  )
 
   // Daily prune of long-applied mutation_outbox / sync_events rows.
   // Gated by a process-local lastRunAt; safe to invoke every heartbeat.

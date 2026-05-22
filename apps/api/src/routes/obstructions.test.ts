@@ -20,6 +20,7 @@ type StoredWorkItem = {
   entity_id: string | null
   assignee_user_id: string | null
   updated_at: string
+  reversibility_window_seconds: number | null
   metadata: Record<string, unknown>
 }
 
@@ -127,7 +128,7 @@ class FakePool {
           assignee_user_id: item.assignee_user_id,
           blocked_since: item.updated_at,
           derived_status: item.status,
-          reversibility_window_seconds: extractWindow(item.metadata),
+          reversibility_window_seconds: item.reversibility_window_seconds,
           last_event_type: null,
           last_event_occurred_at: null,
           last_event_actor_kind: null,
@@ -147,7 +148,7 @@ class FakePool {
           assignee_user_id: item.assignee_user_id,
           blocked_since: item.updated_at,
           derived_status: 'dead',
-          reversibility_window_seconds: extractWindow(item.metadata),
+          reversibility_window_seconds: item.reversibility_window_seconds,
           last_event_type: null,
           last_event_occurred_at: null,
           last_event_actor_kind: null,
@@ -180,16 +181,6 @@ class FakePool {
 
     throw new Error(`unexpected SQL: ${normalized.slice(0, 240)}`)
   }
-}
-
-function extractWindow(metadata: Record<string, unknown>): number | null {
-  const raw = metadata['reversibility_window_seconds']
-  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
-  if (typeof raw === 'string') {
-    const parsed = Number(raw)
-    return Number.isFinite(parsed) ? parsed : null
-  }
-  return null
 }
 
 function buildReq(method = 'GET'): http.IncomingMessage {
@@ -248,7 +239,8 @@ describe('handleObstructionsRoutes', () => {
         entity_id: 'e-1',
         assignee_user_id: 'user-1',
         updated_at: '2026-05-20T12:00:00.000Z',
-        metadata: { reversibility_window_seconds: 86_400 },
+        reversibility_window_seconds: 86_400,
+        metadata: {},
       },
       {
         id: 'wi-expired',
@@ -261,6 +253,7 @@ describe('handleObstructionsRoutes', () => {
         entity_id: null,
         assignee_user_id: null,
         updated_at: '2026-05-19T12:00:00.000Z',
+        reversibility_window_seconds: null,
         metadata: {},
       },
       {
@@ -274,6 +267,7 @@ describe('handleObstructionsRoutes', () => {
         entity_id: null,
         assignee_user_id: null,
         updated_at: '2026-05-18T12:00:00.000Z',
+        reversibility_window_seconds: null,
         metadata: {},
       },
       {
@@ -287,7 +281,8 @@ describe('handleObstructionsRoutes', () => {
         entity_id: null,
         assignee_user_id: null,
         updated_at: '2026-05-21T06:00:00.000Z',
-        metadata: { reversibility_window_seconds: 3600 },
+        reversibility_window_seconds: 3600,
+        metadata: {},
       },
       {
         id: 'wi-healthy',
@@ -300,6 +295,7 @@ describe('handleObstructionsRoutes', () => {
         entity_id: null,
         assignee_user_id: null,
         updated_at: '2026-05-21T11:00:00.000Z',
+        reversibility_window_seconds: null,
         metadata: {},
       },
     ]
@@ -343,7 +339,7 @@ describe('handleObstructionsRoutes', () => {
 
     const expired = body.obstructions.find((row) => row.work_item_id === 'wi-expired')!
     expect(expired.suggested_action).toContain('Re-dispatch')
-    // wi-expired has no reversibility window in metadata → optimistically open
+    // wi-expired has no reversibility window on the row → optimistically open
     expect(expired.reversibility_available).toBe(true)
   })
 
@@ -361,6 +357,7 @@ describe('handleObstructionsRoutes', () => {
         entity_id: null,
         assignee_user_id: null,
         updated_at: '2026-05-20T12:00:00.000Z',
+        reversibility_window_seconds: null,
         metadata: {},
       },
       {
@@ -374,6 +371,7 @@ describe('handleObstructionsRoutes', () => {
         entity_id: null,
         assignee_user_id: null,
         updated_at: '2026-05-19T12:00:00.000Z',
+        reversibility_window_seconds: null,
         metadata: {},
       },
     ]
