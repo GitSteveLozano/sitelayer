@@ -44,13 +44,16 @@ Any one of:
 2. `MESH_WORK_REQUEST_DISPATCH_TOKEN` or Mesh-side auth changed.
 3. `SITELAYER_PUBLIC_BASE` is unset or wrong, so Mesh receives only a relative
    callback path instead of a usable callback URL.
-4. The agent callback replay omitted the per-dispatch scoped token from the
+4. New dispatch is blocked because
+   `WORK_REQUEST_DISPATCH_MAX_PENDING` or `WORK_REQUEST_DISPATCH_MAX_FAILED`
+   has been reached.
+5. The agent callback replay omitted the per-dispatch scoped token from the
    Mesh payload. `SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN` is only a legacy
    fallback for rows created before scoped callback tokens.
-5. Mesh accepted the job but did not call back before
+6. Mesh accepted the job but did not call back before
    `WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS`.
-6. The work item was stale-swept to `proposal_expired` or `review_stale`.
-7. GitHub linking was attempted by a role without export permission.
+7. The work item was stale-swept to `proposal_expired` or `review_stale`.
+8. GitHub linking was attempted by a role without export permission.
 
 ## Failure Semantics
 
@@ -67,9 +70,16 @@ Any one of:
   `pending` or lease-expired `processing`. Work items remain `agent_running`
   until the worker resumes or the stale sweep marks them
   `proposal_expired`.
-- **Mesh dispatch URL unset:** the worker leaves dispatch rows pending and does
-  not spend retry attempts. Configure `MESH_WORK_REQUEST_DISPATCH_URL`; the
-  next worker heartbeat will claim the backlog.
+- **Mesh dispatch URL unset:** new API dispatch returns 503 without moving the
+  work item to `agent_running` or creating an outbox row. Existing dispatch
+  rows stay pending in the worker without spending retry attempts. Configure
+  `MESH_WORK_REQUEST_DISPATCH_URL`; the next worker heartbeat will claim the
+  backlog.
+- **Dispatch backlog full:** new API dispatch returns 429 when pending/processing
+  `dispatch_mesh_work_request` rows meet `WORK_REQUEST_DISPATCH_MAX_PENDING`
+  (default 50), or 503 when failed/dead rows meet
+  `WORK_REQUEST_DISPATCH_MAX_FAILED` (default 25). Repeated dispatch calls for
+  an already queued work item still return that existing outbox row.
 - **Mesh unavailable:** the worker records the dispatch error and reschedules
   with queue backoff. After the retry cap the row is `failed`; retry it from
   the work item after the underlying URL/token/availability issue is fixed.
@@ -89,6 +99,11 @@ Any one of:
   response for that user, not create new support packets or queue work.
 - Repeated API dispatch calls return the existing outbox state. They must not
   reset `attempt_count`, `next_attempt_at`, `error`, or worker-owned backoff.
+- New API dispatch checks company-local Mesh dispatch pressure inside the same
+  transaction before it appends `agent.dispatch_requested` or inserts the
+  outbox row. `WORK_REQUEST_DISPATCH_MAX_PENDING` defaults to 50 and
+  `WORK_REQUEST_DISPATCH_MAX_FAILED` defaults to 25; `/api/work-requests/queue-health`
+  returns the active limits and current counts.
 - The worker is the only normal path that advances queue retry state. Human
   recovery uses the explicit retry action after the dependency is fixed; normal
   dispatch clicks do not reset failed rows.
