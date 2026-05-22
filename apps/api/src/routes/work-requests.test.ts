@@ -12,6 +12,8 @@ type JsonRecord = Record<string, unknown>
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
 const TEST_MESH_DISPATCH_URL = 'https://mesh.example.test/api/orchestrate/tasks'
 const ORIGINAL_MESH_DISPATCH_URL = process.env.MESH_WORK_REQUEST_DISPATCH_URL
+const ORIGINAL_DISPATCH_MAX_PENDING = process.env.WORK_REQUEST_DISPATCH_MAX_PENDING
+const ORIGINAL_DISPATCH_MAX_FAILED = process.env.WORK_REQUEST_DISPATCH_MAX_FAILED
 
 type SupportPacket = {
   id: string
@@ -274,6 +276,36 @@ class FakePool {
 
     if (
       normalized.includes('from mutation_outbox') &&
+      normalized.includes('pending_count') &&
+      normalized.includes('failed_count')
+    ) {
+      const [companyId, mutationType] = params as [string, string]
+      const pendingCount = this.mutationOutbox.filter(
+        (outbox) =>
+          outbox.company_id === companyId &&
+          outbox.mutation_type === mutationType &&
+          (outbox.status === 'pending' || outbox.status === 'processing'),
+      ).length
+      const failedCount = this.mutationOutbox.filter(
+        (outbox) =>
+          outbox.company_id === companyId &&
+          outbox.mutation_type === mutationType &&
+          (outbox.status === 'failed' || outbox.status === 'dead'),
+      ).length
+      return {
+        rows: [
+          {
+            pending_count: pendingCount,
+            failed_count: failedCount,
+            oldest_pending_age_seconds: pendingCount > 0 ? 900 : null,
+          },
+        ],
+        rowCount: 1,
+      }
+    }
+
+    if (
+      normalized.includes('from mutation_outbox') &&
       normalized.includes('idempotency_key') &&
       normalized.includes('mutation_type = $3')
     ) {
@@ -532,11 +564,17 @@ const clientContext = {
 describe('handleWorkRequestRoutes', () => {
   beforeEach(() => {
     process.env.MESH_WORK_REQUEST_DISPATCH_URL = TEST_MESH_DISPATCH_URL
+    delete process.env.WORK_REQUEST_DISPATCH_MAX_PENDING
+    delete process.env.WORK_REQUEST_DISPATCH_MAX_FAILED
   })
 
   afterEach(() => {
     if (ORIGINAL_MESH_DISPATCH_URL === undefined) delete process.env.MESH_WORK_REQUEST_DISPATCH_URL
     else process.env.MESH_WORK_REQUEST_DISPATCH_URL = ORIGINAL_MESH_DISPATCH_URL
+    if (ORIGINAL_DISPATCH_MAX_PENDING === undefined) delete process.env.WORK_REQUEST_DISPATCH_MAX_PENDING
+    else process.env.WORK_REQUEST_DISPATCH_MAX_PENDING = ORIGINAL_DISPATCH_MAX_PENDING
+    if (ORIGINAL_DISPATCH_MAX_FAILED === undefined) delete process.env.WORK_REQUEST_DISPATCH_MAX_FAILED
+    else process.env.WORK_REQUEST_DISPATCH_MAX_FAILED = ORIGINAL_DISPATCH_MAX_FAILED
   })
 
   it('creates a support packet, work item, and first handoff event in one route call', async () => {
@@ -766,6 +804,50 @@ describe('handleWorkRequestRoutes', () => {
       if (previous === undefined) delete process.env.SITELAYER_PUBLIC_BASE
       else process.env.SITELAYER_PUBLIC_BASE = previous
     }
+  })
+
+  it('rejects new Mesh dispatch when the pending dispatch backlog is full', async () => {
+    process.env.WORK_REQUEST_DISPATCH_MAX_PENDING = '1'
+    const pool = new FakePool()
+    await handleWorkRequestRoutes(
+      buildReq(),
+      buildUrl(),
+      makeCtx(pool, { title: 'First task', client: clientContext }).ctx,
+    )
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${pool.workItems[0]!.id}/dispatch/mesh`),
+      makeCtx(pool, {}).ctx,
+    )
+    await handleWorkRequestRoutes(
+      buildReq(),
+      buildUrl(),
+      makeCtx(pool, { title: 'Second task', client: { ...clientContext, request_id: 'second-request' } }).ctx,
+    )
+    const secondWorkItemId = pool.workItems[1]!.id
+    const dispatch = makeCtx(pool, {})
+
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${secondWorkItemId}/dispatch/mesh`),
+      dispatch.ctx,
+    )
+
+    expect(dispatch.responses[0]?.status).toBe(429)
+    expect(dispatch.responses[0]?.body).toMatchObject({
+      error: 'mesh dispatch backlog is full',
+      dispatch_outbox: {
+        pending_count: 1,
+        pending_limit: 1,
+      },
+    })
+    expect(pool.workItems[1]).toMatchObject({ status: 'new', lane: 'triage' })
+    expect(pool.mutationOutbox).toHaveLength(1)
+    expect(
+      pool.handoffEvents.filter(
+        (event) => event.work_item_id === secondWorkItemId && event.event_type === 'agent.dispatch_requested',
+      ),
+    ).toHaveLength(0)
   })
 
   it('does not reset dispatch outbox backoff when dispatch is repeated', async () => {

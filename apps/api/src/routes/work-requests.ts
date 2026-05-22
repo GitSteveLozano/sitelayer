@@ -52,6 +52,8 @@ const MAX_TITLE_LENGTH = 240
 const MAX_SUMMARY_LENGTH = 4000
 const MAX_STALE_SWEEP_LIMIT = 50
 const DEFAULT_CALLBACK_TOKEN_TTL_HOURS = 72
+const DEFAULT_DISPATCH_MAX_PENDING = 50
+const DEFAULT_DISPATCH_MAX_FAILED = 25
 const DISPATCH_MUTATION_TYPE = 'dispatch_mesh_work_request'
 const HEALTH_WORK_STATUSES = ['agent_running', 'review_ready', 'review_stale', 'proposal_expired'] as const
 const HEALTH_DISPATCH_STATUSES = ['pending', 'processing', 'failed', 'dead'] as const
@@ -65,6 +67,14 @@ type DispatchOutboxSummary = {
   next_attempt_at: string | null
   applied_at: string | null
   error: string | null
+}
+
+type DispatchBackpressureState = {
+  pending_count: number
+  failed_count: number
+  oldest_pending_age_seconds: number | null
+  pending_limit: number
+  failed_limit: number
 }
 
 type DispatchPayload = {
@@ -138,6 +148,20 @@ function callbackTokenTtlHours(): number {
   return Math.min(
     720,
     Math.max(1, readPositiveNumberEnv('WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS', DEFAULT_CALLBACK_TOKEN_TTL_HOURS)),
+  )
+}
+
+function dispatchMaxPending(): number {
+  return Math.min(
+    1000,
+    Math.max(1, readPositiveNumberEnv('WORK_REQUEST_DISPATCH_MAX_PENDING', DEFAULT_DISPATCH_MAX_PENDING)),
+  )
+}
+
+function dispatchMaxFailed(): number {
+  return Math.min(
+    1000,
+    Math.max(1, readPositiveNumberEnv('WORK_REQUEST_DISPATCH_MAX_FAILED', DEFAULT_DISPATCH_MAX_FAILED)),
   )
 }
 
@@ -281,6 +305,39 @@ async function getDispatchOutboxTx(
     [companyId, idempotencyKey, DISPATCH_MUTATION_TYPE],
   )
   return result.rows[0] ?? null
+}
+
+async function getDispatchBackpressureTx(
+  executor: LedgerExecutor,
+  companyId: string,
+): Promise<DispatchBackpressureState> {
+  const pendingLimit = dispatchMaxPending()
+  const failedLimit = dispatchMaxFailed()
+  const result = await executor.query<{
+    pending_count: number | string | null
+    failed_count: number | string | null
+    oldest_pending_age_seconds: number | string | null
+  }>(
+    `select count(*) filter (where status in ('pending', 'processing'))::int as pending_count,
+            count(*) filter (where status in ('failed', 'dead'))::int as failed_count,
+            extract(epoch from (now() - min(created_at) filter (where status in ('pending', 'processing'))))::int
+              as oldest_pending_age_seconds
+       from mutation_outbox
+      where company_id = $1
+        and mutation_type = $2`,
+    [companyId, DISPATCH_MUTATION_TYPE],
+  )
+  const row = result.rows[0]
+  return {
+    pending_count: Number(row?.pending_count ?? 0),
+    failed_count: Number(row?.failed_count ?? 0),
+    oldest_pending_age_seconds:
+      row?.oldest_pending_age_seconds === null || row?.oldest_pending_age_seconds === undefined
+        ? null
+        : Number(row.oldest_pending_age_seconds),
+    pending_limit: pendingLimit,
+    failed_limit: failedLimit,
+  }
 }
 
 async function getHandoffEventByIdempotencyTx(
@@ -666,6 +723,8 @@ async function getWorkRequestQueueHealth(ctx: WorkRequestRouteCtx) {
         callback_configured: true,
         scoped_callbacks_enabled: true,
         callback_fallback_configured: Boolean(process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN),
+        dispatch_max_pending: dispatchMaxPending(),
+        dispatch_max_failed: dispatchMaxFailed(),
       },
       work_items: countsFor(HEALTH_WORK_STATUSES, workStatuses.rows),
       dispatch_outbox: {
@@ -911,11 +970,19 @@ async function dispatchWorkRequestToMesh(req: http.IncomingMessage, ctx: WorkReq
     const existingOutbox = await getDispatchOutboxTx(c, ctx.company.id, idempotencyKey)
     if (existingOutbox) {
       return {
+        kind: 'ready' as const,
         workItem: detail.work_item,
         event: await getHandoffEventByIdempotencyTx(c, ctx.company.id, idempotencyKey),
         outbox: existingOutbox,
         dispatchQueued: false,
       }
+    }
+    const backpressure = await getDispatchBackpressureTx(c, ctx.company.id)
+    if (backpressure.pending_count >= backpressure.pending_limit) {
+      return { kind: 'backpressure' as const, status: 429, reason: 'pending' as const, backpressure }
+    }
+    if (backpressure.failed_count >= backpressure.failed_limit) {
+      return { kind: 'backpressure' as const, status: 503, reason: 'failed' as const, backpressure }
     }
     const updated = await updateContextWorkItemWithEventTx(c, {
       companyId: ctx.company.id,
@@ -945,10 +1012,20 @@ async function dispatchWorkRequestToMesh(req: http.IncomingMessage, ctx: WorkReq
       idempotencyKey,
       payload,
     })
-    return { ...updated, outbox, dispatchQueued: true }
+    return { kind: 'ready' as const, ...updated, outbox, dispatchQueued: true }
   })
   if (!result) {
     ctx.sendJson(404, { error: 'work request not found' })
+    return
+  }
+  if (result.kind === 'backpressure') {
+    ctx.sendJson(result.status, {
+      error:
+        result.reason === 'pending'
+          ? 'mesh dispatch backlog is full'
+          : 'mesh dispatch failure backlog requires operator attention',
+      dispatch_outbox: result.backpressure,
+    })
     return
   }
   ctx.sendJson(202, {
