@@ -51,8 +51,10 @@ jobs:
           WORK_REQUEST_AGENT_STALE_HOURS: '24'
           WORK_REQUEST_STALE_SWEEP_INTERVAL_MS: '300000'
           WORK_REQUEST_STALE_SWEEP_LIMIT: '25'
-          # Workers are enabled on dev so QBO sync paths and notification
-          # delivery can be exercised against the persistent dev DB.
+          NOTIFICATIONS_ENABLED: '0'
+          # Workers are enabled on dev so QBO sync, context handoff dispatch,
+          # and stale sweeps can be exercised against the persistent dev DB.
+          # Notification delivery stays disabled unless Clerk is configured.
           PREVIEW_ENABLE_WORKER: '1'
           # The pre-flight orphan reap targets `sitelayer-pr-*` only, so the
           # `sitelayer-dev` stack is unaffected. Skip the reap anyway since

@@ -180,6 +180,7 @@ rsync -az --delete \
   printf 'VITE_API_URL=https://%s\n' "$preview_host"
   printf 'VITE_SENTRY_ENVIRONMENT=%s\n' "$PREVIEW_TIER"
   printf 'SITELAYER_PUBLIC_BASE=https://%s\n' "$preview_host"
+  append_optional_env NOTIFICATIONS_ENABLED
   append_optional_env MESH_WORK_REQUEST_DISPATCH_URL
   append_optional_env MESH_WORK_REQUEST_DISPATCH_TOKEN
   printf 'WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS=%s\n' "${WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS:-72}"
