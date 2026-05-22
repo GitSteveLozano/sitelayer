@@ -44,8 +44,11 @@ jobs:
           PREVIEW_SHARED_ENV: /app/previews/.env.dev.shared
           PREVIEW_MODE: ${{ inputs.mode || 'dev' }}
           PREVIEW_SOURCE_DIR: ${{ github.workspace }}
-          MESH_WORK_REQUEST_DISPATCH_URL: http://mesh-hetzner:8713/api/orchestrate/tasks
-          MESH_WORK_REQUEST_DISPATCH_TOKEN: ${{ secrets.MESH_WORK_REQUEST_DISPATCH_TOKEN }}
+          # The preview/dev host is not guaranteed to be on the Tailnet, so do
+          # not hardcode mesh-hetzner here. Set this repository variable only
+          # when the value is reachable from inside the dev worker container.
+          MESH_WORK_REQUEST_DISPATCH_URL: ${{ vars.DEV_MESH_WORK_REQUEST_DISPATCH_URL || '' }}
+          MESH_WORK_REQUEST_DISPATCH_TOKEN: ${{ secrets.DEV_MESH_WORK_REQUEST_DISPATCH_TOKEN || secrets.MESH_WORK_REQUEST_DISPATCH_TOKEN }}
           WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS: '72'
           WORK_REQUEST_REVIEW_STALE_HOURS: '48'
           WORK_REQUEST_AGENT_STALE_HOURS: '24'

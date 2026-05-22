@@ -24,6 +24,8 @@
 #   MESH_API_URL            Enables Mesh task probe
 #   MESH_API_TOKEN          Optional Bearer token for Mesh probe
 #   WORK_REQUEST_SMOKE_ID   Override the generated smoke entity/idempotency suffix
+#   WORK_REQUEST_SMOKE_WAIT_SECONDS
+#                           Poll dispatch_outbox until applied/failed/dead (default: 0)
 
 set -euo pipefail
 
@@ -83,6 +85,11 @@ fi
 
 if [ -z "$SITELAYER_API_URL" ] || [ -z "$SITELAYER_AUTH_TOKEN" ]; then
   err "Set SITELAYER_API_URL and SITELAYER_AUTH_TOKEN (or SITELAYER_TOKEN)."
+  exit 5
+fi
+WORK_REQUEST_SMOKE_WAIT_SECONDS="${WORK_REQUEST_SMOKE_WAIT_SECONDS:-0}"
+if ! [[ "$WORK_REQUEST_SMOKE_WAIT_SECONDS" =~ ^[0-9]+$ ]]; then
+  err "WORK_REQUEST_SMOKE_WAIT_SECONDS must be a non-negative integer."
   exit 5
 fi
 
@@ -202,7 +209,48 @@ if [ "$health_http" = "200" ]; then
   pending_count="$(json_field '.dispatch_outbox.pending' "$health_json")"
   ok "Queue health mesh_dispatch_configured=$mesh_configured pending=$pending_count"
 else
+  mesh_configured=""
   log "Queue health skipped/failed with HTTP $health_http"
+fi
+
+if [ "$WORK_REQUEST_SMOKE_WAIT_SECONDS" -gt 0 ]; then
+  if [ "$mesh_configured" = "false" ]; then
+    log "Mesh dispatch is not configured; skipped worker-drain wait."
+  else
+    log "Waiting up to ${WORK_REQUEST_SMOKE_WAIT_SECONDS}s for worker dispatch drain"
+    deadline=$((SECONDS + WORK_REQUEST_SMOKE_WAIT_SECONDS))
+    dispatch_state=""
+    dispatch_error=""
+    attempt_count=""
+    while [ "$SECONDS" -le "$deadline" ]; do
+      wait_resp="$(http_json GET "$SITELAYER_API_URL/api/work-requests/$work_item_id")"
+      wait_http="$(tail -n1 <<<"$wait_resp")"
+      wait_json="$(sed '$d' <<<"$wait_resp")"
+      if [ "$wait_http" != "200" ]; then
+        err "Detail during wait returned HTTP $wait_http"
+        printf '%s\n' "$wait_json" >&2
+        exit 6
+      fi
+      dispatch_state="$(json_field '.dispatch_outbox.status' "$wait_json")"
+      dispatch_error="$(json_field '.dispatch_outbox.error' "$wait_json")"
+      attempt_count="$(json_field '.dispatch_outbox.attempt_count' "$wait_json")"
+      case "$dispatch_state" in
+        applied)
+          ok "Worker dispatch applied attempt_count=$attempt_count"
+          break
+          ;;
+        failed|dead)
+          err "Worker dispatch reached $dispatch_state attempt_count=$attempt_count error=$dispatch_error"
+          exit 6
+          ;;
+      esac
+      sleep 5
+    done
+    if [ "$dispatch_state" != "applied" ]; then
+      err "Timed out waiting for worker dispatch; last status=$dispatch_state attempt_count=$attempt_count error=$dispatch_error"
+      exit 6
+    fi
+  fi
 fi
 
 log "Step 4/5: scoped callback replay"

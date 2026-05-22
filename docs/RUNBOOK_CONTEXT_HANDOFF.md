@@ -225,7 +225,7 @@ when inspecting long timelines.
 
 ## Verifying Recovery
 
-For a dev/preview end-to-end smoke, use:
+For a dev/preview API smoke, use the seeded e2e tenant:
 
 ```bash
 SITELAYER_API_URL=https://dev.sitelayer.sandolab.xyz \
@@ -233,6 +233,23 @@ SITELAYER_AUTH_TOKEN=e2e-admin \
 SITELAYER_COMPANY_SLUG=e2e-fixtures \
 ./scripts/test-context-work-request.sh
 ```
+
+For worker-drain validation, use the tenant the persistent dev worker drains
+(`ACTIVE_COMPANY_SLUG=la-operations`) and wait for the outbox row to become
+`applied`:
+
+```bash
+SITELAYER_API_URL=https://dev.sitelayer.sandolab.xyz \
+SITELAYER_AUTH_TOKEN=demo-user \
+SITELAYER_COMPANY_SLUG=la-operations \
+WORK_REQUEST_SMOKE_WAIT_SECONDS=180 \
+./scripts/test-context-work-request.sh
+```
+
+The preview/dev host is not on the Tailnet by default. Only set
+`DEV_MESH_WORK_REQUEST_DISPATCH_URL` when the URL is reachable from inside the
+dev worker container; otherwise leave it unset so worker retries are not spent
+against a known-unreachable `mesh-hetzner` address.
 
 Set `DATABASE_URL` to also replay the scoped callback token from
 `mutation_outbox` and verify that the work item reaches `review_ready`.
