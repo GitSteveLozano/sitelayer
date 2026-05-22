@@ -31,6 +31,7 @@ import {
 } from '../../components/m/index.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
 import { WorkRequestAction } from '../../components/work-requests/WorkRequestAction.js'
+import { WorkRequestEntityStatus } from '../../components/work-requests/WorkRequestEntityStatus.js'
 import { formatMoney } from './format.js'
 
 type Filter = 'all' | 'out' | 'available' | 'service'
@@ -160,6 +161,7 @@ export function MobileRentals({ companySlug, companyRole }: { companySlug: strin
           <MStat label="Daily revenue" value={formatMoney(dailyRevenue)} />
           <MStat label="Util" value={`${utilizationPct}%`} />
         </MStatStrip>
+        <WorkRequestEntityStatus entityType="rental_catalog" entityId={companySlug} />
         <WorkRequestAction
           companyRole={companyRole}
           defaultTitle="Rental issue"

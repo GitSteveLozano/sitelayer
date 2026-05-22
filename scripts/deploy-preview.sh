@@ -24,6 +24,13 @@ PREVIEW_MODE="${PREVIEW_MODE:-dev}"
 #                       `public`. Used by .github/workflows/deploy-dev.yml.
 PREVIEW_TIER="${PREVIEW_TIER:-preview}"
 
+append_optional_env() {
+  local name="$1"
+  local value="${!name:-}"
+  [ -n "$value" ] || return 0
+  printf '%s=%s\n' "$name" "$value"
+}
+
 case "$PREVIEW_TIER" in
   preview|dev) ;;
   *)
@@ -172,6 +179,14 @@ rsync -az --delete \
   printf 'QBO_SUCCESS_REDIRECT_URI=https://%s/?qbo=connected\n' "$preview_host"
   printf 'VITE_API_URL=https://%s\n' "$preview_host"
   printf 'VITE_SENTRY_ENVIRONMENT=%s\n' "$PREVIEW_TIER"
+  printf 'SITELAYER_PUBLIC_BASE=https://%s\n' "$preview_host"
+  append_optional_env MESH_WORK_REQUEST_DISPATCH_URL
+  append_optional_env MESH_WORK_REQUEST_DISPATCH_TOKEN
+  printf 'WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS=%s\n' "${WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS:-72}"
+  printf 'WORK_REQUEST_REVIEW_STALE_HOURS=%s\n' "${WORK_REQUEST_REVIEW_STALE_HOURS:-48}"
+  printf 'WORK_REQUEST_AGENT_STALE_HOURS=%s\n' "${WORK_REQUEST_AGENT_STALE_HOURS:-24}"
+  printf 'WORK_REQUEST_STALE_SWEEP_INTERVAL_MS=%s\n' "${WORK_REQUEST_STALE_SWEEP_INTERVAL_MS:-300000}"
+  printf 'WORK_REQUEST_STALE_SWEEP_LIMIT=%s\n' "${WORK_REQUEST_STALE_SWEEP_LIMIT:-25}"
 } >"$target_dir/.env"
 chmod 600 "$target_dir/.env"
 

@@ -51,6 +51,7 @@ const LIST_ROLES: readonly CompanyRole[] = CREATE_ROLES
 const MAX_TITLE_LENGTH = 240
 const MAX_SUMMARY_LENGTH = 4000
 const MAX_STALE_SWEEP_LIMIT = 50
+const DEFAULT_CALLBACK_TOKEN_TTL_HOURS = 72
 const DISPATCH_MUTATION_TYPE = 'dispatch_mesh_work_request'
 const HEALTH_WORK_STATUSES = ['agent_running', 'review_ready', 'review_stale', 'proposal_expired'] as const
 const HEALTH_DISPATCH_STATUSES = ['pending', 'processing', 'failed', 'dead'] as const
@@ -79,8 +80,10 @@ type DispatchPayload = {
   support_packet: unknown
   callback: {
     path: string
+    url: string | null
     token: string
     token_type: 'scoped_bearer'
+    expires_at: string
   }
 }
 
@@ -118,6 +121,52 @@ function newCallbackToken(): string {
 
 function hashCallbackToken(token: string): string {
   return createHash('sha256').update(token).digest('hex')
+}
+
+function readPositiveNumberEnv(name: string, fallback: number): number {
+  const raw = Number(process.env[name])
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback
+}
+
+function callbackTokenTtlHours(): number {
+  return Math.min(
+    720,
+    Math.max(1, readPositiveNumberEnv('WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS', DEFAULT_CALLBACK_TOKEN_TTL_HOURS)),
+  )
+}
+
+function callbackTokenExpiresAt(now = Date.now()): string {
+  return new Date(now + callbackTokenTtlHours() * 60 * 60 * 1000).toISOString()
+}
+
+function normalizePublicBaseUrl(value: string | null): string | null {
+  if (!value) return null
+  const trimmed = value.trim().replace(/\/+$/, '')
+  if (!trimmed) return null
+  try {
+    const parsed = new URL(trimmed)
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null
+    return parsed.toString().replace(/\/+$/, '')
+  } catch {
+    return null
+  }
+}
+
+function publicBaseUrlFromRequest(req: http.IncomingMessage): string | null {
+  const configured = normalizePublicBaseUrl(
+    process.env.SITELAYER_PUBLIC_BASE ?? process.env.PUBLIC_BASE_URL ?? process.env.APP_PUBLIC_BASE_URL ?? null,
+  )
+  if (configured) return configured
+  const host = headerText(req.headers['x-forwarded-host']) ?? headerText(req.headers.host)
+  if (!host) return null
+  const proto =
+    headerText(req.headers['x-forwarded-proto']) ?? (process.env.NODE_ENV === 'production' ? 'https' : 'http')
+  return normalizePublicBaseUrl(`${proto}://${host}`)
+}
+
+function callbackUrlForPath(req: http.IncomingMessage, path: string): string | null {
+  const base = publicBaseUrlFromRequest(req)
+  return base ? `${base}${path}` : null
 }
 
 function buildClientPacket(body: Record<string, unknown>): JsonRecord {
@@ -353,28 +402,41 @@ async function setAgentCallbackTokenHashTx(
   )
 }
 
-async function readAgentCallbackTokenHash(companyId: string, workItemId: string): Promise<string | null> {
+async function readAgentCallbackTokenAuth(
+  companyId: string,
+  workItemId: string,
+): Promise<{ tokenHash: string | null; issuedAt: string | null } | null> {
   const result = await withCompanyClient(companyId, (c) =>
-    c.query<{ agent_callback_token_hash: string | null }>(
-      `select agent_callback_token_hash
+    c.query<{ agent_callback_token_hash: string | null; agent_callback_token_issued_at: string | null }>(
+      `select agent_callback_token_hash, agent_callback_token_issued_at
          from context_work_items
         where company_id = $1 and id = $2
         limit 1`,
       [companyId, workItemId],
     ),
   )
-  return result.rows[0]?.agent_callback_token_hash ?? null
+  const row = result.rows[0]
+  if (!row) return null
+  return {
+    tokenHash: row.agent_callback_token_hash ?? null,
+    issuedAt: row.agent_callback_token_issued_at ?? null,
+  }
 }
 
 async function authorizeAgentCallback(
   companyId: string,
   workItemId: string,
   presentedToken: string,
-): Promise<'ok' | 'missing' | 'invalid' | 'not_found'> {
-  const scopedHash = await readAgentCallbackTokenHash(companyId, workItemId)
-  if (scopedHash) {
+): Promise<'ok' | 'missing' | 'invalid' | 'expired' | 'not_found'> {
+  const scoped = await readAgentCallbackTokenAuth(companyId, workItemId)
+  if (!scoped) return 'not_found'
+  if (scoped?.tokenHash) {
     if (!presentedToken) return 'missing'
-    return safeTokenEqual(hashCallbackToken(presentedToken), scopedHash) ? 'ok' : 'invalid'
+    const issuedAt = scoped.issuedAt ? Date.parse(scoped.issuedAt) : NaN
+    if (Number.isFinite(issuedAt) && Date.now() - issuedAt > callbackTokenTtlHours() * 60 * 60 * 1000) {
+      return 'expired'
+    }
+    return safeTokenEqual(hashCallbackToken(presentedToken), scoped.tokenHash) ? 'ok' : 'invalid'
   }
   const fallback = process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN
   if (!fallback) return 'not_found'
@@ -383,9 +445,11 @@ async function authorizeAgentCallback(
 }
 
 function buildDispatchPayload(
+  req: http.IncomingMessage,
   row: ContextWorkItemRow & { support_packet?: unknown },
   callbackToken: string,
 ): DispatchPayload {
+  const callbackPath = `/api/work-requests/${row.id}/agent-callback`
   return {
     work_item_id: row.id,
     support_packet_id: row.support_packet_id,
@@ -398,9 +462,11 @@ function buildDispatchPayload(
     lane: row.lane,
     support_packet: row.support_packet ?? null,
     callback: {
-      path: `/api/work-requests/${row.id}/agent-callback`,
+      path: callbackPath,
+      url: callbackUrlForPath(req, callbackPath),
       token: callbackToken,
       token_type: 'scoped_bearer',
+      expires_at: callbackTokenExpiresAt(),
     },
   }
 }
@@ -816,7 +882,6 @@ async function appendWorkRequestEvent(ctx: WorkRequestRouteCtx, id: string) {
 }
 
 async function dispatchWorkRequestToMesh(req: http.IncomingMessage, ctx: WorkRequestRouteCtx, id: string) {
-  void req
   if (!ctx.requireRole(TRIAGE_ROLES)) return
   if (!isValidUuid(id)) {
     ctx.sendJson(400, { error: 'invalid work request id' })
@@ -834,7 +899,7 @@ async function dispatchWorkRequestToMesh(req: http.IncomingMessage, ctx: WorkReq
   const idempotencyKey = `context_work_item:dispatch_mesh:${id}`
   const callbackToken = newCallbackToken()
   const callbackTokenHash = hashCallbackToken(callbackToken)
-  const payload = buildDispatchPayload(detail.work_item, callbackToken)
+  const payload = buildDispatchPayload(req, detail.work_item, callbackToken)
   const result = await withMutationTx(ctx.company.id, async (c) => {
     const existingOutbox = await getDispatchOutboxTx(c, ctx.company.id, idempotencyKey)
     if (existingOutbox) {
@@ -926,7 +991,7 @@ async function retryWorkRequestMeshDispatch(req: http.IncomingMessage, ctx: Work
     `context_work_item:dispatch_mesh_retry:${id}:${Math.floor(Date.now() / 60_000)}`
   const callbackToken = newCallbackToken()
   const callbackTokenHash = hashCallbackToken(callbackToken)
-  const payload = buildDispatchPayload(detail.work_item, callbackToken)
+  const payload = buildDispatchPayload(req, detail.work_item, callbackToken)
   const result = await withMutationTx(ctx.company.id, async (c) => {
     const retry = await retryDispatchOutboxTx(c, {
       companyId: ctx.company.id,
@@ -1002,6 +1067,10 @@ async function receiveAgentCallback(req: http.IncomingMessage, ctx: WorkRequestR
   const auth = await authorizeAgentCallback(ctx.company.id, id, presented)
   if (auth === 'not_found') {
     ctx.sendJson(404, { error: 'not found' })
+    return
+  }
+  if (auth === 'expired') {
+    ctx.sendJson(410, { error: 'callback token expired' })
     return
   }
   if (auth !== 'ok') {

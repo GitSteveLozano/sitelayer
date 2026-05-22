@@ -12,8 +12,10 @@ export interface ContextWorkDispatchPayload {
   support_packet?: unknown
   callback?: {
     path?: string | null
+    url?: string | null
     token?: string | null
     token_type?: string | null
+    expires_at?: string | null
   } | null
 }
 
@@ -125,6 +127,7 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
   const summary = cleanString(payload.summary)
   const title = cleanString(payload.title) ?? `Sitelayer work request ${payload.work_item_id.slice(0, 8)}`
   const callbackPath = cleanString(payload.callback?.path)
+  const callbackUrl = cleanString(payload.callback?.url)
 
   return {
     subject: `[Sitelayer] ${title}`,
@@ -137,7 +140,7 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
       route,
       entityType,
       entityId,
-      callbackPath,
+      callbackPath: callbackUrl ?? callbackPath,
     }),
     created_by: 'sitelayer-worker',
     source: 'sitelayer-context-handoff',
@@ -158,11 +161,12 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
       entity_type: entityType,
       entity_id: entityId,
       callback_path: callbackPath,
+      callback_url: callbackUrl,
       readonly: true,
       acceptance_criteria: [
         'Read the attached Sitelayer context handoff before acting.',
         'Record the observed issue, likely cause, and recommended owner or next action.',
-        'Use the callback path when updating the Sitelayer work request status.',
+        'Use the scoped callback URL when updating the Sitelayer work request status.',
       ],
     },
     execution_context: {
@@ -174,6 +178,7 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
       entity_type: entityType,
       entity_id: entityId,
       callback_path: callbackPath,
+      callback_url: callbackUrl,
       dispatch_mode: 'steerer',
       claim_mode: 'steerer',
       context_handoff: contextHandoff,

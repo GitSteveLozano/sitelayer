@@ -15,6 +15,7 @@ import type { CompanyRole } from '@sitelayer/domain'
 import { MBody, MTopBar } from '../../components/m/index.js'
 import { MEmptyState } from '../../components/m-states/index.js'
 import { WorkRequestAction } from '../../components/work-requests/WorkRequestAction.js'
+import { WorkRequestEntityStatus } from '../../components/work-requests/WorkRequestEntityStatus.js'
 import { ProjectHero } from './project-detail/project-hero.js'
 import { TabBar } from './project-detail/tab-bar.js'
 import { Overview } from './project-detail/overview-tab.js'
@@ -93,6 +94,7 @@ export function MobileProjectDetail({
       />
       <MBody>
         <ProjectHero project={project} pctSpent={pctSpent} onTrack={onTrack} spent={spent} bid={bid} />
+        <WorkRequestEntityStatus entityType="project" entityId={project.id} />
         <WorkRequestAction
           companyRole={companyRole}
           defaultTitle="Project issue"

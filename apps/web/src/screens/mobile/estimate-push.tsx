@@ -32,6 +32,7 @@ import {
 } from '../../components/m/index.js'
 import { MSkeletonList } from '../../components/m-states/index.js'
 import { WorkRequestAction } from '../../components/work-requests/WorkRequestAction.js'
+import { WorkRequestEntityStatus } from '../../components/work-requests/WorkRequestEntityStatus.js'
 import { formatMoney } from './format.js'
 
 const STATE_LABEL: Record<EstimatePushState, string> = {
@@ -163,6 +164,7 @@ export function MobileEstimatePush({ companySlug, companyRole }: { companySlug: 
           route={`/projects/${projectId}/estimate-push/${pushId}`}
           client={workRequestContext}
         />
+        <WorkRequestEntityStatus entityType="estimate_push" entityId={pushId} />
         <MKpiRow cols={2}>
           <MKpi label="Subtotal" value={formatMoney(subtotal)} />
           <MKpi

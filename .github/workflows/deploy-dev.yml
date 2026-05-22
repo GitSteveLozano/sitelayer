@@ -44,6 +44,13 @@ jobs:
           PREVIEW_SHARED_ENV: /app/previews/.env.dev.shared
           PREVIEW_MODE: ${{ inputs.mode || 'dev' }}
           PREVIEW_SOURCE_DIR: ${{ github.workspace }}
+          MESH_WORK_REQUEST_DISPATCH_URL: http://mesh-hetzner:8713/api/orchestrate/tasks
+          MESH_WORK_REQUEST_DISPATCH_TOKEN: ${{ secrets.MESH_WORK_REQUEST_DISPATCH_TOKEN }}
+          WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS: '72'
+          WORK_REQUEST_REVIEW_STALE_HOURS: '48'
+          WORK_REQUEST_AGENT_STALE_HOURS: '24'
+          WORK_REQUEST_STALE_SWEEP_INTERVAL_MS: '300000'
+          WORK_REQUEST_STALE_SWEEP_LIMIT: '25'
           # Workers are enabled on dev so QBO sync paths and notification
           # delivery can be exercised against the persistent dev DB.
           PREVIEW_ENABLE_WORKER: '1'
