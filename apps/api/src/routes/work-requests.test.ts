@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import type pino from 'pino'
@@ -10,6 +10,8 @@ import { handleWorkRequestRoutes, type WorkRequestRouteCtx } from './work-reques
 type JsonRecord = Record<string, unknown>
 
 const COMPANY_ID = '11111111-1111-4111-8111-111111111111'
+const TEST_MESH_DISPATCH_URL = 'https://mesh.example.test/api/orchestrate/tasks'
+const ORIGINAL_MESH_DISPATCH_URL = process.env.MESH_WORK_REQUEST_DISPATCH_URL
 
 type SupportPacket = {
   id: string
@@ -528,6 +530,15 @@ const clientContext = {
 }
 
 describe('handleWorkRequestRoutes', () => {
+  beforeEach(() => {
+    process.env.MESH_WORK_REQUEST_DISPATCH_URL = TEST_MESH_DISPATCH_URL
+  })
+
+  afterEach(() => {
+    if (ORIGINAL_MESH_DISPATCH_URL === undefined) delete process.env.MESH_WORK_REQUEST_DISPATCH_URL
+    else process.env.MESH_WORK_REQUEST_DISPATCH_URL = ORIGINAL_MESH_DISPATCH_URL
+  })
+
   it('creates a support packet, work item, and first handoff event in one route call', async () => {
     const pool = new FakePool()
     const { ctx, responses } = makeCtx(pool, {
@@ -713,6 +724,26 @@ describe('handleWorkRequestRoutes', () => {
     expect(pool.handoffEvents.map((event) => event.event_type)).toContain('agent.dispatch_requested')
   })
 
+  it('rejects Mesh dispatch when dispatch is not configured without mutating the work item', async () => {
+    delete process.env.MESH_WORK_REQUEST_DISPATCH_URL
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Unavailable dispatch', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItemId = pool.workItems[0]!.id
+    const dispatch = makeCtx(pool, {})
+
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/dispatch/mesh`),
+      dispatch.ctx,
+    )
+
+    expect(dispatch.responses[0]).toEqual({ status: 503, body: { error: 'mesh dispatch is not configured' } })
+    expect(pool.workItems[0]).toMatchObject({ status: 'new', lane: 'triage' })
+    expect(pool.mutationOutbox).toHaveLength(0)
+    expect(pool.handoffEvents.map((event) => event.event_type)).toEqual(['work_item.created'])
+  })
+
   it('prefers configured public base when building callback URLs', async () => {
     const previous = process.env.SITELAYER_PUBLIC_BASE
     process.env.SITELAYER_PUBLIC_BASE = 'https://sitelayer.sandolab.xyz/'
@@ -823,6 +854,39 @@ describe('handleWorkRequestRoutes', () => {
     ])
   })
 
+  it('rejects Mesh dispatch retries when dispatch is not configured without resetting backoff', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Retry config missing', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItemId = pool.workItems[0]!.id
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/dispatch/mesh`),
+      makeCtx(pool, {}).ctx,
+    )
+    pool.mutationOutbox[0]!.status = 'failed'
+    pool.mutationOutbox[0]!.attempt_count = 5
+    pool.mutationOutbox[0]!.next_attempt_at = '2026-05-21T13:00:00.000Z'
+    pool.mutationOutbox[0]!.error = 'mesh unavailable'
+    delete process.env.MESH_WORK_REQUEST_DISPATCH_URL
+    const retry = makeCtx(pool, { idempotency_key: 'retry-no-config' })
+
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/dispatch/mesh/retry`),
+      retry.ctx,
+    )
+
+    expect(retry.responses[0]).toEqual({ status: 503, body: { error: 'mesh dispatch is not configured' } })
+    expect(pool.mutationOutbox[0]).toMatchObject({
+      status: 'failed',
+      attempt_count: 5,
+      next_attempt_at: '2026-05-21T13:00:00.000Z',
+      error: 'mesh unavailable',
+    })
+    expect(pool.handoffEvents.filter((event) => event.event_type === 'agent.dispatch_retried')).toHaveLength(0)
+  })
+
   it('does not reset active dispatch rows through the retry endpoint', async () => {
     const pool = new FakePool()
     const created = makeCtx(pool, { title: 'Pending dispatch retry ignored', client: clientContext })
@@ -925,7 +989,6 @@ describe('handleWorkRequestRoutes', () => {
   it('reports work queue health counts for the inbox', async () => {
     const previousDispatchUrl = process.env.MESH_WORK_REQUEST_DISPATCH_URL
     const previousWebhookToken = process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN
-    delete process.env.MESH_WORK_REQUEST_DISPATCH_URL
     process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN = 'callback-secret'
     const pool = new FakePool()
     try {
@@ -947,6 +1010,7 @@ describe('handleWorkRequestRoutes', () => {
         makeCtx(pool, {}).ctx,
       )
       pool.mutationOutbox[0]!.status = 'failed'
+      delete process.env.MESH_WORK_REQUEST_DISPATCH_URL
       const health = makeCtx(pool, {})
 
       await handleWorkRequestRoutes(buildReq('GET'), buildUrl('/api/work-requests/queue-health'), health.ctx)

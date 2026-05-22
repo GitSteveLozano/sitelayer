@@ -115,6 +115,12 @@ function bearerToken(req: http.IncomingMessage): string {
   return authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : ''
 }
 
+function requireMeshDispatchConfigured(ctx: WorkRequestRouteCtx): boolean {
+  if (process.env.MESH_WORK_REQUEST_DISPATCH_URL) return true
+  ctx.sendJson(503, { error: 'mesh dispatch is not configured' })
+  return false
+}
+
 function newCallbackToken(): string {
   return randomBytes(32).toString('base64url')
 }
@@ -887,6 +893,7 @@ async function dispatchWorkRequestToMesh(req: http.IncomingMessage, ctx: WorkReq
     ctx.sendJson(400, { error: 'invalid work request id' })
     return
   }
+  if (!requireMeshDispatchConfigured(ctx)) return
   const detail = await getContextWorkItemWithEvents(ctx.company.id, id)
   if (!detail) {
     ctx.sendJson(404, { error: 'work request not found' })
@@ -968,6 +975,7 @@ async function retryWorkRequestMeshDispatch(req: http.IncomingMessage, ctx: Work
     ctx.sendJson(400, { error: 'invalid work request id' })
     return
   }
+  if (!requireMeshDispatchConfigured(ctx)) return
   let body: Record<string, unknown>
   try {
     body = await ctx.readBody()
