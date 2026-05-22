@@ -25,6 +25,7 @@ import {
   fetchSupportPacketAccessLog,
   fetchWorkRequest,
   fetchWorkRequestGithubExport,
+  fetchWorkRequestQueueHealth,
   queryKeys,
   retryWorkRequestMeshDispatch,
   type AppendWorkRequestEventInput,
@@ -75,6 +76,12 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
   const canTriage = canTriageWorkRequests(companyRole)
   const isAdmin = companyRole === 'admin'
   const supportPacketId = detail.data?.support_packet?.id ?? workItem?.support_packet_id ?? ''
+  const health = useQuery({
+    queryKey: queryKeys.workRequests.health(),
+    queryFn: fetchWorkRequestQueueHealth,
+    enabled: canTriage,
+    refetchInterval: 30_000,
+  })
   const supportPacketAccessLog = useQuery({
     queryKey: queryKeys.supportPackets.accessLog(supportPacketId),
     queryFn: () => fetchSupportPacketAccessLog(supportPacketId),
@@ -90,6 +97,9 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
   const isClosed = workItem?.status === 'resolved' || workItem?.status === 'wont_do'
   const dispatchOutbox = detail.data?.dispatch_outbox ?? null
   const canRetryDispatch = dispatchOutbox?.status === 'failed' || dispatchOutbox?.status === 'dead'
+  const dispatchUnavailable = Boolean(
+    health.data && (!health.data.config.mesh_dispatch_configured || !health.data.config.scoped_callbacks_enabled),
+  )
 
   return (
     <>
@@ -136,16 +146,27 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
               <>
                 <MSectionH>Actions</MSectionH>
                 <div style={{ padding: '0 16px', display: 'grid', gap: 10 }}>
+                  {dispatchUnavailable ? (
+                    <MBanner
+                      tone="warn"
+                      title="Agent dispatch unavailable"
+                      body="Mesh dispatch is not configured for this environment. Keep this in human review or use the GitHub export."
+                    />
+                  ) : null}
                   <MButtonStack>
                     {canTriage ? (
                       canRetryDispatch ? (
-                        <MButton variant="primary" disabled={busy} onClick={() => retryDispatch.mutate()}>
+                        <MButton
+                          variant="primary"
+                          disabled={busy || dispatchUnavailable}
+                          onClick={() => retryDispatch.mutate()}
+                        >
                           {retryDispatch.isPending ? 'Retrying...' : 'Retry dispatch'}
                         </MButton>
                       ) : (
                         <MButton
                           variant="primary"
-                          disabled={busy || workItem.status === 'agent_running'}
+                          disabled={busy || dispatchUnavailable || workItem.status === 'agent_running'}
                           onClick={() => dispatch.mutate()}
                         >
                           {dispatch.isPending ? 'Dispatching...' : 'Dispatch agent'}
