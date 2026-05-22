@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import type { CompanyRole } from '@sitelayer/domain'
@@ -44,15 +44,18 @@ export function WorkRequestAction({
   const [clientRequestId, setClientRequestId] = useState(() => nextRequestId())
   const navigate = useNavigate()
   const qc = useQueryClient()
+  const previewContext = useMemo(
+    () => buildBrowserWorkRequestContext({ ...client, client_request_id: clientRequestId }),
+    [client, clientRequestId],
+  )
   const mutation = useMutation({
     mutationFn: () => {
-      const clientContext = buildBrowserWorkRequestContext({ ...client, client_request_id: clientRequestId })
       const input: CreateWorkRequestInput = {
         title,
         summary,
         severity,
         lane: 'triage',
-        client: clientContext,
+        client: previewContext,
         client_request_id: clientRequestId,
       }
       if (category !== undefined) input.category = category
@@ -129,6 +132,15 @@ export function WorkRequestAction({
           <option value="high">High</option>
           <option value="urgent">Urgent</option>
         </MSelect>
+        <div style={{ display: 'grid', gap: 6, fontSize: 12, color: 'var(--m-ink-2)' }}>
+          <PreviewLine label="Route" value={route ?? readRoute(previewContext)} />
+          <PreviewLine label="Entity" value={readEntity(previewContext)} />
+          <PreviewLine label="Request" value={readText(previewContext.client_request_id)} />
+          <PreviewLine label="Build" value={readText(previewContext.build_sha)} />
+          <div style={{ color: 'var(--m-ink-3)', lineHeight: 1.35 }}>
+            Obvious secrets, tokens, emails, and phone numbers are redacted before this context is stored.
+          </div>
+        </div>
         <MButtonStack>
           <MButton onClick={() => mutation.mutate()} disabled={mutation.isPending || !title.trim()}>
             {mutation.isPending ? 'Creating...' : submitLabel}
@@ -140,4 +152,36 @@ export function WorkRequestAction({
       </div>
     </div>
   )
+}
+
+function PreviewLine({ label, value }: { label: string; value: string | null }) {
+  if (!value) return null
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: '70px minmax(0, 1fr)', gap: 8 }}>
+      <span style={{ color: 'var(--m-ink-3)' }}>{label}</span>
+      <span style={{ overflowWrap: 'anywhere' }}>{value}</span>
+    </div>
+  )
+}
+
+function readRoute(context: WorkRequestClientContext): string | null {
+  const page = readRecord(context.page)
+  return readText(page?.route) ?? readText(page?.path)
+}
+
+function readEntity(context: WorkRequestClientContext): string | null {
+  const path = readRecord(context.path)
+  const entity = readRecord(context.entity)
+  const entityType = readText(path?.entity_type) ?? readText(entity?.entity_type)
+  const entityId = readText(path?.entity_id) ?? readText(entity?.entity_id)
+  if (entityType && entityId) return `${entityType}:${entityId}`
+  return entityType ?? entityId
+}
+
+function readRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null
+}
+
+function readText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null
 }
