@@ -149,7 +149,7 @@ Follow `DEPLOY_RUNBOOK.md` -> "Live-flag flip protocol":
 The `estimate_push`, `rental_billing_push`, `labor_payroll_push`, and
 `damage_charges` runners are wrapped by the `dispatch_lanes` primitive
 (migration 094, `apps/worker/src/dispatch-lanes.ts`). The lane is a
-second kill-switch *layered above* the env flag — the env flag still
+second kill-switch _layered above_ the env flag — the env flag still
 controls live vs stub at boot; the lane controls whether the runner
 drains at all.
 

@@ -126,7 +126,8 @@ export function createLaneHealthKeeper(deps: { pool: Pool; logger: Logger }): La
             reason: 'qbo_circuit_closed',
             decided_by: 'system:lane-health-keeper',
           })
-          if (r.changed) changes.push({ lane: row.name, from: r.from_state, to: 'active', reason: 'qbo_circuit_closed' })
+          if (r.changed)
+            changes.push({ lane: row.name, from: r.from_state, to: 'active', reason: 'qbo_circuit_closed' })
         }
       } catch (err) {
         logger.warn({ err }, '[lane-health-keeper] failed to clear stale qbo pauses')
@@ -175,7 +176,8 @@ export function createLaneHealthKeeper(deps: { pool: Pool; logger: Logger }): La
             reason: 'outbox_backlog_cleared',
             decided_by: 'system:lane-health-keeper',
           })
-          if (r.changed) changes.push({ lane: row.name, from: r.from_state, to: 'active', reason: 'outbox_backlog_cleared' })
+          if (r.changed)
+            changes.push({ lane: row.name, from: r.from_state, to: 'active', reason: 'outbox_backlog_cleared' })
         }
       } catch (err) {
         logger.warn({ err }, '[lane-health-keeper] failed to clear stale degraded rows')

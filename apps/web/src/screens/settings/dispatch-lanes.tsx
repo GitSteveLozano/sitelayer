@@ -153,7 +153,9 @@ function PauseModal({ lane, onClose }: { lane: DispatchLane; onClose: () => void
           />
         </label>
         <label className="block mt-3">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Resume after (optional)</div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">
+            Resume after (optional)
+          </div>
           <input
             type="datetime-local"
             value={resumeAfter}

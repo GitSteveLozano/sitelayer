@@ -98,12 +98,7 @@ export async function getLaneState(pool: Pool, name: string): Promise<LaneSnapsh
  * it back to `active` lazily. Avoids requiring the auto-pause keeper to
  * be the only path that re-enables a lane.
  */
-async function maybeAutoResume(
-  pool: Pool,
-  name: string,
-  snapshot: LaneSnapshot,
-  now: number,
-): Promise<LaneSnapshot> {
+async function maybeAutoResume(pool: Pool, name: string, snapshot: LaneSnapshot, now: number): Promise<LaneSnapshot> {
   if (snapshot.state === 'active') return snapshot
   if (!snapshot.resume_after) return snapshot
   if (snapshot.resume_after.getTime() > now) return snapshot
@@ -142,12 +137,7 @@ async function maybeAutoResume(
  * (with throttled logging); degraded → runs with a warning. The gate is
  * a thin pre/post hook; it never mutates the function's result.
  */
-export async function withLaneGate(
-  pool: Pool,
-  logger: Logger,
-  name: string,
-  fn: () => Promise<void>,
-): Promise<void> {
+export async function withLaneGate(pool: Pool, logger: Logger, name: string, fn: () => Promise<void>): Promise<void> {
   const snapshot = await getLaneState(pool, name)
   if (snapshot.state === 'paused') {
     logPausedThrottled(logger, name, snapshot)
@@ -271,7 +261,14 @@ export async function setLaneState(
     await client.query(
       `insert into dispatch_lane_decisions (lane_name, from_state, to_state, reason, decided_by, metadata)
        values ($1, $2, $3, $4, $5, coalesce($6::jsonb, '{}'::jsonb))`,
-      [args.name, fromState, args.to_state, args.reason, args.decided_by, args.metadata ? JSON.stringify(args.metadata) : null],
+      [
+        args.name,
+        fromState,
+        args.to_state,
+        args.reason,
+        args.decided_by,
+        args.metadata ? JSON.stringify(args.metadata) : null,
+      ],
     )
     await client.query('commit')
     // Invalidate cache for this lane so the next tick reads the new state.

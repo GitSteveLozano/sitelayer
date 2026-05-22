@@ -33,7 +33,10 @@ function buildResult<T extends QueryResultRow>(rows: T[]): QueryResult<T> {
   return { rows, rowCount: rows.length, command: '', oid: 0, fields: [] }
 }
 
-function makeFakePool(fx: PoolFixture): { pool: Pool; transitions: Array<{ name: string; to: LaneState; reason: string }> } {
+function makeFakePool(fx: PoolFixture): {
+  pool: Pool
+  transitions: Array<{ name: string; to: LaneState; reason: string }>
+} {
   const transitions: Array<{ name: string; to: LaneState; reason: string }> = []
   let txnLane: string | null = null
   let txnFromState: LaneState | null = null
