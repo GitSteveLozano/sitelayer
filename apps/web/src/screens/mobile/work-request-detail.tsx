@@ -13,6 +13,7 @@ import {
   MSectionH,
   MTextarea,
   MTopBar,
+  Spark,
 } from '../../components/m/index.js'
 import { MSkeletonList } from '../../components/m-states/index.js'
 import { WorkRequestContextPreview } from '../../components/work-requests/WorkRequestContextPreview.js'
@@ -35,6 +36,7 @@ import {
   retryWorkRequestMeshDispatch,
   reverseWorkRequest,
   type AppendWorkRequestEventInput,
+  type WorkRequestBrief,
 } from '@/lib/api'
 import { canTriageWorkRequests } from '@/lib/work-request-permissions'
 import type { CompanyRole } from '@sitelayer/domain'
@@ -312,6 +314,8 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
 
             <WorkRequestContextPreview workItem={workItem} supportPacket={detail.data.support_packet} />
 
+            <WorkRequestAgentBrief brief={detail.data.work_request_brief} />
+
             {isAdmin ? (
               <>
                 <MSectionH>Support packet</MSectionH>
@@ -417,6 +421,66 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
       </MBody>
     </>
   )
+}
+
+function WorkRequestAgentBrief({ brief }: { brief: WorkRequestBrief }) {
+  const diagnostics = brief.diagnostics
+  const supporting = [
+    diagnostics.route,
+    diagnostics.entity_type && diagnostics.entity_id ? `${diagnostics.entity_type}:${diagnostics.entity_id}` : null,
+    diagnostics.dispatch_outbox_status ? `dispatch ${diagnostics.dispatch_outbox_status}` : null,
+  ]
+    .filter(Boolean)
+    .join(' - ')
+  return (
+    <>
+      <MSectionH>Agent brief</MSectionH>
+      <MListInset>
+        <MListRow
+          leading={<Spark state="accent" size={16} />}
+          leadingTone="accent"
+          headline="Next action"
+          supporting={formatBriefAction(brief.state.next_action)}
+        />
+        <MListRow
+          headline="Context"
+          supporting={supporting || diagnostics.work_item_path}
+          trailing={<span>{formatDateTime(brief.generated_at)}</span>}
+        />
+        <MListRow
+          headline="Evidence"
+          supporting={diagnostics.evidence_refs.map((ref) => `${ref.type}:${ref.id}`).join(' - ')}
+          trailing={
+            <span>
+              {brief.timeline_total} event{brief.timeline_total === 1 ? '' : 's'}
+              {brief.timeline_truncated ? '+' : ''}
+            </span>
+          }
+        />
+      </MListInset>
+      <div style={{ padding: '0 16px', display: 'grid', gap: 10 }}>
+        <MTextarea
+          aria-label="Agent brief markdown"
+          readOnly
+          value={brief.agent_brief_markdown}
+          rows={10}
+          style={{
+            fontFamily:
+              'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+            fontSize: 12,
+            lineHeight: 1.45,
+          }}
+        />
+      </div>
+    </>
+  )
+}
+
+function formatBriefAction(value: string): string {
+  return value
+    .split('_')
+    .map((part) => (part ? part[0]!.toUpperCase() + part.slice(1) : part))
+    .join(' ')
 }
 
 function formatDateTime(value: string): string {

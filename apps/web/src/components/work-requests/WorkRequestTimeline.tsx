@@ -22,6 +22,7 @@ const EVENT_LABEL: Partial<Record<ContextHandoffEvent['event_type'], string>> = 
   'external.github_linked': 'GitHub linked',
   'resolution.accepted': 'Resolved',
   'resolution.reopened': 'Reopened',
+  'work_item.reversed': 'Reversed',
 }
 
 export function WorkRequestTimeline({ events }: { events: ContextHandoffEvent[] }) {

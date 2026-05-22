@@ -47,6 +47,7 @@ export const queryKeys = {
       offset?: number
     }) => [...queryKeys.workRequests.all(), 'list', params ?? {}] as const,
     detail: (id: string) => [...queryKeys.workRequests.all(), 'detail', id] as const,
+    brief: (id: string) => [...queryKeys.workRequests.all(), 'brief', id] as const,
     health: () => [...queryKeys.workRequests.all(), 'health'] as const,
   },
   supportPackets: {

@@ -87,6 +87,64 @@ const detailResponse: WorkRequestDetailResponse = {
     redaction_version: 'support-packet-v1',
   },
   dispatch_outbox: null,
+  work_request_brief: {
+    schema: 'sitelayer.work_request_brief.v1',
+    generated_at: '2026-05-21T12:06:00.000Z',
+    work_item: {
+      id: '00000000-0000-4000-8000-000000000001',
+      support_packet_id: '00000000-0000-4000-8000-000000000002',
+      title: 'Estimate push failed',
+      summary: 'Customer could not send an estimate.',
+      status: 'new',
+      lane: 'triage',
+      severity: 'high',
+      route: '/financial/estimate-pushes/ep-1',
+      entity_type: 'estimate_push',
+      entity_id: 'ep-1',
+      assignee_user_id: null,
+      created_by_user_id: 'creator-1',
+      created_at: '2026-05-21T12:00:00.000Z',
+      updated_at: '2026-05-21T12:05:00.000Z',
+      resolved_at: null,
+      reversed_at: null,
+      reversibility_window_seconds: 21600,
+      expires_at: '2026-05-21T18:00:00.000Z',
+      metadata_keys: [],
+    },
+    state: {
+      status: 'new',
+      lane: 'triage',
+      severity: 'high',
+      reversibility_window_seconds: 21600,
+      expires_at: '2026-05-21T18:00:00.000Z',
+      next_action: 'dispatch_agent',
+    },
+    support_packet: {
+      id: '00000000-0000-4000-8000-000000000002',
+      route: '/financial/estimate-pushes/ep-1',
+      problem: 'Estimate push failed',
+      request_id: 'req-1',
+      build_sha: 'test-build',
+      created_at: '2026-05-21T12:00:00.000Z',
+      expires_at: '2026-05-22T12:00:00.000Z',
+      redaction_version: 'support-packet-v1',
+    },
+    diagnostics: {
+      work_item_path: '/work/00000000-0000-4000-8000-000000000001',
+      support_packet_id: '00000000-0000-4000-8000-000000000002',
+      request_id: 'req-1',
+      build_sha: 'test-build',
+      route: '/financial/estimate-pushes/ep-1',
+      entity_type: 'estimate_push',
+      entity_id: 'ep-1',
+      dispatch_outbox_status: null,
+      evidence_refs: [{ type: 'support_debug_packet', id: '00000000-0000-4000-8000-000000000002' }],
+    },
+    timeline: [],
+    timeline_total: 0,
+    timeline_truncated: false,
+    agent_brief_markdown: '# Work request handoff\n\nWork item: 00000000-0000-4000-8000-000000000001',
+  },
   events: [],
   events_pagination: {
     limit: 200,
@@ -154,6 +212,16 @@ describe('MobileWorkRequestDetail', () => {
     expect((screen.getByText('Dispatch agent') as HTMLButtonElement).disabled).toBe(true)
     expect(await screen.findByText('Agent Prompt by admin-1')).toBeTruthy()
     expect(mocks.fetchSupportPacketAccessLog).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000002')
+  })
+
+  it('renders the agent-readable handoff brief from the detail response', async () => {
+    const Wrapper = makeWrapper()
+    render(<MobileWorkRequestDetail companyRole="admin" />, { wrapper: Wrapper })
+
+    expect(await screen.findByText('Agent brief')).toBeTruthy()
+    expect(await screen.findByText('Dispatch Agent')).toBeTruthy()
+    const markdown = await screen.findByLabelText('Agent brief markdown')
+    expect(markdown).toHaveProperty('value', detailResponse.work_request_brief.agent_brief_markdown)
   })
 
   it('renders the closed reversibility badge when expires_at is in the past', async () => {

@@ -106,6 +106,61 @@ export interface WorkRequestSupportPacketSummary {
   redaction_version: string
 }
 
+export interface WorkRequestBriefTimelineEntry {
+  event_type: string
+  actor_kind: string
+  actor_user_id: string | null
+  actor_ref: string | null
+  source_system: string
+  recorded_at: string
+  message: string | null
+  url: string | null
+  status: string | null
+  lane: string | null
+  artifacts_count: number | null
+  payload_keys: string[]
+}
+
+export interface WorkRequestBrief {
+  schema: 'sitelayer.work_request_brief.v1'
+  generated_at: string
+  work_item: Omit<ContextWorkItem, 'metadata'> & { metadata_keys: string[] }
+  state: {
+    status: WorkItemStatus
+    lane: WorkItemLane
+    severity: WorkItemSeverity | null
+    reversibility_window_seconds: number
+    expires_at: string | null
+    next_action: string
+  }
+  support_packet: WorkRequestSupportPacketSummary | null
+  diagnostics: {
+    work_item_path: string
+    support_packet_id: string
+    request_id: string | null
+    build_sha: string | null
+    route: string | null
+    entity_type: string | null
+    entity_id: string | null
+    dispatch_outbox_status: string | null
+    evidence_refs: Array<{ type: string; id: string }>
+  }
+  timeline: WorkRequestBriefTimelineEntry[]
+  timeline_total: number
+  timeline_truncated: boolean
+  callback?: {
+    path: string
+    url: string | null
+    token_type: 'scoped_bearer'
+    expires_at: string
+  }
+  agent_brief_markdown: string
+}
+
+export interface WorkRequestBriefResponse {
+  work_request_brief: WorkRequestBrief
+}
+
 export interface DispatchOutboxSummary {
   id: string
   mutation_type: 'dispatch_mesh_work_request'
@@ -161,6 +216,7 @@ export interface WorkRequestDetailResponse {
   work_item: ContextWorkItem
   support_packet: WorkRequestSupportPacketSummary | null
   dispatch_outbox: DispatchOutboxSummary | null
+  work_request_brief: WorkRequestBrief
   events: ContextHandoffEvent[]
   events_pagination: {
     limit: number
@@ -242,6 +298,10 @@ export function fetchWorkRequests(params: ListWorkRequestsParams = {}): Promise<
 
 export function fetchWorkRequest(id: string): Promise<WorkRequestDetailResponse> {
   return request<WorkRequestDetailResponse>(`/api/work-requests/${encodeURIComponent(id)}`)
+}
+
+export function fetchWorkRequestBrief(id: string): Promise<WorkRequestBriefResponse> {
+  return request<WorkRequestBriefResponse>(`/api/work-requests/${encodeURIComponent(id)}/brief`)
 }
 
 export function fetchWorkRequestQueueHealth(): Promise<WorkRequestQueueHealthResponse> {
