@@ -1,10 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import * as Sentry from '@sentry/node'
-import {
-  continueRequestTrace,
-  extractTraceHeaders,
-  shouldBypassTraceContinuation,
-} from './trace-ingress.js'
+import { continueRequestTrace, extractTraceHeaders, shouldBypassTraceContinuation } from './trace-ingress.js'
 
 // ---------------------------------------------------------------------------
 // Smoke check: incoming `sentry-trace` continuation. The proving-ground plan

@@ -79,10 +79,7 @@ export function extractTraceHeaders(headers: http.IncomingHttpHeaders): {
  * of the callback, which is enough for the AsyncLocalStorage that backs
  * Sentry's OTel context manager to carry the trace through the awaits.
  */
-export function continueRequestTrace<T>(
-  headers: http.IncomingHttpHeaders,
-  fn: () => T,
-): T {
+export function continueRequestTrace<T>(headers: http.IncomingHttpHeaders, fn: () => T): T {
   const { sentryTrace, baggage } = extractTraceHeaders(headers)
   return Sentry.continueTrace({ sentryTrace, baggage }, fn)
 }
