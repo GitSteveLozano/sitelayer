@@ -47,6 +47,10 @@ import {
   validateIdempotencyKey,
   type IdempotencyCachedResponse,
 } from './idempotency.js'
+import {
+  matchWorkRequestCallbackWorkItemId,
+  resolveWorkRequestCallbackCompany,
+} from './work-request-callback-company.js'
 
 const logger = createLogger('api')
 validateRequiredEnvVars(logger)
@@ -633,8 +637,8 @@ const server = http.createServer(async (req, res) => {
                 '/api/webhooks/clerk',
                 '/api/webhooks/qbo',
               ])
-              const isWorkRequestCallback =
-                req.method === 'POST' && /^\/api\/work-requests\/[^/]+\/agent-callback$/.test(url.pathname)
+              const workRequestCallbackWorkItemId = matchWorkRequestCallbackWorkItemId(req.method, url.pathname)
+              const isWorkRequestCallback = workRequestCallbackWorkItemId !== null
               const isPublicPath = PUBLIC_PATHS.has(url.pathname) || isWorkRequestCallback
               let identity: Identity
               try {
@@ -683,7 +687,10 @@ const server = http.createServer(async (req, res) => {
                 return
               }
 
-              let company = await getCompany(req, isWorkRequestCallback ? { membershipBypassRole: 'admin' } : {})
+              let company =
+                workRequestCallbackWorkItemId !== null
+                  ? await resolveWorkRequestCallbackCompany(pool, workRequestCallbackWorkItemId)
+                  : await getCompany(req)
               // First-user self-onboard. The Clerk webhook that mirrors
               // org membership into `company_memberships` isn't wired
               // (CLERK_WEBHOOK_SECRET unset) and ADR 0003 marks the install
@@ -716,6 +723,10 @@ const server = http.createServer(async (req, res) => {
                 }
               }
               if (!company) {
+                if (isWorkRequestCallback) {
+                  sendJson(res, 404, { error: 'work request not found', user_id: identity.userId })
+                  return
+                }
                 sendJson(res, 404, {
                   error: `company slug ${activeCompanySlug} not found`,
                   user_id: identity.userId,
