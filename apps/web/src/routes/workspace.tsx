@@ -1,7 +1,8 @@
 import { useEffect, useMemo } from 'react'
-import { Navigate } from 'react-router-dom'
+import { Navigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ColdStartSplash } from '@/components/shell/ColdStartSplash'
+import { ControlPlaneProbe } from '@/components/ControlPlaneProbe'
 import {
   ApiError,
   getActiveCompanySlug,
@@ -79,6 +80,7 @@ export default function WorkspaceRoute() {
 
 function CompanyWorkspace({ activeCompany }: { activeCompany: ActiveCompany }) {
   const companySlug = activeCompany.slug
+  const location = useLocation()
 
   const bootstrapQuery = useQuery({
     queryKey: queryKeys.bootstrap(companySlug),
@@ -89,6 +91,12 @@ function CompanyWorkspace({ activeCompany }: { activeCompany: ActiveCompany }) {
     queryKey: queryKeys.session(companySlug),
     queryFn: () => request<SessionResponse>('/api/session', { companySlug }),
   })
+
+  // CompanyWorkspace is mounted via `<Route path="/*">` so `useParams()`
+  // doesn't see deeper segments. Derive `projectId` and `currentTab`
+  // from the pathname instead — this is the same pattern the operator-
+  // context handshake uses for origin-side state.
+  const probeRoute = useMemo(() => parseProbeRoute(location.pathname), [location.pathname])
 
   const error = bootstrapQuery.error ?? sessionQuery.error
   if (needsOnboarding(error)) return <Navigate to="/onboarding" replace />
@@ -105,8 +113,29 @@ function CompanyWorkspace({ activeCompany }: { activeCompany: ActiveCompany }) {
 
   if (bootstrapQuery.isPending || sessionQuery.isPending) return <ColdStartSplash />
 
+  const activeProjectName =
+    probeRoute.projectId && bootstrapQuery.data
+      ? (bootstrapQuery.data.projects.find((p) => p.id === probeRoute.projectId)?.name ?? null)
+      : null
+
   return (
     <RoleContext.Provider value={persona}>
+      {/* Operator probe — installs `window.__controlPlaneProbe` for the
+          browser-bridge capture-modal. See
+          ~/projects/digital-ontology/tab-to-task-current-state-2026-05-22.md §1.6.
+          TODO: thread xstate snapshots (project-lifecycle, time-review,
+          billing-review) once we expose them at this level — today each
+          machine is mounted per-route deeper in the tree. */}
+      <ControlPlaneProbe
+        companySlug={companySlug}
+        projectId={probeRoute.projectId}
+        currentTab={probeRoute.currentTab}
+        userRole={sessionRole}
+        activeProjectName={activeProjectName}
+        projectState={null}
+        timeReviewState={null}
+        billingReviewState={null}
+      />
       <MobileShell
         bootstrap={bootstrapQuery.data ?? null}
         companyRole={companyRole}
@@ -115,6 +144,26 @@ function CompanyWorkspace({ activeCompany }: { activeCompany: ActiveCompany }) {
       />
     </RoleContext.Provider>
   )
+}
+
+/**
+ * Parse the route into the two fields the probe carries on `path`.
+ *
+ *   /projects/abc123/...  -> { projectId: 'abc123', currentTab: 'projects' }
+ *   /estimates            -> { projectId: null,    currentTab: 'estimates' }
+ *   /                     -> { projectId: null,    currentTab: null }
+ *
+ * The probe doesn't need a full route schema — it only needs enough
+ * coordinates for the capture-modal to label the captured tab. Keep this
+ * intentionally lossy.
+ */
+function parseProbeRoute(pathname: string): { projectId: string | null; currentTab: string | null } {
+  const segments = pathname.split('/').filter(Boolean)
+  if (segments.length === 0) return { projectId: null, currentTab: null }
+  const [first, second] = segments
+  const currentTab = first ?? null
+  const projectId = first === 'projects' && second ? second : null
+  return { projectId, currentTab }
 }
 
 function persistActiveCompanySlug(slug: string): void {

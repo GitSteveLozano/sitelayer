@@ -11,6 +11,7 @@ export function buildBrowserWorkRequestContext(extra: WorkRequestClientContext =
           search: window.location.search || null,
           route: `${window.location.pathname}${window.location.search}`,
         }
+  const controlPlane = readControlPlaneCapture()
   return {
     source: 'web',
     captured_at: new Date().toISOString(),
@@ -18,7 +19,34 @@ export function buildBrowserWorkRequestContext(extra: WorkRequestClientContext =
     build_sha: getBuildSha(),
     page: path,
     browser: readBrowserContext(),
+    ...(controlPlane ? { control_plane: controlPlane } : {}),
     ...extra,
+  }
+}
+
+function readControlPlaneCapture(): Record<string, unknown> | null {
+  if (typeof window === 'undefined') return null
+  const probe = (
+    window as Window & {
+      __controlPlaneProbe?: {
+        capture?: () => unknown
+        version?: unknown
+      }
+    }
+  ).__controlPlaneProbe
+  if (typeof probe?.capture !== 'function') return null
+  try {
+    const captured = probe.capture()
+    if (!isRecord(captured)) return null
+    return {
+      version: typeof probe.version === 'string' ? probe.version : null,
+      capture: captured,
+    }
+  } catch {
+    return {
+      version: typeof probe.version === 'string' ? probe.version : null,
+      capture_error: 'control_plane_probe_failed',
+    }
   }
 }
 
@@ -72,6 +100,10 @@ function readTimezone(): string | null {
 
 function finiteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function userAgentFamily(userAgent: string): string {

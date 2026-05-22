@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildBrowserWorkRequestContext } from './context'
 
 vi.mock('@/lib/api/client', () => ({
@@ -7,6 +7,10 @@ vi.mock('@/lib/api/client', () => ({
 }))
 
 describe('buildBrowserWorkRequestContext', () => {
+  afterEach(() => {
+    delete window.__controlPlaneProbe
+  })
+
   it('adds bounded browser state to every work request context', () => {
     window.history.replaceState({}, '', '/projects/project-1?tab=budget')
     Object.defineProperty(window.navigator, 'language', { configurable: true, value: 'en-US' })
@@ -44,6 +48,64 @@ describe('buildBrowserWorkRequestContext', () => {
         },
       },
       entity: { entity_type: 'project', entity_id: 'project-1' },
+    })
+  })
+
+  it('includes the operator control-plane probe capture when mounted', () => {
+    window.__controlPlaneProbe = {
+      version: 'sitelayer-1.0.0',
+      capture: () => ({
+        path: {
+          entity_kind: 'project',
+          entity_id: 'project-1',
+          company_slug: 'la-ops',
+        },
+        page_state: {
+          current_tab: 'projects',
+          user_role: 'admin',
+        },
+        deploy: {
+          build_sha: 'build-123',
+          env: 'test',
+        },
+      }),
+    }
+
+    const context = buildBrowserWorkRequestContext()
+
+    expect(context.control_plane).toEqual({
+      version: 'sitelayer-1.0.0',
+      capture: {
+        path: {
+          entity_kind: 'project',
+          entity_id: 'project-1',
+          company_slug: 'la-ops',
+        },
+        page_state: {
+          current_tab: 'projects',
+          user_role: 'admin',
+        },
+        deploy: {
+          build_sha: 'build-123',
+          env: 'test',
+        },
+      },
+    })
+  })
+
+  it('records probe capture failures without blocking work request creation', () => {
+    window.__controlPlaneProbe = {
+      version: 'sitelayer-1.0.0',
+      capture: () => {
+        throw new Error('capture failed')
+      },
+    }
+
+    const context = buildBrowserWorkRequestContext()
+
+    expect(context.control_plane).toEqual({
+      version: 'sitelayer-1.0.0',
+      capture_error: 'control_plane_probe_failed',
     })
   })
 })

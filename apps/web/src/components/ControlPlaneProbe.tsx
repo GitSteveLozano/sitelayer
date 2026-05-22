@@ -1,0 +1,111 @@
+import { useEffect, useMemo } from 'react'
+
+/**
+ * Operator-owned probe contract. See:
+ *   ~/projects/digital-ontology/tab-to-task-current-state-2026-05-22.md §1.6
+ *
+ * Other operator apps have shipped a probe with this same shape. Keep the field names
+ * (`entity_kind`, `entity_id`, `page_state`, `deploy`, ...) aligned so the
+ * browser-bridge capture-modal can consume any operator tab without
+ * per-app branching.
+ */
+export type ControlPlaneCapture = {
+  page_state?: Record<string, unknown>
+  path: {
+    entity_kind: string
+    entity_id: string | number | null
+    [k: string]: unknown
+  }
+  principal?: Record<string, unknown>
+  acting_as?: string | null
+  trace?: { trace_id?: string; span_id?: string } | null
+  deploy?: { build_sha?: string; env?: string } | null
+  feature_flags?: Record<string, unknown>
+  ambient?: Record<string, unknown>
+}
+
+declare global {
+  interface Window {
+    __controlPlaneProbe?: {
+      capture: () => ControlPlaneCapture
+      version: string
+    }
+  }
+}
+
+const PROBE_VERSION = 'sitelayer-1.0.0'
+
+type SitelayerProbeInput = {
+  companySlug: string | null
+  projectId: string | null
+  currentTab: string | null
+  userRole: string | null
+  activeProjectName: string | null
+  /**
+   * Optional snapshot from the project-lifecycle xstate machine. Pass `null`
+   * unless the caller already has the snapshot in scope — the probe should
+   * never instantiate a per-project hook itself.
+   */
+  projectState?: string | null
+  timeReviewState?: string | null
+  billingReviewState?: string | null
+}
+
+/**
+ * Headless probe component. Mount once near the top of the authenticated
+ * workspace tree and pass props gathered from the same scope that already
+ * has them (company, route, lifecycle snapshot). The component installs
+ * `window.__controlPlaneProbe = { capture, version }` and removes it on
+ * unmount, but only if the version still matches, so a newer probe
+ * version that overwrote ours during HMR or A/B rollout is not clobbered.
+ */
+export function ControlPlaneProbe(input: SitelayerProbeInput) {
+  const seed = useMemo<ControlPlaneCapture>(() => {
+    const entityKind = input.projectId ? 'project' : 'company'
+    const entityId = input.projectId ?? input.companySlug ?? null
+    return {
+      path: {
+        entity_kind: entityKind,
+        entity_id: entityId,
+        company_slug: input.companySlug,
+        project_id: input.projectId,
+        current_tab: input.currentTab,
+      },
+      page_state: {
+        user_role: input.userRole,
+        active_project_name: input.activeProjectName,
+        project_state: input.projectState ?? null,
+        time_review_state: input.timeReviewState ?? null,
+        billing_review_state: input.billingReviewState ?? null,
+      },
+    }
+  }, [
+    input.companySlug,
+    input.projectId,
+    input.currentTab,
+    input.userRole,
+    input.activeProjectName,
+    input.projectState,
+    input.timeReviewState,
+    input.billingReviewState,
+  ])
+
+  useEffect(() => {
+    const buildSha = import.meta.env.VITE_BUILD_SHA as string | undefined
+    const env = (import.meta.env.MODE as string | undefined) ?? 'unknown'
+    window.__controlPlaneProbe = {
+      capture: () => ({
+        ...seed,
+        deploy: buildSha ? { build_sha: buildSha, env } : null,
+      }),
+      version: PROBE_VERSION,
+    }
+    return () => {
+      if (window.__controlPlaneProbe?.version === PROBE_VERSION) {
+        delete window.__controlPlaneProbe
+      }
+    }
+  }, [seed])
+
+  return null
+}
