@@ -9,11 +9,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { createHash } from 'node:crypto'
 import type { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg'
-import {
-  canonicalizeAuditEscrowJSON,
-  hashAuditEscrowSHA256,
-  verifyAuditEscrowEd25519,
-} from '@sitelayer/queue'
+import { canonicalizeAuditEscrowJSON, hashAuditEscrowSHA256, verifyAuditEscrowEd25519 } from '@sitelayer/queue'
 import { createAuditEscrowTickRunner } from './audit-escrow-tick.js'
 
 const COMPANY_ID = '00000000-0000-4000-8000-000000000099'
@@ -117,13 +113,7 @@ function makeFakePool(): PoolFixture {
       ])
     }
     if (sql.startsWith('insert into audit_escrow_keys')) {
-      const [keyId, hostId, , publicKeyB64, privateKeyB64] = params as [
-        string,
-        string,
-        string,
-        string,
-        string,
-      ]
+      const [keyId, hostId, , publicKeyB64, privateKeyB64] = params as [string, string, string, string, string]
       const existing = keys.find((k) => k.key_id === keyId)
       if (existing) {
         existing.host_id = hostId
@@ -190,7 +180,22 @@ function makeFakePool(): PoolFixture {
         materialJson,
         payloadJson,
         createdAt,
-      ] = params as [string, string, string, string | null, Date, Date, number, string, string, string, string, string, string, Date]
+      ] = params as [
+        string,
+        string,
+        string,
+        string | null,
+        Date,
+        Date,
+        number,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        Date,
+      ]
       const id = nextId++
       const row: StoredEntry = {
         id,
@@ -222,12 +227,7 @@ function makeFakePool(): PoolFixture {
       // SELECT from audit_events
       const [companyId, windowStart, windowEnd, limit] = params as [string, Date, Date, number]
       const filtered = auditEvents
-        .filter(
-          (e) =>
-            e.escrow_anchor_id === null &&
-            e.created_at > windowStart &&
-            e.created_at <= windowEnd,
-        )
+        .filter((e) => e.escrow_anchor_id === null && e.created_at > windowStart && e.created_at <= windowEnd)
         .sort((a, b) => a.created_at.getTime() - b.created_at.getTime())
         .slice(0, limit)
       void companyId

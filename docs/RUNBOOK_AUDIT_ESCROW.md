@@ -202,18 +202,18 @@ recorded on the row) and reconcile against the database:
 
 ## Configuration knobs
 
-| Env var | Default | Effect |
-|---|---|---|
-| `AUDIT_ESCROW_TICK_INTERVAL_MS` | `3600000` (1h) | Worker tick cadence |
-| `AUDIT_ESCROW_BATCH_SIZE` | `10000` | Max source rows per entry |
-| `AUDIT_ESCROW_HOST_ID` | `''` | Stamped on `audit_escrow_keys.host_id` for forensic context |
-| `AUDIT_ESCROW_S3_BUCKET` | unset | DO Spaces bucket for sealing; unset disables |
-| `AUDIT_ESCROW_S3_REGION` | `AWS_REGION` or `us-east-1` | Region for S3 client |
-| `AUDIT_ESCROW_S3_ENDPOINT` | unset | DO Spaces endpoint (`https://<region>.digitaloceanspaces.com`) |
-| `AUDIT_ESCROW_S3_ACCESS_KEY_ID` | unset | Spaces access key |
-| `AUDIT_ESCROW_S3_SECRET_ACCESS_KEY` | unset | Spaces secret |
-| `AUDIT_ESCROW_S3_RETAIN_YEARS` | `7` | Object Lock retention period |
-| `AUDIT_ESCROW_OTS_ENABLED` | unset | Stub flag for OpenTimestamps wire-up (v2) |
+| Env var                             | Default                     | Effect                                                         |
+| ----------------------------------- | --------------------------- | -------------------------------------------------------------- |
+| `AUDIT_ESCROW_TICK_INTERVAL_MS`     | `3600000` (1h)              | Worker tick cadence                                            |
+| `AUDIT_ESCROW_BATCH_SIZE`           | `10000`                     | Max source rows per entry                                      |
+| `AUDIT_ESCROW_HOST_ID`              | `''`                        | Stamped on `audit_escrow_keys.host_id` for forensic context    |
+| `AUDIT_ESCROW_S3_BUCKET`            | unset                       | DO Spaces bucket for sealing; unset disables                   |
+| `AUDIT_ESCROW_S3_REGION`            | `AWS_REGION` or `us-east-1` | Region for S3 client                                           |
+| `AUDIT_ESCROW_S3_ENDPOINT`          | unset                       | DO Spaces endpoint (`https://<region>.digitaloceanspaces.com`) |
+| `AUDIT_ESCROW_S3_ACCESS_KEY_ID`     | unset                       | Spaces access key                                              |
+| `AUDIT_ESCROW_S3_SECRET_ACCESS_KEY` | unset                       | Spaces secret                                                  |
+| `AUDIT_ESCROW_S3_RETAIN_YEARS`      | `7`                         | Object Lock retention period                                   |
+| `AUDIT_ESCROW_OTS_ENABLED`          | unset                       | Stub flag for OpenTimestamps wire-up (v2)                      |
 
 ## Follow-ups (not in v1)
 

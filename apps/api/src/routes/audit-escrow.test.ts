@@ -11,10 +11,7 @@
 import type http from 'node:http'
 import { describe, expect, it, beforeEach } from 'vitest'
 import type { Pool, QueryResult, QueryResultRow } from 'pg'
-import {
-  appendAuditEscrowEntry,
-  type AuditEscrowEntry,
-} from '@sitelayer/queue'
+import { appendAuditEscrowEntry, type AuditEscrowEntry } from '@sitelayer/queue'
 import { handleAuditEscrowRoutes } from './audit-escrow.js'
 
 const COMPANY_ID = '00000000-0000-4000-8000-000000000099'
@@ -74,7 +71,9 @@ function makeFakePool(): PoolFixture {
     }
     if (sql.startsWith('select pg_advisory_xact_lock')) return buildResult([])
     if (sql.includes('from audit_escrow_keys') && sql.includes('retired_at is null')) {
-      const active = keys.filter((k) => k.retired_at === null).sort((a, b) => b.created_at.getTime() - a.created_at.getTime())
+      const active = keys
+        .filter((k) => k.retired_at === null)
+        .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())
       const row = active[0]
       if (!row) return buildResult([])
       return buildResult([row as unknown as QueryResultRow])
@@ -123,7 +122,22 @@ function makeFakePool(): PoolFixture {
         materialJson,
         payloadJson,
         createdAt,
-      ] = params as [string, string, string, string | null, Date, Date, number, string, string, string, string, string, string, Date]
+      ] = params as [
+        string,
+        string,
+        string,
+        string | null,
+        Date,
+        Date,
+        number,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        Date,
+      ]
       const id = nextId++
       const row: StoredEntry = {
         id,
@@ -167,7 +181,7 @@ function makeFakePool(): PoolFixture {
   }
 
   const client = {
-    query: ((sql: unknown, params?: unknown[]) => exec(String(sql), params ?? [])),
+    query: (sql: unknown, params?: unknown[]) => exec(String(sql), params ?? []),
     release: () => undefined,
   } as never
 

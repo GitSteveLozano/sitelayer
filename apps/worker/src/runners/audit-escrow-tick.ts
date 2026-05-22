@@ -72,7 +72,10 @@ export function createAuditEscrowTickRunner(deps: { pool: Pool; logger: Logger }
       summary.audit_events_anchored += auditResult.anchored
     } catch (err) {
       summary.failed++
-      logger.error({ err, company_id: companyId, action: ACTIONS.AUDIT_EVENTS }, '[audit-escrow] audit_event anchor failed')
+      logger.error(
+        { err, company_id: companyId, action: ACTIONS.AUDIT_EVENTS },
+        '[audit-escrow] audit_event anchor failed',
+      )
     }
 
     try {
@@ -88,11 +91,7 @@ export function createAuditEscrowTickRunner(deps: { pool: Pool; logger: Logger }
     }
 
     lastRunAt = Date.now()
-    if (
-      summary.audit_event_entries_created > 0 ||
-      summary.context_handoff_entries_created > 0 ||
-      summary.failed > 0
-    ) {
+    if (summary.audit_event_entries_created > 0 || summary.context_handoff_entries_created > 0 || summary.failed > 0) {
       logger.info({ company_id: companyId, ...summary }, '[audit-escrow] tick')
     }
     return summary

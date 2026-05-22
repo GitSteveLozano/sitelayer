@@ -324,9 +324,7 @@ function rowToEntry(row: EntryRow): AuditEscrowEntry {
   const material =
     typeof row.material_json === 'string' ? (JSON.parse(row.material_json) as AuditEscrowMaterial) : row.material_json
   const payload =
-    typeof row.payload_json === 'string'
-      ? (JSON.parse(row.payload_json) as Record<string, unknown>)
-      : row.payload_json
+    typeof row.payload_json === 'string' ? (JSON.parse(row.payload_json) as Record<string, unknown>) : row.payload_json
   return {
     id: typeof row.id === 'string' ? Number(row.id) : row.id,
     entryHash: row.entry_hash,
@@ -419,9 +417,7 @@ export async function appendEntry(pool: Pool, params: AppendEntryParams): Promis
     // verifier can recompute it from just the material header without
     // needing the payload. Order matters; do NOT change without bumping
     // AUDIT_ESCROW_VERSION and adding a migration note.
-    const contextHash = hashSHA256(
-      [previousHash, windowStartIso, windowEndIso, key.keyId].join('\n'),
-    )
+    const contextHash = hashSHA256([previousHash, windowStartIso, windowEndIso, key.keyId].join('\n'))
 
     const createdAt = new Date()
     const material: AuditEscrowMaterial = {

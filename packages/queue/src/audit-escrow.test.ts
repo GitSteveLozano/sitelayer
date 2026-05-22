@@ -54,7 +54,12 @@ describe('canonicalizeJSON', () => {
 
   it('preserves array order', () => {
     expect(canonicalizeJSON([3, 1, 2])).toBe('[3,1,2]')
-    expect(canonicalizeJSON([{ b: 1, a: 2 }, { b: 3, a: 4 }])).toBe('[{"a":2,"b":1},{"a":4,"b":3}]')
+    expect(
+      canonicalizeJSON([
+        { b: 1, a: 2 },
+        { b: 3, a: 4 },
+      ]),
+    ).toBe('[{"a":2,"b":1},{"a":4,"b":3}]')
   })
 
   it('handles unicode + escapes the same way JSON.stringify does', () => {
@@ -203,7 +208,9 @@ function makeFakePool(): {
       return buildResult([])
     }
     if (sql.includes('from audit_escrow_keys') && sql.includes('retired_at is null')) {
-      const active = keys.filter((k) => k.retired_at === null).sort((a, b) => b.created_at.getTime() - a.created_at.getTime())
+      const active = keys
+        .filter((k) => k.retired_at === null)
+        .sort((a, b) => b.created_at.getTime() - a.created_at.getTime())
       const row = active[0]
       if (!row) return buildResult([])
       return buildResult([
@@ -217,13 +224,7 @@ function makeFakePool(): {
       ])
     }
     if (sql.startsWith('insert into audit_escrow_keys')) {
-      const [keyId, hostId, algorithm, publicKeyB64, privateKeyB64] = params as [
-        string,
-        string,
-        string,
-        string,
-        string,
-      ]
+      const [keyId, hostId, algorithm, publicKeyB64, privateKeyB64] = params as [string, string, string, string, string]
       let existing = keys.find((k) => k.key_id === keyId)
       if (existing) {
         existing.host_id = hostId
@@ -283,7 +284,22 @@ function makeFakePool(): {
         materialJson,
         payloadJson,
         createdAt,
-      ] = params as [string, string, string, string | null, Date, Date, number, string, string, string, string, string, string, Date]
+      ] = params as [
+        string,
+        string,
+        string,
+        string | null,
+        Date,
+        Date,
+        number,
+        string,
+        string,
+        string,
+        string,
+        string,
+        string,
+        Date,
+      ]
       const id = nextId++
       const row: StoredEntry = {
         id,
@@ -315,7 +331,8 @@ function makeFakePool(): {
   }
 
   const client: PoolClient = {
-    query: ((sqlOrConfig: unknown, params?: unknown[]) => exec(String(sqlOrConfig), params ?? [])) as PoolClient['query'],
+    query: ((sqlOrConfig: unknown, params?: unknown[]) =>
+      exec(String(sqlOrConfig), params ?? [])) as PoolClient['query'],
     release: () => undefined,
   } as unknown as PoolClient
 
@@ -387,8 +404,16 @@ describe('audit-escrow append chain', () => {
       sourceCount: 0,
       payload: { kind: 'baseline' },
     }
-    const entryA = await appendEntry(fx.pool, { ...base, action: 'audit_event_batch', companyId: 'company-a-uuid'.padEnd(36, '0').slice(0, 36) })
-    const entryB = await appendEntry(fx.pool, { ...base, action: 'audit_event_batch', companyId: 'company-b-uuid'.padEnd(36, '0').slice(0, 36) })
+    const entryA = await appendEntry(fx.pool, {
+      ...base,
+      action: 'audit_event_batch',
+      companyId: 'company-a-uuid'.padEnd(36, '0').slice(0, 36),
+    })
+    const entryB = await appendEntry(fx.pool, {
+      ...base,
+      action: 'audit_event_batch',
+      companyId: 'company-b-uuid'.padEnd(36, '0').slice(0, 36),
+    })
     expect(entryA.previousEntryHash).toBe('')
     expect(entryB.previousEntryHash).toBe('')
   })
