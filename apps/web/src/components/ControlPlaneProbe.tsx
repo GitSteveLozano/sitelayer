@@ -1,29 +1,18 @@
 import { useEffect, useMemo } from 'react'
+import type { ControlPlaneCapture } from '@operator/types'
 import { readProbePublishRegistry } from '@/lib/control-plane-probe-pub'
 
 /**
- * Operator-owned probe contract. See:
- *   ~/projects/digital-ontology/tab-to-task-current-state-2026-05-22.md §1.6
+ * Operator-owned probe contract — type now lives in `@operator/types`
+ * (shared across chess, nhl, winwar, sitelayer, learn, qedviz, sandolab,
+ * console-ui). Re-exported here so existing imports of
+ * `ControlPlaneCapture` from this module keep working without a sweep.
  *
- * Other operator apps have shipped a probe with this same shape. Keep the field names
- * (`entity_kind`, `entity_id`, `page_state`, `deploy`, ...) aligned so the
- * browser-bridge capture-modal can consume any operator tab without
- * per-app branching.
+ * See:
+ *   ~/projects/digital-ontology/tab-to-task-current-state-2026-05-22.md §1.6
+ *   ~/projects/digital-ontology/tab-to-task-implementation-plan-2026-05-22.md §2.3
  */
-export type ControlPlaneCapture = {
-  page_state?: Record<string, unknown>
-  path: {
-    entity_kind: string
-    entity_id: string | number | null
-    [k: string]: unknown
-  }
-  principal?: Record<string, unknown>
-  acting_as?: string | null
-  trace?: { trace_id?: string; span_id?: string } | null
-  deploy?: { build_sha?: string; env?: string } | null
-  feature_flags?: Record<string, unknown>
-  ambient?: Record<string, unknown>
-}
+export type { ControlPlaneCapture }
 
 declare global {
   interface Window {
