@@ -19,6 +19,7 @@ import {
   listContextWorkItems,
   updateContextWorkItemWithEventTx,
   type ContextHandoffEventRow,
+  type ContextWorkItemDetail,
   type ContextWorkItemRow,
   type HandoffEventType,
   type WorkItemLane,
@@ -89,6 +90,8 @@ type DispatchPayload = {
   lane: WorkItemLane
   reversibility_window_seconds: number
   support_packet: unknown
+  work_request_brief: WorkRequestBrief
+  agent_brief_markdown: string
   callback: {
     path: string
     url: string | null
@@ -96,6 +99,57 @@ type DispatchPayload = {
     token_type: 'scoped_bearer'
     expires_at: string
   }
+}
+
+type WorkRequestBriefTimelineEntry = {
+  event_type: string
+  actor_kind: string
+  actor_user_id: string | null
+  actor_ref: string | null
+  source_system: string
+  recorded_at: string
+  message: string | null
+  url: string | null
+  status: string | null
+  lane: string | null
+  artifacts_count: number | null
+  payload_keys: string[]
+}
+
+type WorkRequestBrief = {
+  schema: 'sitelayer.work_request_brief.v1'
+  generated_at: string
+  work_item: Omit<ReturnType<typeof workItemResponse>, 'metadata'> & { metadata_keys: string[] }
+  state: {
+    status: WorkItemStatus
+    lane: WorkItemLane
+    severity: WorkItemSeverity | null
+    reversibility_window_seconds: number
+    expires_at: string | null
+    next_action: string
+  }
+  support_packet: ContextWorkItemDetail['work_item']['support_packet']
+  diagnostics: {
+    work_item_path: string
+    support_packet_id: string
+    request_id: string | null
+    build_sha: string | null
+    route: string | null
+    entity_type: string | null
+    entity_id: string | null
+    dispatch_outbox_status: string | null
+    evidence_refs: Array<{ type: string; id: string }>
+  }
+  timeline: WorkRequestBriefTimelineEntry[]
+  timeline_total: number
+  timeline_truncated: boolean
+  callback?: {
+    path: string
+    url: string | null
+    token_type: 'scoped_bearer'
+    expires_at: string
+  }
+  agent_brief_markdown: string
 }
 
 function optionalText(value: unknown, maxLength: number): string | null {
@@ -260,6 +314,149 @@ function workItemResponse(row: ContextWorkItemRow) {
     reversibility_window_seconds: Number(row.reversibility_window_seconds),
     expires_at: row.expires_at,
     metadata: row.metadata,
+  }
+}
+
+function workItemBriefResponse(row: ContextWorkItemRow): WorkRequestBrief['work_item'] {
+  const { metadata, ...rest } = workItemResponse(row)
+  return {
+    ...rest,
+    metadata_keys: Object.keys(metadata ?? {})
+      .sort()
+      .slice(0, 40),
+  }
+}
+
+function timelineEntry(event: ContextHandoffEventRow): WorkRequestBriefTimelineEntry {
+  const artifacts = Array.isArray(event.payload.artifacts) ? event.payload.artifacts.length : null
+  return {
+    event_type: event.event_type,
+    actor_kind: event.actor_kind,
+    actor_user_id: event.actor_user_id,
+    actor_ref: event.actor_ref,
+    source_system: event.source_system,
+    recorded_at: event.recorded_at,
+    message: optionalText(event.payload.message ?? event.payload.body, 500),
+    url: optionalText(event.payload.url, 1000),
+    status: optionalText(event.payload.status, 100),
+    lane: optionalText(event.payload.lane, 100),
+    artifacts_count: artifacts,
+    payload_keys: Object.keys(event.payload).sort().slice(0, 40),
+  }
+}
+
+function nextActionForWorkItem(row: ContextWorkItemRow, outbox: DispatchOutboxSummary | null): string {
+  if (row.status === 'resolved') return 'resolved'
+  if (row.status === 'wont_do') return 'closed_without_action'
+  if (row.status === 'reversed') return 'reversed'
+  if (outbox?.status === 'failed' || outbox?.status === 'dead') return 'retry_or_reassign_dispatch'
+  if (row.status === 'review_ready') return 'human_review'
+  if (row.status === 'review_stale') return 'refresh_review_or_close'
+  if (row.status === 'proposal_expired') return 'redispatch_or_assign_human'
+  if (row.status === 'agent_running') return 'monitor_agent_callback'
+  if (row.status === 'human_assigned') return 'assigned_human_followup'
+  return row.lane === 'agent' ? 'dispatch_agent' : 'triage'
+}
+
+function buildAgentBriefMarkdown(input: {
+  detail: ContextWorkItemDetail
+  dispatchOutbox: DispatchOutboxSummary | null
+  timeline: WorkRequestBriefTimelineEntry[]
+  callback?: WorkRequestBrief['callback']
+  nextAction: string
+}): string {
+  const item = input.detail.work_item
+  const support = item.support_packet
+  const lines = [
+    `# Sitelayer Work Request`,
+    '',
+    `Work item: ${item.id}`,
+    `Title: ${item.title}`,
+    `Status: ${item.status}`,
+    `Lane: ${item.lane}`,
+    `Severity: ${item.severity ?? 'normal'}`,
+    `Next action: ${input.nextAction}`,
+  ]
+  if (item.summary) lines.push('', 'Summary:', item.summary)
+  lines.push(
+    '',
+    'Context:',
+    `- Route: ${item.route ?? support?.route ?? 'unknown'}`,
+    `- Entity: ${item.entity_type ?? 'unknown'}/${item.entity_id ?? 'unknown'}`,
+    `- Support packet: ${item.support_packet_id}`,
+    `- Request ID: ${support?.request_id ?? 'unknown'}`,
+    `- Build: ${support?.build_sha ?? 'unknown'}`,
+    `- Reversibility expires: ${item.expires_at ?? 'unknown'}`,
+    `- Dispatch outbox: ${input.dispatchOutbox?.status ?? 'none'}`,
+  )
+  if (input.callback) {
+    lines.push(`- Callback: ${input.callback.url ?? input.callback.path} (${input.callback.token_type})`)
+  }
+  lines.push('', 'Recent timeline:')
+  if (input.timeline.length === 0) {
+    lines.push('- no handoff events captured')
+  } else {
+    for (const event of input.timeline) {
+      const detail = event.message ?? event.url ?? [event.status, event.lane].filter(Boolean).join('/') ?? ''
+      lines.push(`- ${event.recorded_at} ${event.event_type} by ${event.actor_kind}${detail ? `: ${detail}` : ''}`)
+    }
+  }
+  lines.push(
+    '',
+    'Agent instructions:',
+    '- Treat this brief as the safe handoff surface.',
+    '- Use the support_packet_id as an evidence reference; do not require raw support packet access unless needed.',
+    '- Report progress through the callback when provided.',
+  )
+  return lines.join('\n')
+}
+
+function buildWorkRequestBrief(
+  detail: ContextWorkItemDetail,
+  dispatchOutbox: DispatchOutboxSummary | null,
+  opts: { callback?: WorkRequestBrief['callback'] } = {},
+): WorkRequestBrief {
+  const timelineEvents = detail.events.slice(-12).map(timelineEntry)
+  const nextAction = nextActionForWorkItem(detail.work_item, dispatchOutbox)
+  const partial = {
+    schema: 'sitelayer.work_request_brief.v1' as const,
+    generated_at: new Date().toISOString(),
+    work_item: workItemBriefResponse(detail.work_item),
+    state: {
+      status: detail.work_item.status,
+      lane: detail.work_item.lane,
+      severity: detail.work_item.severity,
+      reversibility_window_seconds: Number(detail.work_item.reversibility_window_seconds),
+      expires_at: detail.work_item.expires_at,
+      next_action: nextAction,
+    },
+    support_packet: detail.work_item.support_packet,
+    diagnostics: {
+      work_item_path: `/work/${detail.work_item.id}`,
+      support_packet_id: detail.work_item.support_packet_id,
+      request_id: detail.work_item.support_packet?.request_id ?? null,
+      build_sha: detail.work_item.support_packet?.build_sha ?? null,
+      route: detail.work_item.route ?? detail.work_item.support_packet?.route ?? null,
+      entity_type: detail.work_item.entity_type,
+      entity_id: detail.work_item.entity_id,
+      dispatch_outbox_status: dispatchOutbox?.status ?? null,
+      evidence_refs: [{ type: 'support_debug_packet', id: detail.work_item.support_packet_id }],
+    },
+    timeline: timelineEvents,
+    timeline_total: detail.events_total,
+    timeline_truncated: detail.events_total > timelineEvents.length,
+    ...(opts.callback ? { callback: opts.callback } : {}),
+  }
+  const agentBriefMarkdown = buildAgentBriefMarkdown({
+    detail,
+    dispatchOutbox,
+    timeline: timelineEvents,
+    callback: opts.callback,
+    nextAction,
+  })
+  return {
+    ...partial,
+    agent_brief_markdown: agentBriefMarkdown,
   }
 }
 
@@ -530,10 +727,26 @@ async function authorizeAgentCallback(
 
 function buildDispatchPayload(
   req: http.IncomingMessage,
-  row: ContextWorkItemRow & { support_packet?: unknown },
+  detail: ContextWorkItemDetail,
   callbackToken: string,
 ): DispatchPayload {
+  const row = detail.work_item
   const callbackPath = `/api/work-requests/${row.id}/agent-callback`
+  const callback = {
+    path: callbackPath,
+    url: callbackUrlForPath(req, callbackPath),
+    token: callbackToken,
+    token_type: 'scoped_bearer' as const,
+    expires_at: callbackTokenExpiresAt(),
+  }
+  const brief = buildWorkRequestBrief(detail, null, {
+    callback: {
+      path: callback.path,
+      url: callback.url,
+      token_type: callback.token_type,
+      expires_at: callback.expires_at,
+    },
+  })
   return {
     work_item_id: row.id,
     support_packet_id: row.support_packet_id,
@@ -546,13 +759,9 @@ function buildDispatchPayload(
     lane: row.lane,
     reversibility_window_seconds: Number(row.reversibility_window_seconds),
     support_packet: row.support_packet ?? null,
-    callback: {
-      path: callbackPath,
-      url: callbackUrlForPath(req, callbackPath),
-      token: callbackToken,
-      token_type: 'scoped_bearer',
-      expires_at: callbackTokenExpiresAt(),
-    },
+    work_request_brief: brief,
+    agent_brief_markdown: brief.agent_brief_markdown,
+    callback,
   }
 }
 
@@ -781,10 +990,13 @@ async function getWorkRequest(ctx: WorkRequestRouteCtx, id: string, url: URL) {
     ctx.sendJson(403, { error: 'forbidden' })
     return
   }
+  const dispatchOutbox = await getDispatchOutbox(ctx.company.id, id)
+  const workRequestBrief = buildWorkRequestBrief(detail, dispatchOutbox)
   ctx.sendJson(200, {
     work_item: workItemResponse(detail.work_item),
     support_packet: detail.work_item.support_packet,
-    dispatch_outbox: await getDispatchOutbox(ctx.company.id, id),
+    dispatch_outbox: dispatchOutbox,
+    work_request_brief: workRequestBrief,
     events: detail.events,
     events_pagination: {
       limit: detail.events_limit,
@@ -792,6 +1004,31 @@ async function getWorkRequest(ctx: WorkRequestRouteCtx, id: string, url: URL) {
       total: detail.events_total,
       has_more: detail.events_truncated,
     },
+  })
+}
+
+async function getWorkRequestBrief(ctx: WorkRequestRouteCtx, id: string, url: URL) {
+  if (!isValidUuid(id)) {
+    ctx.sendJson(400, { error: 'invalid work request id' })
+    return
+  }
+  const requestedEventsLimit = Number(url.searchParams.get('events_limit') ?? 200)
+  const eventsLimit = Number.isFinite(requestedEventsLimit)
+    ? Math.max(12, Math.min(500, Math.floor(requestedEventsLimit)))
+    : 200
+  const detail = await getContextWorkItemWithEvents(ctx.company.id, id, { eventsLimit })
+  if (!detail) {
+    ctx.sendJson(404, { error: 'work request not found' })
+    return
+  }
+  if (!canReadWorkItem(ctx.company.role, ctx.identity.userId, detail.work_item)) {
+    ctx.sendJson(403, { error: 'forbidden' })
+    return
+  }
+  const dispatchOutbox = await getDispatchOutbox(ctx.company.id, id)
+  const workRequestBrief = buildWorkRequestBrief(detail, dispatchOutbox)
+  ctx.sendJson(200, {
+    work_request_brief: workRequestBrief,
   })
 }
 
@@ -1000,7 +1237,7 @@ async function dispatchWorkRequestToMesh(req: http.IncomingMessage, ctx: WorkReq
   const idempotencyKey = `context_work_item:dispatch_mesh:${id}`
   const callbackToken = newCallbackToken()
   const callbackTokenHash = hashCallbackToken(callbackToken)
-  const payload = buildDispatchPayload(req, detail.work_item, callbackToken)
+  const payload = buildDispatchPayload(req, detail, callbackToken)
   const result = await withMutationTx(ctx.company.id, async (c) => {
     const existingOutbox = await getDispatchOutboxTx(c, ctx.company.id, idempotencyKey)
     if (existingOutbox) {
@@ -1111,7 +1348,7 @@ async function retryWorkRequestMeshDispatch(req: http.IncomingMessage, ctx: Work
     `context_work_item:dispatch_mesh_retry:${id}:${Math.floor(Date.now() / 60_000)}`
   const callbackToken = newCallbackToken()
   const callbackTokenHash = hashCallbackToken(callbackToken)
-  const payload = buildDispatchPayload(req, detail.work_item, callbackToken)
+  const payload = buildDispatchPayload(req, detail, callbackToken)
   const result = await withMutationTx(ctx.company.id, async (c) => {
     const retry = await retryDispatchOutboxTx(c, {
       companyId: ctx.company.id,
@@ -1675,6 +1912,12 @@ export async function handleWorkRequestRoutes(
   const reverseMatch = url.pathname.match(/^\/api\/work-requests\/([^/]+)\/reverse$/)
   if (reverseMatch && req.method === 'POST') {
     await reverseWorkRequest(ctx, decodeURIComponent(reverseMatch[1]!))
+    return true
+  }
+
+  const briefMatch = url.pathname.match(/^\/api\/work-requests\/([^/]+)\/brief$/)
+  if (briefMatch && req.method === 'GET') {
+    await getWorkRequestBrief(ctx, decodeURIComponent(briefMatch[1]!), url)
     return true
   }
 

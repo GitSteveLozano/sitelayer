@@ -725,6 +725,39 @@ describe('handleWorkRequestRoutes', () => {
     expect(pool.handoffEvents.map((event) => event.event_type)).toEqual(['work_item.created', 'resolution.accepted'])
   })
 
+  it('returns a safe agent-readable work request brief', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, {
+      title: 'Brief me',
+      summary: 'The route is acting differently after a workflow event.',
+      client: clientContext,
+    })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItemId = pool.workItems[0]!.id
+    const brief = makeCtx(pool, {})
+
+    await handleWorkRequestRoutes(buildReq('GET'), buildUrl(`/api/work-requests/${workItemId}/brief`), brief.ctx)
+
+    expect(brief.responses[0]?.status).toBe(200)
+    const body = brief.responses[0]?.body as { work_request_brief: JsonRecord }
+    expect(body.work_request_brief).toMatchObject({
+      schema: 'sitelayer.work_request_brief.v1',
+      state: {
+        status: 'new',
+        lane: 'triage',
+        next_action: 'triage',
+      },
+      diagnostics: {
+        work_item_path: `/work/${workItemId}`,
+        support_packet_id: pool.workItems[0]!.support_packet_id,
+        route: '/projects/p-1/estimate-push/push-1',
+      },
+    })
+    expect(body.work_request_brief.agent_brief_markdown).toContain(`Work item: ${workItemId}`)
+    expect(body.work_request_brief.agent_brief_markdown).toContain('Support packet:')
+    expect(JSON.stringify(body.work_request_brief)).not.toContain('Bearer secret')
+  })
+
   it('rejects cross-role triage actions for members', async () => {
     const pool = new FakePool()
     const created = makeCtx(pool, { title: 'Needs assignment', client: clientContext })
@@ -795,6 +828,18 @@ describe('handleWorkRequestRoutes', () => {
     expect((pool.mutationOutbox[0]?.payload.callback as JsonRecord | undefined)?.path).toBe(
       `/api/work-requests/${workItemId}/agent-callback`,
     )
+    expect(pool.mutationOutbox[0]?.payload.work_request_brief).toMatchObject({
+      schema: 'sitelayer.work_request_brief.v1',
+      diagnostics: {
+        support_packet_id: pool.workItems[0]!.support_packet_id,
+      },
+      callback: {
+        path: `/api/work-requests/${workItemId}/agent-callback`,
+        token_type: 'scoped_bearer',
+      },
+    })
+    expect(pool.mutationOutbox[0]?.payload.agent_brief_markdown).toContain(`Work item: ${workItemId}`)
+    expect(JSON.stringify(pool.mutationOutbox[0]?.payload.work_request_brief)).not.toContain('Bearer secret')
     expect((pool.mutationOutbox[0]?.payload.callback as JsonRecord | undefined)?.url).toBe(
       `https://sitelayer.test/api/work-requests/${workItemId}/agent-callback`,
     )

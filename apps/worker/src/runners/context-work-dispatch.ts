@@ -13,6 +13,8 @@ export interface ContextWorkDispatchPayload {
   status?: string | null
   lane?: string | null
   support_packet?: unknown
+  work_request_brief?: unknown
+  agent_brief_markdown?: string | null
   callback?: {
     path?: string | null
     url?: string | null
@@ -172,6 +174,8 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
     entity_type: payload.entity_type ?? null,
     entity_id: payload.entity_id ?? null,
     support_packet: payload.support_packet ?? null,
+    work_request_brief: payload.work_request_brief ?? null,
+    agent_brief_markdown: payload.agent_brief_markdown ?? null,
     callback: payload.callback ?? null,
   }
   const route = cleanString(payload.route)
@@ -204,6 +208,7 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
     callback_path: callbackPath,
     callback_url: callbackUrl,
     lane,
+    work_request_brief_schema: readBriefSchema(payload.work_request_brief),
   }
   const executionContext: Record<string, unknown> = {
     project_hint: 'sitelayer',
@@ -218,6 +223,8 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
     dispatch_mode: 'steerer',
     claim_mode: 'steerer',
     context_handoff: contextHandoff,
+    work_request_brief: payload.work_request_brief ?? null,
+    agent_brief_markdown: cleanString(payload.agent_brief_markdown),
   }
 
   if (isAgentLane) {
@@ -268,6 +275,7 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
       callbackPath: callbackUrl ?? callbackPath,
       isAgentLane,
       affectedPackages,
+      agentBriefMarkdown: cleanString(payload.agent_brief_markdown),
     }),
     created_by: 'sitelayer-worker',
     source: 'sitelayer-context-handoff',
@@ -331,6 +339,7 @@ function buildMeshTaskDescription(input: {
   callbackPath?: string | null
   isAgentLane?: boolean
   affectedPackages?: string[]
+  agentBriefMarkdown?: string | null
 }): string {
   const lines = [
     'Sitelayer context handoff work request.',
@@ -346,6 +355,9 @@ function buildMeshTaskDescription(input: {
   }
   appendLine(lines, 'Summary', input.summary)
   appendLine(lines, 'Callback', input.callbackPath)
+  if (input.agentBriefMarkdown) {
+    lines.push('', 'Agent-readable handoff brief:', input.agentBriefMarkdown)
+  }
   if (input.isAgentLane) {
     appendLine(lines, 'Lane', 'agent (implementation)')
     if (input.affectedPackages?.length) {
@@ -379,6 +391,12 @@ function appendLine(lines: string[], label: string, value?: string | null): void
 
 function cleanString(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function readBriefSchema(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const schema = (value as Record<string, unknown>).schema
+  return typeof schema === 'string' && schema.trim() ? schema.trim() : null
 }
 
 function buildDispatchHeaders(): Record<string, string> {

@@ -90,6 +90,13 @@ describe('createContextWorkDispatchRunner', () => {
           support_packet_id: '00000000-0000-4000-8000-000000000002',
           title: 'Investigate estimate push',
           route: '/projects/p/estimate-push/x',
+          work_request_brief: {
+            schema: 'sitelayer.work_request_brief.v1',
+            diagnostics: {
+              support_packet_id: '00000000-0000-4000-8000-000000000002',
+            },
+          },
+          agent_brief_markdown: 'Safe handoff brief for the receiving agent.',
           callback: {
             path: '/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
             url: 'https://sitelayer.example.test/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
@@ -132,6 +139,7 @@ describe('createContextWorkDispatchRunner', () => {
         callback_path: '/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
         callback_url:
           'https://sitelayer.example.test/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
+        work_request_brief_schema: 'sitelayer.work_request_brief.v1',
         readonly: true,
       },
       execution_context: {
@@ -145,12 +153,20 @@ describe('createContextWorkDispatchRunner', () => {
           'https://sitelayer.example.test/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
         dispatch_mode: 'steerer',
         claim_mode: 'steerer',
+        work_request_brief: {
+          schema: 'sitelayer.work_request_brief.v1',
+        },
+        agent_brief_markdown: 'Safe handoff brief for the receiving agent.',
         context_handoff: {
           version: 'context-handoff-v1',
           source_system: 'sitelayer',
           company_id: 'company-1',
           work_item_id: '00000000-0000-4000-8000-000000000001',
           support_packet_id: '00000000-0000-4000-8000-000000000002',
+          work_request_brief: {
+            schema: 'sitelayer.work_request_brief.v1',
+          },
+          agent_brief_markdown: 'Safe handoff brief for the receiving agent.',
           callback: {
             path: '/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
             url: 'https://sitelayer.example.test/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
@@ -164,6 +180,7 @@ describe('createContextWorkDispatchRunner', () => {
     expect(JSON.parse(String(init.body)).description).toContain(
       'Treat this as read-only triage unless a separate implementation task',
     )
+    expect(JSON.parse(String(init.body)).description).toContain('Safe handoff brief for the receiving agent.')
     // Default (non-agent) lane must NOT carry the sitelayer_implementation routing keys:
     // those are reserved for lane=agent so triage work continues to land in operator_assistant.
     const triageBody = JSON.parse(String(init.body)) as {
