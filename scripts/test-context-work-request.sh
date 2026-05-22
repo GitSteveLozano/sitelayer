@@ -24,6 +24,8 @@
 #   MESH_API_URL            Enables Mesh task probe
 #   MESH_API_TOKEN          Optional Bearer token for Mesh probe
 #   WORK_REQUEST_SMOKE_ID   Override the generated smoke entity/idempotency suffix
+#   WORK_REQUEST_SMOKE_DISPATCH
+#                           auto|always|never (default: auto)
 #   WORK_REQUEST_SMOKE_WAIT_SECONDS
 #                           Poll dispatch_outbox until applied/failed/dead (default: 0)
 
@@ -41,7 +43,7 @@ require_cmd() {
 }
 
 json_field() {
-  jq -r "$1 // \"\"" <<<"$2"
+  jq -r "($1) as \$value | if \$value == null then \"\" else \$value end" <<<"$2"
 }
 
 http_json() {
@@ -92,6 +94,14 @@ if ! [[ "$WORK_REQUEST_SMOKE_WAIT_SECONDS" =~ ^[0-9]+$ ]]; then
   err "WORK_REQUEST_SMOKE_WAIT_SECONDS must be a non-negative integer."
   exit 5
 fi
+WORK_REQUEST_SMOKE_DISPATCH="${WORK_REQUEST_SMOKE_DISPATCH:-auto}"
+case "$WORK_REQUEST_SMOKE_DISPATCH" in
+  auto|always|never) ;;
+  *)
+    err "WORK_REQUEST_SMOKE_DISPATCH must be auto, always, or never."
+    exit 5
+    ;;
+esac
 
 SITELAYER_API_URL="${SITELAYER_API_URL%/}"
 case "$SITELAYER_API_URL" in
@@ -121,6 +131,17 @@ request_id="smoke-context-work-${smoke_id}"
 log "Target: $SITELAYER_API_URL"
 log "Company: $SITELAYER_COMPANY_SLUG"
 log "Smoke id: $smoke_id"
+
+preflight_mesh_configured=""
+preflight_health_resp="$(http_json GET "$SITELAYER_API_URL/api/work-requests/queue-health")"
+preflight_health_http="$(tail -n1 <<<"$preflight_health_resp")"
+preflight_health_json="$(sed '$d' <<<"$preflight_health_resp")"
+if [ "$preflight_health_http" = "200" ]; then
+  preflight_mesh_configured="$(json_field '.config.mesh_dispatch_configured' "$preflight_health_json")"
+  log "Preflight queue health mesh_dispatch_configured=$preflight_mesh_configured"
+else
+  log "Preflight queue health skipped/failed with HTTP $preflight_health_http"
+fi
 
 create_body="$(
   jq -nc \
@@ -175,18 +196,31 @@ if [ -z "$work_item_id" ]; then
 fi
 ok "Created work_item_id=$work_item_id support_packet_id=$support_packet_id"
 
-log "Step 2/5: queue Mesh dispatch"
-dispatch_resp="$(http_json POST "$SITELAYER_API_URL/api/work-requests/$work_item_id/dispatch/mesh" '{}')"
-dispatch_http="$(tail -n1 <<<"$dispatch_resp")"
-dispatch_json="$(sed '$d' <<<"$dispatch_resp")"
-if [ "$dispatch_http" != "202" ]; then
-  err "Dispatch returned HTTP $dispatch_http"
-  printf '%s\n' "$dispatch_json" >&2
-  exit 2
+dispatch_attempted=0
+should_dispatch=1
+if [ "$WORK_REQUEST_SMOKE_DISPATCH" = "never" ]; then
+  should_dispatch=0
+elif [ "$WORK_REQUEST_SMOKE_DISPATCH" = "auto" ] && [ "$preflight_mesh_configured" = "false" ]; then
+  should_dispatch=0
 fi
-outbox_status="$(json_field '.outbox.status' "$dispatch_json")"
-dispatch_queued="$(json_field '.dispatch_queued' "$dispatch_json")"
-ok "Dispatch outbox status=$outbox_status dispatch_queued=$dispatch_queued"
+
+if [ "$should_dispatch" -eq 0 ]; then
+  log "Step 2/5: skipped Mesh dispatch (mode=$WORK_REQUEST_SMOKE_DISPATCH mesh_dispatch_configured=${preflight_mesh_configured:-unknown})"
+else
+  log "Step 2/5: queue Mesh dispatch"
+  dispatch_resp="$(http_json POST "$SITELAYER_API_URL/api/work-requests/$work_item_id/dispatch/mesh" '{}')"
+  dispatch_http="$(tail -n1 <<<"$dispatch_resp")"
+  dispatch_json="$(sed '$d' <<<"$dispatch_resp")"
+  if [ "$dispatch_http" != "202" ]; then
+    err "Dispatch returned HTTP $dispatch_http"
+    printf '%s\n' "$dispatch_json" >&2
+    exit 2
+  fi
+  dispatch_attempted=1
+  outbox_status="$(json_field '.outbox.status' "$dispatch_json")"
+  dispatch_queued="$(json_field '.dispatch_queued' "$dispatch_json")"
+  ok "Dispatch outbox status=$outbox_status dispatch_queued=$dispatch_queued"
+fi
 
 log "Step 3/5: read work item and queue health"
 detail_resp="$(http_json GET "$SITELAYER_API_URL/api/work-requests/$work_item_id")"
@@ -214,7 +248,9 @@ else
 fi
 
 if [ "$WORK_REQUEST_SMOKE_WAIT_SECONDS" -gt 0 ]; then
-  if [ "$mesh_configured" = "false" ]; then
+  if [ "$dispatch_attempted" -ne 1 ]; then
+    log "Dispatch was skipped; skipped worker-drain wait."
+  elif [ "$mesh_configured" = "false" ]; then
     log "Mesh dispatch is not configured; skipped worker-drain wait."
   else
     log "Waiting up to ${WORK_REQUEST_SMOKE_WAIT_SECONDS}s for worker dispatch drain"
@@ -254,7 +290,9 @@ if [ "$WORK_REQUEST_SMOKE_WAIT_SECONDS" -gt 0 ]; then
 fi
 
 log "Step 4/5: scoped callback replay"
-if [ -z "${DATABASE_URL:-}" ]; then
+if [ "$dispatch_attempted" -ne 1 ]; then
+  log "Dispatch was skipped; skipped callback replay."
+elif [ -z "${DATABASE_URL:-}" ]; then
   log "DATABASE_URL not set; skipped callback replay."
 else
   require_cmd psql
@@ -319,7 +357,9 @@ else
 fi
 
 log "Step 5/5: optional Mesh probe"
-if [ -z "${MESH_API_URL:-}" ]; then
+if [ "$dispatch_attempted" -ne 1 ]; then
+  log "Dispatch was skipped; skipped Mesh task probe."
+elif [ -z "${MESH_API_URL:-}" ]; then
   log "MESH_API_URL not set; skipped Mesh task probe."
 else
   mesh_headers=()

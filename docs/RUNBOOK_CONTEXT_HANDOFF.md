@@ -231,17 +231,20 @@ For a dev/preview API smoke, use the seeded e2e tenant:
 SITELAYER_API_URL=https://dev.sitelayer.sandolab.xyz \
 SITELAYER_AUTH_TOKEN=e2e-admin \
 SITELAYER_COMPANY_SLUG=e2e-fixtures \
+WORK_REQUEST_SMOKE_DISPATCH=never \
 ./scripts/test-context-work-request.sh
 ```
 
 For worker-drain validation, use the tenant the persistent dev worker drains
-(`ACTIVE_COMPANY_SLUG=la-operations`) and wait for the outbox row to become
-`applied`:
+(`ACTIVE_COMPANY_SLUG=la-operations`) after a reachable
+`DEV_MESH_WORK_REQUEST_DISPATCH_URL` is configured, then wait for the outbox
+row to become `applied`:
 
 ```bash
 SITELAYER_API_URL=https://dev.sitelayer.sandolab.xyz \
 SITELAYER_AUTH_TOKEN=demo-user \
 SITELAYER_COMPANY_SLUG=la-operations \
+WORK_REQUEST_SMOKE_DISPATCH=always \
 WORK_REQUEST_SMOKE_WAIT_SECONDS=180 \
 ./scripts/test-context-work-request.sh
 ```
