@@ -43,13 +43,13 @@ describe('useControlPlaneProbePublish', () => {
     const { unmount: unmountA } = renderHook(() =>
       useControlPlaneProbePublish('billingReviewState', 'generated'),
     )
-    renderHook(() => useControlPlaneProbePublish('billingReviewState', 'approved'))
+    const { unmount: unmountB } = renderHook(() =>
+      useControlPlaneProbePublish('billingReviewState', 'approved'),
+    )
     expect(readProbePublishRegistry().billingReviewState).toBe('approved')
-    // Unmounting the first publisher should still clear the shared key
-    // (cleanup is unconditional — the second publisher cleans up on its
-    // own unmount). Documenting the property so a future change here
-    // doesn't silently regress.
     unmountA()
+    expect(readProbePublishRegistry().billingReviewState).toBe('approved')
+    unmountB()
     expect(readProbePublishRegistry().billingReviewState).toBeUndefined()
   })
 

@@ -1,11 +1,13 @@
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it } from 'vitest'
+import { __resetProbePublish, useControlPlaneProbePublish } from '@/lib/control-plane-probe-pub'
 import { ControlPlaneProbe } from './ControlPlaneProbe'
 
 describe('ControlPlaneProbe', () => {
   afterEach(() => {
     cleanup()
     delete window.__controlPlaneProbe
+    __resetProbePublish()
   })
 
   it('installs a workspace capture probe with company and route state', () => {
@@ -61,5 +63,30 @@ describe('ControlPlaneProbe', () => {
     view.unmount()
 
     expect(window.__controlPlaneProbe?.version).toBe('newer-probe')
+  })
+
+  it('uses published route state over prop fallbacks at capture time', () => {
+    function RoutePublisher() {
+      useControlPlaneProbePublish('projectState', 'published-state')
+      return null
+    }
+
+    render(
+      <>
+        <ControlPlaneProbe
+          companySlug="la-ops"
+          projectId="project-1"
+          currentTab="projects"
+          userRole="admin"
+          activeProjectName="Riverside"
+          projectState="prop-state"
+        />
+        <RoutePublisher />
+      </>,
+    )
+
+    expect(window.__controlPlaneProbe?.capture().page_state).toMatchObject({
+      project_state: 'published-state',
+    })
   })
 })

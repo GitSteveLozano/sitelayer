@@ -22,11 +22,11 @@
  * §1.9.5 for the design summary.
  */
 
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 
 const probePublishRegistry = new Map<
   string,
-  { value: unknown; publishedAt: number }
+  { value: unknown; publishedAt: number; token: symbol }
 >()
 
 /**
@@ -65,19 +65,27 @@ export function getProbePublishMetadata(
  * snapshots into the probe.
  *
  * Last-write-wins: if two components publish the same key, the most
- * recent `useEffect` write overwrites. Mirrors `window.__controlPlaneProbe`
- * version handshake — newer wins.
+ * recent `useEffect` write overwrites. Cleanup is token-scoped so an
+ * older publisher unmounting after a newer publisher has overwritten
+ * the key cannot delete the newer snapshot.
  */
 export function useControlPlaneProbePublish(key: string, snapshot: unknown): void {
+  const tokenRef = useRef<symbol | null>(null)
+  if (!tokenRef.current) tokenRef.current = Symbol('control-plane-probe-publish')
+
   useEffect(() => {
+    const token = tokenRef.current!
     if (snapshot !== null && snapshot !== undefined) {
       probePublishRegistry.set(key, {
         value: snapshot,
         publishedAt: Date.now(),
+        token,
       })
     }
     return () => {
-      probePublishRegistry.delete(key)
+      if (probePublishRegistry.get(key)?.token === token) {
+        probePublishRegistry.delete(key)
+      }
     }
   }, [key, snapshot])
 }
