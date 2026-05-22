@@ -9,6 +9,7 @@ import type { LedgerExecutor } from '../mutation-tx.js'
 import { handleAnalyticsRoutes } from './analytics.js'
 import { handleAuditEscrowRoutes } from './audit-escrow.js'
 import { handleAuditEventRoutes } from './audit-events.js'
+import { handleDispatchLaneRoutes } from './dispatch-lanes.js'
 import { handleBonusRuleRoutes } from './bonus-rules.js'
 import { handleBlueprintRoutes } from './blueprints.js'
 import { handleClockRoutes } from './clock.js'
@@ -244,6 +245,18 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         requireRole: requireRoleStr,
         sendJson,
+      }),
+
+    // Dispatch lanes (admin-only GET / POST /api/admin/dispatch-lanes)
+    // Wedge 5 kill-switch primitive — see migration 094 and
+    // apps/worker/src/dispatch-lanes.ts for the runtime gate.
+    () =>
+      handleDispatchLaneRoutes(req, url, {
+        pool,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+        getCurrentUserId: ctx.getCurrentUserId,
       }),
 
     // Audit Escrow verification (admin-only GET /api/audit/escrow/...)
