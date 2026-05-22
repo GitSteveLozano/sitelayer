@@ -9,6 +9,7 @@ export interface ContextWorkDispatchPayload {
   route?: string | null
   entity_type?: string | null
   entity_id?: string | null
+  reversibility_window_seconds?: number | null
   status?: string | null
   lane?: string | null
   support_packet?: unknown
@@ -20,6 +21,12 @@ export interface ContextWorkDispatchPayload {
     expires_at?: string | null
   } | null
 }
+
+// Mesh round-trips a numeric reversibility window per task (mesh migration 261).
+// Sitelayer's authoritative value is the column on context_work_items
+// (sitelayer migration 093); if the payload omits it we fall back to the
+// 24h default to stay backward-compatible with in-flight outbox rows.
+const DEFAULT_REVERSIBILITY_WINDOW_SECONDS = 86_400
 
 // Mesh routing for the sitelayer implementation lane. Registered in
 // control-plane mesh as:
@@ -241,7 +248,10 @@ function buildMeshDispatchBody(companyId: string, payload: ContextWorkDispatchPa
     tags,
     project_hint: 'sitelayer',
     idempotency_key: `sitelayer:context_work_item:${payload.work_item_id}`,
-    reversibility_window_seconds: 86_400,
+    reversibility_window_seconds:
+      typeof payload.reversibility_window_seconds === 'number' && Number.isFinite(payload.reversibility_window_seconds)
+        ? payload.reversibility_window_seconds
+        : DEFAULT_REVERSIBILITY_WINDOW_SECONDS,
     properties,
     execution_context: executionContext,
   }

@@ -69,6 +69,9 @@ const detailResponse: WorkRequestDetailResponse = {
     created_at: '2026-05-21T12:00:00.000Z',
     updated_at: '2026-05-21T12:05:00.000Z',
     resolved_at: null,
+    reversed_at: null,
+    reversibility_window_seconds: 21600,
+    expires_at: '2026-05-21T18:00:00.000Z',
     metadata: {},
   },
   support_packet: {
@@ -149,5 +152,14 @@ describe('MobileWorkRequestDetail', () => {
     expect((screen.getByText('Dispatch agent') as HTMLButtonElement).disabled).toBe(true)
     expect(await screen.findByText('Agent Prompt by admin-1')).toBeTruthy()
     expect(mocks.fetchSupportPacketAccessLog).toHaveBeenCalledWith('00000000-0000-4000-8000-000000000002')
+  })
+
+  it('renders the closed reversibility badge when expires_at is in the past', async () => {
+    const Wrapper = makeWrapper()
+    render(<MobileWorkRequestDetail companyRole="admin" />, { wrapper: Wrapper })
+
+    // The seed expires_at (2026-05-21T18:00:00) is before "now" (2026-05-22)
+    // so the badge should render the closed-window label.
+    expect(await screen.findByText('Recall window closed')).toBeTruthy()
   })
 })
