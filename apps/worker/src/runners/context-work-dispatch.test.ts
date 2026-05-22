@@ -85,8 +85,10 @@ describe('createContextWorkDispatchRunner', () => {
           route: '/projects/p/estimate-push/x',
           callback: {
             path: '/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
+            url: 'https://sitelayer.example.test/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
             token: 'scoped-callback',
             token_type: 'scoped_bearer',
+            expires_at: '2026-05-22T12:00:00.000Z',
           },
         },
       },
@@ -121,6 +123,8 @@ describe('createContextWorkDispatchRunner', () => {
         support_packet_id: '00000000-0000-4000-8000-000000000002',
         route: '/projects/p/estimate-push/x',
         callback_path: '/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
+        callback_url:
+          'https://sitelayer.example.test/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
         readonly: true,
       },
       execution_context: {
@@ -130,6 +134,8 @@ describe('createContextWorkDispatchRunner', () => {
         support_packet_id: '00000000-0000-4000-8000-000000000002',
         route: '/projects/p/estimate-push/x',
         callback_path: '/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
+        callback_url:
+          'https://sitelayer.example.test/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
         dispatch_mode: 'steerer',
         claim_mode: 'steerer',
         context_handoff: {
@@ -140,8 +146,10 @@ describe('createContextWorkDispatchRunner', () => {
           support_packet_id: '00000000-0000-4000-8000-000000000002',
           callback: {
             path: '/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
+            url: 'https://sitelayer.example.test/api/work-requests/00000000-0000-4000-8000-000000000001/agent-callback',
             token: 'scoped-callback',
             token_type: 'scoped_bearer',
+            expires_at: '2026-05-22T12:00:00.000Z',
           },
         },
       },

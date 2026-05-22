@@ -433,7 +433,14 @@ class FakePool {
       const [companyId, workItemId] = params as [string, string]
       const row = this.workItems.find((item) => item.company_id === companyId && item.id === workItemId)
       return {
-        rows: row ? [{ agent_callback_token_hash: row.agent_callback_token_hash }] : [],
+        rows: row
+          ? [
+              {
+                agent_callback_token_hash: row.agent_callback_token_hash,
+                agent_callback_token_issued_at: row.agent_callback_token_issued_at,
+              },
+            ]
+          : [],
         rowCount: row ? 1 : 0,
       }
     }
@@ -672,7 +679,7 @@ describe('handleWorkRequestRoutes', () => {
     const dispatch = makeCtx(pool, {})
 
     await handleWorkRequestRoutes(
-      buildReq('POST'),
+      buildReq('POST', { host: 'sitelayer.test', 'x-forwarded-proto': 'https' }),
       buildUrl(`/api/work-requests/${workItemId}/dispatch/mesh`),
       dispatch.ctx,
     )
@@ -694,9 +701,40 @@ describe('handleWorkRequestRoutes', () => {
       idempotency_key: `context_work_item:dispatch_mesh:${workItemId}`,
     })
     expect((pool.mutationOutbox[0]?.payload.callback as JsonRecord | undefined)?.token_type).toBe('scoped_bearer')
+    expect((pool.mutationOutbox[0]?.payload.callback as JsonRecord | undefined)?.path).toBe(
+      `/api/work-requests/${workItemId}/agent-callback`,
+    )
+    expect((pool.mutationOutbox[0]?.payload.callback as JsonRecord | undefined)?.url).toBe(
+      `https://sitelayer.test/api/work-requests/${workItemId}/agent-callback`,
+    )
+    expect(typeof (pool.mutationOutbox[0]?.payload.callback as JsonRecord | undefined)?.expires_at).toBe('string')
     expect(typeof (pool.mutationOutbox[0]?.payload.callback as JsonRecord | undefined)?.token).toBe('string')
     expect(pool.workItems[0]?.agent_callback_token_hash).toMatch(/^[a-f0-9]{64}$/)
     expect(pool.handoffEvents.map((event) => event.event_type)).toContain('agent.dispatch_requested')
+  })
+
+  it('prefers configured public base when building callback URLs', async () => {
+    const previous = process.env.SITELAYER_PUBLIC_BASE
+    process.env.SITELAYER_PUBLIC_BASE = 'https://sitelayer.sandolab.xyz/'
+    try {
+      const pool = new FakePool()
+      const created = makeCtx(pool, { title: 'Public callback', client: clientContext })
+      await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+      const workItemId = pool.workItems[0]!.id
+
+      await handleWorkRequestRoutes(
+        buildReq('POST', { host: 'internal.local' }),
+        buildUrl(`/api/work-requests/${workItemId}/dispatch/mesh`),
+        makeCtx(pool, {}).ctx,
+      )
+
+      expect((pool.mutationOutbox[0]?.payload.callback as JsonRecord | undefined)?.url).toBe(
+        `https://sitelayer.sandolab.xyz/api/work-requests/${workItemId}/agent-callback`,
+      )
+    } finally {
+      if (previous === undefined) delete process.env.SITELAYER_PUBLIC_BASE
+      else process.env.SITELAYER_PUBLIC_BASE = previous
+    }
   })
 
   it('does not reset dispatch outbox backoff when dispatch is repeated', async () => {
@@ -1022,6 +1060,37 @@ describe('handleWorkRequestRoutes', () => {
     } finally {
       if (previous === undefined) delete process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN
       else process.env.SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN = previous
+    }
+  })
+
+  it('rejects expired scoped callback tokens', async () => {
+    const previousTtl = process.env.WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS
+    process.env.WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS = '1'
+    try {
+      const pool = new FakePool()
+      const created = makeCtx(pool, { title: 'Expired callback', client: clientContext })
+      await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+      const workItemId = pool.workItems[0]!.id
+      await handleWorkRequestRoutes(
+        buildReq('POST'),
+        buildUrl(`/api/work-requests/${workItemId}/dispatch/mesh`),
+        makeCtx(pool, {}).ctx,
+      )
+      const callbackToken = (pool.mutationOutbox[0]!.payload.callback as JsonRecord).token as string
+      pool.workItems[0]!.agent_callback_token_issued_at = '2026-05-20T12:00:00.000Z'
+      const callback = makeCtx(pool, { event_type: 'agent.proposal_ready', idempotency_key: 'expired-callback-1' })
+
+      await handleWorkRequestRoutes(
+        buildReq('POST', { authorization: `Bearer ${callbackToken}` }),
+        buildUrl(`/api/work-requests/${workItemId}/agent-callback`),
+        callback.ctx,
+      )
+
+      expect(callback.responses[0]).toEqual({ status: 410, body: { error: 'callback token expired' } })
+      expect(pool.handoffEvents.map((event) => event.event_type)).not.toContain('agent.proposal_ready')
+    } finally {
+      if (previousTtl === undefined) delete process.env.WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS
+      else process.env.WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS = previousTtl
     }
   })
 

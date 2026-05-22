@@ -60,15 +60,19 @@ test('turns escaped multiline secrets into compose-compatible multiline values',
 
 test('renders optional context work dispatch configuration when provided', () => {
   const result = runRenderer({
+    SITELAYER_PUBLIC_BASE: 'https://sitelayer.sandolab.xyz',
     MESH_WORK_REQUEST_DISPATCH_URL: 'http://mesh-hetzner:8713/api/orchestrate/tasks',
     MESH_WORK_REQUEST_DISPATCH_TOKEN: 'mesh-work-secret',
     SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN: 'legacy-callback-secret',
+    WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS: '72',
   })
 
   assert.equal(result.status, 0, result.stderr)
+  assert.match(result.body, /SITELAYER_PUBLIC_BASE='https:\/\/sitelayer.sandolab.xyz'/)
   assert.match(result.body, /MESH_WORK_REQUEST_DISPATCH_URL='http:\/\/mesh-hetzner:8713\/api\/orchestrate\/tasks'/)
   assert.match(result.body, /MESH_WORK_REQUEST_DISPATCH_TOKEN='mesh-work-secret'/)
   assert.match(result.body, /SITELAYER_WORK_REQUEST_WEBHOOK_TOKEN='legacy-callback-secret'/)
+  assert.match(result.body, /WORK_REQUEST_CALLBACK_TOKEN_TTL_HOURS='72'/)
   assert.match(result.body, /WORK_REQUEST_REVIEW_STALE_HOURS='48'/)
   assert.match(result.body, /WORK_REQUEST_AGENT_STALE_HOURS='24'/)
   assert.doesNotMatch(result.stdout, /mesh-work-secret/)
