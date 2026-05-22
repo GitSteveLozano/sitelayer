@@ -58,6 +58,9 @@ const DEFAULT_DISPATCH_MAX_FAILED = 25
 const DISPATCH_MUTATION_TYPE = 'dispatch_mesh_work_request'
 const HEALTH_WORK_STATUSES = ['agent_running', 'review_ready', 'review_stale', 'proposal_expired'] as const
 const HEALTH_DISPATCH_STATUSES = ['pending', 'processing', 'failed', 'dead'] as const
+const HANDOFF_PACKET_AUDIENCES = ['operator', 'mesh', 'collaborator', 'github'] as const
+
+type HandoffPacketAudience = (typeof HANDOFF_PACKET_AUDIENCES)[number]
 
 type DispatchOutboxSummary = {
   id: string
@@ -150,6 +153,37 @@ type WorkRequestBrief = {
     expires_at: string
   }
   agent_brief_markdown: string
+}
+
+type WorkRequestHandoffPacket = {
+  schema: 'sitelayer.context_handoff_packet.v1'
+  generated_at: string
+  audience: HandoffPacketAudience
+  redaction_version: 'context-handoff-v1'
+  source: {
+    system: 'sitelayer'
+    company_id: string
+    work_item_id: string
+    support_packet_id: string
+    public_path: string
+  }
+  permissions: {
+    intended_use: string
+    raw_support_packet_included: boolean
+    callback_token_included: false
+    callback_available_after_dispatch: boolean
+  }
+  state: WorkRequestBrief['state']
+  work_item: WorkRequestBrief['work_item']
+  diagnostics: WorkRequestBrief['diagnostics']
+  support_packet: ContextWorkItemDetail['work_item']['support_packet'] | null
+  evidence_refs: WorkRequestBrief['diagnostics']['evidence_refs']
+  timeline: WorkRequestBrief['timeline']
+  timeline_total: number
+  timeline_truncated: boolean
+  agent_brief_markdown: string
+  callback?: WorkRequestBrief['callback']
+  packet_sha256: string
 }
 
 function optionalText(value: unknown, maxLength: number): string | null {
@@ -457,6 +491,70 @@ function buildWorkRequestBrief(
   return {
     ...partial,
     agent_brief_markdown: agentBriefMarkdown,
+  }
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map((item) => stableStringify(item)).join(',')}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+    .join(',')}}`
+}
+
+function includeSupportPacketForAudience(audience: HandoffPacketAudience): boolean {
+  return audience === 'operator' || audience === 'mesh'
+}
+
+function intendedUseForAudience(audience: HandoffPacketAudience): string {
+  if (audience === 'mesh') return 'agent_execution'
+  if (audience === 'github') return 'external_issue_export'
+  if (audience === 'collaborator') return 'human_handoff'
+  return 'operator_debugging'
+}
+
+function buildWorkRequestHandoffPacket(input: {
+  companyId: string
+  detail: ContextWorkItemDetail
+  dispatchOutbox: DispatchOutboxSummary | null
+  audience: HandoffPacketAudience
+}): WorkRequestHandoffPacket {
+  const brief = buildWorkRequestBrief(input.detail, input.dispatchOutbox)
+  const includeSupportPacket = includeSupportPacketForAudience(input.audience)
+  const packetWithoutHash = {
+    schema: 'sitelayer.context_handoff_packet.v1' as const,
+    generated_at: new Date().toISOString(),
+    audience: input.audience,
+    redaction_version: 'context-handoff-v1' as const,
+    source: {
+      system: 'sitelayer' as const,
+      company_id: input.companyId,
+      work_item_id: input.detail.work_item.id,
+      support_packet_id: input.detail.work_item.support_packet_id,
+      public_path: `/work/${input.detail.work_item.id}`,
+    },
+    permissions: {
+      intended_use: intendedUseForAudience(input.audience),
+      raw_support_packet_included: includeSupportPacket,
+      callback_token_included: false as const,
+      callback_available_after_dispatch: true,
+    },
+    state: brief.state,
+    work_item: brief.work_item,
+    diagnostics: brief.diagnostics,
+    support_packet: includeSupportPacket ? brief.support_packet : null,
+    evidence_refs: brief.diagnostics.evidence_refs,
+    timeline: brief.timeline,
+    timeline_total: brief.timeline_total,
+    timeline_truncated: brief.timeline_truncated,
+    agent_brief_markdown: brief.agent_brief_markdown,
+    ...(brief.callback ? { callback: brief.callback } : {}),
+  }
+  return {
+    ...packetWithoutHash,
+    packet_sha256: createHash('sha256').update(stableStringify(packetWithoutHash)).digest('hex'),
   }
 }
 
@@ -1030,6 +1128,109 @@ async function getWorkRequestBrief(ctx: WorkRequestRouteCtx, id: string, url: UR
   ctx.sendJson(200, {
     work_request_brief: workRequestBrief,
   })
+}
+
+async function getWorkRequestHandoffPacket(ctx: WorkRequestRouteCtx, id: string, url: URL) {
+  if (!isValidUuid(id)) {
+    ctx.sendJson(400, { error: 'invalid work request id' })
+    return
+  }
+  const audienceRaw = url.searchParams.get('audience')
+  const audience =
+    audienceRaw === null
+      ? 'operator'
+      : (parseAllowed(audienceRaw, HANDOFF_PACKET_AUDIENCES) as HandoffPacketAudience | null)
+  if (!audience) {
+    ctx.sendJson(400, { error: `audience must be one of ${HANDOFF_PACKET_AUDIENCES.join(', ')}` })
+    return
+  }
+  const detail = await getContextWorkItemWithEvents(ctx.company.id, id, { eventsLimit: 200 })
+  if (!detail) {
+    ctx.sendJson(404, { error: 'work request not found' })
+    return
+  }
+  if (!canReadWorkItem(ctx.company.role, ctx.identity.userId, detail.work_item)) {
+    ctx.sendJson(403, { error: 'forbidden' })
+    return
+  }
+  const dispatchOutbox = await getDispatchOutbox(ctx.company.id, id)
+  ctx.sendJson(200, {
+    handoff_packet: buildWorkRequestHandoffPacket({
+      companyId: ctx.company.id,
+      detail,
+      dispatchOutbox,
+      audience,
+    }),
+  })
+}
+
+async function exportWorkRequestHandoffPacket(ctx: WorkRequestRouteCtx, id: string) {
+  if (!ctx.requireRole(TRIAGE_ROLES)) return
+  if (!isValidUuid(id)) {
+    ctx.sendJson(400, { error: 'invalid work request id' })
+    return
+  }
+  let body: Record<string, unknown>
+  try {
+    body = await ctx.readBody()
+  } catch {
+    ctx.sendJson(400, { error: 'invalid JSON body' })
+    return
+  }
+  const audience = parseAllowed(body.audience, HANDOFF_PACKET_AUDIENCES) as HandoffPacketAudience | null
+  if (body.audience !== undefined && body.audience !== null && !audience) {
+    ctx.sendJson(400, { error: `audience must be one of ${HANDOFF_PACKET_AUDIENCES.join(', ')}` })
+    return
+  }
+  const detail = await getContextWorkItemWithEvents(ctx.company.id, id, { eventsLimit: 200 })
+  if (!detail) {
+    ctx.sendJson(404, { error: 'work request not found' })
+    return
+  }
+  if (!canReadWorkItem(ctx.company.role, ctx.identity.userId, detail.work_item)) {
+    ctx.sendJson(403, { error: 'forbidden' })
+    return
+  }
+  const packetAudience = audience ?? 'collaborator'
+  const purpose = optionalText(body.purpose, 500) ?? intendedUseForAudience(packetAudience)
+  const dispatchOutbox = await getDispatchOutbox(ctx.company.id, id)
+  const packet = buildWorkRequestHandoffPacket({
+    companyId: ctx.company.id,
+    detail,
+    dispatchOutbox,
+    audience: packetAudience,
+  })
+  const packetBody = stableStringify(packet)
+  const event = await withMutationTx(ctx.company.id, (c) =>
+    appendContextHandoffEventTx(c, {
+      companyId: ctx.company.id,
+      workItemId: id,
+      eventType: 'handoff_packet.exported',
+      actorKind: 'user',
+      actorUserId: ctx.identity.userId,
+      payload: {
+        audience: packet.audience,
+        purpose,
+        schema: packet.schema,
+        packet_sha256: packet.packet_sha256,
+        packet_length: packetBody.length,
+        support_packet_id: detail.work_item.support_packet_id,
+        timeline_total: packet.timeline_total,
+      },
+      metadata: {
+        evidence_refs: packet.evidence_refs,
+        intended_use: packet.permissions.intended_use,
+        redaction_version: packet.redaction_version,
+      },
+      idempotencyKey:
+        optionalText(body.idempotency_key, 200) ??
+        `context_work_item:handoff_packet_export:${id}:${ctx.identity.userId}:${packetAudience}:${Math.floor(
+          Date.now() / 60_000,
+        )}`,
+    }),
+  )
+  ctx.sendJson(200, { handoff_packet: packet, event })
+  observeContextHandoff('handoff_packet.exported')
 }
 
 async function getDispatchOutbox(companyId: string, workItemId: string): Promise<DispatchOutboxSummary | null> {
@@ -1918,6 +2119,16 @@ export async function handleWorkRequestRoutes(
   const briefMatch = url.pathname.match(/^\/api\/work-requests\/([^/]+)\/brief$/)
   if (briefMatch && req.method === 'GET') {
     await getWorkRequestBrief(ctx, decodeURIComponent(briefMatch[1]!), url)
+    return true
+  }
+
+  const handoffPacketMatch = url.pathname.match(/^\/api\/work-requests\/([^/]+)\/handoff-packet$/)
+  if (handoffPacketMatch && req.method === 'GET') {
+    await getWorkRequestHandoffPacket(ctx, decodeURIComponent(handoffPacketMatch[1]!), url)
+    return true
+  }
+  if (handoffPacketMatch && req.method === 'POST') {
+    await exportWorkRequestHandoffPacket(ctx, decodeURIComponent(handoffPacketMatch[1]!))
     return true
   }
 

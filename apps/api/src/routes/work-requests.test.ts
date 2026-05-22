@@ -758,6 +758,92 @@ describe('handleWorkRequestRoutes', () => {
     expect(JSON.stringify(body.work_request_brief)).not.toContain('Bearer secret')
   })
 
+  it('returns an audience-scoped portable handoff packet', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, {
+      title: 'Packet me',
+      summary: 'Package the current state for another person.',
+      client: clientContext,
+    })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItemId = pool.workItems[0]!.id
+    const packetCtx = makeCtx(pool, {})
+
+    await handleWorkRequestRoutes(
+      buildReq('GET'),
+      buildUrl(`/api/work-requests/${workItemId}/handoff-packet?audience=collaborator`),
+      packetCtx.ctx,
+    )
+
+    expect(packetCtx.responses[0]?.status).toBe(200)
+    const body = packetCtx.responses[0]?.body as { handoff_packet: JsonRecord }
+    expect(body.handoff_packet).toMatchObject({
+      schema: 'sitelayer.context_handoff_packet.v1',
+      audience: 'collaborator',
+      redaction_version: 'context-handoff-v1',
+      source: {
+        system: 'sitelayer',
+        work_item_id: workItemId,
+        public_path: `/work/${workItemId}`,
+      },
+      permissions: {
+        intended_use: 'human_handoff',
+        raw_support_packet_included: false,
+        callback_token_included: false,
+      },
+      state: {
+        status: 'new',
+        lane: 'triage',
+      },
+      support_packet: null,
+    })
+    expect(body.handoff_packet.packet_sha256).toMatch(/^[a-f0-9]{64}$/)
+    expect(body.handoff_packet.agent_brief_markdown).toContain(`Work item: ${workItemId}`)
+    expect(JSON.stringify(body.handoff_packet)).not.toContain('Bearer secret')
+  })
+
+  it('records an audit event when a handoff packet is exported', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Export packet', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItemId = pool.workItems[0]!.id
+    const exportCtx = makeCtx(pool, {
+      audience: 'github',
+      purpose: 'create external issue for review',
+      idempotency_key: 'handoff-export-test',
+    })
+
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/handoff-packet`),
+      exportCtx.ctx,
+    )
+
+    expect(exportCtx.responses[0]?.status).toBe(200)
+    const body = exportCtx.responses[0]?.body as { handoff_packet: JsonRecord; event: JsonRecord }
+    expect(body.handoff_packet).toMatchObject({
+      schema: 'sitelayer.context_handoff_packet.v1',
+      audience: 'github',
+      support_packet: null,
+    })
+    expect(body.event).toMatchObject({
+      event_type: 'handoff_packet.exported',
+      payload: {
+        audience: 'github',
+        purpose: 'create external issue for review',
+        packet_sha256: body.handoff_packet.packet_sha256,
+      },
+      metadata: {
+        intended_use: 'external_issue_export',
+        redaction_version: 'context-handoff-v1',
+      },
+    })
+    expect(pool.handoffEvents.map((event) => event.event_type)).toEqual([
+      'work_item.created',
+      'handoff_packet.exported',
+    ])
+  })
+
   it('rejects cross-role triage actions for members', async () => {
     const pool = new FakePool()
     const created = makeCtx(pool, { title: 'Needs assignment', client: clientContext })

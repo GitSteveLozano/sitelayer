@@ -74,6 +74,7 @@ export const HANDOFF_EVENT_TYPES = [
   'human.review_requested',
   'human.reviewed',
   'external.github_export_prepared',
+  'handoff_packet.exported',
   'external.github_linked',
   'resolution.accepted',
   'resolution.reopened',
