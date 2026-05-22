@@ -6,6 +6,7 @@ import type { ActiveCompany } from '../auth-types.js'
 import type { Identity } from '../auth.js'
 import { attachMutationTx } from '../mutation-tx.js'
 import {
+  buildSupportServerContext,
   collectEntityRefs,
   collectRequestIds,
   handleSupportPacketRoutes,
@@ -30,6 +31,12 @@ type SupportPacketAccessLog = {
 
 class FakeSupportPacketPool {
   accessLog: SupportPacketAccessLog[] = []
+  auditRows: JsonRecord[] = []
+  workflowRows: JsonRecord[] = []
+  outboxRows: JsonRecord[] = []
+  syncEventRows: JsonRecord[] = []
+  workItemRows: JsonRecord[] = []
+  workItemEventRows: JsonRecord[] = []
   supportPacket: SupportPacketRow = {
     id: '00000000-0000-4000-8000-000000000101',
     company_id: COMPANY_ID,
@@ -96,6 +103,30 @@ class FakeSupportPacketPool {
       const [, supportPacketId] = params as [string, string, number]
       const rows = this.accessLog.filter((row) => row.support_packet_id === supportPacketId)
       return { rows, rowCount: rows.length }
+    }
+    if (normalized.includes('from audit_events')) {
+      return { rows: this.auditRows, rowCount: this.auditRows.length }
+    }
+    if (normalized.includes('from workflow_event_log')) {
+      return { rows: this.workflowRows, rowCount: this.workflowRows.length }
+    }
+    if (normalized.includes('from mutation_outbox') && normalized.includes('count(*)::text')) {
+      return { rows: [{ count: String(this.outboxRows.length) }], rowCount: 1 }
+    }
+    if (normalized.includes('from sync_events') && normalized.includes('count(*)::text')) {
+      return { rows: [{ count: String(this.syncEventRows.length) }], rowCount: 1 }
+    }
+    if (normalized.includes('from mutation_outbox')) {
+      return { rows: this.outboxRows, rowCount: this.outboxRows.length }
+    }
+    if (normalized.includes('from sync_events')) {
+      return { rows: this.syncEventRows, rowCount: this.syncEventRows.length }
+    }
+    if (normalized.includes('from context_work_items') && normalized.includes('left join support_debug_packets')) {
+      return { rows: this.workItemRows, rowCount: this.workItemRows.length }
+    }
+    if (normalized.includes('from context_handoff_events')) {
+      return { rows: this.workItemEventRows, rowCount: this.workItemEventRows.length }
     }
     throw new Error(`unexpected SQL: ${normalized.slice(0, 240)}`)
   }
@@ -216,5 +247,80 @@ describe('support packet sanitization', () => {
         },
       ],
     })
+  })
+
+  it('includes related work-request context and handoff traces in server context', async () => {
+    const pool = new FakeSupportPacketPool()
+    pool.attach()
+    pool.workItemRows = [
+      {
+        id: '22222222-2222-4222-8222-222222222222',
+        support_packet_id: pool.supportPacket.id,
+        title: 'Estimate push failed',
+        summary: 'The user could not send the estimate.',
+        status: 'agent_running',
+        lane: 'agent',
+        severity: 'high',
+        route: '/financial/estimate-pushes/33333333-3333-4333-8333-333333333333',
+        entity_type: 'estimate_push',
+        entity_id: '33333333-3333-4333-8333-333333333333',
+        assignee_user_id: null,
+        created_by_user_id: 'creator-1',
+        created_at: '2026-05-21T12:00:00.000Z',
+        updated_at: '2026-05-21T12:02:00.000Z',
+        resolved_at: null,
+        metadata: { client_request_id: 'request-1' },
+        support_request_id: 'request-1',
+      },
+    ]
+    pool.workItemEventRows = [
+      {
+        id: '44444444-4444-4444-8444-444444444444',
+        work_item_id: '22222222-2222-4222-8222-222222222222',
+        event_type: 'agent.dispatch_requested',
+        actor_kind: 'user',
+        actor_user_id: 'creator-1',
+        actor_ref: null,
+        source_system: 'sitelayer',
+        payload: { note: 'dispatch requested' },
+        metadata: {},
+        request_id: 'request-1',
+        sentry_trace: '0123456789abcdef0123456789abcdef-0123456789abcdef-1',
+        build_sha: 'test-build',
+        occurred_at: '2026-05-21T12:01:00.000Z',
+        recorded_at: '2026-05-21T12:01:00.000Z',
+      },
+    ]
+
+    const context = await buildSupportServerContext({
+      pool: pool as unknown as Pool,
+      company: { id: COMPANY_ID, slug: 'co', name: 'Co', created_at: '', role: 'admin' },
+      identity: { userId: 'creator-1', source: 'default' },
+      tier: 'local',
+      buildSha: 'test-build',
+      client: {
+        request_id: 'request-1',
+        path: {
+          route: '/financial/estimate-pushes/33333333-3333-4333-8333-333333333333',
+          entity_type: 'estimate_push',
+          entity_id: '33333333-3333-4333-8333-333333333333',
+        },
+      },
+    })
+
+    expect(context.work_items).toMatchObject([
+      {
+        id: '22222222-2222-4222-8222-222222222222',
+        title: 'Estimate push failed',
+        status: 'agent_running',
+      },
+    ])
+    expect(context.work_item_events).toMatchObject([
+      {
+        event_type: 'agent.dispatch_requested',
+        request_id: 'request-1',
+      },
+    ])
+    expect(context.trace_ids).toContain('0123456789abcdef0123456789abcdef')
   })
 })

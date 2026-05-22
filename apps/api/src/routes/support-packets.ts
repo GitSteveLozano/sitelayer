@@ -545,7 +545,7 @@ export async function buildSupportServerContext({
     fetchWorkflowContext(pool, company.id, entityRefs),
     fetchWorkItemContext(pool, company.id, requestIds, entityRefs),
   ])
-  const traceIds = collectTraceIds({ client, auditEvents, queue, workflowEvents })
+  const traceIds = collectTraceIds({ client, auditEvents, queue, workflowEvents, workItemContext })
   return {
     captured_at: new Date().toISOString(),
     tier,
