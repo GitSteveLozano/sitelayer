@@ -9,6 +9,7 @@ import {
   CatalogPricingProfilesScreen,
   CatalogServiceItemsScreen,
   CatalogWorkersScreen,
+  DispatchLanesAdminScreen,
   SettingsScreen,
 } from '@/screens/settings'
 import { IntegrationsHubScreen, QboConnectionScreen, QboMappingsScreen } from '@/screens/integrations'
@@ -45,6 +46,7 @@ export default function MoreRoute() {
       <Route path="inventory/damage-charges" element={<DamageChargesAdminScreen />} />
       <Route path="bonus-sim" element={<BonusSimulatorScreen />} />
       <Route path="audit" element={<AuditLogScreen />} />
+      <Route path="dispatch-lanes" element={<DispatchLanesAdminScreen />} />
     </Routes>
   )
 }
