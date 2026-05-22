@@ -2,6 +2,7 @@ import { Link, useParams } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { getActiveCompanySlug } from '@/lib/api/client'
+import { useControlPlaneProbePublish } from '@/lib/control-plane-probe-pub'
 import { useBillingReview } from '@/machines/billing-review'
 import type { RentalBillingHumanEvent } from '@/lib/api'
 
@@ -23,6 +24,11 @@ export function BillingRunDetailScreen() {
     id ?? '',
     companySlug,
   )
+
+  // Publish the billing-review state into the control-plane probe so the
+  // browser-bridge capture modal can fold it into
+  // `page_state.billing_review_state`. See `apps/web/src/lib/control-plane-probe-pub.ts`.
+  useControlPlaneProbePublish('billingReviewState', snapshot?.state ?? null)
 
   if (!id) {
     return (
