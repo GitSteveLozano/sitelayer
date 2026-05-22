@@ -39,14 +39,12 @@ function makeFakePool(fx: PoolFixture): {
 } {
   const transitions: Array<{ name: string; to: LaneState; reason: string }> = []
   let txnLane: string | null = null
-  let txnFromState: LaneState | null = null
 
   const exec = async (sql: string, params: unknown[] = []): Promise<QueryResult<QueryResultRow>> => {
     const trimmed = sql.trim().toLowerCase()
     if (trimmed.startsWith('begin') || trimmed.startsWith('commit') || trimmed.startsWith('rollback')) {
       if (trimmed.startsWith('commit') || trimmed.startsWith('rollback')) {
         txnLane = null
-        txnFromState = null
       }
       return buildResult([])
     }
@@ -69,7 +67,6 @@ function makeFakePool(fx: PoolFixture): {
       const lane = fx.lanes.get(name)
       if (!lane) return buildResult([])
       txnLane = name
-      txnFromState = lane.state
       return buildResult([{ state: lane.state } as QueryResultRow])
     }
 
