@@ -15,6 +15,7 @@ export const WORK_ITEM_STATUSES = [
   'resolved',
   'reopened',
   'wont_do',
+  'reversed',
 ] as const
 
 export type WorkItemStatus = (typeof WORK_ITEM_STATUSES)[number]
@@ -24,6 +25,33 @@ export type WorkItemLane = (typeof WORK_ITEM_LANES)[number]
 
 export const WORK_ITEM_SEVERITIES = ['low', 'normal', 'high', 'urgent'] as const
 export type WorkItemSeverity = (typeof WORK_ITEM_SEVERITIES)[number]
+
+/**
+ * Reversibility window (in seconds) for a newly created context_work_item,
+ * keyed by severity. Higher-severity items have a tighter window because the
+ * operator/agent likely needs to act quickly before the situation drifts.
+ *
+ * Mirrors the mesh-side `tasks.reversibility_window_seconds` column shipped
+ * in mesh migration 261. The default (86400) matches what the outbound
+ * dispatch payload at apps/worker/src/runners/context-work-dispatch.ts
+ * has been sending; the helper exists so future code reads the canonical map
+ * rather than rehardcoding 86_400.
+ */
+export const REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY: Record<WorkItemSeverity, number> = {
+  urgent: 3600,
+  high: 21600,
+  normal: 86400,
+  low: 604800,
+}
+
+export const DEFAULT_REVERSIBILITY_WINDOW_SECONDS = 86400
+
+export function reversibilityWindowForSeverity(severity: WorkItemSeverity | null | undefined): number {
+  if (severity && severity in REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY) {
+    return REVERSIBILITY_WINDOW_SECONDS_BY_SEVERITY[severity]
+  }
+  return DEFAULT_REVERSIBILITY_WINDOW_SECONDS
+}
 
 export const HANDOFF_ACTOR_KINDS = ['user', 'agent', 'system', 'external'] as const
 export type HandoffActorKind = (typeof HANDOFF_ACTOR_KINDS)[number]
@@ -48,6 +76,7 @@ export const HANDOFF_EVENT_TYPES = [
   'external.github_linked',
   'resolution.accepted',
   'resolution.reopened',
+  'work_item.reversed',
 ] as const
 
 export type HandoffEventType = (typeof HANDOFF_EVENT_TYPES)[number]
@@ -69,6 +98,9 @@ export type ContextWorkItemRow = {
   created_at: string
   updated_at: string
   resolved_at: string | null
+  reversed_at: string | null
+  reversibility_window_seconds: number
+  expires_at: string | null
   metadata: JsonRecord
 }
 
@@ -132,8 +164,18 @@ const WORK_ITEM_COLUMN_NAMES = [
   'created_at',
   'updated_at',
   'resolved_at',
+  'reversed_at',
+  'reversibility_window_seconds',
   'metadata',
 ] as const
+
+// Computed `expires_at` (created_at + reversibility_window_seconds seconds) is
+// always selected alongside the base columns so the index defined in
+// migration 093 can be used by future filters.
+const WORK_ITEM_EXPIRES_AT_EXPR =
+  "(created_at + reversibility_window_seconds * interval '1 second') as expires_at"
+const PREFIXED_WORK_ITEM_EXPIRES_AT_EXPR =
+  "(w.created_at + w.reversibility_window_seconds * interval '1 second') as expires_at"
 
 const HANDOFF_EVENT_COLUMN_NAMES = [
   'id',
@@ -158,9 +200,9 @@ const HANDOFF_EVENT_COLUMN_NAMES = [
   'recorded_at',
 ] as const
 
-const WORK_ITEM_COLUMNS = WORK_ITEM_COLUMN_NAMES.join(', ')
+const WORK_ITEM_COLUMNS = `${WORK_ITEM_COLUMN_NAMES.join(', ')}, ${WORK_ITEM_EXPIRES_AT_EXPR}`
 const HANDOFF_EVENT_COLUMNS = HANDOFF_EVENT_COLUMN_NAMES.join(', ')
-const PREFIXED_WORK_ITEM_COLUMNS = WORK_ITEM_COLUMN_NAMES.map((column) => `w.${column}`).join(', ')
+const PREFIXED_WORK_ITEM_COLUMNS = `${WORK_ITEM_COLUMN_NAMES.map((column) => `w.${column}`).join(', ')}, ${PREFIXED_WORK_ITEM_EXPIRES_AT_EXPR}`
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -204,6 +246,7 @@ export async function createContextWorkItemTx(
     assigneeUserId?: string | null
     createdByUserId?: string | null
     metadata?: unknown
+    reversibilityWindowSeconds?: number | null
   },
 ): Promise<ContextWorkItemRow> {
   const title = optionalText(args.title)
@@ -214,11 +257,17 @@ export async function createContextWorkItemTx(
   assertIn(WORK_ITEM_LANES, lane, 'lane')
   if (args.severity) assertIn(WORK_ITEM_SEVERITIES, args.severity, 'severity')
 
+  const reversibilityWindowSeconds =
+    typeof args.reversibilityWindowSeconds === 'number' && Number.isFinite(args.reversibilityWindowSeconds)
+      ? Math.max(0, Math.floor(args.reversibilityWindowSeconds))
+      : reversibilityWindowForSeverity(args.severity ?? null)
+
   const result = await executor.query<ContextWorkItemRow>(
     `insert into context_work_items (
        company_id, support_packet_id, title, summary, status, lane, severity,
-       route, entity_type, entity_id, assignee_user_id, created_by_user_id, metadata
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb)
+       route, entity_type, entity_id, assignee_user_id, created_by_user_id, metadata,
+       reversibility_window_seconds
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)
      returning ${WORK_ITEM_COLUMNS}`,
     [
       args.companyId,
@@ -234,6 +283,7 @@ export async function createContextWorkItemTx(
       optionalText(args.assigneeUserId),
       optionalText(args.createdByUserId),
       JSON.stringify(toJsonRecord(args.metadata ?? {})),
+      reversibilityWindowSeconds,
     ],
   )
   const row = result.rows[0]
@@ -337,6 +387,7 @@ export async function updateContextWorkItemWithEventTx(
     lane?: WorkItemLane
     assigneeUserId?: string | null
     resolvedAt?: string | null
+    reversedAt?: string | null
     idempotencyKey?: string | null
   },
 ): Promise<{ workItem: ContextWorkItemRow; event: ContextHandoffEventRow } | null> {
@@ -371,6 +422,7 @@ export async function updateContextWorkItemWithEventTx(
             lane = $4,
             assignee_user_id = $5,
             resolved_at = $6::timestamptz,
+            reversed_at = $7::timestamptz,
             updated_at = now()
       where company_id = $1 and id = $2
       returning ${WORK_ITEM_COLUMNS}`,
@@ -381,6 +433,7 @@ export async function updateContextWorkItemWithEventTx(
       lane,
       args.assigneeUserId === undefined ? existing.assignee_user_id : optionalText(args.assigneeUserId),
       args.resolvedAt === undefined ? existing.resolved_at : args.resolvedAt,
+      args.reversedAt === undefined ? existing.reversed_at : args.reversedAt,
     ],
   )
   const workItem = result.rows[0]

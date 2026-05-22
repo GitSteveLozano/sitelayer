@@ -47,9 +47,15 @@ type WorkItem = {
   created_at: string
   updated_at: string
   resolved_at: string | null
+  reversed_at: string | null
+  reversibility_window_seconds: number
   metadata: JsonRecord
   agent_callback_token_hash: string | null
   agent_callback_token_issued_at: string | null
+}
+
+function expiresAtFor(row: { created_at: string; reversibility_window_seconds: number }): string {
+  return new Date(Date.parse(row.created_at) + row.reversibility_window_seconds * 1000).toISOString()
 }
 
 type HandoffEvent = {
@@ -156,6 +162,13 @@ class FakePool {
 
     if (normalized.startsWith('insert into context_work_items')) {
       this.workItemCounter += 1
+      const createdAt = '2026-05-21T12:00:01.000Z'
+      const reversibilityWindowSeconds =
+        typeof params[13] === 'number'
+          ? (params[13] as number)
+          : params[13] != null
+            ? Number(params[13])
+            : 86400
       const row: WorkItem = {
         id: uuid(200 + this.workItemCounter),
         company_id: params[0] as string,
@@ -171,14 +184,16 @@ class FakePool {
         assignee_user_id: (params[10] as string | null) ?? null,
         created_by_user_id: (params[11] as string | null) ?? null,
         metadata: JSON.parse(params[12] as string) as JsonRecord,
-        created_at: '2026-05-21T12:00:01.000Z',
-        updated_at: '2026-05-21T12:00:01.000Z',
+        reversibility_window_seconds: reversibilityWindowSeconds,
+        created_at: createdAt,
+        updated_at: createdAt,
         resolved_at: null,
+        reversed_at: null,
         agent_callback_token_hash: null,
         agent_callback_token_issued_at: null,
       }
       this.workItems.push(row)
-      return { rows: [row], rowCount: 1 }
+      return { rows: [{ ...row, expires_at: expiresAtFor(row) }], rowCount: 1 }
     }
 
     if (normalized.startsWith('insert into context_handoff_events')) {
@@ -389,6 +404,7 @@ class FakePool {
         rows: [
           {
             ...row,
+            expires_at: expiresAtFor(row),
             support_packet: packet
               ? {
                   id: packet.id,
@@ -432,7 +448,10 @@ class FakePool {
     if (normalized.includes('from context_work_items') && normalized.includes('for update')) {
       const [companyId, workItemId] = params as [string, string]
       const row = this.workItems.find((item) => item.company_id === companyId && item.id === workItemId)
-      return { rows: row ? [row] : [], rowCount: row ? 1 : 0 }
+      return {
+        rows: row ? [{ ...row, expires_at: expiresAtFor(row) }] : [],
+        rowCount: row ? 1 : 0,
+      }
     }
 
     if (normalized.startsWith('update context_work_items')) {
@@ -445,11 +464,12 @@ class FakePool {
         row.updated_at = '2026-05-21T12:00:04.000Z'
         return { rows: [], rowCount: 1 }
       }
-      const [companyId, workItemId, status, lane, assigneeUserId, resolvedAt] = params as [
+      const [companyId, workItemId, status, lane, assigneeUserId, resolvedAt, reversedAt] = params as [
         string,
         string,
         string,
         string,
+        string | null,
         string | null,
         string | null,
       ]
@@ -459,8 +479,9 @@ class FakePool {
       row.lane = lane
       row.assignee_user_id = assigneeUserId
       row.resolved_at = resolvedAt
+      if (reversedAt !== undefined) row.reversed_at = reversedAt
       row.updated_at = '2026-05-21T12:00:03.000Z'
-      return { rows: [row], rowCount: 1 }
+      return { rows: [{ ...row, expires_at: expiresAtFor(row) }], rowCount: 1 }
     }
 
     if (normalized.includes('select agent_callback_token_hash') && normalized.includes('from context_work_items')) {
@@ -486,7 +507,8 @@ class FakePool {
         const createdBy = params[1] as string | undefined
         if (createdBy) rows = rows.filter((item) => item.created_by_user_id === createdBy)
       }
-      return { rows, rowCount: rows.length }
+      const enriched = rows.map((row) => ({ ...row, expires_at: expiresAtFor(row) }))
+      return { rows: enriched, rowCount: enriched.length }
     }
 
     if (
@@ -1272,5 +1294,182 @@ describe('handleWorkRequestRoutes', () => {
       labels: ['sitelayer', 'context-handoff'],
     })
     expect(pool.handoffEvents.at(-1)?.payload.body_sha256).toMatch(/^[a-f0-9]{64}$/)
+  })
+
+  it('populates reversibility_window_seconds from severity at creation time', async () => {
+    const pool = new FakePool()
+    const create = makeCtx(pool, {
+      title: 'Urgent reversibility',
+      severity: 'urgent',
+      client: clientContext,
+    })
+
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), create.ctx)
+
+    expect(create.responses[0]?.status).toBe(201)
+    expect(pool.workItems[0]?.reversibility_window_seconds).toBe(3600)
+    const body = create.responses[0]?.body as { work_item: { reversibility_window_seconds: number; expires_at: string } }
+    expect(body.work_item.reversibility_window_seconds).toBe(3600)
+    expect(typeof body.work_item.expires_at).toBe('string')
+    // expires_at = created_at + 1h => 2026-05-21T13:00:01.000Z
+    expect(body.work_item.expires_at).toBe('2026-05-21T13:00:01.000Z')
+  })
+
+  it('reverses a work item, records an event with previous status, and returns the updated row', async () => {
+    const pool = new FakePool()
+    const create = makeCtx(pool, { title: 'Reverse me', severity: 'normal', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), create.ctx)
+    const workItem = pool.workItems[0]!
+    // Bump created_at to "now" so the 24h normal window has not expired
+    workItem.created_at = new Date().toISOString()
+    const workItemId = workItem.id
+    const reverse = makeCtx(pool, { reason: 'wrong action, recall before agent runs' })
+
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/reverse`),
+      reverse.ctx,
+    )
+
+    expect(reverse.responses[0]?.status).toBe(200)
+    const body = reverse.responses[0]?.body as {
+      work_item: { status: string; lane: string; reversed_at: string | null }
+      event: { event_type: string; payload: Record<string, unknown> }
+    }
+    expect(body.work_item.status).toBe('reversed')
+    expect(body.work_item.lane).toBe('done')
+    expect(typeof body.work_item.reversed_at).toBe('string')
+    expect(body.event.event_type).toBe('work_item.reversed')
+    expect(body.event.payload).toMatchObject({
+      reason: 'wrong action, recall before agent runs',
+      previous_status: 'new',
+      previous_lane: 'triage',
+    })
+    expect(typeof (body.event.payload as { reversed_within_seconds?: unknown }).reversed_within_seconds).toBe(
+      'number',
+    )
+    expect(pool.workItems[0]).toMatchObject({ status: 'reversed', lane: 'done' })
+    expect(pool.workItems[0]?.reversed_at).not.toBeNull()
+  })
+
+  it('returns 400 when the reverse reason is missing or blank', async () => {
+    const pool = new FakePool()
+    const create = makeCtx(pool, { title: 'Need reason', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), create.ctx)
+    const workItemId = pool.workItems[0]!.id
+    const reverse = makeCtx(pool, { reason: '   ' })
+
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/reverse`),
+      reverse.ctx,
+    )
+
+    expect(reverse.responses[0]).toEqual({ status: 400, body: { error: 'reason is required' } })
+    expect(pool.workItems[0]).toMatchObject({ status: 'new' })
+    expect(pool.handoffEvents.filter((event) => event.event_type === 'work_item.reversed')).toHaveLength(0)
+  })
+
+  it('returns 409 when reversing a resolved work item', async () => {
+    const pool = new FakePool()
+    const create = makeCtx(pool, { title: 'Already done', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), create.ctx)
+    const workItemId = pool.workItems[0]!.id
+    // Mark resolved first via the resolution event path
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/events`),
+      makeCtx(pool, { event_type: 'resolution.accepted' }).ctx,
+    )
+
+    const reverse = makeCtx(pool, { reason: 'too late' })
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/reverse`),
+      reverse.ctx,
+    )
+
+    expect(reverse.responses[0]?.status).toBe(409)
+    expect(pool.workItems[0]?.status).toBe('resolved')
+  })
+
+  it('returns 410 when the reversibility window has closed', async () => {
+    const pool = new FakePool()
+    const create = makeCtx(pool, { title: 'Expired window', severity: 'urgent', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), create.ctx)
+    const workItem = pool.workItems[0]!
+    // Backdate created_at so the 1h urgent window is fully expired
+    workItem.created_at = new Date(Date.now() - 7200_000).toISOString()
+    const reverse = makeCtx(pool, { reason: 'too late' })
+
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItem.id}/reverse`),
+      reverse.ctx,
+    )
+
+    expect(reverse.responses[0]).toEqual({ status: 410, body: { error: 'reversibility window closed' } })
+    expect(workItem.status).toBe('new')
+  })
+
+  it('returns the existing reversed row on idempotent re-reverse', async () => {
+    const pool = new FakePool()
+    const create = makeCtx(pool, { title: 'Idempotent reverse', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), create.ctx)
+    const workItem = pool.workItems[0]!
+    workItem.created_at = new Date().toISOString()
+    const workItemId = workItem.id
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/reverse`),
+      makeCtx(pool, { reason: 'first call' }).ctx,
+    )
+    const reverseCount = pool.handoffEvents.filter((event) => event.event_type === 'work_item.reversed').length
+    const second = makeCtx(pool, { reason: 'retry' })
+
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/reverse`),
+      second.ctx,
+    )
+
+    expect(second.responses[0]?.status).toBe(200)
+    expect((second.responses[0]?.body as { idempotent_replay?: boolean }).idempotent_replay).toBe(true)
+    expect(
+      pool.handoffEvents.filter((event) => event.event_type === 'work_item.reversed').length,
+    ).toBe(reverseCount)
+  })
+
+  it('rejects reverse for members (TRIAGE_ROLES gate)', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Member tries reverse', client: clientContext }, 'member', 'member-1')
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItemId = pool.workItems[0]!.id
+    const reverse = makeCtx(pool, { reason: 'I want this back' }, 'member', 'member-1')
+
+    await handleWorkRequestRoutes(
+      buildReq('POST'),
+      buildUrl(`/api/work-requests/${workItemId}/reverse`),
+      reverse.ctx,
+    )
+
+    expect(reverse.responses[0]?.status).toBe(403)
+    expect(pool.workItems[0]?.status).toBe('new')
+  })
+
+  it('includes reversibility_window_seconds in the outbound dispatch payload', async () => {
+    const pool = new FakePool()
+    const created = makeCtx(pool, { title: 'Dispatch echoes window', severity: 'high', client: clientContext })
+    await handleWorkRequestRoutes(buildReq(), buildUrl(), created.ctx)
+    const workItemId = pool.workItems[0]!.id
+
+    await handleWorkRequestRoutes(
+      buildReq('POST', { host: 'sitelayer.test', 'x-forwarded-proto': 'https' }),
+      buildUrl(`/api/work-requests/${workItemId}/dispatch/mesh`),
+      makeCtx(pool, {}).ctx,
+    )
+
+    const outboxPayload = pool.mutationOutbox[0]?.payload as JsonRecord | undefined
+    expect(outboxPayload?.reversibility_window_seconds).toBe(21600)
   })
 })
