@@ -491,9 +491,10 @@ class FakePool {
         const [companyId, workItemId, tokenHash] = params as [string, string, string]
         const row = this.workItems.find((item) => item.company_id === companyId && item.id === workItemId)
         if (!row) return { rows: [], rowCount: 0 }
+        const updatedAt = new Date().toISOString()
         row.agent_callback_token_hash = tokenHash
-        row.agent_callback_token_issued_at = '2026-05-21T12:00:04.000Z'
-        row.updated_at = '2026-05-21T12:00:04.000Z'
+        row.agent_callback_token_issued_at = updatedAt
+        row.updated_at = updatedAt
         return { rows: [], rowCount: 1 }
       }
       const [companyId, workItemId, status, lane, assigneeUserId, resolvedAt, reversedAt] = params as [

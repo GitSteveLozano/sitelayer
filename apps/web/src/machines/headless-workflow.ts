@@ -1,6 +1,7 @@
 import { useCallback, useEffect } from 'react'
 import { useMachine } from '@xstate/react'
 import { assign, fromPromise, setup } from 'xstate'
+import { compactTraceEventType, compactWorkflowSnapshot, emitControlPlaneTrace } from '@/lib/control-plane-trace'
 
 /**
  * Generic factory for the headless workflow UI machines that wrap
@@ -198,8 +199,39 @@ export function createHeadlessWorkflowMachine<TSnapshot extends WorkflowSnapshot
       send({ type: 'LOAD' })
     }, [entityId, companySlug, send])
 
+    useEffect(() => {
+      const snapshot = state.context.snapshot
+      if (!snapshot) return
+      emitControlPlaneTrace('sitelayer.workflow.state', {
+        workflow_id: config.id,
+        entity_id: state.context.entityId,
+        company_slug: state.context.companySlug,
+        snapshot: compactWorkflowSnapshot(snapshot),
+        out_of_sync: state.context.outOfSync,
+        has_error: Boolean(state.context.error),
+      })
+    }, [
+      state.context.companySlug,
+      state.context.entityId,
+      state.context.error,
+      state.context.outOfSync,
+      state.context.snapshot,
+    ])
+
     const refresh = useCallback(() => send({ type: 'LOAD' }), [send])
-    const dispatch = useCallback((event: TEvent) => send({ type: 'DISPATCH', event }), [send])
+    const dispatch = useCallback(
+      (event: TEvent) => {
+        emitControlPlaneTrace('sitelayer.workflow.event', {
+          workflow_id: config.id,
+          entity_id: state.context.entityId,
+          company_slug: state.context.companySlug,
+          event_type: compactTraceEventType(event),
+          state_version: state.context.snapshot?.state_version ?? null,
+        })
+        send({ type: 'DISPATCH', event })
+      },
+      [send, state.context.companySlug, state.context.entityId, state.context.snapshot?.state_version],
+    )
     const dismissError = useCallback(() => send({ type: 'DISMISS_ERROR' }), [send])
 
     return {

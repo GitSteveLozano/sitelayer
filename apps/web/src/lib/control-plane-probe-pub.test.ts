@@ -1,5 +1,5 @@
 import { renderHook } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   __resetProbePublish,
   getProbePublishMetadata,
@@ -7,9 +7,15 @@ import {
   useControlPlaneProbePublish,
 } from './control-plane-probe-pub.js'
 
+type TestTraceBridge = {
+  active?: () => { trace_id?: string } | null
+  emit?: (event: Record<string, unknown>) => unknown
+}
+
 describe('useControlPlaneProbePublish', () => {
   afterEach(() => {
     __resetProbePublish()
+    delete (window as Window & { __controlPlaneTrace?: TestTraceBridge }).__controlPlaneTrace
   })
 
   it('publishes the snapshot on mount', () => {
@@ -53,5 +59,25 @@ describe('useControlPlaneProbePublish', () => {
     expect(readProbePublishRegistry()).toEqual({})
     renderHook(() => useControlPlaneProbePublish('timeReviewState', undefined))
     expect(readProbePublishRegistry()).toEqual({})
+  })
+
+  it('emits compact probe state when an operator trace is active', () => {
+    const emit = vi.fn()
+    const globalWindow = window as Window & { __controlPlaneTrace?: TestTraceBridge }
+    globalWindow.__controlPlaneTrace = { active: () => ({ trace_id: 'trace-1' }), emit }
+
+    renderHook(() => useControlPlaneProbePublish('projectState', 'estimating'))
+
+    expect(emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trace_id: 'trace-1',
+        event_type: 'sitelayer.probe.state',
+        payload: {
+          route_path: '/',
+          key: 'projectState',
+          value: 'estimating',
+        },
+      }),
+    )
   })
 })
