@@ -1,5 +1,7 @@
 import { useEffect, useMemo } from 'react'
 import type { ControlPlaneCapture } from '@operator/types'
+import { Sentry } from '@/instrument'
+import { readActiveControlPlaneTrace, readControlPlaneTraceCapabilitiesWhenActive } from '@/lib/control-plane-trace'
 import { readProbePublishRegistry } from '@/lib/control-plane-probe-pub'
 
 /**
@@ -24,6 +26,21 @@ declare global {
 }
 
 const PROBE_VERSION = 'sitelayer-1.0.0'
+
+function readSentryTrace(): { trace_id?: string; span_id?: string; sentry_trace?: string } | null {
+  try {
+    const data = Sentry.getTraceData?.()
+    const sentryTrace = (data as Record<string, string | undefined> | undefined)?.['sentry-trace']
+    if (!sentryTrace) return null
+    const parts = sentryTrace.split('-')
+    const trace: { trace_id?: string; span_id?: string; sentry_trace: string } = { sentry_trace: sentryTrace }
+    if (parts[0]) trace.trace_id = parts[0]
+    if (parts[1]) trace.span_id = parts[1]
+    return trace
+  } catch {
+    return null
+  }
+}
 
 type SitelayerProbeInput = {
   companySlug: string | null
@@ -98,8 +115,11 @@ export function ControlPlaneProbe(input: SitelayerProbeInput) {
         // matching prop fallbacks — the prop is only consulted if no
         // route screen is publishing the key.
         const published = readProbePublishRegistry()
+        const activeTrace = readActiveControlPlaneTrace()
+        const sentryTrace = readSentryTrace()
         return {
           ...seed,
+          trace: activeTrace ?? sentryTrace,
           page_state: {
             ...(seed.page_state ?? {}),
             ...(Object.prototype.hasOwnProperty.call(published, 'projectState')
@@ -111,6 +131,11 @@ export function ControlPlaneProbe(input: SitelayerProbeInput) {
             ...(Object.prototype.hasOwnProperty.call(published, 'billingReviewState')
               ? { billing_review_state: published.billingReviewState }
               : {}),
+            operator_trace: {
+              active: Boolean(activeTrace),
+              capabilities: readControlPlaneTraceCapabilitiesWhenActive(),
+            },
+            sentry_trace: sentryTrace,
           },
           deploy: buildSha ? { build_sha: buildSha, env } : null,
         }

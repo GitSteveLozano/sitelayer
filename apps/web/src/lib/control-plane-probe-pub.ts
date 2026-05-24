@@ -23,6 +23,7 @@
  */
 
 import { useEffect, useRef } from 'react'
+import { emitControlPlaneTrace } from './control-plane-trace'
 
 const probePublishRegistry = new Map<string, { value: unknown; publishedAt: number; token: symbol }>()
 
@@ -75,6 +76,10 @@ export function useControlPlaneProbePublish(key: string, snapshot: unknown): voi
         value: snapshot,
         publishedAt: Date.now(),
         token,
+      })
+      emitControlPlaneTrace('sitelayer.probe.state', {
+        key,
+        value: snapshot,
       })
     }
     return () => {

@@ -1,4 +1,5 @@
 import { request } from './client'
+import { emitControlPlaneTrace } from '@/lib/control-plane-trace'
 
 export type WorkItemStatus =
   | 'new'
@@ -328,10 +329,45 @@ export interface WorkRequestGithubExportResponse {
 }
 
 export function createWorkRequest(input: CreateWorkRequestInput): Promise<CreateWorkRequestResponse> {
+  emitControlPlaneTrace('sitelayer.work_request.create.requested', {
+    category: input.category ?? null,
+    severity: input.severity ?? null,
+    lane: input.lane ?? null,
+    route_path: compactInputRoutePath(input.route),
+    client_request_id: input.client_request_id ?? null,
+    details_present: Boolean(input.summary?.trim()),
+  })
   return request<CreateWorkRequestResponse>('/api/work-requests', {
     method: 'POST',
     json: input,
-  })
+  }).then(
+    (response) => {
+      emitControlPlaneTrace(
+        'sitelayer.work_request.create.result',
+        {
+          work_item_id: response.work_item.id,
+          status: response.work_item.status,
+          lane: response.work_item.lane,
+          severity: response.work_item.severity,
+          client_request_id: input.client_request_id ?? null,
+          idempotent_replay: Boolean(response.idempotent_replay),
+        },
+        'info',
+      )
+      return response
+    },
+    (error: unknown) => {
+      emitControlPlaneTrace(
+        'sitelayer.work_request.create.error',
+        {
+          client_request_id: input.client_request_id ?? null,
+          error_name: error instanceof Error ? error.name : 'unknown',
+        },
+        'warn',
+      )
+      throw error
+    },
+  )
 }
 
 export function fetchWorkRequests(params: ListWorkRequestsParams = {}): Promise<ListWorkRequestsResponse> {
@@ -415,4 +451,16 @@ export function reverseWorkRequest(id: string, input: ReverseWorkRequestInput): 
     method: 'POST',
     json: input,
   })
+}
+
+function compactInputRoutePath(route: string | null | undefined): string | null {
+  if (!route) return null
+  const trimmed = route.trim()
+  if (!trimmed) return null
+  try {
+    const base = typeof window === 'undefined' ? 'https://sitelayer.invalid' : window.location.origin
+    return new URL(trimmed, base).pathname || null
+  } catch {
+    return trimmed.split('?')[0]?.split('#')[0]?.slice(0, 120) || null
+  }
 }
