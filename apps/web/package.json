@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@clerk/clerk-react": "5.61.6",
-    "@operator/types": "github:taylorSando/operator-types#v1.0.0",
+    "@operator/types": "github:taylorSando/operator-types#v1.1.0",
     "@sentry/react": "^10.51.0",
     "@sitelayer/domain": "file:../../packages/domain",
     "@sitelayer/workflows": "file:../../packages/workflows",
