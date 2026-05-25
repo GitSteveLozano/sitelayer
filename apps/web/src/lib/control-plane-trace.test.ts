@@ -54,12 +54,17 @@ describe('control-plane trace helpers', () => {
         event_type: 'sitelayer.workflow.event',
         severity: 'debug',
         redaction: { status: 'summary_only', reason: 'sitelayer_client_trace_tap' },
-        payload: {
+        payload: expect.objectContaining({
+          event_schema_version: 'operator_event_taxonomy.v1',
+          project_key: 'sitelayer',
+          event_domain: 'controlled_app',
+          event_class: 'workflow_event',
+          redaction_status: 'summary_only',
           route_path: '/',
           workflow_id: 'projectLifecycle',
           event_type: 'ACCEPT',
           state_version: 3,
-        },
+        }),
       }),
     )
   })

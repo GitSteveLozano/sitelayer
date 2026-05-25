@@ -72,11 +72,16 @@ describe('useControlPlaneProbePublish', () => {
       expect.objectContaining({
         trace_id: 'trace-1',
         event_type: 'sitelayer.probe.state',
-        payload: {
+        payload: expect.objectContaining({
+          event_schema_version: 'operator_event_taxonomy.v1',
+          project_key: 'sitelayer',
+          event_domain: 'controlled_app',
+          event_class: 'state_snapshot',
+          redaction_status: 'summary_only',
           route_path: '/',
           key: 'projectState',
           value: 'estimating',
-        },
+        }),
       }),
     )
   })
