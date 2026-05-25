@@ -11,6 +11,7 @@ const REDACTION = {
   status: 'summary_only',
   reason: 'sitelayer_client_trace_tap',
 } as const
+const EVENT_SCHEMA_VERSION = 'operator_event_taxonomy.v1'
 
 export function readActiveControlPlaneTrace(): { trace_id: string } | null {
   const bridge = readTraceBridge()
@@ -54,7 +55,12 @@ export function emitControlPlaneTrace(
         event_type: eventType,
         severity,
         payload: compactTracePayload({
+          event_schema_version: EVENT_SCHEMA_VERSION,
+          project_key: 'sitelayer',
+          event_domain: 'controlled_app',
+          event_class: traceEventClass(eventType),
           route_path: readRoutePath(),
+          redaction_status: REDACTION.status,
           ...payload,
         }),
         redaction: REDACTION,
@@ -64,6 +70,18 @@ export function emitControlPlaneTrace(
   } catch {
     return false
   }
+}
+
+function traceEventClass(eventType: string): string {
+  if (eventType.endsWith('.probe.state')) return 'state_snapshot'
+  if (eventType.endsWith('.workflow.state')) return 'workflow_state'
+  if (eventType.endsWith('.workflow.event')) return 'workflow_event'
+  if (eventType.includes('.work_request.create.')) return 'workflow_event'
+  if (eventType.endsWith('.runtime.error') || eventType.endsWith('.error')) return 'runtime_error'
+  if (eventType.endsWith('.entity.changed')) return 'entity_change'
+  if (eventType.endsWith('.entity.viewed')) return 'entity_view'
+  if (eventType.endsWith('.ui.action')) return 'user_action'
+  return 'diagnostic'
 }
 
 export function compactTraceValue(value: unknown): unknown {
