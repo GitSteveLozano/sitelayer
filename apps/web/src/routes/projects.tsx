@@ -1,5 +1,5 @@
 import { Route, Routes } from 'react-router-dom'
-import { ProjectsListScreen, ProjectDetailScreen } from '@/screens/projects'
+import { ProjectsListScreen, ProjectDetailScreen, ProjectAssignmentsScreen } from '@/screens/projects'
 import { ProjectSetupScreen } from '@/screens/projects/setup'
 import { TakeoffCanvasScreen } from '@/screens/projects/takeoff-canvas'
 import { TakeoffSummaryScreen } from '@/screens/projects/takeoff-summary'
@@ -28,6 +28,7 @@ export default function ProjectsRoute() {
   return (
     <Routes>
       <Route index element={<ProjectsListScreen />} />
+      <Route path="assignments" element={<ProjectAssignmentsScreen />} />
       <Route path=":id" element={<ProjectDetailScreen />} />
       <Route path=":id/setup" element={<ProjectSetupScreen />} />
       <Route path=":id/takeoff/:measurementId" element={<TakeoffDetailScreen />} />

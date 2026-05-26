@@ -3,13 +3,17 @@ import { Link } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import {
+  countFailedOutbox,
   fetchQboAuthUrl,
   useActiveCompanyId,
   useCompanySettings,
   usePatchCompanySettings,
   useQboConnection,
+  useQboSyncOutbox,
+  useQboSyncStatus,
   useServiceItems,
   useTriggerQboSync,
+  type QboLatestSyncEvent,
 } from '@/lib/api'
 
 export function QboConnectionScreen() {
@@ -17,6 +21,15 @@ export function QboConnectionScreen() {
   const sync = useTriggerQboSync()
   const [error, setError] = useState<string | null>(null)
   const [authPending, setAuthPending] = useState(false)
+
+  // Poll the sync queue while a sync is in-flight (button pressed or the
+  // connection cache still says 'syncing') so the monitor reflects the
+  // syncing → succeeded|failed transition without a manual refresh.
+  const conn = qbo.data?.connection
+  const status = conn?.status ?? 'disconnected'
+  const inFlight = sync.isPending || status === 'syncing'
+  const syncStatus = useQboSyncStatus({ refetchInterval: inFlight ? 3_000 : false })
+  const outbox = useQboSyncOutbox(50, { refetchInterval: inFlight ? 3_000 : false })
 
   const onConnect = async () => {
     setError(null)
@@ -34,6 +47,8 @@ export function QboConnectionScreen() {
     setError(null)
     try {
       await sync.mutateAsync()
+      // Pull fresh queue + event state right after the trigger returns.
+      await Promise.all([syncStatus.refetch(), outbox.refetch()])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Sync failed')
     }
@@ -42,10 +57,6 @@ export function QboConnectionScreen() {
   if (qbo.isPending) {
     return <div className="px-5 pt-8 text-[13px] text-ink-3">Loading QBO state…</div>
   }
-
-  const conn = qbo.data?.connection
-  const status = conn?.status ?? 'disconnected'
-  const syncStatus = qbo.data?.status
 
   return (
     <div className="px-5 pt-6 pb-12 max-w-2xl">
@@ -81,37 +92,18 @@ export function QboConnectionScreen() {
           </div>
         </Card>
 
-        {syncStatus ? (
-          <Card>
-            <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Sync queue</div>
-            <div className="grid grid-cols-2 gap-2 mt-2 text-[12px] text-ink-2">
-              <div>
-                <div className="text-[11px] text-ink-3">Pending outbox</div>
-                <div className="num text-[18px] font-semibold">{syncStatus.pending_outbox}</div>
-              </div>
-              <div>
-                <div className="text-[11px] text-ink-3">Pending events</div>
-                <div className="num text-[18px] font-semibold">{syncStatus.pending_sync_events}</div>
-              </div>
-              <div>
-                <div className="text-[11px] text-ink-3">Applied 24h</div>
-                <div className="num text-[18px] font-semibold">{syncStatus.applied_last_24h}</div>
-              </div>
-              <div>
-                <div className="text-[11px] text-ink-3">Failed 24h</div>
-                <div className="num text-[18px] font-semibold">{syncStatus.failed_last_24h}</div>
-              </div>
-            </div>
-            <div className="text-[11px] text-ink-3 mt-2">
-              Last applied: {syncStatus.last_applied_at ? new Date(syncStatus.last_applied_at).toLocaleString() : '—'}
-            </div>
-            <div className="mt-3">
-              <MobileButton variant="ghost" onClick={onSync} disabled={sync.isPending}>
-                {sync.isPending ? 'Triggering…' : 'Trigger sync'}
-              </MobileButton>
-            </div>
-          </Card>
-        ) : null}
+        <QboSyncMonitorCard
+          connectionStatus={status}
+          hasConnection={Boolean(conn)}
+          pendingOutbox={syncStatus.data?.pendingOutboxCount ?? 0}
+          pendingEvents={syncStatus.data?.pendingSyncEventCount ?? 0}
+          failedCount={countFailedOutbox(outbox.data)}
+          lastEvent={syncStatus.data?.latestSyncEvent ?? null}
+          loading={syncStatus.isPending || outbox.isPending}
+          inFlight={inFlight}
+          triggering={sync.isPending}
+          onSync={onSync}
+        />
 
         <Link to="/more/integrations/qbo/mappings" className="block">
           <Card>
@@ -129,12 +121,145 @@ export function QboConnectionScreen() {
           </Card>
         </Link>
 
+        <Link to="/more/integrations/qbo/custom-fields" className="block">
+          <Card>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[14px] font-semibold">Custom fields</div>
+                <div className="text-[12px] text-ink-3 mt-0.5">
+                  Map QBO custom-field definitions per entity (Estimate / Invoice / Bill / PO).
+                </div>
+              </div>
+              <span className="text-ink-4" aria-hidden="true">
+                ›
+              </span>
+            </div>
+          </Card>
+        </Link>
+
         <QboOvertimeMappingCard />
 
         {error ? <div className="text-[12px] text-warn">{error}</div> : null}
-        <Attribution source="GET /api/integrations/qbo · POST /api/integrations/qbo/sync" />
+        <Attribution source="GET /api/integrations/qbo · GET /api/sync/status · GET /api/sync/outbox · POST /api/integrations/qbo/sync" />
       </div>
     </div>
+  )
+}
+
+/**
+ * Map a sync row status + the connection's cached status flag into the
+ * monitor's last-run state. The qbo_sync_runs workflow
+ * (pending → syncing → succeeded | failed) has no GET surface yet, so
+ * we derive the run state from the in-flight signal, the connection's
+ * own cached `status` flag (the route flips it to syncing / connected /
+ * error), and the latest sync_events row.
+ */
+function deriveRunState(args: { inFlight: boolean; connectionStatus: string; lastEvent: QboLatestSyncEvent | null }): {
+  label: string
+  tone: 'good' | 'warn' | 'default'
+  detail: string
+} {
+  if (args.inFlight || args.connectionStatus === 'syncing') {
+    return { label: 'Syncing', tone: 'default', detail: 'Sync in progress…' }
+  }
+  if (args.connectionStatus === 'error') {
+    return {
+      label: 'Failed',
+      tone: 'warn',
+      detail: args.lastEvent?.error ?? 'Last sync attempt failed. Run again to retry.',
+    }
+  }
+  const ev = args.lastEvent
+  if (!ev) {
+    return { label: 'Idle', tone: 'default', detail: 'No sync has run yet.' }
+  }
+  if (ev.status === 'failed') {
+    return { label: 'Failed', tone: 'warn', detail: ev.error ?? 'Last event failed.' }
+  }
+  if (ev.status === 'pending' || ev.status === 'processing') {
+    return { label: 'Queued', tone: 'default', detail: 'Work queued, not yet applied.' }
+  }
+  return {
+    label: 'Succeeded',
+    tone: 'good',
+    detail: `Last event applied ${ev.applied_at ? new Date(ev.applied_at).toLocaleString() : new Date(ev.created_at).toLocaleString()}.`,
+  }
+}
+
+/**
+ * Sync monitor + manual trigger. Reads the live queue depths from
+ * GET /api/sync/status and the failed count from GET /api/sync/outbox,
+ * shows the derived last-run state, and exposes a "Run sync now" button
+ * that POSTs /api/integrations/qbo/sync. The button disables and the
+ * KPIs poll while a sync is in-flight.
+ */
+function QboSyncMonitorCard({
+  connectionStatus,
+  hasConnection,
+  pendingOutbox,
+  pendingEvents,
+  failedCount,
+  lastEvent,
+  loading,
+  inFlight,
+  triggering,
+  onSync,
+}: {
+  connectionStatus: string
+  hasConnection: boolean
+  pendingOutbox: number
+  pendingEvents: number
+  failedCount: number
+  lastEvent: QboLatestSyncEvent | null
+  loading: boolean
+  inFlight: boolean
+  triggering: boolean
+  onSync: () => void
+}) {
+  const run = deriveRunState({ inFlight, connectionStatus, lastEvent })
+  const hasFailures = failedCount > 0
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between gap-3">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Sync</div>
+        <Pill tone={run.tone}>{run.label}</Pill>
+      </div>
+
+      <div className="text-[12px] text-ink-2 mt-1">{loading ? 'Loading sync state…' : run.detail}</div>
+
+      <div className="grid grid-cols-3 gap-2 mt-3 text-[12px] text-ink-2">
+        <div>
+          <div className="text-[11px] text-ink-3">Pending outbox</div>
+          <div className="num text-[18px] font-semibold">{pendingOutbox}</div>
+        </div>
+        <div>
+          <div className="text-[11px] text-ink-3">Pending events</div>
+          <div className="num text-[18px] font-semibold">{pendingEvents}</div>
+        </div>
+        <div>
+          <div className="text-[11px] text-ink-3">Failed</div>
+          <div className={`num text-[18px] font-semibold${hasFailures ? ' text-warn' : ''}`}>{failedCount}</div>
+        </div>
+      </div>
+
+      {hasFailures ? (
+        <div className="text-[12px] text-warn mt-2">
+          {failedCount} item{failedCount === 1 ? '' : 's'} failed to push. Re-run the sync to retry them.
+        </div>
+      ) : null}
+
+      <div className="mt-3">
+        <MobileButton variant="primary" onClick={onSync} disabled={triggering || inFlight}>
+          {triggering ? 'Starting…' : inFlight ? 'Syncing…' : 'Run sync now'}
+        </MobileButton>
+      </div>
+      {!hasConnection ? (
+        <div className="text-[11px] text-ink-3 mt-2">
+          No QBO credentials yet — sync runs in simulated mode and backfills mappings from local data.
+        </div>
+      ) : null}
+    </Card>
   )
 }
 

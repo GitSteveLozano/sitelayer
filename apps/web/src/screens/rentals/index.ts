@@ -1,5 +1,5 @@
 export { RentalsListScreen } from './list'
 export { RentalsScanScreen } from './scan'
-export { RentalsItemDetailScreen } from './detail'
+export { RentalsItemDetailScreen, RentalLifecycleDetailScreen } from './detail'
 export { RentalsUtilizationScreen } from './utilization'
 export { RentalRequestsQueueScreen } from './rental-requests-queue'

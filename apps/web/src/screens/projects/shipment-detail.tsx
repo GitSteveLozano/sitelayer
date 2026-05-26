@@ -1,8 +1,8 @@
 import { Link, useParams } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
-import { useShipment, useTransitionShipment, type ShipmentStatus } from '@/lib/api/shipments'
+import { useShipmentWorkflow, type ShipmentWorkflowState } from '@/lib/api/shipment-workflow'
 
-const STATUS_TONE: Record<ShipmentStatus, 'default' | 'good' | 'warn' | 'bad' | 'info'> = {
+const STATUS_TONE: Record<ShipmentWorkflowState, 'default' | 'good' | 'warn' | 'bad' | 'info'> = {
   planned: 'default',
   picking: 'info',
   shipped: 'info',
@@ -12,27 +12,13 @@ const STATUS_TONE: Record<ShipmentStatus, 'default' | 'good' | 'warn' | 'bad' | 
   voided: 'bad',
 }
 
-const HUMAN_EVENTS: Array<{
-  state: ShipmentStatus
-  event: 'START_PICKING' | 'SHIP' | 'CONFIRM_DELIVERY' | 'OPEN_RETURN' | 'CLOSE' | 'VOID'
-  next: ShipmentStatus
-  label: string
-}> = [
-  { state: 'planned', event: 'START_PICKING', next: 'picking', label: 'Start picking' },
-  { state: 'planned', event: 'SHIP', next: 'shipped', label: 'Mark shipped' },
-  { state: 'picking', event: 'SHIP', next: 'shipped', label: 'Mark shipped' },
-  { state: 'shipped', event: 'CONFIRM_DELIVERY', next: 'delivered', label: 'Confirm delivery' },
-  { state: 'delivered', event: 'OPEN_RETURN', next: 'returning', label: 'Open return' },
-  { state: 'delivered', event: 'CLOSE', next: 'closed', label: 'Close shipment' },
-  { state: 'returning', event: 'CLOSE', next: 'closed', label: 'Close shipment' },
-]
-
 export function ShipmentDetailScreen() {
   const { shipmentId } = useParams<{ shipmentId: string }>()
-  const shipment = useShipment(shipmentId ?? '')
-  const transition = useTransitionShipment(shipmentId ?? '')
+  const { snapshot, isLoading, isSubmitting, error, outOfSync, dispatch, dismissError } = useShipmentWorkflow(
+    shipmentId ?? '',
+  )
 
-  if (shipment.isPending) {
+  if (isLoading && !snapshot) {
     return (
       <div className="px-5 pt-6 pb-12 max-w-2xl">
         <Card tight>
@@ -41,7 +27,7 @@ export function ShipmentDetailScreen() {
       </div>
     )
   }
-  if (!shipment.data) {
+  if (!snapshot) {
     return (
       <div className="px-5 pt-6 pb-12 max-w-2xl">
         <Card tight>
@@ -50,36 +36,59 @@ export function ShipmentDetailScreen() {
       </div>
     )
   }
-  const s = shipment.data
-  const availableEvents = HUMAN_EVENTS.filter((e) => e.state === s.status)
+
+  const ctx = snapshot.context
 
   return (
     <div className="px-5 pt-6 pb-12 max-w-2xl">
-      <Link to={`/projects/${s.project_id}`} className="text-[12px] text-ink-3">
+      <Link to={`/projects/${ctx.project_id}`} className="text-[12px] text-ink-3">
         ← Project
       </Link>
       <div className="mt-2 flex items-center justify-between gap-3">
         <div>
           <h1 className="font-display text-[22px] font-bold tracking-tight leading-tight">
-            {s.direction === 'outbound' ? 'Outbound shipment' : 'Return shipment'}
+            {ctx.direction === 'outbound' ? 'Outbound shipment' : 'Return shipment'}
           </h1>
           <p className="text-[11px] text-ink-3 mt-1">
-            {s.scheduled_for ? `Scheduled ${s.scheduled_for}` : 'Unscheduled'}
-            {s.ticket_number ? <> · ticket {s.ticket_number}</> : null}
-            {s.driver ? <> · driver {s.driver}</> : null}
+            {ctx.scheduled_for ? `Scheduled ${ctx.scheduled_for}` : 'Unscheduled'} · v{snapshot.state_version}
+            {ctx.ticket_number ? <> · ticket {ctx.ticket_number}</> : null}
+            {ctx.driver ? <> · driver {ctx.driver}</> : null}
           </p>
         </div>
-        <Pill tone={STATUS_TONE[s.status]}>{s.status}</Pill>
+        <Pill tone={STATUS_TONE[snapshot.state]}>{snapshot.state}</Pill>
       </div>
+
+      {outOfSync ? (
+        <Card tight className="mt-4">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Stale state</div>
+          <div className="text-[12px] text-ink-2 mt-1">
+            Shipment state moved on the server. Reloaded — pick the next action again.
+          </div>
+        </Card>
+      ) : null}
+
+      {error && !outOfSync ? (
+        <Card tight className="mt-4">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Error</div>
+              <div className="text-[12px] text-ink-2 mt-1">{error}</div>
+            </div>
+            <button type="button" onClick={dismissError} className="text-[11px] text-ink-3 underline">
+              dismiss
+            </button>
+          </div>
+        </Card>
+      ) : null}
 
       <h2 className="mt-6 text-[14px] font-semibold">Lines</h2>
       <div className="mt-2 space-y-1">
-        {s.lines.length === 0 ? (
+        {ctx.lines.length === 0 ? (
           <Card tight>
             <div className="text-[12px] text-ink-3">No lines on this shipment yet.</div>
           </Card>
         ) : (
-          s.lines.map((line) => (
+          ctx.lines.map((line) => (
             <Card key={line.id} tight>
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -101,53 +110,36 @@ export function ShipmentDetailScreen() {
         )}
       </div>
 
-      {availableEvents.length > 0 ? (
-        <>
-          <h2 className="mt-6 text-[14px] font-semibold">Next steps</h2>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {availableEvents.map((e) => (
+      <h2 className="mt-6 text-[14px] font-semibold">Next steps</h2>
+      <div className="mt-2">
+        {snapshot.next_events.length === 0 ? (
+          <Card tight>
+            <div className="text-[12px] text-ink-3">Terminal state — no further actions.</div>
+          </Card>
+        ) : (
+          <div className="flex flex-wrap gap-2">
+            {snapshot.next_events.map((ev) => (
               <MobileButton
-                key={e.event}
-                variant="primary"
-                disabled={transition.isPending}
-                onClick={() =>
-                  transition.mutate({
-                    event_type: e.event,
-                    next_status: e.next,
-                    state_version: s.state_version,
-                  })
-                }
+                key={ev.type}
+                variant={ev.type === 'VOID' ? 'ghost' : 'primary'}
+                disabled={isSubmitting || !!ev.disabled_reason}
+                onClick={() => dispatch(ev.type)}
               >
-                {e.label}
+                {ev.label}
               </MobileButton>
             ))}
-            {s.status !== 'closed' && s.status !== 'voided' ? (
-              <MobileButton
-                variant="ghost"
-                disabled={transition.isPending}
-                onClick={() =>
-                  transition.mutate({
-                    event_type: 'VOID',
-                    next_status: 'voided',
-                    state_version: s.state_version,
-                  })
-                }
-              >
-                Void
-              </MobileButton>
-            ) : null}
           </div>
-        </>
-      ) : null}
+        )}
+      </div>
 
       <h2 className="mt-6 text-[14px] font-semibold">Event log</h2>
       <div className="mt-2 space-y-1">
-        {s.events.length === 0 ? (
+        {ctx.events.length === 0 ? (
           <Card tight>
             <div className="text-[12px] text-ink-3">No events recorded yet.</div>
           </Card>
         ) : (
-          s.events.map((ev) => (
+          ctx.events.map((ev) => (
             <Card key={ev.id} tight>
               <div className="text-[12px]">
                 <span className="font-semibold">{ev.event_type}</span>

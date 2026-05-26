@@ -1,7 +1,15 @@
 import { Link, useParams } from 'react-router-dom'
-import { Card, Pill } from '@/components/mobile'
+import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
 import { useInventoryItems, useInventoryMovements, useInventoryUtilization, type InventoryMovement } from '@/lib/api'
+import { getActiveCompanySlug } from '@/lib/api/client'
+import {
+  dispatchRentalLifecycleEvent,
+  fetchRentalLifecycle,
+  type RentalLifecycleHumanEvent,
+  type RentalLifecycleSnapshot,
+} from '@/lib/api/rental-lifecycle'
+import { createHeadlessWorkflowMachine } from '@/machines/headless-workflow'
 
 /**
  * `rnt-detail` — per-item detail view.
@@ -81,6 +89,200 @@ export function RentalsItemDetailScreen() {
         <div className="pt-2">
           <Attribution source="From inventory_movements (worker scan stamps included)" />
         </div>
+      </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Rental lifecycle detail (`rnt-lifecycle-detail`)
+//
+// Headless renderer over the deterministic `rental` workflow:
+// active → returned → invoiced_pending → closed. Mirrors
+// `screens/financial/billing-run-detail.tsx`: GET snapshot → render
+// state + next_events → POST { event, state_version } → 409 reloads the
+// fresh snapshot and flags the stale-state condition.
+//
+// This dispatches lifecycle transitions through
+// POST /api/rentals/:id/events (RETURN / CLOSE) rather than the legacy
+// CRUD `POST /api/rentals/:id/return` path. The return path still owns
+// damage-reconciliation; this screen is the calm "where is this rental
+// in its lifecycle, and what's the next legal step" surface.
+// ---------------------------------------------------------------------------
+
+const LIFECYCLE_TONE_BY_STATE: Record<string, 'good' | 'warn' | 'default'> = {
+  active: 'good',
+  returned: 'default',
+  invoiced_pending: 'warn',
+  closed: 'default',
+}
+
+// XState machine is created once at module scope (XState machines must
+// not be re-created per render). The factory owns only UI state —
+// loading / submitting / showingError / outOfSync — and stores the
+// server-authoritative snapshot verbatim.
+const { useHook: useRentalLifecycle } = createHeadlessWorkflowMachine<
+  RentalLifecycleSnapshot,
+  RentalLifecycleHumanEvent
+>({
+  id: 'rentalLifecycle',
+  load: (id, slug) => fetchRentalLifecycle(id, slug),
+  submit: (id, event, stateVersion, slug) => dispatchRentalLifecycleEvent(id, event, stateVersion, slug),
+})
+
+export function RentalLifecycleDetailScreen() {
+  const { id } = useParams<{ id: string }>()
+  const companySlug = getActiveCompanySlug()
+  // Empty-string id is harmless — the load actor 404s immediately and the
+  // early-return below guards the rest of the render.
+  const { snapshot, error, outOfSync, isLoading, isSubmitting, dispatch, dismissError } = useRentalLifecycle(
+    id ?? '',
+    companySlug,
+  )
+
+  if (!id) {
+    return (
+      <div className="px-5 pt-8">
+        <Link to="/rentals" className="text-accent text-[13px] font-medium">
+          ← back to rentals
+        </Link>
+      </div>
+    )
+  }
+
+  if (isLoading && !snapshot) {
+    return <div className="px-5 pt-8 text-[13px] text-ink-3">Loading rental…</div>
+  }
+  if (!snapshot) {
+    return (
+      <div className="px-5 pt-8">
+        <h1 className="font-display text-[22px] font-bold tracking-tight">Rental not found</h1>
+        <Link to="/rentals" className="text-accent text-[13px] font-medium">
+          ← back to rentals
+        </Link>
+      </div>
+    )
+  }
+
+  const ctx = snapshot.context
+
+  const onEvent = (event: RentalLifecycleHumanEvent) => {
+    dispatch(event)
+  }
+
+  return (
+    <div className="px-5 pt-6 pb-12 max-w-2xl">
+      <Link to="/rentals" className="text-[12px] text-ink-3">
+        ← Rentals
+      </Link>
+      <div className="mt-2 flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h1 className="font-display text-[22px] font-bold tracking-tight leading-tight truncate">
+            {ctx.item_description}
+          </h1>
+          <div className="text-[11px] text-ink-3 mt-1">
+            ${Number(ctx.daily_rate).toFixed(2)}/day · delivered {ctx.delivered_on}
+            {ctx.returned_on ? ` · returned ${ctx.returned_on}` : ''} · v{snapshot.state_version}
+          </div>
+        </div>
+        <Pill tone={LIFECYCLE_TONE_BY_STATE[snapshot.state] ?? 'default'}>{snapshot.state}</Pill>
+      </div>
+
+      {outOfSync ? (
+        <Card tight className="mt-4">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Stale state</div>
+          <div className="text-[12px] text-ink-2 mt-1">
+            Rental state moved on the server. Reloaded — pick the next action again.
+          </div>
+        </Card>
+      ) : null}
+
+      {error && !outOfSync ? (
+        <Card tight className="mt-4">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Error</div>
+              <div className="text-[12px] text-ink-2 mt-1">{error}</div>
+            </div>
+            <button type="button" onClick={dismissError} className="text-[11px] text-ink-3 underline">
+              dismiss
+            </button>
+          </div>
+        </Card>
+      ) : null}
+
+      <div className="mt-4 space-y-2">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Billing</div>
+        <Card tight>
+          <LifecycleRow label="Cadence" value={`${ctx.invoice_cadence_days}d`} />
+          <LifecycleRow label="Next invoice" value={ctx.next_invoice_at ?? '—'} />
+          <LifecycleRow
+            label="Last invoice"
+            value={ctx.last_invoice_amount ? `$${Number(ctx.last_invoice_amount).toFixed(2)}` : '—'}
+          />
+          <LifecycleRow label="Billed through" value={ctx.last_invoiced_through ?? '—'} />
+        </Card>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Trail</div>
+        <Card tight>
+          <LifecycleTrail label="Returned" at={ctx.returned_at} />
+          <LifecycleTrail label="Closed" at={ctx.closed_at} />
+        </Card>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Actions</div>
+        {snapshot.next_events.length === 0 ? (
+          <Card tight>
+            <div className="text-[12px] text-ink-3">Terminal state — no further actions.</div>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {snapshot.next_events.map((ev) => (
+              <MobileButton
+                key={ev.type}
+                variant={ev.type === 'CLOSE' ? 'ghost' : 'primary'}
+                disabled={isSubmitting}
+                onClick={() => onEvent(ev.type)}
+              >
+                {ev.label}
+              </MobileButton>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="mt-4">
+        <Attribution source="GET /api/rentals/:id · POST /:id/events (rental lifecycle workflow reducer)" />
+      </div>
+    </div>
+  )
+}
+
+function LifecycleRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between text-[12px] py-1">
+      <div className="text-ink-3">{label}</div>
+      <div className="text-ink-2 num">{value}</div>
+    </div>
+  )
+}
+
+function LifecycleTrail({ label, at }: { label: string; at: string | null }) {
+  return (
+    <div className="flex items-center justify-between text-[12px] py-1">
+      <div className="text-ink-3">{label}</div>
+      <div className="text-ink-2">
+        {at
+          ? new Date(at).toLocaleString(undefined, {
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+            })
+          : '—'}
       </div>
     </div>
   )

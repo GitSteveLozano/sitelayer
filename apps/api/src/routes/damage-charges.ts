@@ -3,10 +3,14 @@ import type { Pool, PoolClient } from 'pg'
 import {
   DAMAGE_CHARGE_SETTLEMENT_WORKFLOW_NAME,
   DAMAGE_CHARGE_SETTLEMENT_WORKFLOW_SCHEMA_VERSION,
+  nextDamageChargeSettlementEvents,
+  parseDamageChargeSettlementEventRequest,
   transitionDamageChargeSettlementWorkflow,
+  type DamageChargeSettlementHumanEventType,
   type DamageChargeSettlementWorkflowEvent,
   type DamageChargeSettlementWorkflowSnapshot,
   type DamageChargeSettlementWorkflowState,
+  type WorkflowSnapshot,
 } from '@sitelayer/workflows'
 import { z } from 'zod'
 import { HttpError, parseJsonBody } from '../http-utils.js'
@@ -91,6 +95,94 @@ type DamageChargeRow = {
   waive_reason: string | null
   version: number
 } & Record<string, unknown>
+
+/**
+ * WorkflowSnapshot context for a damage charge. Carries the descriptive
+ * row columns the detail UI renders (amounts, kind, refs) plus the
+ * settlement trail (invoiced / waived stamps). `state` / `state_version`
+ * / `next_events` live on the envelope so screens never reinvent the
+ * vocabulary — same shape as `billingRunWorkflowSnapshotResponse`.
+ */
+type DamageChargeWorkflowContext = {
+  id: string
+  project_id: unknown
+  customer_id: unknown
+  shipment_id: unknown
+  shipment_line_id: unknown
+  inventory_item_id: unknown
+  catalog_part_id: unknown
+  kind: unknown
+  quantity: unknown
+  unit_amount: unknown
+  total_amount: unknown
+  description: unknown
+  taxable: unknown
+  qbo_invoice_id: unknown
+  invoiced_at: string | null
+  invoiced_by: string | null
+  waived_at: string | null
+  waived_by: string | null
+  waive_reason: string | null
+  notes: unknown
+  created_at: unknown
+  updated_at: unknown
+}
+
+function damageChargeWorkflowSnapshotResponse(
+  row: DamageChargeRow,
+): WorkflowSnapshot<
+  DamageChargeSettlementWorkflowState,
+  DamageChargeSettlementHumanEventType,
+  DamageChargeWorkflowContext
+> {
+  const state = (row.status as DamageChargeSettlementWorkflowState) ?? 'open'
+  return {
+    state,
+    state_version: row.state_version ?? 1,
+    context: {
+      id: row.id,
+      project_id: row.project_id,
+      customer_id: row.customer_id,
+      shipment_id: row.shipment_id,
+      shipment_line_id: row.shipment_line_id,
+      inventory_item_id: row.inventory_item_id,
+      catalog_part_id: row.catalog_part_id,
+      kind: row.kind,
+      quantity: row.quantity,
+      unit_amount: row.unit_amount,
+      total_amount: row.total_amount,
+      description: row.description,
+      taxable: row.taxable,
+      qbo_invoice_id: row.qbo_invoice_id,
+      invoiced_at: row.invoiced_at,
+      invoiced_by: row.invoiced_by,
+      waived_at: row.waived_at,
+      waived_by: row.waived_by,
+      waive_reason: row.waive_reason,
+      notes: row.notes,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    },
+    next_events: nextDamageChargeSettlementEvents(state),
+  }
+}
+
+/**
+ * Build a reducer-ready event from a human-issued event type. Mirrors
+ * `buildReducerEvent` in rental-billing-state.ts — the route stays
+ * focused on transactional persistence and the reducer owns semantics.
+ */
+function buildDamageChargeReducerEvent(
+  eventType: DamageChargeSettlementHumanEventType,
+  actorUserId: string,
+  waiveReason: string | null,
+): DamageChargeSettlementWorkflowEvent {
+  const nowIso = new Date().toISOString()
+  if (eventType === 'INVOICE') {
+    return { type: 'INVOICE', invoiced_at: nowIso, invoiced_by: actorUserId }
+  }
+  return { type: 'WAIVE', waived_at: nowIso, waived_by: actorUserId, waive_reason: waiveReason }
+}
 
 /**
  * Dispatch a damage_charge_settlement workflow event in the same tx as
@@ -259,6 +351,120 @@ export async function handleDamageChargeRoutes(
       ),
     )
     ctx.sendJson(201, result.rows[0])
+    return true
+  }
+
+  // WorkflowSnapshot for a single charge — `{ state, state_version,
+  // context, next_events }`. Entry surface for the headless settlement
+  // detail UI; mirrors GET /api/rental-billing-runs/:id. The `/events`
+  // and `/invoice` / `/waive` suffix routes below are matched first by
+  // their own regexes, so this bare-id GET only catches the snapshot.
+  const snapshotMatch = url.pathname.match(/^\/api\/damage-charges\/([^/]+)$/)
+  if (req.method === 'GET' && snapshotMatch) {
+    const id = snapshotMatch[1]!
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<DamageChargeRow>(
+        `select ${COLUMNS} from damage_charges
+         where company_id = $1 and id = $2 and deleted_at is null
+         limit 1`,
+        [ctx.company.id, id],
+      ),
+    )
+    const row = result.rows[0]
+    if (!row) {
+      ctx.sendJson(404, { error: 'charge not found' })
+      return true
+    }
+    ctx.sendJson(200, damageChargeWorkflowSnapshotResponse(row))
+    return true
+  }
+
+  // Generic workflow event surface — `{ event, state_version }`. Applies
+  // the damage_charge_settlement reducer in one tx with an optimistic
+  // post-lock state_version check (409 on stale or illegal transition).
+  // Mirrors POST /api/rental-billing-runs/:id/events. INVOICE additionally
+  // enqueues the stable-keyed `damage_charge_invoice_push` outbox row that
+  // the existing QBO push worker drains. The legacy `/invoice` and
+  // `/waive` routes below remain for back-compat callers.
+  const eventMatch = url.pathname.match(/^\/api\/damage-charges\/([^/]+)\/events$/)
+  if (req.method === 'POST' && eventMatch) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const id = eventMatch[1]!
+    const parsed = parseDamageChargeSettlementEventRequest(await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const { event: eventType, state_version: stateVersion, waive_reason: waiveReason } = parsed.value
+    const result = await withMutationTx(async (client: PoolClient) => {
+      const locked = await client.query<DamageChargeRow>(
+        `select ${COLUMNS}
+           from damage_charges
+           where company_id = $1 and id = $2 and deleted_at is null
+           for update`,
+        [ctx.company.id, id],
+      )
+      const current = locked.rows[0]
+      if (!current) return { kind: 'not_found' as const }
+      // Post-lock optimistic version check — concurrent POSTs with the
+      // same state_version serialize on the row lock; the loser sees the
+      // bumped version and 409s instead of re-running the reducer.
+      if ((current.state_version ?? 1) !== stateVersion) {
+        return { kind: 'version_conflict' as const, row: current }
+      }
+      const reducerEvent = buildDamageChargeReducerEvent(
+        eventType as DamageChargeSettlementHumanEventType,
+        ctx.currentUserId,
+        waiveReason ?? null,
+      )
+      const transition = await applyDamageChargeSettlementTransition(client, {
+        companyId: ctx.company.id,
+        chargeId: id,
+        event: reducerEvent,
+        eventType,
+        actorUserId: ctx.currentUserId,
+      })
+      if (transition.kind === 'not_found') return { kind: 'not_found' as const }
+      if (transition.kind === 'illegal_transition') {
+        return { kind: 'illegal_transition' as const, row: current, message: transition.message }
+      }
+      // INVOICE side effect: enqueue the existing QBO push outbox row with
+      // the stable per-charge idempotency key — same key as the legacy
+      // /invoice route so retries collapse onto one outbox row.
+      if (eventType === 'INVOICE') {
+        await recordMutationOutbox(
+          ctx.company.id,
+          'damage_charge',
+          id,
+          'damage_charge_invoice_push',
+          transition.row,
+          `damage_charge_invoice:${id}`,
+          'server',
+          ctx.currentUserId,
+          client,
+        )
+      }
+      return { kind: 'ok' as const, row: transition.row }
+    })
+    if (result.kind === 'not_found') {
+      ctx.sendJson(404, { error: 'charge not found' })
+      return true
+    }
+    if (result.kind === 'version_conflict') {
+      ctx.sendJson(409, {
+        error: 'state_version mismatch — reload and retry',
+        snapshot: damageChargeWorkflowSnapshotResponse(result.row),
+      })
+      return true
+    }
+    if (result.kind === 'illegal_transition') {
+      ctx.sendJson(409, {
+        error: result.message,
+        snapshot: damageChargeWorkflowSnapshotResponse(result.row),
+      })
+      return true
+    }
+    ctx.sendJson(200, damageChargeWorkflowSnapshotResponse(result.row))
     return true
   }
 

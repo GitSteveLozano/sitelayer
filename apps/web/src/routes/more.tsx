@@ -10,9 +10,15 @@ import {
   CatalogServiceItemsScreen,
   CatalogWorkersScreen,
   DispatchLanesAdminScreen,
+  NotificationsQueueScreen,
   SettingsScreen,
 } from '@/screens/settings'
-import { IntegrationsHubScreen, QboConnectionScreen, QboMappingsScreen } from '@/screens/integrations'
+import {
+  IntegrationsHubScreen,
+  QboConnectionScreen,
+  QboCustomFieldsScreen,
+  QboMappingsScreen,
+} from '@/screens/integrations'
 import {
   BranchesAdminScreen,
   DamageChargesAdminScreen,
@@ -37,6 +43,7 @@ export default function MoreRoute() {
       <Route path="integrations" element={<IntegrationsHubScreen />} />
       <Route path="integrations/qbo" element={<QboConnectionScreen />} />
       <Route path="integrations/qbo/mappings" element={<QboMappingsScreen />} />
+      <Route path="integrations/qbo/custom-fields" element={<QboCustomFieldsScreen />} />
       <Route path="inventory" element={<InventoryAdminHubScreen />} />
       <Route path="inventory/items" element={<InventoryItemsAdminScreen />} />
       <Route path="inventory/locations" element={<InventoryLocationsAdminScreen />} />
@@ -47,6 +54,7 @@ export default function MoreRoute() {
       <Route path="bonus-sim" element={<BonusSimulatorScreen />} />
       <Route path="audit" element={<AuditLogScreen />} />
       <Route path="dispatch-lanes" element={<DispatchLanesAdminScreen />} />
+      <Route path="notifications-queue" element={<NotificationsQueueScreen />} />
     </Routes>
   )
 }

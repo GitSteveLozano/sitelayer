@@ -73,6 +73,7 @@ import {
   MTopBar,
 } from '../../components/m/index.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
+import { TakeoffImportSheet } from './takeoff-import-sheet.js'
 
 type Tool = 'polygon' | 'lineal' | 'count'
 type Mode = 'manual' | 'draw'
@@ -155,6 +156,7 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
   const [draftPoints, setDraftPoints] = useState<TakeoffPoint[]>([])
   const [error, setError] = useState<string | null>(null)
   const [savedToast, setSavedToast] = useState<string | null>(null)
+  const [importOpen, setImportOpen] = useState(false)
   const svgRef = useRef<SVGSVGElement | null>(null)
 
   // Default the scope item once the catalog loads.
@@ -279,16 +281,25 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                 onPrimary={onCreateDraft}
               />
             ) : (
-              <div style={{ padding: '0 16px 4px' }}>
-                <MChipRow>
-                  {draftList.map((d) => (
-                    <MChip key={d.id} active={d.id === activeDraftId} onClick={() => setActiveDraft(d.id)}>
-                      {d.name}
-                      {d.status === 'archived' ? ' (archived)' : ''}
-                    </MChip>
-                  ))}
-                </MChipRow>
-              </div>
+              <>
+                <div style={{ padding: '0 16px 4px' }}>
+                  <MChipRow>
+                    {draftList.map((d) => (
+                      <MChip key={d.id} active={d.id === activeDraftId} onClick={() => setActiveDraft(d.id)}>
+                        {d.name}
+                        {d.status === 'archived' ? ' (archived)' : ''}
+                      </MChip>
+                    ))}
+                  </MChipRow>
+                </div>
+                {activeDraftId ? (
+                  <div style={{ padding: '4px 16px 0' }}>
+                    <MButton variant="ghost" size="sm" onClick={() => setImportOpen(true)}>
+                      <MI.FileText size={15} /> Import CSV / TSV
+                    </MButton>
+                  </div>
+                ) : null}
+              </>
             )}
 
             {draftList.length > 0 ? (
@@ -538,6 +549,16 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
           </>
         )}
       </MBody>
+      {activeDraftId ? (
+        <TakeoffImportSheet
+          open={importOpen}
+          projectId={projectId}
+          pageId={activePage?.id ?? null}
+          sourceLabel={activeDraft?.name ?? 'csv'}
+          onClose={() => setImportOpen(false)}
+          onImported={(count) => setSavedToast(`Imported ${count} measurement${count === 1 ? '' : 's'}.`)}
+        />
+      ) : null}
     </>
   )
 }

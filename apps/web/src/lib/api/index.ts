@@ -342,6 +342,20 @@ export {
 } from './labor-payroll-runs'
 
 export {
+  downloadPayrollExport,
+  fetchPayrollExports,
+  payrollExportDownloadPath,
+  payrollExportQueryKeys,
+  usePayrollExports,
+  useRequestPayrollExport,
+  PAYROLL_EXPORT_FORMATS,
+  type PayrollExportFormat,
+  type PayrollExportListResponse,
+  type PayrollExportRow,
+  type PayrollExportStatus,
+} from './payroll-exports'
+
+export {
   fetchQboAuthUrl,
   fetchQboConnection,
   fetchQboMappings,
@@ -363,6 +377,21 @@ export {
   type QboMappingUpsertRequest,
   type QboSyncStatus,
 } from './qbo'
+
+export {
+  countFailedOutbox,
+  fetchQboSyncOutbox,
+  fetchQboSyncStatus,
+  qboSyncQueryKeys,
+  useQboSyncOutbox,
+  useQboSyncStatus,
+  type QboLatestSyncEvent,
+  type QboSyncOutboxResponse,
+  type QboSyncOutboxRow,
+  type QboSyncRowStatus,
+  type QboSyncStatusConnection,
+  type QboSyncStatusResponse,
+} from './qbo-sync'
 
 export {
   auditEventQueryKeys,
@@ -640,3 +669,15 @@ export {
   type RentalRequestListResponse,
   type RentalRequestStatus,
 } from './rental-requests'
+
+// Phase 3.1 — admin notification queue (isolated block; see notifications-queue.ts)
+export {
+  fetchNotificationQueue,
+  notificationQueueKeys,
+  useDispatchNotificationEvent,
+  useNotificationQueue,
+  type NotificationQueueListParams,
+  type NotificationQueueListResponse,
+  type NotificationQueueRow,
+  type NotificationSnapshot,
+} from './notifications-queue'

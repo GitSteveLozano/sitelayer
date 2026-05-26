@@ -18,6 +18,7 @@ export { CatalogDivisionsScreen } from './catalog-divisions'
 export { BonusSimulatorScreen } from './bonus-sim'
 export { AuditLogScreen } from './audit-log'
 export { DispatchLanesAdminScreen } from './dispatch-lanes'
+export { NotificationsQueueScreen } from './notifications-queue'
 
 const ROLE_LABEL: Record<Role, string> = {
   owner: 'Owner / PM',
