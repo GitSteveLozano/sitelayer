@@ -57,9 +57,11 @@ export function emitControlPlaneTrace(
         payload: compactTracePayload({
           event_schema_version: EVENT_SCHEMA_VERSION,
           project_key: 'sitelayer',
+          source_surface: 'web',
           event_domain: 'controlled_app',
           event_class: traceEventClass(eventType),
           route_path: readRoutePath(),
+          user_state: buildUserStateSnapshot(payload),
           redaction_status: REDACTION.status,
           ...payload,
         }),
@@ -82,6 +84,34 @@ function traceEventClass(eventType: string): string {
   if (eventType.endsWith('.entity.viewed')) return 'entity_view'
   if (eventType.endsWith('.ui.action')) return 'user_action'
   return 'diagnostic'
+}
+
+function buildUserStateSnapshot(payload: Record<string, unknown>): Record<string, unknown> {
+  const state = typeof payload.state === 'string' ? payload.state : undefined
+  const status = typeof payload.status === 'string' ? payload.status : undefined
+  const entityKind =
+    typeof payload.entity_kind === 'string'
+      ? payload.entity_kind
+      : typeof payload.entity_type === 'string'
+        ? payload.entity_type
+        : undefined
+  const entityId =
+    typeof payload.entity_id === 'string' || typeof payload.entity_id === 'number'
+      ? payload.entity_id
+      : typeof payload.project_id === 'string' || typeof payload.project_id === 'number'
+        ? payload.project_id
+        : undefined
+
+  return compactTracePayload({
+    kind: 'operator_app_state',
+    mode: 'debug_trace',
+    surface: 'web',
+    workflow_state: state ?? status,
+    entity_kind: entityKind,
+    entity_id: entityId,
+    blocking_status: payload.has_error === true || payload.out_of_sync === true ? 'degraded' : 'none',
+    canonicality: 'operator_probe_only',
+  })
 }
 
 export function compactTraceValue(value: unknown): unknown {
