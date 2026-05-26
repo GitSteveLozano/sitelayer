@@ -59,6 +59,15 @@ const TakeoffMobileScreen = lazy(() =>
 const MobileSettingsHome = lazy(() =>
   import('./settings/settings-home.js').then((m) => ({ default: m.MobileSettingsHome })),
 )
+const ProjectAssignmentsScreen = lazy(() =>
+  import('./projects/assignments.js').then((m) => ({ default: m.ProjectAssignmentsScreen })),
+)
+const RentalLifecycleDetailScreen = lazy(() =>
+  import('./rentals/detail.js').then((m) => ({ default: m.RentalLifecycleDetailScreen })),
+)
+const ShipmentDetailScreen = lazy(() =>
+  import('./projects/shipment-detail.js').then((m) => ({ default: m.ShipmentDetailScreen })),
+)
 const MobileEstimateReview = lazy(() =>
   import('./mobile/estimate-review.js').then((m) => ({ default: m.MobileEstimateReview })),
 )
@@ -264,6 +273,7 @@ export function MobileShell({
             <Route path="projects" element={<MobileProjectsList bootstrap={bootstrap} />} />
             <Route path="projects/sent" element={<MobileEstimatesSent />} />
             <Route path="projects/new" element={<MobileProjectNew companySlug={companySlug} />} />
+            <Route path="projects/assignments" element={<ProjectAssignmentsScreen />} />
             <Route
               path="projects/:projectId"
               element={<MobileProjectDetail bootstrap={bootstrap} companyRole={companyRole} />}
@@ -278,6 +288,7 @@ export function MobileShell({
               path="projects/:projectId/estimate-push/:pushId"
               element={<MobileEstimatePush companySlug={companySlug} companyRole={companyRole} />}
             />
+            <Route path="projects/:projectId/shipments/:shipmentId" element={<ShipmentDetailScreen />} />
             <Route
               path="projects/:projectId/*"
               element={<MobileProjectDetail bootstrap={bootstrap} companyRole={companyRole} />}
@@ -302,6 +313,7 @@ export function MobileShell({
             <Route path="scaffold-inspections/:token" element={<MobileScaffoldInspectionScreen />} />
             <Route path="rentals/portal" element={<MobileRentalsPortal companySlug={companySlug} />} />
             <Route path="rentals/requests" element={<RentalRequestsQueueScreen />} />
+            <Route path="rentals/lifecycle/:id" element={<RentalLifecycleDetailScreen />} />
             <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} companyRole={companyRole} />} />
             <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
             <Route

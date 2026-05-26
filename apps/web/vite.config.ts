@@ -75,6 +75,15 @@ export default defineConfig({
         navigateFallback: `${baseNoTrailing}/index.html`,
         navigateFallbackDenylist: [/^\/api\//],
         globPatterns: ['**/*.{js,css,html,svg,woff2}'],
+        // Keep the heavy `vendor-three` chunk (~538KB, the 3D takeoff scene)
+        // OUT of the precache manifest. It's already lazy-loaded
+        // (TakeoffPreviewScreen is `lazy()` in App.tsx), so the app shell
+        // never references it — but the default glob would still bake all
+        // 538KB into every install, forcing workers/foremen who never open
+        // the 3D preview to download it on first install. Exclude it here and
+        // serve it via the `runtimeCaching` rule below so it's fetched (and
+        // cached for offline) only when a user actually opens the preview.
+        globIgnores: ['**/vendor-three*.js'],
         // 2026-05-10: a redirect response got baked into the precache during
         // a deploy cutover. The SW served it on navigations, and Chrome
         // rejected it ("a redirected response was used for a request whose
@@ -89,6 +98,19 @@ export default defineConfig({
         skipWaiting: true,
         clientsClaim: true,
         runtimeCaching: [
+          {
+            // The excluded `vendor-three` chunk is fetched on demand the first
+            // time the 3D takeoff preview opens. CacheFirst keeps it offline
+            // once downloaded (content-hashed filename → cache key changes on
+            // every rebuild, so there's no stale-bundle risk).
+            urlPattern: /\/assets\/vendor-three[^/]*\.js$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'vendor-three',
+              expiration: { maxEntries: 4, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com\//,
             handler: 'StaleWhileRevalidate',

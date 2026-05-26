@@ -18,6 +18,107 @@ import { renderMetrics } from '../metrics.js'
 const logger = createLogger('api:public')
 
 /**
+ * Extract the primary email from a Clerk user payload. Clerk sends an
+ * `email_addresses` array plus a `primary_email_address_id` pointing at the
+ * preferred entry; fall back to the first address if the pointer is missing.
+ */
+function extractPrimaryEmail(data: Record<string, unknown>): string | null {
+  const addresses = Array.isArray(data.email_addresses) ? data.email_addresses : []
+  const primaryId = typeof data.primary_email_address_id === 'string' ? data.primary_email_address_id : null
+  const rows = addresses.filter(
+    (a): a is { id?: unknown; email_address?: unknown } => typeof a === 'object' && a !== null,
+  )
+  const primary = primaryId ? rows.find((a) => a.id === primaryId) : undefined
+  const chosen = primary ?? rows[0]
+  const email = chosen?.email_address
+  return typeof email === 'string' && email.length > 0 ? email : null
+}
+
+function asNullableString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+/**
+ * Clerk reports created_at / updated_at as epoch milliseconds. Convert to an
+ * ISO string Postgres can cast to timestamptz; null when absent/invalid.
+ */
+function clerkEpochToIso(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return null
+  const d = new Date(value)
+  return Number.isNaN(d.getTime()) ? null : d.toISOString()
+}
+
+/**
+ * Upsert a Clerk identity into the clerk_users mirror. Runs at the pool with
+ * no company GUC — clerk_users is a global directory, not company-scoped.
+ *
+ * Expand/backfill/contract tolerance: if the migration hasn't applied yet the
+ * table won't exist and the insert throws `42P01` (undefined_table). We log
+ * and swallow that specific case so an in-flight rollout (new code, old
+ * schema) returns 204 to Clerk instead of 500ing and triggering Svix retries.
+ */
+async function upsertClerkUser(pool: Pool, clerkUserId: string, data: Record<string, unknown>): Promise<void> {
+  const email = extractPrimaryEmail(data)
+  const firstName = asNullableString(data.first_name)
+  const lastName = asNullableString(data.last_name)
+  const imageUrl = asNullableString(data.image_url) ?? asNullableString(data.profile_image_url)
+  const clerkCreatedAt = clerkEpochToIso(data.created_at)
+  const clerkUpdatedAt = clerkEpochToIso(data.updated_at)
+  try {
+    await pool.query(
+      `insert into clerk_users (
+         clerk_user_id, email, first_name, last_name, image_url,
+         clerk_created_at, clerk_updated_at, updated_at
+       ) values ($1, $2, $3, $4, $5, $6, $7, now())
+       on conflict (clerk_user_id) do update set
+         email = excluded.email,
+         first_name = excluded.first_name,
+         last_name = excluded.last_name,
+         image_url = excluded.image_url,
+         clerk_created_at = coalesce(excluded.clerk_created_at, clerk_users.clerk_created_at),
+         clerk_updated_at = excluded.clerk_updated_at,
+         updated_at = now(),
+         deleted_at = null`,
+      [clerkUserId, email, firstName, lastName, imageUrl, clerkCreatedAt, clerkUpdatedAt],
+    )
+  } catch (err) {
+    if (isMissingClerkUsersTable(err)) {
+      logger.warn({ clerkUserId }, '[clerk-webhook] clerk_users table absent — skipping mirror (rollout in progress)')
+      return
+    }
+    throw err
+  }
+}
+
+/**
+ * Soft-delete a mirror row on user.deleted. Tolerant of the table being absent
+ * during rollout, same as upsertClerkUser.
+ */
+async function softDeleteClerkUser(pool: Pool, clerkUserId: string): Promise<void> {
+  try {
+    await pool.query(
+      `update clerk_users set deleted_at = now(), updated_at = now()
+       where clerk_user_id = $1 and deleted_at is null`,
+      [clerkUserId],
+    )
+  } catch (err) {
+    if (isMissingClerkUsersTable(err)) {
+      logger.warn(
+        { clerkUserId },
+        '[clerk-webhook] clerk_users table absent — skipping soft-delete (rollout in progress)',
+      )
+      return
+    }
+    throw err
+  }
+}
+
+/** Postgres error code 42P01 = undefined_table (migration not yet applied). */
+function isMissingClerkUsersTable(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === '42P01'
+}
+
+/**
  * Pre-auth route handlers. These run BEFORE Clerk identity resolution and
  * rate limiting because:
  *   - OPTIONS is a CORS preflight; browsers send no Bearer.
@@ -187,7 +288,10 @@ export async function handlePublicRoutes(
     switch (type) {
       case 'user.created':
       case 'user.updated':
-        // Mirror table TBD; intentionally a no-op until the schema lands.
+        // Mirror the Clerk identity into clerk_users so invited members are
+        // known to the app before they manually onboard. This is the global
+        // identity directory; per-company role still lives in
+        // company_memberships and is written elsewhere.
         //
         // Welcome email is intentionally NOT enqueued here. It fires
         // from POST /api/companies once the user has finished onboarding
@@ -196,11 +300,18 @@ export async function handlePublicRoutes(
         // would require a pre-tenancy outbox path and would also send a
         // welcome before the user has anything to welcome them to. See
         // routes/companies.ts → recordMutationOutbox(..., 'welcome_email', ...).
+        if (subjectId) {
+          await upsertClerkUser(ctx.pool, subjectId, data)
+        }
         break
       case 'user.deleted':
-        // Don't cascade-delete memberships; preserve audit trail by leaving
-        // company_memberships intact. Future: nullify actor on audit_events.
-        logger.info({ subjectId }, '[clerk-webhook] user.deleted — no-op (audit trail preserved)')
+        // Soft-delete the mirror row (set deleted_at) but DON'T cascade-delete
+        // memberships; preserve the audit trail by leaving company_memberships
+        // and audit_events intact. Future: nullify actor on audit_events.
+        if (subjectId) {
+          await softDeleteClerkUser(ctx.pool, subjectId)
+        }
+        logger.info({ subjectId }, '[clerk-webhook] user.deleted — soft-deleted mirror (memberships preserved)')
         break
       case 'session.created':
         break

@@ -1,21 +1,22 @@
 // Project assignments — who's allocated to which project.
 //
-// Wraps apps/api/src/routes/project-assignments.ts. The API is per-project:
-//   GET    /api/projects/:projectId/assignments        -> list for one project
-//   POST   /api/projects/:projectId/assignments        -> add (admin/office)
-//   DELETE /api/projects/:projectId/assignments/:id     -> remove (admin/office)
+// Wraps apps/api/src/routes/project-assignments.ts:
+//   GET    /api/assignments                             -> company-wide list (one query)
+//   GET    /api/projects/:projectId/assignments         -> list for one project
+//   POST   /api/projects/:projectId/assignments         -> add (admin/office)
+//   DELETE /api/projects/:projectId/assignments/:id      -> remove (admin/office)
 //
-// There is no company-wide "all assignments" endpoint, so the portfolio
-// view (apps/web/src/screens/projects/assignments.tsx) fans out one list
-// query per project via `useProjectAssignmentsForProjects` and groups the
-// results client-side.
+// The portfolio view (apps/web/src/screens/projects/assignments.tsx) uses the
+// company-wide `useAllAssignments()` so it no longer fans out one request per
+// project. `useProjectAssignmentsForProjects` is kept for any per-project
+// caller / cache-keyed flows.
 //
-// Note: assignment rows identify the assignee by `clerk_user_id`. The
-// `workers` roster in /api/bootstrap is keyed by worker `id` and does not
-// expose a clerk mapping, so the UI shows the clerk user id as the
-// identity until a join surface exists.
+// Assignment rows identify the assignee by `clerk_user_id`. The API resolves
+// that id against the global clerk_users mirror and returns `assignee_name` /
+// `assignee_email` when known (both null when the identity hasn't been
+// mirrored yet), so the UI shows a human name and falls back to the id.
 
-import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { request } from './client'
 
 export type ProjectAssignmentRole = 'foreman' | 'worker'
@@ -28,6 +29,10 @@ export interface ProjectAssignment {
   assigned_by_clerk_user_id: string | null
   created_at: string
   deleted_at: string | null
+  /** Resolved from the clerk_users mirror; null when the id isn't mapped. */
+  assignee_name: string | null
+  /** Resolved from the clerk_users mirror; null when the id isn't mapped. */
+  assignee_email: string | null
 }
 
 export interface ProjectAssignmentListResponse {
@@ -42,10 +47,27 @@ export interface CreateProjectAssignmentRequest {
 export const projectAssignmentKeys = {
   all: () => ['project-assignments'] as const,
   list: (projectId: string) => [...projectAssignmentKeys.all(), 'list', projectId] as const,
+  company: () => [...projectAssignmentKeys.all(), 'company'] as const,
 }
 
 export function fetchProjectAssignments(projectId: string): Promise<ProjectAssignmentListResponse> {
   return request<ProjectAssignmentListResponse>(`/api/projects/${encodeURIComponent(projectId)}/assignments`)
+}
+
+export function fetchAllAssignments(): Promise<ProjectAssignmentListResponse> {
+  return request<ProjectAssignmentListResponse>('/api/assignments')
+}
+
+/**
+ * Company-wide assignments in a single request (every project's roster). This
+ * is the portfolio "Assignments" screen's primary read — it replaces the
+ * per-project fan-out that previously issued one query per project (N+1).
+ */
+export function useAllAssignments() {
+  return useQuery({
+    queryKey: projectAssignmentKeys.company(),
+    queryFn: fetchAllAssignments,
+  })
 }
 
 /**

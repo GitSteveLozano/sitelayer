@@ -31,7 +31,7 @@ import {
 import { Sheet } from '../../components/mobile/Sheet.js'
 import { formatRunningHours, timeOfDay, todayIso } from './format.js'
 import { useCrewSchedule } from '../../machines/crew-schedule.js'
-import { useAutoGeofenceClock, usePrimaryProjectFence } from '../../lib/geofence.js'
+import { useAutoGeofenceClock, useIdleAutoClockOut, usePrimaryProjectFence } from '../../lib/geofence.js'
 import { useMarkNotificationRead, useUnreadNotifications, type NotificationRow } from '../../lib/api/notifications.js'
 import { useProjectBriefs } from '../../lib/api/projects.js'
 import type { ProjectBriefStep } from '../../lib/api/project-briefs.js'
@@ -187,6 +187,20 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
     return undefined
   }, [geofence.sample, isClockedIn, refreshClockEvents])
 
+  // Idle auto clock-OUT — arms an inactivity timer while clocked in under
+  // the same auto policy. Any tap/key/touch or an in-fence GPS reading
+  // resets it; after the threshold elapses it fires
+  // POST /api/clock/out with auto_out_reason='idle'
+  // (→ event_type='auto_out_idle'). Refresh the timeline so the running
+  // clock UI flips to off-clock and the auto_out_idle row shows.
+  const idle = useIdleAutoClockOut({
+    enabled: geofenceEnabled,
+    alreadyClockedIn: isClockedIn,
+    presence: geofence.sample,
+    lastSample: geofence.sample,
+    onAutoOut: refreshClockEvents,
+  })
+
   // Today's unconfirmed assignments for this worker. The bootstrap
   // ships per-company schedules, so we filter by (today, crew contains
   // me, status=draft). The first worker row is the active worker per
@@ -294,7 +308,26 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
             />
           </>
         ) : (
-          <OffClockCard onClockIn={() => handlePunch('in')} busy={busy === 'in'} />
+          <>
+            {latest?.event_type === 'auto_out_idle' || idle.firedIdleOut ? (
+              <div style={{ marginTop: 8 }}>
+                <MBanner
+                  tone="info"
+                  title="Clocked out for inactivity"
+                  body="You were clocked out automatically after a stretch of no activity on site. Clock back in if you're still working."
+                />
+              </div>
+            ) : latest?.event_type === 'auto_out_geo' ? (
+              <div style={{ marginTop: 8 }}>
+                <MBanner
+                  tone="info"
+                  title="Clocked out — left the site"
+                  body="You were clocked out automatically when you left the project geofence."
+                />
+              </div>
+            ) : null}
+            <OffClockCard onClockIn={() => handlePunch('in')} busy={busy === 'in'} />
+          </>
         )}
         <FlagIssueButton onClick={() => navigate('/issue')} />
       </MBody>

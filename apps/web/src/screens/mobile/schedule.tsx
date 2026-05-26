@@ -6,8 +6,11 @@
  * right side shows site cards with crew dot counts.
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
-import { apiPost, type BootstrapResponse } from '@/lib/api'
+import { useQueryClient } from '@tanstack/react-query'
+import { apiPost, queryKeys, useCopyScheduleWeek, type BootstrapResponse } from '@/lib/api'
+import { startOfWeek } from '@/lib/clock-derive'
 import {
+  MBanner,
   MBody,
   MButton,
   MButtonRow,
@@ -38,6 +41,48 @@ export function MobileSchedule({
   const [mode, setMode] = useState<Mode>('week')
   const [createOpen, setCreateOpen] = useState(false)
   const [createdSchedules, setCreatedSchedules] = useState<ScheduleRow[]>([])
+  const [copyResult, setCopyResult] = useState<{ copied: number; skipped: number } | null>(null)
+
+  const qc = useQueryClient()
+  const copyWeek = useCopyScheduleWeek()
+
+  // "Copy last week": clone the prior Monday→Sunday block into the current
+  // week. The server returns the new rows as drafts so the foreman
+  // re-confirms; days that already have an assignment for the same project
+  // are left alone (idempotent at the project/day level).
+  const thisMondayMs = startOfWeek(Date.now())
+  const thisMondayIso = new Date(thisMondayMs).toISOString().slice(0, 10)
+  const lastMondayIso = new Date(thisMondayMs - 7 * 24 * 3600 * 1000).toISOString().slice(0, 10)
+
+  const onCopyLastWeek = async () => {
+    if (copyWeek.isPending) return
+    setCopyResult(null)
+    try {
+      const res = await copyWeek.mutateAsync({ from_monday: lastMondayIso, to_monday: thisMondayIso })
+      // MobileSchedule renders from `bootstrap` (not the useSchedules
+      // TanStack query), so refresh the bootstrap query the screen actually
+      // consumes — re-fetched data carries the new draft rows. We also fold
+      // the returned rows into local state for an immediate render, matching
+      // the create-assignment optimistic path above.
+      void qc.invalidateQueries({ queryKey: queryKeys.bootstrap(companySlug) })
+      setCreatedSchedules((rows) => [
+        ...rows,
+        ...res.schedules.map((s) => ({
+          id: s.id,
+          project_id: s.project_id,
+          scheduled_for: s.scheduled_for,
+          crew: Array.isArray(s.crew) ? s.crew : [],
+          status: s.status,
+          version: s.version,
+          deleted_at: s.deleted_at,
+          created_at: s.created_at,
+        })),
+      ])
+      setCopyResult({ copied: res.copied, skipped: res.skipped })
+    } catch {
+      // copyWeek.isError drives the inline error banner below
+    }
+  }
 
   const schedules = useMemo(
     () => [...(bootstrap?.schedules ?? []), ...createdSchedules],
@@ -69,11 +114,33 @@ export function MobileSchedule({
     return (
       <>
         <MTopBar title="Schedule" actionIcon={<MI.Plus size={20} />} actionLabel="New" onAction={openCreate} />
+        {copyResult ? (
+          <div style={{ padding: '8px 16px 0' }}>
+            <MBanner
+              tone="ok"
+              title="Last week copied"
+              body={`${copyResult.copied} ${copyResult.copied === 1 ? 'assignment' : 'assignments'} added as drafts${
+                copyResult.skipped > 0 ? ` · ${copyResult.skipped} already scheduled, left alone` : ''
+              }.`}
+            />
+          </div>
+        ) : null}
+        {copyWeek.isError ? (
+          <div style={{ padding: '8px 16px 0' }}>
+            <MBanner
+              tone="error"
+              title="Couldn't copy last week"
+              body={copyWeek.error instanceof Error ? copyWeek.error.message : 'Try again.'}
+            />
+          </div>
+        ) : null}
         <MEmptyState
           title="Nothing scheduled"
-          body="Build a week ahead by assigning crews to projects."
+          body="Build a week ahead by assigning crews to projects, or copy last week's plan forward."
           primaryLabel="New assignment"
           onPrimary={openCreate}
+          secondaryLabel={copyWeek.isPending ? 'Copying…' : 'Copy last week'}
+          onSecondary={onCopyLastWeek}
         />
         <CreateAssignmentSheet
           open={createOpen}
@@ -112,6 +179,33 @@ export function MobileSchedule({
             Week
           </MChip>
         </MChipRow>
+        {mode === 'week' ? (
+          <div style={{ padding: '4px 16px 0', display: 'flex', justifyContent: 'flex-end' }}>
+            <MButton variant="ghost" size="sm" onClick={onCopyLastWeek} disabled={copyWeek.isPending}>
+              {copyWeek.isPending ? 'Copying…' : 'Copy last week'}
+            </MButton>
+          </div>
+        ) : null}
+        {copyResult ? (
+          <div style={{ padding: '8px 16px 0' }}>
+            <MBanner
+              tone="ok"
+              title="Last week copied"
+              body={`${copyResult.copied} ${copyResult.copied === 1 ? 'assignment' : 'assignments'} added as drafts${
+                copyResult.skipped > 0 ? ` · ${copyResult.skipped} already scheduled, left alone` : ''
+              }.`}
+            />
+          </div>
+        ) : null}
+        {copyWeek.isError ? (
+          <div style={{ padding: '8px 16px 0' }}>
+            <MBanner
+              tone="error"
+              title="Couldn't copy last week"
+              body={copyWeek.error instanceof Error ? copyWeek.error.message : 'Try again.'}
+            />
+          </div>
+        ) : null}
         <MSectionH>This week</MSectionH>
         <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
           {byDay.slice(0, mode === 'day' ? 1 : 7).map((d) => (

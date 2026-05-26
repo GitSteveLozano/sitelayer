@@ -447,9 +447,13 @@ export {
 export { useActiveCompanyId, useActiveCompanyModules } from './active-company'
 
 export {
+  copyScheduleWeek,
   fetchSchedules,
   scheduleQueryKeys,
+  useCopyScheduleWeek,
   useSchedules,
+  type CopyScheduleWeekRequest,
+  type CopyScheduleWeekResponse,
   type CrewScheduleRow,
   type ScheduleListParams,
   type ScheduleListResponse,

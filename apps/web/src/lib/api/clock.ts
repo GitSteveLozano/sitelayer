@@ -57,8 +57,19 @@ export interface ClockInRequest {
   worker_id?: string | null
 }
 
-/** project_id is intentionally absent — out pairs with the open in. */
-export type ClockOutRequest = Omit<ClockInRequest, 'project_id'>
+/** Why an auto clock-OUT fired. Only honoured by the API when
+ * source='auto_geofence'; records event_type='auto_out_idle' /
+ * 'auto_out_geo' instead of plain 'out'. */
+export type AutoOutReason = 'idle' | 'geofence'
+
+/**
+ * project_id is intentionally absent — out pairs with the open in.
+ * `auto_out_reason` is optional: set by the PWA's idle-timer / geofence-
+ * exit auto-out path so the recorded event_type carries its provenance.
+ */
+export type ClockOutRequest = Omit<ClockInRequest, 'project_id'> & {
+  auto_out_reason?: AutoOutReason | null
+}
 
 export interface ClockInResponse {
   clockEvent: ClockEvent
