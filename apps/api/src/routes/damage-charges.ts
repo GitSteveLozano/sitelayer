@@ -130,7 +130,11 @@ type DamageChargeWorkflowContext = {
 
 function damageChargeWorkflowSnapshotResponse(
   row: DamageChargeRow,
-): WorkflowSnapshot<DamageChargeSettlementWorkflowState, DamageChargeSettlementHumanEventType, DamageChargeWorkflowContext> {
+): WorkflowSnapshot<
+  DamageChargeSettlementWorkflowState,
+  DamageChargeSettlementHumanEventType,
+  DamageChargeWorkflowContext
+> {
   const state = (row.status as DamageChargeSettlementWorkflowState) ?? 'open'
   return {
     state,
