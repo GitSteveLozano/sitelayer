@@ -2,13 +2,12 @@ import { useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { Card, MobileButton, Pill, Sheet } from '@/components/mobile'
 import { useProjects } from '@/lib/api'
+import { useCreateDamageCharge, useDamageCharges, type DamageCharge } from '@/lib/api/damage-charges'
 import {
-  useCreateDamageCharge,
-  useDamageCharges,
-  useInvoiceDamageCharge,
-  useWaiveDamageCharge,
-  type DamageCharge,
-} from '@/lib/api/damage-charges'
+  useDamageChargeSnapshot,
+  useDispatchDamageChargeEvent,
+  type DamageChargeSettlementEvent,
+} from '@/lib/api/damage-charge-settlement'
 
 const KINDS: ReadonlyArray<{ value: DamageCharge['kind']; label: string }> = [
   { value: 'damage', label: 'Damage' },
@@ -23,10 +22,12 @@ export function DamageChargesAdminScreen() {
   const projects = useProjects()
   const damage = useDamageCharges(projectId)
   const create = useCreateDamageCharge(projectId)
-  const invoice = useInvoiceDamageCharge()
-  const waive = useWaiveDamageCharge()
   const [creating, setCreating] = useState(false)
-  const [waivingId, setWaivingId] = useState<string | null>(null)
+  // The selected charge opens a headless settlement detail sheet that
+  // renders the WorkflowSnapshot state + next_events and dispatches
+  // INVOICE / WAIVE through the deterministic reducer. Reachable from the
+  // existing route — no shared-nav change.
+  const [settlingId, setSettlingId] = useState<string | null>(null)
 
   const rows = damage.data?.charges ?? []
   const openTotal = rows.filter((c) => c.status === 'open').reduce((sum, c) => sum + Number(c.total_amount), 0)
@@ -38,13 +39,6 @@ export function DamageChargesAdminScreen() {
     const unit_amount = Number(form.get('unit_amount') ?? 0)
     if (!description || quantity <= 0 || unit_amount <= 0) return
     create.mutate({ kind, description, quantity, unit_amount }, { onSuccess: () => setCreating(false) })
-  }
-
-  function onWaiveSubmit(form: FormData, id: string) {
-    const reason = String(form.get('reason') ?? '').trim()
-    const payload: Parameters<typeof waive.mutate>[0] = { id }
-    if (reason) payload.waive_reason = reason
-    waive.mutate(payload, { onSuccess: () => setWaivingId(null) })
   }
 
   return (
@@ -117,20 +111,14 @@ export function DamageChargesAdminScreen() {
                       {c.status}
                     </Pill>
                   </div>
-                  {c.status === 'open' ? (
-                    <div className="mt-2 flex gap-2">
-                      <MobileButton
-                        variant="primary"
-                        onClick={() => invoice.mutate({ id: c.id })}
-                        disabled={invoice.isPending}
-                      >
-                        Invoice
-                      </MobileButton>
-                      <MobileButton variant="ghost" onClick={() => setWaivingId(c.id)}>
-                        Waive
-                      </MobileButton>
-                    </div>
-                  ) : null}
+                  <div className="mt-2 flex gap-2">
+                    <MobileButton
+                      variant={c.status === 'open' ? 'primary' : 'ghost'}
+                      onClick={() => setSettlingId(c.id)}
+                    >
+                      {c.status === 'open' ? 'Settle' : 'View'}
+                    </MobileButton>
+                  </div>
                 </Card>
               ))
             )}
@@ -211,35 +199,166 @@ export function DamageChargesAdminScreen() {
         </Sheet>
       ) : null}
 
-      {waivingId ? (
-        <Sheet open onClose={() => setWaivingId(null)} title="Waive charge">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault()
-              onWaiveSubmit(new FormData(e.currentTarget), waivingId)
-            }}
-            className="space-y-3"
-          >
-            <label className="block">
-              <span className="text-[12px] text-ink-3">Reason</span>
-              <textarea
-                name="reason"
-                rows={3}
-                className="mt-1 w-full rounded-md border border-line bg-base p-2 text-[13px]"
-                placeholder="Why this charge is being waived"
-              />
-            </label>
-            <div className="flex justify-end gap-2 pt-2">
-              <MobileButton type="button" variant="ghost" onClick={() => setWaivingId(null)}>
-                Cancel
-              </MobileButton>
-              <MobileButton type="submit" variant="primary" disabled={waive.isPending}>
-                Waive
-              </MobileButton>
-            </div>
-          </form>
+      {settlingId ? (
+        <Sheet open onClose={() => setSettlingId(null)} title="Settle charge">
+          <DamageChargeSettlementPanel id={settlingId} onClose={() => setSettlingId(null)} />
         </Sheet>
       ) : null}
+    </div>
+  )
+}
+
+const SETTLEMENT_TONE: Record<string, 'good' | 'warn' | 'default'> = {
+  open: 'warn',
+  invoiced: 'good',
+  waived: 'default',
+}
+
+/**
+ * Headless damage-charge settlement detail. Loads the WorkflowSnapshot
+ * (`{ state, state_version, context, next_events }`) and dispatches
+ * INVOICE / WAIVE straight from `next_events`, mirroring the
+ * billing-run-detail pattern. The component is a thin renderer — it never
+ * invents a settlement state; the reducer + 409 reload own the truth.
+ */
+function DamageChargeSettlementPanel({ id, onClose }: { id: string; onClose: () => void }) {
+  const snapshotQuery = useDamageChargeSnapshot(id)
+  const dispatch = useDispatchDamageChargeEvent(id)
+  // WAIVE collects an optional reason; INVOICE goes straight through.
+  const [waiveReason, setWaiveReason] = useState('')
+  const [showWaive, setShowWaive] = useState(false)
+
+  const snapshot = snapshotQuery.data
+
+  if (snapshotQuery.isPending && !snapshot) {
+    return <div className="text-[12px] text-ink-3">Loading charge…</div>
+  }
+  if (!snapshot) {
+    return (
+      <div className="space-y-3">
+        <div className="text-[12px] text-warn">Could not load this charge.</div>
+        <MobileButton variant="ghost" onClick={onClose}>
+          Close
+        </MobileButton>
+      </div>
+    )
+  }
+
+  const ctx = snapshot.context
+  const dispatchError = dispatch.error?.message ?? null
+  const isStale = dispatchError != null && /\b409\b|state_version|illegal|not allowed/i.test(dispatchError)
+
+  const onEvent = (event: DamageChargeSettlementEvent) => {
+    if (event === 'WAIVE' && !showWaive) {
+      setShowWaive(true)
+      return
+    }
+    dispatch.mutate(
+      {
+        event,
+        state_version: snapshot.state_version,
+        ...(event === 'WAIVE' && waiveReason.trim() ? { waive_reason: waiveReason.trim() } : {}),
+      },
+      {
+        onSuccess: () => {
+          setShowWaive(false)
+          setWaiveReason('')
+        },
+      },
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="text-[14px] font-semibold truncate">{ctx.description}</div>
+          <div className="text-[11px] text-ink-3 mt-0.5">
+            {ctx.kind} · {ctx.quantity} × ${Number(ctx.unit_amount).toFixed(2)} = ${Number(ctx.total_amount).toFixed(2)}{' '}
+            · v{snapshot.state_version}
+            {ctx.qbo_invoice_id ? <> · QBO #{ctx.qbo_invoice_id}</> : null}
+          </div>
+        </div>
+        <Pill tone={SETTLEMENT_TONE[snapshot.state] ?? 'default'}>{snapshot.state}</Pill>
+      </div>
+
+      {isStale ? (
+        <Card tight>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Stale state</div>
+          <div className="text-[12px] text-ink-2 mt-1">
+            This charge moved on the server. Reloaded — pick the next action again.
+          </div>
+        </Card>
+      ) : dispatchError ? (
+        <Card tight>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Error</div>
+          <div className="text-[12px] text-ink-2 mt-1">{dispatchError}</div>
+        </Card>
+      ) : null}
+
+      <Card tight>
+        <Trail label="Invoiced" at={ctx.invoiced_at} />
+        <Trail label="Waived" at={ctx.waived_at} />
+        {ctx.waive_reason ? (
+          <div className="flex items-start justify-between gap-3 text-[12px] py-1">
+            <div className="text-ink-3">Reason</div>
+            <div className="text-ink-2 text-right">{ctx.waive_reason}</div>
+          </div>
+        ) : null}
+      </Card>
+
+      {showWaive ? (
+        <label className="block">
+          <span className="text-[12px] text-ink-3">Waive reason (optional)</span>
+          <textarea
+            value={waiveReason}
+            onChange={(e) => setWaiveReason(e.target.value)}
+            rows={3}
+            className="mt-1 w-full rounded-md border border-line bg-base p-2 text-[13px]"
+            placeholder="Why this charge is being waived"
+          />
+        </label>
+      ) : null}
+
+      <div>
+        <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1 mb-2">Actions</div>
+        {snapshot.next_events.length === 0 ? (
+          <Card tight>
+            <div className="text-[12px] text-ink-3">Terminal — this charge is settled.</div>
+          </Card>
+        ) : (
+          <div className="grid grid-cols-2 gap-2">
+            {snapshot.next_events.map((ev) => (
+              <MobileButton
+                key={ev.type}
+                variant={ev.type === 'WAIVE' ? 'ghost' : 'primary'}
+                disabled={dispatch.isPending}
+                onClick={() => onEvent(ev.type)}
+              >
+                {ev.label}
+              </MobileButton>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function Trail({ label, at }: { label: string; at: string | null }) {
+  return (
+    <div className="flex items-center justify-between text-[12px] py-1">
+      <div className="text-ink-3">{label}</div>
+      <div className="text-ink-2">
+        {at
+          ? new Date(at).toLocaleString(undefined, {
+              month: 'short',
+              day: 'numeric',
+              hour: 'numeric',
+              minute: '2-digit',
+            })
+          : '—'}
+      </div>
     </div>
   )
 }

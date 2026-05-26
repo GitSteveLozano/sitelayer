@@ -1,8 +1,11 @@
 import type { ProjectRow } from '@/lib/api'
-import { MKpi, MKpiRow, MPill, MSectionH } from '../../../components/m/index.js'
+import { MBanner, MButton, MKpi, MKpiRow, MPill, MSectionH } from '../../../components/m/index.js'
+import { ApiError } from '../../../lib/api/client.js'
+import { useRole } from '../../../lib/role.js'
 import { useProjectLaborVariance, type LaborVarianceRow } from '../../../lib/api/labor-variance.js'
 import { useProjectCloseoutSummary, type CloseoutSummaryResponse } from '../../../lib/api/closeout-summary.js'
-import { formatDecimalHours, formatMoney } from '../format.js'
+import { useProjectCloseout, useCloseoutProject } from '../../../lib/api/project-closeout.js'
+import { formatDecimalHours, formatMoney, shortDate } from '../format.js'
 
 export function BudgetTab({
   project,
@@ -50,6 +53,158 @@ export function BudgetTab({
       <div style={{ padding: '0 16px 16px', fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>
         Budget calculated from logged labor entries × project labor rate. Materials and rentals not included in this
         rollup yet — see the Materials tab for that.
+      </div>
+      {/* Closeout action — drives the project-closeout workflow
+          (active → completed) via GET/POST /api/projects/:id/closeout.
+          Self-gates to the owner persona (admin/office); hidden for
+          everyone else since the API rejects the GET for other roles. */}
+      <ProjectCloseoutCard projectId={project.id} />
+    </div>
+  )
+}
+
+/**
+ * Project-closeout action card. Mirrors the headless-workflow pattern from
+ * `screens/financial/billing-run-detail.tsx`: read the WorkflowSnapshot,
+ * render the next event as an Approve-style button, POST CLOSEOUT with the
+ * row version, and reload on a 409 (stale version → server state moved on).
+ *
+ * Two states drive the UI:
+ *   - active   + next_events includes CLOSEOUT → "Close out project" button
+ *   - completed                                → "Closed out" pill + date
+ *
+ * Gated to the owner persona (admin/office map to `owner` in lib/role).
+ * Non-owner personas get nothing rendered — the API GET is admin/office
+ * only, so fetching for a worker/foreman would just 403.
+ */
+function ProjectCloseoutCard({ projectId }: { projectId: string }) {
+  const role = useRole()
+  const canCloseout = role === 'owner'
+
+  const snapshot = useProjectCloseout(projectId, { enabled: canCloseout })
+  const mutation = useCloseoutProject(projectId)
+
+  // Hidden for roles without permission — never render anything.
+  if (!canCloseout) return null
+
+  if (snapshot.isPending) {
+    return (
+      <div style={{ padding: '0 16px 16px' }}>
+        <div
+          style={{
+            padding: 14,
+            fontSize: 12,
+            color: 'var(--m-ink-3)',
+            border: '1px solid var(--m-line)',
+            borderRadius: 12,
+            background: 'var(--m-card-soft)',
+          }}
+        >
+          Loading closeout…
+        </div>
+      </div>
+    )
+  }
+
+  if (snapshot.isError || !snapshot.data) {
+    return (
+      <div style={{ padding: '0 16px 16px' }}>
+        <MBanner tone="error" title="Could not load closeout" body="Reload the project to try again." />
+      </div>
+    )
+  }
+
+  const data = snapshot.data
+  const closeoutEvent = data.next_events.find((ev) => ev.type === 'CLOSEOUT')
+  const isCompleted = data.state === 'completed'
+
+  // 409 means the project state moved on the server (already closed out
+  // from another device, or the version is stale). The mutation's
+  // onSettled invalidate has already pulled a fresh snapshot, so surface
+  // the calm "reloaded" note and let the re-derived state render below.
+  const conflict = mutation.error instanceof ApiError && mutation.error.status === 409
+  const errorMsg =
+    mutation.error && !conflict
+      ? mutation.error instanceof ApiError
+        ? mutation.error.message_for_user()
+        : 'Closeout failed. Try again.'
+      : null
+
+  const onCloseout = () => {
+    if (mutation.isPending) return
+    mutation.mutate({ expectedVersion: data.context.version })
+  }
+
+  return (
+    <div style={{ padding: '0 16px 16px' }}>
+      <div
+        style={{
+          border: '1px solid var(--m-line)',
+          borderRadius: 12,
+          overflow: 'hidden',
+          background: 'var(--m-card)',
+        }}
+      >
+        <div
+          style={{
+            padding: '10px 14px',
+            borderBottom: '1px solid var(--m-line)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+          }}
+        >
+          <span
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+            }}
+          >
+            Closeout
+          </span>
+          {isCompleted ? <MPill tone="green">Closed out</MPill> : <MPill tone="blue">Active</MPill>}
+        </div>
+
+        <div style={{ padding: '12px 14px' }}>
+          {isCompleted ? (
+            <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>
+              Closed out{data.context.closed_at ? ` on ${shortDate(data.context.closed_at)}` : ''}. The closeout summary
+              above is locked.
+            </div>
+          ) : (
+            <>
+              <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5, marginBottom: 12 }}>
+                Marks the project complete and locks the closeout summary. This can't be undone.
+              </div>
+              {conflict ? (
+                <div style={{ marginBottom: 12 }}>
+                  <MBanner
+                    tone="warn"
+                    title="Project state moved"
+                    body="Reloaded the latest state — check it before closing out again."
+                  />
+                </div>
+              ) : null}
+              {errorMsg ? (
+                <div style={{ marginBottom: 12 }}>
+                  <MBanner
+                    tone="error"
+                    title="Closeout failed"
+                    body={errorMsg}
+                    requestId={mutation.error instanceof ApiError ? mutation.error.requestId : null}
+                  />
+                </div>
+              ) : null}
+              <MButton variant="primary" disabled={!closeoutEvent || mutation.isPending} onClick={onCloseout}>
+                {mutation.isPending ? 'Closing out…' : (closeoutEvent?.label ?? 'Close out project')}
+              </MButton>
+            </>
+          )}
+        </div>
       </div>
     </div>
   )

@@ -1,5 +1,6 @@
 import { Route, Routes } from 'react-router-dom'
 import {
+  RentalLifecycleDetailScreen,
   RentalRequestsQueueScreen,
   RentalsItemDetailScreen,
   RentalsListScreen,
@@ -15,6 +16,7 @@ export default function RentalsRoute() {
       <Route path="utilization" element={<RentalsUtilizationScreen />} />
       <Route path="requests" element={<RentalRequestsQueueScreen />} />
       <Route path="items/:id" element={<RentalsItemDetailScreen />} />
+      <Route path="lifecycle/:id" element={<RentalLifecycleDetailScreen />} />
     </Routes>
   )
 }
