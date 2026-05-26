@@ -1,6 +1,19 @@
 import type http from 'node:http'
-import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
-import type { Pool } from 'pg'
+import type { Pool, PoolClient } from 'pg'
+import {
+  NOTIFICATION_ALL_STATES,
+  NOTIFICATION_WORKFLOW_NAME,
+  NOTIFICATION_WORKFLOW_SCHEMA_VERSION,
+  nextNotificationEvents,
+  parseNotificationEventRequest,
+  transitionNotificationWorkflow,
+  type NotificationChannel,
+  type NotificationFailureKind,
+  type NotificationWorkflowEvent,
+  type NotificationWorkflowSnapshot,
+  type NotificationWorkflowState,
+} from '@sitelayer/workflows'
+import { recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { buildPaginationMeta, isValidUuid, parsePagination } from '../http-utils.js'
 
@@ -37,6 +50,245 @@ type NotificationRow = {
 // 100, but the upper bound is the shared 500 cap (set via maxLimit).
 const NOTIFICATIONS_DEFAULT_LIMIT = 20
 
+// ---------------------------------------------------------------------------
+// Admin notification queue (company-scoped delivery view) + the RETRY/VOID
+// workflow-event surface. Mirrors the deterministic-workflow pattern in
+// rental-billing-state.ts.
+//
+// Reconciliation note — the `notifications.status` column only stores the
+// collapsed legacy vocabulary (`pending` / `sending` / `sent` / `failed` /
+// `voided`); the worker projects the reducer's eight states down to those
+// via `workflowStateToLegacyStatus` (apps/worker/src/notifications.ts). The
+// canonical eight-state vocabulary — and the `failure_kind` / `error` /
+// `channel` discriminators the frontend hook needs — live in
+// `workflow_event_log.snapshot_after` (the JSONB reducer output). So the
+// queue join reaches into the latest event-log snapshot for each row and
+// reconstructs the true `NotificationWorkflowSnapshot`, falling back to the
+// row's own `status` for legacy rows that predate the workflow / have no
+// event log yet. There is intentionally NO `failure_kind` / `channel`
+// column on the table (migration 081 header documents this), so adding one
+// is out of scope; we adapt the API response to the hook's contract here.
+// ---------------------------------------------------------------------------
+
+const NOTIFICATION_QUEUE_LIMIT = 200
+
+// Frontend-contract row. Field names match apps/web/src/lib/api/notifications-queue.ts
+// NotificationQueueRow exactly — `state` is the canonical eight-state
+// workflow state, `failure_kind` / `error` / `channel` are derived from the
+// latest workflow_event_log snapshot.
+type NotificationQueueRow = {
+  id: string
+  company_id: string
+  recipient_clerk_user_id: string | null
+  recipient_email: string | null
+  kind: string
+  subject: string
+  channel: NotificationChannel | null
+  state: NotificationWorkflowState
+  state_version: number
+  failure_kind: NotificationFailureKind | null
+  error: string | null
+  delivery_attempts: number | null
+  next_attempt_at: string | null
+  sent_at: string | null
+  failed_at: string | null
+  created_at: string
+}
+
+// Raw row read by the queue join: the notifications columns plus the latest
+// workflow_event_log snapshot_after JSONB (or null for legacy rows).
+type NotificationQueueDbRow = {
+  id: string
+  company_id: string
+  recipient_clerk_user_id: string | null
+  recipient_email: string | null
+  kind: string
+  subject: string
+  status: string
+  state_version: number
+  error: string | null
+  last_delivery_error: string | null
+  delivery_attempts: number | null
+  next_attempt_at: string | null
+  sent_at: string | null
+  created_at: string
+  // workflow_event_log.snapshot_after for the highest state_version row of
+  // this notification, or null when none has been written yet.
+  snapshot_after: NotificationWorkflowSnapshot | null
+}
+
+// Project the notifications columns the queue surface needs, joined (via the
+// QUEUE_FROM lateral) to the latest workflow_event_log snapshot for the
+// canonical reducer state.
+const QUEUE_SELECT = `
+  n.id,
+  n.company_id,
+  n.recipient_clerk_user_id,
+  n.recipient_email,
+  n.kind,
+  n.subject,
+  n.status,
+  coalesce(n.state_version, 1) as state_version,
+  n.error,
+  n.last_delivery_error,
+  coalesce(n.delivery_attempts, 0) as delivery_attempts,
+  n.next_attempt_at,
+  n.sent_at,
+  n.created_at,
+  wel.snapshot_after
+`
+
+// RETURNING projection for the UPDATE path — same columns, but no table
+// alias (RETURNING references the target table directly) and snapshot_after
+// is synthesized as null (the lateral join isn't visible to RETURNING; the
+// route re-attaches the fresh reducer snapshot in JS).
+const QUEUE_RETURNING = `
+  id,
+  company_id,
+  recipient_clerk_user_id,
+  recipient_email,
+  kind,
+  subject,
+  status,
+  coalesce(state_version, 1) as state_version,
+  error,
+  last_delivery_error,
+  coalesce(delivery_attempts, 0) as delivery_attempts,
+  next_attempt_at,
+  sent_at,
+  created_at,
+  null::jsonb as snapshot_after
+`
+
+const QUEUE_FROM = `
+  from notifications n
+  left join lateral (
+    select snapshot_after
+    from workflow_event_log
+    where entity_id = n.id
+      and workflow_name = '${NOTIFICATION_WORKFLOW_NAME}'
+    order by state_version desc
+    limit 1
+  ) wel on true
+`
+
+const VALID_QUEUE_STATES = new Set<string>(NOTIFICATION_ALL_STATES)
+
+// Collapse the reducer's eight states down to the legacy `status` vocabulary
+// the worker also writes (apps/worker/src/notifications.ts:workflowStateToLegacyStatus).
+// Kept in sync here because the human RETRY/VOID path writes the same column.
+function workflowStateToLegacyStatus(state: NotificationWorkflowState): string {
+  switch (state) {
+    case 'pending':
+    case 'hydrating':
+      return 'pending'
+    case 'sending':
+      return 'sending'
+    case 'sent':
+      return 'sent'
+    case 'failed_clerk_not_found':
+    case 'failed_clerk_unreachable':
+    case 'failed_provider':
+      return 'failed'
+    case 'voided':
+      return 'voided'
+  }
+}
+
+// Recover the canonical eight-state snapshot for a row. Prefer the latest
+// workflow_event_log snapshot (authoritative); fall back to projecting the
+// collapsed `status` column for legacy rows with no event log. The `failed`
+// collapse is ambiguous (provider vs clerk_unreachable vs clerk_not_found),
+// so legacy `failed` rows resolve to `failed_provider` — the most common,
+// retryable terminal — and surface no `failure_kind`.
+function rowToSnapshot(row: NotificationQueueDbRow): NotificationWorkflowSnapshot {
+  const snap = row.snapshot_after
+  if (snap && typeof snap.state === 'string' && VALID_QUEUE_STATES.has(snap.state)) {
+    return {
+      ...snap,
+      // state_version on the row is authoritative for the optimistic check
+      // (snapshot_after.state_version is the post-transition version that was
+      // current when the log row was written; the row carries the live one).
+      state_version: row.state_version,
+    }
+  }
+  let state: NotificationWorkflowState
+  switch (row.status) {
+    case 'sent':
+      state = 'sent'
+      break
+    case 'sending':
+      state = 'sending'
+      break
+    case 'failed':
+      state = 'failed_provider'
+      break
+    case 'voided':
+      state = 'voided'
+      break
+    default:
+      state = 'pending'
+  }
+  return {
+    state,
+    state_version: row.state_version,
+    error: row.error ?? row.last_delivery_error ?? null,
+    failure_kind: null,
+  }
+}
+
+function rowToQueueRow(row: NotificationQueueDbRow): NotificationQueueRow {
+  const snapshot = rowToSnapshot(row)
+  return {
+    id: row.id,
+    company_id: row.company_id,
+    recipient_clerk_user_id: row.recipient_clerk_user_id,
+    recipient_email: snapshot.recipient_email ?? row.recipient_email ?? null,
+    kind: row.kind,
+    subject: row.subject,
+    channel: snapshot.channel ?? null,
+    state: snapshot.state,
+    state_version: row.state_version,
+    failure_kind: snapshot.failure_kind ?? null,
+    error: snapshot.error ?? row.error ?? row.last_delivery_error ?? null,
+    delivery_attempts: row.delivery_attempts ?? null,
+    next_attempt_at: row.next_attempt_at,
+    sent_at: row.sent_at,
+    // failed_at travels on the SEND_FAILED event; surface it from the snapshot.
+    failed_at: snapshot.failed_at ?? null,
+    created_at: row.created_at,
+  }
+}
+
+// Snapshot response for the workflow-event POST — same shape as every other
+// workflow ({ state, state_version, next_events, context }). The frontend
+// NotificationSnapshot.context is the full queue row.
+function notificationSnapshotResponse(row: NotificationQueueDbRow): {
+  state: NotificationWorkflowState
+  state_version: number
+  next_events: ReturnType<typeof nextNotificationEvents>
+  context: NotificationQueueRow
+} {
+  const queueRow = rowToQueueRow(row)
+  return {
+    state: queueRow.state,
+    state_version: queueRow.state_version,
+    next_events: nextNotificationEvents(queueRow.state),
+    context: queueRow,
+  }
+}
+
+function buildNotificationReducerEvent(
+  eventType: 'RETRY' | 'VOID',
+  reason: string | null,
+  nowIso: string,
+): NotificationWorkflowEvent {
+  if (eventType === 'RETRY') {
+    return { type: 'RETRY', retried_at: nowIso }
+  }
+  return { type: 'VOID', voided_at: nowIso, reason: reason ?? null }
+}
+
 // Project the schema's columns plus a synthesized `read_at` derived from
 // payload->>'read_at'. Keeping this string in one constant means the
 // list and read-mark queries return the same shape.
@@ -69,6 +321,179 @@ export async function handleNotificationRoutes(
   url: URL,
   ctx: NotificationRouteCtx,
 ): Promise<boolean> {
+  // Admin notification queue — company-scoped (NOT per-recipient) delivery
+  // view for admin/office. Surfaces the canonical workflow state + delivery
+  // columns the Notification-queue UI renders.
+  if (req.method === 'GET' && url.pathname === '/api/notifications/queue') {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const stateFilter = url.searchParams.get('state')
+    const params: unknown[] = [ctx.company.id]
+    // Canonical-state filter: the live state lives in the joined event-log
+    // snapshot, with the row's collapsed `status` as the legacy fallback.
+    // Both arms must agree so a `?state=` filter is exact across rows that
+    // do and don't have an event log yet.
+    let stateClause = ''
+    if (stateFilter && VALID_QUEUE_STATES.has(stateFilter)) {
+      params.push(stateFilter)
+      const idx = params.length
+      const legacy = workflowStateToLegacyStatus(stateFilter as NotificationWorkflowState)
+      params.push(legacy)
+      const legacyIdx = params.length
+      stateClause = ` and (
+        case
+          when wel.snapshot_after is not null then wel.snapshot_after->>'state' = $${idx}
+          else n.status = $${legacyIdx}
+        end
+      )`
+    } else if (stateFilter) {
+      // Unknown state value → empty result rather than a silent full list.
+      ctx.sendJson(200, { notifications: [] })
+      return true
+    }
+
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<NotificationQueueDbRow>(
+        `select ${QUEUE_SELECT}
+         ${QUEUE_FROM}
+         where n.company_id = $1${stateClause}
+         order by n.created_at desc
+         limit ${NOTIFICATION_QUEUE_LIMIT}`,
+        params,
+      ),
+    )
+    ctx.sendJson(200, { notifications: result.rows.map(rowToQueueRow) })
+    return true
+  }
+
+  // Workflow-event dispatch (RETRY / VOID) for one notification row.
+  const eventMatch = url.pathname.match(/^\/api\/notifications\/([^/]+)\/events$/)
+  if (req.method === 'POST' && eventMatch) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const id = eventMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const body = await ctx.readBody()
+    const parsed = parseNotificationEventRequest(body)
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const eventType = parsed.value.event
+    const reason = parsed.value.event === 'VOID' ? (parsed.value.reason ?? null) : null
+    const stateVersion = parsed.value.state_version
+
+    try {
+      const outcome = await withMutationTx(ctx.company.id, async (client: PoolClient) => {
+        const lockedResult = await client.query<NotificationQueueDbRow>(
+          `select ${QUEUE_SELECT}
+           ${QUEUE_FROM}
+           where n.company_id = $1 and n.id = $2
+           for update of n`,
+          [ctx.company.id, id],
+        )
+        const current = lockedResult.rows[0]
+        if (!current) return { kind: 'not_found' as const }
+        // Post-lock optimistic check: concurrent POSTs with the same
+        // state_version serialize on the row lock; the second sees the bumped
+        // version and 409s. Same pattern as rental-billing-state.ts.
+        if (current.state_version !== stateVersion) {
+          return { kind: 'version_conflict' as const, row: current }
+        }
+
+        const snapshot = rowToSnapshot(current)
+        const reducerEvent = buildNotificationReducerEvent(eventType, reason, new Date().toISOString())
+        let next: NotificationWorkflowSnapshot
+        try {
+          next = transitionNotificationWorkflow(snapshot, reducerEvent)
+        } catch (err) {
+          return {
+            kind: 'illegal_transition' as const,
+            row: current,
+            message: err instanceof Error ? err.message : String(err),
+          }
+        }
+
+        const nextStatus = workflowStateToLegacyStatus(next.state)
+        // RETRY re-enters `pending` — the worker claim query is
+        // `where status = 'pending' and next_attempt_at <= now()`
+        // (apps/worker/src/notifications.ts), so reset next_attempt_at to
+        // now() for immediate re-claim and clear the stale error. VOID is
+        // terminal; stash the reason in `error` and leave scheduling alone.
+        const updateSql =
+          eventType === 'RETRY'
+            ? `update notifications
+                 set status = $3,
+                     state_version = $4,
+                     next_attempt_at = now(),
+                     error = null,
+                     last_delivery_error = null
+               where company_id = $1 and id = $2
+               returning ${QUEUE_RETURNING}`
+            : `update notifications
+                 set status = $3,
+                     state_version = $4,
+                     error = $5
+               where company_id = $1 and id = $2
+               returning ${QUEUE_RETURNING}`
+        // The RETURNING projection can't reach the lateral join, so we
+        // re-attach the reducer's fresh snapshot to the returned row below.
+        const updateParams =
+          eventType === 'RETRY'
+            ? [ctx.company.id, id, nextStatus, next.state_version]
+            : [ctx.company.id, id, nextStatus, next.state_version, next.error ?? null]
+        const updateResult = await client.query<NotificationQueueDbRow>(updateSql, updateParams)
+        const updated = updateResult.rows[0]
+        if (!updated) return { kind: 'not_found' as const }
+        // Stamp the fresh reducer snapshot onto the returned row so the
+        // response context carries the new canonical state / failure_kind /
+        // channel rather than the pre-update event-log snapshot.
+        updated.snapshot_after = next
+
+        await recordWorkflowEvent(client, {
+          companyId: ctx.company.id,
+          workflowName: NOTIFICATION_WORKFLOW_NAME,
+          schemaVersion: NOTIFICATION_WORKFLOW_SCHEMA_VERSION,
+          entityType: 'notification',
+          entityId: updated.id,
+          stateVersion: stateVersion,
+          eventType,
+          eventPayload: reducerEvent,
+          snapshotAfter: next,
+          actorUserId: ctx.currentUserId,
+        })
+
+        return { kind: 'ok' as const, row: updated }
+      })
+
+      if (outcome.kind === 'not_found') {
+        ctx.sendJson(404, { error: 'notification not found' })
+        return true
+      }
+      if (outcome.kind === 'version_conflict') {
+        ctx.sendJson(409, {
+          error: 'state_version mismatch — reload and retry',
+          snapshot: notificationSnapshotResponse(outcome.row),
+        })
+        return true
+      }
+      if (outcome.kind === 'illegal_transition') {
+        ctx.sendJson(409, {
+          error: outcome.message,
+          snapshot: notificationSnapshotResponse(outcome.row),
+        })
+        return true
+      }
+
+      ctx.sendJson(200, notificationSnapshotResponse(outcome.row))
+      return true
+    } catch (err) {
+      ctx.sendJson(500, { error: err instanceof Error ? err.message : 'internal error' })
+      return true
+    }
+  }
+
   if (req.method === 'GET' && url.pathname === '/api/notifications') {
     const unreadOnly = url.searchParams.get('unread') === '1'
     const kind = url.searchParams.get('kind')

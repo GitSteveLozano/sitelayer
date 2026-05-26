@@ -74,6 +74,7 @@ export const WORKFLOW_NAV: ReadonlyArray<NavItem> = [
   { key: 'estimates', to: '/projects?focus=estimate', label: 'Estimates', icon: FileText },
   { key: 'live-crew', to: '/live-crew', label: 'Live crew', icon: Users },
   { key: 'financial', to: '/financial', label: 'Financial', icon: Receipt },
+  { key: 'assignments', to: '/projects/assignments', label: 'Assignments', icon: Users },
 ]
 
 export const WORKSPACE_NAV: ReadonlyArray<NavItem> = [
@@ -83,6 +84,7 @@ export const WORKSPACE_NAV: ReadonlyArray<NavItem> = [
   { key: 'bonus', to: '/more/bonus-sim', label: 'Bonus simulator', icon: SlidersHorizontal },
   { key: 'audit', to: '/more/audit', label: 'Audit log', icon: ShieldCheck },
   { key: 'dispatch', to: '/more/dispatch-lanes', label: 'Dispatch lanes', icon: Route },
+  { key: 'notify-queue', to: '/more/notifications-queue', label: 'Notification queue', icon: ScrollText },
 ]
 
 export const YOU_NAV: ReadonlyArray<NavItem> = [

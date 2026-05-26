@@ -669,3 +669,15 @@ export {
   type RentalRequestListResponse,
   type RentalRequestStatus,
 } from './rental-requests'
+
+// Phase 3.1 — admin notification queue (isolated block; see notifications-queue.ts)
+export {
+  fetchNotificationQueue,
+  notificationQueueKeys,
+  useDispatchNotificationEvent,
+  useNotificationQueue,
+  type NotificationQueueListParams,
+  type NotificationQueueListResponse,
+  type NotificationQueueRow,
+  type NotificationSnapshot,
+} from './notifications-queue'

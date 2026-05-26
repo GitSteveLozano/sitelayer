@@ -121,6 +121,22 @@ export function QboConnectionScreen() {
           </Card>
         </Link>
 
+        <Link to="/more/integrations/qbo/custom-fields" className="block">
+          <Card>
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[14px] font-semibold">Custom fields</div>
+                <div className="text-[12px] text-ink-3 mt-0.5">
+                  Map QBO custom-field definitions per entity (Estimate / Invoice / Bill / PO).
+                </div>
+              </div>
+              <span className="text-ink-4" aria-hidden="true">
+                ›
+              </span>
+            </div>
+          </Card>
+        </Link>
+
         <QboOvertimeMappingCard />
 
         {error ? <div className="text-[12px] text-warn">{error}</div> : null}
