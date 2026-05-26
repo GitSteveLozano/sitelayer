@@ -1,22 +1,32 @@
 /**
  * Mobile estimate review. Shows the project's estimate lines + totals
- * with a send CTA. Sourced from /api/projects/:id/summary which is
- * already populated server-side.
+ * with a send CTA. KPIs / AI stripe / scope tree come from
+ * /api/projects/:id/summary; the editable line list comes from the
+ * `useEstimateBuilder` machine (GET /api/projects/:id/estimate/scope-vs-bid),
+ * whose lines carry the `id` that PATCH /api/estimate-lines/:id targets.
+ *
+ * Inline editing: each line exposes quantity + rate fields. Edits stage
+ * on the machine (keyed on service_item_code) and flush through a 700ms
+ * debounced SAVE → PATCH. The returned scope_vs_bid refreshes totals; a
+ * 409 reloads the snapshot and shows a conflict banner.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { apiGet, type ProjectSummary } from '@/lib/api'
+import { apiGet, getActiveCompanySlug, type ProjectSummary } from '@/lib/api'
+import { useEstimateBuilder } from '@/machines/estimate-builder'
+import type { EstimateLine } from '../../lib/api/estimate.js'
 import { createEstimatePush } from '../../lib/api/estimate-pushes.js'
 import {
+  MBanner,
   MBody,
   MButton,
   MButtonStack,
   MI,
+  MInput,
   MKpi,
   MKpiRow,
   MPill,
   MListInset,
-  MListRow,
   MSectionH,
   MTopBar,
 } from '../../components/m/index.js'
@@ -32,6 +42,22 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   const [error, setError] = useState<string | null>(null)
   const [creatingPush, setCreatingPush] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+
+  // Editable line list + totals. The machine owns the scope-vs-bid
+  // snapshot (whose lines carry `id`), staged edits, and save/conflict UI
+  // state. The summary above stays the source for KPIs / AI stripe.
+  const builder = useEstimateBuilder(projectId, getActiveCompanySlug())
+
+  // Debounced auto-save (700ms) — mirrors the desktop estimate-builder.
+  const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (!builder.hasDirtyEdits) return
+    if (saveTimer.current) clearTimeout(saveTimer.current)
+    saveTimer.current = setTimeout(() => builder.save(), 700)
+    return () => {
+      if (saveTimer.current) clearTimeout(saveTimer.current)
+    }
+  }, [builder])
 
   const handleSendToClient = async () => {
     if (!projectId) return
@@ -87,14 +113,20 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   }
 
   const m = summary.metrics
-  const lines = summary.estimateLines
+  // Editable lines come from the builder snapshot (they carry `id`). Fall
+  // back to the summary lines for the scope tree / empty-state guard.
+  const editableLines = builder.lines
+  const summaryLines = summary.estimateLines
+  // Live total: prefer the machine snapshot (updates as edits save) and
+  // fall back to the summary metric before the snapshot loads.
+  const liveTotal = builder.snapshot?.scope_total ?? m.estimateTotal
 
   return (
     <>
       <MTopBar back title="Estimate" sub={summary.project.name} onBack={() => navigate(`/projects/${projectId}`)} />
       <MBody>
         <MKpiRow cols={2}>
-          <MKpi label="Total" value={formatMoney(m.estimateTotal)} />
+          <MKpi label="Total" value={formatMoney(liveTotal)} />
           <MKpi
             label="Margin"
             value={`${(m.margin.margin * 100).toFixed(0)}%`}
@@ -116,26 +148,49 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
             {formatMoney(m.subCost)}.
           </MAiStripe>
         </div>
-        <MSectionH>Line items</MSectionH>
-        {lines.length === 0 ? (
+
+        {builder.error ? (
+          <div style={{ padding: '0 16px', marginTop: 12 }}>
+            <MBanner
+              tone={builder.conflict ? 'warn' : 'error'}
+              title={builder.conflict ? 'Estimate refreshed' : 'Could not save'}
+              body={
+                builder.conflict
+                  ? 'Another device changed this estimate while you were editing — your view has been refreshed.'
+                  : builder.error
+              }
+              action={
+                <MButton variant="ghost" size="sm" onClick={() => builder.dismissError()}>
+                  Dismiss
+                </MButton>
+              }
+            />
+          </div>
+        ) : null}
+
+        <MSectionH>{builder.isSaving ? 'Line items · saving…' : 'Line items'}</MSectionH>
+        {summaryLines.length === 0 && editableLines.length === 0 ? (
           <div style={{ padding: '0 16px', color: 'var(--m-ink-3)', fontSize: 13 }}>
             No line items yet. Run takeoff first, then recompute the estimate.
           </div>
         ) : (
           <>
-            <EstimateScopeTree lines={lines} />
+            <EstimateScopeTree lines={summaryLines.length > 0 ? summaryLines : editableLines} />
             <MSectionH>Builder</MSectionH>
-            <MListInset>
-              {lines.map((line, i) => (
-                <MListRow
-                  key={`${line.service_item_code}-${i}`}
-                  leading={<MI.FileText size={18} />}
-                  headline={line.service_item_code}
-                  supporting={`${line.quantity} ${line.unit} @ ${formatMoney(Number(line.rate))}`}
-                  trailing={<span className="num">{formatMoney(Number(line.amount))}</span>}
-                />
-              ))}
-            </MListInset>
+            {builder.isLoading && editableLines.length === 0 ? (
+              <MSkeletonList count={3} />
+            ) : (
+              <MListInset>
+                {editableLines.map((line) => (
+                  <EstimateLineEditor
+                    key={line.id}
+                    line={line}
+                    pending={builder.pendingEdits[line.service_item_code] ?? null}
+                    onEdit={builder.editLine}
+                  />
+                ))}
+              </MListInset>
+            )}
           </>
         )}
         {createError ? (
@@ -143,8 +198,16 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
         ) : null}
         <div style={{ padding: 16 }}>
           <MButtonStack>
-            <MButton variant="primary" onClick={handleSendToClient} disabled={creatingPush || lines.length === 0}>
-              {creatingPush ? 'Drafting…' : 'Send to client'}
+            <MButton
+              variant="primary"
+              onClick={handleSendToClient}
+              disabled={creatingPush || builder.hasDirtyEdits || builder.isSaving || editableLines.length === 0}
+            >
+              {creatingPush
+                ? 'Drafting…'
+                : builder.hasDirtyEdits || builder.isSaving
+                  ? 'Saving edits…'
+                  : 'Send to client'}
             </MButton>
             <MButton variant="ghost" onClick={() => navigate(`/projects/${projectId}`)}>
               Back to project
@@ -156,7 +219,93 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   )
 }
 
-function EstimateScopeTree({ lines }: { lines: ProjectSummary['estimateLines'] }) {
+/**
+ * One editable estimate line: quantity + rate inputs with a live amount.
+ * Edits stage on the builder machine (keyed on service_item_code); the
+ * screen's debounced SAVE flushes them through PATCH /api/estimate-lines/:id.
+ */
+function EstimateLineEditor({
+  line,
+  pending,
+  onEdit,
+}: {
+  line: EstimateLine
+  pending: { quantity?: number; override_rate?: number | null } | null
+  onEdit: (edit: { service_item_code: string; quantity?: number; override_rate?: number | null }) => void
+}) {
+  const [qtyDraft, setQtyDraft] = useState<string>(() => formatNum(line.quantity))
+  const [rateDraft, setRateDraft] = useState<string>(() => formatNum(line.rate))
+
+  // Re-sync from the snapshot when a save lands (no pending edit in flight),
+  // so a recompute / conflict-reload repaints the inputs.
+  useEffect(() => {
+    if (!pending) {
+      setQtyDraft(formatNum(line.quantity))
+      setRateDraft(formatNum(line.rate))
+    }
+  }, [line.quantity, line.rate, pending])
+
+  const qty = pending?.quantity ?? Number(line.quantity)
+  const rate = pending?.override_rate ?? Number(line.rate)
+  const amount = (Number.isFinite(qty) ? qty : 0) * (Number.isFinite(rate) ? rate : 0)
+
+  return (
+    <div style={{ padding: '10px 16px', borderTop: '1px solid var(--m-line)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <MI.FileText size={18} />
+        <div style={{ minWidth: 0, flex: 1, fontSize: 14, fontWeight: 600 }}>{line.service_item_code}</div>
+        <span className="num" style={{ fontSize: 14, fontWeight: 600 }}>
+          {formatMoney(amount)}
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+        <label style={{ flex: 1, fontSize: 11, color: 'var(--m-ink-3)' }}>
+          Qty ({line.unit})
+          <MInput
+            type="number"
+            inputMode="decimal"
+            step="0.01"
+            aria-label={`quantity for ${line.service_item_code}`}
+            value={qtyDraft}
+            onChange={(e) => {
+              setQtyDraft(e.target.value)
+              const next = Number(e.target.value)
+              if (Number.isFinite(next)) onEdit({ service_item_code: line.service_item_code, quantity: next })
+            }}
+          />
+        </label>
+        <label style={{ flex: 1, fontSize: 11, color: 'var(--m-ink-3)' }}>
+          Rate
+          <MInput
+            type="number"
+            inputMode="decimal"
+            step="0.01"
+            aria-label={`rate for ${line.service_item_code}`}
+            value={rateDraft}
+            onChange={(e) => {
+              setRateDraft(e.target.value)
+              const next = Number(e.target.value)
+              if (Number.isFinite(next)) onEdit({ service_item_code: line.service_item_code, override_rate: next })
+            }}
+          />
+        </label>
+      </div>
+      {pending ? (
+        <div style={{ fontSize: 11, color: 'var(--m-accent)', marginTop: 4 }}>Edited · saving shortly</div>
+      ) : null}
+    </div>
+  )
+}
+
+function formatNum(raw: string | number): string {
+  const n = Number(raw)
+  if (!Number.isFinite(n)) return '0'
+  return String(n)
+}
+
+type ScopeTreeLine = { service_item_code: string; amount: string }
+
+function EstimateScopeTree({ lines }: { lines: ScopeTreeLine[] }) {
   const groups = new Map<string, { count: number; amount: number }>()
   for (const line of lines) {
     const group = line.service_item_code.split(/[-_.]/)[0] || line.service_item_code

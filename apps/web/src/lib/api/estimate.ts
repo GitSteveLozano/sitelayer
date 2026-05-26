@@ -9,6 +9,8 @@ import { API_URL, request } from './client'
 export type BidVsScopeStatus = 'ok' | 'warn' | 'mismatch'
 
 export interface EstimateLine {
+  /** estimate_lines.id — present on scope-vs-bid responses; the target for PATCH /api/estimate-lines/:id. */
+  id: string
   service_item_code: string
   quantity: string
   unit: string
@@ -16,6 +18,39 @@ export interface EstimateLine {
   amount: string
   division_code: string | null
   created_at: string
+}
+
+export interface UpdateEstimateLineInput {
+  /** New quantity. Omit to leave unchanged. */
+  quantity?: number
+  /** New unit rate. Omit to leave unchanged. */
+  rate?: number
+  /**
+   * Optimistic guard: the `amount` the client last saw for this line.
+   * On mismatch the API returns 409 so the caller can reload. Omit to
+   * opt out of the guard.
+   */
+  expected_amount?: number
+}
+
+export interface UpdateEstimateLineResponse {
+  line: EstimateLine
+  scope_vs_bid: ScopeVsBidResponse
+}
+
+/**
+ * PATCH /api/estimate-lines/:id — edit one estimate line's quantity/rate
+ * in place. Returns the updated line plus the refreshed scope-vs-bid
+ * snapshot for the line's draft so callers can repaint totals in one hop.
+ */
+export function updateEstimateLine(
+  lineId: string,
+  input: UpdateEstimateLineInput,
+): Promise<UpdateEstimateLineResponse> {
+  return request<UpdateEstimateLineResponse>(`/api/estimate-lines/${encodeURIComponent(lineId)}`, {
+    method: 'PATCH',
+    json: input,
+  })
 }
 
 export interface ScopeVsBidResponse {

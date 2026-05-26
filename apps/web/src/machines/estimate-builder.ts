@@ -3,7 +3,13 @@ import { useMachine } from '@xstate/react'
 import { assign, fromPromise, setup } from 'xstate'
 
 import { ApiError, request } from '../lib/api/client'
-import { fetchScopeVsBid, type EstimateLine, type ScopeVsBidResponse } from '../lib/api/estimate'
+import {
+  fetchScopeVsBid,
+  updateEstimateLine,
+  type EstimateLine,
+  type ScopeVsBidResponse,
+  type UpdateEstimateLineInput,
+} from '../lib/api/estimate'
 
 /**
  * Headless estimate-builder UI state machine.
@@ -19,13 +25,16 @@ import { fetchScopeVsBid, type EstimateLine, type ScopeVsBidResponse } from '../
  *   - `input`-pattern initial context so React can re-mount with a new
  *     project id and the machine resets cleanly
  *
- * Save semantics (slice constraint): the API does not (yet) expose
- * `PATCH /api/estimate-lines/:id`. Instead the line-level edits land on
- * `takeoff_measurements` and `recompute` rebuilds the snapshot. Until the
- * per-line PATCH lands, the SAVE actor is wired against the recompute path
- * and the dirty queue from the screen is stored on context so the next
- * save flushes everything in one call. A 409 from any save reloads the
- * snapshot and surfaces a conflict toast — same contract as estimate-push.
+ * Save semantics: line-level edits flush through `PATCH
+ * /api/estimate-lines/:id`. The screen stages edits keyed on
+ * `service_item_code` (the only stable handle the line-row UI has); the
+ * SAVE actor resolves each code → the line's `id` + last-seen `amount`
+ * from the current snapshot, then PATCHes the changed lines in parallel.
+ * The `expected_amount` guard turns a concurrent recompute / other-device
+ * edit into a 409, which reloads the snapshot and surfaces a conflict
+ * toast — same contract as estimate-push. The last successful PATCH's
+ * `scope_vs_bid` becomes the new snapshot so totals refresh without an
+ * extra round-trip.
  *
  * EDIT_LINE doesn't transition states; it stages a change in `pendingEdits`
  * which the screen drains on a debounced SAVE.
@@ -56,7 +65,12 @@ type Event =
   | { type: 'DISMISS_ERROR' }
 
 type LoadInput = { projectId: string }
-type SaveInput = { projectId: string; edits: Record<string, PendingLineEdit> }
+type SaveInput = {
+  projectId: string
+  edits: Record<string, PendingLineEdit>
+  /** Current snapshot lines, used to resolve service_item_code → line id + expected amount. */
+  lines: EstimateLine[]
+}
 type RecomputeInput = { projectId: string }
 
 type SaveOutput =
@@ -81,13 +95,39 @@ export const estimateBuilderMachine = setup({
       return fetchScopeVsBid(input.projectId)
     }),
     submitEdits: fromPromise<SaveOutput, SaveInput>(async ({ input }) => {
-      // INTEGRATION TODO: when `PATCH /api/estimate-lines/:id` lands, replace
-      // this body with a parallel batch of PATCHes keyed on
-      // `input.edits[code].override_rate / quantity`. Until then the takeoff
-      // → recompute path is the source of truth and we forward through it.
+      // Resolve each staged edit (keyed on service_item_code) to the
+      // backing estimate_lines row so we can PATCH /api/estimate-lines/:id.
+      // A code with no matching line (e.g. removed by a concurrent
+      // recompute) is dropped — the next reload reconciles it.
+      const lineByCode = new Map(input.lines.map((line) => [line.service_item_code, line]))
+      const patches = Object.entries(input.edits).flatMap(([code, edit]) => {
+        const line = lineByCode.get(code)
+        if (!line) return []
+        const body: UpdateEstimateLineInput = { expected_amount: Number(line.amount) }
+        if (edit.quantity !== undefined) body.quantity = edit.quantity
+        if (edit.override_rate !== undefined && edit.override_rate !== null) body.rate = edit.override_rate
+        // Nothing actually changed for this line — skip the round-trip.
+        if (body.quantity === undefined && body.rate === undefined) return []
+        return [{ id: line.id, body }]
+      })
+
+      if (patches.length === 0) {
+        // No resolvable changes; treat as a no-op success against the
+        // freshest snapshot so the UI clears its dirty state cleanly.
+        const fresh = await fetchScopeVsBid(input.projectId)
+        return { kind: 'ok', snapshot: fresh }
+      }
+
       try {
-        const refresh = await recomputeProjectEstimate(input.projectId)
-        return { kind: 'ok', snapshot: refresh.scope_vs_bid }
+        // Run sequentially so a mid-batch 409 short-circuits the rest and
+        // we don't fire writes against a snapshot we already know is stale.
+        let latest: ScopeVsBidResponse | null = null
+        for (const patch of patches) {
+          const result = await updateEstimateLine(patch.id, patch.body)
+          latest = result.scope_vs_bid
+        }
+        const snapshot = latest ?? (await fetchScopeVsBid(input.projectId))
+        return { kind: 'ok', snapshot }
       } catch (caught) {
         if (caught instanceof ApiError && caught.status === 409) {
           try {
@@ -167,7 +207,11 @@ export const estimateBuilderMachine = setup({
     saving: {
       invoke: {
         src: 'submitEdits',
-        input: ({ context }) => ({ projectId: context.projectId, edits: context.pendingEdits }),
+        input: ({ context }) => ({
+          projectId: context.projectId,
+          edits: context.pendingEdits,
+          lines: context.snapshot?.lines ?? [],
+        }),
         onDone: [
           {
             target: 'conflict',
