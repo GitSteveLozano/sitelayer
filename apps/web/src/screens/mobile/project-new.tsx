@@ -16,11 +16,13 @@ import {
   MButton,
   MButtonStack,
   MInput,
+  MPill,
   MSectionH,
   MSelect,
   MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
+import { CustomerDedupPicker, type CustomerMatch } from './customer-dedup-picker.js'
 
 const DIVISIONS = ['D1', 'D2', 'D3', 'D4', 'D5'] as const
 
@@ -28,6 +30,14 @@ export function MobileProjectNew({ companySlug }: { companySlug: string }) {
   const navigate = useNavigate()
   const [name, setName] = useState('')
   const [customerName, setCustomerName] = useState('')
+  // Dedup linkage: when the estimator adopts an existing customer (via the
+  // QuickBooks-style dedup picker) we link the project to that record's id
+  // instead of minting a duplicate. `linkedCustomer` also drives the
+  // "Linked to …" confirmation chip + suppresses the match prompt.
+  const [linkedCustomer, setLinkedCustomer] = useState<CustomerMatch | null>(null)
+  // The user explicitly chose "create new" for the current typed name —
+  // remember it so the prompt doesn't immediately re-appear for that name.
+  const [dismissedFor, setDismissedFor] = useState<string | null>(null)
   const [divisionCode, setDivisionCode] = useState<(typeof DIVISIONS)[number]>('D4')
   const [bidTotal, setBidTotal] = useState('')
   const [laborRate, setLaborRate] = useState('')
@@ -57,6 +67,10 @@ export function MobileProjectNew({ companySlug }: { companySlug: string }) {
         {
           name: name.trim(),
           customer_name: customerName.trim(),
+          // When the estimator linked to an existing customer through the
+          // dedup picker, carry that customer's id so the server attaches the
+          // project to the real record instead of creating a duplicate.
+          ...(linkedCustomer ? { customer_id: linkedCustomer.customer.id } : {}),
           division_code: divisionCode,
           bid_total: bidTotal ? Number(bidTotal) : 0,
           labor_rate: laborRate ? Number(laborRate) : 0,
@@ -75,6 +89,22 @@ export function MobileProjectNew({ companySlug }: { companySlug: string }) {
     } finally {
       setBusy(false)
     }
+  }
+
+  // Adopt an existing customer from the dedup picker: snap the name to the
+  // canonical (QBO label when present, else roster name) and record the link.
+  const handleLinkCustomer = (match: CustomerMatch) => {
+    setLinkedCustomer(match)
+    setCustomerName(match.qboLabel ?? match.customer.name)
+    setDismissedFor(null)
+  }
+
+  // User edited the customer field — drop any existing link (the typed name
+  // no longer necessarily refers to the linked record) and re-arm matching.
+  const handleCustomerChange = (value: string) => {
+    setCustomerName(value)
+    if (linkedCustomer) setLinkedCustomer(null)
+    if (dismissedFor !== null) setDismissedFor(null)
   }
 
   return (
@@ -98,13 +128,45 @@ export function MobileProjectNew({ companySlug }: { companySlug: string }) {
             <MInput
               id={customerId}
               value={customerName}
-              onChange={(e) => setCustomerName(e.currentTarget.value)}
+              onChange={(e) => handleCustomerChange(e.currentTarget.value)}
               placeholder="Foxridge Homes"
               aria-invalid={customerError ? true : undefined}
               aria-describedby={customerError ? `${customerId}-err` : undefined}
               aria-required="true"
             />
+            {linkedCustomer ? (
+              <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <MPill tone="green" dot>
+                  Linked to existing customer
+                </MPill>
+                <button
+                  type="button"
+                  onClick={() => setLinkedCustomer(null)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    color: 'var(--m-ink-3)',
+                    fontSize: 12,
+                    textDecoration: 'underline',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Unlink
+                </button>
+              </div>
+            ) : null}
           </Field>
+        </div>
+        {dismissedFor !== customerName.trim() ? (
+          <CustomerDedupPicker
+            typedName={customerName}
+            linkedCustomerId={linkedCustomer?.customer.id ?? null}
+            onLink={handleLinkCustomer}
+            onCreateNew={() => setDismissedFor(customerName.trim())}
+          />
+        ) : null}
+        <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <Field label="Division">
             <MSelect
               value={divisionCode}

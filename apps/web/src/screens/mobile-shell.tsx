@@ -81,6 +81,7 @@ const WorkerLog = lazy(() => import('./mobile/worker-log.js').then((m) => ({ def
 const ForemanToday = lazy(() => import('./mobile/foreman-today.js').then((m) => ({ default: m.ForemanToday })))
 const ForemanField = lazy(() => import('./mobile/foreman-field.js').then((m) => ({ default: m.ForemanField })))
 const ForemanCrew = lazy(() => import('./mobile/foreman-crew.js').then((m) => ({ default: m.ForemanCrew })))
+const ForemanMap = lazy(() => import('./mobile/foreman-map.js').then((m) => ({ default: m.ForemanMap })))
 const ForemanBrief = lazy(() => import('./mobile/foreman-brief.js').then((m) => ({ default: m.ForemanBrief })))
 const ForemanLog = lazy(() => import('./mobile/foreman-log.js').then((m) => ({ default: m.ForemanLog })))
 const ForemanBlockerDetail = lazy(() =>
@@ -315,6 +316,8 @@ export function MobileShell({
             />
             <Route path="crew" element={<ForemanCrew bootstrap={bootstrap} />} />
             <Route path="crew/*" element={<ForemanCrew bootstrap={bootstrap} />} />
+            <Route path="map" element={<ForemanMap bootstrap={bootstrap} companySlug={companySlug} />} />
+            <Route path="map/*" element={<ForemanMap bootstrap={bootstrap} companySlug={companySlug} />} />
             <Route
               path="log"
               element={
@@ -415,7 +418,7 @@ function inferRoleModeFromPath(pathname: string, basePath: string): RoleMode | n
   ) {
     return 'admin'
   }
-  if (segment === 'crew' || segment === 'field' || segment === 'brief' || segment === 'foreman') {
+  if (segment === 'crew' || segment === 'map' || segment === 'field' || segment === 'brief' || segment === 'foreman') {
     return 'foreman'
   }
   if (segment === 'scope' || segment === 'hours' || segment === 'clockin' || segment === 'issue') {
