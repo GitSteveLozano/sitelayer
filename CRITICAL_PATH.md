@@ -4,7 +4,7 @@
 **Today:** Production and preview infrastructure are live on DigitalOcean; prod deploys use immutable registry images through GitHub Actions; Clerk, Spaces, TLS, backups, and baseline observability are wired. Blueprint uploads stream multipart through the API directly to Spaces, with presigned download URLs.
 **Next:** validate live QBO sync end to end, then onboard the first pilot company.
 
-**Mesh coordination:** project `sitelayer` / ID `282`; follow-up task chain `sitelayer-deploy-reconcile-20260423`
+**Mesh coordination:** project `sitelayer` / ID `282`. (Historical: the task chain `sitelayer-deploy-reconcile-20260423` no longer exists in mesh — pilot-onboarding state has moved past it. Use the live mesh project `sitelayer` / ID `282` and its open health-emitter tasks as the source of truth.)
 
 ---
 

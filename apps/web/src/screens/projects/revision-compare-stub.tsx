@@ -10,19 +10,18 @@ import { computeRasterDiff, type DiffMode, type DiffResult } from '@/lib/bluepri
 /**
  * `prj-revision-compare-stub` — plan revision compare overlay.
  *
- * Ships a working visual diff. The picker + before/after file URLs are
- * unchanged; the placeholder "coming soon" body is replaced with a real
- * comparison surface:
+ * Ships a working visual diff. A revision picker selects the before/after
+ * blueprint pair and the surface renders a live comparison:
  *
- *   - Stored diffs (approach #1): `blueprint_page_diffs` (migration 037)
- *     exists, but no API route serves those rows yet (the migration itself
- *     documents the image-diff worker as an unshipped follow-on). When that
- *     endpoint lands, `RevisionDiffSurface` is where it plugs in.
  *   - Client-side raster diff (approach #2, live): both revisions' page
  *     images are loaded as authenticated object URLs, drawn onto a canvas,
  *     and compared per-pixel by perceived luminance. Ink added between
  *     revisions reads BLUE; ink removed reads RED. The estimator gets an
  *     opacity slider plus an Overlay / Side-by-side / Difference toggle.
+ *   - Stored diffs (approach #1): `blueprint_page_diffs` (migration 037)
+ *     exists, but no API route serves those rows yet, so nothing reads the
+ *     stored diffs today. When that endpoint lands, `RevisionDiffSurface`
+ *     is where it plugs in.
  *
  * Limitation: the raster diff only runs on image revisions (PNG/JPG/WEBP).
  * PDF revisions can't be rasterized client-side here (no pdf.js in the

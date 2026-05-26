@@ -7,6 +7,12 @@ This is the operating contract for shipping changes to the production
 (`sitelayer-db`). Locked down in advance of the pilot so that a single
 careless merge cannot break a paying customer.
 
+> **Canonical production IP:** the reserved IP `159.203.51.158` is the
+> canonical address for the production droplet (see `CLAUDE.md` →
+> Current Infrastructure Snapshot). The bare `165.245.230.3` used in the
+> `ssh` examples below is the droplet's current public IPv4; prefer the
+> reserved IP, which survives droplet replacement.
+
 ## Hard rules
 
 1. **No commit to `main` lands without going through preview first.**

@@ -326,18 +326,18 @@ export function buildShareUrl(portalBaseUrl: string, token: string): string {
 // Lifecycle helper — best-effort transition. The project-lifecycle
 // workflow module (`apps/api/src/routes/project-lifecycle.ts` + the
 // pure reducer in `packages/workflows/src/project-lifecycle.ts`,
-// migration 048) is built in parallel. We can't import the reducer
-// directly without editing `packages/workflows/src/index.ts` (forbidden
-// by the integration contract for this PR), so this helper writes the
-// same SEND/ACCEPT/DECLINE transitions inline using the same column
-// names and `workflow_event_log` shape the lifecycle endpoint will use.
+// migration 048) now ships. This helper still writes the SEND/ACCEPT/
+// DECLINE transitions inline using the same column names and
+// `workflow_event_log` shape the lifecycle endpoint uses, rather than
+// delegating to that reducer — an intentional deferred refactor, not a
+// missing dependency.
 //
 // The transition table here is a strict subset of the canonical reducer
 // (SEND: estimating→sent, ACCEPT: sent→accepted, DECLINE: sent→declined).
 // Anything else is a no-op so the share row remains the source of truth
-// even when the lifecycle is in an unexpected state. Once the lifecycle
-// route module ships, this helper should switch to invoking it via the
-// internal lifecycle event endpoint — see INTEGRATION TODO.
+// even when the lifecycle is in an unexpected state. A future cleanup
+// should collapse this onto the canonical reducer via the lifecycle event
+// path instead of duplicating the transition table here.
 // ---------------------------------------------------------------------------
 
 export type LifecycleEventKind = 'SEND' | 'ACCEPT' | 'DECLINE'

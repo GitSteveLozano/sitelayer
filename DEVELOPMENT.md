@@ -54,18 +54,16 @@ If port `3000` is busy, Vite prints the next available URL.
 
 ## App Routes
 
-- `/confirm` - daily schedule confirmation and crew review
-- `/clock` - crew clock-in/out and timeline
-- `/schedule` - weekly crew schedule grid
-- `/projects` - auth shell, company switcher, customers, workers, pricing, bonus rules
-- `/takeoffs` and `/takeoffs/:projectId` - project selection, blueprint documents, takeoff board, labor, schedules, material bills
-- `/estimates` - selected project summary, estimate lines, analytics
-- `/integrations` - QBO connection, queue health, mappings, offline queue
+The canonical runtime shell is `apps/web/src/screens/mobile-shell.tsx` (`MobileShell`), mounted at `App.tsx`'s `/*` via `routes/workspace.tsx`. It carries its own inline route table, including the `projects/:projectId/*` and `rentals/*` catchalls. Add a new reachable mobile route inside `mobile-shell.tsx` **before** the catchalls, or mount a full-screen route directly in `App.tsx`/`more.tsx`/`financial.tsx`. The standalone files `routes/{projects,rentals,schedule,home,time,log,crew}.tsx` are legacy/dead — never mounted under the shell (and being removed), so do not add routes there.
+
+Legacy/specialized paths still reachable for orientation (not an exhaustive list — read `mobile-shell.tsx` and `App.tsx` for the live table):
+
 - `/onboarding` - company creation wizard
-- `/rentals` - admin/office rental ledger
-- `/bonus-sim` - admin bonus simulation
-- `/audit` - admin/owner audit trail
-- `/dev/*` - non-production scratch space for generated UI
+- `/financial/*` - admin financial hub (full-screen)
+- `/projects/:id/*` - full-viewport project deep routes (setup, takeoff, estimate-builder, rental-contract)
+- `/portal/*` - public client portal (signed estimate / rentals)
+- `/m-preview` - dev-only primitive showcase
+- `/m/*` - legacy alias of the mobile shell
 
 ## Ribbon Colors
 

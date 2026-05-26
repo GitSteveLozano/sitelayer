@@ -5,7 +5,8 @@
 -- foreman doesn't have to be in the app to know.
 --
 -- Shape:
---   - `kind` matches the chip row in apps/web-v2/src/screens/worker/issue-modal.tsx:
+--   - `kind` matches the chip row in apps/web/src/screens/mobile/worker-issue.tsx
+--     (formerly apps/web-v2/src/screens/worker/issue-modal.tsx; web-v2 retired per ADR 0003):
 --       materials_out | crew_short | safety | other
 --     Stored as text rather than an enum so adding a new chip later is a
 --     migration of allowed values, not a schema-change rebuild.

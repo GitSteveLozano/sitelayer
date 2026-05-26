@@ -39,7 +39,7 @@ There is **one web app** at `apps/web/`. The old parallel frontend track was rem
 
 State management has fixed homes:
 
-- **Long-lived UI orchestration** → XState machines under `apps/web/src/machines/`. Use one when state has multiple modes (idle / loading / error / submitting) and survives across mounts.
+- **Long-lived UI orchestration** → XState machines under `apps/web/src/machines/`. Use one when state has multiple modes (idle / loading / error / submitting) and survives across mounts. Copy an existing exemplar: `project-lifecycle.ts`, `estimate-push.ts`, `time-review.ts`, `crew-schedule.ts`, `billing-review.ts`, or `field-event.ts`; follow [`docs/DETERMINISTIC_WORKFLOWS.md`](./docs/DETERMINISTIC_WORKFLOWS.md) for the reducer shape.
 - **Data fetching + caching** → TanStack Query under `apps/web/src/lib/api/`. Resource-shaped hooks (`useProjects`, `useEstimatePush`, etc.).
 - **Backend workflows** → deterministic temporal.io-style reducers in `packages/workflows/`. Pure transition function, state version, headless UI. See [`docs/DETERMINISTIC_WORKFLOWS.md`](./docs/DETERMINISTIC_WORKFLOWS.md).
 - **Single HTTP client** → `apps/web/src/lib/api/client.ts:request<T>()`. Never invent a parallel fetcher. `api-v1-compat.ts` is closed for new exports — it delegates to `request<T>()` for legacy XState machines.
@@ -48,7 +48,7 @@ Mutations cross-system through the **outbox**: API writes to `mutation_outbox` (
 
 Where new code goes:
 
-- New screen → `apps/web/src/screens/mobile/<name>.tsx`.
+- New screen → `apps/web/src/screens/mobile/<name>.tsx`, then wire its route into `apps/web/src/screens/mobile-shell.tsx` (the runtime `MobileShell`) **before** the `projects/:projectId/*` and `rentals/*` catchalls, or mount a full-screen route directly in `App.tsx`/`more.tsx`/`financial.tsx`. `routes/{projects,rentals,schedule,home,time,log,crew}.tsx` are legacy/dead (never mounted under the shell, and being removed) — don't add routes there.
 - New primitive → `apps/web/src/components/m/` (lowercase).
 - New durable UI machine → `apps/web/src/machines/<name>.ts`.
 - New backend workflow → `packages/workflows/<name>.ts`.

@@ -11,8 +11,9 @@
  * shell deliberately hides tabs the active context doesn't surface — a
  * worker never sees Field, a foreman never sees Reports.
  *
- * Implementation note: for Phase 2 the per-tab screens are placeholders.
- * Each phase from 3 onward replaces a placeholder with a real screen.
+ * Implementation note: every per-tab screen is a real, lazy-loaded screen
+ * (no remaining placeholders). The canonical app shell is mounted at the
+ * App.tsx `/*` route; `/m/*` is retained only as a legacy alias.
  */
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'

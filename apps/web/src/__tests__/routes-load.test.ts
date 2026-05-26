@@ -9,14 +9,8 @@ import { describe, expect, test } from 'vitest'
 // When adding a new top-level route to App.tsx, add it here too.
 
 const ROUTES: ReadonlyArray<readonly [string, () => Promise<{ default: unknown }>]> = [
-  ['home', () => import('@/routes/home')],
   ['workspace', () => import('@/routes/workspace')],
-  ['projects', () => import('@/routes/projects')],
-  ['time', () => import('@/routes/time')],
-  ['rentals', () => import('@/routes/rentals')],
   ['more', () => import('@/routes/more')],
-  ['log', () => import('@/routes/log')],
-  ['schedule', () => import('@/routes/schedule')],
   ['live-crew', () => import('@/routes/live-crew')],
   ['bid-accuracy', () => import('@/routes/bid-accuracy')],
   ['financial', () => import('@/routes/financial')],
