@@ -864,6 +864,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       handleEstimateRoutes(req, url, {
         pool,
         company,
+        currentUserId,
         requireRole: requireRoleStr,
         readBody,
         sendJson,

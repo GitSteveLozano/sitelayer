@@ -10,6 +10,7 @@ import {
   type LedgerExecutor,
 } from '../mutation-tx.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
+import { assertServiceItemCatalogStatus, rejectionMessageForCatalog } from '../catalog.js'
 import { buildEstimatePdfInputFromSummary, type EstimatePdfInput } from '../pdf.js'
 import { resolvePrices } from '../pricing.js'
 import { summarizeProject } from './projects.js'
@@ -19,6 +20,8 @@ import { resolveDefaultDraftId, validateDraftId } from './takeoff-drafts.js'
 export type EstimateRouteCtx = {
   pool: Pool
   company: ActiveCompany
+  /** Clerk user id of the caller; stamped on the audit/sync ledger for line edits. */
+  currentUserId?: string | null
   requireRole: (allowed: readonly string[]) => boolean
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
@@ -251,11 +254,11 @@ export async function getScopeVsBid(
   const linesResult = await withCompanyClient(companyId, (client) =>
     client.query(
       draftId
-        ? `select service_item_code, quantity, unit, rate, amount, division_code, created_at
+        ? `select id, service_item_code, quantity, unit, rate, amount, division_code, created_at
            from estimate_lines
           where company_id = $1 and project_id = $2 and draft_id = $3
           order by created_at asc, service_item_code asc`
-        : `select service_item_code, quantity, unit, rate, amount, division_code, created_at
+        : `select id, service_item_code, quantity, unit, rate, amount, division_code, created_at
            from estimate_lines
           where company_id = $1 and project_id = $2 and draft_id is null
           order by created_at asc, service_item_code asc`,
@@ -403,12 +406,170 @@ async function forecastProjectHours(pool: Pool, companyId: string, projectId: st
  * - POST /api/projects/<id>/estimate/forecast-hours — admin/office; ML forecast
  * - GET  /api/service-items/<code>/divisions         — list xref divisions
  * - PUT  /api/service-items/<code>/divisions         — admin/office; replace set
+ * - PATCH /api/estimate-lines/<id>                     — admin/foreman/office;
+ *                                                       per-line qty/rate edit
+ *                                                       (mobile estimate review +
+ *                                                       desktop builder)
  */
 export async function handleEstimateRoutes(
   req: http.IncomingMessage,
   url: URL,
   ctx: EstimateRouteCtx,
 ): Promise<boolean> {
+  // PATCH /api/estimate-lines/<id> — update a single estimate line's
+  // quantity and/or rate in place. Unlike the recompute path (which
+  // rebuilds every line from takeoff_measurements), this lets the
+  // estimate review screens nudge one line without blowing away manual
+  // edits on siblings.
+  //
+  // Concurrency: estimate_lines carries no `version`/`updated_at` column,
+  // so the optimistic guard is value-based — the client may send
+  // `expected_amount` (the line `amount` it last saw). A mismatch means
+  // another writer (or a recompute) moved the line; we 409 with the
+  // current amount so the client reloads. Omitting `expected_amount`
+  // opts out, matching `assertVersion`'s null-version behavior.
+  //
+  // Catalog: enforced the same way the takeoff measurement writes do —
+  // the line's service_item_code must be in the curated catalog for its
+  // division_code (`assertServiceItemCatalogStatus`).
+  const estimateLineMatch = url.pathname.match(/^\/api\/estimate-lines\/([^/]+)$/)
+  if (req.method === 'PATCH' && estimateLineMatch) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const lineId = decodeURIComponent(estimateLineMatch[1] ?? '')
+    if (!isValidUuid(lineId)) {
+      ctx.sendJson(400, { error: 'estimate line id must be a valid uuid' })
+      return true
+    }
+    const body = await ctx.readBody()
+
+    const hasQuantity = body.quantity !== undefined && body.quantity !== null && body.quantity !== ''
+    const hasRate = body.rate !== undefined && body.rate !== null && body.rate !== ''
+    if (!hasQuantity && !hasRate) {
+      ctx.sendJson(400, { error: 'quantity or rate is required' })
+      return true
+    }
+
+    let quantity: number | null = null
+    if (hasQuantity) {
+      const parsed = Number(body.quantity)
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        ctx.sendJson(400, { error: 'quantity must be a non-negative number' })
+        return true
+      }
+      quantity = parsed
+    }
+    let rate: number | null = null
+    if (hasRate) {
+      const parsed = Number(body.rate)
+      if (!Number.isFinite(parsed) || parsed < 0) {
+        ctx.sendJson(400, { error: 'rate must be a non-negative number' })
+        return true
+      }
+      rate = parsed
+    }
+
+    const hasExpectedAmount =
+      body.expected_amount !== undefined && body.expected_amount !== null && body.expected_amount !== ''
+    let expectedAmount: number | null = null
+    if (hasExpectedAmount) {
+      const parsed = Number(body.expected_amount)
+      if (!Number.isFinite(parsed)) {
+        ctx.sendJson(400, { error: 'expected_amount must be a number' })
+        return true
+      }
+      expectedAmount = parsed
+    }
+
+    const existing = await withCompanyClient(ctx.company.id, (client) =>
+      client.query<{
+        id: string
+        project_id: string
+        draft_id: string | null
+        service_item_code: string
+        quantity: string
+        unit: string
+        rate: string
+        amount: string
+        division_code: string | null
+      }>(
+        `select id, project_id, draft_id, service_item_code, quantity, unit, rate, amount, division_code
+           from estimate_lines
+          where company_id = $1 and id = $2
+          limit 1`,
+        [ctx.company.id, lineId],
+      ),
+    )
+    const line = existing.rows[0]
+    if (!line) {
+      ctx.sendJson(404, { error: 'estimate line not found' })
+      return true
+    }
+
+    // Optimistic guard: round both sides to cents so a string/number
+    // round-trip through numeric(12,2) doesn't produce a phantom conflict.
+    if (expectedAmount !== null && round2(Number(line.amount)) !== round2(expectedAmount)) {
+      ctx.sendJson(409, { error: 'version conflict', current_amount: Number(line.amount) })
+      return true
+    }
+
+    // Catalog enforcement — same gate the takeoff measurement writes use.
+    const catalog = await assertServiceItemCatalogStatus(
+      ctx.pool,
+      ctx.company.id,
+      line.service_item_code,
+      line.division_code,
+    )
+    if (!catalog.ok) {
+      ctx.sendJson(422, { error: rejectionMessageForCatalog(catalog.reason), reason: catalog.reason })
+      return true
+    }
+
+    const nextQuantity = quantity ?? Number(line.quantity)
+    const nextRate = rate ?? Number(line.rate)
+    const nextAmount = round2(nextQuantity * nextRate)
+
+    const updated = await withMutationTx(async (client) => {
+      const result = await client.query<{
+        id: string
+        service_item_code: string
+        quantity: string
+        unit: string
+        rate: string
+        amount: string
+        division_code: string | null
+        created_at: string
+      }>(
+        `update estimate_lines
+            set quantity = $3::numeric, rate = $4::numeric, amount = $5::numeric
+          where company_id = $1 and id = $2
+        returning id, service_item_code, quantity, unit, rate, amount, division_code, created_at`,
+        [ctx.company.id, lineId, String(nextQuantity), String(nextRate), String(nextAmount)],
+      )
+      const row = result.rows[0]
+      if (!row) return null
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'estimate_line',
+        entityId: lineId,
+        action: 'update',
+        row,
+        actorUserId: ctx.currentUserId ?? null,
+      })
+      return row
+    })
+    if (!updated) {
+      ctx.sendJson(404, { error: 'estimate line not found' })
+      return true
+    }
+
+    // Return the refreshed scope-vs-bid snapshot for the line's draft so
+    // the caller can repaint totals without a second round-trip — same
+    // contract the recompute route uses.
+    const scopeVsBid = await getScopeVsBid(ctx.pool, ctx.company.id, line.project_id, { draftId: line.draft_id })
+    ctx.sendJson(200, { line: updated, scope_vs_bid: scopeVsBid })
+    return true
+  }
+
   if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\/recompute$/)) {
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
     const projectId = url.pathname.split('/')[3] ?? ''
