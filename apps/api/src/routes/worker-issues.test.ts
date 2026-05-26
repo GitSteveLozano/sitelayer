@@ -68,7 +68,24 @@ class MemoryStorage implements BlueprintStorage {
 // FakePool — answers the SQL the attachment routes issue.
 // ---------------------------------------------------------------------------
 
-type IssueRow = { id: string; company_id: string }
+type IssueRow = {
+  id: string
+  company_id: string
+  project_id?: string | null
+  worker_id?: string | null
+  reporter_clerk_user_id?: string | null
+  kind?: string
+  message?: string
+  severity?: string
+  resolved_at?: string | null
+  resolved_by_clerk_user_id?: string | null
+  resolved_action?: string | null
+  resolution_message?: string | null
+  state_version?: number
+  escalated_to_estimator_at?: string | null
+  escalation_reason?: string | null
+  created_at?: string
+}
 type AttachmentRow = {
   id: string
   company_id: string
@@ -85,6 +102,7 @@ class FakePool {
   attachments: AttachmentRow[] = []
   outbox: unknown[] = []
   syncEvents: unknown[] = []
+  workflowEvents: unknown[][] = []
   // Auto-incrementing UUIDs simulated as `att-1`, `att-2`, ...
   private idCounter = 0
 
@@ -124,14 +142,88 @@ class FakePool {
       return { rows: row ? [{ id: row.id }] : [], rowCount: row ? 1 : 0 }
     }
 
-    // Issue full-row select used after attachment insert.
+    // Issue full-row select. Used after attachment insert, by the GET
+    // detail / PATCH workflow handler (incl. the `for update` lock load),
+    // and the post-transition refetch. We hand back the full stored row
+    // with workflow-column defaults so the field-event reducer + the
+    // route's `rowToSnapshot` see a coherent shape.
     if (/^select[\s\S]+from\s+worker_issues/i.test(sql)) {
-      const [companyId, issueId] = params as [string, string]
-      const row = this.issues.find((r) => r.company_id === companyId && r.id === issueId)
-      return {
-        rows: row ? [{ ...row, kind: 'safety', message: 'test', created_at: 'now' }] : [],
-        rowCount: row ? 1 : 0,
+      // Param order differs across call sites: the `for update` load + GET
+      // detail bind (company_id, id); the post-transition refetch binds
+      // (id, company_id). Match order-agnostically on the (id, company)
+      // pair so both shapes resolve the same stored row.
+      const [a, b] = params as [string, string]
+      const row = this.issues.find((r) => (r.id === a && r.company_id === b) || (r.id === b && r.company_id === a))
+      if (!row) return { rows: [], rowCount: 0 }
+      const full = {
+        id: row.id,
+        company_id: row.company_id,
+        project_id: row.project_id ?? null,
+        worker_id: row.worker_id ?? null,
+        reporter_clerk_user_id: row.reporter_clerk_user_id ?? 'reporter-1',
+        kind: row.kind ?? 'materials_out',
+        message: row.message ?? 'test',
+        severity: row.severity ?? 'stopped',
+        resolved_at: row.resolved_at ?? null,
+        resolved_by_clerk_user_id: row.resolved_by_clerk_user_id ?? null,
+        resolved_action: row.resolved_action ?? null,
+        resolution_message: row.resolution_message ?? null,
+        state_version: row.state_version ?? 1,
+        escalated_to_estimator_at: row.escalated_to_estimator_at ?? null,
+        escalation_reason: row.escalation_reason ?? null,
+        created_at: row.created_at ?? 'now',
       }
+      return { rows: [full], rowCount: 1 }
+    }
+
+    // PATCH workflow transition: UPDATE worker_issues SET ... — mutate the
+    // stored row in place. The route uses distinct column sets per event
+    // type, but every variant ends with `where id = $N and company_id =
+    // $N+1`, so locate the row from the trailing two params.
+    if (/^update\s+worker_issues\s+set/i.test(sql)) {
+      const companyId = params[params.length - 1] as string
+      const issueId = params[params.length - 2] as string
+      const row = this.issues.find((r) => r.company_id === companyId && r.id === issueId)
+      if (!row) return { rows: [], rowCount: 0 }
+      // Re-derive the new column values from the SQL + params. Rather than
+      // parse the SQL, mirror the route's per-event UPDATE shapes.
+      if (/resolved_action\s*=\s*\$3,\s*resolution_message/i.test(sql)) {
+        // RESOLVE: resolved_at,$1 by,$2 action,$3 message,$4 version,$5
+        row.resolved_at = params[0] as string
+        row.resolved_by_clerk_user_id = params[1] as string
+        row.resolved_action = params[2] as string
+        row.resolution_message = params[3] as string
+        row.state_version = params[4] as number
+        row.escalated_to_estimator_at = null
+        row.escalation_reason = null
+      } else if (/escalated_to_estimator_at\s*=\s*\$1/i.test(sql)) {
+        // ESCALATE: escalated_at,$1 reason,$2 version,$3
+        row.escalated_to_estimator_at = params[0] as string
+        row.escalation_reason = params[1] as string
+        row.state_version = params[2] as number
+      } else if (/resolved_action\s*=\s*\$3,\s*state_version/i.test(sql)) {
+        // DISMISS: dismissed_at,$1 by,$2 sentinel,$3 version,$4
+        row.resolved_at = params[0] as string
+        row.resolved_by_clerk_user_id = params[1] as string
+        row.resolved_action = params[2] as string
+        row.state_version = params[3] as number
+      } else {
+        // REOPEN: clears decision columns; version,$1
+        row.resolved_at = null
+        row.resolved_by_clerk_user_id = null
+        row.resolved_action = null
+        row.resolution_message = null
+        row.escalated_to_estimator_at = null
+        row.escalation_reason = null
+        row.state_version = params[0] as number
+      }
+      return { rows: [], rowCount: 1 }
+    }
+
+    // recordWorkflowEvent insert — capture for assertions.
+    if (/^insert\s+into\s+workflow_event_log/i.test(sql)) {
+      this.workflowEvents.push(params)
+      return { rows: [], rowCount: 1 }
     }
 
     // Voice replacement: delete any existing voice attachment.
@@ -239,6 +331,23 @@ beforeAll(async () => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
     const ctx: WorkerIssueRouteCtx = {
       ...makeCtx(),
+      // Real body buffer so PATCH /api/worker-issues/:id workflow events
+      // round-trip through the route's parser. Multipart paths read the
+      // socket directly via Busboy and never call this.
+      readBody: () =>
+        new Promise<Record<string, unknown>>((resolve) => {
+          const chunks: Buffer[] = []
+          req.on('data', (c) => chunks.push(c as Buffer))
+          req.on('end', () => {
+            const text = Buffer.concat(chunks).toString('utf8')
+            if (!text) return resolve({})
+            try {
+              resolve(JSON.parse(text) as Record<string, unknown>)
+            } catch {
+              resolve({})
+            }
+          })
+        }),
       sendJson: (status: number, body: unknown) => {
         res.writeHead(status, { 'content-type': 'application/json' })
         res.end(JSON.stringify(body))
@@ -280,6 +389,7 @@ beforeEach(() => {
   pool.attachments = []
   pool.outbox = []
   pool.syncEvents = []
+  pool.workflowEvents = []
   storage.files.clear()
   storage.mimes.clear()
 })
@@ -352,6 +462,42 @@ function postMultipart(
     )
     req.on('error', reject)
     req.end(body)
+  })
+}
+
+function jsonRequest(
+  method: 'PATCH' | 'GET',
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: unknown }> {
+  const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body))
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: '127.0.0.1',
+        port,
+        method,
+        path,
+        headers: payload ? { 'content-type': 'application/json', 'content-length': String(payload.length) } : undefined,
+      },
+      (res) => {
+        const buf: Buffer[] = []
+        res.on('data', (c) => buf.push(c as Buffer))
+        res.on('end', () => {
+          const text = Buffer.concat(buf).toString('utf8')
+          let parsed: unknown = text
+          try {
+            parsed = JSON.parse(text)
+          } catch {
+            // leave as text
+          }
+          resolve({ status: res.statusCode ?? 0, body: parsed })
+        })
+      },
+    )
+    req.on('error', reject)
+    if (payload) req.end(payload)
+    else req.end()
   })
 }
 
@@ -516,5 +662,151 @@ describe('GET /api/worker-issues/:id/attachments/:key/file', () => {
       `/api/worker-issues/${ISSUE_ID}/attachments/${encodeURIComponent('other-co/worker-issues/foo.jpg')}/file`,
     )
     expect(fetched.status).toBe(400)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Field-event workflow transition route — PATCH /api/worker-issues/:id.
+//
+// Exercises the RESOLVE / ESCALATE / DISMISS reducer path end-to-end:
+// optimistic state_version bump, the per-event UPDATE, the workflow event
+// log append, and the mutation_outbox side effect (notify_worker_resolution
+// on RESOLVE, notify_estimator_escalation on ESCALATE). GET /:id returns the
+// snapshot the fm-blocker-detail screen / field-event machine consume.
+// ---------------------------------------------------------------------------
+
+function seedOpenIssue(overrides: Partial<IssueRow> = {}) {
+  pool.issues.push({
+    id: ISSUE_ID,
+    company_id: 'co-1',
+    project_id: 'proj-1',
+    worker_id: 'worker-1',
+    reporter_clerk_user_id: 'reporter-1',
+    kind: 'materials_out',
+    message: 'Out of EPS sheets',
+    severity: 'stopped',
+    state_version: 1,
+    resolved_at: null,
+    escalated_to_estimator_at: null,
+    created_at: 'now',
+    ...overrides,
+  })
+}
+
+describe('GET /api/worker-issues/:id (workflow snapshot)', () => {
+  it('returns the open snapshot with state, version, and RESOLVE/ESCALATE/DISMISS next_events', async () => {
+    seedOpenIssue()
+    const res = await jsonRequest('GET', `/api/worker-issues/${ISSUE_ID}`)
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    const body = res.body as {
+      state: string
+      state_version: number
+      context: { id: string; severity: string }
+      next_events: Array<{ type: string }>
+    }
+    expect(body.state).toBe('open')
+    expect(body.state_version).toBe(1)
+    expect(body.context.id).toBe(ISSUE_ID)
+    expect(body.next_events.map((e) => e.type).sort()).toEqual(['DISMISS', 'ESCALATE', 'RESOLVE'])
+  })
+
+  it('returns 404 for an unknown issue', async () => {
+    const res = await jsonRequest('GET', `/api/worker-issues/${ISSUE_ID}`)
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('PATCH /api/worker-issues/:id (field-event workflow)', () => {
+  it('RESOLVE moves open → resolved, bumps state_version, and enqueues notify_worker_resolution', async () => {
+    seedOpenIssue()
+    const res = await jsonRequest('PATCH', `/api/worker-issues/${ISSUE_ID}`, {
+      event: 'RESOLVE',
+      state_version: 1,
+      action: 'order_more',
+      message_to_worker: 'On its way · 30m',
+    })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    const body = res.body as { state: string; state_version: number; context: { resolved_action: string } }
+    expect(body.state).toBe('resolved')
+    expect(body.state_version).toBe(2)
+    expect(body.context.resolved_action).toBe('order_more')
+
+    // Workflow event log appended with the version the event was dispatched against.
+    expect(pool.workflowEvents).toHaveLength(1)
+    const wf = pool.workflowEvents[0]!
+    expect(wf[1]).toBe('field_event') // workflow_name
+    expect(wf[5]).toBe(1) // state_version BEFORE the transition
+    expect(wf[6]).toBe('RESOLVE') // event_type
+
+    // Side effect enqueued to mutation_outbox (worker drains notify_worker_resolution).
+    expect(pool.outbox).toHaveLength(1)
+    // Persisted row advanced.
+    expect(pool.issues[0]!.state_version).toBe(2)
+    expect(pool.issues[0]!.resolved_action).toBe('order_more')
+  })
+
+  it('ESCALATE moves open → escalated and enqueues notify_estimator_escalation', async () => {
+    seedOpenIssue()
+    const res = await jsonRequest('PATCH', `/api/worker-issues/${ISSUE_ID}`, {
+      event: 'ESCALATE',
+      state_version: 1,
+      reason: 'Need a change order to swap the spec',
+    })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    const body = res.body as { state: string; state_version: number }
+    expect(body.state).toBe('escalated')
+    expect(body.state_version).toBe(2)
+    expect(pool.outbox).toHaveLength(1)
+    expect(pool.issues[0]!.escalation_reason).toBe('Need a change order to swap the spec')
+  })
+
+  it('DISMISS moves open → dismissed with no notification side effect', async () => {
+    seedOpenIssue()
+    const res = await jsonRequest('PATCH', `/api/worker-issues/${ISSUE_ID}`, {
+      event: 'DISMISS',
+      state_version: 1,
+    })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    const body = res.body as { state: string; state_version: number }
+    expect(body.state).toBe('dismissed')
+    expect(body.state_version).toBe(2)
+    // DISMISS emits no worker/estimator notification.
+    expect(pool.outbox).toHaveLength(0)
+  })
+
+  it('returns 409 on a stale state_version and echoes the current snapshot', async () => {
+    seedOpenIssue({ state_version: 3 })
+    const res = await jsonRequest('PATCH', `/api/worker-issues/${ISSUE_ID}`, {
+      event: 'RESOLVE',
+      state_version: 1,
+      action: 'order_more',
+      message_to_worker: 'stale write',
+    })
+    expect(res.status).toBe(409)
+    const body = res.body as { error: string; snapshot: { state_version: number } }
+    expect(body.snapshot.state_version).toBe(3)
+    // Nothing persisted.
+    expect(pool.issues[0]!.state_version).toBe(3)
+    expect(pool.workflowEvents).toHaveLength(0)
+    expect(pool.outbox).toHaveLength(0)
+  })
+
+  it('returns 400 when RESOLVE is missing message_to_worker', async () => {
+    seedOpenIssue()
+    const res = await jsonRequest('PATCH', `/api/worker-issues/${ISSUE_ID}`, {
+      event: 'RESOLVE',
+      state_version: 1,
+      action: 'order_more',
+    })
+    expect(res.status).toBe(400)
+    expect(pool.workflowEvents).toHaveLength(0)
+  })
+
+  it('returns 404 when patching an unknown issue', async () => {
+    const res = await jsonRequest('PATCH', `/api/worker-issues/${ISSUE_ID}`, {
+      event: 'DISMISS',
+      state_version: 1,
+    })
+    expect(res.status).toBe(404)
   })
 })

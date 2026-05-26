@@ -13,14 +13,19 @@ import { useNavigate } from 'react-router-dom'
 import { apiGet, apiPost, type BootstrapResponse } from '@/lib/api'
 import {
   MAvatar,
+  MAvatarGroup,
   MBanner,
   MBody,
   MButton,
   MButtonRow,
   MI,
   MLargeHead,
+  MListInset,
+  MListRow,
   MPill,
+  MSectionH,
   MTopBar,
+  avatarToneFor,
   initialsFor,
 } from '../../components/m/index.js'
 import { Sheet } from '../../components/mobile/Sheet.js'
@@ -28,6 +33,13 @@ import { formatRunningHours, timeOfDay, todayIso } from './format.js'
 import { useCrewSchedule } from '../../machines/crew-schedule.js'
 import { useAutoGeofenceClock, usePrimaryProjectFence } from '../../lib/geofence.js'
 import { useMarkNotificationRead, useUnreadNotifications, type NotificationRow } from '../../lib/api/notifications.js'
+import { useProjectBriefs } from '../../lib/api/projects.js'
+import type { ProjectBriefStep } from '../../lib/api/project-briefs.js'
+import { stepStatus } from './worker-scope-steps.js'
+
+// The worker is "approaching daily overtime" once the running shift
+// passes this many seconds. 7h30m per the wk-today edge-case spec.
+const APPROACHING_OT_SEC = 7 * 3600 + 30 * 60
 
 type ClockEvent = {
   id: string
@@ -75,6 +87,49 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
   const isClockedIn = latest?.event_type === 'in'
   const project = bootstrap?.projects.find((p) => p.id === latest?.project_id)
   const elapsedSec = isClockedIn && latest ? Math.floor((tick - new Date(latest.occurred_at).valueOf()) / 1000) : 0
+  const approachingOt = isClockedIn && elapsedSec >= APPROACHING_OT_SEC
+
+  // Crew on site — derive from the company-wide clock timeline. The
+  // timeline returns every worker's events for the date when no
+  // worker_id filter is applied; we reduce to "currently in" by keeping
+  // the most-recent event per worker and selecting those still clocked
+  // in. Names + tones come from the bootstrap worker roster.
+  const crewOnSite = useMemo(() => {
+    const latestByWorker = new Map<string, ClockEvent>()
+    for (const e of events) {
+      if (!e.worker_id) continue
+      const prev = latestByWorker.get(e.worker_id)
+      if (!prev || prev.occurred_at < e.occurred_at) latestByWorker.set(e.worker_id, e)
+    }
+    const meWorkerId = bootstrap?.workers[0]?.id ?? null
+    return [...latestByWorker.values()]
+      .filter((e) => e.event_type === 'in')
+      .map((e) => {
+        const worker = bootstrap?.workers.find((w) => w.id === e.worker_id)
+        const name = worker?.name ?? 'Crew'
+        return {
+          id: e.worker_id as string,
+          name,
+          initials: initialsFor(name),
+          isMe: e.worker_id === meWorkerId,
+        }
+      })
+      .sort((a, b) => (a.isMe === b.isMe ? 0 : a.isMe ? -1 : 1))
+  }, [events, bootstrap?.workers])
+
+  // Today's brief for the clocked-in project — gives us the foreman
+  // attribution ("scoped by …") and the scope-summary card. The brief
+  // is the same record `wk-scope` reads; we only need the headline bits.
+  const briefQuery = useProjectBriefs(project?.id ?? null, todayIso())
+  const brief = briefQuery.data?.briefs?.[0] ?? null
+  const briefSteps = useMemo<ProjectBriefStep[]>(
+    () => (brief && Array.isArray(brief.steps) ? (brief.steps as ProjectBriefStep[]) : []),
+    [brief],
+  )
+  const foremanName = useMemo(
+    () => bootstrap?.workers.find((w) => /lead|foreman/i.test(w.role ?? ''))?.name ?? null,
+    [bootstrap?.workers],
+  )
 
   const handlePunch = useCallback(
     async (kind: 'in' | 'out') => {
@@ -219,14 +274,25 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
           </div>
         ) : null}
         {isClockedIn && project ? (
-          <ClockedInCard
-            project={project.name}
-            scope={project.division_code}
-            startedAt={latest.occurred_at}
-            elapsedSec={elapsedSec}
-            onClockOut={() => handlePunch('out')}
-            busy={busy === 'out'}
-          />
+          <>
+            <ClockedInCard
+              project={project.name}
+              scope={project.division_code}
+              startedAt={latest.occurred_at}
+              elapsedSec={elapsedSec}
+              approachingOt={approachingOt}
+              foremanName={foremanName}
+              onClockOut={() => handlePunch('out')}
+              busy={busy === 'out'}
+            />
+            <CrewOnSite crew={crewOnSite} />
+            <ScopeSummaryCard
+              scope={project.division_code}
+              steps={briefSteps}
+              hasBrief={Boolean(brief)}
+              onTap={() => navigate('/scope')}
+            />
+          </>
         ) : (
           <OffClockCard onClockIn={() => handlePunch('in')} busy={busy === 'in'} />
         )}
@@ -360,6 +426,8 @@ function ClockedInCard({
   scope,
   startedAt,
   elapsedSec,
+  approachingOt,
+  foremanName,
   onClockOut,
   busy,
 }: {
@@ -367,6 +435,8 @@ function ClockedInCard({
   scope: string
   startedAt: string
   elapsedSec: number
+  approachingOt: boolean
+  foremanName: string | null
   onClockOut: () => void
   busy: boolean
 }) {
@@ -374,7 +444,18 @@ function ClockedInCard({
   const sec = (elapsedSec % 60).toString().padStart(2, '0')
   return (
     <div className="m-card" style={{ marginTop: 12, marginBottom: 16 }}>
-      <div className="m-topbar-eyebrow">TODAY'S JOB</div>
+      <div
+        className="m-topbar-eyebrow"
+        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+      >
+        <span>TODAY'S JOB</span>
+        {foremanName ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, textTransform: 'none' }}>
+            <MAvatar initials={initialsFor(foremanName)} size="sm" />
+            <span style={{ color: 'var(--m-ink-3)', fontSize: 11 }}>scoped by {foremanName.split(/\s+/)[0]}</span>
+          </span>
+        ) : null}
+      </div>
       <div style={{ fontSize: 19, fontWeight: 600 }}>{project}</div>
       <div className="m-quiet-sm">{scope}</div>
       <div style={{ borderTop: '1px solid var(--m-line)', margin: '12px 0' }} />
@@ -398,15 +479,110 @@ function ClockedInCard({
       <div className="m-quiet-sm" style={{ textAlign: 'center', marginTop: 4 }}>
         Started {timeOfDay(startedAt)}
       </div>
+      {approachingOt ? (
+        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 10 }}>
+          <MPill tone="amber" dot>
+            Approaching daily OT
+          </MPill>
+        </div>
+      ) : null}
       <div style={{ height: 12 }} />
       <MButtonRow>
         <MButton variant="quiet" disabled>
+          <span
+            aria-hidden
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: 2,
+              background: 'var(--m-amber)',
+              display: 'inline-block',
+              marginRight: 6,
+            }}
+          />
           Break
         </MButton>
         <MButton variant="primary" onClick={onClockOut} disabled={busy}>
+          <span
+            aria-hidden
+            style={{
+              width: 10,
+              height: 10,
+              borderRadius: '50%',
+              background: '#fff',
+              display: 'inline-block',
+              marginRight: 6,
+            }}
+          />
           {busy ? 'Clocking out…' : 'Clock out'}
         </MButton>
       </MButtonRow>
+    </div>
+  )
+}
+
+/**
+ * CREW ON SITE — `wk-today` section. Avatar group of everyone currently
+ * clocked in on the worker's site, "you" first. Renders nothing when
+ * only the worker (or no one) is on site so the screen stays calm.
+ */
+function CrewOnSite({ crew }: { crew: ReadonlyArray<{ id: string; name: string; initials: string; isMe: boolean }> }) {
+  if (crew.length === 0) return null
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <MSectionH>{`Crew on site (${crew.length})`}</MSectionH>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 2px' }}>
+        <MAvatarGroup
+          avatars={crew.map((c) => ({
+            initials: c.initials,
+            tone: c.isMe ? undefined : avatarToneFor(c.id),
+          }))}
+          max={5}
+          size="lg"
+        />
+        <span className="m-quiet-sm" style={{ minWidth: 0 }}>
+          {crew
+            .map((c) => (c.isMe ? `${c.name.split(/\s+/)[0]} (you)` : c.name.split(/\s+/)[0]))
+            .slice(0, 3)
+            .join(' · ')}
+          {crew.length > 3 ? ` +${crew.length - 3}` : ''}
+        </span>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Collapsed today's-scope summary card on `wk-today`. Shows the scope
+ * line + "N of M steps done" and taps through to `wk-scope`. Step
+ * completion uses the optional `status` field the foreman UI may set on
+ * a brief step; absent that we treat nothing as done so we never
+ * over-report progress.
+ */
+function ScopeSummaryCard({
+  scope,
+  steps,
+  hasBrief,
+  onTap,
+}: {
+  scope: string
+  steps: ProjectBriefStep[]
+  hasBrief: boolean
+  onTap: () => void
+}) {
+  const total = steps.length
+  const done = steps.filter((s) => stepStatus(s) === 'done').length
+  const supporting = !hasBrief
+    ? 'Tap to view — brief loads here when sent'
+    : total > 0
+      ? `${done} of ${total} step${total === 1 ? '' : 's'} done`
+      : 'Tap to view today’s scope'
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <MSectionH>Today's scope</MSectionH>
+      <MListInset>
+        <MListRow leading={<MI.Layers size={18} />} headline={scope} supporting={supporting} chev onTap={onTap} />
+      </MListInset>
     </div>
   )
 }

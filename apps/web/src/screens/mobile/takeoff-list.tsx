@@ -1,11 +1,20 @@
 /**
- * Mobile takeoff entry — lists this project's blueprints with thumbnail
- * links to the full takeoff canvas. Phase 5 stops here; a native mobile
- * takeoff canvas with pinch-to-zoom + polygon gestures is a follow-up.
+ * Mobile takeoff entry — lists this project's blueprints and opens the
+ * NATIVE mobile takeoff surface (`mb-takeoff`, see takeoff-mobile.tsx)
+ * instead of linking out to the heavy desktop `takeoff-canvas`.
  *
- * The canvas route is the full-viewport `/projects/:id/takeoff-canvas`
- * declared in App.tsx — it sits outside the mobile shell on purpose so
- * the polygon canvas can claim the whole screen.
+ * Audit fix (finish-mobile-to-design): the old behaviour navigated to the
+ * full-viewport `/projects/:id/takeoff-canvas` route declared in App.tsx,
+ * which lives OUTSIDE the mobile shell. A phone user dropped into the
+ * desktop polygon canvas. Now every "open takeoff" affordance routes to
+ * the in-shell `projects/:projectId/takeoff-mobile` screen, which lets the
+ * user manage drafts, browse blueprint pages, and add real measurements
+ * (manual quantity + tap-to-draw) without leaving the mobile experience.
+ *
+ * NOTE FOR INTEGRATOR: the `projects/:projectId/takeoff-mobile` route must
+ * be declared in mobile-shell.tsx (see report). Until then these
+ * navigations 404. The blueprint thumbnail rows pass `?blueprint=<id>`
+ * which the mobile screen reads to preselect the drawing.
  */
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -65,13 +74,13 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
         ) : blueprints.length === 0 ? (
           <MEmptyState
             title="No drawings yet"
-            body="Upload a PDF or image to start the takeoff. Sitelayer will help you trace polygons and compute square footage."
-            primaryLabel="Upload drawing"
-            onPrimary={() => navigate(`/projects/${projectId}/takeoff-canvas`)}
+            body="You can still run a takeoff: enter manual quantities per scope item, or upload a drawing to trace polygons and compute square footage."
+            primaryLabel="Start takeoff"
+            onPrimary={() => navigate(`/projects/${projectId}/takeoff-mobile`)}
           />
         ) : (
           <>
-            <MSectionH link="Open canvas" onLinkClick={() => navigate(`/projects/${projectId}/takeoff-canvas`)}>
+            <MSectionH link="Open takeoff" onLinkClick={() => navigate(`/projects/${projectId}/takeoff-mobile`)}>
               {blueprints.length} {blueprints.length === 1 ? 'drawing' : 'drawings'}
             </MSectionH>
             <MListInset>
@@ -84,13 +93,13 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
                   supporting={`Uploaded ${shortDate(b.created_at)}`}
                   trailing={b.replaces_blueprint_document_id ? <span style={{ fontSize: 11 }}>v2+</span> : null}
                   chev
-                  onTap={() => navigate(`/projects/${projectId}/takeoff-canvas?blueprint=${b.id}`)}
+                  onTap={() => navigate(`/projects/${projectId}/takeoff-mobile?blueprint=${b.id}`)}
                 />
               ))}
             </MListInset>
             <div style={{ padding: '16px' }}>
-              <MButton variant="primary" onClick={() => navigate(`/projects/${projectId}/takeoff-canvas`)}>
-                Open takeoff canvas
+              <MButton variant="primary" onClick={() => navigate(`/projects/${projectId}/takeoff-mobile`)}>
+                Open mobile takeoff
               </MButton>
             </div>
           </>

@@ -89,9 +89,10 @@ export function ForemanBlockerDetail({
   const params = useParams<{ issueId: string }>()
   const issueId = params.issueId ?? ''
 
-  // We try the workflow snapshot first via the field-event machine. If
-  // it 404s (the parallel PATCH route hasn't shipped yet), fall back to
-  // a direct GET on /api/worker-issues so we still show context.
+  // We try the workflow snapshot first via the field-event machine
+  // (GET /api/worker-issues/:id). If that fails to load, fall back to a
+  // direct GET on /api/worker-issues so we can still render the worker's
+  // context even when the snapshot fetch errored.
   const fe = useFieldEvent(issueId, companySlug)
   const [legacyRow, setLegacyRow] = useState<IssueRow | null>(null)
   const [attachments, setAttachments] = useState<AttachmentRow[]>([])
@@ -163,17 +164,14 @@ export function ForemanBlockerDetail({
   const lng = numberOrNull(fallback?.lng)
 
   const handleResolve = () => {
-    if (!fe.snapshot) {
-      // PATCH route may not exist yet. The field-event machine guards
-      // against dispatching without a snapshot; surface a TODO banner
-      // so the foreman knows the action was a no-op.
-      return
-    }
+    // The machine guards DISPATCH on a non-null snapshot, so submitting
+    // before the snapshot loads is a no-op rather than a crash. The
+    // primary button is disabled until the snapshot is present + a reply
+    // is typed, so the foreman can't reach this with an empty payload.
     fe.dispatch({ event: 'RESOLVE', action, message_to_worker: reply.trim() })
   }
 
   const handleEscalate = () => {
-    if (!fe.snapshot) return
     fe.dispatch({ event: 'ESCALATE', reason: escalateReason.trim() || cleanedMessage })
   }
 
@@ -202,7 +200,12 @@ export function ForemanBlockerDetail({
           <MBanner
             tone="warn"
             title="Couldn't load this event"
-            body="The PATCH /api/worker-issues/:id workflow route may not be live yet. Returning to /field will show the latest list."
+            body="This field event may have been removed or belongs to another company. Head back to Field for the latest list."
+            action={
+              <MButton size="sm" variant="quiet" onClick={() => navigate('/field')}>
+                Back to Field
+              </MButton>
+            }
           />
         ) : null}
         {fe.error ? (
@@ -300,12 +303,6 @@ export function ForemanBlockerDetail({
                     </MButton>
                   </MButtonStack>
                 </div>
-                {!fe.snapshot && !fe.isLoading ? (
-                  <div className="m-quiet-sm" style={{ marginTop: 8 }}>
-                    Workflow route not available yet — the resolve action will be queued once PATCH
-                    /api/worker-issues/:id ships.
-                  </div>
-                ) : null}
               </>
             ) : (
               <>

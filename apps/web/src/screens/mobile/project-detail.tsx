@@ -2,11 +2,15 @@
  * Mobile project detail. The most-used screen in the system per the
  * estimator README. Shows project hero + tab nav + per-tab content.
  *
- * For Phase 4 the data is sourced from bootstrap (projects, laborEntries,
- * schedules, materialBills filtered by project_id). Tabs that need
- * heavier data (estimate lines, daily logs, blueprints) render lightly
- * and link out to existing project screens via /projects/:id; later phases
- * replace those with native mobile implementations.
+ * Data is sourced from bootstrap (projects, laborEntries, schedules,
+ * materialBills filtered by project_id) plus per-tab TanStack Query hooks:
+ *   - Materials  → bootstrap materialBills (vendor bills + share-of-bid)
+ *   - Budget     → closeout-summary + labor-variance (bid vs actual)
+ *   - Crew       → bootstrap laborEntries grouped by worker
+ *   - Log        → useDailyLogs (foreman fm-log outputs for this project)
+ *   - Files      → useProjectBlueprints (drawings + scale state)
+ * Estimate still opens its dedicated full-screen review route, which owns
+ * line items + send-to-client.
  */
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -141,7 +145,7 @@ export function MobileProjectDetail({
         )}
         {tab === 'estimate' && <EstimateTab project={project} navigate={navigate} />}
         {tab === 'crew' && <CrewTab labor={labor} workers={bootstrap?.workers ?? []} />}
-        {tab === 'materials' && <MaterialsTab bills={materialBills} />}
+        {tab === 'materials' && <MaterialsTab bills={materialBills} project={project} />}
         {tab === 'budget' && (
           <BudgetTab project={project} totalHours={totalHours} spent={spent} bid={bid} pctSpent={pctSpent} />
         )}

@@ -18,7 +18,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
-import { MBody, MButton, MButtonStack, MI, MInput, MTapCard, MTextarea, MTopBar } from '../../components/m/index.js'
+import { MButton, MI, MInput, MTextarea, Spark } from '../../components/m/index.js'
 import { fetchDailyLogs, patchDailyLog, useCreateDailyLog, useUploadDailyLogPhoto } from '../../lib/api/daily-logs.js'
 import { useProjectBriefs } from '../../lib/api/projects.js'
 import type { ProjectBriefStep } from '../../lib/api/project-briefs.js'
@@ -85,8 +85,29 @@ export function WorkerLog({
 
   const handleFile = (f: File) => {
     setFile(f)
-    setPreview(URL.createObjectURL(f))
+    setPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return URL.createObjectURL(f)
+    })
   }
+
+  const retake = () => {
+    setPreview((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return null
+    })
+    setNote('')
+    setFile(null)
+    setError(null)
+    // Re-open the camera straight away — capture flow chains.
+    inputRef.current?.click()
+  }
+
+  // Revoke the object URL when it changes or the screen unmounts (avoids leaks).
+  useEffect(() => {
+    if (!preview) return
+    return () => URL.revokeObjectURL(preview)
+  }, [preview])
 
   const handleSend = async () => {
     if (!file || !projectId) return
@@ -133,133 +154,278 @@ export function WorkerLog({
   }
 
   return (
-    <>
-      <MTopBar back title="Log photo" onBack={() => navigate('/today')} />
-      <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+    <div
+      style={{
+        position: 'relative',
+        flex: 1,
+        minHeight: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        background: '#000',
+        overflow: 'hidden',
+      }}
+    >
+      {/* Hidden native-camera input. The whole viewfinder taps into this. */}
+      <MInput
+        ref={inputRef}
+        type="file"
+        accept="image/*"
+        capture="environment"
+        onChange={(e) => {
+          const f = e.currentTarget.files?.[0]
+          if (f) handleFile(f)
+          // Reset so re-selecting the same file still fires onChange.
+          e.currentTarget.value = ''
+        }}
+        style={{ display: 'none' }}
+      />
+
+      {/* Full-bleed viewfinder. Before capture it's a tappable dark
+          surface that opens the camera; after capture it shows the shot,
+          dimmed so the slide-up note reads on top. */}
+      <button
+        type="button"
+        onClick={() => {
+          if (!preview) inputRef.current?.click()
+        }}
+        aria-label={preview ? 'Captured photo' : 'Open camera'}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          padding: 0,
+          border: 'none',
+          background: preview ? '#000' : 'radial-gradient(circle at 50% 38%, #2a2420 0%, #14110d 70%, #0a0806 100%)',
+          color: 'var(--m-ink-3)',
+          cursor: preview ? 'default' : 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        {preview ? (
+          <img
+            src={preview}
+            alt="Captured"
+            style={{
+              width: '100%',
+              height: '100%',
+              objectFit: 'cover',
+              opacity: 0.55,
+              transition: 'opacity 0.2s ease',
+            }}
+          />
+        ) : (
+          <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, opacity: 0.7 }}>
+            <MI.Camera size={40} />
+            <span style={{ fontSize: 13, fontWeight: 500 }}>Tap to open camera</span>
+          </span>
+        )}
+      </button>
+
+      {/* Top overlay strip — close / title / flash / flip. Flash and flip
+          are presentational only; the native camera owns those controls. */}
+      <div
+        style={{
+          position: 'relative',
+          zIndex: 2,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '14px 16px',
+        }}
+      >
+        <ViewfinderIconButton label="Close" onClick={() => navigate('/today')}>
+          <MI.X size={20} />
+        </ViewfinderIconButton>
+        <div style={{ flex: 1, textAlign: 'center', color: '#fff', fontSize: 15, fontWeight: 600 }}>Log photo</div>
+        <ViewfinderIconButton label="Toggle flash" disabled>
+          <MI.AlertTri size={18} />
+        </ViewfinderIconButton>
+        <ViewfinderIconButton label="Flip camera" disabled>
+          <MI.Camera size={18} />
+        </ViewfinderIconButton>
+      </div>
+
+      {/* Auto-tag chip — what the system already knows we're shooting. */}
+      <div style={{ position: 'relative', zIndex: 2, display: 'flex', justifyContent: 'center', padding: '0 16px' }}>
         <div
           style={{
-            flex: 1,
-            background: '#1a160f',
-            position: 'relative',
-            display: 'flex',
+            display: 'inline-flex',
             alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--m-ink-3)',
-            overflow: 'hidden',
+            gap: 8,
+            padding: '6px 12px',
+            borderRadius: 999,
+            background: 'rgba(217,144,74,0.92)',
+            backdropFilter: 'blur(8px)',
+            color: '#fff',
+            fontSize: 12,
+            fontWeight: 600,
           }}
         >
-          {preview ? (
-            <img src={preview} alt="Captured" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-          ) : (
-            <MTapCard
-              onClick={() => inputRef.current?.click()}
-              style={{
-                background: 'transparent',
-                border: '2px dashed var(--m-line-2)',
-                color: 'var(--m-ink-3)',
-                borderRadius: 18,
-                padding: '40px 28px',
-                width: 'auto',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 8,
-              }}
-            >
-              <MI.Camera size={36} />
-              <span style={{ fontSize: 14, fontWeight: 500 }}>Tap to capture</span>
-            </MTapCard>
-          )}
-          <div
-            style={{
-              position: 'absolute',
-              top: 12,
-              left: 12,
-              right: 12,
-              padding: '6px 12px',
-              borderRadius: 999,
-              background: 'rgba(217,144,74,0.92)',
-              color: '#fff',
-              fontSize: 12,
-              fontWeight: 600,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 8,
-            }}
-          >
-            <span style={{ width: 6, height: 6, background: '#fff', borderRadius: '50%' }} />
-            {projectName} · auto-tagged
-            {activeStep ? <span style={{ opacity: 0.85 }}>· {activeStep.title}</span> : null}
+          <Spark state="strong" size={13} />
+          <span>
+            {projectName}
+            {activeStep ? ` · ${activeStep.title}` : ''} · auto-tagged
+          </span>
+        </div>
+      </div>
+
+      {/* Step picker — tag the shot to a scope step before capturing. */}
+      {steps.length > 0 && !preview ? (
+        <div
+          style={{
+            position: 'relative',
+            zIndex: 2,
+            marginTop: 10,
+            padding: '0 16px',
+            display: 'flex',
+            gap: 8,
+            overflowX: 'auto',
+          }}
+        >
+          <ScopeStepChip label="Untagged" active={activeStepId === null} onClick={() => setActiveStepId(null)} />
+          {steps.map((step, idx) => {
+            const stepId = step.id ?? null
+            return (
+              <ScopeStepChip
+                key={stepId ?? idx}
+                label={step.title || `Step ${idx + 1}`}
+                active={stepId !== null && stepId === activeStepId}
+                onClick={() => stepId && setActiveStepId(stepId)}
+                disabled={!stepId}
+              />
+            )
+          })}
+        </div>
+      ) : null}
+
+      <div style={{ flex: 1 }} />
+
+      {/* Bottom controls — pre-capture: roll thumb · 72px shutter · note.
+          post-capture: slide-up note + send. */}
+      {preview ? (
+        <div
+          style={{
+            position: 'relative',
+            zIndex: 2,
+            background: 'var(--m-card)',
+            borderTop: '1px solid var(--m-line)',
+            padding: '14px 16px 18px',
+            animation: 'mSlideUp 0.22s ease-out',
+          }}
+        >
+          <div className="m-topbar-eyebrow" style={{ marginBottom: 8 }}>
+            Add a note (optional)
+          </div>
+          <MTextarea
+            value={note}
+            onChange={(e) => setNote(e.currentTarget.value)}
+            placeholder="Add a note — optional"
+            autoFocus
+            style={{ width: '100%', minHeight: 64 }}
+          />
+          {error ? <div style={{ marginTop: 10, color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
+          <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+            <div style={{ flex: 1 }}>
+              <MButton variant="primary" onClick={handleSend} disabled={busy || !projectId}>
+                {busy ? 'Sending…' : 'Send to daily log'}
+              </MButton>
+            </div>
+            <ViewfinderIconButton label="Retake" onClick={retake} solid>
+              <MI.Camera size={18} />
+            </ViewfinderIconButton>
           </div>
         </div>
-        {steps.length > 0 ? (
+      ) : (
+        <div
+          style={{
+            position: 'relative',
+            zIndex: 2,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0 28px 28px',
+          }}
+        >
+          {/* Roll thumbnail — last shot, or an empty frame. */}
           <div
             style={{
-              padding: '10px 16px 4px',
-              display: 'flex',
-              gap: 8,
-              overflowX: 'auto',
-              borderBottom: '1px solid var(--m-line-2)',
+              width: 44,
+              height: 44,
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.25)',
+              background: 'rgba(255,255,255,0.06)',
             }}
-          >
-            <ScopeStepChip label="Untagged" active={activeStepId === null} onClick={() => setActiveStepId(null)} />
-            {steps.map((step, idx) => {
-              const stepId = step.id ?? null
-              return (
-                <ScopeStepChip
-                  key={stepId ?? idx}
-                  label={step.title || `Step ${idx + 1}`}
-                  active={stepId !== null && stepId === activeStepId}
-                  onClick={() => stepId && setActiveStepId(stepId)}
-                  disabled={!stepId}
-                />
-              )
-            })}
-          </div>
-        ) : null}
-        <MBody pad>
-          <MInput
-            ref={inputRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={(e) => {
-              const f = e.currentTarget.files?.[0]
-              if (f) handleFile(f)
-            }}
-            style={{ display: 'none' }}
+            aria-hidden
           />
-          {preview ? (
-            <>
-              <MTextarea
-                value={note}
-                onChange={(e) => setNote(e.currentTarget.value)}
-                placeholder="Add a note — optional"
-                style={{ width: '100%', minHeight: 80 }}
-              />
-              {error ? <div style={{ marginTop: 12, color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
-              <div style={{ marginTop: 12 }}>
-                <MButtonStack>
-                  <MButton variant="primary" onClick={handleSend} disabled={busy || !projectId}>
-                    {busy ? 'Sending…' : 'Send to daily log'}
-                  </MButton>
-                  <MButton
-                    variant="ghost"
-                    onClick={() => {
-                      setPreview(null)
-                      setNote('')
-                      setFile(null)
-                    }}
-                  >
-                    Retake
-                  </MButton>
-                </MButtonStack>
-              </div>
-            </>
-          ) : null}
-        </MBody>
-      </div>
-    </>
+          {/* 72px capture button — white ring, accent inner fill. */}
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            aria-label="Capture photo"
+            style={{
+              width: 72,
+              height: 72,
+              borderRadius: '50%',
+              border: '4px solid #fff',
+              background: 'var(--m-accent)',
+              padding: 0,
+              cursor: 'pointer',
+              boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
+            }}
+          />
+          {/* Note shortcut — opens the camera then the note flow. */}
+          <ViewfinderIconButton label="Add a note" onClick={() => inputRef.current?.click()}>
+            <MI.FileText size={20} />
+          </ViewfinderIconButton>
+        </div>
+      )}
+
+      <style>{`@keyframes mSlideUp { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }`}</style>
+    </div>
+  )
+}
+
+/** Round icon button used in the viewfinder overlay. `solid` gives a
+ *  filled background (the retake control); default is a translucent
+ *  glassy circle that reads on top of the photo. */
+function ViewfinderIconButton({
+  children,
+  label,
+  onClick,
+  disabled,
+  solid,
+}: {
+  children: React.ReactNode
+  label: string
+  onClick?: () => void
+  disabled?: boolean
+  solid?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      onClick={onClick}
+      disabled={disabled}
+      style={{
+        width: 44,
+        height: 44,
+        flexShrink: 0,
+        borderRadius: '50%',
+        border: 'none',
+        background: solid ? 'var(--m-card-soft)' : 'rgba(0,0,0,0.45)',
+        backdropFilter: solid ? undefined : 'blur(8px)',
+        color: '#fff',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: disabled ? 0.4 : 1,
+        cursor: disabled ? 'default' : 'pointer',
+      }}
+    >
+      {children}
+    </button>
   )
 }
 
