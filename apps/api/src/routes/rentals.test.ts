@@ -74,6 +74,11 @@ class FakePool {
       const [, id] = params as [string, string]
       return this.projects.has(id) ? { rows: [{ '?column?': 1 }], rowCount: 1 } : { rows: [], rowCount: 0 }
     }
+    // Transfer target-project existence check (`select id from projects ...`).
+    if (/^select id from projects/i.test(sql)) {
+      const [id] = params as [string, string]
+      return this.projects.has(id) ? { rows: [{ id }], rowCount: 1 } : { rows: [], rowCount: 0 }
+    }
     if (/^select 1 from customers/i.test(sql)) {
       const [, id] = params as [string, string]
       return this.customers.has(id) ? { rows: [{ '?column?': 1 }], rowCount: 1 } : { rows: [], rowCount: 0 }
@@ -92,6 +97,50 @@ class FakePool {
       const [, id] = params as [string, string]
       const row = this.rentals.find((r) => r.id === id && !r.deleted_at)
       return row ? { rows: [row], rowCount: 1 } : { rows: [], rowCount: 0 }
+    }
+
+    // Transfer source-row read (`select ... from rentals where id = $1 ... limit 1`).
+    // id is the FIRST param here (vs the workflow locked read where company_id is $1).
+    if (/from rentals\s+where id = \$1[\s\S]+limit 1/i.test(sql)) {
+      const [id] = params as [string, string]
+      const row = this.rentals.find((r) => r.id === id)
+      return row ? { rows: [row], rowCount: 1 } : { rows: [], rowCount: 0 }
+    }
+
+    // Transfer INSERT (`insert into rentals (...) select ... from rentals where id = $4`).
+    // Clones the source row into a new active rental on the target project.
+    if (/^insert into rentals[\s\S]+select[\s\S]+from rentals where id = \$4/i.test(sql)) {
+      const [toProjectId, transferredAt, nextInvoiceAt, sourceId] = params as [string, string, string, string]
+      const source = this.rentals.find((r) => r.id === sourceId)
+      if (!source) return { rows: [], rowCount: 0 }
+      this.idCounter += 1
+      const row: StoredRental = {
+        ...source,
+        id: `rental-${this.idCounter}`,
+        project_id: toProjectId,
+        delivered_on: transferredAt,
+        returned_on: null,
+        next_invoice_at: nextInvoiceAt,
+        status: 'active',
+        version: 1,
+        state_version: 1,
+        returned_at: null,
+        returned_by: null,
+        closed_at: null,
+        closed_by: null,
+        deleted_at: null,
+      }
+      this.rentals.push(row)
+      return { rows: [row], rowCount: 1 }
+    }
+
+    // Transfer returned_on stamp (`update rentals set returned_on = $1 ...`).
+    if (/^update rentals set\s+returned_on\s*=\s*\$1/i.test(sql)) {
+      const [returnedOn, id] = params as [string, string]
+      const row = this.rentals.find((r) => r.id === id)
+      if (!row) return { rows: [], rowCount: 0 }
+      row.returned_on = returnedOn
+      return { rows: [row], rowCount: 1 }
     }
 
     if (/^insert into rentals/i.test(sql)) {
@@ -529,5 +578,90 @@ describe('handleRentalRoutes — POST /api/rentals/:id/return', () => {
     await handleRentalRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/return`), ctx)
     expect(responses[0]?.status).toBe(409)
     expect(pool.workflowEvents).toHaveLength(0)
+  })
+})
+
+describe('handleRentalRoutes — POST /api/rentals/:id/transfer', () => {
+  const TARGET_PROJECT_ID = '44444444-4444-4444-8444-444444444444'
+
+  it('rejects member callers with 403', async () => {
+    const pool = new FakePool()
+    seedRental(pool)
+    const { ctx, responses } = makeCtx(pool, { to_project_id: TARGET_PROJECT_ID }, 'member')
+    await handleRentalRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/transfer`), ctx)
+    expect(responses[0]?.status).toBe(403)
+  })
+
+  it('returns 400 when to_project_id is missing', async () => {
+    const pool = new FakePool()
+    seedRental(pool)
+    const { ctx, responses } = makeCtx(pool, {})
+    await handleRentalRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/transfer`), ctx)
+    expect(responses[0]?.status).toBe(400)
+    expect((responses[0]?.body as { error: string }).error).toContain('to_project_id')
+  })
+
+  it('returns 404 when the source rental does not exist', async () => {
+    const pool = new FakePool()
+    pool.projects.add(TARGET_PROJECT_ID)
+    const { ctx, responses } = makeCtx(pool, { to_project_id: TARGET_PROJECT_ID })
+    await handleRentalRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/transfer`), ctx)
+    expect(responses[0]?.status).toBe(404)
+  })
+
+  it('returns 400 when the target project is not in the company', async () => {
+    const pool = new FakePool()
+    seedRental(pool)
+    const { ctx, responses } = makeCtx(pool, { to_project_id: TARGET_PROJECT_ID })
+    await handleRentalRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/transfer`), ctx)
+    expect(responses[0]?.status).toBe(400)
+    expect((responses[0]?.body as { error: string }).error).toContain('target project not found')
+  })
+
+  it('closes the source through the reducer and clones a new active rental on the target project', async () => {
+    const pool = new FakePool()
+    seedRental(pool, { status: 'active', state_version: 1, item_description: 'Scaffold tower', daily_rate: '25.00' })
+    pool.projects.add(TARGET_PROJECT_ID)
+    const { ctx, responses } = makeCtx(pool, { to_project_id: TARGET_PROJECT_ID, transferred_at: '2026-05-15' })
+    await handleRentalRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/transfer`), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+
+    // Source rental: CLOSE went through the reducer (status=closed, state_version bumped).
+    const source = pool.rentals.find((r) => r.id === RENTAL_ID)
+    expect(source?.status).toBe('closed')
+    expect(source?.state_version).toBe(2)
+    expect(source?.returned_on).toBe('2026-05-15')
+
+    // New rental: cloned with real columns onto the target project, active.
+    const created = pool.rentals.find((r) => r.id !== RENTAL_ID)
+    expect(created).toBeDefined()
+    expect(created?.project_id).toBe(TARGET_PROJECT_ID)
+    expect(created?.status).toBe('active')
+    expect(created?.item_description).toBe('Scaffold tower')
+    expect(created?.daily_rate).toBe('25.00')
+    expect(created?.delivered_on).toBe('2026-05-15')
+
+    // CLOSE wrote a workflow_event_log row through the reducer.
+    expect(pool.workflowEvents).toHaveLength(1)
+    expect(pool.workflowEvents[0]?.event_type).toBe('CLOSE')
+    expect(pool.workflowEvents[0]?.state_version).toBe(1)
+    expect(pool.workflowEvents[0]?.workflow_name).toBe('rental')
+
+    // Response carries both sides.
+    const body = responses[0]?.body as { closed_rental: RentalRow; new_rental: RentalRow }
+    expect(body.closed_rental.id).toBe(RENTAL_ID)
+    expect(body.new_rental.project_id).toBe(TARGET_PROJECT_ID)
+  })
+
+  it('returns 400 on an illegal CLOSE transition (transfer from an already-closed rental)', async () => {
+    const pool = new FakePool()
+    seedRental(pool, { status: 'closed', state_version: 4 })
+    pool.projects.add(TARGET_PROJECT_ID)
+    const { ctx, responses } = makeCtx(pool, { to_project_id: TARGET_PROJECT_ID })
+    await handleRentalRoutes({ method: 'POST' } as never, buildUrl(`/api/rentals/${RENTAL_ID}/transfer`), ctx)
+    expect(responses[0]?.status).toBe(400)
+    expect(pool.workflowEvents).toHaveLength(0)
+    // No new rental was cloned.
+    expect(pool.rentals).toHaveLength(1)
   })
 })
