@@ -12,6 +12,7 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import type { BootstrapResponse, LaborRow } from '@/lib/api'
 import { usePatchLaborEntry } from '../../lib/api/labor-entries.js'
 import {
+  MAiStripe,
   MAvatar,
   MBanner,
   MBody,
@@ -70,6 +71,57 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
     return sum + Number(l.hours ?? 0) * rate
   }, 0)
 
+  // Deterministic anomaly heuristic — placeholder for the AI flag stripe
+  // in the v3.3.0 fm-time-review design ("Marcus's clock-out was 4:48; he
+  // posted a photo at 5:02 — adjust?"). Until the clock_event / photo
+  // correlation lands, we flag a pending entry whose hours fall outside a
+  // normal field day (>12h, likely a missed clock-out; or 0h, likely a
+  // missed clock-in) so the foreman knows which row needs their eyes
+  // before approving the batch.
+  const [aiDismissed, setAiDismissed] = useState(false)
+  const anomaly = useMemo(() => {
+    for (const l of pending) {
+      const hours = Number(l.hours ?? 0)
+      if (!Number.isFinite(hours)) continue
+      const w = workers.find((x) => x.id === l.worker_id)
+      const name = w?.name ?? 'A crew member'
+      if (hours > 12) {
+        return { id: l.id, name, kind: 'long' as const, hours }
+      }
+      if (hours <= 0) {
+        return { id: l.id, name, kind: 'zero' as const, hours }
+      }
+    }
+    return null
+  }, [pending, workers])
+
+  // Approve-all: walk every pending entry through the same per-row PATCH
+  // the inline editor uses, applying any inline edits the foreman already
+  // made. Per the design this is the full-width primary action; the
+  // foreman is the only approver and one tap signs off the crew's day.
+  const [isApprovingAll, setIsApprovingAll] = useState(false)
+  const [approveAllError, setApproveAllError] = useState<string | null>(null)
+  const handleApproveAll = async () => {
+    if (pending.length === 0 || isApprovingAll) return
+    setIsApprovingAll(true)
+    setApproveAllError(null)
+    try {
+      for (const l of pending) {
+        const e = edits[l.id]
+        const patch: { status: 'approved'; hours?: number } = { status: 'approved' }
+        const adjustedHours = adjustedHoursFromEdit(l, e)
+        if (adjustedHours !== null) patch.hours = adjustedHours
+        await patchLabor.mutateAsync({ id: l.id, patch })
+      }
+      setExpandedId(null)
+      setEdits({})
+    } catch (err) {
+      setApproveAllError(err instanceof Error ? err.message : 'Some entries could not be approved')
+    } finally {
+      setIsApprovingAll(false)
+    }
+  }
+
   return (
     <>
       <MTopBar
@@ -123,6 +175,35 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
                 metaTone={pending.length > 0 ? 'amber' : undefined}
               />
             </MKpiRow>
+            {anomaly && !aiDismissed ? (
+              <div style={{ padding: '4px 16px 0' }}>
+                <MAiStripe
+                  tone="warn"
+                  eyebrow="NEEDS YOUR EYES"
+                  title={
+                    anomaly.kind === 'long'
+                      ? `${anomaly.name}'s day is ${formatDecimalHours(anomaly.hours, 1)} — likely a missed clock-out.`
+                      : `${anomaly.name} has no hours logged — likely a missed clock-in.`
+                  }
+                  attribution={<>Based on today&apos;s clock activity.</>}
+                  onDismiss={() => setAiDismissed(true)}
+                  action={
+                    <MButton
+                      size="sm"
+                      variant="quiet"
+                      onClick={() => {
+                        setExpandedId(anomaly.id)
+                        setAiDismissed(true)
+                      }}
+                    >
+                      Review entry
+                    </MButton>
+                  }
+                >
+                  Open the row to adjust before you approve the crew.
+                </MAiStripe>
+              </div>
+            ) : null}
             {pending.length > 0 ? (
               <>
                 <MSectionH>Pending review</MSectionH>
@@ -226,8 +307,28 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
               </>
             ) : null}
             {pending.length > 0 ? (
-              <div style={{ padding: 16 }}>
-                <MButton variant="primary" onClick={() => navigate('/clock')}>
+              <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {approveAllError ? (
+                  <MBanner
+                    tone="error"
+                    title="Couldn't approve everyone"
+                    body={approveAllError}
+                    action={
+                      <MButton size="sm" variant="ghost" onClick={() => setApproveAllError(null)}>
+                        Dismiss
+                      </MButton>
+                    }
+                  />
+                ) : null}
+                <MButton
+                  variant="primary"
+                  onClick={() => void handleApproveAll()}
+                  disabled={isApprovingAll || patchLabor.isPending}
+                  aria-disabled={isApprovingAll || patchLabor.isPending}
+                >
+                  {isApprovingAll ? 'Approving…' : `Approve all · ${pending.length}`}
+                </MButton>
+                <MButton variant="ghost" onClick={() => navigate('/clock')}>
                   Review on desktop
                 </MButton>
               </div>

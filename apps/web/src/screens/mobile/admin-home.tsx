@@ -26,6 +26,7 @@ import {
   MSectionH,
   MTopBar,
 } from '../../components/m/index.js'
+import { Spark } from '../../components/m/ai.js'
 import { MEmptyState } from '../../components/m-states/index.js'
 import { formatDecimalHours, formatMoney, formatStatusLabel, statusTone, todayIso } from './format.js'
 
@@ -67,6 +68,7 @@ export function AdminHome({ bootstrap }: AdminHomeProps) {
           eyebrow: 'Estimate',
           title: `${p.name} needs a bid follow-up`,
           body: `${p.customer_name} · ${formatStatusLabel(p.status)}`,
+          why: `Flagged because this project is in "${formatStatusLabel(p.status)}" — a sent or in-flight estimate with no acceptance yet. Estimates that sit without a nudge close at a lower rate.`,
           action: 'Open project',
           projectId: p.id,
         })
@@ -85,6 +87,7 @@ export function AdminHome({ bootstrap }: AdminHomeProps) {
           eyebrow: `At risk · ${formatMoney(laborBurn)}`,
           title: `${p.name} labor is trending hot`,
           body: `${formatDecimalHours(hrs, 1)} logged today. Review crew plan before the next dispatch.`,
+          why: `Today's labor burn (${formatMoney(laborBurn)}) is more than 18% of the ${formatMoney(bid)} bid in a single day. At this pace the labor budget runs out before the job does.`,
           action: 'Review site',
           projectId: p.id,
         })
@@ -241,12 +244,19 @@ type AttentionItem = {
   eyebrow: string
   title: string
   body: string
+  /** The "Why this card?" reveal — surfaces the data behind the flag. */
+  why: string
   action: string
   projectId: string
 }
 
 function AttentionList({ items, onOpen }: { items: readonly AttentionItem[]; onOpen: (projectId: string) => void }) {
-  if (items.length === 0) {
+  // Dismissed cards stay hidden for the session — AI is offered, never
+  // imposed (Design Overview/design_system AI rules). Tracked by item id.
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set())
+  const visible = items.filter((i) => !dismissed.has(i.id))
+
+  if (visible.length === 0) {
     return (
       <div style={{ padding: '0 16px' }}>
         <div className="m-card" style={{ color: 'var(--m-ink-3)', fontSize: 13 }}>
@@ -258,35 +268,105 @@ function AttentionList({ items, onOpen }: { items: readonly AttentionItem[]; onO
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '0 16px 16px' }}>
-      {items.map((item) => (
-        <div
+      {visible.map((item) => (
+        <AttentionCard
           key={item.id}
-          className="m-card"
+          item={item}
+          onOpen={() => onOpen(item.projectId)}
+          onDismiss={() => setDismissed((prev) => new Set(prev).add(item.id))}
+        />
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Single AI priority card — mirrors db-pm.png: Spark-marked eyebrow,
+ * dismiss (×), title + body, a "Why this card?" reveal (the data moat
+ * made visible), and the primary action. Confidence is ordinal (the
+ * eyebrow), never a numeric score, per the AI rules.
+ */
+function AttentionCard({
+  item,
+  onOpen,
+  onDismiss,
+}: {
+  item: AttentionItem
+  onOpen: () => void
+  onDismiss: () => void
+}) {
+  const [showWhy, setShowWhy] = useState(false)
+  const accent = item.tone === 'red' ? 'var(--m-red)' : 'var(--m-accent)'
+  const accentInk = item.tone === 'red' ? 'var(--m-red)' : 'var(--m-accent-ink)'
+
+  return (
+    <div
+      className="m-card"
+      style={{
+        borderLeft: `3px solid ${accent}`,
+        boxShadow: 'var(--m-shadow-card)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
+        <div
           style={{
-            borderLeft: `3px solid ${item.tone === 'red' ? 'var(--m-red)' : 'var(--m-accent)'}`,
-            boxShadow: 'var(--m-shadow-card)',
+            color: accentInk,
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 5,
           }}
         >
-          <div
-            style={{
-              color: item.tone === 'red' ? 'var(--m-red)' : 'var(--m-accent-ink)',
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: '0.06em',
-              textTransform: 'uppercase',
-            }}
-          >
-            {item.eyebrow}
-          </div>
-          <div style={{ marginTop: 10, fontSize: 17, fontWeight: 700, lineHeight: 1.18 }}>{item.title}</div>
-          <div style={{ marginTop: 7, color: 'var(--m-ink-2)', fontSize: 13, lineHeight: 1.35 }}>{item.body}</div>
-          <div style={{ marginTop: 14, display: 'flex', justifyContent: 'flex-end' }}>
-            <MButton size="sm" variant="primary" onClick={() => onOpen(item.projectId)}>
-              {item.action}
-            </MButton>
-          </div>
+          <Spark size={11} state="strong" />
+          {item.eyebrow}
         </div>
-      ))}
+        <button type="button" className="m-ai-dismiss" aria-label="Dismiss" onClick={onDismiss}>
+          <MI.X size={12} />
+        </button>
+      </div>
+      <div style={{ marginTop: 10, fontSize: 17, fontWeight: 700, lineHeight: 1.18 }}>{item.title}</div>
+      <div style={{ marginTop: 7, color: 'var(--m-ink-2)', fontSize: 13, lineHeight: 1.35 }}>{item.body}</div>
+      {showWhy ? (
+        <div
+          style={{
+            marginTop: 8,
+            fontSize: 12,
+            color: 'var(--m-ink-3)',
+            lineHeight: 1.4,
+            borderTop: '1px solid var(--m-line)',
+            paddingTop: 8,
+          }}
+        >
+          {item.why}
+        </div>
+      ) : null}
+      <div style={{ marginTop: 14, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+        <button
+          type="button"
+          onClick={() => setShowWhy((v) => !v)}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            padding: 0,
+            color: 'var(--m-ink-3)',
+            fontSize: 12,
+            fontWeight: 500,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            cursor: 'pointer',
+          }}
+        >
+          <Spark size={10} state="muted" />
+          {showWhy ? 'Hide' : 'Why this card?'}
+        </button>
+        <MButton size="sm" variant="primary" onClick={onOpen}>
+          {item.action}
+        </MButton>
+      </div>
     </div>
   )
 }

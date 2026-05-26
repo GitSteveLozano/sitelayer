@@ -12,6 +12,27 @@ import type { BootstrapResponse } from '@/lib/api'
 import { MBody, MI, MLargeHead, MListInset, MListRow, MPill, MSectionH, MTopBar } from '../../components/m/index.js'
 import { formatDecimalHours, formatMoney, shortDate, todayIso } from './format.js'
 
+// Standard full-time week. Drives the "OF 40 HRS" eyebrow + the
+// proportion the worker has logged so far.
+const WEEKLY_TARGET_HRS = 40
+
+/** Decimal hours → "HH:MM" for the headline total. */
+function formatHoursMinutes(decimalHours: number): string {
+  if (!Number.isFinite(decimalHours) || decimalHours < 0) return '0:00'
+  const totalMinutes = Math.round(decimalHours * 60)
+  const h = Math.floor(totalMinutes / 60)
+  const m = totalMinutes % 60
+  return `${h}:${m.toString().padStart(2, '0')}`
+}
+
+/** Bucket a labor-entry status into the worker-facing approval state. */
+function approvalBucket(status: string): 'approved' | 'pending' | 'disputed' {
+  const s = (status ?? '').toLowerCase()
+  if (s.includes('disput') || s.includes('reject')) return 'disputed'
+  if (s.includes('approv') || s.includes('lock') || s.includes('post')) return 'approved'
+  return 'pending'
+}
+
 // Local-date ISO. `Date.toISOString()` is UTC and rolls "today" forward
 // in negative-offset timezones — labor.occurred_on is keyed off the
 // user's calendar, so we need the local date here.
@@ -63,6 +84,21 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
 
   const peak = Math.max(1, ...dayBars.map((d) => d.hours))
 
+  // Pay-period summary. Without a per-worker period boundary in the
+  // bootstrap we treat the visible week of labor as the period-to-date
+  // window — enough to surface gross + approval-state counts. Counts are
+  // per-entry; the dollar figure is the worker's own gross (rate × hrs).
+  const periodSummary = useMemo(() => {
+    const counts = { approved: 0, pending: 0, disputed: 0 }
+    let gross = 0
+    for (const l of recent) {
+      counts[approvalBucket(l.status ?? '')] += 1
+      const project = projects.find((p) => p.id === l.project_id)
+      gross += Number(l.hours ?? 0) * Number(project?.labor_rate ?? 0)
+    }
+    return { counts, gross }
+  }, [recent, projects])
+
   return (
     <>
       <MTopBar back title="My week" onBack={() => navigate('/today')} />
@@ -71,10 +107,13 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
           eyebrow={`THIS WEEK · ${shortDate(dayBars[0]!.iso).toUpperCase()}–${shortDate(dayBars[6]!.iso).toUpperCase()}`}
           title={
             <span>
-              <span className="num">{totalHours.toFixed(1)}</span>
-              <span style={{ color: 'var(--m-ink-3)', fontSize: 14, fontWeight: 500, marginLeft: 6 }}>
-                hours so far
+              <span className="num" style={{ fontSize: 48, fontWeight: 600, letterSpacing: '-0.02em' }}>
+                {formatHoursMinutes(totalHours)}
               </span>
+              <span
+                className="m-topbar-eyebrow"
+                style={{ display: 'block', marginTop: 4 }}
+              >{`OF ${WEEKLY_TARGET_HRS} HRS`}</span>
             </span>
           }
           sub={
@@ -95,14 +134,29 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
                 <span style={{ fontSize: 10, color: isToday ? 'var(--m-accent)' : 'var(--m-ink-3)', fontWeight: 600 }}>
                   {d.hours > 0 ? d.hours.toFixed(1) : ''}
                 </span>
-                <div
-                  style={{
-                    width: '70%',
-                    height,
-                    background: isToday ? 'var(--m-accent)' : 'var(--m-ink)',
-                    borderRadius: 4,
-                  }}
-                />
+                {d.hours > 0 ? (
+                  <div
+                    style={{
+                      width: '70%',
+                      height,
+                      // Today's bar is accent; logged past days are the
+                      // de-emphasized "black"/neutral bar from the design.
+                      background: isToday ? 'var(--m-accent)' : 'var(--m-line-2)',
+                      borderRadius: 4,
+                    }}
+                  />
+                ) : (
+                  // Days with no hours yet render as a dashed placeholder
+                  // (Fri–Sun in the design) so the strip reads as a full week.
+                  <div
+                    style={{
+                      width: '70%',
+                      height: Math.max(28, 110 * 0.4),
+                      border: '1.5px dashed var(--m-line-2)',
+                      borderRadius: 4,
+                    }}
+                  />
+                )}
                 <span style={{ fontSize: 10, color: isToday ? 'var(--m-accent)' : 'var(--m-ink-3)' }}>{d.label}</span>
               </div>
             )
@@ -148,6 +202,29 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
               )
             })}
         </MListInset>
+        <div style={{ marginTop: 18 }}>
+          <MSectionH>Pay period to date</MSectionH>
+          <div className="m-card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <div>
+                <div className="m-topbar-eyebrow">Pay period to date</div>
+                <div
+                  className="num"
+                  style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.02em', marginTop: 4, lineHeight: 1 }}
+                >
+                  {formatMoney(periodSummary.gross)}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+              <MPill tone="green">{`${periodSummary.counts.approved} approved`}</MPill>
+              <MPill tone="amber">{`${periodSummary.counts.pending} pending`}</MPill>
+              {periodSummary.counts.disputed > 0 ? (
+                <MPill tone="red" dot>{`${periodSummary.counts.disputed} disputed`}</MPill>
+              ) : null}
+            </div>
+          </div>
+        </div>
         <div className="m-quiet-sm" style={{ textAlign: 'center', padding: 16 }}>
           Questions? Talk to your foreman.
         </div>

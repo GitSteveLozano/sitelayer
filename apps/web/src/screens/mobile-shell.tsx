@@ -53,6 +53,12 @@ const MobileProjectDetail = lazy(() =>
 )
 const MobileProjectNew = lazy(() => import('./mobile/project-new.js').then((m) => ({ default: m.MobileProjectNew })))
 const MobileTakeoffList = lazy(() => import('./mobile/takeoff-list.js').then((m) => ({ default: m.MobileTakeoffList })))
+const TakeoffMobileScreen = lazy(() =>
+  import('./mobile/takeoff-mobile.js').then((m) => ({ default: m.TakeoffMobileScreen })),
+)
+const MobileSettingsHome = lazy(() =>
+  import('./settings/settings-home.js').then((m) => ({ default: m.MobileSettingsHome })),
+)
 const MobileEstimateReview = lazy(() =>
   import('./mobile/estimate-review.js').then((m) => ({ default: m.MobileEstimateReview })),
 )
@@ -262,6 +268,10 @@ export function MobileShell({
               element={<MobileProjectDetail bootstrap={bootstrap} companyRole={companyRole} />}
             />
             <Route path="projects/:projectId/takeoff" element={<MobileTakeoffList companySlug={companySlug} />} />
+            <Route
+              path="projects/:projectId/takeoff-mobile"
+              element={<TakeoffMobileScreen companySlug={companySlug} />}
+            />
             <Route path="projects/:projectId/estimate" element={<MobileEstimateReview companySlug={companySlug} />} />
             <Route
               path="projects/:projectId/estimate-push/:pushId"
@@ -299,6 +309,10 @@ export function MobileShell({
             />
             <Route path="work/:workItemId" element={<MobileWorkRequestDetail companyRole={companyRole} />} />
             <Route path="more/*" element={<MoreRoute />} />
+            <Route
+              path="settings/*"
+              element={<MobileSettingsHome bootstrap={bootstrap} companyRole={companyRole} navigate={navigate} />}
+            />
             <Route path="crew" element={<ForemanCrew bootstrap={bootstrap} />} />
             <Route path="crew/*" element={<ForemanCrew bootstrap={bootstrap} />} />
             <Route
@@ -395,6 +409,7 @@ function inferRoleModeFromPath(pathname: string, basePath: string): RoleMode | n
     segment === 'schedule' ||
     segment === 'rentals' ||
     segment === 'more' ||
+    segment === 'settings' ||
     segment === 'invoice' ||
     segment === 'work'
   ) {
