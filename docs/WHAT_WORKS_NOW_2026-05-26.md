@@ -6,13 +6,13 @@ This is a code-grounded inventory of what the platform actually does today — n
 
 ## How to read the status tags
 
-| Tag | Meaning |
-|-----|---------|
-| ✅ **Works** | Wired end-to-end (UI → API → DB), renders/acts on real data |
-| 🟡 **Partial** | Renders real data but some actions are read-only or stubbed |
-| ⚙️ **Backend-only** | API/workflow exists and works, but no UI front door yet |
-| 🚩 **Flag-gated** | Built, but turned OFF by default in production (needs an env flag + restart) |
-| 🔴 **Stub / not wired** | Placeholder, "coming soon", or not connected |
+| Tag                     | Meaning                                                                      |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| ✅ **Works**            | Wired end-to-end (UI → API → DB), renders/acts on real data                  |
+| 🟡 **Partial**          | Renders real data but some actions are read-only or stubbed                  |
+| ⚙️ **Backend-only**     | API/workflow exists and works, but no UI front door yet                      |
+| 🚩 **Flag-gated**       | Built, but turned OFF by default in production (needs an env flag + restart) |
+| 🔴 **Stub / not wired** | Placeholder, "coming soon", or not connected                                 |
 
 ---
 
@@ -28,53 +28,55 @@ Defined in `packages/domain/src/roles.ts`: **`admin`, `office`, `foreman`, `memb
 
 ### Which tabs each role sees (mobile shell)
 
-| Persona (role) | Bottom-nav tabs |
-|---|---|
-| **Admin / Office** (owner) | Today · Projects · Schedule · Rentals · More |
-| **Foreman** | Today · Crew · Field · Log · Time |
-| **Worker** (member) | Today · Scope · Hours · Log |
-| **Bookkeeper** | Finance/payroll-focused (limited; please confirm what you actually see) |
+| Persona (role)             | Bottom-nav tabs                                                         |
+| -------------------------- | ----------------------------------------------------------------------- |
+| **Admin / Office** (owner) | Today · Projects · Schedule · Rentals · More                            |
+| **Foreman**                | Today · Crew · Field · Log · Time                                       |
+| **Worker** (member)        | Today · Scope · Hours · Log                                             |
+| **Bookkeeper**             | Finance/payroll-focused (limited; please confirm what you actually see) |
 
 > In non-production builds there's a **RoleSwitcher** (bottom-right) to flip between `e2e-admin / foreman / office / member / bookkeeper` without re-auth. It's hard-blocked in prod.
 
 ---
 
-## 2. Permission matrix — what each role is *allowed* to do
+## 2. Permission matrix — what each role is _allowed_ to do
 
 Authorization is enforced server-side (`requireRole()` in `apps/api/src/server.ts`) plus Postgres row-level security isolating each company's data. Reads are generally open to any signed-in member of the company; writes are gated as below.
 
-| Capability | Admin | Office | Foreman | Member (worker) | Bookkeeper |
-|---|:--:|:--:|:--:|:--:|:--:|
-| View company data (projects, labor, rentals — read-only) | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Clock in / out (self) | ✅ | ✅ | ✅ | ✅ | ❌ |
-| Create / edit **projects** | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Create / edit **takeoff & measurements** | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Create / edit **estimates & pricing** | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Enter **labor entries** | ✅ | ✅ | ✅ | ❌ | ❌ |
-| **Schedule crews** / confirm schedule | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Send daily **brief**, manage **daily logs** | ✅ | ✅ | ✅ | view/own | ❌ |
-| Flag a **field issue** | ✅ | ✅ | ✅ | ✅ | ❌ |
-| **Resolve / triage** field issues | ✅ | ✅ | ✅ | ❌ | ❌ |
-| **Approve** time-review / payroll runs | ✅ | ✅ | ✅ | ❌ | ❌ |
-| Manage **rental contracts**, post **billing runs** | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Manage **inventory catalog** / locations | ✅ | ✅ | ❌ | ❌ | ❌ |
-| Create **customers**, **service items**, **divisions** | ✅ | ✅ | ❌ | ❌ | ❌ |
-| **Export payroll** to QBO | ✅ | ✅ | ❌ | ❌ | ✅ |
-| Manage **QBO** connection / mappings / sync | ✅ | ✅ | ❌ | ❌ | ❌ |
-| **Invite / manage members** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Configure **company settings / modules / bonus rules** | ✅ | ❌ | ❌ | ❌ | ❌ |
-| View **audit logs** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Capability                                               | Admin | Office | Foreman | Member (worker) | Bookkeeper |
+| -------------------------------------------------------- | :---: | :----: | :-----: | :-------------: | :--------: |
+| View company data (projects, labor, rentals — read-only) |  ✅   |   ✅   |   ✅    |       ✅        |     ✅     |
+| Clock in / out (self)                                    |  ✅   |   ✅   |   ✅    |       ✅        |     ❌     |
+| Create / edit **projects**                               |  ✅   |   ✅   |   ✅    |       ❌        |     ❌     |
+| Create / edit **takeoff & measurements**                 |  ✅   |   ✅   |   ✅    |       ❌        |     ❌     |
+| Create / edit **estimates & pricing**                    |  ✅   |   ✅   |   ❌    |       ❌        |     ❌     |
+| Enter **labor entries**                                  |  ✅   |   ✅   |   ✅    |       ❌        |     ❌     |
+| **Schedule crews** / confirm schedule                    |  ✅   |   ✅   |   ✅    |       ❌        |     ❌     |
+| Send daily **brief**, manage **daily logs**              |  ✅   |   ✅   |   ✅    |    view/own     |     ❌     |
+| Flag a **field issue**                                   |  ✅   |   ✅   |   ✅    |       ✅        |     ❌     |
+| **Resolve / triage** field issues                        |  ✅   |   ✅   |   ✅    |       ❌        |     ❌     |
+| **Approve** time-review / payroll runs                   |  ✅   |   ✅   |   ✅    |       ❌        |     ❌     |
+| Manage **rental contracts**, post **billing runs**       |  ✅   |   ✅   |   ❌    |       ❌        |     ❌     |
+| Manage **inventory catalog** / locations                 |  ✅   |   ✅   |   ❌    |       ❌        |     ❌     |
+| Create **customers**, **service items**, **divisions**   |  ✅   |   ✅   |   ❌    |       ❌        |     ❌     |
+| **Export payroll** to QBO                                |  ✅   |   ✅   |   ❌    |       ❌        |     ✅     |
+| Manage **QBO** connection / mappings / sync              |  ✅   |   ✅   |   ❌    |       ❌        |     ❌     |
+| **Invite / manage members**                              |  ✅   |   ❌   |   ❌    |       ❌        |     ❌     |
+| Configure **company settings / modules / bonus rules**   |  ✅   |   ❌   |   ❌    |       ❌        |     ❌     |
+| View **audit logs**                                      |  ✅   |   ❌   |   ❌    |       ❌        |     ❌     |
 
 ---
 
 ## 3. Feature inventory (by area)
 
 ### Projects ✅
+
 - Create project (name, address, customer, division, bid, labor rate, target sqft/hr), list with search/filter, detail view.
 - Status lifecycle (bid → active → closed) and **closeout** (locks summary).
 - Project detail tabs: **Overview ✅ · Crew ✅ · Materials ✅ · Budget ✅ · Estimate 🟡 (read-only on mobile) · Log 🟡 · Files 🟡 (list only)**.
 
 ### Blueprint takeoff & measurement 🟡
+
 - ✅ PDF upload + storage (DigitalOcean Spaces, with local fallback), versioning, up to 200 MB.
 - ✅ Interactive measurement canvas: polygons / lines / volumes, scale calibration, zoom/pan.
 - ✅ Scope items (EPS, basecoat, finish, stone, etc.) with colors/units/rates.
@@ -83,6 +85,7 @@ Authorization is enforced server-side (`requireRole()` in `apps/api/src/server.t
 - 🔴 **Photogrammetry / drone / RoomPlan capture**: skeleton/stub only, not exercised end-to-end.
 
 ### Estimation & pricing ✅
+
 - ✅ Auto-generated estimate line items from measured quantities × rates.
 - ✅ Bid-vs-scope comparison (under/over bid, threshold bands).
 - ✅ Pricing profiles + cascading rate overrides (project → customer → company → default).
@@ -90,21 +93,25 @@ Authorization is enforced server-side (`requireRole()` in `apps/api/src/server.t
 - 🟡 In-app estimate **line editing** has incomplete plumbing (some "INTEGRATION TODO" markers); review/recompute is fuller on desktop than mobile.
 
 ### Crew scheduling ✅
+
 - ✅ Day / week / 4-week grid, multiple crew per project/day, create assignment, foreman confirm/decline.
 - 🔴 **"Copy week"** — not implemented (no route/UI found).
 
 ### Labor & time tracking ✅ (one gap)
+
 - ✅ Clock in/out with GPS + geofence check; manual + foreman-override sources; auto-draft labor entry on clock-out.
 - ✅ Labor entries (hours per worker/service/project), daily crew confirmation, **time-review approval** workflow (locks entries on approve), payroll-run generation.
 - ✅ Productivity analytics (sqft/hr) — depends on workers entering `sqft_done`.
-- 🟡 **Geofenced *auto* clock-in/out**: server + schema ready, but the client-side geofence trigger and `auto_out_idle` timeout aren't wired. README oversells this — confirm whether auto clock-in actually fires on-site.
+- 🟡 **Geofenced _auto_ clock-in/out**: server + schema ready, but the client-side geofence trigger and `auto_out_idle` timeout aren't wired. README oversells this — confirm whether auto clock-in actually fires on-site.
 
 ### Daily logs & field events ✅
+
 - ✅ Daily log capture (scope progress, weather, notes, photos) with submit workflow.
 - ✅ Field-issue flow: worker flags issue (materials out / crew short / safety / other) → foreman triage (resolve / escalate / dismiss) → worker gets notified. Auto-escalation after timeout for "stopped" severity.
 - ✅ Photo logs (worker + daily log), uploaded to storage.
 
 ### Rentals & inventory ✅ (mostly)
+
 - ✅ Inventory catalog CRUD, locations, movement ledger, stock availability/utilization.
 - ✅ Rental contracts + line items; **billing-run state machine** (generated → approved → posting → posted/failed/void) with list + detail + approval UI.
 - ✅ Returns / transfers via movement entries; **rental-request approval** queue (for customer-portal submissions).
@@ -112,14 +119,17 @@ Authorization is enforced server-side (`requireRole()` in `apps/api/src/server.t
 - 🔴 **Scan-driven dispatch** (scan equipment from the field): schema placeholders only, no field-scan app.
 
 ### Analytics & dashboards ✅
+
 - ✅ Per-project margins (revenue vs labor + material cost), labor productivity, inventory utilization (idle-revenue/day), home-screen KPIs per persona, live-vs-budget.
 - 🔴 **Anomaly detection**: the time-review screen shows an "N anomalies flagged" label but there's **no detection logic** behind it (always 0).
 
 ### QuickBooks Online (QBO) integration 🚩
+
 - ✅ **OAuth connect**, entity **mappings** (customer/division/service-item/project), sync-run orchestration, queue inspection UI (`/api/sync/*`).
 - 🚩 **All actual pushes are OFF by default and run as dry-run stubs:** estimate push (`QBO_LIVE_ESTIMATE_PUSH`), rental invoice (`QBO_LIVE_RENTAL_INVOICE`), labor payroll (`QBO_LIVE_LABOR_PAYROLL`). Going live needs the flags + sandbox credentials + worker restart, and a sandbox smoke test. **This is the #1 known pilot blocker.**
 
 ### Notifications ✅
+
 - ✅ Deterministic notification workflow (email / SMS / web-push), push-subscription + preference endpoints, triggered by field-event resolution, escalations, schedule confirmations. (Confirm real email/SMS delivery in your environment.)
 
 ---
