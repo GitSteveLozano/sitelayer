@@ -36,6 +36,39 @@ function parseClockSource(value: unknown): ClockSource {
 }
 
 /**
+ * Reason an auto clock-OUT fired, as supplied by the worker PWA on the
+ * /out path. `idle` = the device idle-timer expired while clocked in;
+ * `geofence` = the device left the project fence past its grace window.
+ * Both map onto an `event_type` ('auto_out_idle' / 'auto_out_geo') so the
+ * Time-tab review queue can tell *why* a worker was clocked out without a
+ * tap. The provenance `source` column stays 'auto_geofence' — its CHECK
+ * constraint (migration 029) only admits manual|auto_geofence|
+ * foreman_override, so we encode the auto-out flavour in event_type
+ * rather than minting a new source value.
+ */
+const AUTO_OUT_REASONS = ['idle', 'geofence'] as const
+type AutoOutReason = (typeof AUTO_OUT_REASONS)[number]
+
+function parseAutoOutReason(value: unknown): AutoOutReason | null {
+  if (typeof value === 'string' && (AUTO_OUT_REASONS as readonly string[]).includes(value)) {
+    return value as AutoOutReason
+  }
+  return null
+}
+
+/**
+ * Resolve the clock-OUT `event_type` to record. A plain out (manual tap,
+ * or an auto event with no explicit reason) stays 'out'. An auto event
+ * that supplies a reason records 'auto_out_idle' / 'auto_out_geo' so the
+ * row carries its provenance. The flavour is only honoured for auto
+ * sources — a manual tap that smuggles auto_out_reason is still 'out'.
+ */
+function resolveClockOutEventType(source: ClockSource, reason: AutoOutReason | null): string {
+  if (source !== 'auto_geofence' || reason === null) return 'out'
+  return reason === 'idle' ? 'auto_out_idle' : 'auto_out_geo'
+}
+
+/**
  * Compute correctible_until for a non-manual clock event. Returns null
  * for manual events (no separate window — the user just submitted them)
  * and for projects without a configured correction window.
@@ -69,7 +102,11 @@ function computeCorrectibleUntil(
  *                                emits a draft labor_entry when the
  *                                duration is positive and < 24h.
  *                                Same source / correctible_until
- *                                semantics as /in.
+ *                                semantics as /in. Accepts an optional
+ *                                body.auto_out_reason ('idle'|'geofence')
+ *                                on auto_geofence events, which records
+ *                                event_type='auto_out_idle' /
+ *                                'auto_out_geo' instead of plain 'out'.
  * - GET  /api/clock/timeline  — admin/foreman/office; filterable by
  *                                worker_id and date
  *
@@ -313,6 +350,10 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
     const accuracy = parseOptionalNumber(body.accuracy_m)
     const notes = typeof body.notes === 'string' ? body.notes.slice(0, 1024) : null
     const source = parseClockSource(body.source)
+    // Optional auto clock-OUT flavour. Only meaningful when source is
+    // auto_geofence; for a manual tap it's ignored so the row stays 'out'.
+    const autoOutReason = parseAutoOutReason(body.auto_out_reason)
+    const eventType = resolveClockOutEventType(source, autoOutReason)
     const currentUserId = ctx.currentUserId
 
     // Same foreman_override path as /in — admin/foreman/office can clock
@@ -438,7 +479,7 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
         occurred_at, lat, lng, accuracy_m, inside_geofence, notes,
         source, correctible_until
       )
-      values ($1, $2, $3, $4, 'out', $5, $6, $7, $8, $9, $10, $11, $12)
+      values ($1, $2, $3, $4, $13, $5, $6, $7, $8, $9, $10, $11, $12)
       returning id, company_id, worker_id, project_id, clerk_user_id,
                 event_type, occurred_at, lat, lng, accuracy_m,
                 inside_geofence, notes, source, correctible_until, created_at
@@ -456,6 +497,7 @@ export async function handleClockRoutes(req: http.IncomingMessage, url: URL, ctx
           notes,
           source,
           correctibleUntil,
+          eventType,
         ],
       ),
     )

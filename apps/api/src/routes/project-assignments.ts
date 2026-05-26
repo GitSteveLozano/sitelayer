@@ -12,22 +12,59 @@ export type ProjectAssignmentRouteCtx = {
   getCurrentUserId: () => string
 }
 
+// Columns shared by every assignment read. `assignee_name` / `assignee_email`
+// are resolved from the global clerk_users mirror (096_clerk_user_mirror.sql)
+// via LEFT JOIN — null when the webhook hasn't mirrored that identity yet, so
+// the client falls back to the clerk_user_id. The name is composed from
+// first/last (either may be null) and trimmed; an all-null name stays null
+// rather than becoming an empty string.
+const ASSIGNMENT_SELECT_COLUMNS = `
+  pa.id, pa.project_id, pa.clerk_user_id, pa.role, pa.assigned_by_clerk_user_id,
+  pa.created_at, pa.deleted_at,
+  nullif(trim(concat_ws(' ', cu.first_name, cu.last_name)), '') as assignee_name,
+  cu.email as assignee_email`
+
 /**
- * Handle /api/projects/:projectId/assignments* requests. Returns true when
- * the request matched a route in this module (regardless of response status);
- * false to let the parent dispatch fall through.
+ * Handle assignment requests. Returns true when the request matched a route in
+ * this module (regardless of response status); false to let the parent
+ * dispatch fall through. Routes:
+ *   GET    /api/assignments                              -> company-wide list
+ *   GET    /api/projects/:projectId/assignments          -> one project's list
+ *   POST   /api/projects/:projectId/assignments          -> add (admin/office)
+ *   DELETE /api/projects/:projectId/assignments/:id       -> remove (admin/office)
  *
  * Reads are open to any company member — useful for the foreman's "who's on
- * this site" view. Writes are admin-only — only company admins assign or
- * remove foreman/worker roles.
+ * this site" view and the web portfolio "Assignments" screen. Writes are
+ * admin/office-only.
+ *
+ * Both list routes resolve the assignee's name/email from the clerk_users
+ * mirror (LEFT JOIN, falls back to the id when unmapped).
  */
 export async function handleProjectAssignmentRoutes(
   req: http.IncomingMessage,
   url: URL,
   ctx: ProjectAssignmentRouteCtx,
 ): Promise<boolean> {
+  const companyListMatch = url.pathname.match(/^\/api\/assignments$/)
   const listMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/assignments$/)
   const itemMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/assignments\/([^/]+)$/)
+
+  // Company-wide list: every project's assignments in one query, so the web
+  // portfolio view doesn't fan out one request per project (N+1).
+  if (req.method === 'GET' && companyListMatch) {
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query(
+        `select ${ASSIGNMENT_SELECT_COLUMNS}
+         from project_assignments pa
+         left join clerk_users cu on cu.clerk_user_id = pa.clerk_user_id and cu.deleted_at is null
+         where pa.company_id = $1 and pa.deleted_at is null
+         order by pa.project_id asc, pa.created_at asc`,
+        [ctx.company.id],
+      ),
+    )
+    ctx.sendJson(200, { assignments: result.rows })
+    return true
+  }
 
   if (req.method === 'GET' && listMatch) {
     const projectId = listMatch[1]!
@@ -37,10 +74,11 @@ export async function handleProjectAssignmentRoutes(
     }
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query(
-        `select id, project_id, clerk_user_id, role, assigned_by_clerk_user_id, created_at, deleted_at
-         from project_assignments
-         where company_id = $1 and project_id = $2 and deleted_at is null
-         order by created_at asc`,
+        `select ${ASSIGNMENT_SELECT_COLUMNS}
+         from project_assignments pa
+         left join clerk_users cu on cu.clerk_user_id = pa.clerk_user_id and cu.deleted_at is null
+         where pa.company_id = $1 and pa.project_id = $2 and pa.deleted_at is null
+         order by pa.created_at asc`,
         [ctx.company.id, projectId],
       ),
     )

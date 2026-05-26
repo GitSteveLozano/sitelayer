@@ -34,6 +34,12 @@ const DOMAIN_ENTITY_TYPES = new Set([
   'estimate_share_link',
   'rental',
   'shipment',
+  // Global Clerk identity mirror (clerk_users). Audit rows for this entity are
+  // only written when there IS a company to attribute the event to (e.g. a
+  // future JIT-membership grant). The pre-tenancy webhook upsert itself is not
+  // audited here — audit_events.company_id is NOT NULL — and instead relies on
+  // the clerk_users created_at/updated_at/deleted_at columns as its trail.
+  'clerk_user',
 ])
 
 export type AuditInput = {

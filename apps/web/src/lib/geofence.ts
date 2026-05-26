@@ -416,6 +416,7 @@ export function useAutoGeofenceClock({
           lng: s.lng,
           accuracy_m: s.accuracy_m,
           source: 'auto_geofence',
+          auto_out_reason: 'geofence',
         }
         await clockOut.mutateAsync(body)
       } catch {
@@ -435,4 +436,149 @@ export function useAutoGeofenceClock({
     onExit,
     disabled: !enabled || !fence || !projectId,
   })
+}
+
+// ---------------------------------------------------------------------------
+// Idle auto clock-out (auto_out_idle)
+// ---------------------------------------------------------------------------
+
+/**
+ * Default idle threshold before an auto clock-OUT fires: 30 minutes of no
+ * user activity AND no in-fence GPS reading. Long enough that a worker
+ * pocketing the phone mid-task isn't yanked off the clock, short enough
+ * that "drove home and forgot to clock out" doesn't leak an hour of
+ * paid time before the geofence-exit grace catches it.
+ */
+export const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60_000
+
+export type IdleAutoClockOutOptions = {
+  /** Master switch — same auto policy toggle that gates geofence auto-in. */
+  enabled: boolean
+  /** Only arm the timer while the worker is actually on the clock. */
+  alreadyClockedIn: boolean
+  /** Milliseconds of inactivity before firing. Defaults to 30m. */
+  thresholdMs?: number | undefined
+  /**
+   * Latest geofence sample, if a fence watcher is mounted. A reading
+   * inside the fence counts as presence and resets the idle timer (the
+   * worker is on-site working even with the screen off); an outside
+   * reading does NOT reset — geofence-exit auto-out owns that case.
+   * Pass null/undefined when no fence is configured; the timer then
+   * runs on user-activity only.
+   */
+  presence?: GeofenceSample | null | undefined
+  /** Capture coords on the auto-out event when a sample is available. */
+  lastSample?: GeofenceSample | null | undefined
+  /** Called after the auto clock-out lands so the UI can refresh state. */
+  onAutoOut?: (() => void) | undefined
+}
+
+export type IdleAutoClockOutState = {
+  /** True while the idle timer is armed (enabled + clocked in). */
+  armed: boolean
+  /** True once an idle auto-out has fired this clocked-in span. */
+  firedIdleOut: boolean
+}
+
+const IDLE_ACTIVITY_EVENTS = ['pointerdown', 'keydown', 'touchstart', 'visibilitychange', 'focus'] as const
+
+/**
+ * Arms an inactivity timer while the worker is clocked in under the auto
+ * policy. Any user interaction (tap, key, touch, tab focus) or an
+ * in-fence GPS reading resets the countdown; if `thresholdMs` elapses
+ * with neither, it fires POST /api/clock/out with
+ * `auto_out_reason='idle'` (→ event_type='auto_out_idle'). One-shot per
+ * clocked-in span: after firing it disarms until the next clock-in flips
+ * `alreadyClockedIn` back to true.
+ */
+export function useIdleAutoClockOut({
+  enabled,
+  alreadyClockedIn,
+  thresholdMs = DEFAULT_IDLE_TIMEOUT_MS,
+  presence,
+  lastSample,
+  onAutoOut,
+}: IdleAutoClockOutOptions): IdleAutoClockOutState {
+  const clockOut = useClockOut()
+  const inFlightRef = useRef(false)
+  const firedRef = useRef(false)
+  const [firedIdleOut, setFiredIdleOut] = useState(false)
+  // Bumped on any activity (user input or in-fence presence) to restart
+  // the single countdown effect below.
+  const [resetTick, setResetTick] = useState(0)
+
+  const armed = enabled && alreadyClockedIn
+  const lastSampleRef = useRef<GeofenceSample | null | undefined>(lastSample)
+  lastSampleRef.current = lastSample
+  const onAutoOutRef = useRef(onAutoOut)
+  onAutoOutRef.current = onAutoOut
+
+  // Reset the one-shot latch whenever we leave the armed state (manual
+  // clock-out, auto policy turned off). The next clock-in re-arms fresh.
+  useEffect(() => {
+    if (!armed) {
+      firedRef.current = false
+      setFiredIdleOut(false)
+    }
+  }, [armed])
+
+  // Listen for user activity while armed; each event bumps resetTick which
+  // restarts the countdown. Listeners are torn down when disarmed so an
+  // off-clock worker's taps don't churn state.
+  useEffect(() => {
+    if (!armed || typeof window === 'undefined') return
+    const bump = () => setResetTick((t) => t + 1)
+    for (const evt of IDLE_ACTIVITY_EVENTS) {
+      window.addEventListener(evt, bump, { passive: true })
+    }
+    return () => {
+      for (const evt of IDLE_ACTIVITY_EVENTS) {
+        window.removeEventListener(evt, bump)
+      }
+    }
+  }, [armed])
+
+  // An in-fence GPS reading is presence — treat it as activity and restart
+  // the countdown. An outside reading does NOT (geofence-exit auto-out
+  // owns that case).
+  const presenceAt = presence?.inside ? presence.at : null
+  useEffect(() => {
+    if (!armed || presenceAt === null) return
+    setResetTick((t) => t + 1)
+  }, [armed, presenceAt])
+
+  // Single countdown. Re-armed whenever `resetTick` (activity/presence) or
+  // `thresholdMs` changes. Fires once per clocked-in span via firedRef.
+  useEffect(() => {
+    if (!armed || firedRef.current || typeof window === 'undefined') return
+    const timer = window.setTimeout(() => {
+      if (inFlightRef.current || firedRef.current) return
+      inFlightRef.current = true
+      firedRef.current = true
+      const s = lastSampleRef.current
+      const body: ClockOutRequest = {
+        lat: s?.lat ?? 0,
+        lng: s?.lng ?? 0,
+        accuracy_m: s?.accuracy_m ?? null,
+        source: 'auto_geofence',
+        auto_out_reason: 'idle',
+      }
+      void clockOut
+        .mutateAsync(body)
+        .then(() => {
+          setFiredIdleOut(true)
+          onAutoOutRef.current?.()
+        })
+        .catch(() => {
+          // Surfaced via clockOut.error; allow a retry once activity resumes.
+          firedRef.current = false
+        })
+        .finally(() => {
+          inFlightRef.current = false
+        })
+    }, thresholdMs)
+    return () => window.clearTimeout(timer)
+  }, [armed, thresholdMs, resetTick, clockOut])
+
+  return { armed, firedIdleOut }
 }

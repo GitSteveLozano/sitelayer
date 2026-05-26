@@ -6,16 +6,17 @@
  * chip toggle over `components/m/*` rows, with the full five-state coverage
  * from `components/m-states/*`.
  *
- * Data: the assignments API is per-project (GET
- * /api/projects/:projectId/assignments), so this screen pulls the company's
- * projects, fans out one assignment query per project, and aggregates the
- * results client-side. Empty/loading/error states are derived from the
- * project list query plus the fan-out query statuses.
+ * Data: the screen reads the company-wide GET /api/assignments in a single
+ * request (`useAllAssignments`) — no more one-query-per-project fan-out.
+ * `useProjects` is still loaded, but only as a name lookup so each row can
+ * show its project's name; assignment rows themselves carry only project_id.
+ * Empty/loading/error states are derived from the assignments query (with the
+ * project list query as a secondary signal for the name map).
  *
- * Identity caveat: assignment rows carry `clerk_user_id`, but the company
- * worker roster (and /api/bootstrap) keys workers by their own `id` with no
- * clerk mapping exposed, so the assignee is shown by clerk user id. If a
- * worker name join surfaces later, swap `labelForAssignee` to use it.
+ * Identity: assignment rows carry `clerk_user_id`, and the API resolves it
+ * against the clerk_users mirror into `assignee_name` / `assignee_email`. The
+ * screen shows the name when present and falls back to a truncated id when the
+ * identity hasn't been mirrored yet.
  */
 import { useMemo, useState, type ReactNode } from 'react'
 import {
@@ -34,7 +35,7 @@ import {
 import { MEmptyState, MErrorState, MSkeletonList } from '../../components/m-states/index.js'
 import { useProjects } from '../../lib/api/projects.js'
 import {
-  useProjectAssignmentsForProjects,
+  useAllAssignments,
   type ProjectAssignment,
   type ProjectAssignmentRole,
 } from '../../lib/api/project-assignments.js'
@@ -51,48 +52,54 @@ const ROLE_LABEL: Record<ProjectAssignmentRole, string> = {
   worker: 'Worker',
 }
 
+type AssigneeIdentity = { clerk_user_id: string; assignee_name: string | null }
+
 /**
- * Best-effort display label for an assignee. Clerk user ids look like
- * `user_2abc…` — show a short tail so the row stays scannable without
+ * Display label for an assignee. Prefers the API-resolved `assignee_name`
+ * (from the clerk_users mirror); falls back to a short tail of the clerk user
+ * id (which looks like `user_2abc…`) so the row stays scannable without
  * pretending we have a real name.
  */
-function labelForAssignee(clerkUserId: string): string {
-  const trimmed = clerkUserId.trim()
+function labelForAssignee(identity: AssigneeIdentity): string {
+  const name = identity.assignee_name?.trim()
+  if (name) return name
+  const trimmed = identity.clerk_user_id.trim()
   if (trimmed.length <= 14) return trimmed
   return `…${trimmed.slice(-10)}`
 }
 
-function initialsForAssignee(clerkUserId: string): string {
-  const tail = clerkUserId.replace(/^user_/, '').replace(/[^a-zA-Z0-9]/g, '')
+function initialsForAssignee(identity: AssigneeIdentity): string {
+  const name = identity.assignee_name?.trim()
+  if (name) return initialsFor(name)
+  const tail = identity.clerk_user_id.replace(/^user_/, '').replace(/[^a-zA-Z0-9]/g, '')
   return (tail.slice(0, 2) || '??').toUpperCase()
 }
 
 export function ProjectAssignmentsScreen() {
   const [grp, setGrp] = useState<GroupBy>('project')
   const projectsQuery = useProjects()
-  const projects = useMemo(() => projectsQuery.data?.projects ?? [], [projectsQuery.data?.projects])
-  const projectIds = useMemo(() => projects.map((p) => p.id), [projects])
-  const assignmentQueries = useProjectAssignmentsForProjects(projectIds)
+  const assignmentsQuery = useAllAssignments()
 
-  // Fan-out aggregation. Each entry of `assignmentQueries` lines up with
-  // `projectIds` by index. We collapse them into one flat list (tagging the
-  // project name) plus loading/error rollups for the system states.
-  const { rows, anyLoading, anyError } = useMemo(() => {
+  // Project-name lookup. The company-wide assignments endpoint returns
+  // project_id only, so we resolve names from the (already-cached) project
+  // list. A missing entry falls back to the id.
+  const projectNameById = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const p of projectsQuery.data?.projects ?? []) map.set(p.id, p.name)
+    return map
+  }, [projectsQuery.data?.projects])
+
+  // One company-wide query → one flat list (server already filters
+  // soft-deleted rows, but we keep the guard for safety) tagged with the
+  // project name for grouping.
+  const rows = useMemo(() => {
     const flat: Array<ProjectAssignment & { projectName: string }> = []
-    let loading = false
-    let error = false
-    assignmentQueries.forEach((q, i) => {
-      if (q.isLoading) loading = true
-      if (q.isError) error = true
-      const project = projects[i]
-      const list = q.data?.assignments ?? []
-      for (const a of list) {
-        if (a.deleted_at) continue
-        flat.push({ ...a, projectName: project?.name ?? a.project_id })
-      }
-    })
-    return { rows: flat, anyLoading: loading, anyError: error }
-  }, [assignmentQueries, projects])
+    for (const a of assignmentsQuery.data?.assignments ?? []) {
+      if (a.deleted_at) continue
+      flat.push({ ...a, projectName: projectNameById.get(a.project_id) ?? a.project_id })
+    }
+    return flat
+  }, [assignmentsQuery.data?.assignments, projectNameById])
 
   // Group by project (project → its assignments) or by person (assignee →
   // the projects they're on). Sort foreman before worker within a group.
@@ -110,57 +117,52 @@ export function ProjectAssignmentsScreen() {
   }, [rows])
 
   const byPerson = useMemo(() => {
-    const map = new Map<string, { clerkUserId: string; items: typeof rows }>()
+    const map = new Map<string, { clerkUserId: string; assigneeName: string | null; items: typeof rows }>()
     for (const r of rows) {
-      const entry = map.get(r.clerk_user_id) ?? { clerkUserId: r.clerk_user_id, items: [] }
+      const entry = map.get(r.clerk_user_id) ?? {
+        clerkUserId: r.clerk_user_id,
+        assigneeName: r.assignee_name,
+        items: [],
+      }
       entry.items.push(r)
       map.set(r.clerk_user_id, entry)
     }
     for (const entry of map.values()) {
       entry.items.sort((a, b) => a.projectName.localeCompare(b.projectName))
     }
-    return [...map.values()].sort((a, b) => a.clerkUserId.localeCompare(b.clerkUserId))
+    // Sort by the displayed label so people with resolved names sort by name.
+    return [...map.values()].sort((a, b) =>
+      labelForAssignee({ clerk_user_id: a.clerkUserId, assignee_name: a.assigneeName }).localeCompare(
+        labelForAssignee({ clerk_user_id: b.clerkUserId, assignee_name: b.assigneeName }),
+      ),
+    )
   }, [rows])
 
   const peopleCount = byPerson.length
   const projectsWithCrew = byProject.length
 
   // ---- System states -------------------------------------------------
-  // Project list itself failed → hard error (nothing else to render).
-  if (projectsQuery.isError) {
-    return (
-      <Shell>
-        <MErrorState
-          title="Couldn't load projects"
-          body="The project roster didn't load, so assignments can't be shown. Check your connection and try again."
-          primaryLabel="Retry"
-          onPrimary={() => void projectsQuery.refetch()}
-        />
-      </Shell>
-    )
-  }
-
-  // Loading: either the project list is still loading, or we have projects
-  // and their assignment fan-out hasn't resolved yet.
-  if (projectsQuery.isLoading || (projectIds.length > 0 && anyLoading && rows.length === 0)) {
-    return (
-      <Shell>
-        <MSkeletonList count={6} />
-      </Shell>
-    )
-  }
-
-  // Assignment fan-out failed for every project we tried (and produced no
-  // rows). Distinct from the project-list failure above.
-  if (anyError && rows.length === 0) {
+  // The company-wide assignments read is the primary load. If it fails we
+  // can't show the roster (project names are only a secondary lookup that
+  // degrades to ids, so a failed project list never blocks rendering here).
+  if (assignmentsQuery.isError) {
     return (
       <Shell>
         <MErrorState
           title="Couldn't load assignments"
-          body="One or more projects failed to return their crew. Try again — already-loaded assignments will stay."
+          body="The assignment roster didn't load. Check your connection and try again."
           primaryLabel="Retry"
-          onPrimary={() => assignmentQueries.forEach((q) => void q.refetch())}
+          onPrimary={() => void assignmentsQuery.refetch()}
         />
+      </Shell>
+    )
+  }
+
+  // Loading the single assignments query.
+  if (assignmentsQuery.isLoading) {
+    return (
+      <Shell>
+        <MSkeletonList count={6} />
       </Shell>
     )
   }
@@ -214,13 +216,9 @@ export function ProjectAssignmentsScreen() {
                   <MListRow
                     key={a.id}
                     leading={
-                      <MAvatar
-                        initials={initialsForAssignee(a.clerk_user_id)}
-                        tone={avatarToneFor(a.clerk_user_id)}
-                        size="sm"
-                      />
+                      <MAvatar initials={initialsForAssignee(a)} tone={avatarToneFor(a.clerk_user_id)} size="sm" />
                     }
-                    headline={labelForAssignee(a.clerk_user_id)}
+                    headline={labelForAssignee(a)}
                     supporting={ROLE_LABEL[a.role]}
                     trailing={<MPill tone={ROLE_TONE[a.role]}>{ROLE_LABEL[a.role]}</MPill>}
                   />
@@ -230,7 +228,9 @@ export function ProjectAssignmentsScreen() {
           ))
         : byPerson.map((group) => (
             <div key={group.clerkUserId}>
-              <MSectionH>{labelForAssignee(group.clerkUserId)}</MSectionH>
+              <MSectionH>
+                {labelForAssignee({ clerk_user_id: group.clerkUserId, assignee_name: group.assigneeName })}
+              </MSectionH>
               <MListInset>
                 {group.items.map((a) => (
                   <MListRow
