@@ -9,6 +9,27 @@ import { queryKeys } from './keys'
 export type TimeReviewState = 'pending' | 'approved' | 'rejected'
 export type TimeReviewHumanEvent = 'APPROVE' | 'REJECT' | 'REOPEN'
 
+/** Deterministic per-entry anomaly reason codes (server: lib/time-anomalies.ts). */
+export type TimeAnomalyCode =
+  | 'overlap'
+  | 'excessive'
+  | 'zero_negative'
+  | 'missing_break'
+  | 'clockout_before_photo'
+  | 'geofence'
+  | 'variance'
+
+export interface TimeAnomaly {
+  code: TimeAnomalyCode
+  message: string
+}
+
+/** Additive per-entry anomaly projection on the snapshot context. */
+export interface EntryAnomalies {
+  entry_id: string
+  anomalies: TimeAnomaly[]
+}
+
 export interface TimeReviewRunRow {
   id: string
   company_id: string
@@ -36,7 +57,11 @@ export interface TimeReviewRunRow {
 export interface TimeReviewSnapshot {
   state: TimeReviewState
   state_version: number
-  context: Omit<TimeReviewRunRow, 'state' | 'state_version'>
+  context: Omit<TimeReviewRunRow, 'state' | 'state_version'> & {
+    /** Per-entry anomaly reasons re-derived server-side at read time.
+     *  Additive — absent on older API builds. */
+    anomalies?: EntryAnomalies[]
+  }
   next_events: Array<{ type: string; label: string }>
 }
 

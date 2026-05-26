@@ -15,6 +15,12 @@ import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutat
 import { recordAudit } from '../audit.js'
 import { observeAudit, observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { HttpError, isValidDateInput, isValidUuid } from '../http-utils.js'
+import {
+  detectTimeAnomalies,
+  type ClockEventInput,
+  type LaborEntryInput,
+  type TimeAnomaly,
+} from '../lib/time-anomalies.js'
 
 export type TimeReviewRouteCtx = {
   pool: Pool
@@ -70,10 +76,21 @@ function rowToSnapshot(row: TimeReviewRunRow): TimeReviewWorkflowSnapshot {
   }
 }
 
-function snapshotResponse(row: TimeReviewRunRow): {
+/** Additive per-entry anomaly projection on the snapshot context. Backward
+ *  compatible — old clients ignore `anomalies`; new clients read the reason
+ *  codes/messages to render the flagged entries. */
+export type EntryAnomalies = {
+  entry_id: string
+  anomalies: TimeAnomaly[]
+}
+
+function snapshotResponse(
+  row: TimeReviewRunRow,
+  anomalies?: EntryAnomalies[],
+): {
   state: TimeReviewWorkflowState
   state_version: number
-  context: Omit<TimeReviewRunRow, 'state' | 'state_version'>
+  context: Omit<TimeReviewRunRow, 'state' | 'state_version'> & { anomalies?: EntryAnomalies[] }
   next_events: ReturnType<typeof workflowNextEvents>
 } {
   return {
@@ -99,9 +116,116 @@ function snapshotResponse(row: TimeReviewRunRow): {
       origin: row.origin,
       created_at: row.created_at,
       updated_at: row.updated_at,
+      ...(anomalies ? { anomalies } : {}),
     },
     next_events: workflowNextEvents(row.state),
   }
+}
+
+/**
+ * Re-derive per-entry anomalies for a run by re-querying the labor entries
+ * and clock events it covers and running the deterministic detector. Done
+ * at read time so no schema/migration is required and the reasons always
+ * reflect the current detector. Returns the sorted per-entry projection.
+ */
+async function computeRunAnomalies(companyId: string, row: TimeReviewRunRow): Promise<EntryAnomalies[]> {
+  if (!row.covered_entry_ids || row.covered_entry_ids.length === 0) return []
+  const { laborEntries, clockEvents } = await loadAnomalyInputs(
+    companyId,
+    row.period_start,
+    row.period_end,
+    row.project_id,
+    row.covered_entry_ids,
+  )
+  const result = detectTimeAnomalies(laborEntries, clockEvents)
+  return Object.entries(result.byEntryId).map(([entry_id, anomalies]) => ({ entry_id, anomalies }))
+}
+
+/**
+ * Load the labor_entries + clock_events the detector needs for a period.
+ * When `restrictToEntryIds` is provided, labor entries are limited to that
+ * set (the covered ids of an existing run); clock events are pulled for the
+ * same workers/day window so the cross-entry signals (overlap, geofence,
+ * photo correlation, break inference) have the punch chain to work with.
+ */
+async function loadAnomalyInputs(
+  companyId: string,
+  periodStart: string,
+  periodEnd: string,
+  projectId: string | null,
+  restrictToEntryIds?: string[],
+): Promise<{ laborEntries: LaborEntryInput[]; clockEvents: ClockEventInput[] }> {
+  return withCompanyClient(companyId, async (c) => {
+    const laborRes = await c.query<{
+      id: string
+      worker_id: string | null
+      project_id: string | null
+      hours: string
+      occurred_on: string
+      division_code: string | null
+      service_item_code: string | null
+    }>(
+      `select id, worker_id, project_id, hours, occurred_on::text as occurred_on,
+              division_code, service_item_code
+         from labor_entries
+        where company_id = $1
+          and deleted_at is null
+          and ($2 = '' or project_id = $2::uuid)
+          and occurred_on between $3::date and $4::date
+          and ($5::uuid[] is null or id = any($5::uuid[]))`,
+      [
+        companyId,
+        projectId ?? '',
+        periodStart,
+        periodEnd,
+        restrictToEntryIds && restrictToEntryIds.length > 0 ? restrictToEntryIds : null,
+      ],
+    )
+
+    const clockRes = await c.query<{
+      id: string
+      worker_id: string | null
+      project_id: string | null
+      event_type: string
+      occurred_at: string
+      inside_geofence: boolean | null
+      source: string | null
+      photo_uploaded_at: string | null
+      voided_at: string | null
+    }>(
+      `select id, worker_id, project_id, event_type, occurred_at,
+              inside_geofence, source, photo_uploaded_at, voided_at
+         from clock_events
+        where company_id = $1
+          and ($2 = '' or project_id = $2::uuid)
+          and occurred_at >= $3::date
+          and occurred_at < ($4::date + interval '1 day')`,
+      [companyId, projectId ?? '', periodStart, periodEnd],
+    )
+
+    return {
+      laborEntries: laborRes.rows.map((r) => ({
+        id: r.id,
+        worker_id: r.worker_id,
+        project_id: r.project_id,
+        hours: r.hours,
+        occurred_on: r.occurred_on,
+        division_code: r.division_code,
+        service_item_code: r.service_item_code,
+      })),
+      clockEvents: clockRes.rows.map((r) => ({
+        id: r.id,
+        worker_id: r.worker_id,
+        project_id: r.project_id,
+        event_type: r.event_type,
+        occurred_at: r.occurred_at,
+        inside_geofence: r.inside_geofence,
+        source: r.source,
+        photo_uploaded_at: r.photo_uploaded_at,
+        voided_at: r.voided_at,
+      })),
+    }
+  })
 }
 
 // Local copy of the next-events derivation so the response shape lives
@@ -221,7 +345,8 @@ export async function handleTimeReviewRunRoutes(
       ctx.sendJson(404, { error: 'time review run not found' })
       return true
     }
-    ctx.sendJson(200, snapshotResponse(result.rows[0]))
+    const anomalies = await computeRunAnomalies(ctx.company.id, result.rows[0])
+    ctx.sendJson(200, snapshotResponse(result.rows[0], anomalies))
     return true
   }
 
@@ -245,13 +370,10 @@ export async function handleTimeReviewRunRoutes(
     }
 
     // Pull the labor_entries the run will cover. Locked entries are skipped
-    // because they're already part of an approved run. Phase 1A's anomaly
-    // model is intentionally simple — single hours-over-eight signal — so
-    // the column has a meaningful default before the cohort model lands
-    // in Phase 5.
+    // because they're already part of an approved run.
     const entryRows = await withCompanyClient(ctx.company.id, (c) =>
-      c.query<{ id: string; hours: string; over_eight: boolean }>(
-        `select id, hours, (hours::numeric > 8) as over_eight
+      c.query<{ id: string; hours: string }>(
+        `select id, hours
        from labor_entries
        where company_id = $1
          and deleted_at is null
@@ -265,7 +387,23 @@ export async function handleTimeReviewRunRoutes(
     const coveredEntryIds = entryRows.rows.map((r) => r.id)
     const totalEntries = entryRows.rows.length
     const totalHours = entryRows.rows.reduce((sum, r) => sum + Number(r.hours || 0), 0).toFixed(2)
-    const anomalyCount = entryRows.rows.filter((r) => r.over_eight).length
+
+    // Deterministic, multi-signal anomaly detection (lib/time-anomalies.ts):
+    // overlap, excessive, zero/negative, missing_break, geofence,
+    // clockout_before_photo, and crew/role variance. anomaly_count is the
+    // number of distinct entries that carry at least one reason (one bump
+    // per flagged entry — same semantics the column had before). The
+    // per-entry reasons are re-derived at read time in computeRunAnomalies
+    // and surfaced on the snapshot context (additive `anomalies` field).
+    const { laborEntries, clockEvents } = await loadAnomalyInputs(
+      ctx.company.id,
+      periodStart,
+      periodEnd,
+      projectId,
+      coveredEntryIds,
+    )
+    const detected = detectTimeAnomalies(laborEntries, clockEvents)
+    const anomalyCount = detected.anomalyCount
 
     const created = await withMutationTx(async (client: PoolClient) => {
       const insert = await client.query<TimeReviewRunRow>(
@@ -290,7 +428,11 @@ export async function handleTimeReviewRunRoutes(
       return row
     })
 
-    ctx.sendJson(201, snapshotResponse(created))
+    const createdAnomalies: EntryAnomalies[] = Object.entries(detected.byEntryId).map(([entry_id, anomalies]) => ({
+      entry_id,
+      anomalies,
+    }))
+    ctx.sendJson(201, snapshotResponse(created, createdAnomalies))
     return true
   }
 

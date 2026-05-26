@@ -9,8 +9,9 @@
  */
 import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import type { BootstrapResponse, LaborRow } from '@/lib/api'
+import type { BootstrapResponse, LaborRow, TimeAnomaly } from '@/lib/api'
 import { usePatchLaborEntry } from '../../lib/api/labor-entries.js'
+import { useTimeReviewRun, useTimeReviewRuns } from '../../lib/api/time-review.js'
 import {
   MAiStripe,
   MAvatar,
@@ -71,29 +72,44 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
     return sum + Number(l.hours ?? 0) * rate
   }, 0)
 
-  // Deterministic anomaly heuristic — placeholder for the AI flag stripe
-  // in the v3.3.0 fm-time-review design ("Marcus's clock-out was 4:48; he
-  // posted a photo at 5:02 — adjust?"). Until the clock_event / photo
-  // correlation lands, we flag a pending entry whose hours fall outside a
-  // normal field day (>12h, likely a missed clock-out; or 0h, likely a
-  // missed clock-in) so the foreman knows which row needs their eyes
-  // before approving the batch.
+  // Deterministic, multi-signal anomaly detection now runs server-side
+  // (apps/api/src/lib/time-anomalies.ts) and rides the time-review-run
+  // snapshot as a per-entry `anomalies: [{ code, message }]` projection.
+  // We latch onto the most recent pending run for the current company,
+  // fetch its snapshot, and map each flagged entry_id back to the
+  // bootstrap labor row + worker so the stripe can list the specific
+  // entries and their reason messages. No run yet → empty list (the
+  // stripe simply doesn't render).
   const [aiDismissed, setAiDismissed] = useState(false)
-  const anomaly = useMemo(() => {
-    for (const l of pending) {
-      const hours = Number(l.hours ?? 0)
-      if (!Number.isFinite(hours)) continue
-      const w = workers.find((x) => x.id === l.worker_id)
-      const name = w?.name ?? 'A crew member'
-      if (hours > 12) {
-        return { id: l.id, name, kind: 'long' as const, hours }
-      }
-      if (hours <= 0) {
-        return { id: l.id, name, kind: 'zero' as const, hours }
-      }
-    }
-    return null
-  }, [pending, workers])
+  const pendingRuns = useTimeReviewRuns({ state: 'pending' })
+  const latestRunId = useMemo(() => {
+    const runs = pendingRuns.data?.timeReviewRuns ?? []
+    if (runs.length === 0) return null
+    // List route already orders period_start desc, created_at desc.
+    const flagged = runs.find((r) => r.anomaly_count > 0)
+    return (flagged ?? runs[0])?.id ?? null
+  }, [pendingRuns.data])
+  const runSnapshot = useTimeReviewRun(latestRunId)
+
+  // Per-entry anomalies from the snapshot, joined to the labor row + worker
+  // name we already have in bootstrap. Entries not in this run (or whose
+  // ids don't match a bootstrap row) still render with a generic label.
+  type FlaggedEntry = { entryId: string; name: string; hours: number; anomalies: TimeAnomaly[] }
+  const flaggedEntries = useMemo<FlaggedEntry[]>(() => {
+    const entryAnomalies = runSnapshot.data?.context.anomalies ?? []
+    return entryAnomalies
+      .filter((ea) => ea.anomalies.length > 0)
+      .map((ea) => {
+        const row = labor.find((l) => l.id === ea.entry_id)
+        const w = row ? workers.find((x) => x.id === row.worker_id) : undefined
+        return {
+          entryId: ea.entry_id,
+          name: w?.name ?? 'A crew member',
+          hours: Number(row?.hours ?? 0),
+          anomalies: ea.anomalies,
+        }
+      })
+  }, [runSnapshot.data, labor, workers])
 
   // Approve-all: walk every pending entry through the same per-row PATCH
   // the inline editor uses, applying any inline edits the foreman already
@@ -175,32 +191,51 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
                 metaTone={pending.length > 0 ? 'amber' : undefined}
               />
             </MKpiRow>
-            {anomaly && !aiDismissed ? (
+            {flaggedEntries.length > 0 && !aiDismissed ? (
               <div style={{ padding: '4px 16px 0' }}>
                 <MAiStripe
                   tone="warn"
                   eyebrow="NEEDS YOUR EYES"
                   title={
-                    anomaly.kind === 'long'
-                      ? `${anomaly.name}'s day is ${formatDecimalHours(anomaly.hours, 1)} — likely a missed clock-out.`
-                      : `${anomaly.name} has no hours logged — likely a missed clock-in.`
+                    flaggedEntries.length === 1
+                      ? `1 entry needs a look before you approve.`
+                      : `${flaggedEntries.length} entries need a look before you approve.`
                   }
-                  attribution={<>Based on today&apos;s clock activity.</>}
+                  attribution={<>Based on this period&apos;s clock + labor activity.</>}
                   onDismiss={() => setAiDismissed(true)}
                   action={
-                    <MButton
-                      size="sm"
-                      variant="quiet"
-                      onClick={() => {
-                        setExpandedId(anomaly.id)
-                        setAiDismissed(true)
-                      }}
-                    >
-                      Review entry
-                    </MButton>
+                    flaggedEntries[0] && labor.some((l) => l.id === flaggedEntries[0]!.entryId) ? (
+                      <MButton
+                        size="sm"
+                        variant="quiet"
+                        onClick={() => {
+                          setExpandedId(flaggedEntries[0]!.entryId)
+                          setAiDismissed(true)
+                        }}
+                      >
+                        Review first entry
+                      </MButton>
+                    ) : undefined
                   }
                 >
-                  Open the row to adjust before you approve the crew.
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {flaggedEntries.slice(0, 5).map((fe) => (
+                      <div key={fe.entryId}>
+                        <div style={{ fontWeight: 600 }}>
+                          {fe.name}
+                          {fe.hours > 0 ? ` · ${formatDecimalHours(fe.hours, 1)}` : ''}
+                        </div>
+                        <ul style={{ margin: '2px 0 0', paddingLeft: 16 }}>
+                          {fe.anomalies.map((a, i) => (
+                            <li key={`${fe.entryId}-${a.code}-${i}`}>{a.message}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                    {flaggedEntries.length > 5 ? (
+                      <div className="m-quiet-sm">+{flaggedEntries.length - 5} more flagged.</div>
+                    ) : null}
+                  </div>
                 </MAiStripe>
               </div>
             ) : null}
