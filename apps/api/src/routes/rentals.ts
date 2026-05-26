@@ -640,12 +640,12 @@ export async function handleRentalRoutes(req: http.IncomingMessage, url: URL, ct
       )
       const newRental = await client.query<RentalRow>(
         `insert into rentals (
-           company_id, project_id, customer_id, sku, description, daily_rate_cents,
+           company_id, project_id, customer_id, item_description, daily_rate, notes,
            delivered_on, status, invoice_cadence_days, next_invoice_at,
            transferred_from_rental_id
          )
-         select company_id, $1, customer_id, sku, description, daily_rate_cents,
-                $2, 'active', invoice_cadence_days, $3, id
+         select company_id, $1, customer_id, item_description, daily_rate, notes,
+                $2::date, 'active', invoice_cadence_days, $3, id
            from rentals where id = $4 and company_id = $5
          returning ${RENTAL_SELECT_COLUMNS}`,
         [
