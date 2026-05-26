@@ -33,11 +33,13 @@ export function OwnerTimeAnomaliesScreen() {
       <div className="px-4 pb-4">
         <WhyThis
           title="What counts as an anomaly?"
-          attribution="From server-side hour heuristics — see /api/time-review-runs"
+          attribution="From the deterministic detector — see /api/time-review-runs"
         >
-          The time-review reducer flags rows where the recorded hours fall outside the expected window for that worker /
-          project / day combination — gaps, overlaps, hours over a soft cap, or entries posted after the geofence
-          cutoff. Each anomaly is a hint, not a verdict; you decide whether to approve or reopen.
+          Each covered entry is checked against seven deterministic signals (no AI): overlapping clock/labor intervals,
+          excessive days over a ~12h cap, zero or negative duration, long shifts with no break recorded, a clock-out
+          before a later same-site punch, off-geofence punches, and hours far above the crew/role norm for that day. The
+          count below is the number of entries that tripped at least one signal; open a run to see the specific reason
+          on each flagged entry. Each anomaly is a hint, not a verdict — you decide whether to approve or reopen.
         </WhyThis>
       </div>
 

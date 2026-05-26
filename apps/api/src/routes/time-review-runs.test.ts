@@ -43,10 +43,25 @@ class FakePool {
     id: string
     company_id: string
     project_id: string | null
+    worker_id?: string | null
     hours: string
     review_locked_at: string | null
     occurred_on: string
     deleted_at: string | null
+    division_code?: string | null
+    service_item_code?: string | null
+  }> = []
+  clockEvents: Array<{
+    id: string
+    company_id: string
+    project_id: string | null
+    worker_id: string | null
+    event_type: string
+    occurred_at: string
+    inside_geofence: boolean | null
+    source?: string | null
+    photo_uploaded_at?: string | null
+    voided_at?: string | null
   }> = []
   workflowEvents: Array<{ event_type: string; state_version: number }> = []
   syncEvents: Row[] = []
@@ -83,7 +98,8 @@ class FakePool {
       return { rows: [], rowCount: 0 }
     }
 
-    if (/from labor_entries/i.test(sql) && /over_eight/i.test(sql)) {
+    // Create handler: covered-entry roll-up (no over_eight column anymore).
+    if (/from labor_entries/i.test(sql) && /review_locked_at is null/i.test(sql)) {
       const [companyId, projectId, periodStart, periodEnd] = params as [string, string, string, string]
       const rows = this.laborEntries
         .filter(
@@ -95,7 +111,57 @@ class FakePool {
             l.occurred_on >= periodStart &&
             l.occurred_on <= periodEnd,
         )
-        .map((l) => ({ id: l.id, hours: l.hours, over_eight: Number(l.hours) > 8 }))
+        .map((l) => ({ id: l.id, hours: l.hours }))
+      return { rows, rowCount: rows.length }
+    }
+
+    // loadAnomalyInputs: labor entries for the detector (occurred_on::text).
+    if (/from labor_entries/i.test(sql) && /occurred_on::text/i.test(sql)) {
+      const [companyId, projectId, periodStart, periodEnd, restrict] = params as [
+        string,
+        string,
+        string,
+        string,
+        string[] | null,
+      ]
+      const rows = this.laborEntries
+        .filter(
+          (l) =>
+            l.company_id === companyId &&
+            !l.deleted_at &&
+            (projectId === '' || l.project_id === projectId) &&
+            l.occurred_on >= periodStart &&
+            l.occurred_on <= periodEnd &&
+            (restrict === null || restrict.includes(l.id)),
+        )
+        .map((l) => ({
+          id: l.id,
+          worker_id: l.worker_id ?? null,
+          project_id: l.project_id,
+          hours: l.hours,
+          occurred_on: l.occurred_on,
+          division_code: l.division_code ?? null,
+          service_item_code: l.service_item_code ?? null,
+        }))
+      return { rows, rowCount: rows.length }
+    }
+
+    // loadAnomalyInputs: clock events for the detector.
+    if (/from clock_events/i.test(sql)) {
+      const [companyId, projectId] = params as [string, string]
+      const rows = this.clockEvents
+        .filter((c) => c.company_id === companyId && (projectId === '' || c.project_id === projectId))
+        .map((c) => ({
+          id: c.id,
+          worker_id: c.worker_id,
+          project_id: c.project_id,
+          event_type: c.event_type,
+          occurred_at: c.occurred_at,
+          inside_geofence: c.inside_geofence,
+          source: c.source ?? null,
+          photo_uploaded_at: c.photo_uploaded_at ?? null,
+          voided_at: c.voided_at ?? null,
+        }))
       return { rows, rowCount: rows.length }
     }
 
@@ -241,22 +307,26 @@ describe('handleTimeReviewRunRoutes — POST /api/time-review-runs', () => {
     expect(responses[0]?.status).toBe(400)
   })
 
-  it('creates a pending run, computes total_hours and surfaces the hours>8 anomaly count', async () => {
+  it('creates a pending run, computes total_hours and surfaces the deterministic anomaly count + per-entry reasons', async () => {
     const pool = new FakePool()
+    // Normal 8h day — clean.
     pool.laborEntries.push({
       id: '11111111-aaaa-4aaa-8aaa-111111111111',
       company_id: 'co-1',
       project_id: null,
+      worker_id: 'w-1',
       hours: '8',
       review_locked_at: null,
       occurred_on: '2026-05-02',
       deleted_at: null,
     })
+    // 14h day — over the 12h cap → excessive anomaly.
     pool.laborEntries.push({
       id: '22222222-aaaa-4aaa-8aaa-222222222222',
       company_id: 'co-1',
       project_id: null,
-      hours: '11',
+      worker_id: 'w-2',
+      hours: '14',
       review_locked_at: null,
       occurred_on: '2026-05-03',
       deleted_at: null,
@@ -266,8 +336,16 @@ describe('handleTimeReviewRunRoutes — POST /api/time-review-runs', () => {
     expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(201)
     expect(pool.runs).toHaveLength(1)
     expect(pool.runs[0]?.total_entries).toBe(2)
-    expect(pool.runs[0]?.total_hours).toBe('19.00')
+    expect(pool.runs[0]?.total_hours).toBe('22.00')
+    // Only the 14h entry trips a signal → one flagged entry.
     expect(pool.runs[0]?.anomaly_count).toBe(1)
+    // Per-entry reasons ride the create response (additive `anomalies`).
+    const body = responses[0]?.body as {
+      context: { anomalies?: Array<{ entry_id: string; anomalies: Array<{ code: string; message: string }> }> }
+    }
+    expect(body.context.anomalies).toHaveLength(1)
+    expect(body.context.anomalies?.[0]?.entry_id).toBe('22222222-aaaa-4aaa-8aaa-222222222222')
+    expect(body.context.anomalies?.[0]?.anomalies?.[0]?.code).toBe('excessive')
   })
 })
 
