@@ -392,7 +392,7 @@ Layer 3: Derived Insight & Workflow UI
 | **Backend**         | Node.js (plain http module) + Postgres                     | No framework; minimal HTTP server                                                                                                                                                                                                                                  |
 | **Frontend**        | React 19 + Vite SPA                                        | Client-side only; no SSR                                                                                                                                                                                                                                           |
 | **Worker**          | Node.js background tasks                                   | Postgres-backed leased queue; no Hatchet yet                                                                                                                                                                                                                       |
-| **Monorepo**        | npm workspaces                                             | apps: api, web, worker; packages: config, domain, logger, queue                                                                                                                                                                                                    |
+| **Monorepo**        | npm workspaces                                             | apps: api, web, worker; packages: config, domain, logger, queue, workflows, capture-schema, capture-catalog, pipe-blueprint, pipe-roomplan, pipe-drone, pipe-photogrammetry                                                                                        |
 | **Database**        | Postgres (pg driver)                                       | Direct parameterized SQL in the per-feature handler modules under `apps/api/src/routes/` (dispatched via `routes/dispatch.ts`), not in `server.ts`; no ORM                                                                                                         |
 | **Auth**            | Clerk wired in SPA + JWT verification in API; gated by env | `apps/web/src/App.tsx` runs SignIn/SignUp; `apps/api/src/auth.ts` verifies Clerk JWTs when `CLERK_JWT_KEY` is set. Header fallback to `ACTIVE_USER_ID=demo-user` is still active until `AUTH_ALLOW_HEADER_FALLBACK=0` and `CLERK_JWT_KEY` are configured per tier. |
 | **File Storage**    | Dual-mode shipped: local FS or DigitalOcean Spaces         | `apps/api/src/storage.ts` auto-selects `S3Storage` when `DO_SPACES_BUCKET/KEY/SECRET` are set, otherwise local FS at `BLUEPRINT_STORAGE_ROOT`. Default region `tor1`.                                                                                              |
@@ -412,7 +412,13 @@ sitelayer/
 │   ├── domain/              # Shared types, business math, constants
 │   ├── logger/              # Pino logger with request and Sentry trace context
 │   ├── queue/               # Shared Postgres queue claiming/apply helpers
-│   └── workflows/           # Deterministic workflow reducers + Zod schemas (see docs/DETERMINISTIC_WORKFLOWS.md)
+│   ├── workflows/           # Deterministic workflow reducers + Zod schemas (see docs/DETERMINISTIC_WORKFLOWS.md)
+│   ├── capture-schema/      # Unified TakeoffResult / TakeoffGeometry types shared by every capture pipeline
+│   ├── capture-catalog/     # Service-item / MasterFormat code catalog used to classify captured quantities
+│   ├── pipe-blueprint/      # Blueprint PDF → quantities via Claude Opus vision (live behind BLUEPRINT_VISION_MODE=live)
+│   ├── pipe-roomplan/       # Apple RoomPlan CapturedRoom JSON → takeoff measurements
+│   ├── pipe-drone/          # Drone imagery (NodeODM client + sidecar) → roof/footprint/sitework quantities
+│   └── pipe-photogrammetry/ # Phone-video/Luma + labeled-mesh → surface measurements
 ├── docker/
 │   └── postgres/init/       # Schema initialization
 └── docs/                    # Architecture, requirements, findings
@@ -459,6 +465,10 @@ Blueprints / takeoff:
 - POST `/api/projects/:id/takeoff/measurement` — append one polygon
 - POST `/api/projects/:id/takeoff/measurements` — replace set
 - GET/PATCH/DELETE `/api/takeoff/measurements/:id`
+- POST `/api/projects/:id/takeoff-drafts/capture` — run a capture pipeline (`kind` = blueprint_vision | roomplan | drone | photogrammetry); returns a review-required `TakeoffResult` draft
+- POST `/api/projects/:id/takeoff-drafts/:draftId/promote` — promote selected captured quantities into committed `takeoff_measurements`
+
+3D takeoff preview: there IS a working three.js renderer — `apps/web/src/screens/projects/takeoff-3d-scene.tsx` + the `buildTakeoffPreviewScene` builder in `apps/web/src/lib/takeoff/geometry-3d.ts` (lazy `vendor-three` chunk). Live at `/projects/:id/takeoff-preview`, public demo at `/demo/takeoff-preview-3d`. The four capture pipelines live in `packages/pipe-*` on the shared `packages/capture-schema` types. See `docs/BLUEPRINT_TO_3D_PREVIEW.md` and `docs/MULTI_DRAFT_TAKEOFF_SPEC.md`. Not built: a scaffold _designer_, and captured geometry isn't yet fed into the renderer (only manual blueprint polygons are).
 
 Estimation:
 
