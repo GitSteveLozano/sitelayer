@@ -681,13 +681,9 @@ Each deterministic workflow has a registered reducer in `packages/workflows/src/
 - Type-safe via TypeScript if using pg client correctly
 - Easier to profile and debug
 
-**Tradeoff**: String interpolation risks SQL injection; verbose; no query builder abstractions; schema changes require code edits.
+**Tradeoff**: verbose; no query builder. (SQL-injection is mitigated — all queries are parameterized; that's enforced, not optional.)
 
-**Recommendation**: ⚠️ **Unsustainable beyond 100 queries**. At ~500 queries per pilot, already at threshold. Consider:
-
-- **Option A** (Minimal): Migrate to Postgres.js (same client, better ergonomics, typed queries)
-- **Option B** (Recommended): Introduce Drizzle or Prisma when schema stabilizes post-pilot
-- **Option C** (Overkill): Pair Node.js with Temporal.io for workflow + transactional guarantees
+**Recommendation**: **Keep raw parameterized SQL. Do NOT introduce an ORM (Prisma/Drizzle).** This codebase deliberately relies on patterns ORMs fight: `FOR UPDATE SKIP LOCKED` (the `@sitelayer/queue` lease), `SET LOCAL app.company_id` (RLS GUC), closeout/analytics CTEs, optimistic `version`/`state_version` guards, and `withMutationTx` transaction control. An ORM would force constant `$queryRaw` escapes (no benefit) **and** want to own migrations — replacing the locked-down, checksummed, immutable forward-only SQL migration discipline (`docker/postgres/init`, `DEPLOY_RUNBOOK`) is a safety regression, not an upgrade. "Unsustainable past N queries" is not true for this style. If compile-time type-safety ever becomes a real pain, the only thing worth evaluating is a **SQL-first type generator (PgTyped / pg-to-ts)** that types your existing SQL without touching migrations or RLS — never an ORM.
 
 ### 4. **Monorepo with npm Workspaces**
 
@@ -745,22 +741,16 @@ Each deterministic workflow has a registered reducer in `packages/workflows/src/
 
 ### Database ORM / Query Layer
 
-**Current**: Direct pg client SQL strings  
-**Verdict**: ⚠️ OK for now; **must migrate by post-pilot**
+**Current**: Direct pg client, raw parameterized SQL  
+**Verdict**: ✅ **Correct for this codebase. Stay here.**
 
-| Tool            | Upside                                | Downside                                   | Fit for Sitelayer                      |
-| --------------- | ------------------------------------- | ------------------------------------------ | -------------------------------------- |
-| **Prisma**      | Best DX, auto-migrations, type-safe   | Runtime overhead, lock-in to schema.prisma | ✅ Recommended                         |
-| **Drizzle**     | Lightweight, fully typed, SQL-in-TS   | Smaller ecosystem                          | ✅ Alternative if performance critical |
-| **Postgres.js** | Drop-in pg replacement, typed queries | Still manual composition                   | 🟡 Bridge solution, not long-term      |
-| **Raw pg**      | Total control, transparent            | String concatenation risks                 | ❌ Don't scale this                    |
+| Tool                        | Fit for Sitelayer                                                                                                                           |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Raw parameterized pg**    | ✅ Current. Transparent; full control over RLS GUC, `FOR UPDATE SKIP LOCKED`, CTEs, tx boundaries. Stay here.                               |
+| **PgTyped / pg-to-ts**      | 🟡 The ONLY thing worth considering — generates TS types _from_ your existing SQL/schema. Adds compile-time safety, touches nothing else.   |
+| **Prisma / Drizzle (ORMs)** | ❌ No. They want to own migrations (vs the locked-down immutable SQL discipline) and fight RLS / SKIP LOCKED / CTEs → constant `$queryRaw`. |
 
-**Recommendation**: Keep the current ledgered SQL migrations through the pilot, then plan a **Prisma migration** before the schema surface grows much further. It gives you:
-
-- Type safety for queries
-- Auto-migration generation from schema changes
-- Clear schema-of-record (schema.prisma)
-- Generator plugins for seed data
+**Recommendation**: **Do not migrate to an ORM.** The raw-SQL approach is the right fit — it's what makes RLS, the lease queue, and the deterministic-workflow transactions tractable. If query type-safety becomes a real, measured pain, evaluate a SQL-first type generator (PgTyped) only. An ORM here is a regression.
 
 ### Authentication
 
@@ -855,10 +845,7 @@ Each deterministic workflow has a registered reducer in `packages/workflows/src/
 
 **When**: After first customer completes 2-4 week pilot
 
-1. **Prisma Integration** (1 week)
-   - Migrate schema.prisma from SQL
-   - Auto-generate migrations
-   - Type-safe queries
+1. **(No ORM migration.)** Raw parameterized SQL stays — see "Database ORM / Query Layer" above. If query type-safety becomes a measured pain, evaluate a SQL-first type generator (PgTyped) only; do not adopt Prisma/Drizzle.
 2. **Clerk Auth** (1 week)
    - Replace hardcoded demo user
    - Per-company isolation
