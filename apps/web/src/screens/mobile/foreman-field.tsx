@@ -98,7 +98,7 @@ export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapR
             await refresh()
             setSelected(null)
           } catch {
-            // PATCH may not exist server-side yet; close anyway.
+            // PATCH /api/worker-issues/:id is wired; on any error close anyway.
             setSelected(null)
           } finally {
             setBusy(false)

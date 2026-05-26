@@ -24,14 +24,16 @@ The old parallel frontend track was removed on 2026-05-05 (ADR 0003). If you see
 
 The mobile shell at `apps/web/src/screens/mobile/` is the canonical UI. Steve's design lives there; everything else mounts under it.
 
+The runtime shell is `apps/web/src/screens/mobile-shell.tsx` (`MobileShell`), mounted at `App.tsx`'s `/*` via `routes/workspace.tsx`, with its own inline route table including the `projects/:projectId/*` and `rentals/*` catchalls. Add a new reachable mobile route inside `mobile-shell.tsx` **before** those catchalls, or mount a full-screen route directly in `App.tsx`/`more.tsx`/`financial.tsx`. The standalone `routes/{projects,rentals,schedule,home,time,log,crew}.tsx` modules are legacy/dead (never mounted under the shell, and being removed) — do not add routes there.
+
 ### 2. State management contract
 
-| Concern                     | Where it lives                                                 |
-| --------------------------- | -------------------------------------------------------------- |
-| Long-lived UI orchestration | XState machines in `apps/web/src/machines/` (5 machines today) |
-| Data fetching + caching     | TanStack Query (`apps/web/src/lib/api/`)                       |
-| Backend workflows           | Temporal.io-style state machines in `packages/workflows/`      |
-| HTTP transport              | `apps/web/src/lib/api/client.ts:request<T>()` (single source)  |
+| Concern                     | Where it lives                                                                                                                                                                                                             |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Long-lived UI orchestration | XState machines in `apps/web/src/machines/` (exemplars: `project-lifecycle.ts`, `estimate-push.ts`, `time-review.ts`, `crew-schedule.ts`, `billing-review.ts`, `field-event.ts`; follow `docs/DETERMINISTIC_WORKFLOWS.md`) |
+| Data fetching + caching     | TanStack Query (`apps/web/src/lib/api/`)                                                                                                                                                                                   |
+| Backend workflows           | Temporal.io-style state machines in `packages/workflows/`                                                                                                                                                                  |
+| HTTP transport              | `apps/web/src/lib/api/client.ts:request<T>()` (single source)                                                                                                                                                              |
 
 If you're tempted to put long-lived state in `useState` + `useEffect`, ask first: should this be an XState machine? If the state has multiple modes (idle / loading / error / submitting / etc.) and survives across mounts, the answer is usually yes.
 
@@ -63,7 +65,7 @@ If you fix one of those, do it as a focused PR.
 
 In rough order of authority:
 
-1. **Live code and checked-in deployment files** — `Dockerfile`, `docker-compose.*.yml`, `.github/workflows/`, `apps/api/src/server.ts` (the canonical endpoint list).
+1. **Live code and checked-in deployment files** — `Dockerfile`, `docker-compose.*.yml`, `.github/workflows/`, and `apps/api/src/routes/dispatch.ts` + the `apps/api/src/routes/` handler modules (the canonical endpoint registry; `server.ts` is HTTP+auth+middleware only).
 2. [`CLAUDE.md`](./CLAUDE.md) — operating rules, deploy procedure, env management. Trust this over historical docs.
 3. [`docs/adr/`](docs/adr/) — durable architectural decisions. Newer ADRs supersede older ones; the most recent is the truth.
 4. [`DEPLOY_RUNBOOK.md`](DEPLOY_RUNBOOK.md) — deploy/migration contract.

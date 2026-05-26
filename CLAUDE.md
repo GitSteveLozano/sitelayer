@@ -22,16 +22,18 @@ machine as a collaborator Mac, not Taylor's operator workstation. In that mode:
 
 **State management:**
 
-- **Frontend orchestration** lives in **XState** machines under `apps/web/src/machines/`: `bootstrap-refresh`, `offline-replay`, `project-selection`, `estimate-push`, `billing-review`. These own long-lived UI state (offline queue, role/company switching, multi-step approval flows).
+- **Frontend orchestration** lives in **XState** machines under `apps/web/src/machines/`. Real exemplars to copy: `project-lifecycle.ts`, `estimate-push.ts`, `time-review.ts`, `crew-schedule.ts`, `billing-review.ts`, `field-event.ts`. These own long-lived UI state (offline queue, role/company switching, multi-step approval flows). Follow `docs/DETERMINISTIC_WORKFLOWS.md` for the reducer shape.
 - **Frontend data fetching/caching** lives in **TanStack Query** (`apps/web/src/lib/api/`). Resource-shaped hooks (`useProjects`, `useClockIn`, `useEstimatePush`, etc.).
 - **Backend workflows** are **temporal.io-style** deterministic state machines in `packages/workflows/` (rental-billing, estimate-push, project-closeout, crew-schedule, time-review, labor-payroll, project-lifecycle, field-event, rental, daily-log, notification, shipment, damage-charge-settlement, rental-request-approval, qbo-sync-run, scaffold-ops-approval). See `docs/DETERMINISTIC_WORKFLOWS.md` and the "Workflow Inventory" section below.
 - **Single HTTP client** = `apps/web/src/lib/api/client.ts:request<T>()`. `api-v1-compat.ts` is a name-bridge for the migrated XState machines and delegates to the same `request<T>()` underneath.
 
+**Routing topology (read before adding a reachable route).** The canonical runtime shell is `apps/web/src/screens/mobile-shell.tsx` (`MobileShell`), mounted at `App.tsx`'s `/*` route via `routes/workspace.tsx`. `MobileShell` carries its OWN inline `<Routes>` table, including the `projects/:projectId/*` and `rentals/*` catchalls. To add a new reachable mobile route, add it inside **`mobile-shell.tsx` before those catchalls** (otherwise a catchall swallows it); a full-screen/specialized route instead mounts directly in `App.tsx` (e.g. `/financial/*`, `/more`) or in `more.tsx` / `financial.tsx`. **`routes/{projects,rentals,schedule,home,time,log,crew}.tsx` are legacy/dead — never mounted under the shell (and being removed). Do NOT add routes there.**
+
 Where new code goes:
 
-- **New screen** → `apps/web/src/screens/mobile/<name>.tsx` for canonical mobile shell work, or the existing feature folders under `apps/web/src/screens/` when extending a specialized full-screen route.
+- **New screen** → `apps/web/src/screens/mobile/<name>.tsx`, then wire its route into `mobile-shell.tsx` (before the catchalls). For a specialized full-screen route, extend the relevant feature folder under `apps/web/src/screens/` and mount it directly in `App.tsx`/`more.tsx`/`financial.tsx`.
 - **New primitive** → `apps/web/src/components/m/` (lowercase, e.g. `button.tsx`, `kpi.tsx`).
-- **New durable UI state machine** → `apps/web/src/machines/<name>.ts` using the patterns in the existing five.
+- **New durable UI state machine** → `apps/web/src/machines/<name>.ts`, following the patterns in the existing exemplars (`project-lifecycle.ts`, `estimate-push.ts`, `time-review.ts`, `crew-schedule.ts`, `billing-review.ts`, `field-event.ts`) and `docs/DETERMINISTIC_WORKFLOWS.md`.
 - **New backend workflow** → `packages/workflows/<name>.ts` following the rules in `docs/DETERMINISTIC_WORKFLOWS.md`.
 - **New API route** → `apps/api/src/routes/<name>.ts`.
 
@@ -345,7 +347,7 @@ and both have unit-test coverage (`apps/api/src/auth.test.ts`,
 
 ## Current Infrastructure Snapshot
 
-**Verified with `doctl` and production smoke checks on 2026-04-25.**
+**Verified with `doctl` and production smoke checks on 2026-04-25.** (Schema has since advanced to migration 096, 2026-05-26; the droplet / managed-Postgres / Spaces topology below is unchanged.)
 
 | Resource                         | Current State                                                                                                                                                                                                                                             |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -391,7 +393,7 @@ Layer 3: Derived Insight & Workflow UI
 | **Frontend**        | React 19 + Vite SPA                                        | Client-side only; no SSR                                                                                                                                                                                                                                           |
 | **Worker**          | Node.js background tasks                                   | Postgres-backed leased queue; no Hatchet yet                                                                                                                                                                                                                       |
 | **Monorepo**        | npm workspaces                                             | apps: api, web, worker; packages: config, domain, logger, queue                                                                                                                                                                                                    |
-| **Database**        | Postgres (pg driver)                                       | Direct SQL queries in server.ts; no ORM                                                                                                                                                                                                                            |
+| **Database**        | Postgres (pg driver)                                       | Direct parameterized SQL in the per-feature handler modules under `apps/api/src/routes/` (dispatched via `routes/dispatch.ts`), not in `server.ts`; no ORM                                                                                                         |
 | **Auth**            | Clerk wired in SPA + JWT verification in API; gated by env | `apps/web/src/App.tsx` runs SignIn/SignUp; `apps/api/src/auth.ts` verifies Clerk JWTs when `CLERK_JWT_KEY` is set. Header fallback to `ACTIVE_USER_ID=demo-user` is still active until `AUTH_ALLOW_HEADER_FALLBACK=0` and `CLERK_JWT_KEY` are configured per tier. |
 | **File Storage**    | Dual-mode shipped: local FS or DigitalOcean Spaces         | `apps/api/src/storage.ts` auto-selects `S3Storage` when `DO_SPACES_BUCKET/KEY/SECRET` are set, otherwise local FS at `BLUEPRINT_STORAGE_ROOT`. Default region `tor1`.                                                                                              |
 | **QBO Integration** | OAuth + REST API (direct HTTP)                             | Connector layer; sync state in `integration_mappings` table                                                                                                                                                                                                        |
@@ -420,12 +422,12 @@ sitelayer/
 
 ### Backend (apps/api/src/server.ts)
 
-- **HTTP Server**: Plain Node.js `http` module; no framework overhead
-- **Routing**: Manual request parsing; CORS handling for frontend/worker origins
-- **Database**: Direct pg client queries; no ORM
+- **HTTP Server**: Plain Node.js `http` module; no framework overhead. `server.ts` owns HTTP, auth, and middleware; it does not contain the route table.
+- **Routing**: `server.ts` hands each request to `apps/api/src/routes/dispatch.ts`, which dispatches to the ~75 per-feature handler modules in `apps/api/src/routes/` (~150 endpoints). CORS handling for frontend/worker origins.
+- **Database**: Direct parameterized pg client queries inside those handler modules; no ORM
 - **Dependencies**: `pg`, `@sentry/node`, `@sitelayer/config`, `@sitelayer/domain`, `@sitelayer/logger`, `@sitelayer/queue`
 
-**Endpoints** (representative — `apps/api/src/server.ts` is the canonical list):
+**Endpoints** (partial sample — the canonical registry is `apps/api/src/routes/dispatch.ts` plus the ~75 handler modules in `apps/api/src/routes/` (~150 endpoints total). `server.ts` is HTTP + auth + middleware only; it does not enumerate routes. Don't treat the list below as exhaustive):
 
 System / observability:
 
@@ -434,6 +436,8 @@ System / observability:
 - GET `/api/features`, GET `/api/spec`, GET `/api/session`
 - GET `/api/audit-events`
 - GET `/api/debug/traces/:traceId` — Sentry trace fetch, gated by `DEBUG_TRACE_TOKEN`
+
+Handler-module routes not in the legacy sample above (illustrative, not exhaustive — see `routes/dispatch.ts`): `routes/ai-chat.ts` (AI chat assist), `routes/dispatch-lanes.ts` (rental dispatch lanes), `routes/worker-issues.ts` (field issue submissions).
 
 Companies / auth:
 
@@ -605,7 +609,7 @@ Each deterministic workflow has a registered reducer in `packages/workflows/src/
 | `shipment`                 | Live in API; estimate → fulfillment workflow with reducer + event log                                                                                | v1     | planned, picking, shipped, delivered, returning, closed, voided                                              | none                                                      |
 | `damage_charge_settlement` | Live in API; damage/loss/late-return billing workflow                                                                                                | v1     | open, invoiced, waived                                                                                       | `post_qbo_damage_charge` (optional)                       |
 | `rental_request_approval`  | Live in API; operator-side approval queue for portal rental_requests submissions                                                                     | v1     | pending, approved, declined                                                                                  | none                                                      |
-| `qbo_sync_run`             | Live in API; wraps every full QBO sync attempt with START_SYNC → SYNC_SUCCEEDED/FAILED dispatched through the reducer (migration 077)                | v1     | pending, syncing, succeeded, failed                                                                          | `run_qbo_sync`                                            |
+| `qbo_sync_run`             | Live in API; wraps every full QBO sync attempt with START_SYNC → SYNC_SUCCEEDED/FAILED dispatched through the reducer (migration 077)                | v1     | pending, syncing, succeeded, failed, retrying                                                                | `run_qbo_sync`                                            |
 | `scaffold_ops_approval`    | Live in API; vendor/branch/external-rental approval gates                                                                                            | v1     | pending, approved, rejected                                                                                  | none                                                      |
 
 ### Database Schema
@@ -613,7 +617,7 @@ Each deterministic workflow has a registered reducer in `packages/workflows/src/
 **Core Tables** (canonical source: `docker/postgres/init/*.sql`):
 
 - `companies` — multi-tenant root
-- `company_memberships` — Clerk user → company role (`admin|foreman|office|member`); auth identity lives here, not a separate users table
+- `company_memberships` — Clerk user → company role (`admin|foreman|office|member|bookkeeper`; canonical union: `packages/domain/src/roles.ts:COMPANY_ROLES`); auth identity lives here, not a separate users table
 - `customers` — per-company customer roster
 - `projects` — construction projects
 - `blueprint_documents` — uploaded PDF/image documents with storage path (local FS or DO Spaces key) and revision lineage

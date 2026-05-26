@@ -11,8 +11,9 @@ import type { BootstrapResponse } from '@/lib/api'
  * filter row + a per-issue list. We mock `@/lib/api`'s `apiGet`/`apiPatch`
  * to drive the loading skeleton, the empty state, and a populated list,
  * and to confirm the chip counts reflect the fetched rows. The detail /
- * resolve sub-flow is left untested here (it depends on a PATCH endpoint
- * that may not exist server-side yet) — see REPORT.
+ * resolve sub-flow is left untested here; it calls the wired
+ * `PATCH /api/worker-issues/:id` endpoint, which has its own server-side
+ * coverage in worker-issues.test.ts.
  */
 
 const apiGetMock = vi.fn<(path: string, slug?: string) => Promise<unknown>>()

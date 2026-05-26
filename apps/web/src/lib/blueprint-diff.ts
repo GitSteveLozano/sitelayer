@@ -1,13 +1,16 @@
 /**
  * Client-side raster diff for blueprint revisions.
  *
+ * This module implements approach #2 (live, the default path used by the
+ * revision-compare surface): it loads the "before" + "after" page images
+ * onto an offscreen canvas, computes a per-pixel difference, and produces
+ * a red/blue highlight overlay the estimator can render over the page.
+ *
  * Approach #1 (server-side stored diffs from `blueprint_page_diffs`,
- * migration 037) is not yet reachable: there is no API route that serves
- * those rows — the migration itself documents the image-diff worker as an
- * unshipped Phase 3E follow-on. So this module implements approach #2: it
- * loads the "before" + "after" page images onto an offscreen canvas,
- * computes a per-pixel difference, and produces a red/blue highlight
- * overlay the estimator can render over the page.
+ * migration 037) is the optional, not-yet-wired alternative: the migration
+ * and table exist, but no API route serves those rows yet, so nothing reads
+ * the stored diffs today. Wiring that endpoint is a follow-on; until then
+ * the client-side raster diff below is the shipped behavior.
  *
  * Color convention (matches the design handoff for the picker):
  *   - RED   = content that exists in BEFORE but is gone/faded in AFTER

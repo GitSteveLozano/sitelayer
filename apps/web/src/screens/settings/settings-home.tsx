@@ -17,10 +17,6 @@
  * Notifications + push are rendered inline as a sub-section so the whole
  * surface is reachable without leaving the screen — push toggle uses the
  * existing PushOnboardingCard, channel prefs use NotificationPreferencesScreen.
- *
- * NOTE FOR INTEGRATOR: this screen is not yet wired into mobile-shell.tsx
- * (read-only for this task). Add a route + a "Settings" entry so the
- * admin shell can reach it. See the REPORT in the task summary.
  */
 import { useState } from 'react'
 import type { BootstrapResponse } from '@/lib/api'
