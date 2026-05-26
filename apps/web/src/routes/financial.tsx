@@ -7,6 +7,8 @@ import {
   FinancialHubScreen,
   LaborPayrollRunDetailScreen,
   LaborPayrollRunListScreen,
+  PayrollExportDetailScreen,
+  PayrollExportListScreen,
 } from '@/screens/financial'
 
 export default function FinancialRoute() {
@@ -19,6 +21,8 @@ export default function FinancialRoute() {
       <Route path="billing-runs/:id" element={<BillingRunDetailScreen />} />
       <Route path="labor-payroll-runs" element={<LaborPayrollRunListScreen />} />
       <Route path="labor-payroll-runs/:id" element={<LaborPayrollRunDetailScreen />} />
+      <Route path="payroll-exports" element={<PayrollExportListScreen />} />
+      <Route path="payroll-exports/:id" element={<PayrollExportDetailScreen />} />
     </Routes>
   )
 }

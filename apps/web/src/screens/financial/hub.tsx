@@ -72,6 +72,20 @@ export function FinancialHubScreen() {
             </div>
           </Card>
         </Link>
+
+        <Link to="/financial/payroll-exports" className="block">
+          <Card>
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-[14px] font-semibold">Payroll exports</div>
+                <div className="text-[12px] text-ink-3 mt-0.5">
+                  Generate a CSV / Xero / Gusto / ADP file from a run and download it.
+                </div>
+              </div>
+              <Pill tone="default">Files</Pill>
+            </div>
+          </Card>
+        </Link>
       </div>
     </div>
   )
