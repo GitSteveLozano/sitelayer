@@ -121,7 +121,7 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
           <MChip active={grp === 'person'} onClick={() => setGrp('person')}>
             By person
           </MChip>
-          <MChip active={grp === 'map'} onClick={() => setGrp('map')}>
+          <MChip active={grp === 'map'} onClick={() => navigate('/map')}>
             Map
           </MChip>
         </MChipRow>
@@ -437,7 +437,7 @@ export function CrewQuickActions({
   )
 }
 
-type ForemanCrewMapProps = {
+export type ForemanCrewMapProps = {
   projects: BootstrapResponse['projects']
   workers: BootstrapResponse['workers']
   labor: BootstrapResponse['laborEntries']
@@ -445,7 +445,14 @@ type ForemanCrewMapProps = {
   onOpenProject: (projectId: string) => void
 }
 
-function ForemanCrewMap({ projects, workers, labor, today, onOpenProject }: ForemanCrewMapProps) {
+/**
+ * The stylized "crew on site" map body — roads/blocks backdrop, a
+ * geofence ring + label per active site, worker pins colored by clock
+ * status, plus a stat strip and a live roster beneath. Shared between
+ * the in-screen Crew "Map" toggle and the dedicated `fm-map` screen
+ * (`foreman-map.tsx`) so the two stay visually identical.
+ */
+export function ForemanCrewMap({ projects, workers, labor, today, onOpenProject }: ForemanCrewMapProps) {
   const activeProjects = projects.filter((p) => /progress|active/i.test(p.status)).slice(0, 3)
   const mappedProjects = activeProjects.length > 0 ? activeProjects : projects.slice(0, 3)
   const todayLabor = labor.filter((l) => l.occurred_on === today && !l.deleted_at && l.worker_id)
