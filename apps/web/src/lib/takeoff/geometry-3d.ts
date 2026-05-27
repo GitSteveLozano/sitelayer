@@ -49,6 +49,11 @@ const DEFAULT_WORLD_PER_BOARD_UNIT = 1
 const DEFAULT_WALL_HEIGHT_FT = 9
 const POLYGON_VISUAL_THICKNESS_FT = 0.08
 const PALETTE = ['#d9904a', '#4f9f89', '#6d7ed7', '#c75f75', '#8e735b', '#4b9ed6', '#9b7bd8', '#7d9253'] as const
+// Captured geometry (any pipeline that emits geometry.surfaces[].polygon —
+// drone today; lat/lon coords) arrives in source-specific coordinates with no
+// shared board-space scale, so we normalize the whole capture set to roughly
+// this many feet across.
+const CAPTURE_TARGET_SPAN_FT = 60
 
 export function buildTakeoffPreviewScene(
   measurements: TakeoffMeasurement[],
@@ -70,6 +75,10 @@ export function buildTakeoffPreviewScene(
   let legacyPageOneCount = 0
 
   for (const [index, measurement] of measurements.entries()) {
+    // Captured geometry isn't tied to a board-space sheet; it's handled in
+    // the dedicated capture phase below (and bypasses the blueprint/page
+    // filters since it carries no blueprint_document_id / page_id).
+    if (isCaptureGeometry(measurement.geometry)) continue
     if (activeBlueprintId && measurement.blueprint_document_id !== activeBlueprintId) continue
     if (options.activePage && !measurementBelongsToPage(measurement, options.activePage)) continue
     if (options.activePage && measurement.page_id == null && options.activePage.page_number === 1) {
@@ -81,17 +90,7 @@ export function buildTakeoffPreviewScene(
       continue
     }
 
-    const color = colorForKey(measurement.service_item_code)
-    const quantity = Number(measurement.quantity)
-    const base = {
-      id: measurement.id,
-      serviceItemCode: measurement.service_item_code,
-      quantity: Number.isFinite(quantity) ? quantity : 0,
-      unit: measurement.unit,
-      elevation: measurement.elevation,
-      color,
-      notes: measurement.notes,
-    }
+    const base = buildBase(measurement)
 
     if (geometry.kind === 'polygon') {
       const points = pointsToWorld(geometry.points, worldPerBoardUnit)
@@ -167,6 +166,33 @@ export function buildTakeoffPreviewScene(
     }
   }
 
+  // Capture phase: render promoted capture polygons (those whose source
+  // pipeline emitted geometry.surfaces[].polygon — drone today; blueprint
+  // currently ships only quantities + a pixel artifact, so its captures don't
+  // carry a polygon yet). They have no board calibration, so we normalize the
+  // whole set by its shared bounds — the SHAPE and relative placement are
+  // correct; absolute scale is not, hence the warning.
+  const captureEntries: Array<{ measurement: TakeoffMeasurement; points: Array<[number, number]> }> = []
+  for (const measurement of measurements) {
+    const polygon = readCapturePolygon(measurement.geometry)
+    if (polygon) captureEntries.push({ measurement, points: polygon })
+  }
+  const captureTransform = computeCaptureTransform(captureEntries)
+  if (captureTransform) {
+    for (const entry of captureEntries) {
+      const points: TakeoffPreviewPoint[] = entry.points.map(([x, y]) => ({
+        x: (x - captureTransform.centerX) * captureTransform.scale,
+        z: (y - captureTransform.centerY) * captureTransform.scale,
+        boardX: x,
+        boardY: y,
+      }))
+      items.push({ ...buildBase(entry.measurement), kind: 'polygon', points, heightFt: POLYGON_VISUAL_THICKNESS_FT })
+    }
+    warnings.add(
+      'Captured geometry is shown at normalized (relative) scale — absolute per-source calibration is not yet wired.',
+    )
+  }
+
   if (skippedCount > 0) {
     warnings.add(`${skippedCount} measurement${skippedCount === 1 ? '' : 's'} had unsupported or incomplete geometry.`)
   }
@@ -187,6 +213,72 @@ export function buildTakeoffPreviewScene(
     unitLabel: hasCalibration ? 'ft' : 'board',
     bounds: computeBounds(items),
     skippedCount,
+  }
+}
+
+function buildBase(measurement: TakeoffMeasurement) {
+  const quantity = Number(measurement.quantity)
+  return {
+    id: measurement.id,
+    serviceItemCode: measurement.service_item_code,
+    quantity: Number.isFinite(quantity) ? quantity : 0,
+    unit: measurement.unit,
+    elevation: measurement.elevation,
+    color: colorForKey(measurement.service_item_code),
+    notes: measurement.notes,
+  }
+}
+
+function isCaptureGeometry(raw: TakeoffMeasurement['geometry']): boolean {
+  return Boolean(raw && typeof raw === 'object' && (raw as { kind?: unknown }).kind === 'capture')
+}
+
+/**
+ * Read a promoted capture measurement's polygon (`{ kind: 'capture', polygon:
+ * number[][] }`, written by takeoff-drafts promote). Returns `[x, y]` pairs in
+ * the source's own coordinate space (image pixels, lat/lon, …) or null.
+ */
+function readCapturePolygon(raw: TakeoffMeasurement['geometry']): Array<[number, number]> | null {
+  if (!isCaptureGeometry(raw)) return null
+  const polygon = (raw as { polygon?: unknown }).polygon
+  if (!Array.isArray(polygon)) return null
+  const points: Array<[number, number]> = []
+  for (const point of polygon) {
+    if (!Array.isArray(point) || point.length < 2) continue
+    const x = finiteNumber(point[0])
+    const y = finiteNumber(point[1])
+    if (x != null && y != null) points.push([x, y])
+  }
+  return points.length >= 3 ? points : null
+}
+
+/**
+ * Shared bounds → world transform for the whole capture set, so multiple
+ * captured surfaces keep their relative size/position. Scales the largest
+ * dimension to CAPTURE_TARGET_SPAN_FT and centers at the origin.
+ */
+function computeCaptureTransform(
+  entries: Array<{ points: Array<[number, number]> }>,
+): { centerX: number; centerY: number; scale: number } | null {
+  if (entries.length === 0) return null
+  let minX = Infinity
+  let maxX = -Infinity
+  let minY = Infinity
+  let maxY = -Infinity
+  for (const entry of entries) {
+    for (const [x, y] of entry.points) {
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+  }
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null
+  const span = Math.max(maxX - minX, maxY - minY)
+  return {
+    centerX: (minX + maxX) / 2,
+    centerY: (minY + maxY) / 2,
+    scale: span > 0 ? CAPTURE_TARGET_SPAN_FT / span : 1,
   }
 }
 

@@ -179,4 +179,56 @@ describe('buildTakeoffPreviewScene', () => {
     expect(scene.skippedCount).toBe(1)
     expect(scene.warnings.join(' ')).toContain('unsupported or incomplete geometry')
   })
+
+  it('renders captured polygons normalized to relative scale, bypassing the blueprint filter', () => {
+    const scene = buildTakeoffPreviewScene(
+      [
+        {
+          ...baseMeasurement,
+          id: 'cap1',
+          // Promoted captures carry no blueprint/page association.
+          blueprint_document_id: null,
+          page_id: null,
+          geometry: {
+            kind: 'capture',
+            surfaceId: 's1',
+            refs: ['s1'],
+            // Source-space coords (e.g. image pixels): a 200x100 rectangle.
+            polygon: [
+              [100, 100],
+              [300, 100],
+              [300, 200],
+              [100, 200],
+            ],
+          },
+        },
+      ],
+      // A blueprint filter is active, yet the capture must still render.
+      { activeBlueprintId: 'b1' },
+    )
+
+    const item = scene.items.find((i) => i.id === 'cap1')
+    expect(item).toBeDefined()
+    expect(item?.kind).toBe('polygon')
+    expect(item?.points).toHaveLength(4)
+    // Largest span (200) maps to ~60 ft, centered at origin: x spans -30..30.
+    const xs = item!.points.map((p) => p.x)
+    expect(Math.min(...xs)).toBeCloseTo(-30)
+    expect(Math.max(...xs)).toBeCloseTo(30)
+    expect(scene.skippedCount).toBe(0)
+    expect(scene.warnings.join(' ')).toContain('normalized (relative) scale')
+  })
+
+  it('drops a capture geometry with too few points', () => {
+    const scene = buildTakeoffPreviewScene([
+      {
+        ...baseMeasurement,
+        id: 'cap-bad',
+        blueprint_document_id: null,
+        page_id: null,
+        geometry: { kind: 'capture', refs: ['s1'], polygon: [[1, 1]] },
+      },
+    ])
+    expect(scene.items).toHaveLength(0)
+  })
 })
