@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { generateScaffoldModel, type ScaffoldDesignSpec, type ScaffoldModel } from '@sitelayer/domain'
 import { Card, Banner, MobileButton } from '@/components/mobile'
 import { useProjects } from '@/lib/api/projects'
@@ -20,8 +20,25 @@ const DEFAULT_SPEC: ScaffoldDesignSpec = {
 const MM_PER_FOOT = 304.8
 const fmtFt = (mm: number) => `${(mm / MM_PER_FOOT).toFixed(1)} ft`
 
+/** Parse a `?spec=` param (URL-encoded JSON) back into a spec, validating the
+ *  numeric fields. Used to re-open a saved scaffold_design BOM in the designer. */
+function parseSpecParam(raw: string | null): ScaffoldDesignSpec | null {
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(decodeURIComponent(raw)) as Partial<ScaffoldDesignSpec>
+    const fields = ['baysAlongLength', 'baysAlongWidth', 'bayLengthMm', 'bayWidthMm', 'liftHeightMm', 'lifts'] as const
+    if (fields.every((f) => typeof parsed[f] === 'number' && Number.isFinite(parsed[f]))) {
+      return parsed as ScaffoldDesignSpec
+    }
+  } catch {
+    // fall through to null
+  }
+  return null
+}
+
 export function ScaffoldDesignerScreen() {
-  const [spec, setSpec] = useState<ScaffoldDesignSpec>(DEFAULT_SPEC)
+  const [searchParams] = useSearchParams()
+  const [spec, setSpec] = useState<ScaffoldDesignSpec>(() => parseSpecParam(searchParams.get('spec')) ?? DEFAULT_SPEC)
 
   const { model, error } = useMemo<{ model: ScaffoldModel | null; error: string | null }>(() => {
     try {
