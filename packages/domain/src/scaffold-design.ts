@@ -220,6 +220,75 @@ function normalizeDeckLifts(deckLifts: number[] | undefined, lifts: number): num
   return valid
 }
 
+/**
+ * A catalog part normalized for BOM resolution. `role` comes from the
+ * `catalog_parts.attrs.role` convention; `lengthMm` from `catalog_parts.length_mm`.
+ */
+export interface ScaffoldCatalogPart {
+  id: string
+  role: ScaffoldMemberRole | null
+  lengthMm: number | null
+}
+
+export interface ResolvedScaffoldBomLine {
+  catalogPartId: string
+  role: ScaffoldMemberRole
+  /** The catalog part's length (mm) that was matched; null for point items. */
+  matchedLengthMm: number | null
+  /** The demanded nominal length (mm) for trace/diff. */
+  demandLengthMm: number
+  quantity: number
+}
+
+export interface ScaffoldBomResolution {
+  lines: ResolvedScaffoldBomLine[]
+  /** Demand lines with no catalog part for their role — can't become bom_lines. */
+  unresolved: ScaffoldPartDemandLine[]
+}
+
+/**
+ * Resolve aggregated part demand against a system's catalog parts. Matches by
+ * role (`attrs.role`) then nearest `length_mm`; point roles (lengthMm 0) match
+ * any part of that role. Demand whose role has no catalog part is returned as
+ * `unresolved` (a bom_line can't exist without a catalog_part_id). Pure.
+ */
+export function resolveScaffoldBom(
+  demand: readonly ScaffoldPartDemandLine[],
+  catalogParts: readonly ScaffoldCatalogPart[],
+): ScaffoldBomResolution {
+  const byRole = new Map<ScaffoldMemberRole, ScaffoldCatalogPart[]>()
+  for (const part of catalogParts) {
+    if (!part.role) continue
+    const list = byRole.get(part.role)
+    if (list) list.push(part)
+    else byRole.set(part.role, [part])
+  }
+
+  const lines: ResolvedScaffoldBomLine[] = []
+  const unresolved: ScaffoldPartDemandLine[] = []
+  for (const line of demand) {
+    const candidates = byRole.get(line.role)
+    if (!candidates || candidates.length === 0) {
+      unresolved.push(line)
+      continue
+    }
+    // Nearest length; deterministic tiebreak on id so reruns are stable.
+    const best = [...candidates].sort((a, b) => {
+      const da = Math.abs((a.lengthMm ?? 0) - line.lengthMm)
+      const db = Math.abs((b.lengthMm ?? 0) - line.lengthMm)
+      return da === db ? (a.id < b.id ? -1 : 1) : da - db
+    })[0]!
+    lines.push({
+      catalogPartId: best.id,
+      role: line.role,
+      matchedLengthMm: best.lengthMm,
+      demandLengthMm: line.lengthMm,
+      quantity: line.quantity,
+    })
+  }
+  return { lines, unresolved }
+}
+
 /** Aggregate members into (role, lengthMm) demand lines, sorted stably. */
 export function aggregatePartDemand(members: readonly ScaffoldMember[]): ScaffoldPartDemandLine[] {
   const byKey = new Map<string, ScaffoldPartDemandLine>()

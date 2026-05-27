@@ -8,6 +8,13 @@ import {
   type ScaffoldOpsApprovalWorkflowSnapshot,
   type ScaffoldOpsApprovalWorkflowState,
 } from '@sitelayer/workflows'
+import {
+  generateScaffoldModel,
+  resolveScaffoldBom,
+  type ScaffoldCatalogPart,
+  type ScaffoldDesignSpec,
+  type ScaffoldMemberRole,
+} from '@sitelayer/domain'
 import { z } from 'zod'
 import { HttpError, parseJsonBody } from '../http-utils.js'
 
@@ -123,6 +130,53 @@ const BomLinesBodySchema = z
     lines: z.array(z.record(z.string(), z.unknown())).optional(),
   })
   .loose()
+
+const ScaffoldDesignBomBodySchema = z
+  .object({
+    name: z.string().optional(),
+    scaffold_system_id: z.string().nullish(),
+    spec: z
+      .object({
+        baysAlongLength: z.number(),
+        baysAlongWidth: z.number(),
+        bayLengthMm: z.number(),
+        bayWidthMm: z.number(),
+        liftHeightMm: z.number(),
+        lifts: z.number(),
+        options: z
+          .object({
+            basePlates: z.boolean().optional(),
+            guardrails: z.boolean().optional(),
+            toeboards: z.boolean().optional(),
+            deckLifts: z.array(z.number()).optional(),
+            braceEveryNBays: z.number().optional(),
+          })
+          .loose()
+          .optional(),
+      })
+      .loose(),
+  })
+  .loose()
+
+const SCAFFOLD_MEMBER_ROLES = new Set<ScaffoldMemberRole>([
+  'base_plate',
+  'standard',
+  'ledger',
+  'transom',
+  'brace',
+  'deck',
+  'guardrail',
+  'toeboard',
+])
+
+/** Read the `attrs.role` convention off a catalog row into a member role. */
+function catalogPartRole(attrs: unknown): ScaffoldMemberRole | null {
+  if (!attrs || typeof attrs !== 'object') return null
+  const role = (attrs as { role?: unknown }).role
+  return typeof role === 'string' && SCAFFOLD_MEMBER_ROLES.has(role as ScaffoldMemberRole)
+    ? (role as ScaffoldMemberRole)
+    : null
+}
 import { observeWorkflowEvent, workflowEventOutcome } from '../metrics.js'
 import { recordMutationLedger, recordWorkflowEvent, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
@@ -625,6 +679,106 @@ export async function handleScaffoldOpsRoutes(
       }
     })
     ctx.sendJson(200, { inserted, updated })
+    return true
+  }
+
+  // POST /api/projects/:projectId/scaffold-designs/bom — generate a scaffold
+  // model from a design spec, resolve its part demand against the company's
+  // catalog parts (attrs.role + nearest length), and persist a draft BOM
+  // (source='scaffold_design'). Unresolved demand (no catalog part for a role)
+  // is reported back, never silently dropped.
+  const designBomMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/scaffold-designs\/bom$/)
+  if (req.method === 'POST' && designBomMatch) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const projectId = designBomMatch[1]!
+    const parsed = parseJsonBody(ScaffoldDesignBomBodySchema, await ctx.readBody())
+    if (!parsed.ok) {
+      ctx.sendJson(400, { error: parsed.error })
+      return true
+    }
+    const body = parsed.value
+    const name = nonEmptyString(body.name) ?? 'Scaffold design'
+    const systemId = nonEmptyString(body.scaffold_system_id)
+
+    let model
+    try {
+      model = generateScaffoldModel(body.spec as ScaffoldDesignSpec)
+    } catch (err) {
+      ctx.sendJson(400, { error: err instanceof Error ? err.message : 'invalid scaffold spec' })
+      return true
+    }
+
+    const partsResult = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string; length_mm: number | null; attrs: unknown }>(
+        systemId
+          ? `select id, length_mm, attrs from catalog_parts where company_id = $1 and scaffold_system_id = $2 and active and deleted_at is null`
+          : `select id, length_mm, attrs from catalog_parts where company_id = $1 and active and deleted_at is null`,
+        systemId ? [ctx.company.id, systemId] : [ctx.company.id],
+      ),
+    )
+    const catalogParts: ScaffoldCatalogPart[] = partsResult.rows.map((row) => ({
+      id: row.id,
+      role: catalogPartRole(row.attrs),
+      lengthMm: row.length_mm,
+    }))
+    const resolution = resolveScaffoldBom(model.partDemand, catalogParts)
+
+    const created = await withMutationTx(ctx.company.id, async (client: PoolClient) => {
+      const bomRes = await client.query(
+        `insert into boms (company_id, project_id, source, source_ref, name, notes)
+         values ($1, $2, 'scaffold_design', $3, $4, $5) returning ${BOM_COLUMNS}`,
+        [
+          ctx.company.id,
+          projectId,
+          JSON.stringify({ spec: body.spec, scaffold_system_id: systemId }),
+          name,
+          resolution.unresolved.length ? `${resolution.unresolved.length} demand line(s) had no catalog part` : null,
+        ],
+      )
+      const bom = bomRes.rows[0] as { id: string }
+      if (!bom) throw new HttpError(500, 'bom insert returned no row')
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'bom',
+        entityId: bom.id,
+        action: 'create',
+        row: bom,
+      })
+      const lineRows: unknown[] = []
+      for (const line of resolution.lines) {
+        const lineRes = await client.query(
+          `insert into bom_lines (company_id, bom_id, catalog_part_id, quantity, notes, attrs)
+           values ($1, $2, $3, $4, null, $5::jsonb) returning ${BOM_LINE_COLUMNS}`,
+          [
+            ctx.company.id,
+            bom.id,
+            line.catalogPartId,
+            line.quantity,
+            JSON.stringify({ role: line.role, demand_length_mm: line.demandLengthMm }),
+          ],
+        )
+        lineRows.push(lineRes.rows[0])
+      }
+      const total = await client.query<{ total_weight_kg: string; total_lines: string }>(
+        `select coalesce(sum(bl.quantity * cp.weight_kg), 0) as total_weight_kg, count(*)::text as total_lines
+         from bom_lines bl join catalog_parts cp on cp.company_id = bl.company_id and cp.id = bl.catalog_part_id
+         where bl.company_id = $1 and bl.bom_id = $2`,
+        [ctx.company.id, bom.id],
+      )
+      const updated = await client.query(
+        `update boms set total_weight_kg = $3, total_lines = $4, updated_at = now()
+         where company_id = $1 and id = $2 returning ${BOM_COLUMNS}`,
+        [ctx.company.id, bom.id, total.rows[0]?.total_weight_kg ?? 0, total.rows[0]?.total_lines ?? 0],
+      )
+      return { bom: updated.rows[0], lines: lineRows }
+    })
+
+    ctx.sendJson(201, {
+      bom: created.bom,
+      lines: created.lines,
+      unresolved: resolution.unresolved,
+      model_summary: { members: model.members.length, bounds: model.bounds, warnings: model.warnings },
+    })
     return true
   }
 

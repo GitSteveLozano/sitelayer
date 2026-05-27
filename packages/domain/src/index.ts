@@ -1263,12 +1263,16 @@ export {
 export {
   generateScaffoldModel,
   aggregatePartDemand,
+  resolveScaffoldBom,
   type ScaffoldDesignSpec,
   type ScaffoldDesignOptions,
   type ScaffoldMember,
   type ScaffoldMemberRole,
   type ScaffoldModel,
   type ScaffoldPartDemandLine,
+  type ScaffoldCatalogPart,
+  type ResolvedScaffoldBomLine,
+  type ScaffoldBomResolution,
   type Vec3Mm,
 } from './scaffold-design.js'
 
