@@ -26,3 +26,13 @@ describe('apps/web lazy routes', () => {
     expect(typeof mod.default).toBe('function')
   })
 })
+
+// Full-screen screen routes mounted in App.tsx via a named export (not a
+// routes/* default). Same intent: catch broken imports / missing exports for
+// reachable top-level routes before they hit prod.
+describe('apps/web full-screen route screens', () => {
+  test('scaffold designer screen (/scaffold-designer) loads and exports its component', async () => {
+    const mod = await import('@/screens/scaffold/scaffold-designer')
+    expect(typeof mod.ScaffoldDesignerScreen).toBe('function')
+  })
+})
