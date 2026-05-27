@@ -252,6 +252,42 @@ describe('buildTakeoffPreviewScene', () => {
     expect(scene.warnings.join(' ')).toContain('true scale')
   })
 
+  it('renders drone captures at TRUE scale by projecting lon/lat to feet', () => {
+    // A ~20ft (E-W) × 10ft (N-S) footprint near lat 43.6°, expressed in GeoJSON [lon, lat].
+    const lat = 43.6
+    const dLon = 20 / (364_000 * Math.cos((lat * Math.PI) / 180))
+    const dLat = 10 / 364_000
+    const scene = buildTakeoffPreviewScene([
+      {
+        ...baseMeasurement,
+        id: 'drone-cap',
+        blueprint_document_id: null,
+        page_id: null,
+        geometry: {
+          kind: 'capture',
+          surfaceId: 's1',
+          refs: ['s1'],
+          coordSpace: 'lonlat',
+          polygon: [
+            [-79.4, lat],
+            [-79.4 + dLon, lat],
+            [-79.4 + dLon, lat + dLat],
+            [-79.4, lat + dLat],
+          ],
+        },
+      },
+    ])
+
+    const item = scene.items.find((i) => i.id === 'drone-cap')
+    expect(item).toBeDefined()
+    const xs = item!.points.map((p) => p.x)
+    const zs = item!.points.map((p) => p.z)
+    // True scale (NOT normalized to 60): ~20ft E-W, ~10ft N-S.
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(20, 0)
+    expect(Math.max(...zs) - Math.min(...zs)).toBeCloseTo(10, 0)
+    expect(scene.warnings.join(' ')).toContain('drone GPS')
+  })
+
   it('drops a capture geometry with too few points', () => {
     const scene = buildTakeoffPreviewScene([
       {

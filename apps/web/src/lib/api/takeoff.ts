@@ -59,6 +59,9 @@ export interface CaptureGeometry {
   /** Blueprint captures only: pixels-per-foot for the pixel-space polygon, so
    *  the 3D preview can render at true scale instead of relative. */
   pixelsPerFoot?: number
+  /** Coordinate space of `polygon` when it isn't board/pixel space. `'lonlat'`
+   *  = drone GeoJSON `[lon, lat]`, projected to feet for true-scale render. */
+  coordSpace?: 'lonlat'
 }
 
 export interface TakeoffMeasurement {
