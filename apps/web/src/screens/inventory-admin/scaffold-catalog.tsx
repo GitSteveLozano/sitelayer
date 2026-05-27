@@ -83,7 +83,12 @@ export function ScaffoldCatalogAdminScreen() {
       <Link to="/more/inventory" className="text-[12px] text-ink-3">
         ← Inventory admin
       </Link>
-      <h1 className="mt-2 font-display text-[24px] font-bold tracking-tight leading-tight">Scaffold catalog</h1>
+      <div className="mt-2 flex items-baseline justify-between gap-3">
+        <h1 className="font-display text-[24px] font-bold tracking-tight leading-tight">Scaffold catalog</h1>
+        <Link to="/scaffold-designer" className="shrink-0 text-[12px] font-medium text-accent">
+          Scaffold designer →
+        </Link>
+      </div>
       <p className="text-[12px] text-ink-3 mt-1">
         Physical scaffold parts indexed by manufacturer + system. BOMs (per-project) reference these.
       </p>
