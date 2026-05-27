@@ -21,7 +21,8 @@
         "detector": "claude-opus-4-7",
         "detectorVersion": "blueprint-vision/v0.3",
         "dimensionSourceType": "measured"
-      }
+      },
+      "geometryRefs": ["s_0_r1"]
     },
     {
       "id": "q_0_r1_drywall",
@@ -39,7 +40,8 @@
         "detector": "claude-opus-4-7",
         "detectorVersion": "blueprint-vision/v0.3",
         "dimensionSourceType": "measured"
-      }
+      },
+      "geometryRefs": ["s_0_r1"]
     },
     {
       "id": "q_0_r1_baseboard",
@@ -57,7 +59,8 @@
         "detector": "claude-opus-4-7",
         "detectorVersion": "blueprint-vision/v0.3",
         "dimensionSourceType": "measured"
-      }
+      },
+      "geometryRefs": ["s_0_r1"]
     },
     {
       "id": "q_0_r1_doors",
@@ -75,7 +78,8 @@
         "detector": "claude-opus-4-7",
         "detectorVersion": "blueprint-vision/v0.3",
         "dimensionSourceType": "measured"
-      }
+      },
+      "geometryRefs": ["s_0_r1"]
     },
     {
       "id": "q_0_r1_windows",
@@ -93,9 +97,25 @@
         "detector": "claude-opus-4-7",
         "detectorVersion": "blueprint-vision/v0.3",
         "dimensionSourceType": "measured"
-      }
+      },
+      "geometryRefs": ["s_0_r1"]
     }
   ],
+  "geometry": {
+    "surfaces": [
+      {
+        "id": "s_0_r1",
+        "kind": "floor",
+        "areaSqFt": 120,
+        "polygon": [
+          [100, 100],
+          [400, 100],
+          [400, 350],
+          [100, 350]
+        ]
+      }
+    ]
+  },
   "sourceArtifact": {
     "kind": "blueprint",
     "blueprint": {
@@ -103,15 +123,26 @@
       "pdfSha256": "__PDF_SHA256__",
       "pdfMeta": {
         "pages": 2,
-        "pageSizesPts": [{ "w": 1200, "h": 900 }]
+        "pageSizesPts": [
+          {
+            "w": 1200,
+            "h": 900
+          }
+        ]
       },
       "modelVersion": "claude-opus-4-7",
       "promptVersion": "blueprint-vision/v0.3",
       "pages": [
         {
           "pageIndex": 0,
-          "imageSize": { "widthPx": 1200, "heightPx": 900 },
-          "classification": { "kind": "floor_plan", "confidence": 0.88 },
+          "imageSize": {
+            "widthPx": 1200,
+            "heightPx": 900
+          },
+          "classification": {
+            "kind": "floor_plan",
+            "confidence": 0.88
+          },
           "titleblock": {
             "projectName": "Sample Residence",
             "sheetNumber": "A-101",
@@ -131,24 +162,54 @@
               "id": "r1",
               "name": "BEDROOM 1",
               "polygon": [
-                { "x": 100, "y": 100 },
-                { "x": 400, "y": 100 },
-                { "x": 400, "y": 350 },
-                { "x": 100, "y": 350 }
+                {
+                  "x": 100,
+                  "y": 100
+                },
+                {
+                  "x": 400,
+                  "y": 100
+                },
+                {
+                  "x": 400,
+                  "y": 350
+                },
+                {
+                  "x": 100,
+                  "y": 350
+                }
               ],
-              "areaSqFt": { "value": 120, "sourceType": "measured", "confidence": 0.6 },
-              "perimeterFt": { "value": 44, "sourceType": "measured", "confidence": 0.6 },
+              "areaSqFt": {
+                "value": 120,
+                "sourceType": "measured",
+                "confidence": 0.6
+              },
+              "perimeterFt": {
+                "value": 44,
+                "sourceType": "measured",
+                "confidence": 0.6
+              },
               "openings": [
                 {
                   "kind": "door",
-                  "position": { "x": 250, "y": 100 },
-                  "widthFt": { "value": 3, "sourceType": "annotated", "confidence": 0.57 },
+                  "position": {
+                    "x": 250,
+                    "y": 100
+                  },
+                  "widthFt": {
+                    "value": 3,
+                    "sourceType": "annotated",
+                    "confidence": 0.57
+                  },
                   "swing": "right",
                   "hostWallId": "w1"
                 },
                 {
                   "kind": "window",
-                  "position": { "x": 100, "y": 225 },
+                  "position": {
+                    "x": 100,
+                    "y": 225
+                  },
                   "hostWallId": "w4"
                 }
               ]
@@ -157,27 +218,67 @@
           "walls": [
             {
               "id": "w1",
-              "start": { "x": 100, "y": 100 },
-              "end": { "x": 400, "y": 100 },
-              "lengthFt": { "value": 12, "sourceType": "annotated", "confidence": 0.57 }
+              "start": {
+                "x": 100,
+                "y": 100
+              },
+              "end": {
+                "x": 400,
+                "y": 100
+              },
+              "lengthFt": {
+                "value": 12,
+                "sourceType": "annotated",
+                "confidence": 0.57
+              }
             },
             {
               "id": "w2",
-              "start": { "x": 400, "y": 100 },
-              "end": { "x": 400, "y": 350 },
-              "lengthFt": { "value": 10, "sourceType": "annotated", "confidence": 0.57 }
+              "start": {
+                "x": 400,
+                "y": 100
+              },
+              "end": {
+                "x": 400,
+                "y": 350
+              },
+              "lengthFt": {
+                "value": 10,
+                "sourceType": "annotated",
+                "confidence": 0.57
+              }
             },
             {
               "id": "w3",
-              "start": { "x": 400, "y": 350 },
-              "end": { "x": 100, "y": 350 },
-              "lengthFt": { "value": 12, "sourceType": "measured", "confidence": 0.6 }
+              "start": {
+                "x": 400,
+                "y": 350
+              },
+              "end": {
+                "x": 100,
+                "y": 350
+              },
+              "lengthFt": {
+                "value": 12,
+                "sourceType": "measured",
+                "confidence": 0.6
+              }
             },
             {
               "id": "w4",
-              "start": { "x": 100, "y": 350 },
-              "end": { "x": 100, "y": 100 },
-              "lengthFt": { "value": 10, "sourceType": "measured", "confidence": 0.6 }
+              "start": {
+                "x": 100,
+                "y": 350
+              },
+              "end": {
+                "x": 100,
+                "y": 100
+              },
+              "lengthFt": {
+                "value": 10,
+                "sourceType": "measured",
+                "confidence": 0.6
+              }
             }
           ],
           "notes": ["sample fixture for tests"],
@@ -185,8 +286,14 @@
         },
         {
           "pageIndex": 1,
-          "imageSize": { "widthPx": 0, "heightPx": 0 },
-          "classification": { "kind": "non_drawing", "confidence": 0.95 },
+          "imageSize": {
+            "widthPx": 0,
+            "heightPx": 0
+          },
+          "classification": {
+            "kind": "non_drawing",
+            "confidence": 0.95
+          },
           "scaleConfidence": 0,
           "rooms": [],
           "walls": [],

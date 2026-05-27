@@ -27,6 +27,7 @@ import { readFile, stat } from 'node:fs/promises'
 import {
   type BlueprintArtifact,
   type DimensionSourceType,
+  type TakeoffGeometry,
   type TakeoffQuantity,
   type TakeoffResult,
   type TakeoffWarning,
@@ -170,6 +171,7 @@ export async function buildBlueprintTakeoff(opts: BuildBlueprintTakeoffOptions):
   // 4–7: build quantities + artifact.
   const warnings: TakeoffWarning[] = []
   const quantities: TakeoffQuantity[] = []
+  const surfaces: NonNullable<TakeoffGeometry['surfaces']> = []
   const blueprintPages: BlueprintArtifact['pages'] = []
 
   // Pages we'll include in the artifact even though they didn't produce
@@ -213,7 +215,7 @@ export async function buildBlueprintTakeoff(opts: BuildBlueprintTakeoffOptions):
     })
 
     // Build the per-page artifact + emit quantities.
-    const { artifactPage, pageQuantities } = pageToArtifactAndQuantities({
+    const { artifactPage, pageQuantities, pageSurfaces } = pageToArtifactAndQuantities({
       page: ep,
       pageScale,
       pdfSha256,
@@ -227,6 +229,7 @@ export async function buildBlueprintTakeoff(opts: BuildBlueprintTakeoffOptions):
       h: ep.extract.imageSize.heightPx,
     })
     quantities.push(...pageQuantities)
+    surfaces.push(...pageSurfaces)
 
     if (pageScale.source === 'inferred') {
       warnings.push({
@@ -271,6 +274,7 @@ export async function buildBlueprintTakeoff(opts: BuildBlueprintTakeoffOptions):
     pipelineVersion: PIPELINE_VERSION,
     units: 'imperial',
     quantities,
+    ...(surfaces.length ? { geometry: { surfaces } } : {}),
     sourceArtifact: { kind: 'blueprint', blueprint: artifact },
     warnings: warnings.length ? warnings : undefined,
   }
@@ -412,6 +416,9 @@ interface PageToOutputsArgs {
 interface PageToOutputsResult {
   artifactPage: BlueprintArtifact['pages'][number]
   pageQuantities: TakeoffQuantity[]
+  /** One floor surface per room, in image-pixel coordinates, so promoted
+   *  blueprint captures carry a polygon the 3D preview can render. */
+  pageSurfaces: NonNullable<TakeoffGeometry['surfaces']>
 }
 
 function pageToArtifactAndQuantities(args: PageToOutputsArgs): PageToOutputsResult {
@@ -421,6 +428,9 @@ function pageToArtifactAndQuantities(args: PageToOutputsArgs): PageToOutputsResu
 
   // Build the room-level artifact entries while we go.
   const artifactRooms: BlueprintArtifact['pages'][number]['rooms'] = []
+  // One floor surface per room (image-pixel polygon) so the room's quantities
+  // can reference it via geometryRefs and the 3D preview can render the shape.
+  const pageSurfaces: NonNullable<TakeoffGeometry['surfaces']> = []
 
   for (const room of page.extract.rooms) {
     const areaPx2 = polygonAreaPx2(room.polygon)
@@ -465,6 +475,18 @@ function pageToArtifactAndQuantities(args: PageToOutputsArgs): PageToOutputsResu
 
     const roomLabel = room.name ?? room.id
 
+    // One floor surface per room. All of this room's quantities reference it
+    // via geometryRefs so promote (resolveCapturedGeometry) can attach the
+    // pixel polygon, and the 3D preview can render the room footprint.
+    const surfaceId = `s_${page.pageIndex}_${room.id}`
+    const geometryRefs = [surfaceId]
+    pageSurfaces.push({
+      id: surfaceId,
+      kind: 'floor',
+      areaSqFt: round2(areaValue),
+      polygon: room.polygon.map((p) => [p.x, p.y]),
+    })
+
     // (a) floor area — UniFormat B3010 (interior finishes — flooring).
     pageQuantities.push({
       id: `q_${page.pageIndex}_${room.id}_floor`,
@@ -474,6 +496,7 @@ function pageToArtifactAndQuantities(args: PageToOutputsArgs): PageToOutputsResu
       value: round2(areaValue),
       confidence: round3(conf(areaSourceType)),
       provenance: provenance(areaSourceType),
+      geometryRefs,
     })
 
     // (b) drywall area — MasterFormat 09 29 00 gypsum board.
@@ -485,6 +508,7 @@ function pageToArtifactAndQuantities(args: PageToOutputsArgs): PageToOutputsResu
       value: round2(drywallAreaSqft),
       confidence: round3(conf(perimeterSourceType)),
       provenance: provenance(perimeterSourceType),
+      geometryRefs,
     })
 
     // (c) baseboard — MasterFormat 06 22 00 finish carpentry.
@@ -496,6 +520,7 @@ function pageToArtifactAndQuantities(args: PageToOutputsArgs): PageToOutputsResu
       value: round2(baseboardLf),
       confidence: round3(conf(perimeterSourceType)),
       provenance: provenance(perimeterSourceType),
+      geometryRefs,
     })
 
     // (d) interior doors — MasterFormat 08 14 00.
@@ -508,6 +533,7 @@ function pageToArtifactAndQuantities(args: PageToOutputsArgs): PageToOutputsResu
         value: doorCount,
         confidence: round3(conf('measured')),
         provenance: provenance('measured'),
+        geometryRefs,
       })
     }
 
@@ -521,6 +547,7 @@ function pageToArtifactAndQuantities(args: PageToOutputsArgs): PageToOutputsResu
         value: windowCount,
         confidence: round3(conf('measured')),
         provenance: provenance('measured'),
+        geometryRefs,
       })
     }
 
@@ -584,7 +611,7 @@ function pageToArtifactAndQuantities(args: PageToOutputsArgs): PageToOutputsResu
     warnings: page.extract.warnings,
   }
 
-  return { artifactPage, pageQuantities }
+  return { artifactPage, pageQuantities, pageSurfaces }
 }
 
 function buildArtifactOpening(o: ExtractOpening, conf: (s: DimensionSourceType) => number) {
