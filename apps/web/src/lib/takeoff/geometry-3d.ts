@@ -177,19 +177,25 @@ export function buildTakeoffPreviewScene(
     const polygon = readCapturePolygon(measurement.geometry)
     if (polygon) captureEntries.push({ measurement, points: polygon })
   }
-  const captureTransform = computeCaptureTransform(captureEntries)
+  // Blueprint captures carry pixels-per-foot → render at TRUE scale. Other
+  // sources (drone lat/lon) have none → bounds-normalized relative scale.
+  const capturePixelsPerFoot = readCapturePixelsPerFoot(measurements)
+  const captureTransform = computeCaptureTransform(captureEntries, capturePixelsPerFoot)
   if (captureTransform) {
+    const { centerX, centerY, scale, div } = captureTransform
     for (const entry of captureEntries) {
       const points: TakeoffPreviewPoint[] = entry.points.map(([x, y]) => ({
-        x: (x - captureTransform.centerX) * captureTransform.scale,
-        z: (y - captureTransform.centerY) * captureTransform.scale,
+        x: (x / div - centerX) * scale,
+        z: (y / div - centerY) * scale,
         boardX: x,
         boardY: y,
       }))
       items.push({ ...buildBase(entry.measurement), kind: 'polygon', points, heightFt: POLYGON_VISUAL_THICKNESS_FT })
     }
     warnings.add(
-      'Captured geometry is shown at normalized (relative) scale — absolute per-source calibration is not yet wired.',
+      capturePixelsPerFoot != null
+        ? 'Captured geometry is shown at true scale from the blueprint pixel calibration.'
+        : 'Captured geometry is shown at normalized (relative) scale — absolute per-source calibration is not yet wired.',
     )
   }
 
@@ -252,25 +258,42 @@ function readCapturePolygon(raw: TakeoffMeasurement['geometry']): Array<[number,
   return points.length >= 3 ? points : null
 }
 
+/** First pixels-per-foot found on a capture measurement (blueprint only), or
+ *  null. A draft is a single source, so the first value applies to all. */
+function readCapturePixelsPerFoot(measurements: TakeoffMeasurement[]): number | null {
+  for (const measurement of measurements) {
+    if (!isCaptureGeometry(measurement.geometry)) continue
+    const ppf = (measurement.geometry as { pixelsPerFoot?: unknown }).pixelsPerFoot
+    if (typeof ppf === 'number' && Number.isFinite(ppf) && ppf > 0) return ppf
+  }
+  return null
+}
+
 /**
  * Shared bounds → world transform for the whole capture set, so multiple
- * captured surfaces keep their relative size/position. Scales the largest
- * dimension to CAPTURE_TARGET_SPAN_FT and centers at the origin.
+ * captured surfaces keep their relative size/position. Points are first
+ * divided by `div` (pixels-per-foot → feet; 1 otherwise). With a pixel
+ * calibration we keep true scale (scale = 1); without one we normalize the
+ * largest dimension to CAPTURE_TARGET_SPAN_FT. Always centers at the origin.
  */
 function computeCaptureTransform(
   entries: Array<{ points: Array<[number, number]> }>,
-): { centerX: number; centerY: number; scale: number } | null {
+  pixelsPerFoot: number | null,
+): { centerX: number; centerY: number; scale: number; div: number } | null {
   if (entries.length === 0) return null
+  const div = pixelsPerFoot && pixelsPerFoot > 0 ? pixelsPerFoot : 1
   let minX = Infinity
   let maxX = -Infinity
   let minY = Infinity
   let maxY = -Infinity
   for (const entry of entries) {
     for (const [x, y] of entry.points) {
-      if (x < minX) minX = x
-      if (x > maxX) maxX = x
-      if (y < minY) minY = y
-      if (y > maxY) maxY = y
+      const fx = x / div
+      const fy = y / div
+      if (fx < minX) minX = fx
+      if (fx > maxX) maxX = fx
+      if (fy < minY) minY = fy
+      if (fy > maxY) maxY = fy
     }
   }
   if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null
@@ -278,7 +301,8 @@ function computeCaptureTransform(
   return {
     centerX: (minX + maxX) / 2,
     centerY: (minY + maxY) / 2,
-    scale: span > 0 ? CAPTURE_TARGET_SPAN_FT / span : 1,
+    scale: pixelsPerFoot && pixelsPerFoot > 0 ? 1 : span > 0 ? CAPTURE_TARGET_SPAN_FT / span : 1,
+    div,
   }
 }
 

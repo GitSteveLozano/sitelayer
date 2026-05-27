@@ -139,7 +139,10 @@ function readQuantitiesFromStoredResult(raw: unknown): Array<{
  * we can't find a usable reference we emit `{}` — the column is NOT
  * NULL — which preserves the quantity number on the row.
  */
-function resolveCapturedGeometry(quantity: { geometryRefs?: unknown }, result: unknown): Record<string, unknown> {
+function resolveCapturedGeometry(
+  quantity: { geometryRefs?: unknown; provenance?: unknown },
+  result: unknown,
+): Record<string, unknown> {
   if (!quantity.geometryRefs || !Array.isArray(quantity.geometryRefs) || quantity.geometryRefs.length === 0) {
     return {}
   }
@@ -160,11 +163,34 @@ function resolveCapturedGeometry(quantity: { geometryRefs?: unknown }, result: u
         | { polygon?: unknown }
         | undefined
       if (match?.polygon && Array.isArray(match.polygon) && match.polygon.length >= 3) {
-        return { kind: 'capture', surfaceId: ref, polygon: match.polygon, refs }
+        // Blueprint surfaces are image-pixel polygons + provenance carries
+        // pixels-per-foot (scaleFt), so the 3D preview can show true scale.
+        // Other sources (drone lat/lon) have no pixel ratio — omit it.
+        const pixelsPerFoot = blueprintPixelsPerFoot(quantity.provenance)
+        return {
+          kind: 'capture',
+          surfaceId: ref,
+          polygon: match.polygon,
+          ...(pixelsPerFoot != null ? { pixelsPerFoot } : {}),
+          refs,
+        }
       }
     }
   }
   return { kind: 'capture', refs }
+}
+
+/**
+ * Pixels-per-foot for a blueprint capture (provenance.scaleFt), or null for
+ * any other source. Lets the 3D preview render blueprint footprints at true
+ * scale instead of the bounds-normalized relative scale.
+ */
+function blueprintPixelsPerFoot(provenance: unknown): number | null {
+  if (!provenance || typeof provenance !== 'object') return null
+  const p = provenance as { kind?: unknown; scaleFt?: unknown }
+  if (p.kind !== 'blueprint') return null
+  const scaleFt = typeof p.scaleFt === 'number' ? p.scaleFt : null
+  return scaleFt != null && Number.isFinite(scaleFt) && scaleFt > 0 ? scaleFt : null
 }
 
 /** Build the notes blob for a promoted measurement so we keep a trail
