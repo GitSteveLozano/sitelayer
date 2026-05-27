@@ -107,6 +107,11 @@ function BomDetailCard({ bomId, onClose }: { bomId: string; onClose: () => void 
               <div className="text-[15px] font-semibold">{bom.name}</div>
               <StatusBadge status={bom.status} />
             </div>
+            {designerLinkForBom(bom) ? (
+              <Link to={designerLinkForBom(bom)!} className="mt-1 inline-block text-[12px] font-medium text-accent">
+                Open in designer →
+              </Link>
+            ) : null}
             <ul className="mt-3 divide-y divide-line">
               {bom.lines.map((line) => (
                 <li key={line.id} className="flex items-center gap-2.5 py-2 text-[13px]">
@@ -129,6 +134,21 @@ function BomDetailCard({ bomId, onClose }: { bomId: string; onClose: () => void 
       </Card>
     </div>
   )
+}
+
+/** For a scaffold_design BOM, rebuild the designer URL from the spec stored in
+ *  source_ref ({ spec, scaffold_system_id }). Null for other BOM sources. */
+function designerLinkForBom(bom: { source: string; source_ref: string | null }): string | null {
+  if (bom.source !== 'scaffold_design' || !bom.source_ref) return null
+  try {
+    const parsed = JSON.parse(bom.source_ref) as { spec?: unknown }
+    if (parsed.spec && typeof parsed.spec === 'object') {
+      return `/scaffold-designer?spec=${encodeURIComponent(JSON.stringify(parsed.spec))}`
+    }
+  } catch {
+    // source_ref wasn't the design envelope; no link
+  }
+  return null
 }
 
 function lineLabel(line: BomLine): string {
