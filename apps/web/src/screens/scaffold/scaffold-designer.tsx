@@ -190,6 +190,9 @@ function SaveBomPanel({ spec }: { spec: ScaffoldDesignSpec }) {
             ) : (
               <div className="mt-1 text-good">All demand resolved to catalog parts.</div>
             )}
+            <Link to={`/projects/${projectId}/boms`} className="mt-2 inline-block font-medium text-accent">
+              View project BOMs →
+            </Link>
           </div>
         ) : null}
       </div>

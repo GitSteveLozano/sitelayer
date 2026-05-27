@@ -53,7 +53,12 @@ export function ProjectRentalContractScreen() {
       <Link to={`/projects/${projectId}`} className="text-[12px] text-ink-3">
         ← {project.data?.project.name ?? 'Project'}
       </Link>
-      <h1 className="mt-2 font-display text-[24px] font-bold tracking-tight leading-tight">Rental contract</h1>
+      <div className="mt-2 flex items-baseline justify-between gap-3">
+        <h1 className="font-display text-[24px] font-bold tracking-tight leading-tight">Rental contract</h1>
+        <Link to={`/projects/${projectId}/boms`} className="shrink-0 text-[12px] font-medium text-accent">
+          Scaffold BOMs →
+        </Link>
+      </div>
       <p className="text-[12px] text-ink-3 mt-1">
         25-day cycles by default — generate billing runs to land invoices in QBO.
       </p>
