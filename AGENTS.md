@@ -18,6 +18,14 @@ machine is a collaborator Mac, not Taylor's operator workstation:
 
 ## Read this before editing anything
 
+### 0. Capabilities that exist — do not report these as "missing"
+
+A recon/audit pass once concluded "no 3D engine" because this file and `CLAUDE.md`'s structure section didn't mention it. They exist. Verify against code before calling any of these absent:
+
+- **A working three.js 3D takeoff preview.** `apps/web/src/screens/projects/takeoff-3d-scene.tsx` is a real WebGL renderer (raycasting, drag-rotate/zoom, lighting, blueprint underlay); `apps/web/src/lib/takeoff/geometry-3d.ts` (`buildTakeoffPreviewScene`) converts board-space takeoff measurements → a to-scale (horizontal) / schematic-height 2.5D scene. Lazy-loaded as the `vendor-three` chunk. Live at `/projects/:id/takeoff-preview`; public synthetic demo at `/demo/takeoff-preview-3d`. **three.js is the only 3D lib** — no Babylon/Cesium/react-three-fiber.
+- **Four capture pipelines** in `packages/pipe-{blueprint,roomplan,drone,photogrammetry}`, all returning a unified `TakeoffResult`/`TakeoffGeometry` from `packages/capture-schema` (codes via `packages/capture-catalog`). Endpoint `POST /api/projects/:id/takeoff-drafts/capture` dispatches by `kind`, then promote → `takeoff_measurements`. Status: **blueprint_vision** live behind `BLUEPRINT_VISION_MODE=live`+`ANTHROPIC_API_KEY` (Claude Opus on PDF → quantities); **roomplan** parser real (areas, not yet 3D coords); **drone** sidecar path real + a real NodeODM client (raster extraction needs external Python); **photogrammetry** labeled-mesh path real, Luma client untested.
+- **What is genuinely NOT built:** a scaffold _designer_ (scaffold today is catalog+BOM+approval, not design); and captured geometry is not yet piped into the 3D renderer (only manually-drawn blueprint polygons are). Deeper detail: `docs/BLUEPRINT_TO_3D_PREVIEW.md`, `docs/MULTI_DRAFT_TAKEOFF_SPEC.md`.
+
 ### 1. There is one web app: `apps/web/`
 
 The old parallel frontend track was removed on 2026-05-05 (ADR 0003). If you see a stale doc or comment describing a second web app, the canonical answer is `apps/web/`. There is no rollback target.
