@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { generateScaffoldModel, aggregatePartDemand, type ScaffoldMemberRole } from './scaffold-design.js'
+import {
+  generateScaffoldModel,
+  aggregatePartDemand,
+  resolveScaffoldBom,
+  type ScaffoldCatalogPart,
+  type ScaffoldMemberRole,
+  type ScaffoldPartDemandLine,
+} from './scaffold-design.js'
 
 function countByRole(members: { role: ScaffoldMemberRole }[]): Record<string, number> {
   const out: Record<string, number> = {}
@@ -93,6 +100,72 @@ describe('generateScaffoldModel', () => {
     expect(model.warnings.join(' ')).toContain('no working platform')
   })
 
+  it('rejects invalid specs', () => {
+    // (kept below)
+    expect(true).toBe(true)
+  })
+})
+
+describe('resolveScaffoldBom', () => {
+  const catalog: ScaffoldCatalogPart[] = [
+    { id: 'std-2m', role: 'standard', lengthMm: 2000 },
+    { id: 'ledger-2.5m', role: 'ledger', lengthMm: 2500 },
+    { id: 'ledger-3m', role: 'ledger', lengthMm: 3000 },
+    { id: 'transom-1m', role: 'transom', lengthMm: 1000 },
+    { id: 'baseplate', role: 'base_plate', lengthMm: null },
+    { id: 'deck-2.5m', role: 'deck', lengthMm: 2500 },
+    // no brace / guardrail parts on purpose
+  ]
+
+  it('matches each demand line to the nearest catalog part of the same role', () => {
+    const demand: ScaffoldPartDemandLine[] = [
+      { role: 'standard', lengthMm: 2000, quantity: 4 },
+      { role: 'ledger', lengthMm: 2500, quantity: 2 },
+      { role: 'transom', lengthMm: 1000, quantity: 2 },
+      { role: 'base_plate', lengthMm: 0, quantity: 4 },
+    ]
+    const { lines, unresolved } = resolveScaffoldBom(demand, catalog)
+    expect(unresolved).toHaveLength(0)
+    expect(lines.find((l) => l.role === 'ledger')?.catalogPartId).toBe('ledger-2.5m')
+    expect(lines.find((l) => l.role === 'base_plate')?.catalogPartId).toBe('baseplate')
+    expect(lines.find((l) => l.role === 'standard')?.quantity).toBe(4)
+  })
+
+  it('picks the nearest length when no exact match exists', () => {
+    const demand: ScaffoldPartDemandLine[] = [{ role: 'ledger', lengthMm: 2900, quantity: 1 }]
+    const { lines } = resolveScaffoldBom(demand, catalog)
+    expect(lines[0]?.catalogPartId).toBe('ledger-3m') // 3000 is nearer to 2900 than 2500
+  })
+
+  it('reports demand with no catalog part for its role as unresolved', () => {
+    const demand: ScaffoldPartDemandLine[] = [
+      { role: 'standard', lengthMm: 2000, quantity: 4 },
+      { role: 'brace', lengthMm: 3202, quantity: 2 },
+      { role: 'guardrail', lengthMm: 2500, quantity: 4 },
+    ]
+    const { lines, unresolved } = resolveScaffoldBom(demand, catalog)
+    expect(lines).toHaveLength(1)
+    expect(unresolved.map((u) => u.role).sort()).toEqual(['brace', 'guardrail'])
+  })
+
+  it('end-to-end: a generated model resolves against a catalog', () => {
+    const model = generateScaffoldModel({
+      baysAlongLength: 1,
+      baysAlongWidth: 1,
+      bayLengthMm: 2500,
+      bayWidthMm: 1000,
+      liftHeightMm: 2000,
+      lifts: 1,
+      options: { guardrails: false },
+    })
+    const { lines } = resolveScaffoldBom(model.partDemand, catalog)
+    // standards, ledgers, transoms, base plates, deck all resolve; braces don't.
+    expect(lines.some((l) => l.role === 'standard')).toBe(true)
+    expect(lines.some((l) => l.role === 'deck')).toBe(true)
+  })
+})
+
+describe('generateScaffoldModel (validation)', () => {
   it('rejects invalid specs', () => {
     expect(() =>
       generateScaffoldModel({
