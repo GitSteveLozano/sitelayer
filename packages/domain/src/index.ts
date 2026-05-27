@@ -1261,6 +1261,18 @@ export {
 } from './assembly.js'
 
 export {
+  generateScaffoldModel,
+  aggregatePartDemand,
+  type ScaffoldDesignSpec,
+  type ScaffoldDesignOptions,
+  type ScaffoldMember,
+  type ScaffoldMemberRole,
+  type ScaffoldModel,
+  type ScaffoldPartDemandLine,
+  type Vec3Mm,
+} from './scaffold-design.js'
+
+export {
   DEFAULT_MARKUP_CONFIG,
   applyMarkup,
   normalizeMarkupConfig,
