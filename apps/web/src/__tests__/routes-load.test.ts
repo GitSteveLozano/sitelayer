@@ -35,4 +35,9 @@ describe('apps/web full-screen route screens', () => {
     const mod = await import('@/screens/scaffold/scaffold-designer')
     expect(typeof mod.ScaffoldDesignerScreen).toBe('function')
   })
+
+  test('project BOMs screen (/projects/:id/boms) loads and exports its component', async () => {
+    const mod = await import('@/screens/scaffold/project-boms')
+    expect(typeof mod.ProjectBomsScreen).toBe('function')
+  })
 })
