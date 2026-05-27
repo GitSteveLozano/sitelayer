@@ -44,6 +44,20 @@ export interface MeasurementGeometry {
   height?: number
 }
 
+/**
+ * Geometry persisted for a promoted capture-pipeline measurement (blueprint
+ * vision, drone, roomplan, photogrammetry), written by the takeoff-drafts
+ * promote path. `polygon` is `[x, y]` pairs in the source's own coordinate
+ * space (image pixels, lat/lon, …); `surfaceId`/`refs` trace back to the
+ * captured artifact. The 3D preview normalizes it to relative scale.
+ */
+export interface CaptureGeometry {
+  kind: 'capture'
+  surfaceId?: string
+  refs?: string[]
+  polygon?: number[][]
+}
+
 export interface TakeoffMeasurement {
   id: string
   project_id: string
@@ -61,7 +75,7 @@ export interface TakeoffMeasurement {
    * Spaces-backed full-resolution upload lands as a follow-on.
    */
   image_thumbnail: string | null
-  geometry: MeasurementGeometry | Record<string, never>
+  geometry: MeasurementGeometry | CaptureGeometry | Record<string, never>
   version: number
   created_at: string
 }

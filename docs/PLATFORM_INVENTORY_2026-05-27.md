@@ -111,7 +111,7 @@ Leased Postgres queue + `mutation_outbox` (claim `FOR UPDATE SKIP LOCKED`, lease
 > as gaps were already built — the docs/comments lied. Corrections inline.
 
 1. **Scaffold designer** (3D design → auto-BOM → load/bracing) — REAL gap. The Avontus-parity hole.
-2. **Captured 3D geometry → renderer** — REAL gap, but non-trivial: capture polygons live in heterogeneous spaces (blueprint=pixels, drone=lat/lon, roomplan=areas-only), so it needs per-source normalization, not a generic feed. `geometry-3d.ts` currently skips `kind:'capture'`.
+2. ~~Captured 3D geometry → renderer~~ — **shipped (2026-05-27, relative scale).** `geometry-3d.ts` now renders promoted `kind:'capture'` polygons (blueprint-vision/drone) by bounds-normalizing the capture set to a relative scale and bypassing the blueprint/page filter; selecting the capture draft in the 3D preview shows them. Absolute per-source calibration (pixels→ft, lat/lon→ft projection) is the remaining follow-up.
 3. **QBO live pushes for rental-invoice / labor-payroll** + TimeActivity/Bill **ingest** — flag-gated / needs business rules + creds (operator-blocked).
 4. **AI chat model** — out-of-band (runs in a Mesh subscription runner, not in-process).
 5. **Bonus payout _application_ into a payroll run** — the math (`calculateBonusPayout`/`simulateBonusScenario`) and simulator UI exist; only applying payout inside a live run remains (a money-path design decision).
