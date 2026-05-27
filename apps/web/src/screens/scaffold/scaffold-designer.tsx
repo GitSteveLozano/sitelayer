@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { generateScaffoldModel, type ScaffoldDesignSpec, type ScaffoldModel } from '@sitelayer/domain'
+import { Card, Banner } from '@/components/mobile'
 import { buildScaffoldScene, colorForRole } from '@/lib/scaffold/scaffold-scene'
 import { ScaffoldThreeScene } from './scaffold-3d-scene'
 
@@ -33,8 +34,7 @@ export function ScaffoldDesignerScreen() {
   const num =
     (key: keyof ScaffoldDesignSpec) =>
     (event: React.ChangeEvent<HTMLInputElement>): void => {
-      const value = Number(event.target.value)
-      setSpec((prev) => ({ ...prev, [key]: value }))
+      setSpec((prev) => ({ ...prev, [key]: Number(event.target.value) }))
     }
   const toggle =
     (key: 'basePlates' | 'guardrails' | 'toeboards') =>
@@ -43,83 +43,68 @@ export function ScaffoldDesignerScreen() {
     }
 
   return (
-    <div className="min-h-screen bg-[#0d1117] text-white flex flex-col">
-      <header className="shrink-0 border-b border-white/10 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <Link to="/more/inventory/scaffold-catalog" className="text-[12px] text-white/60 hover:text-white">
-            ← Scaffold catalog
-          </Link>
-          <h1 className="mt-1 text-[20px] font-semibold">Scaffold designer</h1>
-        </div>
-        {model ? (
-          <div className="rounded border border-white/15 px-3 py-2 text-[12px] text-white/70">
-            <span className="font-mono tabular-nums text-white">{model.members.length}</span> members ·{' '}
-            {fmtFt(model.bounds.lengthMm)} × {fmtFt(model.bounds.widthMm)} × {fmtFt(model.bounds.heightMm)}
+    <div className="px-5 pt-6 pb-12 max-w-3xl">
+      <Link to="/more/inventory/scaffold-catalog" className="text-[12px] text-ink-3">
+        ← Scaffold catalog
+      </Link>
+      <h1 className="mt-2 font-display text-[26px] font-bold tracking-tight leading-tight">Scaffold designer</h1>
+      <p className="text-[12px] text-ink-3 mt-1">
+        {model
+          ? `${model.members.length} members · ${fmtFt(model.bounds.lengthMm)} × ${fmtFt(model.bounds.widthMm)} × ${fmtFt(model.bounds.heightMm)}`
+          : 'Set the bay grid and lifts to generate a scaffold + its bill of materials.'}
+      </p>
+
+      <div className="mt-5 space-y-4">
+        <Card>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-3">
+            <NumberField label="Bays (length)" value={spec.baysAlongLength} onChange={num('baysAlongLength')} />
+            <NumberField label="Bays (width)" value={spec.baysAlongWidth} onChange={num('baysAlongWidth')} />
+            <NumberField label="Bay length (mm)" value={spec.bayLengthMm} onChange={num('bayLengthMm')} />
+            <NumberField label="Bay width (mm)" value={spec.bayWidthMm} onChange={num('bayWidthMm')} />
+            <NumberField label="Lift height (mm)" value={spec.liftHeightMm} onChange={num('liftHeightMm')} />
+            <NumberField label="Lifts" value={spec.lifts} onChange={num('lifts')} />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-x-5 gap-y-2 text-[13px]">
+            <Checkbox label="Base plates" checked={spec.options?.basePlates ?? true} onChange={toggle('basePlates')} />
+            <Checkbox label="Guardrails" checked={spec.options?.guardrails ?? true} onChange={toggle('guardrails')} />
+            <Checkbox label="Toeboards" checked={spec.options?.toeboards ?? false} onChange={toggle('toeboards')} />
+          </div>
+        </Card>
+
+        {error ? <Banner tone="error" title={error} /> : null}
+
+        {scene ? (
+          <div className="relative h-[440px] overflow-hidden rounded-xl border border-line bg-[#0d1117]">
+            <ScaffoldThreeScene scene={scene} />
+            <div className="absolute bottom-2 right-2 rounded-md bg-black/45 px-2 py-1 text-[11px] text-white/70">
+              Drag to rotate · scroll to zoom
+            </div>
           </div>
         ) : null}
-      </header>
 
-      <div className="flex flex-1 min-h-[560px] flex-col md:flex-row">
-        <aside className="md:w-[320px] shrink-0 overflow-y-auto border-b md:border-b-0 md:border-r border-white/10 p-4 space-y-4">
-          <section className="grid grid-cols-2 gap-3">
-            <NumberField label="Bays (length)" value={spec.baysAlongLength} onChange={num('baysAlongLength')} min={1} />
-            <NumberField label="Bays (width)" value={spec.baysAlongWidth} onChange={num('baysAlongWidth')} min={1} />
-            <NumberField label="Bay length (mm)" value={spec.bayLengthMm} onChange={num('bayLengthMm')} min={1} />
-            <NumberField label="Bay width (mm)" value={spec.bayWidthMm} onChange={num('bayWidthMm')} min={1} />
-            <NumberField label="Lift height (mm)" value={spec.liftHeightMm} onChange={num('liftHeightMm')} min={1} />
-            <NumberField label="Lifts" value={spec.lifts} onChange={num('lifts')} min={1} />
-          </section>
-          <section className="space-y-1.5 text-[13px]">
-            <Checkbox label="Base plates" checked={spec.options?.basePlates ?? true} onChange={toggle('basePlates')} />
-            <Checkbox
-              label="Guardrails (top)"
-              checked={spec.options?.guardrails ?? true}
-              onChange={toggle('guardrails')}
-            />
-            <Checkbox
-              label="Toeboards (top)"
-              checked={spec.options?.toeboards ?? false}
-              onChange={toggle('toeboards')}
-            />
-          </section>
-
-          {error ? (
-            <div className="rounded border border-[#c75f75]/40 bg-[#c75f75]/10 px-3 py-2 text-[12px] text-[#f0a6b5]">
-              {error}
-            </div>
-          ) : null}
-
-          {model ? (
-            <section>
-              <div className="text-[11px] uppercase tracking-[0.06em] text-white/45 mb-1.5">Bill of materials</div>
-              <ul className="divide-y divide-white/10">
-                {model.partDemand.map((line) => (
-                  <li key={`${line.role}:${line.lengthMm}`} className="flex items-center gap-2 py-1.5 text-[12px]">
-                    <span
-                      className="h-2 w-2 shrink-0 rounded-full"
-                      style={{ backgroundColor: colorForRole(line.role) }}
-                    />
-                    <span className="flex-1 capitalize">{line.role.replace('_', ' ')}</span>
-                    {line.lengthMm > 0 ? <span className="text-white/45 font-mono">{fmtFt(line.lengthMm)}</span> : null}
-                    <span className="font-mono tabular-nums text-white">×{line.quantity}</span>
-                  </li>
-                ))}
-              </ul>
-              {model.warnings.map((w) => (
-                <div key={w} className="mt-2 text-[11px] text-[#f2c97d]">
-                  {w}
-                </div>
+        {model ? (
+          <Card>
+            <div className="text-[11px] uppercase tracking-[0.06em] text-ink-3 mb-2">Bill of materials</div>
+            <ul className="divide-y divide-line">
+              {model.partDemand.map((line) => (
+                <li key={`${line.role}:${line.lengthMm}`} className="flex items-center gap-2.5 py-2 text-[13px]">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: colorForRole(line.role) }}
+                  />
+                  <span className="flex-1 capitalize">{line.role.replace('_', ' ')}</span>
+                  {line.lengthMm > 0 ? <span className="text-ink-3 num">{fmtFt(line.lengthMm)}</span> : null}
+                  <span className="num font-semibold tabular-nums">×{line.quantity}</span>
+                </li>
               ))}
-            </section>
-          ) : null}
-        </aside>
-
-        <main className="relative flex-1 min-h-[420px]">
-          {scene ? <ScaffoldThreeScene scene={scene} /> : null}
-          <div className="absolute bottom-3 right-3 rounded border border-white/12 bg-[#0d1117]/75 px-3 py-2 text-[11px] text-white/60 backdrop-blur">
-            Drag to rotate · scroll to zoom
-          </div>
-        </main>
+            </ul>
+            {model.warnings.map((w) => (
+              <p key={w} className="mt-2 text-[12px] text-warn">
+                {w}
+              </p>
+            ))}
+          </Card>
+        ) : null}
       </div>
     </div>
   )
@@ -129,22 +114,20 @@ function NumberField({
   label,
   value,
   onChange,
-  min,
 }: {
   label: string
   value: number
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void
-  min: number
 }) {
   return (
-    <label className="text-[11px] uppercase tracking-[0.06em] text-white/50">
-      {label}
+    <label className="block">
+      <span className="text-[12px] text-ink-3">{label}</span>
       <input
         type="number"
-        min={min}
+        min={1}
         value={value}
         onChange={onChange}
-        className="mt-1 block w-full rounded border border-white/15 bg-[#161b22] px-2 py-1.5 text-[13px] normal-case tracking-normal text-white"
+        className="mt-1 w-full text-[15px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
       />
     </label>
   )
@@ -161,7 +144,7 @@ function Checkbox({
 }) {
   return (
     <label className="flex items-center gap-2">
-      <input type="checkbox" checked={checked} onChange={onChange} className="accent-[#d9904a]" />
+      <input type="checkbox" checked={checked} onChange={onChange} className="accent-accent" />
       {label}
     </label>
   )

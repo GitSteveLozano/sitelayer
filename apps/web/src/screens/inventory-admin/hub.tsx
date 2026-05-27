@@ -23,6 +23,12 @@ const ENTRIES: ReadonlyArray<Entry> = [
     requires: 'scaffold_bom',
   },
   {
+    to: '/scaffold-designer',
+    label: 'Scaffold designer',
+    detail: 'Model bays × lifts → 3D scaffold + auto bill of materials.',
+    requires: 'scaffold_bom',
+  },
+  {
     to: 'damage-charges',
     label: 'Damage charges',
     detail: 'Per-project damage / loss / late-return queue.',
