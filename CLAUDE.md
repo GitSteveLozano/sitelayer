@@ -529,7 +529,9 @@ QBO_CLIENT_ID / QBO_CLIENT_SECRET / QBO_REDIRECT_URI
 QBO_ENVIRONMENT=sandbox|production
 BLUEPRINT_STORAGE_ROOT=/app/storage/blueprints
 BLUEPRINT_VISION_MODE=dry-run|live   # blueprint takeoff dispatcher mode; live also needs ANTHROPIC_API_KEY
-ANTHROPIC_API_KEY=<set-outside-git>  # Claude Opus key for blueprint vision; placeholder in .env.example only
+VOICE_TO_LOG_MODE=dry-run|live       # worker voice-to-log narrative; live also needs ANTHROPIC_API_KEY (else deterministic stub)
+VOICE_TO_LOG_MODEL=claude-haiku-4-5-20251001  # optional override for the voice-to-log model
+ANTHROPIC_API_KEY=<set-outside-git>  # Claude key for blueprint vision + voice-to-log; placeholder in .env.example only
 ALLOWED_ORIGINS=http://localhost:5173,...
 ```
 
