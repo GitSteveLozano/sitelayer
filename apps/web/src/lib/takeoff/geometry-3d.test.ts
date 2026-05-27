@@ -219,6 +219,39 @@ describe('buildTakeoffPreviewScene', () => {
     expect(scene.warnings.join(' ')).toContain('normalized (relative) scale')
   })
 
+  it('renders blueprint captures at TRUE scale when pixelsPerFoot is present', () => {
+    const scene = buildTakeoffPreviewScene([
+      {
+        ...baseMeasurement,
+        id: 'bp-cap',
+        blueprint_document_id: null,
+        page_id: null,
+        geometry: {
+          kind: 'capture',
+          surfaceId: 's1',
+          refs: ['s1'],
+          pixelsPerFoot: 10, // 10 px = 1 ft
+          // 200px × 100px → 20ft × 10ft at true scale.
+          polygon: [
+            [0, 0],
+            [200, 0],
+            [200, 100],
+            [0, 100],
+          ],
+        },
+      },
+    ])
+
+    const item = scene.items.find((i) => i.id === 'bp-cap')
+    expect(item).toBeDefined()
+    const xs = item!.points.map((p) => p.x)
+    const zs = item!.points.map((p) => p.z)
+    // 20ft wide centered → -10..10; 10ft deep centered → -5..5 (NOT normalized to 60).
+    expect(Math.max(...xs) - Math.min(...xs)).toBeCloseTo(20)
+    expect(Math.max(...zs) - Math.min(...zs)).toBeCloseTo(10)
+    expect(scene.warnings.join(' ')).toContain('true scale')
+  })
+
   it('drops a capture geometry with too few points', () => {
     const scene = buildTakeoffPreviewScene([
       {

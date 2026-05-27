@@ -56,6 +56,9 @@ export interface CaptureGeometry {
   surfaceId?: string
   refs?: string[]
   polygon?: number[][]
+  /** Blueprint captures only: pixels-per-foot for the pixel-space polygon, so
+   *  the 3D preview can render at true scale instead of relative. */
+  pixelsPerFoot?: number
 }
 
 export interface TakeoffMeasurement {
