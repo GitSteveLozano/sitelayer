@@ -6,15 +6,15 @@ import { renderXlsxSingleSheet, type XlsxCell } from '../xlsx-writer.js'
 import { splitStraightAndOt, DEFAULT_OVERTIME_HOUR_THRESHOLD } from '@sitelayer/domain'
 
 /**
- * Payroll exports: CSV / Xero CSV / Payworks CSV / JSON.
+ * Payroll exports: XLSX / CSV / Xero CSV / Payworks CSV / Gusto CSV / ADP CSV / JSON.
  *
  * labor_payroll_runs already drives the QBO TimeActivity push. This route
  * issues export-format requests (audit row in payroll_exports) and renders
  * the bytes on demand at GET /api/labor-payroll-runs/:id/exports/:exportId/download.
  *
- * XLSX is intentionally not in the first cut — adding an OOXML dep is a
- * follow-up. The route still allows requesting it; download returns 503
- * until the renderer ships.
+ * XLSX renders via the dependency-free OOXML writer in `../xlsx-writer.ts`
+ * (`renderXlsxSingleSheet`); Gusto/ADP split daily hours at the 8h overtime
+ * threshold. All formats in ALLOWED_FORMATS render on demand.
  */
 export type PayrollExportRouteCtx = {
   pool: Pool
