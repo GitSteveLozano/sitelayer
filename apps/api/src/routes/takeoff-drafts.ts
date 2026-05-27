@@ -165,13 +165,16 @@ function resolveCapturedGeometry(
       if (match?.polygon && Array.isArray(match.polygon) && match.polygon.length >= 3) {
         // Blueprint surfaces are image-pixel polygons + provenance carries
         // pixels-per-foot (scaleFt), so the 3D preview can show true scale.
-        // Other sources (drone lat/lon) have no pixel ratio — omit it.
+        // Drone surfaces are GeoJSON [lon, lat] — tagged so the preview can
+        // project them to feet. Other sources fall back to relative scale.
         const pixelsPerFoot = blueprintPixelsPerFoot(quantity.provenance)
+        const coordSpace = captureCoordSpace(quantity.provenance)
         return {
           kind: 'capture',
           surfaceId: ref,
           polygon: match.polygon,
           ...(pixelsPerFoot != null ? { pixelsPerFoot } : {}),
+          ...(coordSpace != null ? { coordSpace } : {}),
           refs,
         }
       }
@@ -191,6 +194,15 @@ function blueprintPixelsPerFoot(provenance: unknown): number | null {
   if (p.kind !== 'blueprint') return null
   const scaleFt = typeof p.scaleFt === 'number' ? p.scaleFt : null
   return scaleFt != null && Number.isFinite(scaleFt) && scaleFt > 0 ? scaleFt : null
+}
+
+/** Drone surfaces are GeoJSON [lon, lat]; tag them so the preview projects to
+ *  feet. Returns undefined for sources already in pixel/board space. */
+function captureCoordSpace(provenance: unknown): 'lonlat' | undefined {
+  if (provenance && typeof provenance === 'object' && (provenance as { kind?: unknown }).kind === 'drone') {
+    return 'lonlat'
+  }
+  return undefined
 }
 
 /** Build the notes blob for a promoted measurement so we keep a trail

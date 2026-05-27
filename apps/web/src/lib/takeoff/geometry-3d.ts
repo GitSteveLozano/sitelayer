@@ -177,25 +177,23 @@ export function buildTakeoffPreviewScene(
     const polygon = readCapturePolygon(measurement.geometry)
     if (polygon) captureEntries.push({ measurement, points: polygon })
   }
-  // Blueprint captures carry pixels-per-foot → render at TRUE scale. Other
-  // sources (drone lat/lon) have none → bounds-normalized relative scale.
+  // True scale when we can calibrate: blueprint carries pixels-per-foot; drone
+  // carries lon/lat we project to feet. Otherwise bounds-normalize (relative).
   const capturePixelsPerFoot = readCapturePixelsPerFoot(measurements)
-  const captureTransform = computeCaptureTransform(captureEntries, capturePixelsPerFoot)
-  if (captureTransform) {
-    const { centerX, centerY, scale, div } = captureTransform
-    for (const entry of captureEntries) {
-      const points: TakeoffPreviewPoint[] = entry.points.map(([x, y]) => ({
-        x: (x / div - centerX) * scale,
-        z: (y / div - centerY) * scale,
-        boardX: x,
-        boardY: y,
-      }))
+  const captureLonLat = capturePixelsPerFoot == null && captureHasLonLat(measurements)
+  const projected = projectCaptureEntriesToWorld(captureEntries, capturePixelsPerFoot, captureLonLat)
+  if (projected) {
+    projected.worldByEntry.forEach((points, index) => {
+      const entry = captureEntries[index]
+      if (!entry) return
       items.push({ ...buildBase(entry.measurement), kind: 'polygon', points, heightFt: POLYGON_VISUAL_THICKNESS_FT })
-    }
+    })
     warnings.add(
-      capturePixelsPerFoot != null
+      projected.mode === 'blueprint'
         ? 'Captured geometry is shown at true scale from the blueprint pixel calibration.'
-        : 'Captured geometry is shown at normalized (relative) scale — absolute per-source calibration is not yet wired.',
+        : projected.mode === 'lonlat'
+          ? 'Captured geometry is shown at true scale from drone GPS coordinates.'
+          : 'Captured geometry is shown at normalized (relative) scale — absolute per-source calibration is not yet wired.',
     )
   }
 
@@ -269,40 +267,91 @@ function readCapturePixelsPerFoot(measurements: TakeoffMeasurement[]): number | 
   return null
 }
 
+/** True if any capture geometry is tagged `coordSpace: 'lonlat'` (drone). */
+function captureHasLonLat(measurements: TakeoffMeasurement[]): boolean {
+  return measurements.some(
+    (m) => isCaptureGeometry(m.geometry) && (m.geometry as { coordSpace?: unknown }).coordSpace === 'lonlat',
+  )
+}
+
+// ~feet per degree of latitude (mean). Longitude scales by cos(lat).
+const FEET_PER_DEGREE_LAT = 364_000
+
 /**
- * Shared bounds → world transform for the whole capture set, so multiple
- * captured surfaces keep their relative size/position. Points are first
- * divided by `div` (pixels-per-foot → feet; 1 otherwise). With a pixel
- * calibration we keep true scale (scale = 1); without one we normalize the
- * largest dimension to CAPTURE_TARGET_SPAN_FT. Always centers at the origin.
+ * Project a whole capture set into centered world feet, keeping every surface's
+ * relative size/position. Three modes:
+ *   - blueprint (pixelsPerFoot): pixels ÷ ppf → feet, true scale.
+ *   - lonlat (drone GeoJSON [lon, lat]): equirectangular projection about the
+ *     set centroid → feet, true scale.
+ *   - relative: raw coords normalized so the largest span ≈ CAPTURE_TARGET_SPAN_FT.
+ * Always centers at the origin.
  */
-function computeCaptureTransform(
+function projectCaptureEntriesToWorld(
   entries: Array<{ points: Array<[number, number]> }>,
   pixelsPerFoot: number | null,
-): { centerX: number; centerY: number; scale: number; div: number } | null {
+  lonLat: boolean,
+): { worldByEntry: TakeoffPreviewPoint[][]; mode: 'blueprint' | 'lonlat' | 'relative' } | null {
   if (entries.length === 0) return null
-  const div = pixelsPerFoot && pixelsPerFoot > 0 ? pixelsPerFoot : 1
+
+  // lon/lat projection needs the set centroid up front.
+  let lon0 = 0
+  let lat0 = 0
+  if (lonLat) {
+    let count = 0
+    let sumLon = 0
+    let sumLat = 0
+    for (const entry of entries) {
+      for (const [lon, lat] of entry.points) {
+        sumLon += lon
+        sumLat += lat
+        count += 1
+      }
+    }
+    if (count > 0) {
+      lon0 = sumLon / count
+      lat0 = sumLat / count
+    }
+  }
+  const feetPerDegLon = FEET_PER_DEGREE_LAT * Math.cos((lat0 * Math.PI) / 180)
+
+  const toMetric = ([a, b]: [number, number]): [number, number] => {
+    if (pixelsPerFoot && pixelsPerFoot > 0) return [a / pixelsPerFoot, b / pixelsPerFoot]
+    if (lonLat) return [(a - lon0) * feetPerDegLon, (b - lat0) * FEET_PER_DEGREE_LAT] // a=lon, b=lat
+    return [a, b]
+  }
+
+  const metricByEntry = entries.map((entry) => entry.points.map(toMetric))
+
   let minX = Infinity
   let maxX = -Infinity
   let minY = Infinity
   let maxY = -Infinity
-  for (const entry of entries) {
-    for (const [x, y] of entry.points) {
-      const fx = x / div
-      const fy = y / div
-      if (fx < minX) minX = fx
-      if (fx > maxX) maxX = fx
-      if (fy < minY) minY = fy
-      if (fy > maxY) maxY = fy
+  for (const points of metricByEntry) {
+    for (const [x, y] of points) {
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
     }
   }
   if (!Number.isFinite(minX) || !Number.isFinite(minY)) return null
+
+  const absolute = (pixelsPerFoot != null && pixelsPerFoot > 0) || lonLat
   const span = Math.max(maxX - minX, maxY - minY)
+  const scale = absolute ? 1 : span > 0 ? CAPTURE_TARGET_SPAN_FT / span : 1
+  const centerX = (minX + maxX) / 2
+  const centerY = (minY + maxY) / 2
+
+  const worldByEntry = entries.map((entry, entryIndex) =>
+    entry.points.map(([rawX, rawY], pointIndex) => {
+      const [mx, my] = metricByEntry[entryIndex]![pointIndex]!
+      return { x: (mx - centerX) * scale, z: (my - centerY) * scale, boardX: rawX, boardY: rawY }
+    }),
+  )
+
   return {
-    centerX: (minX + maxX) / 2,
-    centerY: (minY + maxY) / 2,
-    scale: pixelsPerFoot && pixelsPerFoot > 0 ? 1 : span > 0 ? CAPTURE_TARGET_SPAN_FT / span : 1,
-    div,
+    worldByEntry,
+    mode: pixelsPerFoot != null && pixelsPerFoot > 0 ? 'blueprint' : lonLat ? 'lonlat' : 'relative',
   }
 }
 
