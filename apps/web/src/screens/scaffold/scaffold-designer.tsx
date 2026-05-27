@@ -1,7 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { generateScaffoldModel, type ScaffoldDesignSpec, type ScaffoldModel } from '@sitelayer/domain'
-import { Card, Banner } from '@/components/mobile'
+import { Card, Banner, MobileButton } from '@/components/mobile'
+import { useProjects } from '@/lib/api/projects'
+import { useScaffoldSystems, useCreateScaffoldDesignBom } from '@/lib/api/scaffold-ops'
 import { buildScaffoldScene, colorForRole } from '@/lib/scaffold/scaffold-scene'
 import { ScaffoldThreeScene } from './scaffold-3d-scene'
 
@@ -105,8 +107,93 @@ export function ScaffoldDesignerScreen() {
             ))}
           </Card>
         ) : null}
+
+        {model ? <SaveBomPanel spec={spec} /> : null}
       </div>
     </div>
+  )
+}
+
+function SaveBomPanel({ spec }: { spec: ScaffoldDesignSpec }) {
+  const projects = useProjects()
+  const systems = useScaffoldSystems()
+  const [projectId, setProjectId] = useState('')
+  const [systemId, setSystemId] = useState('')
+  const [name, setName] = useState('Scaffold design')
+  const save = useCreateScaffoldDesignBom(projectId)
+
+  const projectRows = projects.data?.projects ?? []
+  const systemRows = systems.data?.systems ?? []
+  const selectCls =
+    'mt-1 w-full text-[15px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent'
+  const unresolvedRoles = save.data ? [...new Set(save.data.unresolved.map((u) => u.role))] : []
+
+  return (
+    <Card>
+      <div className="text-[11px] uppercase tracking-[0.06em] text-ink-3 mb-2">Save as BOM</div>
+      <div className="space-y-3">
+        <label className="block">
+          <span className="text-[12px] text-ink-3">Project</span>
+          <select value={projectId} onChange={(e) => setProjectId(e.target.value)} className={selectCls}>
+            <option value="">Select a project…</option>
+            {projectRows.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-[12px] text-ink-3">Scaffold system (optional)</span>
+          <select value={systemId} onChange={(e) => setSystemId(e.target.value)} className={selectCls}>
+            <option value="">Any system</option>
+            {systemRows.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block">
+          <span className="text-[12px] text-ink-3">BOM name</span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="mt-1 w-full text-[15px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
+          />
+        </label>
+        <MobileButton
+          variant="primary"
+          disabled={!projectId || save.isPending}
+          onClick={() =>
+            save.mutate({
+              name,
+              scaffold_system_id: systemId || null,
+              spec: spec as unknown as Record<string, unknown>,
+            })
+          }
+        >
+          {save.isPending ? 'Saving…' : 'Save as BOM'}
+        </MobileButton>
+
+        {save.isError ? <Banner tone="error" title={save.error.message} /> : null}
+        {save.data ? (
+          <div className="rounded-lg border border-line p-3 text-[12px]">
+            <div className="font-semibold">
+              Saved “{save.data.bom.name}” — {save.data.bom.total_lines} line(s)
+            </div>
+            {unresolvedRoles.length ? (
+              <div className="mt-1 text-warn">
+                {unresolvedRoles.length} role(s) had no catalog part: {unresolvedRoles.join(', ')}. Add catalog parts
+                (with <span className="font-mono">attrs.role</span>) for those.
+              </div>
+            ) : (
+              <div className="mt-1 text-good">All demand resolved to catalog parts.</div>
+            )}
+          </div>
+        ) : null}
+      </div>
+    </Card>
   )
 }
 

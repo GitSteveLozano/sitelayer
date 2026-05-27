@@ -300,3 +300,33 @@ export function useApproveBom(bomId: string) {
     },
   })
 }
+
+export interface ScaffoldDesignBomResult {
+  bom: Bom
+  lines: Array<{ id: string; catalog_part_id: string; quantity: string }>
+  unresolved: Array<{ role: string; lengthMm: number; quantity: number }>
+  model_summary: {
+    members: number
+    bounds: { lengthMm: number; widthMm: number; heightMm: number }
+    warnings: string[]
+  }
+}
+
+export interface ScaffoldDesignBomInput {
+  name?: string
+  scaffold_system_id?: string | null
+  spec: Record<string, unknown>
+}
+
+/** Generate + persist a draft BOM from a scaffold design spec for a project. */
+export function useCreateScaffoldDesignBom(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation<ScaffoldDesignBomResult, Error, ScaffoldDesignBomInput>({
+    mutationFn: (input) =>
+      request<ScaffoldDesignBomResult>(`/api/projects/${encodeURIComponent(projectId)}/scaffold-designs/bom`, {
+        method: 'POST',
+        json: input,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['project-boms', projectId] }),
+  })
+}
