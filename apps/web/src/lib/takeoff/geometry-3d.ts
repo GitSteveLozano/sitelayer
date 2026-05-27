@@ -49,9 +49,10 @@ const DEFAULT_WORLD_PER_BOARD_UNIT = 1
 const DEFAULT_WALL_HEIGHT_FT = 9
 const POLYGON_VISUAL_THICKNESS_FT = 0.08
 const PALETTE = ['#d9904a', '#4f9f89', '#6d7ed7', '#c75f75', '#8e735b', '#4b9ed6', '#9b7bd8', '#7d9253'] as const
-// Captured geometry (blueprint-vision/drone/etc.) arrives in source-specific
-// coordinates (image pixels, lat/lon, …) with no shared board-space scale, so
-// we normalize the whole capture set to roughly this many feet across.
+// Captured geometry (any pipeline that emits geometry.surfaces[].polygon —
+// drone today; lat/lon coords) arrives in source-specific coordinates with no
+// shared board-space scale, so we normalize the whole capture set to roughly
+// this many feet across.
 const CAPTURE_TARGET_SPAN_FT = 60
 
 export function buildTakeoffPreviewScene(
@@ -165,8 +166,10 @@ export function buildTakeoffPreviewScene(
     }
   }
 
-  // Capture phase: render promoted capture-pipeline polygons (blueprint
-  // vision, drone, …). They carry no board calibration, so we normalize the
+  // Capture phase: render promoted capture polygons (those whose source
+  // pipeline emitted geometry.surfaces[].polygon — drone today; blueprint
+  // currently ships only quantities + a pixel artifact, so its captures don't
+  // carry a polygon yet). They have no board calibration, so we normalize the
   // whole set by its shared bounds — the SHAPE and relative placement are
   // correct; absolute scale is not, hence the warning.
   const captureEntries: Array<{ measurement: TakeoffMeasurement; points: Array<[number, number]> }> = []
