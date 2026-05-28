@@ -21,6 +21,10 @@ import { OwnerProjects } from './owner-projects'
 import { OwnerTeam } from './owner-team'
 import { OwnerApprovals } from './owner-approvals'
 import { OwnerClients } from './owner-clients'
+import { OwnerMoney } from './owner-money'
+import { OwnerSchedule } from './owner-schedule'
+import { OwnerRentals } from './owner-rentals'
+import { OwnerSettings } from './owner-settings'
 
 // lucide icons type as LucideProps; the DNavItem icon slot wants SVGProps.
 const asIcon = (C: ComponentType<LucideProps>) => C as unknown as ComponentType<SVGProps<SVGSVGElement>>
@@ -102,13 +106,13 @@ export function DesktopWorkspace({ bootstrap = null }: { bootstrap?: BootstrapRe
       <Routes>
         <Route index element={<OwnerDashboard bootstrap={bootstrap} />} />
         <Route path="projects" element={<OwnerProjects bootstrap={bootstrap} />} />
-        <Route path="schedule" element={<DComingSoon name="Schedule" />} />
-        <Route path="money" element={<DComingSoon name="Money" />} />
+        <Route path="schedule" element={<OwnerSchedule bootstrap={bootstrap} />} />
+        <Route path="money" element={<OwnerMoney bootstrap={bootstrap} />} />
         <Route path="approvals" element={<OwnerApprovals bootstrap={bootstrap} />} />
         <Route path="team" element={<OwnerTeam bootstrap={bootstrap} />} />
         <Route path="clients" element={<OwnerClients />} />
-        <Route path="rentals" element={<DComingSoon name="Rentals" />} />
-        <Route path="settings" element={<DComingSoon name="Settings" />} />
+        <Route path="rentals" element={<OwnerRentals />} />
+        <Route path="settings" element={<OwnerSettings />} />
         <Route path="*" element={<DComingSoon name="Screen" />} />
       </Routes>
     </DShell>
