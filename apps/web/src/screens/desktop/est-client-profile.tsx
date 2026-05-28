@@ -105,7 +105,7 @@ export function EstClientProfile() {
           <div className="d-card" style={{ color: 'var(--m-ink-2)' }}>
             This client may have been removed or you may not have access.
             <div style={{ marginTop: 14 }}>
-              <MButton variant="primary" onClick={() => navigate('/clients')}>
+              <MButton variant="primary" onClick={() => navigate('/desktop/clients')}>
                 Back to clients
               </MButton>
             </div>
@@ -166,7 +166,7 @@ export function EstClientProfile() {
           columns={columns}
           rows={projects}
           rowKey={(r) => r.id}
-          onRowClick={(r) => navigate(`/projects/${r.id}`)}
+          onRowClick={(r) => navigate(`/desktop/projects/${r.id}`)}
           empty={
             projectsQuery.isError
               ? 'Could not load this client’s projects.'

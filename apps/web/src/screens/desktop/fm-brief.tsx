@@ -44,7 +44,7 @@ export function FmBrief() {
       goal: g,
       steps: s.filter((step) => step.title.trim().length > 0),
     })
-    navigate('/today')
+    navigate('/desktop/fm/today')
     return res
   })
 

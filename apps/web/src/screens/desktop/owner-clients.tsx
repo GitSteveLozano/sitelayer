@@ -143,7 +143,7 @@ export function OwnerClients() {
           columns={columns}
           rows={rows}
           rowKey={(r) => r.id}
-          onRowClick={(r) => navigate(`/clients/${r.id}`)}
+          onRowClick={(r) => navigate(`/desktop/clients/${r.id}`)}
           empty="No clients yet. New accounts land here once they're added."
         />
       </div>

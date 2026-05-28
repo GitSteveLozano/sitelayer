@@ -394,7 +394,7 @@ export function EstCanvas() {
               {formatQty(grandTotal)}
             </span>
           </span>
-          <MButton variant="primary" onClick={() => navigate(`/projects/${projectId}/estimate`)}>
+          <MButton variant="primary" onClick={() => navigate(`/desktop/estimate/${projectId}`)}>
             Done →
           </MButton>
         </span>

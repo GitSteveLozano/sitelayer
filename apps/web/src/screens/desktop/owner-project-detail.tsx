@@ -97,7 +97,7 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
           <div className="d-card" style={{ color: 'var(--m-ink-2)' }}>
             This project may have been archived or you may not have access.
             <div style={{ marginTop: 14 }}>
-              <MButton variant="primary" onClick={() => navigate('/projects')}>
+              <MButton variant="primary" onClick={() => navigate('/desktop/projects')}>
                 Back to projects
               </MButton>
             </div>

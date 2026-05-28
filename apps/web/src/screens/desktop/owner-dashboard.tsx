@@ -137,14 +137,14 @@ export function OwnerDashboard({ bootstrap }: { bootstrap: BootstrapResponse | n
         <DataTable<SiteRow>
           title="Today on site"
           action={
-            <MButton size="sm" variant="primary" onClick={() => navigate('/schedule')}>
+            <MButton size="sm" variant="primary" onClick={() => navigate('/desktop/schedule')}>
               View schedule
             </MButton>
           }
           columns={columns}
           rows={rows}
           rowKey={(r) => r.id}
-          onRowClick={(r) => navigate(`/projects/${r.id}`)}
+          onRowClick={(r) => navigate(`/desktop/projects/${r.id}`)}
           empty="No active sites. New projects land here once they kick off."
         />
       </div>

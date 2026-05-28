@@ -185,7 +185,7 @@ export function FmToday({ bootstrap }: { bootstrap: BootstrapResponse | null }) 
               </>
             }
             action={
-              <MButton variant="primary" size="sm" onClick={() => navigate('/schedule')}>
+              <MButton variant="primary" size="sm" onClick={() => navigate('/desktop/fm/schedule')}>
                 See schedule
               </MButton>
             }
@@ -207,14 +207,14 @@ export function FmToday({ bootstrap }: { bootstrap: BootstrapResponse | null }) 
         <DataTable<SiteRow>
           title="Sites today"
           action={
-            <MButton size="sm" variant="primary" onClick={() => navigate('/schedule')}>
+            <MButton size="sm" variant="primary" onClick={() => navigate('/desktop/fm/schedule')}>
               View schedule
             </MButton>
           }
           columns={columns}
           rows={rows}
           rowKey={(r) => r.id}
-          onRowClick={(r) => navigate(`/projects/${r.id}`)}
+          onRowClick={(r) => navigate(`/desktop/projects/${r.id}`)}
           empty="No active sites. Sites you're assigned to land here once they kick off."
         />
       </div>

@@ -148,7 +148,7 @@ export function OwnerProjects({ bootstrap }: { bootstrap: BootstrapResponse | nu
           columns={columns}
           rows={rows}
           rowKey={(r) => r.id}
-          onRowClick={(r) => navigate(`/projects/${r.id}`)}
+          onRowClick={(r) => navigate(`/desktop/projects/${r.id}`)}
           empty={
             allRows.length === 0
               ? 'No projects yet. New jobs land here once they kick off.'
