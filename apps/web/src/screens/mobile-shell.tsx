@@ -107,6 +107,12 @@ const MobileRentalsUtilization = lazy(() =>
   import('./mobile/rentals-utilization.js').then((m) => ({ default: m.MobileRentalsUtilization })),
 )
 const MobileRentalScan = lazy(() => import('./mobile/rentals-scan.js').then((m) => ({ default: m.MobileRentalScan })))
+const MobileRentalsAsset = lazy(() =>
+  import('./mobile/rentals-asset.js').then((m) => ({ default: m.MobileRentalsAsset })),
+)
+const MobileRentalsService = lazy(() =>
+  import('./mobile/rentals-service.js').then((m) => ({ default: m.MobileRentalsService })),
+)
 const MobileScaffoldInspectionScreen = lazy(() =>
   import('./mobile/scaffold-inspection.js').then((m) => ({ default: m.MobileScaffoldInspectionScreen })),
 )
@@ -304,6 +310,9 @@ export function MobileShell({
               element={<MobileRentalDispatch bootstrap={bootstrap} companySlug={companySlug} />}
             />
             <Route path="rentals/utilization" element={<MobileRentalsUtilization companySlug={companySlug} />} />
+            <Route path="rentals/service" element={<MobileRentalsService />} />
+            <Route path="rentals/service/:assetId" element={<MobileRentalsService />} />
+            <Route path="rentals/asset/:assetId" element={<MobileRentalsAsset />} />
             <Route
               path="rentals/scan"
               element={<MobileRentalScan bootstrap={bootstrap} companySlug={companySlug} initialMode="deliver" />}
