@@ -40,21 +40,20 @@
       })()
     </script>
     <style>
-      /* Cold-start splash from Sitemap §1 panel 5. Renders before any
-         JS evaluates so the user sees the brand mark + tagline instead
-         of a flash of blank canvas. The .m-splash class is stripped
-         from the body once React mounts and replaces #root content.
-         Uses the system stack (no Geist) per design handoff §typography:
-         "use Apple system font on iOS, Roboto on Android. Native feel
-         matters. Do NOT substitute Inter or Geist." */
+      /* Cold-start splash (v2). Renders before any JS evaluates so the user
+         sees the brand mark instead of a flash of blank canvas; stripped once
+         React mounts and replaces #root content. v2 brutalist: hi-vis yellow
+         field, square black SL mark with yellow letters, Inter Tight. The font
+         stack falls back to the system face until the self-hosted woff2 swaps
+         in (field workers are offline-first). */
       html,
       body {
         margin: 0;
-        background: var(--theme-bg, #f5f1ec);
+        background: var(--theme-bg, #ffd400);
       }
       body {
-        font-family: -apple-system, 'SF Pro Text', BlinkMacSystemFont, system-ui, sans-serif;
-        color: var(--theme-fg, #1c1816);
+        font-family: 'Inter Tight', 'Inter', system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+        color: var(--theme-fg, #0f0e0c);
       }
       #root:empty {
         position: fixed;
@@ -63,29 +62,30 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 14px;
-        background: var(--theme-bg, #f5f1ec);
-        color: var(--theme-fg, #1c1816);
+        gap: 18px;
+        background: var(--theme-bg, #ffd400);
+        color: var(--theme-fg, #0f0e0c);
       }
       #root:empty::before {
         content: 'SL';
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        width: 64px;
-        height: 64px;
-        border-radius: 16px;
-        background: #d9904a;
-        color: white;
-        font-weight: 700;
-        font-size: 24px;
-        letter-spacing: -0.02em;
+        width: 76px;
+        height: 76px;
+        border-radius: 0;
+        background: #0f0e0c;
+        color: #ffd400;
+        font-weight: 900;
+        font-size: 34px;
+        letter-spacing: -0.04em;
       }
       #root:empty::after {
-        content: 'Sitelayer';
-        font-size: 17px;
-        font-weight: 600;
-        letter-spacing: -0.01em;
+        content: 'SITELAYER';
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: 0.28em;
+        text-indent: 0.28em;
       }
     </style>
   </head>

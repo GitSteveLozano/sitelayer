@@ -20,10 +20,10 @@ export function MTapCard({ children, borderLeft, onClick, style, className, ...r
       className={className}
       style={{
         background: 'var(--m-card)',
-        border: '1px solid var(--m-line)',
+        border: '2px solid var(--m-ink)',
         borderLeft,
-        borderRadius: 12,
-        padding: '12px 14px',
+        borderRadius: 0,
+        padding: '14px 16px',
         textAlign: 'left',
         font: 'inherit',
         color: 'inherit',

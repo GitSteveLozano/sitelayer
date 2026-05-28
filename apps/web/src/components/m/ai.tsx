@@ -60,7 +60,11 @@ export function MAiStripe({ tone, eyebrow, title, children, attribution, action,
               <MAiEyebrow tone={tone === 'warn' ? 'warn' : undefined}>{eyebrow}</MAiEyebrow>
             </div>
           ) : null}
-          {title ? <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>{title}</div> : null}
+          {title ? (
+            <div style={{ fontFamily: 'var(--m-font-display)', fontSize: 16, fontWeight: 700, letterSpacing: '-0.015em', marginBottom: 4 }}>
+              {title}
+            </div>
+          ) : null}
           <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.4 }}>{children}</div>
           {attribution ? (
             <div style={{ marginTop: 8 }}>
