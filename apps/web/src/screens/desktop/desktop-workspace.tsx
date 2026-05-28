@@ -13,7 +13,7 @@
 import { useState } from 'react'
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Bell, Briefcase, Calendar, DollarSign, FileText, Home, Layers, Library, type LucideProps, Package, Plus, Settings, Sparkles, Users, UserSquare } from 'lucide-react'
+import { Activity, Bell, Briefcase, Calendar, DollarSign, FileText, Home, Layers, Library, type LucideProps, MessageSquare, Package, Plus, Radio, Settings, Sparkles, Users, UserSquare } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import { getActiveCompanySlug, queryKeys, request, type BootstrapResponse } from '@/lib/api'
 import { DShell, DSidebar, DTopbar, type DNavSection } from '@/components/d'
@@ -43,6 +43,9 @@ import { FmBrief } from './fm-brief'
 import { FmLog } from './fm-log'
 import { OwnerRentalsUtilization } from './owner-rentals-utilization'
 import { OwnerNewProject } from './owner-new-project'
+import { OwnerMessages } from './owner-messages'
+import { OwnerActivity } from './owner-activity'
+import { OwnerBroadcast } from './owner-broadcast'
 
 // lucide icons type as LucideProps; the DNavItem icon slot wants SVGProps.
 const asIcon = (C: ComponentType<LucideProps>) => C as unknown as ComponentType<SVGProps<SVGSVGElement>>
@@ -81,6 +84,14 @@ const OWNER_NAV: DNavSection[] = [
     ],
   },
   {
+    title: 'Comms',
+    items: [
+      { to: '/desktop/messages', label: 'Messages', icon: asIcon(MessageSquare) },
+      { to: '/desktop/broadcast', label: 'Broadcast', icon: asIcon(Radio) },
+      { to: '/desktop/activity', label: 'Activity', icon: asIcon(Activity) },
+    ],
+  },
+  {
     title: 'Foreman',
     items: [
       { to: '/desktop/fm/today', label: 'FM Today', icon: asIcon(Home) },
@@ -112,6 +123,9 @@ const CRUMB: Record<string, string> = {
   '/desktop/fm/log': 'Foreman · Daily Log',
   '/desktop/projects/new': 'New project',
   '/desktop/rentals/utilization': 'Rentals · Utilization',
+  '/desktop/messages': 'Comms · Messages',
+  '/desktop/broadcast': 'Comms · Broadcast',
+  '/desktop/activity': 'Comms · Activity',
 }
 
 function DComingSoon({ name }: { name: string }) {
@@ -234,6 +248,9 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         <Route path="projects/:projectId" element={<OwnerProjectDetail bootstrap={bootstrap} />} />
         <Route path="rentals/utilization" element={<OwnerRentalsUtilization />} />
         <Route path="fm/log" element={<FmLog bootstrap={bootstrap} />} />
+        <Route path="messages" element={<OwnerMessages bootstrap={bootstrap} />} />
+        <Route path="broadcast" element={<OwnerBroadcast />} />
+        <Route path="activity" element={<OwnerActivity />} />
         <Route path="schedule" element={<OwnerSchedule bootstrap={bootstrap} />} />
         <Route path="money" element={<OwnerMoney bootstrap={bootstrap} />} />
         <Route path="approvals" element={<OwnerApprovals bootstrap={bootstrap} />} />
