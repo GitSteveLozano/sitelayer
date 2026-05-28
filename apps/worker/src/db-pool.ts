@@ -22,10 +22,21 @@ export function buildPool({ databaseUrl, appConfig, rejectUnauthorized }: BuildP
     return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 30_000
   })()
 
+  // Cap the worker's backends explicitly. Without a `max` pg defaults to 10,
+  // which stacks on top of the API pool against a ~22-connection managed
+  // Postgres (worker + API + preview/dev share one db-s-1vcpu-1gb). The worker
+  // is a serial tick loop — a handful of connections is plenty. Env override
+  // (WORKER_PG_POOL_MAX) wins.
+  const max = (() => {
+    const raw = Number(process.env.WORKER_PG_POOL_MAX ?? 4)
+    return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 4
+  })()
+
   const withTierOptions = (config: PoolConfig): PoolConfig => ({
     ...config,
     options: postgresOptionsForTier(appConfig.tier, config.options || process.env.PGOPTIONS),
     idleTimeoutMillis,
+    max,
   })
 
   const getPoolConfig = (connectionString: string): PoolConfig => {

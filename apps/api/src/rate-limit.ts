@@ -67,11 +67,28 @@ export type RateLimiter = {
 
 export function createRateLimiter(config: RateLimitConfig = DEFAULT_RATE_LIMIT_CONFIG): RateLimiter {
   const buckets = new Map<string, Bucket>()
+  let lastSweep = Date.now()
+
+  // Evict buckets idle for a full window. After `windowMs` a bucket has
+  // refilled to capacity, so it's indistinguishable from a fresh one — keeping
+  // it only leaks memory. Without this the map grows one permanent entry per
+  // distinct user/IP, and the IP key comes from a client-controllable
+  // X-Forwarded-For (resolveRequestIp), so a caller rotating spoofed XFF values
+  // can grow the heap without bound. Sweeping at most once per window keeps it
+  // amortised O(1) per request.
+  const sweep = (now: number) => {
+    if (now - lastSweep < config.windowMs) return
+    lastSweep = now
+    for (const [key, bucket] of buckets) {
+      if (now - bucket.updatedAt >= config.windowMs) buckets.delete(key)
+    }
+  }
 
   const capacityFor = (scope: 'user' | 'ip') => (scope === 'user' ? config.perUserPerMin : config.perIpPerMin)
 
   return {
     consume(scope, key, now = Date.now()) {
+      sweep(now)
       const capacity = capacityFor(scope)
       const refillRatePerMs = capacity / config.windowMs
       const composite = `${scope}:${key}`

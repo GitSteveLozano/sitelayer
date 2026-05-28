@@ -133,10 +133,13 @@ export async function handleSystemRoutes(req: http.IncomingMessage, url: URL, ct
  * just `projectAssignments`); company-scoped data ignores it.
  */
 async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: string) {
-  // Every query runs through withCompanyClient so RLS sees the right
-  // company_id when migration 066's policies get enabled. Parallelism is
-  // preserved — each Promise checks out its own pooled connection, sets
-  // SET LOCAL app.company_id inside its read-only tx, runs, and releases.
+  // Run the whole fan-out on ONE pooled connection / one read-only tx / one
+  // SET LOCAL app.company_id. node-postgres queues these on the single client,
+  // so a bootstrap costs ~1 connection instead of 12 (it previously did one
+  // connect + BEGIN + set_config + COMMIT *per query* — ~12 concurrent
+  // connections and ~48 round-trips, which exhausts the small managed-Postgres
+  // connection cap under a login storm). RLS still sees the right company_id
+  // because the GUC is bound once for the tx that wraps all of them.
   const [
     divisions,
     serviceItems,
@@ -150,52 +153,36 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
     schedules,
     laborEntries,
     projectAssignments,
-  ] = await Promise.all([
-    withCompanyClient(companyId, (c) =>
+  ] = await withCompanyClient(companyId, (c) =>
+    Promise.all([
       c.query('select code, name, sort_order from divisions where company_id = $1 order by sort_order asc', [
         companyId,
       ]),
-    ),
-    withCompanyClient(companyId, (c) =>
       c.query(
         'select code, name, category, unit, default_rate, source, version from service_items where company_id = $1 and deleted_at is null order by name asc',
         [companyId],
       ),
-    ),
-    withCompanyClient(companyId, (c) =>
       c.query(
         'select id, external_id, name, source, created_at from customers where company_id = $1 and deleted_at is null order by name asc',
         [companyId],
       ),
-    ),
-    withCompanyClient(companyId, (c) =>
       c.query(
         'select id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at from projects where company_id = $1 order by updated_at desc',
         [companyId],
       ),
-    ),
-    withCompanyClient(companyId, (c) =>
       c.query('select id, name, role, created_at from workers where company_id = $1 order by name asc', [companyId]),
-    ),
-    withCompanyClient(companyId, (c) =>
       c.query(
         'select id, name, is_default, config, version, created_at from pricing_profiles where company_id = $1 order by created_at asc',
         [companyId],
       ),
-    ),
-    withCompanyClient(companyId, (c) =>
       c.query(
         'select id, name, config, is_active, version, created_at from bonus_rules where company_id = $1 order by created_at asc',
         [companyId],
       ),
-    ),
-    withCompanyClient(companyId, (c) =>
       c.query(
         'select id, provider, provider_account_id, sync_cursor, last_synced_at, status, version from integration_connections where company_id = $1 order by created_at asc',
         [companyId],
       ),
-    ),
-    withCompanyClient(companyId, (c) =>
       c.query(
         `
         select id, provider, entity_type, local_ref, external_id, label, status, notes, version, deleted_at, created_at, updated_at
@@ -205,18 +192,17 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
         `,
         [companyId],
       ),
-    ),
-    withCompanyClient(companyId, (c) =>
+      // Recent schedules only — capped so this bounded bootstrap payload doesn't
+      // grow without limit as a company accrues daily crew schedules. The full
+      // set is available via the dedicated /api/schedules endpoint.
       c.query(
-        'select id, project_id, scheduled_for, crew, status from crew_schedules where company_id = $1 order by scheduled_for desc',
+        'select id, project_id, scheduled_for, crew, status from crew_schedules where company_id = $1 order by scheduled_for desc limit 500',
         [companyId],
       ),
-    ),
-    // Bootstrap returns recent labor history only — capped to the last year
-    // and 1000 rows so the response stays bounded as company history grows.
-    // Older entries are still readable through GET /api/labor-entries with
-    // explicit filters.
-    withCompanyClient(companyId, (c) =>
+      // Bootstrap returns recent labor history only — capped to the last year
+      // and 1000 rows so the response stays bounded as company history grows.
+      // Older entries are still readable through GET /api/labor-entries with
+      // explicit filters.
       c.query(
         `select id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, version, deleted_at
          from labor_entries
@@ -226,10 +212,8 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
         limit 1000`,
         [companyId],
       ),
-    ),
-    // Caller's own active project assignments. Drives the role-aware shell
-    // selector on the web client (see docs/MOBILE_DESIGN_ROADMAP.md § Phase 2).
-    withCompanyClient(companyId, (c) =>
+      // Caller's own active project assignments. Drives the role-aware shell
+      // selector on the web client (see docs/MOBILE_DESIGN_ROADMAP.md § Phase 2).
       c.query(
         `select id, project_id, role, assigned_by_clerk_user_id, created_at
          from project_assignments
@@ -239,8 +223,8 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
         order by created_at asc`,
         [companyId, callerUserId],
       ),
-    ),
-  ])
+    ]),
+  )
 
   return {
     template: LA_TEMPLATE,

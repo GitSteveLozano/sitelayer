@@ -136,7 +136,13 @@ function verifyClerkJwt(token: string, config: AuthConfig): Identity {
 
   const payload = decodeJwtSegment(payloadSeg)
   const now = Math.floor(Date.now() / 1000)
-  if (typeof payload.exp === 'number' && payload.exp < now) {
+  // `exp` is mandatory. Clerk session tokens are always short-lived and carry
+  // it; treating it as optional meant a token without an `exp` claim would be
+  // accepted forever. Fail closed if it's missing or in the past.
+  if (typeof payload.exp !== 'number') {
+    throw new AuthError(401, 'token missing exp')
+  }
+  if (payload.exp < now) {
     throw new AuthError(401, 'token expired')
   }
   if (typeof payload.nbf === 'number' && payload.nbf > now + 30) {
