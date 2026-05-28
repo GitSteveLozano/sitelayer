@@ -476,80 +476,93 @@ function ClockedInCard({
   const hrsMin = formatRunningHours(elapsedSec)
   const sec = (elapsedSec % 60).toString().padStart(2, '0')
   return (
-    <div className="m-card" style={{ marginTop: 12, marginBottom: 16 }}>
-      <div
-        className="m-topbar-eyebrow"
-        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
-      >
-        <span>TODAY'S JOB</span>
-        {foremanName ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, textTransform: 'none' }}>
-            <MAvatar initials={initialsFor(foremanName)} size="sm" />
-            <span style={{ color: 'var(--m-ink-3)', fontSize: 11 }}>scoped by {foremanName.split(/\s+/)[0]}</span>
-          </span>
-        ) : null}
+    <div style={{ marginTop: 12, marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/* ON SITE · <project> eyebrow + scope headline */}
+      <div>
+        <div className="m-topbar-eyebrow" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ color: 'var(--m-accent)' }}>ON SITE · {project.toUpperCase()}</span>
+          {foremanName ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, textTransform: 'none' }}>
+              <MAvatar initials={initialsFor(foremanName)} size="sm" />
+              <span style={{ color: 'var(--m-ink-4)', fontSize: 11 }}>scoped by {foremanName.split(/\s+/)[0]}</span>
+            </span>
+          ) : null}
+        </div>
+        <div
+          style={{
+            fontFamily: 'var(--m-font-display)',
+            fontWeight: 700,
+            fontSize: 22,
+            letterSpacing: '-0.015em',
+            lineHeight: 1.1,
+            marginTop: 10,
+          }}
+        >
+          {scope}
+        </div>
       </div>
-      <div style={{ fontSize: 19, fontWeight: 600 }}>{project}</div>
-      <div className="m-quiet-sm">{scope}</div>
-      <div style={{ borderTop: '1px solid var(--m-line)', margin: '12px 0' }} />
-      <div className="m-topbar-eyebrow" style={{ textAlign: 'center' }}>
-        CURRENTLY CLOCKED IN
-      </div>
+
+      {/* TODAY'S JOB status block — 2px-bordered, giant tabular timer */}
       <div
-        className="num"
         style={{
+          border: '2px solid var(--m-line)',
+          padding: '24px 20px',
           textAlign: 'center',
-          fontSize: 60,
-          fontWeight: 600,
-          letterSpacing: '-0.02em',
-          lineHeight: 1,
-          margin: '4px 0 4px',
         }}
       >
-        {hrsMin}
-        <span style={{ fontSize: 26, color: 'var(--m-ink-3)' }}>:{sec}</span>
-      </div>
-      <div className="m-quiet-sm" style={{ textAlign: 'center', marginTop: 4 }}>
-        Started {timeOfDay(startedAt)}
-      </div>
-      {approachingOt ? (
-        <div style={{ display: 'flex', justifyContent: 'center', marginTop: 10 }}>
-          <MPill tone="amber" dot>
-            Approaching daily OT
-          </MPill>
+        <div className="m-topbar-eyebrow" style={{ color: 'var(--m-ink-4)' }}>
+          CURRENTLY CLOCKED IN
         </div>
-      ) : null}
-      <div style={{ height: 12 }} />
-      <MButtonRow>
-        <MButton variant="quiet" disabled>
-          <span
-            aria-hidden
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: 2,
-              background: 'var(--m-amber)',
-              display: 'inline-block',
-              marginRight: 6,
-            }}
-          />
+        <div
+          className="num"
+          style={{
+            fontFamily: 'var(--m-font-display)',
+            fontWeight: 700,
+            fontVariantNumeric: 'tabular-nums',
+            fontSize: 80,
+            letterSpacing: '-0.03em',
+            lineHeight: 1,
+            margin: '12px 0 0',
+          }}
+        >
+          {hrsMin}
+          <span style={{ fontSize: 32, color: 'var(--m-ink-4)' }}>:{sec}</span>
+        </div>
+        <div
+          className="m-topbar-eyebrow"
+          style={{ color: 'var(--m-ink-4)', marginTop: 12, textTransform: 'none', fontSize: 11 }}
+        >
+          Started {timeOfDay(startedAt)}
+        </div>
+        {approachingOt ? (
+          <div style={{ display: 'flex', justifyContent: 'center', marginTop: 14 }}>
+            <MPill tone="amber" dot>
+              Approaching daily OT
+            </MPill>
+          </div>
+        ) : null}
+      </div>
+
+      {/* BREAK (ghost) + CLOCK OUT (danger) split — 64px gloved buttons, shared 2px border */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', border: '2px solid var(--m-line)' }}>
+        <MButton
+          variant="ghost"
+          data-size="worker"
+          disabled
+          style={{ border: 'none', borderRight: '2px solid var(--m-line)' }}
+        >
           Break
         </MButton>
-        <MButton variant="primary" onClick={onClockOut} disabled={busy}>
-          <span
-            aria-hidden
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: '50%',
-              background: '#fff',
-              display: 'inline-block',
-              marginRight: 6,
-            }}
-          />
+        <MButton
+          variant={'danger' as 'primary'}
+          data-size="worker"
+          onClick={onClockOut}
+          disabled={busy}
+          style={{ border: 'none' }}
+        >
           {busy ? 'Clocking out…' : 'Clock out'}
         </MButton>
-      </MButtonRow>
+      </div>
     </div>
   )
 }
@@ -622,15 +635,31 @@ function ScopeSummaryCard({
 
 function OffClockCard({ onClockIn, busy }: { onClockIn: () => void; busy: boolean }) {
   return (
-    <div className="m-card" style={{ marginTop: 12, marginBottom: 16, textAlign: 'center' }}>
-      <div className="m-topbar-eyebrow" style={{ marginBottom: 8 }}>
-        OFF CLOCK
+    <div style={{ marginTop: 12, marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ border: '2px solid var(--m-line)', padding: '24px 20px', textAlign: 'center' }}>
+        <div className="m-topbar-eyebrow" style={{ color: 'var(--m-ink-4)' }}>
+          OFF CLOCK
+        </div>
+        <div
+          style={{
+            fontFamily: 'var(--m-font-display)',
+            fontWeight: 700,
+            fontSize: 22,
+            letterSpacing: '-0.015em',
+            lineHeight: 1.1,
+            margin: '12px 0 8px',
+          }}
+        >
+          You're not clocked in
+        </div>
+        <div
+          className="m-topbar-eyebrow"
+          style={{ color: 'var(--m-ink-4)', textTransform: 'none', fontSize: 11, lineHeight: 1.4 }}
+        >
+          Drive into a site geofence and the app will clock you in automatically.
+        </div>
       </div>
-      <div style={{ fontSize: 17, fontWeight: 500, marginBottom: 4 }}>You're not clocked in</div>
-      <div className="m-quiet-sm" style={{ marginBottom: 16 }}>
-        Drive into a site geofence and the app will clock you in automatically.
-      </div>
-      <MButton variant="primary" onClick={onClockIn} disabled={busy}>
+      <MButton variant="primary" data-size="worker" onClick={onClockIn} disabled={busy}>
         {busy ? 'Clocking in…' : 'Clock in manually'}
       </MButton>
     </div>

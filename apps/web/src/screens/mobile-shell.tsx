@@ -43,6 +43,8 @@ import { UpdateBanner } from '../components/shell/UpdateBanner.js'
 // add a default export.
 const MoreRoute = lazy(() => import('../routes/more.js'))
 const AdminHome = lazy(() => import('./mobile/admin-home.js').then((m) => ({ default: m.AdminHome })))
+const OwnerMoney = lazy(() => import('./mobile/owner-money.js').then((m) => ({ default: m.OwnerMoney })))
+const MobileChatList = lazy(() => import('./mobile/chat.js').then((m) => ({ default: m.MobileChatList })))
 const MobileProjectsList = lazy(() =>
   import('./mobile/projects-list.js').then((m) => ({ default: m.MobileProjectsList })),
 )
@@ -105,6 +107,12 @@ const MobileRentalsUtilization = lazy(() =>
   import('./mobile/rentals-utilization.js').then((m) => ({ default: m.MobileRentalsUtilization })),
 )
 const MobileRentalScan = lazy(() => import('./mobile/rentals-scan.js').then((m) => ({ default: m.MobileRentalScan })))
+const MobileRentalsAsset = lazy(() =>
+  import('./mobile/rentals-asset.js').then((m) => ({ default: m.MobileRentalsAsset })),
+)
+const MobileRentalsService = lazy(() =>
+  import('./mobile/rentals-service.js').then((m) => ({ default: m.MobileRentalsService })),
+)
 const MobileScaffoldInspectionScreen = lazy(() =>
   import('./mobile/scaffold-inspection.js').then((m) => ({ default: m.MobileScaffoldInspectionScreen })),
 )
@@ -302,6 +310,9 @@ export function MobileShell({
               element={<MobileRentalDispatch bootstrap={bootstrap} companySlug={companySlug} />}
             />
             <Route path="rentals/utilization" element={<MobileRentalsUtilization companySlug={companySlug} />} />
+            <Route path="rentals/service" element={<MobileRentalsService />} />
+            <Route path="rentals/service/:assetId" element={<MobileRentalsService />} />
+            <Route path="rentals/asset/:assetId" element={<MobileRentalsAsset />} />
             <Route
               path="rentals/scan"
               element={<MobileRentalScan bootstrap={bootstrap} companySlug={companySlug} initialMode="deliver" />}
@@ -317,6 +328,8 @@ export function MobileShell({
             <Route path="rentals/lifecycle/:id" element={<RentalLifecycleDetailScreen />} />
             <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} companyRole={companyRole} />} />
             <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
+            <Route path="money" element={<OwnerMoney bootstrap={bootstrap} />} />
+            <Route path="chat" element={<MobileChatList bootstrap={bootstrap} />} />
             <Route
               path="work"
               element={<MobileWorkRequests companyRole={companyRole} currentUserId={currentUserId} />}

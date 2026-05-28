@@ -13,6 +13,10 @@ import './styles/globals.css'
 // without a flash of unstyled content; the rules are scoped under .m-*
 // classes so they don't bleed into v2's main routes.
 import './styles/m.css'
+// d.css = the Desktop v2 "command center" primitives (.d-* classes) for the
+// >=1024px owner/estimator surface. Scoped under .d-* so it doesn't bleed
+// into the mobile (.m-*) rules; shares the v2 tokens from tokens.css/m.css.
+import './styles/d.css'
 
 // Lazy-load Sentry's React error boundary so the SDK stays out of the
 // eager graph. Suspense fallback renders the children directly — no

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Navigate, useLocation } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ColdStartSplash } from '@/components/shell/ColdStartSplash'
@@ -97,6 +97,7 @@ function CompanyWorkspace({ activeCompany }: { activeCompany: ActiveCompany }) {
   // from the pathname instead — this is the same pattern the operator-
   // context handshake uses for origin-side state.
   const probeRoute = useMemo(() => parseProbeRoute(location.pathname), [location.pathname])
+  const isDesktop = useIsDesktop()
 
   const error = bootstrapQuery.error ?? sessionQuery.error
   if (needsOnboarding(error)) return <Navigate to="/onboarding" replace />
@@ -112,6 +113,14 @@ function CompanyWorkspace({ activeCompany }: { activeCompany: ActiveCompany }) {
   const persona = companyRole === 'admin' || companyRole === 'office' ? 'owner' : membershipRoleToPersona(companyRole)
 
   if (bootstrapQuery.isPending || sessionQuery.isPending) return <ColdStartSplash />
+
+  // Desktop v2 gate: owners on a wide viewport get the command-center surface
+  // (mounted at /desktop). Foreman/worker stay on the mobile shell. The bootstrap
+  // query is already warm so /desktop renders instantly. Deep full-screen routes
+  // (/projects/:id/setup, /clients, …) are App.tsx siblings and bypass this.
+  if (isDesktop && persona === 'owner') {
+    return <Navigate to="/desktop" replace />
+  }
 
   const activeProjectName =
     probeRoute.projectId && bootstrapQuery.data
@@ -186,6 +195,28 @@ function needsOnboarding(error: unknown): boolean {
     typeof (error.body as { error: unknown }).error === 'string' &&
     /company slug.*not found|requires_onboarding/i.test((error.body as { error: string }).error)
   )
+}
+
+/**
+ * True when the viewport is desktop-width (>=1024px). Drives the Desktop v2
+ * gate. SSR-safe (returns false until mounted) and tracks live resizes.
+ */
+function useIsDesktop(): boolean {
+  const query = '(min-width: 1024px)'
+  const [isDesktop, setIsDesktop] = useState<boolean>(() =>
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+      ? window.matchMedia(query).matches
+      : false,
+  )
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+    const mql = window.matchMedia(query)
+    const onChange = (e: MediaQueryListEvent) => setIsDesktop(e.matches)
+    setIsDesktop(mql.matches)
+    mql.addEventListener('change', onChange)
+    return () => mql.removeEventListener('change', onChange)
+  }, [])
+  return isDesktop
 }
 
 function WorkspaceLoadError({ error }: { error: unknown }) {

@@ -1,0 +1,456 @@
+/**
+ * Foreman desktop — FM · DAILY LOG · AI DRAFT REVIEW (Desktop v2).
+ *
+ * Mirrors the template's `m-fmdl` frame: an eyebrow + display headline, a
+ * three-stat KPI strip (Photos / Hours / Issues), then a `.d-split` with the
+ * AGENT DRAFT narrative + a notes editor on the LEFT and a photo grid +
+ * "Submit to PM" primary action on the RIGHT.
+ *
+ * Reuses the SAME daily-log hook surface as the mobile composer
+ * (screens/mobile/foreman-log.tsx): the screen finds-or-creates today's
+ * draft for the active foreman + project, drafts a narrative through
+ * `useTriggerVoiceToLog` + `useAiInsights`, and submits through the
+ * `daily_log` workflow reducer via `useSubmitDailyLog`. No new hooks.
+ */
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useParams } from 'react-router-dom'
+import type { BootstrapResponse } from '@/lib/api'
+import {
+  dailyLogPhotoUrl,
+  useAiInsights,
+  useApplyInsight,
+  useCreateDailyLog,
+  useDailyLogPhotos,
+  useDailyLogs,
+  useDismissInsight,
+  usePatchDailyLog,
+  useProjectBriefs,
+  useSubmitDailyLog,
+  useTriggerVoiceToLog,
+  type DailyLog,
+  type DailyLogPhotoMetadata,
+  type VoiceToLogProposal,
+} from '@/lib/api'
+import { DEyebrow, DH1, DKpi, DKpiStrip } from '@/components/d'
+import { MButton, MSelect, MTextarea } from '@/components/m'
+import { MAiAgent, MAttribution } from '@/components/m/ai'
+import { formatDecimalHours, todayIso } from '../mobile/format.js'
+
+const MONO_LABEL: React.CSSProperties = {
+  fontFamily: 'var(--m-num)',
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--m-ink-3)',
+}
+
+export function FmLog({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
+  const params = useParams<{ projectId?: string }>()
+
+  // Active projects this foreman can log against. The optional :projectId
+  // route param seeds the selection; otherwise fall back to the first.
+  const projects = useMemo(
+    () => bootstrap?.projects.filter((p) => /progress|active/i.test(p.status)) ?? [],
+    [bootstrap?.projects],
+  )
+  const [projectId, setProjectId] = useState<string>(() => params.projectId ?? projects[0]?.id ?? '')
+
+  // Snap onto a valid project once bootstrap lands (route param wins if valid).
+  useEffect(() => {
+    if (projectId && projects.some((p) => p.id === projectId)) return
+    const next = (params.projectId && projects.some((p) => p.id === params.projectId) ? params.projectId : '') ||
+      projects[0]?.id ||
+      ''
+    if (next && next !== projectId) setProjectId(next)
+  }, [params.projectId, projectId, projects])
+
+  const today = todayIso()
+  const list = useDailyLogs(
+    projectId ? { from: today, to: today, projectId } : { from: today, to: today },
+    { enabled: Boolean(projectId) },
+  )
+  const log = list.data?.dailyLogs.find((d) => d.project_id === projectId && d.occurred_on === today) ?? null
+
+  // Find-or-create today's draft for the active foreman + project.
+  const create = useCreateDailyLog()
+  useEffect(() => {
+    if (!projectId || !list.isFetched || log || create.isPending) return
+    void create.mutateAsync({ project_id: projectId, occurred_on: today }).catch(() => {})
+  }, [projectId, list.isFetched, log, today])
+
+  return (
+    <div className="d-content">
+      <div className="d-stack">
+        <div>
+          <DEyebrow>Foreman · Daily Log</DEyebrow>
+          <DH1>End the day on record.</DH1>
+        </div>
+
+        {projects.length === 0 ? (
+          <div className="d-card" style={{ color: 'var(--m-ink-3)', fontSize: 14 }}>
+            No active jobs today. The daily log opens once a project is on site.
+          </div>
+        ) : (
+          <>
+            {projects.length > 1 ? (
+              <div style={{ maxWidth: 360 }}>
+                <div style={MONO_LABEL}>Project</div>
+                <MSelect
+                  value={projectId}
+                  onChange={(e) => setProjectId(e.currentTarget.value)}
+                  style={{ width: '100%', marginTop: 8 }}
+                >
+                  {projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </MSelect>
+              </div>
+            ) : null}
+
+            {!projectId ? (
+              <div className="d-card" style={{ color: 'var(--m-ink-3)', fontSize: 14 }}>
+                Select a project to start its log.
+              </div>
+            ) : log ? (
+              <DailyLogEditor key={log.id} log={log} bootstrap={bootstrap} />
+            ) : list.isLoading || create.isPending || !list.isFetched ? (
+              <div className="d-card" style={{ color: 'var(--m-ink-3)', fontSize: 14 }}>
+                Preparing today&apos;s draft…
+              </div>
+            ) : (
+              <div className="d-card" style={{ color: 'var(--m-ink-3)', fontSize: 14 }}>
+                No draft yet — it will appear in a moment.
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+interface DailyLogEditorProps {
+  log: DailyLog
+  bootstrap: BootstrapResponse | null
+}
+
+function DailyLogEditor({ log, bootstrap }: DailyLogEditorProps) {
+  const patch = usePatchDailyLog(log.id)
+  const submit = useSubmitDailyLog(log.id)
+
+  const isSubmitted = log.status === 'submitted'
+  const today = log.occurred_on
+
+  // Today's labor on this project — feeds the Hours stat + agent attribution.
+  const todayLabor = useMemo(
+    () =>
+      (bootstrap?.laborEntries ?? []).filter(
+        (l) => l.occurred_on === today && !l.deleted_at && l.project_id === log.project_id,
+      ),
+    [bootstrap?.laborEntries, today, log.project_id],
+  )
+  const totalHours = todayLabor.reduce((sum, l) => sum + Number(l.hours ?? 0), 0)
+
+  const briefs = useProjectBriefs(log.project_id, today)
+
+  // Notes editor with debounced auto-save (same shape as the mobile composer).
+  const [notes, setNotes] = useState(log.notes ?? '')
+  const dirtyRef = useRef(false)
+  const versionRef = useRef(log.version)
+  useEffect(() => {
+    if (!dirtyRef.current) setNotes(log.notes ?? '')
+    versionRef.current = log.version
+  }, [log.notes, log.version])
+  useEffect(() => {
+    if (isSubmitted) return
+    if (notes === (log.notes ?? '')) return
+    dirtyRef.current = true
+    const id = window.setTimeout(() => {
+      void patch
+        .mutateAsync({ notes, expected_version: versionRef.current })
+        .then(() => {
+          dirtyRef.current = false
+        })
+        .catch(() => {})
+    }, 1200)
+    return () => window.clearTimeout(id)
+  }, [notes, isSubmitted, log.notes])
+
+  const photoCount = log.photo_keys.length
+  const issuesCount = Array.isArray(log.schedule_deviations) ? log.schedule_deviations.length : 0
+
+  const onSubmit = async () => {
+    if (isSubmitted) return
+    if (dirtyRef.current) {
+      await patch.mutateAsync({ notes, expected_version: versionRef.current }).catch(() => {})
+    }
+    await submit.mutateAsync({ expected_version: versionRef.current }).catch(() => {})
+  }
+
+  return (
+    <>
+      <DKpiStrip>
+        <DKpi label="Photos" value={String(photoCount)} meta={photoCount > 0 ? 'On record' : 'None yet'} />
+        <DKpi
+          label="Hours"
+          value={formatDecimalHours(totalHours, 1).replace('h', '')}
+          unit="h"
+          meta={totalHours > 0 ? `${todayLabor.length} entries` : 'No clock-ins'}
+          metaTone={totalHours > 0 ? 'good' : undefined}
+        />
+        <DKpi
+          label="Issues"
+          value={String(issuesCount)}
+          tone={issuesCount > 0 ? 'accent' : undefined}
+          meta={issuesCount > 0 ? 'Deviations flagged' : 'On plan'}
+        />
+      </DKpiStrip>
+
+      <div className="d-split">
+        {/* LEFT — agent draft + notes editor */}
+        <div className="d-stack" style={{ gap: 20 }}>
+          <div>
+            <div style={MONO_LABEL}>Agent draft</div>
+            <div style={{ marginTop: 8 }}>
+              <VoiceToLogBlock
+                dailyLogId={log.id}
+                isSubmitted={isSubmitted}
+                attributionCounts={{
+                  photos: photoCount,
+                  fieldEvents: todayLabor.length + issuesCount,
+                }}
+                onApplyProposal={async (proposal) => {
+                  const nextNotes = notes.trim() ? `${notes.trim()}\n\n${proposal.narrative}` : proposal.narrative
+                  dirtyRef.current = true
+                  setNotes(nextNotes)
+                  await patch
+                    .mutateAsync({
+                      notes: nextNotes,
+                      weather: proposal.weather_summary ? { summary: proposal.weather_summary } : null,
+                      schedule_deviations: proposal.schedule_deviations,
+                      expected_version: versionRef.current,
+                    })
+                    .then(() => {
+                      dirtyRef.current = false
+                    })
+                    .catch(() => {})
+                }}
+              />
+            </div>
+          </div>
+
+          <div>
+            <div style={MONO_LABEL}>Notes</div>
+            <MTextarea
+              value={notes}
+              onChange={(e) => setNotes(e.currentTarget.value)}
+              placeholder="What happened today? Any deviations from plan?"
+              disabled={isSubmitted}
+              style={{
+                width: '100%',
+                minHeight: 180,
+                marginTop: 8,
+                background: 'var(--m-card-soft)',
+                border: '2px solid var(--m-ink)',
+                fontSize: 15,
+                lineHeight: 1.5,
+              }}
+            />
+          </div>
+        </div>
+
+        {/* RIGHT — photo grid + submit (sticky) */}
+        <div className="d-card" style={{ position: 'sticky', top: 24 }}>
+          <div style={MONO_LABEL}>Photos · {photoCount}</div>
+          <div style={{ marginTop: 12 }}>
+            <PhotoGrid log={log} />
+          </div>
+
+          <div style={{ marginTop: 20 }}>
+            <MButton
+              variant="primary"
+              onClick={onSubmit}
+              disabled={isSubmitted || submit.isPending}
+              style={{ width: '100%' }}
+            >
+              {isSubmitted ? 'Submitted to PM' : submit.isPending ? 'Submitting…' : 'Submit to PM'}
+            </MButton>
+            {isSubmitted ? (
+              <div style={{ ...MONO_LABEL, marginTop: 8, textAlign: 'center', color: 'var(--m-green)' }}>
+                On record
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </>
+  )
+}
+
+/**
+ * Photo grid. Reads per-photo metadata from `useDailyLogPhotos`, falling
+ * back to the legacy `log.photo_keys` array before the query resolves so
+ * the grid never flashes empty for freshly-uploaded photos.
+ */
+function PhotoGrid({ log }: { log: DailyLog }) {
+  const photosQuery = useDailyLogPhotos(log.id)
+  const photos = useMemo<DailyLogPhotoMetadata[]>(() => {
+    if (photosQuery.data?.photos && photosQuery.data.photos.length > 0) {
+      return photosQuery.data.photos
+    }
+    return log.photo_keys.map((key, idx) => ({
+      id: `legacy-${idx}`,
+      storage_key: key,
+      scope_step_id: null,
+      scope_step_label: null,
+      captured_at: log.created_at,
+    }))
+  }, [photosQuery.data, log.photo_keys, log.created_at])
+
+  if (photos.length === 0) {
+    return (
+      <div style={{ color: 'var(--m-ink-3)', fontSize: 13, padding: '8px 0' }}>
+        No photos captured yet. They show here as the crew uploads from the field.
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
+      {photos.map((photo) => (
+        <img
+          key={photo.id}
+          src={dailyLogPhotoUrl(log.id, photo.storage_key)}
+          alt="Daily log"
+          style={{
+            width: '100%',
+            aspectRatio: '1',
+            objectFit: 'cover',
+            border: '2px solid var(--m-ink)',
+          }}
+        />
+      ))}
+    </div>
+  )
+}
+
+interface VoiceToLogBlockProps {
+  dailyLogId: string
+  isSubmitted: boolean
+  attributionCounts: { photos: number; fieldEvents: number }
+  onApplyProposal: (proposal: VoiceToLogProposal) => Promise<void>
+}
+
+function VoiceToLogBlock({ dailyLogId, isSubmitted, attributionCounts, onApplyProposal }: VoiceToLogBlockProps) {
+  const trigger = useTriggerVoiceToLog()
+  const insights = useAiInsights<VoiceToLogProposal>({ kind: 'voice_to_log', entityId: dailyLogId, open: true })
+  const apply = useApplyInsight()
+  const dismiss = useDismissInsight()
+  const [transcript, setTranscript] = useState('')
+
+  const latest = insights.data?.insights[0]
+
+  const onRunAgent = async () => {
+    if (!transcript.trim()) return
+    await trigger.mutateAsync({ daily_log_id: dailyLogId, transcript, source: 'text' }).catch(() => {})
+  }
+
+  return (
+    <MAiAgent
+      attribution={
+        <>
+          Based on{' '}
+          <strong>
+            {attributionCounts.photos} photos, {attributionCounts.fieldEvents} field events
+          </strong>
+          .
+        </>
+      }
+      onDismiss={
+        latest && !isSubmitted
+          ? () => {
+              void dismiss.mutateAsync({ id: latest.id, reason: 'not_useful' }).catch(() => {})
+            }
+          : undefined
+      }
+    >
+      <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>Voice-to-log</div>
+      {!isSubmitted ? (
+        <>
+          <MTextarea
+            value={transcript}
+            onChange={(e) => setTranscript(e.currentTarget.value)}
+            placeholder="Type the day's narrative; the agent drafts a structured log."
+            style={{ width: '100%', minHeight: 90, marginBottom: 8 }}
+          />
+          <MButton variant="primary" size="sm" onClick={onRunAgent} disabled={!transcript.trim() || trigger.isPending}>
+            {trigger.isPending ? 'Drafting…' : 'Draft narrative'}
+          </MButton>
+        </>
+      ) : (
+        <div style={{ fontSize: 13, color: 'var(--m-ink-3)' }}>Submitted logs are locked.</div>
+      )}
+
+      {latest ? (
+        <div
+          style={{
+            marginTop: 12,
+            paddingTop: 8,
+            borderTop: '1px dashed var(--m-line-2)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+          }}
+        >
+          <div style={{ fontSize: 13, color: 'var(--m-ink-2)', whiteSpace: 'pre-wrap', lineHeight: 1.4 }}>
+            {latest.payload.narrative}
+          </div>
+          {latest.payload.weather_summary ? (
+            <div style={{ fontSize: 11, fontStyle: 'italic', color: 'var(--m-ink-3)' }}>
+              {latest.payload.weather_summary}
+            </div>
+          ) : null}
+          {latest.payload.schedule_deviations.length ? (
+            <ul style={{ paddingLeft: 16, margin: 0, fontSize: 11, color: 'var(--m-ink-3)' }}>
+              {latest.payload.schedule_deviations.map((d, i) => (
+                <li key={i}>{d}</li>
+              ))}
+            </ul>
+          ) : null}
+          {!isSubmitted ? (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 6 }}>
+              <MButton
+                variant="primary"
+                size="sm"
+                onClick={async () => {
+                  await onApplyProposal(latest.payload)
+                  await apply.mutateAsync({ id: latest.id }).catch(() => {})
+                }}
+              >
+                Apply to log
+              </MButton>
+              <MButton
+                variant="quiet"
+                size="sm"
+                onClick={() => {
+                  void dismiss.mutateAsync({ id: latest.id, reason: 'not_useful' }).catch(() => {})
+                }}
+              >
+                Dismiss
+              </MButton>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div style={{ marginTop: 10 }}>
+        <MAttribution>
+          Drafted from foreman dictation by <strong>agent:voice_to_log</strong>.
+        </MAttribution>
+      </div>
+    </MAiAgent>
+  )
+}

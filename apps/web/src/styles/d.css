@@ -1,0 +1,374 @@
+/* Desktop v2 ("command center") primitives — Steve's Desktop v2.
+ * Distinct dense SaaS surface for owner + estimator at >=1024px, sharing the
+ * v2 tokens from tokens.css / m.css (sand · ink · #FFD400 · Inter Tight · hard
+ * edges). Dark persistent sidebar + breadcrumb topbar + dense data tables +
+ * split detail + big-number KPI strips. Mobile (.m-*) is untouched. */
+
+.d-shell {
+  display: grid;
+  grid-template-columns: 232px 1fr;
+  height: 100dvh;
+  min-height: 0;
+  background: var(--m-bg);
+  color: var(--m-ink);
+  font-family: var(--m-font);
+}
+
+/* ---- Sidebar (dark) ---- */
+.d-sidebar {
+  display: flex;
+  flex-direction: column;
+  background: var(--m-ink);
+  color: var(--m-sand);
+  border-right: 2px solid var(--m-ink);
+  min-height: 0;
+  overflow-y: auto;
+}
+.d-sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 18px 20px;
+}
+.d-sidebar-brand .d-mark {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--m-accent);
+  color: var(--m-accent-ink);
+  font-family: var(--m-font-display);
+  font-weight: 900;
+  font-size: 13px;
+  letter-spacing: -0.03em;
+}
+.d-sidebar-brand .d-wordmark {
+  font-family: var(--m-font-display);
+  font-weight: 800;
+  font-size: 18px;
+  letter-spacing: -0.02em;
+}
+.d-sidebar-section {
+  font-family: var(--m-num);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--m-ink-4);
+  padding: 16px 20px 6px;
+}
+.d-nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 20px;
+  color: var(--m-sand-2);
+  font-size: 15px;
+  font-weight: 600;
+  text-decoration: none;
+  border: none;
+  background: transparent;
+  width: 100%;
+  cursor: pointer;
+  text-align: left;
+}
+.d-nav-item svg {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+/* NavLink appends `active` automatically (react-router v6) on the matched route. */
+.d-nav-item.active {
+  background: var(--m-accent);
+  color: var(--m-accent-ink);
+}
+.d-nav-item .d-nav-badge {
+  margin-left: auto;
+  background: var(--m-red);
+  color: #fff;
+  font-family: var(--m-num);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+}
+.d-nav-item.active .d-nav-badge {
+  background: var(--m-accent-ink);
+  color: var(--m-accent);
+}
+/* WEARING role pill, pinned to the sidebar footer */
+.d-wearing {
+  margin-top: auto;
+  margin: auto 14px 16px;
+  border: 2px solid var(--m-sand-2);
+  padding: 10px 12px;
+  cursor: pointer;
+  background: transparent;
+  color: var(--m-sand);
+  text-align: left;
+}
+.d-wearing .d-wearing-l {
+  font-family: var(--m-num);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--m-ink-4);
+}
+.d-wearing .d-wearing-v {
+  font-family: var(--m-font-display);
+  font-weight: 800;
+  font-size: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: var(--m-accent);
+}
+
+/* ---- Main column ---- */
+.d-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.d-topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 24px;
+  height: 64px;
+  flex-shrink: 0;
+  background: var(--m-bg);
+  border-bottom: 2px solid var(--m-ink);
+}
+.d-crumb {
+  font-family: var(--m-num);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--m-ink-3);
+  white-space: nowrap;
+}
+.d-search {
+  flex: 1;
+  max-width: 420px;
+  height: 38px;
+  border: 2px solid var(--m-ink);
+  background: var(--m-card);
+  padding: 0 12px;
+  font-family: var(--m-font);
+  font-size: 14px;
+  color: var(--m-ink);
+}
+.d-topbar-spacer {
+  flex: 1;
+}
+.d-topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.d-content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px 32px 48px;
+}
+.d-content-full {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ---- Page head ---- */
+.d-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--m-num);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--m-ink-3);
+}
+.d-eyebrow .d-eyebrow-sq {
+  width: 10px;
+  height: 10px;
+  background: var(--m-accent);
+}
+.d-h1 {
+  font-family: var(--m-font-display);
+  font-size: 44px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 0.98;
+  margin: 10px 0 0;
+}
+
+/* ---- KPI strip (big-number cells; hard grid) ---- */
+.d-kpi-strip {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  border: 2px solid var(--m-ink);
+}
+.d-kpi-strip > .d-kpi + .d-kpi {
+  border-left: 2px solid var(--m-ink);
+}
+.d-kpi {
+  padding: 18px 22px;
+  background: var(--m-card);
+}
+.d-kpi[data-tone='accent'] {
+  background: var(--m-accent);
+  color: var(--m-accent-ink);
+}
+.d-kpi-l {
+  font-family: var(--m-num);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--m-ink-3);
+}
+.d-kpi[data-tone='accent'] .d-kpi-l {
+  color: var(--m-accent-ink);
+}
+.d-kpi-v {
+  font-family: var(--m-font-display);
+  font-size: 40px;
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 0.9;
+  margin-top: 8px;
+  font-feature-settings: 'tnum';
+  font-variant-numeric: tabular-nums;
+}
+.d-kpi-v .d-kpi-unit {
+  font-size: 22px;
+  opacity: 0.55;
+}
+.d-kpi-meta {
+  font-family: var(--m-num);
+  font-size: 11px;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--m-ink-3);
+  margin-top: 6px;
+}
+.d-kpi-meta[data-tone='good'] {
+  color: var(--m-green);
+}
+.d-kpi-meta[data-tone='bad'] {
+  color: var(--m-red);
+}
+
+/* ---- Dense data table ---- */
+.d-table-wrap {
+  border: 2px solid var(--m-ink);
+  background: var(--m-card);
+}
+.d-table-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 2px solid var(--m-ink);
+}
+.d-table-head-title {
+  font-family: var(--m-font-display);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.d-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.d-table th {
+  text-align: left;
+  font-family: var(--m-num);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--m-ink-3);
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--m-line-2);
+}
+.d-table th[data-num='true'],
+.d-table td[data-num='true'] {
+  text-align: right;
+  font-family: var(--m-num);
+  font-variant-numeric: tabular-nums;
+}
+.d-table td {
+  padding: 14px 18px;
+  font-size: 14px;
+  border-bottom: 1px solid var(--m-line-2);
+  color: var(--m-ink);
+}
+.d-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.d-table tbody tr[data-tap='true'] {
+  cursor: pointer;
+}
+.d-table tbody tr[data-tap='true']:hover {
+  background: var(--m-card-soft);
+}
+.d-table-cell-strong {
+  font-family: var(--m-font-display);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* ---- Tabs ---- */
+.d-tabs {
+  display: flex;
+  border-bottom: 2px solid var(--m-ink);
+}
+.d-tab {
+  padding: 12px 18px;
+  font-family: var(--m-num);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--m-ink-3);
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--m-line-2);
+  cursor: pointer;
+}
+.d-tab[data-active='true'] {
+  background: var(--m-accent);
+  color: var(--m-accent-ink);
+}
+
+/* ---- Split (main + aside) ---- */
+.d-split {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 24px;
+  align-items: start;
+}
+
+/* ---- Card / section ---- */
+.d-card {
+  border: 2px solid var(--m-ink);
+  background: var(--m-card);
+  padding: 20px 22px;
+}
+.d-card[data-tone='accent'] {
+  background: var(--m-accent);
+  color: var(--m-accent-ink);
+  border-width: 3px;
+}
+.d-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}

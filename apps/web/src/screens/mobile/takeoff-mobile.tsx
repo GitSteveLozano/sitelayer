@@ -361,22 +361,48 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                 {/* --- Canvas (draw mode) --- */}
                 {mode === 'draw' ? (
                   <div style={{ padding: '10px 16px 0' }}>
-                    <div style={{ display: 'flex', gap: 6, marginBottom: 8 }}>
-                      {(['polygon', 'lineal', 'count'] as const).map((t) => (
-                        <button
-                          key={t}
-                          type="button"
-                          onClick={() => {
-                            setTool(t)
-                            setDraftPoints([])
-                          }}
-                          className="m-btn m-btn-sm"
-                          data-variant={tool === t ? 'primary' : 'quiet'}
-                          style={{ flex: 1, textTransform: 'capitalize' }}
-                        >
-                          {t}
-                        </button>
-                      ))}
+                    {/* Mono tool toolbar — square brutalist chips (POLY/LIN/PT). Labels are
+                        view-only; the underlying tool values + handlers are unchanged. */}
+                    <div
+                      style={{
+                        display: 'flex',
+                        marginBottom: 8,
+                        border: '2px solid var(--m-ink)',
+                        background: 'var(--m-card-soft)',
+                      }}
+                    >
+                      {([
+                        { tool: 'polygon', label: 'POLY' },
+                        { tool: 'lineal', label: 'LIN' },
+                        { tool: 'count', label: 'PT' },
+                      ] as const).map((t, i, arr) => {
+                        const on = tool === t.tool
+                        return (
+                          <button
+                            key={t.tool}
+                            type="button"
+                            onClick={() => {
+                              setTool(t.tool)
+                              setDraftPoints([])
+                            }}
+                            style={{
+                              flex: 1,
+                              padding: '14px 0',
+                              background: on ? 'var(--m-accent)' : 'transparent',
+                              color: on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
+                              border: 'none',
+                              borderRight: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
+                              fontFamily: 'var(--m-num)',
+                              fontSize: 11,
+                              fontWeight: on ? 700 : 600,
+                              letterSpacing: '0.06em',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            {t.label}
+                          </button>
+                        )
+                      })}
                     </div>
                     <CanvasSurface
                       svgRef={svgRef}
@@ -388,41 +414,95 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                       )}
                       sourceImageUrl={sourceImage.url}
                     />
+                    {/* Live measurement strip — brutalist eyebrow + big-number readout
+                        on an ink slab; Undo/Clear as mono chips. */}
                     <div
                       style={{
+                        marginTop: 8,
+                        padding: '12px 14px',
+                        background: 'var(--m-ink)',
+                        color: 'var(--m-sand)',
+                        border: '2px solid var(--m-ink)',
                         display: 'flex',
                         alignItems: 'center',
                         justifyContent: 'space-between',
-                        fontSize: 12,
-                        color: 'var(--m-ink-3)',
-                        padding: '6px 2px 0',
+                        gap: 12,
                       }}
                     >
-                      <span>
-                        {tool === 'polygon'
-                          ? `${draftPoints.length} pts · area ${formatQty(draftQuantity)}`
-                          : tool === 'lineal'
-                            ? `${draftPoints.length} pts · length ${formatQty(draftQuantity)}`
-                            : `${draftPoints.length} ${draftPoints.length === 1 ? 'count' : 'counts'}`}
-                      </span>
-                      <span style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ minWidth: 0 }}>
+                        <div
+                          style={{
+                            fontFamily: 'var(--m-num)',
+                            fontSize: 10,
+                            fontWeight: 700,
+                            letterSpacing: '0.08em',
+                            textTransform: 'uppercase',
+                            color: 'var(--m-accent)',
+                          }}
+                        >
+                          {tool === 'polygon'
+                            ? `POLY · ${draftPoints.length} PTS`
+                            : tool === 'lineal'
+                              ? `LIN · ${draftPoints.length} PTS`
+                              : `PT · ${draftPoints.length}`}
+                        </div>
+                        <div
+                          style={{
+                            fontFamily: 'var(--m-font-display)',
+                            fontWeight: 800,
+                            fontSize: 30,
+                            lineHeight: 1,
+                            marginTop: 4,
+                            color: 'var(--m-sand)',
+                            fontVariantNumeric: 'tabular-nums',
+                          }}
+                        >
+                          {tool === 'count'
+                            ? `${draftPoints.length}`
+                            : formatQty(draftQuantity)}
+                          <span style={{ fontSize: 14, color: 'var(--m-ink-4)', marginLeft: 6 }}>
+                            {tool === 'polygon' ? 'AREA' : tool === 'lineal' ? 'LEN' : draftPoints.length === 1 ? 'CT' : 'CTS'}
+                          </span>
+                        </div>
+                      </div>
+                      <span style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
                         <button
                           type="button"
                           onClick={() => setDraftPoints((p) => p.slice(0, -1))}
                           disabled={draftPoints.length === 0}
-                          className="m-link"
-                          style={{ opacity: draftPoints.length === 0 ? 0.4 : 1 }}
+                          style={{
+                            padding: '8px 10px',
+                            background: 'transparent',
+                            color: 'var(--m-sand)',
+                            border: '2px solid var(--m-sand)',
+                            fontFamily: 'var(--m-num)',
+                            fontSize: 10,
+                            fontWeight: 700,
+                            letterSpacing: '0.06em',
+                            cursor: draftPoints.length === 0 ? 'default' : 'pointer',
+                            opacity: draftPoints.length === 0 ? 0.4 : 1,
+                          }}
                         >
-                          Undo
+                          UNDO
                         </button>
                         <button
                           type="button"
                           onClick={() => setDraftPoints([])}
                           disabled={draftPoints.length === 0}
-                          className="m-link"
-                          style={{ opacity: draftPoints.length === 0 ? 0.4 : 1 }}
+                          style={{
+                            padding: '8px 10px',
+                            background: 'transparent',
+                            color: 'var(--m-sand)',
+                            border: '2px solid var(--m-sand)',
+                            fontFamily: 'var(--m-num)',
+                            fontSize: 10,
+                            fontWeight: 700,
+                            letterSpacing: '0.06em',
+                            cursor: draftPoints.length === 0 ? 'default' : 'pointer',
+                            opacity: draftPoints.length === 0 ? 0.4 : 1,
+                          }}
                         >
-                          Clear
+                          CLEAR
                         </button>
                       </span>
                     </div>
@@ -537,10 +617,52 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                         )
                       })}
                     </MListInset>
+                    {/* DONE / running-total — big-number brutalist action.
+                        Same navigation handler; grandTotal is view-only. */}
                     <div style={{ padding: '8px 16px 16px' }}>
-                      <MButton variant="ghost" onClick={() => navigate(`/projects/${projectId}/estimate`)}>
-                        Review estimate →
-                      </MButton>
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/projects/${projectId}/estimate`)}
+                        style={{
+                          width: '100%',
+                          minHeight: 56,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 12,
+                          padding: '0 18px',
+                          background: 'var(--m-accent)',
+                          color: 'var(--m-accent-ink)',
+                          border: '2px solid var(--m-ink)',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontFamily: 'var(--m-num)',
+                            fontSize: 12,
+                            fontWeight: 700,
+                            letterSpacing: '0.08em',
+                          }}
+                        >
+                          DONE
+                        </span>
+                        <span
+                          style={{
+                            fontFamily: 'var(--m-font-display)',
+                            fontSize: 26,
+                            fontWeight: 800,
+                            lineHeight: 1,
+                            fontVariantNumeric: 'tabular-nums',
+                          }}
+                        >
+                          {formatQty(grandTotal)}
+                          <span style={{ fontSize: 12, marginLeft: 6 }}>
+                            {totals.length === 1 ? totals[0]?.unit?.toUpperCase() : 'QTY →'}
+                          </span>
+                        </span>
+                      </button>
                     </div>
                   </>
                 )}
@@ -624,10 +746,10 @@ function CanvasSurface({ svgRef, tool, onTap, draftPoints, measurements, sourceI
         position: 'relative',
         width: '100%',
         aspectRatio: '1 / 1',
-        background: 'var(--m-card-soft)',
-        borderRadius: 'var(--m-r)',
+        background: 'var(--m-ink-2)',
+        borderRadius: 0,
         overflow: 'hidden',
-        border: '1px solid var(--m-line)',
+        border: '2px solid var(--m-ink)',
       }}
     >
       {sourceImageUrl ? (
@@ -652,11 +774,19 @@ function CanvasSurface({ svgRef, tool, onTap, draftPoints, measurements, sourceI
         }}
       >
         <g aria-hidden="true">
+          {/* Fine grid every 2 units */}
+          {Array.from({ length: 51 }, (_, i) => (
+            <line key={`fh${i}`} x1={0} x2={100} y1={i * 2} y2={i * 2} stroke="var(--m-ink-3)" strokeWidth={0.1} />
+          ))}
+          {Array.from({ length: 51 }, (_, i) => (
+            <line key={`fv${i}`} x1={i * 2} x2={i * 2} y1={0} y2={100} stroke="var(--m-ink-3)" strokeWidth={0.1} />
+          ))}
+          {/* Coarse grid every 10 units */}
           {Array.from({ length: 11 }, (_, i) => (
-            <line key={`h${i}`} x1={0} x2={100} y1={i * 10} y2={i * 10} stroke="var(--m-line)" strokeWidth={0.1} />
+            <line key={`h${i}`} x1={0} x2={100} y1={i * 10} y2={i * 10} stroke="var(--m-ink-4)" strokeWidth={0.25} />
           ))}
           {Array.from({ length: 11 }, (_, i) => (
-            <line key={`v${i}`} x1={i * 10} x2={i * 10} y1={0} y2={100} stroke="var(--m-line)" strokeWidth={0.1} />
+            <line key={`v${i}`} x1={i * 10} x2={i * 10} y1={0} y2={100} stroke="var(--m-ink-4)" strokeWidth={0.25} />
           ))}
         </g>
 
@@ -674,7 +804,7 @@ function CanvasSurface({ svgRef, tool, onTap, draftPoints, measurements, sourceI
                   strokeWidth={0.4}
                 />
                 {c ? (
-                  <text x={c.x} y={c.y} fontSize={3} textAnchor="middle" fill="var(--m-ink)" fontWeight={600}>
+                  <text x={c.x} y={c.y} fontSize={3} textAnchor="middle" fill="var(--m-accent)" fontWeight={700}>
                     {formatQty(Number(m.quantity))}
                   </text>
                 ) : null}

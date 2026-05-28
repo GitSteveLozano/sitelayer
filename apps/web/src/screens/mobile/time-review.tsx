@@ -27,8 +27,6 @@ import {
   MListRow,
   MPill,
   MSectionH,
-  MStat,
-  MStatStrip,
   MTextarea,
   MTopBar,
   avatarToneFor,
@@ -138,6 +136,18 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
     }
   }
 
+  // Per-entry flag set so each crew week row can carry a square anomaly
+  // chip without re-deriving anomalies. Same data source as the AI stripe.
+  const flaggedById = useMemo(() => {
+    const map = new Map<string, TimeAnomaly[]>()
+    for (const fe of flaggedEntries) map.set(fe.entryId, fe.anomalies)
+    return map
+  }, [flaggedEntries])
+
+  // APPROVE ALL CLEAN: the v2 primary CTA only signs off the entries with
+  // no anomaly flag. Flagged entries stay in the queue for a closer look.
+  const cleanPending = useMemo(() => pending.filter((l) => !flaggedById.has(l.id)), [pending, flaggedById])
+
   return (
     <>
       <MTopBar
@@ -170,11 +180,38 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
             />
           </div>
         ) : null}
-        <MStatStrip>
-          <MStat label="Crew-hrs" value={formatDecimalHours(totalHours, 1)} />
-          <MStat label="Labor cost" value={formatMoney(laborCost)} />
-          <MStat label="Pending" value={String(pending.length)} />
-        </MStatStrip>
+        {/* TOTAL HOURS big-number hero — v2 brutalist: mono micro-label,
+            tabular bignum with a unit suffix, burden + flag-count subline,
+            closed off with a heavy section bar. */}
+        <div
+          style={{
+            padding: '18px 16px',
+            borderBottom: '2px solid var(--m-ink)',
+          }}
+        >
+          <div className="m-kpi-eyebrow">Total hours</div>
+          <div
+            className="num"
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontSize: 64,
+              lineHeight: 0.95,
+              letterSpacing: '-0.03em',
+              marginTop: 8,
+              color: 'var(--m-ink)',
+            }}
+          >
+            {formatDecimalHours(totalHours, 1)}
+            <span style={{ fontSize: 22, color: 'var(--m-ink-3)' }}> H</span>
+          </div>
+          <div
+            className="m-kpi-eyebrow"
+            style={{ marginTop: 8, color: 'var(--m-ink-2)' }}
+          >
+            Burden {formatMoney(laborCost)} · {flaggedEntries.length} flag{flaggedEntries.length === 1 ? '' : 's'} ·{' '}
+            {pending.length} pending
+          </div>
+        </div>
         {todayLabor.length === 0 ? (
           <MEmptyState
             title="No hours yet today"
@@ -241,12 +278,13 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
             ) : null}
             {pending.length > 0 ? (
               <>
-                <MSectionH>Pending review</MSectionH>
+                <MSectionH>Crew week · pending</MSectionH>
                 <MListInset>
                   {pending.map((l) => {
                     const w = workers.find((x) => x.id === l.worker_id)
                     const p = projects.find((x) => x.id === l.project_id)
                     const isExpanded = expandedId === l.id
+                    const rowFlags = flaggedById.get(l.id) ?? []
                     return (
                       <div key={l.id}>
                         <MListRow
@@ -258,7 +296,31 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
                             )
                           }
                           headline={w?.name ?? 'Unassigned'}
-                          supporting={`${p?.name ?? 'Unknown project'} · ${l.service_item_code ?? ''}`}
+                          supporting={
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                              <span>{`${p?.name ?? 'Unknown project'} · ${l.service_item_code ?? ''}`}</span>
+                              {/* Square anomaly flag chip — v2 brutalist: no
+                                  border-radius, mono uppercase, red fill. */}
+                              {rowFlags.length > 0 ? (
+                                <span
+                                  style={{
+                                    padding: '2px 6px',
+                                    borderRadius: 0,
+                                    background: 'var(--m-red)',
+                                    color: 'var(--m-card)',
+                                    fontFamily: 'var(--m-num)',
+                                    fontSize: 9,
+                                    fontWeight: 700,
+                                    letterSpacing: '0.06em',
+                                    textTransform: 'uppercase',
+                                  }}
+                                >
+                                  {rowFlags[0]?.code ?? 'Flag'}
+                                  {rowFlags.length > 1 ? ` +${rowFlags.length - 1}` : ''}
+                                </span>
+                              ) : null}
+                            </span>
+                          }
                           trailing={<span className="num">{formatDecimalHours(Number(l.hours ?? 0), 1)}</span>}
                           chev
                           onTap={() => setExpandedId(isExpanded ? null : l.id)}
@@ -361,7 +423,7 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
                   disabled={isApprovingAll || patchLabor.isPending}
                   aria-disabled={isApprovingAll || patchLabor.isPending}
                 >
-                  {isApprovingAll ? 'Approving…' : `Approve all · ${pending.length}`}
+                  {isApprovingAll ? 'Approving…' : `Approve all clean · ${cleanPending.length}`}
                 </MButton>
                 <MButton variant="ghost" onClick={() => navigate('/clock')}>
                   Review on desktop

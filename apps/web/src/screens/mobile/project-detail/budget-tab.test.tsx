@@ -100,8 +100,8 @@ describe('BudgetTab render-smoke', () => {
     renderTab(<BudgetTab project={project()} totalHours={100} spent={6200} bid={10000} pctSpent={62} />)
     expect(screen.getByText('Loading closeout summary…')).toBeTruthy()
     expect(screen.getByText('Loading scope variance…')).toBeTruthy()
-    // KPI strip from props always renders.
-    expect(screen.getByText('Spent')).toBeTruthy()
+    // v2 SPENT VS BID hero from props always renders.
+    expect(screen.getByText('Spent vs bid')).toBeTruthy()
   })
 
   it('renders the calm empty states when the project has no closeout/variance data yet', () => {

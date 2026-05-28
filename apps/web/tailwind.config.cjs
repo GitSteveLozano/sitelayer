@@ -50,9 +50,9 @@ module.exports = {
       // `font-sans`/`font-display`/`font-mono` mirror the --m-font*
       // CSS custom properties in tokens.css.
       fontFamily: {
-        sans: ['-apple-system', 'SF Pro Text', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
-        display: ['-apple-system', 'SF Pro Display', 'BlinkMacSystemFont', 'system-ui', 'sans-serif'],
-        mono: ['ui-monospace', 'SF Mono', 'JetBrains Mono', 'Menlo', 'monospace'],
+        sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+        display: ['Inter Tight', 'Inter', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'ui-monospace', 'SF Mono', 'Menlo', 'monospace'],
       },
     },
   },

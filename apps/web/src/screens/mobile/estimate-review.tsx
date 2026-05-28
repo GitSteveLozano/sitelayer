@@ -120,20 +120,41 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   // Live total: prefer the machine snapshot (updates as edits save) and
   // fall back to the summary metric before the snapshot loads.
   const liveTotal = builder.snapshot?.scope_total ?? m.estimateTotal
+  const marginPct = `${(m.margin.margin * 100).toFixed(0)}%`
+  const marginTone: 'green' | 'amber' | 'red' =
+    m.margin.margin > 0.18 ? 'green' : m.margin.margin > 0.1 ? 'amber' : 'red'
 
   return (
     <>
       <MTopBar back title="Estimate" sub={summary.project.name} onBack={() => navigate(`/projects/${projectId}`)} />
       <MBody>
+        {/* Price hero: MARGIN big-number + accent SELL TOTAL big-number. */}
         <MKpiRow cols={2}>
-          <MKpi label="Total" value={formatMoney(liveTotal)} />
-          <MKpi
-            label="Margin"
-            value={`${(m.margin.margin * 100).toFixed(0)}%`}
-            meta={formatMoney(m.margin.profit)}
-            metaTone={m.margin.margin > 0.18 ? 'green' : m.margin.margin > 0.1 ? 'amber' : 'red'}
-          />
+          <MKpi label="Margin" value={marginPct} meta={formatMoney(m.margin.profit)} metaTone={marginTone} />
+          <div
+            className="m-kpi"
+            style={{ background: 'var(--m-accent)', color: 'var(--m-accent-ink)', marginLeft: -2 }}
+          >
+            <div className="m-kpi-eyebrow" style={{ color: 'var(--m-accent-ink)', opacity: 0.7 }}>
+              Sell total
+            </div>
+            <div
+              className="num"
+              style={{
+                fontFamily: 'var(--m-font-display)',
+                fontSize: 38,
+                fontWeight: 800,
+                letterSpacing: '-0.035em',
+                marginTop: 6,
+                lineHeight: 0.85,
+                fontVariantNumeric: 'tabular-nums',
+              }}
+            >
+              {formatMoney(liveTotal)}
+            </div>
+          </div>
         </MKpiRow>
+
         <div style={{ padding: '0 16px', marginTop: 12 }}>
           <MAiStripe
             eyebrow="Bid accuracy"
@@ -193,6 +214,26 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
             )}
           </>
         )}
+
+        {/* CLIENT SEES — square pills summarizing what lands on the share. */}
+        <MSectionH>Client sees</MSectionH>
+        <div style={{ padding: '0 16px 4px', display: 'grid', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>Sell total</span>
+            <span className="num" style={{ fontSize: 15, fontWeight: 700 }}>
+              {formatMoney(liveTotal)}
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>Line items</span>
+            <MPill tone="accent">{editableLines.length} priced</MPill>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <span style={{ fontSize: 14, fontWeight: 600 }}>Margin</span>
+            <MPill tone={marginTone}>{marginPct} hidden</MPill>
+          </div>
+        </div>
+
         {createError ? (
           <div style={{ padding: '0 16px', color: 'var(--m-red)', fontSize: 13 }}>{createError}</div>
         ) : null}
@@ -318,22 +359,40 @@ function EstimateScopeTree({ lines }: { lines: ScopeTreeLine[] }) {
   return (
     <>
       <MSectionH>Scope tree</MSectionH>
-      <div style={{ padding: '0 16px 12px', display: 'grid', gap: 8 }}>
+      <div>
         {Array.from(groups.entries()).map(([group, value]) => (
           <div
             key={group}
-            className="m-card m-card-tight"
-            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14,
+              padding: '14px 16px',
+              borderTop: '1px solid var(--m-line-2)',
+            }}
           >
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 600 }}>{group}</div>
+            {/* Status bar — square accent rule on the leading edge. */}
+            <div style={{ width: 6, alignSelf: 'stretch', background: 'var(--m-accent)' }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 15 }}>{group}</div>
               <div className="m-quiet-sm">{value.count} line items</div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span className="num" style={{ fontSize: 13, color: 'var(--m-ink-2)' }}>
+            <div style={{ textAlign: 'right' }}>
+              <div
+                className="num"
+                style={{
+                  fontFamily: 'var(--m-font-display)',
+                  fontWeight: 800,
+                  fontSize: 22,
+                  lineHeight: 1,
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
                 {formatMoney(value.amount)}
-              </span>
-              <MPill tone="accent">priced</MPill>
+              </div>
+              <div style={{ marginTop: 4 }}>
+                <MPill tone="accent">priced</MPill>
+              </div>
             </div>
           </div>
         ))}

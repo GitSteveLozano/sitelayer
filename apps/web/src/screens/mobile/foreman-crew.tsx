@@ -86,43 +86,43 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
 
   return (
     <>
-      <MTopBar title="Crew" actionIcon={<MI.Plus size={20} />} actionLabel="Add" />
+      <MTopBar
+        eyebrow="Crew · across sites"
+        title={`${onSiteCount} OF ${workers.length} ON SITE`}
+        actionIcon={<MI.Plus size={20} />}
+        actionLabel="Add"
+      />
       <MBody>
-        <div style={{ padding: '8px 16px 0' }}>
+        {onBreakCount > 0 || offClock > 0 ? (
           <div
             style={{
+              padding: '10px 20px',
+              borderBottom: '2px solid var(--m-ink)',
+              fontFamily: 'var(--m-num)',
               fontSize: 11,
-              color: 'var(--m-ink-3)',
               fontWeight: 600,
               letterSpacing: '0.06em',
               textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+              display: 'flex',
+              gap: 14,
             }}
           >
-            Crew · today
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>
-            {onSiteCount} of {workers.length} on site
             {onBreakCount > 0 ? (
-              <span style={{ color: 'var(--m-amber)', fontSize: 13, fontWeight: 600, marginLeft: 6 }}>
-                · {onBreakCount} on break
-              </span>
+              <span style={{ color: 'var(--m-amber)' }}>{onBreakCount} on break</span>
             ) : null}
-            {offClock > 0 ? (
-              <span style={{ color: 'var(--m-ink-3)', fontSize: 13, fontWeight: 600, marginLeft: 6 }}>
-                · {offClock} off-clock
-              </span>
-            ) : null}
+            {offClock > 0 ? <span>{offClock} off-clock</span> : null}
           </div>
-        </div>
+        ) : null}
         <MChipRow>
           <MChip active={grp === 'site'} onClick={() => setGrp('site')}>
-            By site
+            BY SITE
           </MChip>
           <MChip active={grp === 'person'} onClick={() => setGrp('person')}>
-            By person
+            BY PERSON
           </MChip>
           <MChip active={grp === 'map'} onClick={() => navigate('/map')}>
-            Map
+            MAP
           </MChip>
         </MChipRow>
         {grp === 'person' ? (
@@ -174,7 +174,7 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
             </MListInset>
           </>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '4px 16px 16px' }}>
+          <div>
             {projects
               .filter((p) => /progress|active/i.test(p.status))
               .map((p) => {
@@ -188,44 +188,70 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
                 )
                 if (onSiteWorkers.length === 0) return null
                 return (
-                  <div key={p.id} className="m-card" style={{ padding: 0 }}>
-                    <div
-                      style={{
-                        padding: '12px 14px',
-                        borderBottom: '1px solid var(--m-line)',
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                      }}
-                    >
+                  <div key={p.id} style={{ borderBottom: '2px solid var(--m-ink)' }}>
+                    <div className="m-section-bar">
                       <div>
-                        <div style={{ fontSize: 15, fontWeight: 600 }}>{p.name}</div>
-                        <div className="m-quiet-sm">Briefed by you · {p.division_code}</div>
-                      </div>
-                      <div className="m-quiet-sm" style={{ alignSelf: 'center' }}>
-                        <span className="num">{formatDecimalHours(hrs, 1)}</span>
-                      </div>
-                    </div>
-                    {onSiteWorkers.map((w) => (
-                      <div
-                        key={w.id}
-                        style={{
-                          padding: '10px 14px',
-                          borderBottom: '1px solid var(--m-line)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 10,
-                        }}
-                      >
-                        <MAvatar initials={initialsFor(w.name)} tone={avatarToneFor(w.id)} size="sm" />
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 14 }}>{w.name}</div>
-                          <div className="m-quiet-sm">{w.role ?? 'Crew'}</div>
+                        <div
+                          style={{
+                            fontFamily: 'var(--m-num)',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            letterSpacing: '0.08em',
+                            textTransform: 'uppercase',
+                            color: 'var(--m-ink)',
+                          }}
+                        >
+                          {p.name}
                         </div>
-                        <MPill tone="green" dot>
-                          on site
-                        </MPill>
+                        <div style={{ marginTop: 3, fontSize: 10, fontWeight: 600, color: 'var(--m-ink-3)' }}>
+                          Briefed by you · {p.division_code}
+                        </div>
                       </div>
-                    ))}
+                      <span className="num" style={{ fontWeight: 700, color: 'var(--m-ink-3)' }}>
+                        {formatDecimalHours(hrs, 1)}
+                      </span>
+                    </div>
+                    {onSiteWorkers.map((w, j) => {
+                      const whrs = todayHoursByWorker.get(w.id) ?? 0
+                      const status = statusFor(whrs)
+                      const tone = STATUS_TONE[status]
+                      return (
+                        <div
+                          key={w.id}
+                          style={{
+                            padding: '14px 20px',
+                            borderBottom: j < onSiteWorkers.length - 1 ? '1px solid var(--m-line-2)' : 'none',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 12,
+                          }}
+                        >
+                          <MAvatar initials={initialsFor(w.name)} tone={avatarToneFor(w.id)} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 15 }}>
+                              {w.name}
+                            </div>
+                            <div
+                              style={{
+                                fontFamily: 'var(--m-num)',
+                                fontSize: 10,
+                                fontWeight: 600,
+                                marginTop: 2,
+                                letterSpacing: '0.04em',
+                                textTransform: 'uppercase',
+                                color: 'var(--m-ink-3)',
+                              }}
+                            >
+                              {w.role ?? 'Crew'}
+                              {whrs > 0 ? ` · ${formatDecimalHours(whrs, 1)}` : ''}
+                            </div>
+                          </div>
+                          <MPill tone={tone ?? 'green'} dot>
+                            {STATUS_LABEL[status]}
+                          </MPill>
+                        </div>
+                      )
+                    })}
                   </div>
                 )
               })}
@@ -297,7 +323,7 @@ function CrewPersonRow({
       }}
     >
       <MListRow
-        leading={<MAvatar initials={initials} tone={avatarTone} size="sm" />}
+        leading={<MAvatar initials={initials} tone={avatarTone} />}
         headline={name}
         supporting={role}
         trailing={

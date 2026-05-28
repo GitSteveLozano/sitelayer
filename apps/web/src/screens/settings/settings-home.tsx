@@ -118,6 +118,49 @@ export function MobileSettingsHome({
           </button>
         </div>
 
+        {/* Money & comms group (v2 net-new surfaces) */}
+        <MSectionH>Money &amp; comms</MSectionH>
+        <MListInset>
+          <MListRow
+            leading={<MI.FileText size={18} />}
+            leadingTone="accent"
+            headline="Money"
+            supporting="Cash flow, net, pending"
+            chev
+            onTap={() => go('/money')}
+          />
+          <MListRow
+            leading={<MI.Users size={18} />}
+            leadingTone="blue"
+            headline="Clients"
+            supporting="Profiles, lifetime value, win rate"
+            chev
+            onTap={() => go('/clients')}
+          />
+          <MListRow
+            leading={<MI.Mic size={18} />}
+            headline="Messages"
+            supporting="Project chat threads"
+            chev
+            onTap={() => go('/chat')}
+          />
+          <MListRow
+            leading={<MI.Alert size={18} />}
+            leadingTone="amber"
+            headline="Broadcast"
+            supporting="One-way crew announcement"
+            chev
+            onTap={() => go('/broadcast')}
+          />
+          <MListRow
+            leading={<MI.Clock size={18} />}
+            headline="Activity"
+            supporting="Company-wide audit timeline"
+            chev
+            onTap={() => go('/activity')}
+          />
+        </MListInset>
+
         {/* Workspace group */}
         <MSectionH>Workspace</MSectionH>
         <MListInset>

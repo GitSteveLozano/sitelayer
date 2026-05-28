@@ -170,10 +170,15 @@ const blueprintDownloadPresigned =
 //   reachable even when Postgres is wedged.
 // - application_name is set so DB-side `pg_stat_activity` debug is easier.
 const pgPoolMax = (() => {
-  // Production handles parallel /api/bootstrap fan-out (11 queries) plus concurrent
-  // user requests on a 4 vCPU droplet. Default to 40 for prod, 20 elsewhere; env
+  // The bound that matters is the DATABASE's connection cap, not the app
+  // droplet's CPU. Prod runs on a db-s-1vcpu-1gb managed Postgres whose hard
+  // cap is ~22 usable connections, shared with the worker pool (and, on the
+  // same instance, the preview/dev stacks). 40 here could demand ~2x what the
+  // DB allows → connect() waits out connectionTimeoutMillis then 5xx. Keep the
+  // API + worker + headroom under ~20. Add a DigitalOcean connection pool
+  // (PgBouncer, transaction mode) in front and this can rise again. Env
   // override always wins.
-  const tierDefault = appConfig.tier === 'prod' ? 40 : 20
+  const tierDefault = appConfig.tier === 'prod' ? 16 : 20
   const raw = process.env.PG_POOL_MAX
   if (raw === undefined || raw === '') return tierDefault
   const n = Number(raw)
@@ -894,8 +899,18 @@ const server = http.createServer(async (req, res) => {
               if (rootSpan) {
                 rootSpan.setStatus({ code: 2, message: error instanceof Error ? error.message : 'internal_error' })
               }
+              // Surface intentional client-facing messages (HttpError /
+              // BlueprintUploadError carry validation text); for any other
+              // unhandled error (500) return a generic message so raw pg /
+              // internal details — constraint names, columns, sometimes values
+              // — don't leak to the client. Full detail stays in Sentry, keyed
+              // by request_id.
+              const clientError =
+                error instanceof HttpError || error instanceof BlueprintUploadError
+                  ? error.message
+                  : 'internal server error'
               sendJson(res, status, {
-                error: error instanceof Error ? error.message : 'internal server error',
+                error: clientError,
                 request_id: requestId,
               })
             }

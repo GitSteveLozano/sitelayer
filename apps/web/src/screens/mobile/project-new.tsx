@@ -16,6 +16,7 @@ import {
   MButton,
   MButtonStack,
   MInput,
+  MLargeHead,
   MPill,
   MSectionH,
   MSelect,
@@ -111,6 +112,7 @@ export function MobileProjectNew({ companySlug }: { companySlug: string }) {
     <>
       <MTopBar back title="New project" onBack={() => navigate('/projects')} />
       <MBody>
+        <MLargeHead eyebrow="STEP 1 / 1" title="Start a job." sub="Name it, point it at a customer, set the numbers." />
         <MSectionH>Identification</MSectionH>
         <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
           <Field label="Project name *" htmlFor={nameId} error={nameError}>
@@ -251,8 +253,9 @@ function Field({
       <span
         style={{
           display: 'block',
+          fontFamily: 'var(--m-num)',
           fontSize: 11,
-          fontWeight: 600,
+          fontWeight: 700,
           color: 'var(--m-ink-3)',
           letterSpacing: '0.06em',
           textTransform: 'uppercase',

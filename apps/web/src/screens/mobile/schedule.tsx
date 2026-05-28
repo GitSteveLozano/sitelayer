@@ -24,7 +24,7 @@ import {
 } from '../../components/m/index.js'
 import { Sheet } from '../../components/mobile/Sheet.js'
 import { MEmptyState } from '../../components/m-states/index.js'
-import { shortDate } from './format.js'
+import { shortDate, statusTone } from './format.js'
 
 type Mode = 'day' | 'week'
 type ScheduleRow = BootstrapResponse['schedules'][number]
@@ -160,15 +160,29 @@ export function MobileSchedule({
       <MTopBar title="Schedule" actionIcon={<MI.Plus size={20} />} actionLabel="New" onAction={openCreate} />
       <MBody>
         <div style={{ padding: '12px 16px 4px' }}>
-          <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.01em' }}>
-            {byDay.length} {byDay.length === 1 ? 'day' : 'days'}
-            <span style={{ color: 'var(--m-ink-3)', fontWeight: 500, marginLeft: 8, fontSize: 14 }}>·</span>
-            <span style={{ color: 'var(--m-ink-3)', fontWeight: 500, marginLeft: 6, fontSize: 14 }}>
-              {totalCrew} crew assignments
-            </span>
+          <div
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontSize: 26,
+              fontWeight: 800,
+              letterSpacing: '-0.01em',
+              textTransform: 'uppercase',
+            }}
+          >
+            {byDay.length} {byDay.length === 1 ? 'DAY' : 'DAYS'}
           </div>
-          <div className="m-quiet-sm" style={{ marginTop: 4 }}>
-            ~{utilizationPct}% utilization
+          <div
+            style={{
+              marginTop: 4,
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+            }}
+          >
+            {totalCrew} CREW ASSIGNMENTS · ~{utilizationPct}% UTILIZATION
           </div>
         </div>
         <MChipRow>
@@ -207,19 +221,21 @@ export function MobileSchedule({
           </div>
         ) : null}
         <MSectionH>This week</MSectionH>
-        <div style={{ padding: '0 16px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {byDay.slice(0, mode === 'day' ? 1 : 7).map((d) => (
-            <DayCard
-              key={d.date}
-              date={d.date}
-              entries={d.entries.map((e) => ({
-                id: e.id,
-                project: projects.find((p) => p.id === e.project_id)?.name ?? 'Unknown project',
-                crewCount: Array.isArray(e.crew) ? e.crew.length : 0,
-                status: e.status,
-              }))}
-            />
-          ))}
+        <div style={{ padding: '0 16px 16px' }}>
+          <div style={{ borderTop: '2px solid var(--m-ink)', borderBottom: '2px solid var(--m-ink)' }}>
+            {byDay.slice(0, mode === 'day' ? 1 : 7).map((d) => (
+              <DayCard
+                key={d.date}
+                date={d.date}
+                entries={d.entries.map((e) => ({
+                  id: e.id,
+                  project: projects.find((p) => p.id === e.project_id)?.name ?? 'Unknown project',
+                  crewCount: Array.isArray(e.crew) ? e.crew.length : 0,
+                  status: e.status,
+                }))}
+              />
+            ))}
+          </div>
         </div>
       </MBody>
       <CreateAssignmentSheet
@@ -411,36 +427,68 @@ type DayEntry = {
   status: string
 }
 
+// Two-letter mono badge code from a project name (e.g. "Hillcrest Ph 4" → "HP").
+function projectCode(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return '··'
+  if (words.length === 1) return words[0]!.slice(0, 2).toUpperCase()
+  return (words[0]![0]! + words[1]![0]!).toUpperCase()
+}
+
+const STRIPE_COLOR: Record<string, string> = {
+  green: 'var(--m-green)',
+  red: 'var(--m-red)',
+  amber: 'var(--m-amber)',
+  blue: 'var(--m-blue)',
+}
+
 function DayCard({ date, entries }: { date: string; entries: readonly DayEntry[] }) {
   return (
-    <div
-      style={{
-        background: 'var(--m-card)',
-        border: '1px solid var(--m-line)',
-        borderRadius: 12,
-        padding: '12px 14px',
-      }}
-    >
+    <div style={{ padding: '14px 0', borderTop: '1px solid var(--m-line-2)' }}>
       <div
         style={{
-          fontSize: 11,
-          color: 'var(--m-ink-3)',
-          fontWeight: 600,
+          fontFamily: 'var(--m-num)',
+          fontSize: 12,
+          fontWeight: 800,
           letterSpacing: '0.06em',
           textTransform: 'uppercase',
+          color: 'var(--m-ink)',
         }}
       >
         {shortDate(date)}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8 }}>
+      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
         {entries.map((e) => (
-          <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div
+            key={e.id}
+            style={{
+              padding: '10px 12px',
+              background: 'var(--m-card-soft)',
+              border: '2px solid var(--m-ink)',
+              borderLeft: `6px solid ${STRIPE_COLOR[statusTone(e.status) ?? ''] ?? 'var(--m-accent)'}`,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+            }}
+          >
             <div
               style={{
-                background: 'var(--m-card-soft)',
-                borderRadius: 8,
-                padding: '6px 10px',
-                fontSize: 13,
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                fontWeight: 800,
+                width: 24,
+                flexShrink: 0,
+              }}
+            >
+              {projectCode(e.project)}
+            </div>
+            <div
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                fontWeight: 600,
+                letterSpacing: '0.04em',
+                textTransform: 'uppercase',
                 flex: 1,
                 minWidth: 0,
                 whiteSpace: 'nowrap',
@@ -448,35 +496,11 @@ function DayCard({ date, entries }: { date: string; entries: readonly DayEntry[]
                 textOverflow: 'ellipsis',
               }}
             >
-              {e.project}
+              {e.project} · {e.crewCount} CREW
             </div>
-            <CrewDots count={e.crewCount} />
-            <span className="m-quiet-sm" style={{ minWidth: 40, textAlign: 'right' }}>
-              {e.crewCount} crew
-            </span>
           </div>
         ))}
       </div>
-    </div>
-  )
-}
-
-function CrewDots({ count }: { count: number }) {
-  const dots = Math.min(count, 6)
-  return (
-    <div style={{ display: 'inline-flex', gap: 2 }}>
-      {Array.from({ length: dots }).map((_, i) => (
-        <span
-          key={i}
-          style={{
-            width: 7,
-            height: 7,
-            borderRadius: '50%',
-            background: 'var(--m-accent)',
-          }}
-        />
-      ))}
-      {count > 6 ? <span style={{ marginLeft: 4, fontSize: 11, color: 'var(--m-ink-3)' }}>+{count - 6}</span> : null}
     </div>
   )
 }

@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse, ProjectRow } from '@/lib/api'
 import {
   MAvatar,
+  MBanner,
   MBody,
   MButton,
   MChip,
@@ -28,6 +29,7 @@ import {
 } from '../../components/m/index.js'
 import { Spark } from '../../components/m/ai.js'
 import { MEmptyState } from '../../components/m-states/index.js'
+import { useActiveGuardrails, useGuardrailAction } from '@/lib/api/guardrails'
 import { formatDecimalHours, formatMoney, formatStatusLabel, statusTone, todayIso } from './format.js'
 
 export type AdminHomeProps = {
@@ -37,6 +39,16 @@ export type AdminHomeProps = {
 export function AdminHome({ bootstrap }: AdminHomeProps) {
   const navigate = useNavigate()
   const [view, setView] = useState<'today' | 'needs' | 'week' | 'all'>('today')
+
+  // v2 Guardrail attention card — company-wide triggered monitors. View-layer
+  // only: shows the highest-priority triggered guardrail above the dashboard
+  // body; renders nothing when none are triggered (calm-by-default).
+  const { data: guardrailsData } = useActiveGuardrails()
+  const { snooze } = useGuardrailAction()
+  const triggeredGuardrail = useMemo(
+    () => (guardrailsData?.guardrails ?? []).find((g) => g.status === 'triggered') ?? null,
+    [guardrailsData?.guardrails],
+  )
 
   const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
   const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
@@ -138,6 +150,38 @@ export function AdminHome({ bootstrap }: AdminHomeProps) {
         onAction={() => navigate('/projects/new')}
       />
       <MBody>
+        {triggeredGuardrail ? (
+          <div style={{ padding: '0 16px' }}>
+            <MBanner
+              tone="attention"
+              title={triggeredGuardrail.label}
+              body={triggeredGuardrail.detail}
+              action={
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <MButton
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      snooze.mutate({
+                        id: triggeredGuardrail.id,
+                        snoozedUntil: new Date(Date.now() + 86400000).toISOString(),
+                      })
+                    }
+                  >
+                    Snooze
+                  </MButton>
+                  <MButton
+                    size="sm"
+                    variant="primary"
+                    onClick={() => navigate(`/projects/${triggeredGuardrail.project_id}`)}
+                  >
+                    Open project
+                  </MButton>
+                </div>
+              }
+            />
+          </div>
+        ) : null}
         <MLargeHead
           eyebrow={new Date()
             .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })
@@ -297,37 +341,35 @@ function AttentionCard({
 }) {
   const [showWhy, setShowWhy] = useState(false)
   const accent = item.tone === 'red' ? 'var(--m-red)' : 'var(--m-accent)'
-  const accentInk = item.tone === 'red' ? 'var(--m-red)' : 'var(--m-accent-ink)'
 
   return (
     <div
       className="m-card"
       style={{
-        borderLeft: `3px solid ${accent}`,
-        boxShadow: 'var(--m-shadow-card)',
+        borderLeft: `6px solid ${accent}`,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-        <div
-          style={{
-            color: accentInk,
-            fontSize: 10,
-            fontWeight: 700,
-            letterSpacing: '0.06em',
-            textTransform: 'uppercase',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 5,
-          }}
-        >
+        <span className="m-ai-eyebrow" data-tone={item.tone === 'red' ? 'warn' : undefined}>
           <Spark size={11} state="strong" />
           {item.eyebrow}
-        </div>
+        </span>
         <button type="button" className="m-ai-dismiss" aria-label="Dismiss" onClick={onDismiss}>
           <MI.X size={12} />
         </button>
       </div>
-      <div style={{ marginTop: 10, fontSize: 17, fontWeight: 700, lineHeight: 1.18 }}>{item.title}</div>
+      <div
+        style={{
+          marginTop: 10,
+          fontFamily: 'var(--m-font-display)',
+          fontSize: 17,
+          fontWeight: 700,
+          letterSpacing: '-0.015em',
+          lineHeight: 1.18,
+        }}
+      >
+        {item.title}
+      </div>
       <div style={{ marginTop: 7, color: 'var(--m-ink-2)', fontSize: 13, lineHeight: 1.35 }}>{item.body}</div>
       {showWhy ? (
         <div
@@ -336,7 +378,7 @@ function AttentionCard({
             fontSize: 12,
             color: 'var(--m-ink-3)',
             lineHeight: 1.4,
-            borderTop: '1px solid var(--m-line)',
+            borderTop: '1px solid var(--m-line-2)',
             paddingTop: 8,
           }}
         >

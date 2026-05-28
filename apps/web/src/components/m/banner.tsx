@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { MI } from './icons.js'
 import { TraceIdFooter } from '../shell/TraceIdFooter.js'
 
-export type MBannerTone = 'info' | 'error' | 'ok' | 'warn'
+export type MBannerTone = 'info' | 'error' | 'ok' | 'warn' | 'attention'
 
 export type MBannerProps = {
   tone?: MBannerTone | undefined

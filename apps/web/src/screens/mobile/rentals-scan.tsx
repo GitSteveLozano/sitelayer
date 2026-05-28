@@ -25,7 +25,6 @@ import {
   MInput,
   MListInset,
   MListRow,
-  MPill,
   MSectionH,
   MSelect,
   MTopBar,
@@ -41,6 +40,18 @@ const CONDITION_CHECKS: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'clean', label: 'Clean enough for next job' },
   { id: 'damage', label: 'Damage noted' },
 ]
+
+// Condition grade tiles. Same `ConditionStatus` values as before — only the
+// presentation (brutalist grade grid) changes.
+const GRADES: ReadonlyArray<{ status: ConditionStatus; label: string; desc: string }> = [
+  { status: 'ok', label: 'GOOD', desc: 'CLEAN · READY' },
+  { status: 'flag', label: 'FAIR', desc: 'NORMAL WEAR' },
+  { status: 'na', label: 'DAMAGED', desc: 'REPAIR NEEDED' },
+]
+
+// Static faux-QR pattern for the scanner target. Computed once at module load
+// so it stays stable across re-renders (no Math.random in render).
+const QR_CELLS: ReadonlyArray<boolean> = Array.from({ length: 64 }, () => Math.random() > 0.55)
 
 export function MobileRentalScan({
   bootstrap,
@@ -144,11 +155,11 @@ export function MobileRentalScan({
   }
 
   return (
-    <>
+    <div className="m-dark">
       <MTopBar
         back
-        title={mode === 'return' ? 'Return equipment' : 'Scan equipment'}
-        sub={mode === 'return' ? 'Check in to yard' : 'Dispatch to job'}
+        title={mode === 'return' ? 'RETURN' : 'SCAN TAG'}
+        sub={mode === 'return' ? 'CHECK IN TO YARD' : 'DISPATCH TO JOB'}
         onBack={() => navigate('/rentals')}
       />
       <MBody>
@@ -160,6 +171,64 @@ export function MobileRentalScan({
             Return
           </MChip>
         </MChipRow>
+
+        {/* Camera viewport with faux-QR target frame */}
+        <div
+          style={{
+            position: 'relative',
+            margin: '12px 16px 0',
+            aspectRatio: '1',
+            overflow: 'hidden',
+            border: '2px solid var(--m-line)',
+            background: 'var(--m-card-soft)',
+          }}
+        >
+          <div
+            style={{
+              position: 'absolute',
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%,-50%)',
+              width: '56%',
+              aspectRatio: '1',
+            }}
+          >
+            {/* Corner brackets */}
+            <span style={{ position: 'absolute', top: 0, left: 0, width: 32, height: 32, borderTop: '3px solid var(--m-accent)', borderLeft: '3px solid var(--m-accent)' }} />
+            <span style={{ position: 'absolute', top: 0, right: 0, width: 32, height: 32, borderTop: '3px solid var(--m-accent)', borderRight: '3px solid var(--m-accent)' }} />
+            <span style={{ position: 'absolute', bottom: 0, left: 0, width: 32, height: 32, borderBottom: '3px solid var(--m-accent)', borderLeft: '3px solid var(--m-accent)' }} />
+            <span style={{ position: 'absolute', bottom: 0, right: 0, width: 32, height: 32, borderBottom: '3px solid var(--m-accent)', borderRight: '3px solid var(--m-accent)' }} />
+            {/* Mock QR target */}
+            <div
+              aria-hidden
+              style={{
+                position: 'absolute',
+                inset: 24,
+                background: 'var(--m-sand)',
+                display: 'grid',
+                gridTemplateColumns: 'repeat(8, 1fr)',
+                gridTemplateRows: 'repeat(8, 1fr)',
+              }}
+            >
+              {QR_CELLS.map((fill, i) => (
+                <span key={i} style={{ background: fill ? 'var(--m-ink)' : 'var(--m-sand)' }} />
+              ))}
+            </div>
+          </div>
+          <div style={{ position: 'absolute', top: 16, left: 0, right: 0, textAlign: 'center' }}>
+            <span
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                color: 'var(--m-ink-2)',
+              }}
+            >
+              POINT AT TAG ON ASSET
+            </span>
+          </div>
+        </div>
 
         <MSectionH>Asset tag</MSectionH>
         <div style={{ padding: '0 16px', display: 'flex', gap: 8 }}>
@@ -182,10 +251,28 @@ export function MobileRentalScan({
             No catalog match for {assetCode}. Check the sticker.
           </div>
         ) : item ? (
-          <div style={{ padding: '8px 16px 0' }}>
-            <MPill tone={item.active ? 'green' : 'amber'} dot>
-              {item.description} · {item.code}
-            </MPill>
+          /* Recognized strip */
+          <div
+            style={{
+              margin: '10px 16px 0',
+              padding: '12px 14px',
+              background: 'var(--m-accent)',
+              color: 'var(--m-accent-ink)',
+              border: '2px solid var(--m-line)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+            }}
+          >
+            <span style={{ width: 14, height: 14, background: 'var(--m-accent-ink)' }} />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700, letterSpacing: '0.06em' }}>
+                RECOGNIZED · {item.code}
+              </div>
+              <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 14, marginTop: 3 }}>
+                {item.description}
+              </div>
+            </div>
           </div>
         ) : null}
 
@@ -260,7 +347,7 @@ export function MobileRentalScan({
         <div style={{ padding: 16 }}>
           <MButtonStack>
             <MButton variant="primary" disabled={submitDisabled} onClick={handleSubmit}>
-              {busy ? 'Saving...' : mode === 'return' ? 'Check in to yard' : 'Dispatch to job'}
+              {busy ? 'SAVING…' : mode === 'return' ? 'RETURN TO YARD' : 'DISPATCH FROM HERE'}
             </MButton>
             <MButton variant="ghost" onClick={() => navigate('/rentals')}>
               Cancel
@@ -268,7 +355,7 @@ export function MobileRentalScan({
           </MButtonStack>
         </div>
       </MBody>
-    </>
+    </div>
   )
 }
 
@@ -282,30 +369,65 @@ function ConditionPanel({
   return (
     <>
       <MSectionH>Condition</MSectionH>
-      <MListInset>
+      <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
         {CONDITION_CHECKS.map((check) => (
-          <MListRow
-            key={check.id}
-            headline={check.label}
-            trailing={
-              <span style={{ display: 'inline-flex', gap: 4 }}>
-                {(['ok', 'flag', 'na'] as const).map((status) => (
+          <div key={check.id}>
+            <div
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                color: 'var(--m-ink-3)',
+                marginBottom: 6,
+              }}
+            >
+              {check.label.toUpperCase()}
+            </div>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
+                border: '2px solid var(--m-line)',
+              }}
+            >
+              {GRADES.map((grade, i) => {
+                const on = value[check.id] === grade.status
+                return (
                   <button
-                    key={status}
+                    key={grade.status}
                     type="button"
-                    className="m-chip"
-                    data-active={value[check.id] === status ? 'true' : undefined}
-                    onClick={() => onChange({ ...value, [check.id]: status })}
-                    style={{ padding: '4px 8px', fontSize: 11 }}
+                    onClick={() => onChange({ ...value, [check.id]: grade.status })}
+                    style={{
+                      padding: '14px 0',
+                      background: on ? 'var(--m-accent)' : 'transparent',
+                      color: on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
+                      border: 'none',
+                      borderRight: i < GRADES.length - 1 ? '2px solid var(--m-line)' : 'none',
+                      cursor: 'pointer',
+                    }}
                   >
-                    {status === 'ok' ? 'OK' : status === 'flag' ? 'Flag' : 'N/A'}
+                    <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 14 }}>
+                      {grade.label}
+                    </div>
+                    <div
+                      style={{
+                        fontFamily: 'var(--m-num)',
+                        fontSize: 9,
+                        marginTop: 4,
+                        fontWeight: 600,
+                        opacity: 0.7,
+                      }}
+                    >
+                      {grade.desc}
+                    </div>
                   </button>
-                ))}
-              </span>
-            }
-          />
+                )
+              })}
+            </div>
+          </div>
         ))}
-      </MListInset>
+      </div>
     </>
   )
 }

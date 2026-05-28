@@ -133,24 +133,26 @@ export function MobileProjectDetail({
           }}
         />
         <TabBar active={tab} onChange={setTab} />
-        {tab === 'overview' && (
-          <Overview
-            project={project}
-            totalHours={totalHours}
-            bid={bid}
-            spent={spent}
-            pctSpent={pctSpent}
-            navigate={navigate}
-          />
-        )}
-        {tab === 'estimate' && <EstimateTab project={project} navigate={navigate} />}
-        {tab === 'crew' && <CrewTab labor={labor} workers={bootstrap?.workers ?? []} />}
-        {tab === 'materials' && <MaterialsTab bills={materialBills} project={project} />}
-        {tab === 'budget' && (
-          <BudgetTab project={project} totalHours={totalHours} spent={spent} bid={bid} pctSpent={pctSpent} />
-        )}
-        {tab === 'log' && <LogTab project={project} navigate={navigate} />}
-        {tab === 'files' && <FilesTab project={project} navigate={navigate} />}
+        <div style={{ paddingTop: 4 }}>
+          {tab === 'overview' && (
+            <Overview
+              project={project}
+              totalHours={totalHours}
+              bid={bid}
+              spent={spent}
+              pctSpent={pctSpent}
+              navigate={navigate}
+            />
+          )}
+          {tab === 'estimate' && <EstimateTab project={project} navigate={navigate} />}
+          {tab === 'crew' && <CrewTab labor={labor} workers={bootstrap?.workers ?? []} />}
+          {tab === 'materials' && <MaterialsTab bills={materialBills} project={project} />}
+          {tab === 'budget' && (
+            <BudgetTab project={project} totalHours={totalHours} spent={spent} bid={bid} pctSpent={pctSpent} />
+          )}
+          {tab === 'log' && <LogTab project={project} navigate={navigate} />}
+          {tab === 'files' && <FilesTab project={project} navigate={navigate} />}
+        </div>
       </MBody>
     </>
   )

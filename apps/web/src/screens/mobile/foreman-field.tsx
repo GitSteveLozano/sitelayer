@@ -113,22 +113,32 @@ export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapR
     <>
       <MTopBar title="Field" actionIcon={<MI.AlertTri size={20} />} actionLabel="Filter" />
       <MBody>
-        <div style={{ padding: '8px 16px 0' }}>
+        <div style={{ padding: '16px 20px 4px' }}>
           <div
             style={{
+              fontFamily: 'var(--m-num)',
               fontSize: 11,
               color: 'var(--m-ink-3)',
-              fontWeight: 600,
-              letterSpacing: '0.06em',
+              fontWeight: 700,
+              letterSpacing: '0.08em',
               textTransform: 'uppercase',
             }}
           >
-            From the field · today
+            Field · today
           </div>
-          <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>
+          <div
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontSize: 22,
+              fontWeight: 800,
+              letterSpacing: '-0.02em',
+              textTransform: 'uppercase',
+              marginTop: 4,
+            }}
+          >
             {counts.all} incoming{' '}
             {counts.all > 0 ? (
-              <span style={{ color: 'var(--m-red)', fontSize: 13, fontWeight: 600, marginLeft: 4 }}>· need you</span>
+              <span style={{ color: 'var(--m-red)', fontSize: 13, fontWeight: 700, marginLeft: 4 }}>· need you</span>
             ) : null}
           </div>
         </div>
@@ -153,55 +163,96 @@ export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapR
         ) : (
           <>
             <ClusterStripe issues={visible} bootstrap={bootstrap} />
-            <MListInset>
-              {visible.map((i) => {
-                const w = bootstrap?.workers.find((x) => x.id === i.worker_id)
-                const p = bootstrap?.projects.find((x) => x.id === i.project_id)
-                const resolved = Boolean(i.resolved_at)
-                const photo = isPhotoLog(i)
-                const sev = severityFromMessage(i)
-                const tone = resolved ? 'green' : photo ? 'blue' : sevTone(sev, i.kind)
-                return (
-                  <div
-                    key={i.id}
-                    style={{
-                      // 4px severity stripe on the left edge per the
-                      // foreman README — color matches the leadingTone.
-                      borderLeft: `4px solid var(--m-${tone})`,
-                      borderRadius: 4,
-                      marginBottom: 2,
-                    }}
-                  >
-                    <MListRow
-                      leading={
-                        w ? (
-                          <MAvatar initials={initialsFor(w.name)} tone={avatarToneFor(w.id)} size="sm" />
-                        ) : (
-                          <MI.Users size={18} />
-                        )
-                      }
-                      leadingTone={tone}
-                      headline={w?.name ?? 'Unknown worker'}
-                      supporting={`${p?.name ?? 'unknown'} · ${shortAgo(i.created_at)}`}
-                      trailing={
-                        <>
-                          <MPill>{shortAgo(i.created_at)}</MPill>
-                          <MPill tone={tone}>
-                            {resolved
-                              ? 'resolved'
-                              : photo
-                                ? 'photo'
-                                : (sev ?? (i.kind === 'safety' ? 'stopped' : 'blocker'))}
-                          </MPill>
-                        </>
-                      }
-                      chev
-                      onTap={() => navigate(`/foreman/blocker/${i.id}`)}
-                    />
+            {visible.map((i) => {
+              const w = bootstrap?.workers.find((x) => x.id === i.worker_id)
+              const p = bootstrap?.projects.find((x) => x.id === i.project_id)
+              const resolved = Boolean(i.resolved_at)
+              const photo = isPhotoLog(i)
+              const sev = severityFromMessage(i)
+              const tone = resolved ? 'green' : photo ? 'blue' : sevTone(sev, i.kind)
+              const pillLabel = resolved
+                ? 'resolved'
+                : photo
+                  ? 'photo'
+                  : (sev ?? (i.kind === 'safety' ? 'stopped' : 'blocker'))
+              // The message body carries inline `[tag]` markers (photo_log,
+              // severity) that aren't meant for the foreman — strip them.
+              const body = i.message.replace(/^\[[^\]]+\]\s*/, '').replace(/\[severity:[^\]]+\]/g, '').trim()
+              return (
+                <button
+                  key={i.id}
+                  type="button"
+                  onClick={() => navigate(`/foreman/blocker/${i.id}`)}
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '16px 20px',
+                    borderTop: 'none',
+                    borderRight: 'none',
+                    borderLeft: 'none',
+                    borderBottom: '2px solid var(--m-ink)',
+                    // Blockers ride the warmer sand fill; photos/notes use the soft tint.
+                    background: photo || resolved ? 'var(--m-card-soft)' : 'var(--m-sand-2)',
+                    color: 'var(--m-ink)',
+                    cursor: 'pointer',
+                    font: 'inherit',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                    <div
+                      style={{
+                        fontFamily: 'var(--m-num)',
+                        fontWeight: 700,
+                        fontSize: 11,
+                        letterSpacing: '0.06em',
+                        textTransform: 'uppercase',
+                      }}
+                    >
+                      <span>{w?.name ?? 'Unknown worker'}</span>
+                      {' · '}
+                      <span>{p?.name ?? 'unknown'}</span>
+                    </div>
+                    <MPill tone={tone}>{pillLabel}</MPill>
                   </div>
-                )
-              })}
-            </MListInset>
+                  <div style={{ fontSize: 15, lineHeight: 1.45, color: 'var(--m-ink)' }}>{body}</div>
+                  {photo ? (
+                    <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
+                      {Array.from({ length: 4 }).map((_, j) => (
+                        <div
+                          key={j}
+                          style={{
+                            width: 54,
+                            height: 54,
+                            background: 'linear-gradient(135deg, #E8A86B 0%, #A05A33 100%)',
+                            border: '2px solid var(--m-ink)',
+                          }}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 12 }}>
+                    <span
+                      className="m-btn"
+                      data-variant={photo || resolved ? 'ghost' : 'primary'}
+                      style={{ flex: 2, minHeight: 48, fontSize: 14 }}
+                    >
+                      {resolved ? 'VIEW' : photo ? 'REPLY' : 'ORDER MATERIALS'}
+                    </span>
+                    <span
+                      style={{
+                        fontFamily: 'var(--m-num)',
+                        fontWeight: 700,
+                        color: 'var(--m-ink-3)',
+                        fontSize: 12,
+                      }}
+                    >
+                      {shortAgo(i.created_at)}
+                    </span>
+                  </div>
+                </button>
+              )
+            })}
           </>
         )}
       </MBody>

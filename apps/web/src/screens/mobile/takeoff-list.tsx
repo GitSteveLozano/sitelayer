@@ -19,7 +19,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet } from '@/lib/api'
-import { MBody, MButton, MI, MListInset, MListRow, MSectionH, MTopBar } from '../../components/m/index.js'
+import { MBody, MButton, MI, MListInset, MListRow, MPill, MSectionH, MTopBar } from '../../components/m/index.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
 import { shortDate } from './format.js'
 
@@ -81,7 +81,7 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
         ) : (
           <>
             <MSectionH link="Open takeoff" onLinkClick={() => navigate(`/projects/${projectId}/takeoff-mobile`)}>
-              {blueprints.length} {blueprints.length === 1 ? 'drawing' : 'drawings'}
+              SHEETS · {blueprints.length} {blueprints.length === 1 ? 'DRAWING' : 'DRAWINGS'}
             </MSectionH>
             <MListInset>
               {blueprints.map((b) => (
@@ -90,8 +90,14 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
                   leading={<MI.Layers size={18} />}
                   leadingTone="accent"
                   headline={b.file_name}
-                  supporting={`Uploaded ${shortDate(b.created_at)}`}
-                  trailing={b.replaces_blueprint_document_id ? <span style={{ fontSize: 11 }}>v2+</span> : null}
+                  supporting={
+                    <span
+                      style={{ fontFamily: 'var(--m-num)', fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase' }}
+                    >
+                      Uploaded {shortDate(b.created_at)}
+                    </span>
+                  }
+                  trailing={b.replaces_blueprint_document_id ? <MPill tone="accent">V2+</MPill> : null}
                   chev
                   onTap={() => navigate(`/projects/${projectId}/takeoff-mobile?blueprint=${b.id}`)}
                 />

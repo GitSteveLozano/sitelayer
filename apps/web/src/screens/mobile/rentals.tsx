@@ -21,6 +21,8 @@ import {
   MInput,
   MKpi,
   MKpiRow,
+  MListPlain,
+  MListRow,
   MPill,
   MQuickAction,
   MQuickActionGrid,
@@ -199,6 +201,7 @@ export function MobileRentals({ companySlug, companyRole }: { companySlug: strin
           <MQuickAction Icon={MI.Camera} label="Scan" onClick={() => navigate('/rentals/scan')} />
           <MQuickAction Icon={MI.FileText} label="Portal" onClick={() => navigate('/rentals/portal')} />
         </MQuickActionGrid>
+        <MSectionH>Assets</MSectionH>
         {error ? (
           <div style={{ padding: 24, color: 'var(--m-red)', fontSize: 13 }}>{error}</div>
         ) : items === null ? (
@@ -211,10 +214,12 @@ export function MobileRentals({ companySlug, companyRole }: { companySlug: strin
             onPrimary={() => navigate('/inventory')}
           />
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 16px 80px' }}>
-            {visible.map((item) => (
-              <ItemCard key={item.id} item={item} />
-            ))}
+          <div style={{ paddingBottom: 80 }}>
+            <MListPlain>
+              {visible.map((item) => (
+                <ItemCard key={item.id} item={item} />
+              ))}
+            </MListPlain>
           </div>
         )}
         <MFab extended ariaLabel="Scan tag" onClick={() => navigate('/rentals/scan')}>
@@ -228,47 +233,20 @@ export function MobileRentals({ companySlug, companyRole }: { companySlug: strin
 
 function ItemCard({ item }: { item: InventoryItem }) {
   const out = !item.active
+  // Square monogram from the asset code prefix (e.g. "SCF-001" → "SCF").
+  const monogram = (item.code.split(/[-\s]/)[0] || item.code).slice(0, 3).toUpperCase()
   return (
-    <div
-      style={{
-        background: 'var(--m-card)',
-        border: '1px solid var(--m-line)',
-        borderRadius: 12,
-        padding: '12px 14px',
-        display: 'flex',
-        gap: 12,
-      }}
-    >
-      <div
-        style={{
-          width: 48,
-          height: 48,
-          borderRadius: 8,
-          background: 'var(--m-card-soft)',
-          color: 'var(--m-ink-3)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-        }}
-      >
-        <span style={{ fontSize: 18 }}>▦</span>
-      </div>
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 15, fontWeight: 600 }}>{item.description}</div>
-        <div className="m-quiet-sm">
-          {item.code} · {item.category}
-        </div>
-        <div className="m-quiet-sm" style={{ marginTop: 4 }}>
-          ${item.default_rental_rate}/{item.unit || 'day'}
-        </div>
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
+    <MListRow
+      leading={monogram}
+      leadingTone={out ? 'accent' : undefined}
+      headline={item.description}
+      supporting={`${item.code} · ${item.category} · $${item.default_rental_rate}/${item.unit || 'day'}`}
+      badge={
         <MPill tone={out ? 'amber' : 'green'} dot>
           {out ? 'out' : 'in'}
         </MPill>
-      </div>
-    </div>
+      }
+    />
   )
 }
 

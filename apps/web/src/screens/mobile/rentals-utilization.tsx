@@ -18,12 +18,8 @@ import {
   MButton,
   MChip,
   MChipRow,
-  MI,
-  MKpi,
-  MKpiRow,
   MListInset,
   MListRow,
-  MSectionH,
   MTopBar,
 } from '../../components/m/index.js'
 import { MAiStripe } from '../../components/m/ai.js'
@@ -128,26 +124,44 @@ function UtilizationTab({
   onDispatch: () => void
 }) {
   const idle = availabilityRows.filter((r) => r.available_quantity > 0)
+  const fleetTone =
+    utilizationPct >= 70 ? 'var(--m-green)' : utilizationPct >= 40 ? 'var(--m-amber)' : 'var(--m-red)'
+  // Per-asset utilization = on-rent share of total units for the item.
+  const assetRows = availabilityRows.map((r) => {
+    const total = r.available_quantity + r.on_rent_quantity
+    const pct = total > 0 ? Math.round((r.on_rent_quantity / total) * 100) : 0
+    const flag = pct < 30
+    return { row: r, pct, flag }
+  })
 
   return (
     <>
-      <div style={{ padding: '12px 16px 0' }}>
-        <MKpiRow cols={2}>
-          <MKpi
-            label="Utilization"
-            value={`${utilizationPct}%`}
-            meta="of fleet deployed"
-            metaTone={utilizationPct >= 70 ? 'green' : utilizationPct >= 40 ? 'amber' : 'red'}
-          />
-          <MKpi
-            label="Idle revenue"
-            value={formatMoney(idleDailyValue)}
-            unit="/day"
-            meta="leaving on the table"
-            metaTone={idleDailyValue > 0 ? 'amber' : 'green'}
-          />
-        </MKpiRow>
+      {/* FLEET AVG big-number hero — display-font headline + mono meta. */}
+      <div style={{ padding: '24px 20px', borderBottom: '2px solid var(--m-ink)' }}>
+        <div className="m-kpi-eyebrow">Fleet avg</div>
+        <div
+          style={{
+            fontFamily: 'var(--m-font-display)',
+            fontSize: 72,
+            fontWeight: 800,
+            lineHeight: 1,
+            letterSpacing: '-0.02em',
+            marginTop: 8,
+            color: fleetTone,
+          }}
+        >
+          {utilizationPct}
+          <span style={{ color: 'var(--m-ink-4)' }}>%</span>
+        </div>
+        <div
+          className="num"
+          style={{ marginTop: 10, color: 'var(--m-ink-3)', fontWeight: 600, letterSpacing: '0.04em' }}
+        >
+          {formatMoney(idleDailyValue)}/DAY IDLE · {idle.length} {idle.length === 1 ? 'ITEM' : 'ITEMS'}{' '}
+          IDLE
+        </div>
       </div>
+
       {idle.length > 0 ? (
         <div style={{ padding: '12px 16px 0' }}>
           <MAiStripe
@@ -168,26 +182,52 @@ function UtilizationTab({
           </MAiStripe>
         </div>
       ) : null}
-      <MSectionH>Idle equipment</MSectionH>
-      <MListInset>
-        {idle.length === 0 ? (
-          <MListRow headline="Everything's deployed" supporting="Nice — full fleet utilization." />
-        ) : (
-          idle
-            .slice(0, 8)
-            .map((r) => (
-              <MListRow
-                key={r.inventory_item_id}
-                leading={<MI.Truck size={18} />}
-                leadingTone="amber"
-                headline={r.description}
-                supporting={`${r.code} · ${r.available_quantity} ${r.unit || 'ea'} idle`}
-                trailing={<span className="num">{formatMoney(r.idle_revenue_per_day)}/day</span>}
-                chev
-              />
-            ))
-        )}
-      </MListInset>
+
+      <div className="m-section-bar">
+        <span>BY ASSET</span>
+        <span>{assetRows.length}</span>
+      </div>
+
+      {assetRows.length === 0 ? (
+        <MListInset>
+          <MListRow headline="No assets yet" supporting="Add inventory to see utilization." />
+        </MListInset>
+      ) : (
+        assetRows.map(({ row: r, pct, flag }) => (
+          <div
+            key={r.inventory_item_id}
+            style={{ padding: '14px 20px', borderBottom: '1px solid var(--m-line-2)' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+              <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 14 }}>
+                {r.description}
+              </div>
+              <div
+                className="num"
+                style={{ fontSize: 12, fontWeight: 800, color: flag ? 'var(--m-red)' : 'var(--m-ink)' }}
+              >
+                {pct}%
+              </div>
+            </div>
+            <div className="m-progress" data-state={flag ? 'risk' : undefined} style={{ height: 6, marginTop: 8 }}>
+              <div className="m-progress-fill" style={{ width: `${pct}%` }} />
+            </div>
+            <div
+              className="num"
+              style={{
+                fontSize: 10,
+                color: flag ? 'var(--m-red)' : 'var(--m-ink-4)',
+                marginTop: 6,
+                fontWeight: 600,
+                letterSpacing: '0.04em',
+              }}
+            >
+              {r.code} · {formatMoney(r.idle_revenue_per_day)}/DAY IDLE
+              {flag ? ' · UNDERUTILIZED' : ''}
+            </div>
+          </div>
+        ))
+      )}
     </>
   )
 }

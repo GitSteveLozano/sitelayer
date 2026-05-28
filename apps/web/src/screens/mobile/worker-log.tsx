@@ -91,18 +91,6 @@ export function WorkerLog({
     })
   }
 
-  const retake = () => {
-    setPreview((prev) => {
-      if (prev) URL.revokeObjectURL(prev)
-      return null
-    })
-    setNote('')
-    setFile(null)
-    setError(null)
-    // Re-open the camera straight away — capture flow chains.
-    inputRef.current?.click()
-  }
-
   // Revoke the object URL when it changes or the screen unmounts (avoids leaks).
   useEffect(() => {
     if (!preview) return
@@ -153,19 +141,21 @@ export function WorkerLog({
     }
   }
 
+  const autoTagLabel = `${projectName}${activeStep ? ` · ${activeStep.title}` : ''}`
+
   return (
     <div
       style={{
-        position: 'relative',
         flex: 1,
         minHeight: 0,
         display: 'flex',
         flexDirection: 'column',
-        background: '#000',
+        background: 'var(--m-bg)',
+        color: 'var(--m-ink)',
         overflow: 'hidden',
       }}
     >
-      {/* Hidden native-camera input. The whole viewfinder taps into this. */}
+      {/* Hidden native-camera input. The whole capture area taps into this. */}
       <MInput
         ref={inputRef}
         type="file"
@@ -180,227 +170,212 @@ export function WorkerLog({
         style={{ display: 'none' }}
       />
 
-      {/* Full-bleed viewfinder. Before capture it's a tappable dark
-          surface that opens the camera; after capture it shows the shot,
-          dimmed so the slide-up note reads on top. */}
-      <button
-        type="button"
-        onClick={() => {
-          if (!preview) inputRef.current?.click()
-        }}
-        aria-label={preview ? 'Captured photo' : 'Open camera'}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          padding: 0,
-          border: 'none',
-          background: preview ? '#000' : 'radial-gradient(circle at 50% 38%, #2a2420 0%, #14110d 70%, #0a0806 100%)',
-          color: 'var(--m-ink-3)',
-          cursor: preview ? 'default' : 'pointer',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        {preview ? (
-          <img
-            src={preview}
-            alt="Captured"
-            style={{
-              width: '100%',
-              height: '100%',
-              objectFit: 'cover',
-              opacity: 0.55,
-              transition: 'opacity 0.2s ease',
-            }}
-          />
-        ) : (
-          <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, opacity: 0.7 }}>
-            <MI.Camera size={40} />
-            <span style={{ fontSize: 13, fontWeight: 500 }}>Tap to open camera</span>
-          </span>
-        )}
-      </button>
-
-      {/* Top overlay strip — close / title / flash / flip. Flash and flip
-          are presentational only; the native camera owns those controls. */}
+      {/* App bar — brutalist close + mono title. */}
       <div
         style={{
-          position: 'relative',
-          zIndex: 2,
           display: 'flex',
           alignItems: 'center',
           gap: 12,
           padding: '14px 16px',
+          borderBottom: '2px solid var(--m-line)',
         }}
       >
         <ViewfinderIconButton label="Close" onClick={() => navigate('/today')}>
           <MI.X size={20} />
         </ViewfinderIconButton>
-        <div style={{ flex: 1, textAlign: 'center', color: '#fff', fontSize: 15, fontWeight: 600 }}>Log photo</div>
-        <ViewfinderIconButton label="Toggle flash" disabled>
-          <MI.AlertTri size={18} />
-        </ViewfinderIconButton>
-        <ViewfinderIconButton label="Flip camera" disabled>
-          <MI.Camera size={18} />
-        </ViewfinderIconButton>
+        <div
+          className="m-topbar-eyebrow"
+          style={{ flex: 1, fontSize: 13, color: 'var(--m-ink)', letterSpacing: '0.08em' }}
+        >
+          NEW PHOTO
+        </div>
       </div>
 
-      {/* Auto-tag chip — what the system already knows we're shooting. */}
-      <div style={{ position: 'relative', zIndex: 2, display: 'flex', justifyContent: 'center', padding: '0 16px' }}>
-        <div
+      {/* Full-bleed photo capture area. Before capture it's a tappable
+          surface that opens the camera; after capture it shows the shot
+          full-frame. The hi-vis AUTO-TAGGED chip overlays the top. */}
+      <div
+        style={{
+          flex: 1,
+          minHeight: 0,
+          position: 'relative',
+          overflow: 'hidden',
+          borderBottom: '2px solid var(--m-line-2)',
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          aria-label={preview ? 'Retake photo' : 'Open camera'}
           style={{
-            display: 'inline-flex',
+            position: 'absolute',
+            inset: 0,
+            padding: 0,
+            border: 'none',
+            background: 'var(--m-card-soft)',
+            color: 'var(--m-ink-3)',
+            cursor: 'pointer',
+            display: 'flex',
             alignItems: 'center',
-            gap: 8,
-            padding: '6px 12px',
-            borderRadius: 999,
-            background: 'rgba(217,144,74,0.92)',
-            backdropFilter: 'blur(8px)',
-            color: '#fff',
-            fontSize: 12,
-            fontWeight: 600,
+            justifyContent: 'center',
           }}
         >
-          <Spark state="strong" size={13} />
-          <span>
-            {projectName}
-            {activeStep ? ` · ${activeStep.title}` : ''} · auto-tagged
+          {preview ? (
+            <img
+              src={preview}
+              alt="Captured"
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            />
+          ) : (
+            <span
+              style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, color: 'var(--m-ink-4)' }}
+            >
+              <MI.Camera size={44} />
+              <span
+                className="m-topbar-eyebrow"
+                style={{ fontSize: 11, color: 'var(--m-ink-4)' }}
+              >
+                TAP TO OPEN CAMERA
+              </span>
+            </span>
+          )}
+        </button>
+
+        {/* Hi-vis auto-tag overlay — what the system already knows we're
+            shooting. Yellow block, ink border, mono micro-label. */}
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: 16,
+            right: 16,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '12px 14px',
+            background: 'var(--m-accent)',
+            color: 'var(--m-accent-ink)',
+            border: '2px solid var(--m-ink)',
+          }}
+        >
+          <span
+            style={{ width: 12, height: 12, flexShrink: 0, background: 'var(--m-accent-ink)', display: 'inline-flex' }}
+            aria-hidden
+          >
+            <Spark state="strong" size={12} />
           </span>
-        </div>
-      </div>
-
-      {/* Step picker — tag the shot to a scope step before capturing. */}
-      {steps.length > 0 && !preview ? (
-        <div
-          style={{
-            position: 'relative',
-            zIndex: 2,
-            marginTop: 10,
-            padding: '0 16px',
-            display: 'flex',
-            gap: 8,
-            overflowX: 'auto',
-          }}
-        >
-          <ScopeStepChip label="Untagged" active={activeStepId === null} onClick={() => setActiveStepId(null)} />
-          {steps.map((step, idx) => {
-            const stepId = step.id ?? null
-            return (
-              <ScopeStepChip
-                key={stepId ?? idx}
-                label={step.title || `Step ${idx + 1}`}
-                active={stepId !== null && stepId === activeStepId}
-                onClick={() => stepId && setActiveStepId(stepId)}
-                disabled={!stepId}
-              />
-            )
-          })}
-        </div>
-      ) : null}
-
-      <div style={{ flex: 1 }} />
-
-      {/* Bottom controls — pre-capture: roll thumb · 72px shutter · note.
-          post-capture: slide-up note + send. */}
-      {preview ? (
-        <div
-          style={{
-            position: 'relative',
-            zIndex: 2,
-            background: 'var(--m-card)',
-            borderTop: '1px solid var(--m-line)',
-            padding: '14px 16px 18px',
-            animation: 'mSlideUp 0.22s ease-out',
-          }}
-        >
-          <div className="m-topbar-eyebrow" style={{ marginBottom: 8 }}>
-            Add a note (optional)
-          </div>
-          <MTextarea
-            value={note}
-            onChange={(e) => setNote(e.currentTarget.value)}
-            placeholder="Add a note — optional"
-            autoFocus
-            style={{ width: '100%', minHeight: 64 }}
-          />
-          {error ? <div style={{ marginTop: 10, color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
-          <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
-            <div style={{ flex: 1 }}>
-              <MButton variant="primary" onClick={handleSend} disabled={busy || !projectId}>
-                {busy ? 'Sending…' : 'Send to daily log'}
-              </MButton>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontWeight: 700,
+                fontSize: 10,
+                letterSpacing: '0.08em',
+                textTransform: 'uppercase',
+              }}
+            >
+              AUTO-TAGGED
             </div>
-            <ViewfinderIconButton label="Retake" onClick={retake} solid>
-              <MI.Camera size={18} />
-            </ViewfinderIconButton>
+            <div
+              style={{
+                fontFamily: 'var(--m-font-display)',
+                fontWeight: 700,
+                fontSize: 15,
+                marginTop: 2,
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {autoTagLabel}
+            </div>
           </div>
         </div>
-      ) : (
-        <div
-          style={{
-            position: 'relative',
-            zIndex: 2,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '0 28px 28px',
-          }}
-        >
-          {/* Roll thumbnail — last shot, or an empty frame. */}
+
+        {/* Step picker — tag the shot to a scope step before capturing. */}
+        {steps.length > 0 && !preview ? (
           <div
             style={{
-              width: 44,
-              height: 44,
-              borderRadius: 8,
-              border: '1px solid rgba(255,255,255,0.25)',
-              background: 'rgba(255,255,255,0.06)',
+              position: 'absolute',
+              left: 16,
+              right: 16,
+              bottom: 16,
+              display: 'flex',
+              gap: 8,
+              overflowX: 'auto',
             }}
-            aria-hidden
-          />
-          {/* 72px capture button — white ring, accent inner fill. */}
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            aria-label="Capture photo"
-            style={{
-              width: 72,
-              height: 72,
-              borderRadius: '50%',
-              border: '4px solid #fff',
-              background: 'var(--m-accent)',
-              padding: 0,
-              cursor: 'pointer',
-              boxShadow: '0 2px 12px rgba(0,0,0,0.4)',
-            }}
-          />
-          {/* Note shortcut — opens the camera then the note flow. */}
-          <ViewfinderIconButton label="Add a note" onClick={() => inputRef.current?.click()}>
-            <MI.FileText size={20} />
-          </ViewfinderIconButton>
-        </div>
-      )}
+          >
+            <ScopeStepChip label="Untagged" active={activeStepId === null} onClick={() => setActiveStepId(null)} />
+            {steps.map((step, idx) => {
+              const stepId = step.id ?? null
+              return (
+                <ScopeStepChip
+                  key={stepId ?? idx}
+                  label={step.title || `Step ${idx + 1}`}
+                  active={stepId !== null && stepId === activeStepId}
+                  onClick={() => stepId && setActiveStepId(stepId)}
+                  disabled={!stepId}
+                />
+              )
+            })}
+          </div>
+        ) : null}
+      </div>
 
-      <style>{`@keyframes mSlideUp { from { transform: translateY(16px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }`}</style>
+      {/* Note field — mono micro-label + bordered surface. */}
+      <div style={{ padding: '14px 20px 8px' }}>
+        <div className="m-topbar-eyebrow" style={{ color: 'var(--m-ink-4)', marginBottom: 8 }}>
+          NOTE (OPTIONAL)
+        </div>
+        <MTextarea
+          value={note}
+          onChange={(e) => setNote(e.currentTarget.value)}
+          placeholder="Add a note — optional"
+          style={{ width: '100%', minHeight: 64 }}
+        />
+        {error ? (
+          <div
+            style={{ marginTop: 10, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-red)' }}
+          >
+            {error}
+          </div>
+        ) : null}
+      </div>
+
+      {/* Bottom controls — gloved 64px voice button + SAVE primary. The
+          camera/retake action lives on the photo area; voice is the
+          secondary attach affordance. */}
+      <div style={{ padding: '12px 20px 20px', display: 'flex', gap: 10 }}>
+        <ViewfinderIconButton label="Voice note" onClick={() => inputRef.current?.click()} solid size={64}>
+          <MI.Mic size={22} />
+        </ViewfinderIconButton>
+        <div style={{ flex: 1 }}>
+          <MButton variant="primary" data-size="worker" onClick={handleSend} disabled={busy || !projectId}>
+            {busy ? 'SAVING…' : 'SAVE TO LOG'}
+          </MButton>
+        </div>
+      </div>
     </div>
   )
 }
 
-/** Round icon button used in the viewfinder overlay. `solid` gives a
- *  filled background (the retake control); default is a translucent
- *  glassy circle that reads on top of the photo. */
+/** Square brutalist icon button. `solid` inverts to the ink fill (the
+ *  gloved 64px voice control); default is an outlined square that reads
+ *  in the app bar. `size` sets the square edge in px (default 44). */
 function ViewfinderIconButton({
   children,
   label,
   onClick,
   disabled,
   solid,
+  size = 44,
 }: {
   children: React.ReactNode
   label: string
   onClick?: () => void
   disabled?: boolean
   solid?: boolean
+  size?: number
 }) {
   return (
     <button
@@ -409,14 +384,12 @@ function ViewfinderIconButton({
       onClick={onClick}
       disabled={disabled}
       style={{
-        width: 44,
-        height: 44,
+        width: size,
+        height: size,
         flexShrink: 0,
-        borderRadius: '50%',
-        border: 'none',
-        background: solid ? 'var(--m-card-soft)' : 'rgba(0,0,0,0.45)',
-        backdropFilter: solid ? undefined : 'blur(8px)',
-        color: '#fff',
+        border: '2px solid var(--m-ink)',
+        background: solid ? 'var(--m-ink)' : 'var(--m-bg)',
+        color: solid ? 'var(--m-bg)' : 'var(--m-ink)',
         display: 'inline-flex',
         alignItems: 'center',
         justifyContent: 'center',
@@ -451,12 +424,14 @@ function ScopeStepChip({
       style={{
         flexShrink: 0,
         padding: '6px 12px',
-        borderRadius: 999,
-        border: '1px solid var(--m-line-2)',
-        background: active ? 'var(--m-accent-1, #d9904a)' : 'var(--m-surf-2, transparent)',
-        color: active ? '#fff' : 'var(--m-ink-2)',
-        fontSize: 12,
+        border: '2px solid var(--m-ink)',
+        background: active ? 'var(--m-accent)' : 'var(--m-bg)',
+        color: active ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+        fontFamily: 'var(--m-num)',
+        fontSize: 11,
         fontWeight: 600,
+        letterSpacing: '0.04em',
+        textTransform: 'uppercase',
         opacity: disabled ? 0.5 : 1,
         cursor: disabled ? 'not-allowed' : 'pointer',
         whiteSpace: 'nowrap',

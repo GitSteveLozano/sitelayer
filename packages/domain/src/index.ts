@@ -1294,3 +1294,115 @@ export {
   type IntegrationEntityType,
   type ProjectRole,
 } from './roles.js'
+
+// ---------------------------------------------------------------------------
+// v2 entities (Steve's v2 design — see docker/postgres/init/097-099). Shared
+// across api routes, workflow reducers, and the web UI.
+// ---------------------------------------------------------------------------
+
+/** Change-order approval workflow states (097_change_orders.sql). */
+export type ChangeOrderStatus = 'draft' | 'sent' | 'accepted' | 'rejected' | 'voided'
+
+/** A post-contract scope addendum carrying its own signed value delta. */
+export interface ChangeOrder {
+  id: string
+  company_id: string
+  project_id: string
+  number: number
+  description: string
+  /** Signed dollar change to the contract; negative = credit / scope cut. */
+  value_delta: number
+  schedule_impact_days: number
+  status: ChangeOrderStatus
+  state_version: number
+  sent_at: string | null
+  accepted_at: string | null
+  rejected_at: string | null
+  voided_at: string | null
+  reject_reason: string | null
+  created_by: string | null
+  approved_by: string | null
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+/** Guardrail monitor kinds + states (098_guardrails.sql). */
+export type GuardrailType = 'margin' | 'schedule' | 'safety'
+export type GuardrailStatus = 'armed' | 'triggered' | 'snoozed' | 'muted'
+
+/** A per-project threshold monitor driving the owner attention card / at-risk. */
+export interface Guardrail {
+  id: string
+  company_id: string
+  project_id: string
+  type: GuardrailType
+  threshold: number
+  current_value: number
+  status: GuardrailStatus
+  triggered_at: string | null
+  snoozed_until: string | null
+  muted_reason: string | null
+  label: string
+  detail: string
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+/** Categorised reason a sent estimate didn't convert (099_project_lost_reasons.sql). */
+export type LostReasonCode = 'price' | 'timing' | 'scope' | 'ghosted' | 'competitor' | 'other'
+
+export interface ProjectLostReason {
+  id: string
+  company_id: string
+  project_id: string
+  reason: LostReasonCode
+  note: string
+  lost_value: number
+  recorded_by: string | null
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export const LOST_REASON_CODES: readonly LostReasonCode[] = [
+  'price',
+  'timing',
+  'scope',
+  'ghosted',
+  'competitor',
+  'other',
+]
+
+// ---- Cross-role comms (100_messaging.sql) -------------------------------
+
+/** A role-tagged message in a project chat thread. */
+export interface ProjectMessage {
+  id: string
+  company_id: string
+  project_id: string
+  author_user_id: string
+  author_role: string
+  body: string
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export type BroadcastAudience = 'all' | 'foremen' | 'crew'
+
+/** An owner → crew one-way announcement (no replies). */
+export interface Broadcast {
+  id: string
+  company_id: string
+  author_user_id: string
+  audience: BroadcastAudience
+  body: string
+  project_id: string | null
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export const BROADCAST_AUDIENCES: readonly BroadcastAudience[] = ['all', 'foremen', 'crew']

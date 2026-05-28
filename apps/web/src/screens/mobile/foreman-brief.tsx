@@ -196,7 +196,47 @@ export function ForemanBrief({
                 </MSelect>
               </div>
             ) : null}
-            <MSectionH>Today's scope</MSectionH>
+
+            {/* GOAL — the headline the crew sees first. Brutalist field:
+                hard ink border on sand, mono micro-label + char counter. */}
+            <div style={{ marginBottom: 4 }}>
+              <div className={MONO_LABEL} style={monoLabelStyle}>
+                TODAY'S GOAL
+              </div>
+              <MTextarea
+                value={goal}
+                onChange={(e) => {
+                  setDirty(true)
+                  setGoal(e.currentTarget.value)
+                }}
+                style={{
+                  width: '100%',
+                  minHeight: 96,
+                  marginTop: 8,
+                  background: 'var(--m-card-soft)',
+                  border: '2px solid var(--m-ink)',
+                  fontSize: 16,
+                  lineHeight: 1.45,
+                }}
+                placeholder="What's the crew building today, in plain words?"
+                maxLength={280}
+              />
+              <div className={MONO_LABEL} style={{ ...monoLabelStyle, marginTop: 6, textAlign: 'right' }}>
+                {goal.length} / 280
+              </div>
+            </div>
+
+            {/* STEP PLAN — numbered, reorderable rows under a section bar. */}
+            <MSectionH
+              link={
+                <>
+                  <MI.Plus size={12} /> ADD
+                </>
+              }
+              onLinkClick={addStep}
+            >
+              STEP PLAN · {steps.length}
+            </MSectionH>
             <MListInset>
               {steps.length === 0 ? (
                 <MListRow
@@ -206,8 +246,27 @@ export function ForemanBrief({
                 />
               ) : (
                 steps.map((step, idx) => (
-                  <div key={step.id ?? idx} style={{ padding: '8px 12px', borderBottom: '1px solid var(--m-line)' }}>
+                  <div key={step.id ?? idx} style={{ padding: '10px 12px', borderBottom: '1px solid var(--m-line)' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      {/* Step ordinal — the numbered marker that mirrors the
+                          worker-facing preview. */}
+                      <div
+                        aria-hidden
+                        style={{
+                          width: 28,
+                          height: 28,
+                          flexShrink: 0,
+                          border: '2px solid var(--m-ink)',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          fontFamily: 'var(--m-font-display)',
+                          fontWeight: 800,
+                          fontSize: 13,
+                        }}
+                      >
+                        {idx + 1}
+                      </div>
                       <button
                         type="button"
                         aria-label="Move step up"
@@ -256,8 +315,8 @@ export function ForemanBrief({
                       </button>
                     </div>
                     {step.materials ? (
-                      <div className="m-quiet-sm" style={{ marginTop: 4, marginLeft: 60 }}>
-                        Materials: {step.materials}
+                      <div className={MONO_LABEL} style={{ ...monoLabelStyle, marginTop: 4, marginLeft: 96 }}>
+                        MATERIALS · {step.materials}
                       </div>
                     ) : null}
                   </div>
@@ -269,21 +328,8 @@ export function ForemanBrief({
                 <MI.Plus size={14} /> Add step
               </MButton>
             </div>
-            <MSectionH>Today's goal</MSectionH>
-            <MTextarea
-              value={goal}
-              onChange={(e) => {
-                setDirty(true)
-                setGoal(e.currentTarget.value)
-              }}
-              style={{ width: '100%', minHeight: 110 }}
-              placeholder="What's the crew building today, in plain words?"
-              maxLength={280}
-            />
-            <div className="m-quiet-sm" style={{ marginTop: 4, textAlign: 'right' }}>
-              {goal.length} / 280
-            </div>
-            <MSectionH>Materials & deliveries</MSectionH>
+
+            <MSectionH>MATERIALS &amp; DELIVERIES</MSectionH>
             <MaterialsList
               materials={materials}
               onChange={(m) => {
@@ -306,9 +352,30 @@ export function ForemanBrief({
               </div>
             ) : null}
             {error ? <div style={{ marginTop: 12, color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
-            <div style={{ marginTop: 16 }}>
-              <MButton variant="primary" onClick={handleSend} disabled={busy || !project}>
-                {busy ? 'Sending…' : 'Send to crew'}
+
+            {/* Footer reach-bar: who-will-see + PREVIEW / PUSH primaries. */}
+            <div
+              className={MONO_LABEL}
+              style={{
+                ...monoLabelStyle,
+                marginTop: 16,
+                padding: '12px 14px',
+                background: 'var(--m-ink)',
+                color: 'var(--m-card)',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+              }}
+            >
+              <span style={{ width: 8, height: 8, background: 'var(--m-accent)', flexShrink: 0 }} />
+              {project ? `BRIEF FOR ${project.name.toUpperCase()}` : 'PICK A PROJECT TO BRIEF'}
+            </div>
+            <div className="m-btn-row" style={{ marginTop: 12 }}>
+              <MButton variant="ghost" onClick={handleSend} disabled={busy || !project} style={{ flex: 1 }}>
+                Preview
+              </MButton>
+              <MButton variant="primary" onClick={handleSend} disabled={busy || !project} style={{ flex: 2 }}>
+                {busy ? 'Pushing…' : 'Push to crew'}
               </MButton>
             </div>
           </>
@@ -394,6 +461,19 @@ function MaterialsList({
       </div>
     </>
   )
+}
+
+// Mono micro-label — JetBrains Mono, uppercase, tracked. Mirrors the v2
+// `.v2-mono` / eyebrow treatment using the design-system `--m-num` font
+// token so the look stays in sync with styles/m.css.
+const MONO_LABEL = 'm-quiet-sm'
+const monoLabelStyle: React.CSSProperties = {
+  fontFamily: 'var(--m-num)',
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--m-ink-3)',
 }
 
 function reorderBtnStyle(disabled: boolean): React.CSSProperties {

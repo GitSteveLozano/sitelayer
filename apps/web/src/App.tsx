@@ -33,6 +33,9 @@ const WorkspaceRoute = lazy(() => import('@/routes/workspace'))
 // admin-first workspace router became the root.
 const MRoute = lazy(() => import('@/routes/m'))
 const MPreviewRoute = lazy(() => import('@/screens/mobile-preview').then((m) => ({ default: m.MPreviewView })))
+const DesktopWorkspaceRoute = lazy(() =>
+  import('@/screens/desktop/desktop-workspace').then((m) => ({ default: m.DesktopWorkspace })),
+)
 
 // Specialized full-screen routes that don't fit the bottom-tab chrome.
 // These must match before the mobile-shell catch-all below. /more is
@@ -67,6 +70,30 @@ const ScaffoldDesignerScreen = lazy(() =>
 const ProjectBomsScreen = lazy(() =>
   import('@/screens/scaffold/project-boms').then((m) => ({ default: m.ProjectBomsScreen })),
 )
+const ChangeOrdersScreen = lazy(() =>
+  import('@/screens/mobile/change-orders').then((m) => ({ default: m.MobileChangeOrders })),
+)
+const ProjectLostScreen = lazy(() =>
+  import('@/screens/mobile/project-lost').then((m) => ({ default: m.MobileProjectLost })),
+)
+const RecoveryPlanScreen = lazy(() =>
+  import('@/screens/mobile/recovery-plan').then((m) => ({ default: m.MobileRecoveryPlan })),
+)
+const ClientsListScreen = lazy(() =>
+  import('@/screens/mobile/clients').then((m) => ({ default: m.MobileClientsList })),
+)
+const ClientProfileScreen = lazy(() =>
+  import('@/screens/mobile/clients').then((m) => ({ default: m.MobileClientProfile })),
+)
+const ChatThreadScreen = lazy(() => import('@/screens/mobile/chat').then((m) => ({ default: m.MobileChatThread })))
+const BroadcastScreen = lazy(() => import('@/screens/mobile/broadcast').then((m) => ({ default: m.MobileBroadcast })))
+const NotificationsInboxScreen = lazy(() =>
+  import('@/screens/mobile/notifications-inbox').then((m) => ({ default: m.MobileNotificationsInbox })),
+)
+const ActivityLogScreen = lazy(() =>
+  import('@/screens/mobile/activity-log').then((m) => ({ default: m.MobileActivityLog })),
+)
+const StopWorkScreen = lazy(() => import('@/screens/mobile/stop-work').then((m) => ({ default: m.MobileStopWork })))
 const TakeoffDetailScreen = lazy(() =>
   import('@/screens/projects/takeoff-detail').then((m) => ({ default: m.TakeoffDetailScreen })),
 )
@@ -218,6 +245,17 @@ function AppShellRoutes() {
       <Route path="/projects/:id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
       <Route path="/projects/:id/takeoff-preview" element={<TakeoffPreviewScreen />} />
       <Route path="/projects/:id/boms" element={<ProjectBomsScreen />} />
+      <Route path="/projects/:projectId/change-orders" element={<ChangeOrdersScreen />} />
+      <Route path="/projects/:projectId/lost" element={<ProjectLostScreen />} />
+      <Route path="/projects/:projectId/recovery" element={<RecoveryPlanScreen />} />
+      <Route path="/clients" element={<ClientsListScreen />} />
+      <Route path="/clients/:clientId" element={<ClientProfileScreen />} />
+      <Route path="/chat/:projectId" element={<ChatThreadScreen />} />
+      <Route path="/broadcast" element={<BroadcastScreen />} />
+      <Route path="/notifications" element={<NotificationsInboxScreen />} />
+      <Route path="/activity" element={<ActivityLogScreen />} />
+      <Route path="/stop-work" element={<StopWorkScreen />} />
+      <Route path="/projects/:projectId/stop-work" element={<StopWorkScreen />} />
       <Route path="/scaffold-designer" element={<ScaffoldDesignerScreen />} />
       <Route path="/projects/:id/takeoff-summary" element={<TakeoffSummaryScreen />} />
       <Route path="/projects/:id/photo-measure" element={<PhotoMeasureScreen />} />
@@ -240,6 +278,7 @@ function AppShellRoutes() {
 
       {/* Dev-only primitive showcase. */}
       <Route path="/m-preview" element={<MPreviewRoute />} />
+      <Route path="/desktop/*" element={<DesktopWorkspaceRoute />} />
 
       {/* Legacy alias -- original mount of the mobile shell. */}
       <Route path="/m/*" element={<MRoute basePath="/m" />} />

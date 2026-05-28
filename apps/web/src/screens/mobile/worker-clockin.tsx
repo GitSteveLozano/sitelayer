@@ -3,13 +3,20 @@
  * geofence-triggered clock-in. The override window is 2 minutes; per the
  * design handoff this is the most-important worker surface (the value prop).
  *
- * The map preview is intentionally simple — just the geofence circle with
- * a pulsing dot. Real implementations can layer a static map tile from a
- * provider; for now a CSS gradient + SVG dot is enough.
+ * View layer mirrors Steve's v2 brutalist worker screen (V2WorkerClockInSuccess):
+ * eyebrow + big "Clocked in." headline, a geofence map SVG (grid + dashed
+ * fence + marker), a 3-stat strip, and a gloved primary "SEE SCOPE" button.
+ * The shell applies `.m-dark` for workers, so all colors come from `var(--m-*)`
+ * tokens — no hardcoded dark values.
+ *
+ * The map preview is intentionally simple — just the geofence fence with a
+ * pulsing dot over a construction-site grid. Real implementations can layer a
+ * static map tile from a provider; for now an SVG sketch is enough.
  */
 import { useEffect, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MBody, MButton, MButtonStack, MI, MTopBar } from '../../components/m/index.js'
+import { MBody, MButton, MButtonStack, MStat, MStatStrip, MTopBar } from '../../components/m/index.js'
 import { timeOfDay } from './format.js'
 
 /** Detect the OS-level reduced-motion preference; SMIL animations can't
@@ -50,89 +57,122 @@ export function WorkerClockinConfirm() {
     <>
       <MTopBar back title="Clocked in" onBack={() => navigate('/today')} />
       <MBody>
-        <div style={{ position: 'relative' }}>
-          <MapPreview />
-          <div
-            style={{
-              position: 'absolute',
-              top: 12,
-              left: 12,
-              padding: '4px 10px',
-              borderRadius: 999,
-              background: 'rgba(0,0,0,0.55)',
-              color: '#f3ecdf',
-              fontSize: 11,
-              fontWeight: 600,
-              letterSpacing: '0.06em',
-              textTransform: 'uppercase',
-            }}
-          >
-            You're on site
+        <div style={{ padding: '24px 20px 0' }}>
+          <div style={ms.eyebrow}>You're on site</div>
+          <div style={ms.bignum}>
+            Clocked
+            <br />
+            in.
           </div>
         </div>
-        <div style={{ padding: '24px 24px 8px', textAlign: 'center' }}>
-          <div
-            style={{
-              width: 56,
-              height: 56,
-              margin: '0 auto 18px',
-              borderRadius: 28,
-              background: 'rgba(44, 138, 85, 0.15)',
-              color: 'var(--m-green)',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <MI.Check size={28} />
-          </div>
-          <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: '-0.01em' }}>You're clocked in</div>
-          <div className="m-quiet-sm" style={{ marginTop: 6 }}>
-            Walked into the geofence at <strong style={{ color: 'var(--m-accent-ink)' }}>{timeOfDay(punchedAt)}</strong>{' '}
-            · auto-clocked.
-          </div>
+
+        <GeofenceMap />
+
+        <MStatStrip>
+          <MStat label="Punched" value={timeOfDay(punchedAt)} />
+          <MStat label="Mode" value="AUTO" />
+          <MStat label="Fence" value="ON SITE" />
+        </MStatStrip>
+
+        <div className="m-quiet-sm" style={{ padding: '14px 20px 0' }}>
+          Walked into the geofence at{' '}
+          <strong style={{ color: 'var(--m-accent-ink)' }}>{timeOfDay(punchedAt)}</strong> · auto-clocked.
         </div>
-        <div style={{ padding: '0 16px' }}>
+
+        <div style={{ padding: '20px' }}>
           <MButtonStack>
-            <MButton variant="primary" onClick={() => navigate('/scope')}>
+            <MButton variant="primary" data-size="worker" onClick={() => navigate('/scope')}>
               See today's scope
             </MButton>
             <MButton variant="ghost" onClick={() => navigate('/today')}>
               Wrong project? Tap to fix · {secondsLeft}s
             </MButton>
           </MButtonStack>
-          <div className="m-quiet-sm" style={{ textAlign: 'center', marginTop: 12 }}>
-            Closes automatically in {secondsLeft} seconds.
-          </div>
+          <div style={ms.micro}>Closes automatically in {secondsLeft} seconds.</div>
         </div>
       </MBody>
     </>
   )
 }
 
-function MapPreview() {
+const ms: Record<string, CSSProperties> = {
+  eyebrow: {
+    fontFamily: 'var(--m-num)',
+    fontSize: 12,
+    fontWeight: 600,
+    letterSpacing: '0.08em',
+    textTransform: 'uppercase',
+    color: 'var(--m-accent)',
+  },
+  bignum: {
+    fontFamily: 'var(--m-font-display)',
+    fontSize: 72,
+    fontWeight: 800,
+    letterSpacing: '-0.025em',
+    lineHeight: 0.9,
+    marginTop: 14,
+    color: 'var(--m-ink)',
+  },
+  micro: {
+    fontFamily: 'var(--m-num)',
+    fontSize: 11,
+    fontWeight: 500,
+    letterSpacing: '0.06em',
+    textTransform: 'uppercase',
+    textAlign: 'center',
+    color: 'var(--m-ink-4)',
+    marginTop: 12,
+  },
+}
+
+/** Geofence sketch — construction-site grid with a dashed fence and a
+ *  pulsing on-site marker. Brutalist v2 framing: hard 2px border, no radius. */
+function GeofenceMap() {
   const reducedMotion = usePrefersReducedMotion()
   return (
     <div
       style={{
-        height: 180,
-        background:
-          'radial-gradient(circle at 50% 60%, rgba(217,144,74,0.15), transparent 50%), linear-gradient(180deg, #221c14 0%, #1a1610 100%)',
+        margin: '24px 20px',
+        height: 220,
+        border: '2px solid var(--m-line)',
+        background: 'var(--m-card-soft)',
         position: 'relative',
         overflow: 'hidden',
       }}
     >
-      <svg width="100%" height="100%" viewBox="0 0 360 180" style={{ position: 'absolute', inset: 0 }}>
-        <circle cx="180" cy="100" r="56" fill="none" stroke="rgba(217,144,74,0.5)" strokeDasharray="4 6" />
-        <circle cx="180" cy="100" r="8" fill="var(--m-accent)" />
-        <circle cx="180" cy="100" r="14" fill="none" stroke="rgba(217,144,74,0.5)">
+      <svg viewBox="0 0 280 220" width="100%" height="100%" preserveAspectRatio="xMidYMid slice">
+        <defs>
+          <pattern id="wk-clockin-grid" width="20" height="20" patternUnits="userSpaceOnUse">
+            <path d="M 20 0 L 0 0 0 20" stroke="var(--m-line-2)" strokeWidth="0.5" fill="none" />
+          </pattern>
+        </defs>
+        <rect width="280" height="220" fill="url(#wk-clockin-grid)" />
+        <path d="M0 100 L280 80" stroke="var(--m-line-2)" strokeWidth="14" />
+        <path d="M180 0 L165 220" stroke="var(--m-line-2)" strokeWidth="10" />
+        <rect x="50" y="120" width="50" height="40" fill="var(--m-line-2)" stroke="var(--m-ink-3)" strokeWidth="1" />
+        <rect x="200" y="100" width="46" height="40" fill="var(--m-line-2)" stroke="var(--m-ink-3)" strokeWidth="1" />
+        <rect
+          x="90"
+          y="80"
+          width="100"
+          height="100"
+          fill="none"
+          stroke="var(--m-accent)"
+          strokeWidth="2"
+          strokeDasharray="4 4"
+        />
+        <circle cx="140" cy="130" r="28" fill="var(--m-accent)" opacity="0.25">
           {reducedMotion ? null : (
             <>
-              <animate attributeName="r" values="8;22;8" dur="2.4s" repeatCount="indefinite" />
-              <animate attributeName="opacity" values="0.7;0;0.7" dur="2.4s" repeatCount="indefinite" />
+              <animate attributeName="r" values="20;30;20" dur="2.4s" repeatCount="indefinite" />
+              <animate attributeName="opacity" values="0.3;0.1;0.3" dur="2.4s" repeatCount="indefinite" />
             </>
           )}
         </circle>
+        <rect x="132" y="122" width="16" height="16" fill="var(--m-accent)" stroke="var(--m-line)" strokeWidth="2" />
+        <text x="14" y="206" fontFamily="var(--m-num)" fontSize="9" fill="var(--m-accent)" fontWeight="600">
+          ON SITE · INSIDE FENCE
+        </text>
       </svg>
     </div>
   )

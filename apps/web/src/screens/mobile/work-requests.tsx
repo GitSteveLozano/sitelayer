@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom'
 import {
   MBanner,
   MBody,
+  MButton,
   MChip,
   MChipRow,
   MI,
@@ -14,7 +15,13 @@ import {
 } from '../../components/m/index.js'
 import { WorkRequestAction } from '../../components/work-requests/WorkRequestAction.js'
 import { WorkRequestSeverityPill, WorkRequestStatusPill } from '../../components/work-requests/status.js'
-import { fetchWorkRequestQueueHealth, fetchWorkRequests, queryKeys, type WorkItemStatus } from '@/lib/api'
+import {
+  fetchWorkRequestQueueHealth,
+  fetchWorkRequests,
+  queryKeys,
+  type ContextWorkItem,
+  type WorkItemStatus,
+} from '@/lib/api'
 import { canTriageWorkRequests } from '@/lib/work-request-permissions'
 import type { CompanyRole } from '@sitelayer/domain'
 import { MSkeletonList } from '../../components/m-states/index.js'
@@ -105,31 +112,139 @@ export function MobileWorkRequests({
           <div style={{ padding: '24px 16px', fontSize: 13, color: 'var(--m-ink-3)' }}>No work items.</div>
         ) : (
           <>
-            <MSectionH>Queue</MSectionH>
-            <MListInset>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                justifyContent: 'space-between',
+                padding: '4px 16px 0',
+              }}
+            >
+              <MSectionH>Intake queue</MSectionH>
+              <span
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: '0.06em',
+                  color: 'var(--m-ink-3)',
+                }}
+              >
+                {rows.length} ITEM{rows.length === 1 ? '' : 'S'}
+              </span>
+            </div>
+            <div style={{ borderTop: '2px solid var(--m-ink)' }}>
               {rows.map((item) => (
-                <MListRow
-                  key={item.id}
-                  leading={<MI.FileText size={18} />}
-                  leadingTone="accent"
-                  headline={item.title}
-                  supporting={item.summary || item.route || item.entity_type || 'No summary'}
-                  trailing={
-                    <span style={{ display: 'inline-flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4 }}>
-                      <WorkRequestStatusPill status={item.status} />
-                      <WorkRequestSeverityPill severity={item.severity} />
-                    </span>
-                  }
-                  chev
-                  onTap={() => navigate(`/work/${item.id}`)}
-                />
+                <WorkRequestCard key={item.id} item={item} onOpen={() => navigate(`/work/${item.id}`)} />
               ))}
-            </MListInset>
+            </div>
           </>
         )}
       </MBody>
     </>
   )
+}
+
+function WorkRequestCard({ item, onOpen }: { item: ContextWorkItem; onOpen: () => void }) {
+  const kind = (item.entity_type ?? 'work').toUpperCase()
+  const age = relativeAge(item.created_at)
+  const meta = [item.route, age].filter(Boolean).join(' · ')
+  return (
+    <article
+      style={{
+        padding: '16px',
+        borderBottom: '2px solid var(--m-ink)',
+        background: item.severity === 'urgent' ? 'var(--m-card-soft)' : 'transparent',
+      }}
+    >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          marginBottom: 10,
+        }}
+      >
+        <span
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            color: 'var(--m-accent-ink)',
+            background: 'var(--m-accent)',
+            border: '1.5px solid var(--m-ink)',
+            padding: '3px 7px',
+          }}
+        >
+          {kind}
+        </span>
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            flexShrink: 0,
+          }}
+        >
+          <WorkRequestSeverityPill severity={item.severity} />
+          <WorkRequestStatusPill status={item.status} />
+        </span>
+      </div>
+      <div
+        style={{
+          fontFamily: 'var(--m-font-display)',
+          fontWeight: 700,
+          fontSize: 16,
+          lineHeight: 1.3,
+          color: 'var(--m-ink)',
+        }}
+      >
+        {item.title}
+      </div>
+      {item.summary ? (
+        <div style={{ marginTop: 6, fontSize: 14, lineHeight: 1.45, color: 'var(--m-ink-2)' }}>{item.summary}</div>
+      ) : null}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          marginTop: 14,
+        }}
+      >
+        {meta ? (
+          <span
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: '0.04em',
+              color: 'var(--m-ink-3)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {meta.toUpperCase()}
+          </span>
+        ) : (
+          <span />
+        )}
+        <MButton size="sm" onClick={onOpen}>
+          Open
+        </MButton>
+      </div>
+    </article>
+  )
+}
+
+function relativeAge(iso: string): string | null {
+  const ts = Date.parse(iso)
+  if (!Number.isFinite(ts)) return null
+  return formatAge((Date.now() - ts) / 1000)
 }
 
 function WorkQueueHealthStrip({ health }: { health: Awaited<ReturnType<typeof fetchWorkRequestQueueHealth>> }) {
