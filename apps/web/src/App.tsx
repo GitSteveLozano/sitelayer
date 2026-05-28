@@ -93,6 +93,7 @@ const NotificationsInboxScreen = lazy(() =>
 const ActivityLogScreen = lazy(() =>
   import('@/screens/mobile/activity-log').then((m) => ({ default: m.MobileActivityLog })),
 )
+const StopWorkScreen = lazy(() => import('@/screens/mobile/stop-work').then((m) => ({ default: m.MobileStopWork })))
 const TakeoffDetailScreen = lazy(() =>
   import('@/screens/projects/takeoff-detail').then((m) => ({ default: m.TakeoffDetailScreen })),
 )
@@ -253,6 +254,8 @@ function AppShellRoutes() {
       <Route path="/broadcast" element={<BroadcastScreen />} />
       <Route path="/notifications" element={<NotificationsInboxScreen />} />
       <Route path="/activity" element={<ActivityLogScreen />} />
+      <Route path="/stop-work" element={<StopWorkScreen />} />
+      <Route path="/projects/:projectId/stop-work" element={<StopWorkScreen />} />
       <Route path="/scaffold-designer" element={<ScaffoldDesignerScreen />} />
       <Route path="/projects/:id/takeoff-summary" element={<TakeoffSummaryScreen />} />
       <Route path="/projects/:id/photo-measure" element={<PhotoMeasureScreen />} />
