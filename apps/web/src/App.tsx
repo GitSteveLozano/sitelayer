@@ -70,6 +70,18 @@ const ProjectBomsScreen = lazy(() =>
 const ChangeOrdersScreen = lazy(() =>
   import('@/screens/mobile/change-orders').then((m) => ({ default: m.MobileChangeOrders })),
 )
+const ProjectLostScreen = lazy(() =>
+  import('@/screens/mobile/project-lost').then((m) => ({ default: m.MobileProjectLost })),
+)
+const RecoveryPlanScreen = lazy(() =>
+  import('@/screens/mobile/recovery-plan').then((m) => ({ default: m.MobileRecoveryPlan })),
+)
+const ClientsListScreen = lazy(() =>
+  import('@/screens/mobile/clients').then((m) => ({ default: m.MobileClientsList })),
+)
+const ClientProfileScreen = lazy(() =>
+  import('@/screens/mobile/clients').then((m) => ({ default: m.MobileClientProfile })),
+)
 const TakeoffDetailScreen = lazy(() =>
   import('@/screens/projects/takeoff-detail').then((m) => ({ default: m.TakeoffDetailScreen })),
 )
@@ -222,6 +234,10 @@ function AppShellRoutes() {
       <Route path="/projects/:id/takeoff-preview" element={<TakeoffPreviewScreen />} />
       <Route path="/projects/:id/boms" element={<ProjectBomsScreen />} />
       <Route path="/projects/:projectId/change-orders" element={<ChangeOrdersScreen />} />
+      <Route path="/projects/:projectId/lost" element={<ProjectLostScreen />} />
+      <Route path="/projects/:projectId/recovery" element={<RecoveryPlanScreen />} />
+      <Route path="/clients" element={<ClientsListScreen />} />
+      <Route path="/clients/:clientId" element={<ClientProfileScreen />} />
       <Route path="/scaffold-designer" element={<ScaffoldDesignerScreen />} />
       <Route path="/projects/:id/takeoff-summary" element={<TakeoffSummaryScreen />} />
       <Route path="/projects/:id/photo-measure" element={<PhotoMeasureScreen />} />
