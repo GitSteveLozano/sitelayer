@@ -43,6 +43,8 @@ import { UpdateBanner } from '../components/shell/UpdateBanner.js'
 // add a default export.
 const MoreRoute = lazy(() => import('../routes/more.js'))
 const AdminHome = lazy(() => import('./mobile/admin-home.js').then((m) => ({ default: m.AdminHome })))
+const OwnerMoney = lazy(() => import('./mobile/owner-money.js').then((m) => ({ default: m.OwnerMoney })))
+const MobileChatList = lazy(() => import('./mobile/chat.js').then((m) => ({ default: m.MobileChatList })))
 const MobileProjectsList = lazy(() =>
   import('./mobile/projects-list.js').then((m) => ({ default: m.MobileProjectsList })),
 )
@@ -317,6 +319,8 @@ export function MobileShell({
             <Route path="rentals/lifecycle/:id" element={<RentalLifecycleDetailScreen />} />
             <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} companyRole={companyRole} />} />
             <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
+            <Route path="money" element={<OwnerMoney bootstrap={bootstrap} />} />
+            <Route path="chat" element={<MobileChatList bootstrap={bootstrap} />} />
             <Route
               path="work"
               element={<MobileWorkRequests companyRole={companyRole} currentUserId={currentUserId} />}
