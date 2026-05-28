@@ -124,42 +124,11 @@ export async function handleGuardrailRoutes(
       ctx.sendJson(400, { error: 'snoozed_until must be an ISO date string' })
       return true
     }
-    try {
-      const result = await withMutationTx(async (client: PoolClient) => {
-        const locked = await client.query<GuardrailRow>(
-          `select ${GUARDRAIL_COLUMNS} from guardrails
-           where company_id = $1 and id = $2 and deleted_at is null for update`,
-          [ctx.company.id, id],
-        )
-        const current = locked.rows[0]
-        if (!current) return { kind: 'not_found' as const }
-        const updated = await client.query<GuardrailRow>(
-          `update guardrails set
-             status = 'snoozed', snoozed_until = $3, version = version + 1, updated_at = now()
-           where company_id = $1 and id = $2
-           returning ${GUARDRAIL_COLUMNS}`,
-          [ctx.company.id, id, snoozedUntil],
-        )
-        const row = updated.rows[0]!
-        await recordAudit(client, {
-          companyId: ctx.company.id,
-          actorUserId: ctx.currentUserId,
-          action: 'guardrail.snoozed',
-          entityType: 'guardrail',
-          entityId: id,
-          before: { status: current.status },
-          after: { status: row.status },
-        })
-        return { kind: 'ok' as const, row }
-      })
-      if (result.kind === 'not_found') {
-        ctx.sendJson(404, { error: 'guardrail not found' })
-        return true
-      }
-      ctx.sendJson(200, { guardrail: rowToGuardrail(result.row) })
-    } catch (err) {
-      ctx.sendJson(500, { error: err instanceof Error ? err.message : 'failed to snooze guardrail' })
-    }
+    await applyGuardrailMutation(ctx, id, {
+      action: 'guardrail.snoozed',
+      setClause: `status = 'snoozed', snoozed_until = $3`,
+      params: [snoozedUntil],
+    })
     return true
   }
 
@@ -178,42 +147,11 @@ export async function handleGuardrailRoutes(
       ctx.sendJson(400, { error: 'muted_reason is required' })
       return true
     }
-    try {
-      const result = await withMutationTx(async (client: PoolClient) => {
-        const locked = await client.query<GuardrailRow>(
-          `select ${GUARDRAIL_COLUMNS} from guardrails
-           where company_id = $1 and id = $2 and deleted_at is null for update`,
-          [ctx.company.id, id],
-        )
-        const current = locked.rows[0]
-        if (!current) return { kind: 'not_found' as const }
-        const updated = await client.query<GuardrailRow>(
-          `update guardrails set
-             status = 'muted', muted_reason = $3, version = version + 1, updated_at = now()
-           where company_id = $1 and id = $2
-           returning ${GUARDRAIL_COLUMNS}`,
-          [ctx.company.id, id, mutedReason],
-        )
-        const row = updated.rows[0]!
-        await recordAudit(client, {
-          companyId: ctx.company.id,
-          actorUserId: ctx.currentUserId,
-          action: 'guardrail.muted',
-          entityType: 'guardrail',
-          entityId: id,
-          before: { status: current.status },
-          after: { status: row.status },
-        })
-        return { kind: 'ok' as const, row }
-      })
-      if (result.kind === 'not_found') {
-        ctx.sendJson(404, { error: 'guardrail not found' })
-        return true
-      }
-      ctx.sendJson(200, { guardrail: rowToGuardrail(result.row) })
-    } catch (err) {
-      ctx.sendJson(500, { error: err instanceof Error ? err.message : 'failed to mute guardrail' })
-    }
+    await applyGuardrailMutation(ctx, id, {
+      action: 'guardrail.muted',
+      setClause: `status = 'muted', muted_reason = $3`,
+      params: [mutedReason],
+    })
     return true
   }
 
@@ -226,45 +164,62 @@ export async function handleGuardrailRoutes(
       ctx.sendJson(400, { error: 'id must be a valid uuid' })
       return true
     }
-    try {
-      const result = await withMutationTx(async (client: PoolClient) => {
-        const locked = await client.query<GuardrailRow>(
-          `select ${GUARDRAIL_COLUMNS} from guardrails
-           where company_id = $1 and id = $2 and deleted_at is null for update`,
-          [ctx.company.id, id],
-        )
-        const current = locked.rows[0]
-        if (!current) return { kind: 'not_found' as const }
-        const updated = await client.query<GuardrailRow>(
-          `update guardrails set
-             status = 'armed', snoozed_until = null, muted_reason = null, triggered_at = null,
-             version = version + 1, updated_at = now()
-           where company_id = $1 and id = $2
-           returning ${GUARDRAIL_COLUMNS}`,
-          [ctx.company.id, id],
-        )
-        const row = updated.rows[0]!
-        await recordAudit(client, {
-          companyId: ctx.company.id,
-          actorUserId: ctx.currentUserId,
-          action: 'guardrail.cleared',
-          entityType: 'guardrail',
-          entityId: id,
-          before: { status: current.status },
-          after: { status: row.status },
-        })
-        return { kind: 'ok' as const, row }
-      })
-      if (result.kind === 'not_found') {
-        ctx.sendJson(404, { error: 'guardrail not found' })
-        return true
-      }
-      ctx.sendJson(200, { guardrail: rowToGuardrail(result.row) })
-    } catch (err) {
-      ctx.sendJson(500, { error: err instanceof Error ? err.message : 'failed to clear guardrail' })
-    }
+    await applyGuardrailMutation(ctx, id, {
+      action: 'guardrail.cleared',
+      setClause: `status = 'armed', snoozed_until = null, muted_reason = null, triggered_at = null`,
+      params: [],
+    })
     return true
   }
 
   return false
+}
+
+/**
+ * Shared snooze/mute/clear envelope: lock the guardrail FOR UPDATE, apply the
+ * caller's SET clause (which always bumps version + updated_at), audit the
+ * status transition, and respond. `setClause` is a trusted literal built by the
+ * route above; only `params` (starting at $3) carries request data.
+ */
+async function applyGuardrailMutation(
+  ctx: GuardrailRouteCtx,
+  id: string,
+  op: { action: string; setClause: string; params: unknown[] },
+): Promise<void> {
+  try {
+    const result = await withMutationTx(async (client: PoolClient) => {
+      const locked = await client.query<GuardrailRow>(
+        `select ${GUARDRAIL_COLUMNS} from guardrails
+         where company_id = $1 and id = $2 and deleted_at is null for update`,
+        [ctx.company.id, id],
+      )
+      const current = locked.rows[0]
+      if (!current) return { kind: 'not_found' as const }
+      const updated = await client.query<GuardrailRow>(
+        `update guardrails set
+           ${op.setClause}, version = version + 1, updated_at = now()
+         where company_id = $1 and id = $2
+         returning ${GUARDRAIL_COLUMNS}`,
+        [ctx.company.id, id, ...op.params],
+      )
+      const row = updated.rows[0]!
+      await recordAudit(client, {
+        companyId: ctx.company.id,
+        actorUserId: ctx.currentUserId,
+        action: op.action,
+        entityType: 'guardrail',
+        entityId: id,
+        before: { status: current.status },
+        after: { status: row.status },
+      })
+      return { kind: 'ok' as const, row }
+    })
+    if (result.kind === 'not_found') {
+      ctx.sendJson(404, { error: 'guardrail not found' })
+      return
+    }
+    ctx.sendJson(200, { guardrail: rowToGuardrail(result.row) })
+  } catch (err) {
+    ctx.sendJson(500, { error: err instanceof Error ? err.message : 'failed to update guardrail' })
+  }
 }
