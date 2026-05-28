@@ -8,7 +8,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse, ProjectRow } from '@/lib/api'
-import { MBody, MChip, MChipRow, MI, MInput, MPill, MTapCard, MTopBar } from '../../components/m/index.js'
+import { MBody, MChip, MChipRow, MI, MInput, MListPlain, MListRow, MPill, MTopBar } from '../../components/m/index.js'
 import { MEmptyState } from '../../components/m-states/index.js'
 import { formatMoney, formatStatusLabel, statusTone } from './format.js'
 
@@ -128,45 +128,50 @@ export function MobileProjectsList({ bootstrap }: { bootstrap: BootstrapResponse
             No projects match this filter.
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 16px 16px' }}>
-            {visible.map((p) => (
-              <ProjectCard key={p.id} project={p} onOpen={() => navigate(`/projects/${p.id}`)} />
-            ))}
-          </div>
+          <>
+            <div className="m-section-bar">
+              <span>Projects</span>
+              <span style={{ color: 'var(--m-ink)', fontWeight: 700 }}>
+                {visible.length} {filter === 'all' ? 'TOTAL' : 'SHOWN'}
+              </span>
+            </div>
+            <MListPlain>
+              {visible.map((p) => (
+                <ProjectRow key={p.id} project={p} onOpen={() => navigate(`/projects/${p.id}`)} />
+              ))}
+            </MListPlain>
+          </>
         )}
       </MBody>
     </>
   )
 }
 
-function ProjectCard({ project, onOpen }: { project: ProjectRow; onOpen: () => void }) {
+// Two-letter monogram from the project name (e.g. "HILLCREST PH 4" → "HP").
+// Falls back to the first two letters of a single-word name.
+function monogram(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean)
+  if (words.length === 0) return '—'
+  if (words.length === 1) return (words[0] ?? '').slice(0, 2).toUpperCase() || '—'
+  return ((words[0]?.[0] ?? '') + (words[1]?.[0] ?? '')).toUpperCase() || '—'
+}
+
+function ProjectRow({ project, onOpen }: { project: ProjectRow; onOpen: () => void }) {
   const tone = statusTone(project.status)
   return (
-    <MTapCard
-      onClick={onOpen}
-      borderLeft={`4px solid var(--m-${tone === 'green' ? 'green' : tone === 'amber' ? 'amber' : tone === 'red' ? 'red' : tone === 'blue' ? 'blue' : 'line-2'})`}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-        <MPill tone={tone} dot>
-          {formatStatusLabel(project.status)}
-        </MPill>
-      </div>
-      <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 2 }}>{project.name}</div>
-      <div style={{ fontSize: 12, color: 'var(--m-ink-3)' }}>
-        {project.customer_name} · {project.division_code}
-      </div>
-      <div
-        style={{
-          marginTop: 8,
-          display: 'flex',
-          justifyContent: 'space-between',
-          fontSize: 12,
-          color: 'var(--m-ink-2)',
-        }}
-      >
-        <span>Bid {formatMoney(project.bid_total)}</span>
-        {project.target_sqft_per_hr ? <span>Target {project.target_sqft_per_hr} sf/hr</span> : null}
-      </div>
-    </MTapCard>
+    <MListRow
+      onTap={onOpen}
+      chev
+      leading={monogram(project.name)}
+      leadingTone={tone}
+      headline={project.name}
+      supporting={
+        <>
+          {project.customer_name} · {project.division_code} · BID {formatMoney(project.bid_total)}
+          {project.target_sqft_per_hr ? ` · ${project.target_sqft_per_hr} SF/HR` : ''}
+        </>
+      }
+      badge={<MPill tone={tone}>{formatStatusLabel(project.status)}</MPill>}
+    />
   )
 }

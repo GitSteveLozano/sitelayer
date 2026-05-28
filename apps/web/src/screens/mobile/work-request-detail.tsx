@@ -182,13 +182,37 @@ export function MobileWorkRequestDetail({ companyRole }: { companyRole: CompanyR
           </div>
         ) : (
           <>
-            <div style={{ padding: '16px 16px 4px', display: 'grid', gap: 10 }}>
+            <div style={{ padding: '24px 20px 20px', borderBottom: '2px solid var(--m-ink)', display: 'grid', gap: 14 }}>
+              <div
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: 'var(--m-ink-3)',
+                }}
+              >
+                {`${workItem.lane} · ${workItem.id}`}
+              </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                 <WorkRequestStatusPill status={workItem.status} />
                 <WorkRequestSeverityPill severity={workItem.severity} />
                 <WorkRequestReversibilityBadge workItem={workItem} now={now} />
               </div>
-              <h1 style={{ margin: 0, fontSize: 22, lineHeight: 1.15, fontWeight: 750 }}>{workItem.title}</h1>
+              <h1
+                style={{
+                  margin: 0,
+                  fontFamily: 'var(--m-font-display)',
+                  fontSize: 28,
+                  lineHeight: 1.05,
+                  fontWeight: 800,
+                  letterSpacing: '-0.025em',
+                  color: 'var(--m-ink)',
+                }}
+              >
+                {workItem.title}
+              </h1>
               {workItem.summary ? (
                 <div style={{ color: 'var(--m-ink-2)', fontSize: 14, lineHeight: 1.45 }}>{workItem.summary}</div>
               ) : null}
