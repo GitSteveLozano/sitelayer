@@ -11,7 +11,7 @@
  * the composition differs. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
 import { Route, Routes, useLocation } from 'react-router-dom'
-import { Bell, Briefcase, Calendar, DollarSign, Home, type LucideProps, Package, Plus, Settings, Users, UserSquare } from 'lucide-react'
+import { Bell, Briefcase, Calendar, DollarSign, Home, Layers, Library, type LucideProps, Package, Plus, Settings, Sparkles, Users, UserSquare } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import type { BootstrapResponse } from '@/lib/api'
 import { DShell, DSidebar, DTopbar, type DNavSection } from '@/components/d'
@@ -26,6 +26,10 @@ import { OwnerSchedule } from './owner-schedule'
 import { OwnerRentals } from './owner-rentals'
 import { OwnerSettings } from './owner-settings'
 import { OwnerProjectDetail } from './owner-project-detail'
+import { EstTakeoffProjects } from './est-takeoff-projects'
+import { EstAiQueue } from './est-ai-queue'
+import { EstItemLibrary } from './est-item-library'
+import { EstClientProfile } from './est-client-profile'
 
 // lucide icons type as LucideProps; the DNavItem icon slot wants SVGProps.
 const asIcon = (C: ComponentType<LucideProps>) => C as unknown as ComponentType<SVGProps<SVGSVGElement>>
@@ -55,6 +59,14 @@ const OWNER_NAV: DNavSection[] = [
       { to: '/desktop/settings', label: 'Settings', icon: asIcon(Settings) },
     ],
   },
+  {
+    title: 'Estimator',
+    items: [
+      { to: '/desktop/takeoff', label: 'Takeoff', icon: asIcon(Layers) },
+      { to: '/desktop/ai-queue', label: 'AI Queue', icon: asIcon(Sparkles) },
+      { to: '/desktop/item-library', label: 'Item Library', icon: asIcon(Library) },
+    ],
+  },
 ]
 
 const CRUMB: Record<string, string> = {
@@ -67,6 +79,9 @@ const CRUMB: Record<string, string> = {
   '/desktop/clients': 'Clients',
   '/desktop/rentals': 'Rentals',
   '/desktop/settings': 'Settings',
+  '/desktop/takeoff': 'Takeoff',
+  '/desktop/ai-queue': 'AI Queue',
+  '/desktop/item-library': 'Item Library',
 }
 
 function DComingSoon({ name }: { name: string }) {
@@ -115,6 +130,10 @@ export function DesktopWorkspace({ bootstrap = null }: { bootstrap?: BootstrapRe
         <Route path="clients" element={<OwnerClients />} />
         <Route path="rentals" element={<OwnerRentals />} />
         <Route path="settings" element={<OwnerSettings />} />
+        <Route path="takeoff" element={<EstTakeoffProjects bootstrap={bootstrap} />} />
+        <Route path="ai-queue" element={<EstAiQueue bootstrap={bootstrap} />} />
+        <Route path="item-library" element={<EstItemLibrary />} />
+        <Route path="clients/:clientId" element={<EstClientProfile />} />
         <Route path="*" element={<DComingSoon name="Screen" />} />
       </Routes>
     </DShell>
