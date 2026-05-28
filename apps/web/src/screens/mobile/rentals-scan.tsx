@@ -194,10 +194,50 @@ export function MobileRentalScan({
             }}
           >
             {/* Corner brackets */}
-            <span style={{ position: 'absolute', top: 0, left: 0, width: 32, height: 32, borderTop: '3px solid var(--m-accent)', borderLeft: '3px solid var(--m-accent)' }} />
-            <span style={{ position: 'absolute', top: 0, right: 0, width: 32, height: 32, borderTop: '3px solid var(--m-accent)', borderRight: '3px solid var(--m-accent)' }} />
-            <span style={{ position: 'absolute', bottom: 0, left: 0, width: 32, height: 32, borderBottom: '3px solid var(--m-accent)', borderLeft: '3px solid var(--m-accent)' }} />
-            <span style={{ position: 'absolute', bottom: 0, right: 0, width: 32, height: 32, borderBottom: '3px solid var(--m-accent)', borderRight: '3px solid var(--m-accent)' }} />
+            <span
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: 32,
+                height: 32,
+                borderTop: '3px solid var(--m-accent)',
+                borderLeft: '3px solid var(--m-accent)',
+              }}
+            />
+            <span
+              style={{
+                position: 'absolute',
+                top: 0,
+                right: 0,
+                width: 32,
+                height: 32,
+                borderTop: '3px solid var(--m-accent)',
+                borderRight: '3px solid var(--m-accent)',
+              }}
+            />
+            <span
+              style={{
+                position: 'absolute',
+                bottom: 0,
+                left: 0,
+                width: 32,
+                height: 32,
+                borderBottom: '3px solid var(--m-accent)',
+                borderLeft: '3px solid var(--m-accent)',
+              }}
+            />
+            <span
+              style={{
+                position: 'absolute',
+                bottom: 0,
+                right: 0,
+                width: 32,
+                height: 32,
+                borderBottom: '3px solid var(--m-accent)',
+                borderRight: '3px solid var(--m-accent)',
+              }}
+            />
             {/* Mock QR target */}
             <div
               aria-hidden

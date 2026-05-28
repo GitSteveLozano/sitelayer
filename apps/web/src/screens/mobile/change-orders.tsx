@@ -75,9 +75,7 @@ export function MobileChangeOrders() {
   const acceptedDelta = query.data?.accepted_value_delta ?? 0
   // Newest first. created_at is an ISO string; lexical compare is fine, but
   // fall back to the monotonically-increasing CO number for ties.
-  const ordered = [...changeOrders].sort(
-    (a, b) => b.created_at.localeCompare(a.created_at) || b.number - a.number,
-  )
+  const ordered = [...changeOrders].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.number - a.number)
 
   const errorMessage =
     createMutation.error instanceof Error
@@ -191,7 +189,9 @@ export function MobileChangeOrders() {
                 <MButton
                   variant="primary"
                   onClick={submitCreate}
-                  disabled={createMutation.isPending || description.trim() === '' || !Number.isFinite(Number(valueDelta))}
+                  disabled={
+                    createMutation.isPending || description.trim() === '' || !Number.isFinite(Number(valueDelta))
+                  }
                 >
                   {createMutation.isPending ? 'Saving…' : 'Save draft'}
                 </MButton>

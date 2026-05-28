@@ -24,7 +24,6 @@ import {
   useDailyLogs,
   useDismissInsight,
   usePatchDailyLog,
-  useProjectBriefs,
   useSubmitDailyLog,
   useTriggerVoiceToLog,
   type DailyLog,
@@ -59,17 +58,17 @@ export function FmLog({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   // Snap onto a valid project once bootstrap lands (route param wins if valid).
   useEffect(() => {
     if (projectId && projects.some((p) => p.id === projectId)) return
-    const next = (params.projectId && projects.some((p) => p.id === params.projectId) ? params.projectId : '') ||
+    const next =
+      (params.projectId && projects.some((p) => p.id === params.projectId) ? params.projectId : '') ||
       projects[0]?.id ||
       ''
     if (next && next !== projectId) setProjectId(next)
   }, [params.projectId, projectId, projects])
 
   const today = todayIso()
-  const list = useDailyLogs(
-    projectId ? { from: today, to: today, projectId } : { from: today, to: today },
-    { enabled: Boolean(projectId) },
-  )
+  const list = useDailyLogs(projectId ? { from: today, to: today, projectId } : { from: today, to: today }, {
+    enabled: Boolean(projectId),
+  })
   const log = list.data?.dailyLogs.find((d) => d.project_id === projectId && d.occurred_on === today) ?? null
 
   // Find-or-create today's draft for the active foreman + project.
@@ -153,8 +152,6 @@ function DailyLogEditor({ log, bootstrap }: DailyLogEditorProps) {
     [bootstrap?.laborEntries, today, log.project_id],
   )
   const totalHours = todayLabor.reduce((sum, l) => sum + Number(l.hours ?? 0), 0)
-
-  const briefs = useProjectBriefs(log.project_id, today)
 
   // Notes editor with debounced auto-save (same shape as the mobile composer).
   const [notes, setNotes] = useState(log.notes ?? '')
@@ -279,9 +276,7 @@ function DailyLogEditor({ log, bootstrap }: DailyLogEditorProps) {
               {isSubmitted ? 'Submitted to PM' : submit.isPending ? 'Submitting…' : 'Submit to PM'}
             </MButton>
             {isSubmitted ? (
-              <div style={{ ...MONO_LABEL, marginTop: 8, textAlign: 'center', color: 'var(--m-green)' }}>
-                On record
-              </div>
+              <div style={{ ...MONO_LABEL, marginTop: 8, textAlign: 'center', color: 'var(--m-green)' }}>On record</div>
             ) : null}
           </div>
         </div>

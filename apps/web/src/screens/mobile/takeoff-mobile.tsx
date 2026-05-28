@@ -371,11 +371,13 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                         background: 'var(--m-card-soft)',
                       }}
                     >
-                      {([
-                        { tool: 'polygon', label: 'POLY' },
-                        { tool: 'lineal', label: 'LIN' },
-                        { tool: 'count', label: 'PT' },
-                      ] as const).map((t, i, arr) => {
+                      {(
+                        [
+                          { tool: 'polygon', label: 'POLY' },
+                          { tool: 'lineal', label: 'LIN' },
+                          { tool: 'count', label: 'PT' },
+                        ] as const
+                      ).map((t, i, arr) => {
                         const on = tool === t.tool
                         return (
                           <button
@@ -457,11 +459,15 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                             fontVariantNumeric: 'tabular-nums',
                           }}
                         >
-                          {tool === 'count'
-                            ? `${draftPoints.length}`
-                            : formatQty(draftQuantity)}
+                          {tool === 'count' ? `${draftPoints.length}` : formatQty(draftQuantity)}
                           <span style={{ fontSize: 14, color: 'var(--m-ink-4)', marginLeft: 6 }}>
-                            {tool === 'polygon' ? 'AREA' : tool === 'lineal' ? 'LEN' : draftPoints.length === 1 ? 'CT' : 'CTS'}
+                            {tool === 'polygon'
+                              ? 'AREA'
+                              : tool === 'lineal'
+                                ? 'LEN'
+                                : draftPoints.length === 1
+                                  ? 'CT'
+                                  : 'CTS'}
                           </span>
                         </div>
                       </div>

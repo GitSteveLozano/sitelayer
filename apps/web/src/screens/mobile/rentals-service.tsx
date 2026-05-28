@@ -168,9 +168,7 @@ export function MobileRentalsService() {
         {isLoading ? (
           <MSkeletonList count={3} />
         ) : isError ? (
-          <div style={{ padding: 24, color: 'var(--m-red)', fontSize: 13 }}>
-            Could not load inventory context.
-          </div>
+          <div style={{ padding: 24, color: 'var(--m-red)', fontSize: 13 }}>Could not load inventory context.</div>
         ) : entries.length === 0 ? (
           <MEmptyState
             title="No service logged"

@@ -97,10 +97,7 @@ export function OwnerActivity() {
   const projects = useProjects({ limit: 50 })
 
   const raw = events.data?.events ?? []
-  const filtered = useMemo(
-    () => (projectId ? raw.filter((e) => e.entity_id === projectId) : raw),
-    [raw, projectId],
-  )
+  const filtered = useMemo(() => (projectId ? raw.filter((e) => e.entity_id === projectId) : raw), [raw, projectId])
 
   // Hook returns rows newest-first; keep that order and stamp a day label on
   // the first row of each day so the table reads as day-grouped.
@@ -123,7 +120,15 @@ export function OwnerActivity() {
       render: (r) => (
         <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>
           {r.dayLabel ? (
-            <span style={{ fontFamily: MONO, fontSize: 9, fontWeight: 700, letterSpacing: '0.08em', color: 'var(--m-ink-2)' }}>
+            <span
+              style={{
+                fontFamily: MONO,
+                fontSize: 9,
+                fontWeight: 700,
+                letterSpacing: '0.08em',
+                color: 'var(--m-ink-2)',
+              }}
+            >
               {r.dayLabel}
             </span>
           ) : null}

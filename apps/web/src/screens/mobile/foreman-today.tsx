@@ -325,7 +325,11 @@ export function ForemanToday({ bootstrap, companySlug }: { bootstrap: BootstrapR
             icon={<MI.Check size={18} />}
             title="FIELD IS CLEAR"
             body="No open pings from the crew."
-            action={<MPill tone="green" dot>CLEAR</MPill>}
+            action={
+              <MPill tone="green" dot>
+                CLEAR
+              </MPill>
+            }
           />
         )}
 
@@ -504,7 +508,13 @@ function SiteCard({
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
         <div
           className="m-h-display"
-          style={{ fontSize: 22, lineHeight: 1, minWidth: 0, flex: 1, color: !briefed && !blocked ? 'var(--m-ink-3)' : 'var(--m-ink)' }}
+          style={{
+            fontSize: 22,
+            lineHeight: 1,
+            minWidth: 0,
+            flex: 1,
+            color: !briefed && !blocked ? 'var(--m-ink-3)' : 'var(--m-ink)',
+          }}
         >
           {project.name.toUpperCase()}
         </div>

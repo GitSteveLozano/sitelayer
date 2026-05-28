@@ -28,7 +28,8 @@ const TIGHT = 'var(--m-font-display)'
 function toneFor(action: string): string {
   const a = action.toLowerCase()
   if (a === 'delete' || a === 'void' || a === 'reject' || a === 'fail' || a.includes('declin')) return 'var(--m-red)'
-  if (a === 'create' || a === 'approve' || a === 'post' || a.includes('succeed') || a === 'submit') return 'var(--m-green)'
+  if (a === 'create' || a === 'approve' || a === 'post' || a.includes('succeed') || a === 'submit')
+    return 'var(--m-green)'
   return 'var(--m-ink)'
 }
 
@@ -92,10 +93,7 @@ export function MobileActivityLog() {
   const projects = useProjects({ limit: 50 })
 
   const rows = events.data?.events ?? []
-  const filtered = useMemo(
-    () => (projectId ? rows.filter((e) => e.entity_id === projectId) : rows),
-    [rows, projectId],
-  )
+  const filtered = useMemo(() => (projectId ? rows.filter((e) => e.entity_id === projectId) : rows), [rows, projectId])
 
   // Group consecutive entries by day. The hook already returns rows
   // newest-first; we keep that order and emit a divider whenever the day

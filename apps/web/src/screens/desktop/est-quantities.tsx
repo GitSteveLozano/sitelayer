@@ -77,8 +77,7 @@ export function EstQuantities() {
   const marginRatio = m?.margin.margin ?? 0
   const marginPct = m ? `${(marginRatio * 100).toFixed(0)}%` : '—'
   const marginProfit = m ? formatMoney(m.margin.profit) : '—'
-  const marginTone: 'green' | 'amber' | 'red' =
-    marginRatio > 0.18 ? 'green' : marginRatio > 0.1 ? 'amber' : 'red'
+  const marginTone: 'green' | 'amber' | 'red' = marginRatio > 0.18 ? 'green' : marginRatio > 0.1 ? 'amber' : 'red'
 
   const columns: Array<DColumn<QtyRow>> = [
     { key: 'code', header: 'Scope / item', render: (r) => <span className="d-table-cell-strong">{r.code}</span> },
@@ -201,9 +200,7 @@ export function EstQuantities() {
               </div>
             </div>
 
-            {sendError ? (
-              <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{sendError}</div>
-            ) : null}
+            {sendError ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{sendError}</div> : null}
 
             <MButton variant="primary" onClick={handleSend} disabled={sendDisabled}>
               {sendLabel}

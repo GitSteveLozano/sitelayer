@@ -21,16 +21,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, type BootstrapResponse } from '@/lib/api'
 import { API_URL } from '../../lib/api/client.js'
-import {
-  MBanner,
-  MBody,
-  MButton,
-  MButtonStack,
-  MI,
-  MSectionH,
-  MTextarea,
-  MTopBar,
-} from '../../components/m/index.js'
+import { MBanner, MBody, MButton, MButtonStack, MI, MSectionH, MTextarea, MTopBar } from '../../components/m/index.js'
 import { useFieldEvent, type FieldEventResolutionAction } from '../../machines/field-event.js'
 import { timeOfDay } from './format.js'
 
@@ -219,10 +210,17 @@ export function ForemanBlockerDetail({
             className="m-topbar-eyebrow"
             style={{
               fontWeight: 800,
-              color: resolved ? 'var(--m-green)' : sevTone === 'red' ? 'var(--m-red)' : sevTone === 'amber' ? 'var(--m-amber)' : 'var(--m-ink-3)',
+              color: resolved
+                ? 'var(--m-green)'
+                : sevTone === 'red'
+                  ? 'var(--m-red)'
+                  : sevTone === 'amber'
+                    ? 'var(--m-amber)'
+                    : 'var(--m-ink-3)',
             }}
           >
-            ● {resolved ? 'RESOLVED' : (severity ?? 'open').toUpperCase()} · {worker?.name?.toUpperCase() ?? 'UNKNOWN WORKER'}
+            ● {resolved ? 'RESOLVED' : (severity ?? 'open').toUpperCase()} ·{' '}
+            {worker?.name?.toUpperCase() ?? 'UNKNOWN WORKER'}
             {createdAt ? ` · ${timeOfDay(createdAt).toUpperCase()}` : ''}
           </div>
           <div
@@ -239,7 +237,14 @@ export function ForemanBlockerDetail({
           </div>
           <div
             className="m-topbar-eyebrow"
-            style={{ marginTop: 10, color: 'var(--m-ink-3)', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}
+            style={{
+              marginTop: 10,
+              color: 'var(--m-ink-3)',
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 8,
+              alignItems: 'center',
+            }}
           >
             {project?.name ? <span>{project.name.toUpperCase()}</span> : null}
             {createdAt ? <span>{shortAgo(createdAt).toUpperCase()}</span> : null}
@@ -310,7 +315,9 @@ export function ForemanBlockerDetail({
                       >
                         <opt.Icon size={20} />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 15 }}>{opt.label}</div>
+                          <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 15 }}>
+                            {opt.label}
+                          </div>
                         </div>
                         <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 18 }}>→</div>
                       </button>

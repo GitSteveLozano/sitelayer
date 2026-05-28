@@ -78,19 +78,13 @@ export function OwnerProjects({ bootstrap }: { bootstrap: BootstrapResponse | nu
     })
   }, [projects, labor])
 
-  const rows = useMemo(
-    () => allRows.filter((r) => matchesFilter(r.status, filter)),
-    [allRows, filter],
-  )
+  const rows = useMemo(() => allRows.filter((r) => matchesFilter(r.status, filter)), [allRows, filter])
 
   const pipelineValue = useMemo(
     () => allRows.filter((r) => matchesFilter(r.status, 'bidding')).reduce((sum, r) => sum + r.bidValue, 0),
     [allRows],
   )
-  const activeCount = useMemo(
-    () => allRows.filter((r) => matchesFilter(r.status, 'progress')).length,
-    [allRows],
-  )
+  const activeCount = useMemo(() => allRows.filter((r) => matchesFilter(r.status, 'progress')).length, [allRows])
 
   const columns: Array<DColumn<ProjectTableRow>> = [
     { key: 'name', header: 'Project', render: (r) => <span className="d-table-cell-strong">{r.name}</span> },

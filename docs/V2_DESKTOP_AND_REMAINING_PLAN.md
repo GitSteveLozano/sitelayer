@@ -27,7 +27,7 @@ Two bodies of work remain: **(A)** the rest of the mobile net-new screens, and *
 - **Full-bleed takeoff canvas** with floating tool/item palettes.
 - Owner + Estimator only; a **light Foreman desk** view; **workers stay phone-only**.
 
-This **supersedes the current rule** in `components/shell/AppShell.tsx` / `DesktopSideRail.tsx` ("desktop is the same product, wider, with a side rail. Don't invent a different IA"). Steve's v2 *does* invent a richer IA. **Recommendation: adopt it** — build a dedicated desktop workspace that **shares the data layer** (XState machines, TanStack hooks, the entity APIs) and the **v2 tokens**, but has its **own shell + layout primitives + screen components**. Same brutalist language (sand · ink · hi-vis yellow, Inter Tight, hard edges), different composition.
+This **supersedes the current rule** in `components/shell/AppShell.tsx` / `DesktopSideRail.tsx` ("desktop is the same product, wider, with a side rail. Don't invent a different IA"). Steve's v2 _does_ invent a richer IA. **Recommendation: adopt it** — build a dedicated desktop workspace that **shares the data layer** (XState machines, TanStack hooks, the entity APIs) and the **v2 tokens**, but has its **own shell + layout primitives + screen components**. Same brutalist language (sand · ink · hi-vis yellow, Inter Tight, hard edges), different composition.
 
 **Shell selection:** in `routes/workspace.tsx`, mount `DesktopWorkspace` (new) for **owner/estimator at viewport ≥ 1024px**, else `MobileShell`. Workers and foreman-on-phone always get `MobileShell`; foreman ≥1024px gets the light desktop. Retire the "wider mobile" `DesktopSideRail`/`AppShell` desktop path once `DesktopWorkspace` covers a role's screens (keep it as the fallback until then so nothing regresses).
 
@@ -38,6 +38,7 @@ This **supersedes the current rule** in `components/shell/AppShell.tsx` / `Deskt
 ## 2. Desktop v2 workstream (B)
 
 ### Phase D0 — Desktop shell (foundation)
+
 - `screens/desktop/desktop-shell.tsx` (`DesktopWorkspace`): grid of dark sidebar + topbar + scrollable content `<Outlet>`-style region with its own inline `<Routes>` (mirror the mobile-shell route discipline).
 - `components/d/sidebar.tsx` — dark (`--m-ink`) rail, sectioned nav, yellow active item, badge counts (e.g. Approvals), `WEARING ▾` role pill footer (reuses `computeActiveContext` / role-mode switching already in `active-context.ts`).
 - `components/d/topbar.tsx` — breadcrumb (mono), global search field, `NEW PROJECT` primary, notifications bell, avatar.
@@ -45,7 +46,9 @@ This **supersedes the current rule** in `components/shell/AppShell.tsx` / `Deskt
 - **Verify:** renders for owner/estimator ≥1024px; mobile unaffected below; tsc + a routes-load smoke test.
 
 ### Phase D1 — Desktop primitives (`components/d/*`)
+
 The dense building blocks (square, 2px ink borders, mono headers, big-number cells — all on the existing tokens):
+
 - `DataTable` (sortable dense table: mono uppercase header row, hard column rules, row hover, status-pill + chip cells, right-aligned numeric `--m-num`). **Highest-leverage** — Projects/Files/Money/Approvals/Team/Clients/Item-Library all reuse it.
 - `KpiStrip` (4-up big-number cards, one optionally full-yellow — desktop variant of `MKpiRow`).
 - `SplitDetail` (main + right aside, e.g. project detail + budget aside).
@@ -55,12 +58,15 @@ The dense building blocks (square, 2px ink borders, mono headers, big-number cel
 - **Verify:** a `/d-preview` showcase (desktop analog of `/m-preview`) rendering each primitive.
 
 ### Phase D2 — Owner desktop screens
+
 Dashboard (hero + AT-RISK card + KpiStrip + "today on site" table) · Projects (dense table) · Project Detail (SplitDetail + 6 tabs: Overview/Budget/Crew/Logs/Files/Activity) · Money (cash-flow + table) · Approvals queue · Team · Schedule (week grid) · Rentals · Settings (pricing book) · Clients list · New Project kickoff. _All reuse existing hooks; guardrail/at-risk/recovery uses the new guardrail API._
 
 ### Phase D3 — Estimator desktop screens
+
 Takeoff Projects · **Takeoff Canvas** (full-bleed + floating tool/item palettes — the marquee desktop screen; reuses takeoff geometry/measurement APIs) · Quantities + Price & Send · AI Queue (review drafts; over the capture/blueprint-vision pipeline) · Scale Verify · Client Profile · Item Library (dense table).
 
 ### Phase D4 — Foreman light-desktop
+
 Today (multi-site) · Crew (cross-site) · Schedule (2-week lookahead) · Time (first-line approval) · Brief Crew (author + live preview). _Thin desk layer over the same foreman hooks; foreman on phone keeps the mobile screens._
 
 ---
@@ -93,6 +99,7 @@ Grouped; ⚠ = needs backend beyond the 3 shipped entities.
 Pattern stays: small parallel agent batches (≤4), per-package tsc as the authoritative gate (ignore the diagnostics-tool `@/lib/api` false positives), commit per group on the `dev`-lane branch.
 
 ## 5. Risks / open decisions
+
 - **Confirm the IA shift** (§1): adopt a distinct desktop surface vs. keep "mobile wider." (Recommend adopt.)
 - **Breakpoint**: 1024 vs 1280 for the desktop switch; behavior for tablet (768–1024).
 - **Foreman desktop scope**: full parity vs the 5 light screens Steve drew (recommend the 5).

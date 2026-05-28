@@ -152,7 +152,11 @@ export function EstClientProfile() {
             tone="accent"
             meta={decided > 0 ? `${wins}/${decided} decided` : 'No decided bids'}
           />
-          <DKpi label="Projects" value={String(projects.length)} meta={projects.length === 1 ? '1 project' : 'On file'} />
+          <DKpi
+            label="Projects"
+            value={String(projects.length)}
+            meta={projects.length === 1 ? '1 project' : 'On file'}
+          />
           <DKpi label="Avg margin" value={formatMoney(avgMargin)} meta="Per project" />
         </DKpiStrip>
 

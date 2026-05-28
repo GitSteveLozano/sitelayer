@@ -17,20 +17,11 @@ import { useNavigate, useParams } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
 import type { ProjectMessage } from '@/lib/api/messaging'
 import { useProjectMessages, usePostProjectMessage } from '@/lib/api/messaging'
-import {
-  MAvatar,
-  MButton,
-  MI,
-  MInput,
-  MListInset,
-  MListRow,
-  MPill,
-  MTopBar,
-} from '../../components/m/index.js'
+import { MAvatar, MButton, MInput, MListInset, MListRow, MPill, MTopBar } from '../../components/m/index.js'
 import type { MTone } from '../../components/m/list.js'
 import { avatarToneFor, initialsFor } from '../../components/m/avatar.js'
 
-const MONO = "var(--m-num)"
+const MONO = 'var(--m-num)'
 
 /**
  * Maps an author role onto the m-* tone palette. Owner/admin reads as the
@@ -55,9 +46,7 @@ function relativeTime(iso: string): string {
   const day = Math.round(hr / 24)
   if (day === 1) return 'YEST'
   if (day < 7) return `${day}D`
-  return then
-    .toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
-    .toUpperCase()
+  return then.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase()
 }
 
 function clockTime(iso: string): string {
@@ -75,7 +64,11 @@ export function MobileChatList({ bootstrap }: { bootstrap: BootstrapResponse | n
 
   return (
     <>
-      <MTopBar title="Chats" eyebrow="CROSS-ROLE" sub={`${projects.length} project ${projects.length === 1 ? 'thread' : 'threads'}`} />
+      <MTopBar
+        title="Chats"
+        eyebrow="CROSS-ROLE"
+        sub={`${projects.length} project ${projects.length === 1 ? 'thread' : 'threads'}`}
+      />
       {projects.length === 0 ? (
         <div style={{ padding: '24px 16px', color: 'var(--m-ink-3)', fontSize: 13 }}>
           No projects yet. Every project gets a shared chat thread once it exists.

@@ -197,9 +197,7 @@ export function MobileRentalDispatch({
         >
           <MButtonStack>
             <MButton variant="primary" disabled={!canDispatch} onClick={handleDispatch}>
-              {busy
-                ? 'DISPATCHING…'
-                : `CONFIRM · DISPATCH ${picked.size || 0} ${picked.size === 1 ? 'ITEM' : 'ITEMS'}`}
+              {busy ? 'DISPATCHING…' : `CONFIRM · DISPATCH ${picked.size || 0} ${picked.size === 1 ? 'ITEM' : 'ITEMS'}`}
             </MButton>
             <MButton variant="ghost" onClick={() => navigate('/rentals')}>
               Cancel

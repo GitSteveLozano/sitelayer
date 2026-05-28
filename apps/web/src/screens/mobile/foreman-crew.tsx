@@ -108,9 +108,7 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
               gap: 14,
             }}
           >
-            {onBreakCount > 0 ? (
-              <span style={{ color: 'var(--m-amber)' }}>{onBreakCount} on break</span>
-            ) : null}
+            {onBreakCount > 0 ? <span style={{ color: 'var(--m-amber)' }}>{onBreakCount} on break</span> : null}
             {offClock > 0 ? <span>{offClock} off-clock</span> : null}
           </div>
         ) : null}

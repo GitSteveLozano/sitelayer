@@ -145,17 +145,18 @@ export function MobileRentalsAsset() {
         <MSectionH>Recent movements</MSectionH>
         <div style={{ paddingBottom: 80 }}>
           {movements.length === 0 ? (
-            <MEmptyState
-              title="No movements yet"
-              body="Dispatch or return this asset to start its movement history."
-            />
+            <MEmptyState title="No movements yet" body="Dispatch or return this asset to start its movement history." />
           ) : (
             <MListInset>
               {movements.map((m) => (
                 <MListRow
                   key={m.id}
                   headline={m.label}
-                  trailing={<span className="num" style={{ color: 'var(--m-ink-3)', fontSize: 12 }}>{m.meta}</span>}
+                  trailing={
+                    <span className="num" style={{ color: 'var(--m-ink-3)', fontSize: 12 }}>
+                      {m.meta}
+                    </span>
+                  }
                 />
               ))}
             </MListInset>

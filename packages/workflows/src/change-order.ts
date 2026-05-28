@@ -161,9 +161,7 @@ export const ChangeOrderEventRequestSchema = z.object({
 })
 
 export type ChangeOrderEventRequest = z.infer<typeof ChangeOrderEventRequestSchema>
-export type ChangeOrderEventParseResult =
-  | { ok: true; value: ChangeOrderEventRequest }
-  | { ok: false; error: string }
+export type ChangeOrderEventParseResult = { ok: true; value: ChangeOrderEventRequest } | { ok: false; error: string }
 
 export function parseChangeOrderEventRequest(body: unknown): ChangeOrderEventParseResult {
   const normalized: Record<string, unknown> =

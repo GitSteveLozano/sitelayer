@@ -92,7 +92,12 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
                   headline={b.file_name}
                   supporting={
                     <span
-                      style={{ fontFamily: 'var(--m-num)', fontSize: 11, letterSpacing: '0.04em', textTransform: 'uppercase' }}
+                      style={{
+                        fontFamily: 'var(--m-num)',
+                        fontSize: 11,
+                        letterSpacing: '0.04em',
+                        textTransform: 'uppercase',
+                      }}
                     >
                       Uploaded {shortDate(b.created_at)}
                     </span>

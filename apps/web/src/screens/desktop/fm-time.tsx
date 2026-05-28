@@ -38,10 +38,7 @@ export function FmTime({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const pendingRowId = patchLabor.isPending ? (patchLabor.variables?.id ?? null) : null
 
   const today = todayIso()
-  const todayLabor = useMemo(
-    () => labor.filter((l) => l.occurred_on === today && !l.deleted_at),
-    [labor, today],
-  )
+  const todayLabor = useMemo(() => labor.filter((l) => l.occurred_on === today && !l.deleted_at), [labor, today])
 
   // Latch onto the most recent pending time-review run (preferring one with
   // anomalies) and pull its snapshot — exactly the mobile derivation — so we

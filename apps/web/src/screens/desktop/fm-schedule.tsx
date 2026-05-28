@@ -144,9 +144,7 @@ export function FmSchedule({ bootstrap }: { bootstrap: BootstrapResponse | null 
             {bandLabels.map((label, bandIdx) => {
               const isLastBand = bandIdx === bandLabels.length - 1
               const mon = bandDates[bandIdx]
-              const sub = mon
-                ? mon.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-                : ''
+              const sub = mon ? mon.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : ''
               return (
                 <div
                   key={label}

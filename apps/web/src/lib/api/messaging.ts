@@ -22,7 +22,11 @@ export const messagingQueryKeys = KEYS
 export function fetchProjectMessages(projectId: string): Promise<ProjectMessagesResponse> {
   return request<ProjectMessagesResponse>(`/api/projects/${encodeURIComponent(projectId)}/messages`)
 }
-export function postProjectMessage(projectId: string, body: string, authorRole?: string): Promise<{ message: ProjectMessage }> {
+export function postProjectMessage(
+  projectId: string,
+  body: string,
+  authorRole?: string,
+): Promise<{ message: ProjectMessage }> {
   return request(`/api/projects/${encodeURIComponent(projectId)}/messages`, {
     method: 'POST',
     json: { body, ...(authorRole ? { author_role: authorRole } : {}) },
@@ -31,7 +35,11 @@ export function postProjectMessage(projectId: string, body: string, authorRole?:
 export function fetchBroadcasts(): Promise<BroadcastsResponse> {
   return request<BroadcastsResponse>(`/api/broadcasts`)
 }
-export function postBroadcast(input: { body: string; audience?: BroadcastAudience; project_id?: string }): Promise<{ broadcast: Broadcast }> {
+export function postBroadcast(input: {
+  body: string
+  audience?: BroadcastAudience
+  project_id?: string
+}): Promise<{ broadcast: Broadcast }> {
   return request(`/api/broadcasts`, { method: 'POST', json: input })
 }
 
@@ -49,7 +57,8 @@ export function useProjectMessages(
 export function usePostProjectMessage(projectId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (args: { body: string; authorRole?: string }) => postProjectMessage(projectId, args.body, args.authorRole),
+    mutationFn: (args: { body: string; authorRole?: string }) =>
+      postProjectMessage(projectId, args.body, args.authorRole),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.messages(projectId) }),
   })
 }

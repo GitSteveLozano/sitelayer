@@ -80,26 +80,27 @@ export function FmCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
     for (const s of schedules) {
       if (s.deleted_at || s.scheduled_for !== today || !s.project_id) continue
       for (const member of s.crew ?? []) {
-        const wid = typeof member === 'string' ? member : (member as { worker_id?: string; id?: string })?.worker_id ?? (member as { id?: string })?.id
+        const wid =
+          typeof member === 'string'
+            ? member
+            : ((member as { worker_id?: string; id?: string })?.worker_id ?? (member as { id?: string })?.id)
         if (wid && !scheduledSite.has(wid)) scheduledSite.set(wid, s.project_id)
       }
     }
 
     const rows: CrewRow[] = active.map((w) => {
       const hours = hoursToday.get(w.id) ?? 0
-      let siteId: string | null = null
       const byProject = siteHours.get(w.id)
-      if (byProject && byProject.size > 0) {
-        siteId = [...byProject.entries()].sort((a, b) => b[1] - a[1])[0]![0]
-      } else {
-        siteId = scheduledSite.get(w.id) ?? null
-      }
+      const siteId: string | null =
+        byProject && byProject.size > 0
+          ? [...byProject.entries()].sort((a, b) => b[1] - a[1])[0]![0]
+          : (scheduledSite.get(w.id) ?? null)
       return {
         id: w.id,
         name: w.name,
         role: w.role,
         siteId,
-        site: siteId ? projectName.get(siteId) ?? 'Unknown site' : 'Unassigned',
+        site: siteId ? (projectName.get(siteId) ?? 'Unknown site') : 'Unassigned',
         hoursToday: hours,
         onSite: hours > 0,
       }

@@ -13,7 +13,26 @@
 import { useState } from 'react'
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Activity, Bell, Briefcase, Calendar, DollarSign, FileText, Home, Layers, Library, type LucideProps, MessageSquare, Package, Plus, Radio, Settings, Sparkles, Users, UserSquare } from 'lucide-react'
+import {
+  Activity,
+  Bell,
+  Briefcase,
+  Calendar,
+  DollarSign,
+  FileText,
+  Home,
+  Layers,
+  Library,
+  type LucideProps,
+  MessageSquare,
+  Package,
+  Plus,
+  Radio,
+  Settings,
+  Sparkles,
+  Users,
+  UserSquare,
+} from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import { getActiveCompanySlug, queryKeys, request, type BootstrapResponse } from '@/lib/api'
 import { DShell, DSidebar, DTopbar, type DNavSection } from '@/components/d'
@@ -136,8 +155,8 @@ function DComingSoon({ name }: { name: string }) {
         Desktop screen in progress.
       </div>
       <p style={{ color: 'var(--m-ink-3)', marginTop: 12, maxWidth: 520, lineHeight: 1.5 }}>
-        This command-center view is being built (Desktop v2 · D2/D3). The mobile version of this
-        screen is fully live today.
+        This command-center view is being built (Desktop v2 · D2/D3). The mobile version of this screen is fully live
+        today.
       </p>
     </div>
   )
@@ -173,7 +192,9 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
   const bootstrap = bootstrapProp ?? bootstrapQuery.data ?? null
 
   return (
-    <DShell sidebar={<DSidebar sections={OWNER_NAV} wearing="Owner" onWearingClick={() => setWearingOpen((v) => !v)} />}>
+    <DShell
+      sidebar={<DSidebar sections={OWNER_NAV} wearing="Owner" onWearingClick={() => setWearingOpen((v) => !v)} />}
+    >
       {wearingOpen ? (
         <div
           role="menu"

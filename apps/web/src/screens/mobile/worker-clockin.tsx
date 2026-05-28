@@ -75,8 +75,8 @@ export function WorkerClockinConfirm() {
         </MStatStrip>
 
         <div className="m-quiet-sm" style={{ padding: '14px 20px 0' }}>
-          Walked into the geofence at{' '}
-          <strong style={{ color: 'var(--m-accent-ink)' }}>{timeOfDay(punchedAt)}</strong> · auto-clocked.
+          Walked into the geofence at <strong style={{ color: 'var(--m-accent-ink)' }}>{timeOfDay(punchedAt)}</strong> ·
+          auto-clocked.
         </div>
 
         <div style={{ padding: '20px' }}>

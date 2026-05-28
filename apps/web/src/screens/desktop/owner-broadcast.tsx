@@ -73,9 +73,7 @@ export function OwnerBroadcast() {
         <div className="d-split">
           {/* LEFT — compose. */}
           <div className="d-card">
-            <div style={{ ...MONO, fontSize: 11, fontWeight: 600, color: 'var(--m-ink-3)', marginBottom: 8 }}>
-              TO
-            </div>
+            <div style={{ ...MONO, fontSize: 11, fontWeight: 600, color: 'var(--m-ink-3)', marginBottom: 8 }}>TO</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {AUDIENCES.map((a) => (
                 <MChip key={a.value} active={audience === a.value} onClick={() => setAudience(a.value)}>
@@ -137,9 +135,7 @@ function RecentList({
 }) {
   if (loading) {
     return (
-      <div style={{ ...MONO, fontSize: 11, fontWeight: 600, color: 'var(--m-ink-4)', padding: '4px 0' }}>
-        LOADING…
-      </div>
+      <div style={{ ...MONO, fontSize: 11, fontWeight: 600, color: 'var(--m-ink-4)', padding: '4px 0' }}>LOADING…</div>
     )
   }
   if (broadcasts.length === 0) {

@@ -50,10 +50,14 @@ const SECTIONS: SectionDef[] = [
 ]
 
 const PLACEHOLDER_COPY: Partial<Record<SectionKey, string>> = {
-  company: 'Configure your company name, address, license numbers, and branding here. Settings entered here flow through to estimates and invoices.',
-  hours: 'Configure standard working hours, overtime thresholds, and holiday calendars used to compute crew schedules and loaded labor.',
-  integrations: 'Connect and manage external systems (QuickBooks Online, etc.). Connection status and sync controls will appear here once an integration is linked.',
-  notifications: 'Configure which events send notifications, the channels used (email / SMS / push), and per-role delivery preferences.',
+  company:
+    'Configure your company name, address, license numbers, and branding here. Settings entered here flow through to estimates and invoices.',
+  hours:
+    'Configure standard working hours, overtime thresholds, and holiday calendars used to compute crew schedules and loaded labor.',
+  integrations:
+    'Connect and manage external systems (QuickBooks Online, etc.). Connection status and sync controls will appear here once an integration is linked.',
+  notifications:
+    'Configure which events send notifications, the channels used (email / SMS / push), and per-role delivery preferences.',
   profile: 'Manage your own account: display name, email, and personal notification preferences.',
   help: 'Documentation, keyboard shortcuts, and support contact. Configure how your team reaches support here.',
 }
@@ -68,14 +72,38 @@ interface CapabilityRow {
 }
 
 const CAPABILITY_MATRIX: CapabilityRow[] = [
-  { capability: 'View projects', allowed: { admin: true, foreman: true, office: true, member: true, bookkeeper: true } },
-  { capability: 'Edit takeoffs', allowed: { admin: true, foreman: true, office: false, member: true, bookkeeper: false } },
-  { capability: 'Approve estimates', allowed: { admin: true, foreman: false, office: true, member: false, bookkeeper: false } },
-  { capability: 'Manage crew schedule', allowed: { admin: true, foreman: true, office: true, member: false, bookkeeper: false } },
-  { capability: 'Review labor / time', allowed: { admin: true, foreman: true, office: true, member: false, bookkeeper: false } },
-  { capability: 'Push to QuickBooks', allowed: { admin: true, foreman: false, office: false, member: false, bookkeeper: true } },
-  { capability: 'Manage billing / invoices', allowed: { admin: true, foreman: false, office: true, member: false, bookkeeper: true } },
-  { capability: 'Manage company settings', allowed: { admin: true, foreman: false, office: false, member: false, bookkeeper: false } },
+  {
+    capability: 'View projects',
+    allowed: { admin: true, foreman: true, office: true, member: true, bookkeeper: true },
+  },
+  {
+    capability: 'Edit takeoffs',
+    allowed: { admin: true, foreman: true, office: false, member: true, bookkeeper: false },
+  },
+  {
+    capability: 'Approve estimates',
+    allowed: { admin: true, foreman: false, office: true, member: false, bookkeeper: false },
+  },
+  {
+    capability: 'Manage crew schedule',
+    allowed: { admin: true, foreman: true, office: true, member: false, bookkeeper: false },
+  },
+  {
+    capability: 'Review labor / time',
+    allowed: { admin: true, foreman: true, office: true, member: false, bookkeeper: false },
+  },
+  {
+    capability: 'Push to QuickBooks',
+    allowed: { admin: true, foreman: false, office: false, member: false, bookkeeper: true },
+  },
+  {
+    capability: 'Manage billing / invoices',
+    allowed: { admin: true, foreman: false, office: true, member: false, bookkeeper: true },
+  },
+  {
+    capability: 'Manage company settings',
+    allowed: { admin: true, foreman: false, office: false, member: false, bookkeeper: false },
+  },
 ]
 
 function PlaceholderCard({ section }: { section: SectionDef }) {
@@ -91,10 +119,7 @@ function PlaceholderCard({ section }: { section: SectionDef }) {
 
 function PricingBookSection() {
   const itemsQuery = useServiceItems()
-  const rows = useMemo<ServiceItem[]>(
-    () => itemsQuery.data?.serviceItems ?? [],
-    [itemsQuery.data?.serviceItems],
-  )
+  const rows = useMemo<ServiceItem[]>(() => itemsQuery.data?.serviceItems ?? [], [itemsQuery.data?.serviceItems])
 
   const columns: Array<DColumn<ServiceItem>> = [
     { key: 'name', header: 'Item', render: (r) => <span className="d-table-cell-strong">{r.name}</span> },
@@ -156,9 +181,7 @@ function LoadedLaborSection() {
       <div className="d-card" style={{ color: 'var(--m-ink-3)' }}>
         <div className="d-eyebrow">Loaded Labor</div>
         <div style={{ fontSize: 14, marginTop: 8 }}>
-          {burdenQuery.isError
-            ? 'Could not load today’s labor burden.'
-            : 'Loading today’s loaded-labor burden…'}
+          {burdenQuery.isError ? 'Could not load today’s labor burden.' : 'Loading today’s loaded-labor burden…'}
         </div>
       </div>
     )
@@ -184,9 +207,7 @@ function LoadedLaborSection() {
 
   return (
     <DataTable<LaborBurdenWorkerResult>
-      title={`Loaded labor — today (${summary.total_hours.toFixed(1)} hrs · ${formatMoney(
-        summary.total_cents / 100,
-      )})`}
+      title={`Loaded labor — today (${summary.total_hours.toFixed(1)} hrs · ${formatMoney(summary.total_cents / 100)})`}
       columns={columns}
       rows={workers}
       rowKey={(r) => r.worker_id}

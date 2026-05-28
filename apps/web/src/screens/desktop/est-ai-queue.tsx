@@ -71,9 +71,9 @@ export function EstAiQueue({ bootstrap }: { bootstrap: BootstrapResponse | null 
           title="Drafts land here for review before they hit an estimate"
           attribution="Auto-takeoff · review required"
         >
-          When a blueprint is processed by the AI takeoff pipeline, each sheet produces a draft of detected
-          quantities. Nothing is committed to a project estimate until you review it here and promote the
-          quantities you trust. Low-confidence sheets are flagged for a closer look.
+          When a blueprint is processed by the AI takeoff pipeline, each sheet produces a draft of detected quantities.
+          Nothing is committed to a project estimate until you review it here and promote the quantities you trust.
+          Low-confidence sheets are flagged for a closer look.
         </MAiStripe>
 
         <DKpiStrip>
