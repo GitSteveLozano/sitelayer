@@ -182,7 +182,15 @@ export async function handleChangeOrderRoutes(
              (company_id, project_id, number, description, value_delta, schedule_impact_days, created_by)
            values ($1, $2, $3, $4, $5, $6, $7)
            returning ${CHANGE_ORDER_COLUMNS}`,
-          [ctx.company.id, projectId, nextNum.rows[0]!.next, description, valueDelta, scheduleImpact, ctx.currentUserId],
+          [
+            ctx.company.id,
+            projectId,
+            nextNum.rows[0]!.next,
+            description,
+            valueDelta,
+            scheduleImpact,
+            ctx.currentUserId,
+          ],
         )
         const row = inserted.rows[0]!
         await recordAudit(client, {

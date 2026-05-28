@@ -34,19 +34,18 @@ export function FmBrief() {
   const [steps, setSteps] = useState<ProjectBriefStep[]>([])
 
   const createBrief = useCreateProjectBrief(projectId)
-  const { submit, isSubmitting, error } = useSubmitForm<
-    { goal: string; steps: ProjectBriefStep[] },
-    unknown
-  >(async ({ goal: g, steps: s }) => {
-    if (!projectId) return null
-    const res = await createBrief.mutateAsync({
-      effective_date: todayIso(),
-      goal: g,
-      steps: s.filter((step) => step.title.trim().length > 0),
-    })
-    navigate('/desktop/fm/today')
-    return res
-  })
+  const { submit, isSubmitting, error } = useSubmitForm<{ goal: string; steps: ProjectBriefStep[] }, unknown>(
+    async ({ goal: g, steps: s }) => {
+      if (!projectId) return null
+      const res = await createBrief.mutateAsync({
+        effective_date: todayIso(),
+        goal: g,
+        steps: s.filter((step) => step.title.trim().length > 0),
+      })
+      navigate('/desktop/fm/today')
+      return res
+    },
+  )
 
   const handlePush = () => {
     const trimmed = goal.trim()

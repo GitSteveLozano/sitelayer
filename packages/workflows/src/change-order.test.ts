@@ -40,12 +40,16 @@ describe('change_order workflow', () => {
   })
 
   it('rejects illegal transitions (ACCEPT from draft, SEND from accepted)', () => {
-    expect(() => transitionChangeOrderWorkflow(draft(), { type: 'ACCEPT', occurred_at: at })).toThrow(/illegal transition/)
+    expect(() => transitionChangeOrderWorkflow(draft(), { type: 'ACCEPT', occurred_at: at })).toThrow(
+      /illegal transition/,
+    )
     const accepted = transitionChangeOrderWorkflow(
       transitionChangeOrderWorkflow(draft(), { type: 'SEND', occurred_at: at }),
       { type: 'ACCEPT', occurred_at: at },
     )
-    expect(() => transitionChangeOrderWorkflow(accepted, { type: 'SEND', occurred_at: at })).toThrow(/illegal transition/)
+    expect(() => transitionChangeOrderWorkflow(accepted, { type: 'SEND', occurred_at: at })).toThrow(
+      /illegal transition/,
+    )
   })
 
   it('nextEvents reflects the state', () => {

@@ -79,9 +79,7 @@ const ProjectLostScreen = lazy(() =>
 const RecoveryPlanScreen = lazy(() =>
   import('@/screens/mobile/recovery-plan').then((m) => ({ default: m.MobileRecoveryPlan })),
 )
-const ClientsListScreen = lazy(() =>
-  import('@/screens/mobile/clients').then((m) => ({ default: m.MobileClientsList })),
-)
+const ClientsListScreen = lazy(() => import('@/screens/mobile/clients').then((m) => ({ default: m.MobileClientsList })))
 const ClientProfileScreen = lazy(() =>
   import('@/screens/mobile/clients').then((m) => ({ default: m.MobileClientProfile })),
 )

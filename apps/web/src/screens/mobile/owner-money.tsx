@@ -8,7 +8,7 @@
  */
 import { useMemo } from 'react'
 import type { BootstrapResponse } from '@/lib/api'
-import { MKpi, MKpiRow, MSectionH, MTopBar, MBody } from '../../components/m/index.js'
+import { MKpi, MKpiRow, MTopBar, MBody } from '../../components/m/index.js'
 import { formatMoney } from './format.js'
 
 export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
@@ -70,7 +70,13 @@ export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null 
             {model.trend.map((v, i) => (
               <div
                 key={i}
-                style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', height: '100%' }}
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'flex-end',
+                  height: '100%',
+                }}
               >
                 <div
                   style={{

@@ -13,15 +13,7 @@
  */
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import {
-  MBody,
-  MButton,
-  MChip,
-  MChipRow,
-  MListInset,
-  MListRow,
-  MTopBar,
-} from '../../components/m/index.js'
+import { MBody, MButton, MChip, MChipRow, MListInset, MListRow, MTopBar } from '../../components/m/index.js'
 import { MAiStripe } from '../../components/m/ai.js'
 import { MBanner, MSkeletonList } from '../../components/m-states/index.js'
 import { useInventoryUtilization } from '@/lib/api'
@@ -124,8 +116,7 @@ function UtilizationTab({
   onDispatch: () => void
 }) {
   const idle = availabilityRows.filter((r) => r.available_quantity > 0)
-  const fleetTone =
-    utilizationPct >= 70 ? 'var(--m-green)' : utilizationPct >= 40 ? 'var(--m-amber)' : 'var(--m-red)'
+  const fleetTone = utilizationPct >= 70 ? 'var(--m-green)' : utilizationPct >= 40 ? 'var(--m-amber)' : 'var(--m-red)'
   // Per-asset utilization = on-rent share of total units for the item.
   const assetRows = availabilityRows.map((r) => {
     const total = r.available_quantity + r.on_rent_quantity
@@ -157,8 +148,7 @@ function UtilizationTab({
           className="num"
           style={{ marginTop: 10, color: 'var(--m-ink-3)', fontWeight: 600, letterSpacing: '0.04em' }}
         >
-          {formatMoney(idleDailyValue)}/DAY IDLE · {idle.length} {idle.length === 1 ? 'ITEM' : 'ITEMS'}{' '}
-          IDLE
+          {formatMoney(idleDailyValue)}/DAY IDLE · {idle.length} {idle.length === 1 ? 'ITEM' : 'ITEMS'} IDLE
         </div>
       </div>
 
@@ -194,14 +184,9 @@ function UtilizationTab({
         </MListInset>
       ) : (
         assetRows.map(({ row: r, pct, flag }) => (
-          <div
-            key={r.inventory_item_id}
-            style={{ padding: '14px 20px', borderBottom: '1px solid var(--m-line-2)' }}
-          >
+          <div key={r.inventory_item_id} style={{ padding: '14px 20px', borderBottom: '1px solid var(--m-line-2)' }}>
             <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
-              <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 14 }}>
-                {r.description}
-              </div>
+              <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 14 }}>{r.description}</div>
               <div
                 className="num"
                 style={{ fontSize: 12, fontWeight: 800, color: flag ? 'var(--m-red)' : 'var(--m-ink)' }}

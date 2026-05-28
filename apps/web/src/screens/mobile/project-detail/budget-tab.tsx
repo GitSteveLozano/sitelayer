@@ -35,12 +35,7 @@ export function BudgetTab({
       {/* SPENT VS BID hero — the big-number the owner reads first. Display
           font, full-bleed block with a hard bottom rule, mono meta. */}
       <div style={{ padding: '18px 16px', borderBottom: '2px solid var(--m-ink)' }}>
-        <MKpi
-          label="Spent vs bid"
-          value={formatMoney(spent)}
-          meta={`of ${formatMoney(bid)} bid`}
-          metaTone={tone}
-        />
+        <MKpi label="Spent vs bid" value={formatMoney(spent)} meta={`of ${formatMoney(bid)} bid`} metaTone={tone} />
         <div className="m-progress" data-state={barState} style={{ marginTop: 14, height: 8 }}>
           <div className="m-progress-fill" style={{ width: `${Math.min(100, pctSpent)}%` }} />
         </div>
@@ -593,7 +588,7 @@ function LaborVariancePanel({ projectId }: { projectId: string }) {
   return (
     <div>
       <div className="m-section-bar">
-        <span>Spend by code · worst offenders</span>
+        <span>Labor variance · worst offenders</span>
         <span>
           {rows.length} {rows.length === 1 ? 'code' : 'codes'}
         </span>

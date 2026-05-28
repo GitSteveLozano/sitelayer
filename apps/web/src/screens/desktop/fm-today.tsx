@@ -148,11 +148,7 @@ export function FmToday({ bootstrap }: { bootstrap: BootstrapResponse | null }) 
         </div>
 
         <DKpiStrip>
-          <DKpi
-            label="Crew on site"
-            value={String(crewOnSite)}
-            meta={`across ${activeSites.length} ${siteWord}`}
-          />
+          <DKpi label="Crew on site" value={String(crewOnSite)} meta={`across ${activeSites.length} ${siteWord}`} />
           <DKpi label="Sites active" value={String(activeSites.length)} meta={`${siteWord} running`} />
           <DKpi
             label="Open blockers"

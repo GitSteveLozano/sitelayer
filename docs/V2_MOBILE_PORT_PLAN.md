@@ -47,31 +47,31 @@ Order of operations:
 
 Keep every `--m-*` NAME; repoint VALUE to v2.
 
-| `--m-*` token | current value | v2 value | v2 source |
-| --- | --- | --- | --- |
-| `--m-sand` | `#f5f1ec` | `#EDE7DA` | v2-sand (app bg) |
-| `--m-sand-2` | `#ebe6df` | `#E0D8C5` | v2-sand-2 (dark border / dark offset shadow) |
-| `--m-bg` | `#ffffff` | `#EDE7DA` | sand is the app bg now (no white) |
-| `--m-card` | `#ffffff` | `#EDE7DA` | cards are sand w/ 2px ink border |
-| `--m-card-soft` | `#f7f4ef` | `#F4EFE3` | v2-sand-soft (section bar / inset) |
-| `--m-line` | `#e8e3db` | `#0F0E0C` | structural lines = ink |
-| `--m-line-2` | `#d8d2c7` | `#C8C0AC` | v2-line-soft (in-card 1px dividers) |
-| `--m-ink` | `#1c1816` | `#0F0E0C` | v2-ink |
-| `--m-ink-2` | `#5b544c` | `#2E2A23` | v2-ink-2 |
-| `--m-ink-3` | `#6d6358` (m.css) | `#5F584C` | v2-ink-3 (keep contrast intent) |
-| `--m-ink-4` | `#aea69a` | `#8B8474` | v2-ink-4 |
-| `--m-accent` | `#d9904a` | `#FFD400` | v2-accent (the single yellow) |
-| `--m-accent-ink` | `#b46e2c` | `#1F1900` | text/icon ON yellow |
-| `--m-accent-soft` | `rgba(217,144,74,.1)` | `#FFD400` | NO soft tints — full yellow |
-| `--m-green` | `#2c8a55` | `#1A8A4C` | v2-good |
-| `--m-red` | `#c0463d` | `#C7331E` | v2-bad |
-| `--m-amber` | `#c98a2e` | `#C58A14` | v2-warn |
-| `--m-blue` | `#2f6fb5` | `#2E2A23` | no blue in v2 → warm ink-2 |
-| `--m-r-sm/r/r-lg/r-xl` | `8/12/18/24px` | `0` | square everywhere |
-| `--m-shadow-1/2/card` | soft blurred | `6px 6px 0 var(--m-ink)` | hard offset, no blur/alpha |
-| `--m-font` | system stack | `Inter, system-ui, sans-serif` | v2-font (body/button) |
-| `--m-font-display` | system stack | `'Inter Tight', Inter, sans-serif` | v2-font-tight (headings/big-num) |
-| `--m-num` | SF Mono stack | `'JetBrains Mono', ui-monospace, monospace` | v2-font-mono (mono micro-labels) |
+| `--m-*` token          | current value         | v2 value                                    | v2 source                                    |
+| ---------------------- | --------------------- | ------------------------------------------- | -------------------------------------------- |
+| `--m-sand`             | `#f5f1ec`             | `#EDE7DA`                                   | v2-sand (app bg)                             |
+| `--m-sand-2`           | `#ebe6df`             | `#E0D8C5`                                   | v2-sand-2 (dark border / dark offset shadow) |
+| `--m-bg`               | `#ffffff`             | `#EDE7DA`                                   | sand is the app bg now (no white)            |
+| `--m-card`             | `#ffffff`             | `#EDE7DA`                                   | cards are sand w/ 2px ink border             |
+| `--m-card-soft`        | `#f7f4ef`             | `#F4EFE3`                                   | v2-sand-soft (section bar / inset)           |
+| `--m-line`             | `#e8e3db`             | `#0F0E0C`                                   | structural lines = ink                       |
+| `--m-line-2`           | `#d8d2c7`             | `#C8C0AC`                                   | v2-line-soft (in-card 1px dividers)          |
+| `--m-ink`              | `#1c1816`             | `#0F0E0C`                                   | v2-ink                                       |
+| `--m-ink-2`            | `#5b544c`             | `#2E2A23`                                   | v2-ink-2                                     |
+| `--m-ink-3`            | `#6d6358` (m.css)     | `#5F584C`                                   | v2-ink-3 (keep contrast intent)              |
+| `--m-ink-4`            | `#aea69a`             | `#8B8474`                                   | v2-ink-4                                     |
+| `--m-accent`           | `#d9904a`             | `#FFD400`                                   | v2-accent (the single yellow)                |
+| `--m-accent-ink`       | `#b46e2c`             | `#1F1900`                                   | text/icon ON yellow                          |
+| `--m-accent-soft`      | `rgba(217,144,74,.1)` | `#FFD400`                                   | NO soft tints — full yellow                  |
+| `--m-green`            | `#2c8a55`             | `#1A8A4C`                                   | v2-good                                      |
+| `--m-red`              | `#c0463d`             | `#C7331E`                                   | v2-bad                                       |
+| `--m-amber`            | `#c98a2e`             | `#C58A14`                                   | v2-warn                                      |
+| `--m-blue`             | `#2f6fb5`             | `#2E2A23`                                   | no blue in v2 → warm ink-2                   |
+| `--m-r-sm/r/r-lg/r-xl` | `8/12/18/24px`        | `0`                                         | square everywhere                            |
+| `--m-shadow-1/2/card`  | soft blurred          | `6px 6px 0 var(--m-ink)`                    | hard offset, no blur/alpha                   |
+| `--m-font`             | system stack          | `Inter, system-ui, sans-serif`              | v2-font (body/button)                        |
+| `--m-font-display`     | system stack          | `'Inter Tight', Inter, sans-serif`          | v2-font-tight (headings/big-num)             |
+| `--m-num`              | SF Mono stack         | `'JetBrains Mono', ui-monospace, monospace` | v2-font-mono (mono micro-labels)             |
 
 **New tokens added** (no existing screen reads them, but the brutalist classes do):
 `--m-shadow-offset`, `--m-shadow-offset-lg`, `--m-stop-hatch`.

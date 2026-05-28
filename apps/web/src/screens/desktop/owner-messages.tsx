@@ -62,7 +62,9 @@ export function OwnerMessages({ bootstrap }: { bootstrap: BootstrapResponse | nu
           }}
         >
           {/* ---- Left pane: project thread list ---- */}
-          <div style={{ borderRight: '2px solid var(--m-ink)', display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+          <div
+            style={{ borderRight: '2px solid var(--m-ink)', display: 'flex', flexDirection: 'column', minHeight: 0 }}
+          >
             <div
               style={{
                 fontFamily: MONO,
@@ -191,9 +193,7 @@ function MessageThread({ projectId, projectName }: { projectId: string; projectN
         {isLoading && messages.length === 0 ? (
           <div style={{ fontFamily: MONO, fontSize: 11, color: 'var(--m-ink-3)' }}>LOADING…</div>
         ) : messages.length === 0 ? (
-          <div style={{ color: 'var(--m-ink-3)', fontSize: 13 }}>
-            No messages yet. Start the conversation below.
-          </div>
+          <div style={{ color: 'var(--m-ink-3)', fontSize: 13 }}>No messages yet. Start the conversation below.</div>
         ) : (
           messages.map((m) => <MessageRow key={m.id} message={m} />)
         )}

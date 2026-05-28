@@ -271,7 +271,9 @@ function ClientRow({
           >
             {formatMoney(ltv)}
           </div>
-          <div style={{ fontFamily: 'var(--m-num)', fontSize: 9, fontWeight: 600, color: 'var(--m-ink-3)', marginTop: 3 }}>
+          <div
+            style={{ fontFamily: 'var(--m-num)', fontSize: 9, fontWeight: 600, color: 'var(--m-ink-3)', marginTop: 3 }}
+          >
             {projectCount} PROJ
           </div>
         </div>
@@ -333,7 +335,15 @@ export function MobileClientProfile() {
       <MTopBar eyebrow="CLIENT" title={customer.name} back onBack={() => navigate('/clients')} />
       <MBody>
         {/* Identity block — square monogram + name + mono micro-label */}
-        <div style={{ padding: '20px 16px', borderBottom: '2px solid var(--m-ink)', display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div
+          style={{
+            padding: '20px 16px',
+            borderBottom: '2px solid var(--m-ink)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+          }}
+        >
           <Monogram size={64}>{monogram(customer.name)}</Monogram>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 20, lineHeight: 1.1 }}>
@@ -349,7 +359,7 @@ export function MobileClientProfile() {
                 letterSpacing: '0.04em',
               }}
             >
-              {(customer.source?.toUpperCase() || 'CLIENT')}
+              {customer.source?.toUpperCase() || 'CLIENT'}
               {customer.external_id ? ` · ${customer.external_id}` : ''}
             </div>
           </div>

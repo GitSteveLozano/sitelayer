@@ -106,7 +106,15 @@ const CATEGORIES: ReadonlyArray<IssueCategory> = [
     Icon: MI.AlertTri,
     tone: 'dark',
   },
-  { label: 'Other', glyph: '···', sub: 'Type it out', kind: 'other', designKind: 'other', Icon: MI.Alert, tone: 'dark' },
+  {
+    label: 'Other',
+    glyph: '···',
+    sub: 'Type it out',
+    kind: 'other',
+    designKind: 'other',
+    Icon: MI.Alert,
+    tone: 'dark',
+  },
 ]
 
 export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {

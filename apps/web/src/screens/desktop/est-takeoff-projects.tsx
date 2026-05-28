@@ -87,19 +87,10 @@ export function EstTakeoffProjects({ bootstrap }: { bootstrap: BootstrapResponse
     })
   }, [projects])
 
-  const rows = useMemo(
-    () => allRows.filter((r) => matchesFilter(r.status, filter)),
-    [allRows, filter],
-  )
+  const rows = useMemo(() => allRows.filter((r) => matchesFilter(r.status, filter)), [allRows, filter])
 
-  const takeoffCount = useMemo(
-    () => allRows.filter((r) => isTakeoff(r.status)).length,
-    [allRows],
-  )
-  const progressCount = useMemo(
-    () => allRows.filter((r) => isInProgress(r.status)).length,
-    [allRows],
-  )
+  const takeoffCount = useMemo(() => allRows.filter((r) => isTakeoff(r.status)).length, [allRows])
+  const progressCount = useMemo(() => allRows.filter((r) => isInProgress(r.status)).length, [allRows])
   const sentCount = useMemo(() => allRows.filter((r) => isSent(r.status)).length, [allRows])
   const winRate = useMemo(() => {
     const decided = allRows.filter((r) => isDecided(r.status))
@@ -143,11 +134,7 @@ export function EstTakeoffProjects({ bootstrap }: { bootstrap: BootstrapResponse
           <DKpi label="To takeoff" value={String(takeoffCount)} tone="accent" meta="Awaiting measure" />
           <DKpi label="In progress" value={String(progressCount)} meta="Won + on site" />
           <DKpi label="Sent" value={String(sentCount)} meta="Out for bid" />
-          <DKpi
-            label="Win rate"
-            value={winRate == null ? '—' : `${winRate}%`}
-            meta="Of decided bids"
-          />
+          <DKpi label="Win rate" value={winRate == null ? '—' : `${winRate}%`} meta="Of decided bids" />
         </DKpiStrip>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

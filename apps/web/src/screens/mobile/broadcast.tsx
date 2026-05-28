@@ -9,7 +9,7 @@
  * borders, full-yellow active audience tile. Data flows through the
  * messaging hooks (useBroadcasts / usePostBroadcast) — no local mock.
  */
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { BroadcastAudience } from '@sitelayer/domain'
 import {
@@ -131,9 +131,7 @@ function RecentList({
 }) {
   if (loading) {
     return (
-      <div style={{ ...MONO, fontSize: 11, fontWeight: 600, color: 'var(--m-ink-4)', padding: '12px 0' }}>
-        LOADING…
-      </div>
+      <div style={{ ...MONO, fontSize: 11, fontWeight: 600, color: 'var(--m-ink-4)', padding: '12px 0' }}>LOADING…</div>
     )
   }
   if (broadcasts.length === 0) {

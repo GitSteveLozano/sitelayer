@@ -479,7 +479,10 @@ function ClockedInCard({
     <div style={{ marginTop: 12, marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
       {/* ON SITE · <project> eyebrow + scope headline */}
       <div>
-        <div className="m-topbar-eyebrow" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div
+          className="m-topbar-eyebrow"
+          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+        >
           <span style={{ color: 'var(--m-accent)' }}>ON SITE · {project.toUpperCase()}</span>
           {foremanName ? (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, textTransform: 'none' }}>

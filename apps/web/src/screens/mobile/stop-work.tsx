@@ -75,8 +75,8 @@ export function MobileStopWork() {
         All crew, stop work now.
       </div>
       <p style={{ fontSize: 15, lineHeight: 1.4, maxWidth: 320, opacity: 0.92 }}>
-        A safety stop was flagged on this site. Down tools, move to the muster point, and wait for the
-        foreman’s all-clear before resuming.
+        A safety stop was flagged on this site. Down tools, move to the muster point, and wait for the foreman’s
+        all-clear before resuming.
       </p>
 
       <div style={{ width: '100%', maxWidth: 360, display: 'flex', flexDirection: 'column', gap: 12, marginTop: 8 }}>

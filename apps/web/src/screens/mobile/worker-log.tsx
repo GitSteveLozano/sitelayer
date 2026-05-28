@@ -221,20 +221,19 @@ export function WorkerLog({
           }}
         >
           {preview ? (
-            <img
-              src={preview}
-              alt="Captured"
-              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-            />
+            <img src={preview} alt="Captured" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
           ) : (
             <span
-              style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, color: 'var(--m-ink-4)' }}
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 12,
+                color: 'var(--m-ink-4)',
+              }}
             >
               <MI.Camera size={44} />
-              <span
-                className="m-topbar-eyebrow"
-                style={{ fontSize: 11, color: 'var(--m-ink-4)' }}
-              >
+              <span className="m-topbar-eyebrow" style={{ fontSize: 11, color: 'var(--m-ink-4)' }}>
                 TAP TO OPEN CAMERA
               </span>
             </span>
@@ -334,11 +333,7 @@ export function WorkerLog({
           style={{ width: '100%', minHeight: 64 }}
         />
         {error ? (
-          <div
-            style={{ marginTop: 10, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-red)' }}
-          >
-            {error}
-          </div>
+          <div style={{ marginTop: 10, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-red)' }}>{error}</div>
         ) : null}
       </div>
 

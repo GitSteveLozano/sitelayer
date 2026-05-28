@@ -25,7 +25,7 @@ import { useProjectCloseoutSummary } from '@/lib/api/closeout-summary'
 import { useDailyLogs, type DailyLog } from '@/lib/api/daily-logs'
 import { useProjectBlueprints, type BlueprintDocument } from '@/lib/api/takeoff'
 import { useProjectChangeOrders, type ChangeOrder } from '@/lib/api/change-orders'
-import { formatMoney, formatStatusLabel, shortDate, statusTone } from '../mobile/format.js'
+import { formatMoney, formatStatusLabel, shortDate } from '../mobile/format.js'
 
 type TabKey = 'overview' | 'budget' | 'crew' | 'logs' | 'files' | 'activity'
 
@@ -146,7 +146,13 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
         <div className="d-split">
           <div className="d-stack">
             {tab === 'overview' && (
-              <OverviewTab name={name} customer={customer} bid={bidTotal} division={project?.division_code} projectId={projectId} />
+              <OverviewTab
+                name={name}
+                customer={customer}
+                bid={bidTotal}
+                division={project?.division_code}
+                projectId={projectId}
+              />
             )}
             {tab === 'budget' && <BudgetTab projectId={projectId} spent={spent} bid={bidTotal} pctSpent={pctSpent} />}
             {tab === 'crew' && <CrewTab labor={labor} workers={workers} />}
@@ -194,7 +200,13 @@ function OverviewTab({
           {name} — a {formatMoney(bid)} {division ?? ''} job for {customer}.
         </div>
       </div>
-      <ActivityList title="Recent activity" events={recent} pending={timeline.isPending} error={timeline.isError} compact />
+      <ActivityList
+        title="Recent activity"
+        events={recent}
+        pending={timeline.isPending}
+        error={timeline.isError}
+        compact
+      />
     </>
   )
 }
@@ -335,7 +347,11 @@ function LogsTab({ projectId }: { projectId: string }) {
   )
 
   const columns: Array<DColumn<DailyLog>> = [
-    { key: 'date', header: 'Date', render: (r) => <span className="d-table-cell-strong">{shortDate(r.occurred_on)}</span> },
+    {
+      key: 'date',
+      header: 'Date',
+      render: (r) => <span className="d-table-cell-strong">{shortDate(r.occurred_on)}</span>,
+    },
     { key: 'notes', header: 'Notes', render: (r) => logPreview(r) },
     {
       key: 'photos',
@@ -507,7 +523,11 @@ function BudgetAside({
       </div>
       <Fact label="Labor logged" value={`${totalHours.toFixed(1)}h`} />
       <Fact label="Labor rate" value={`$${laborRate}/hr`} />
-      <Fact label="Effective value" value={formatMoney(bid + acceptedDelta)} meta={`incl. ${formatMoney(acceptedDelta)} COs`} />
+      <Fact
+        label="Effective value"
+        value={formatMoney(bid + acceptedDelta)}
+        meta={`incl. ${formatMoney(acceptedDelta)} COs`}
+      />
 
       <div
         style={{
@@ -567,10 +587,15 @@ function ChangeOrderItem({ co, isFirst }: { co: ChangeOrder; isFirst: boolean })
       }}
     >
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <div
+          style={{ fontSize: 13, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+        >
           #{co.number} {co.description}
         </div>
-        <div className="num" style={{ fontSize: 10, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--m-ink-3)' }}>
+        <div
+          className="num"
+          style={{ fontSize: 10, letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--m-ink-3)' }}
+        >
           {formatStatusLabel(co.status)}
         </div>
       </div>
@@ -626,7 +651,13 @@ function Fact({
         {meta ? (
           <span
             className="num"
-            style={{ display: 'block', fontSize: 10, color: 'var(--m-ink-3)', textTransform: 'uppercase', letterSpacing: '0.04em' }}
+            style={{
+              display: 'block',
+              fontSize: 10,
+              color: 'var(--m-ink-3)',
+              textTransform: 'uppercase',
+              letterSpacing: '0.04em',
+            }}
           >
             {meta}
           </span>

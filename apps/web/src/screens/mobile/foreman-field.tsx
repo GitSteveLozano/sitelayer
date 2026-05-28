@@ -177,7 +177,10 @@ export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapR
                   : (sev ?? (i.kind === 'safety' ? 'stopped' : 'blocker'))
               // The message body carries inline `[tag]` markers (photo_log,
               // severity) that aren't meant for the foreman — strip them.
-              const body = i.message.replace(/^\[[^\]]+\]\s*/, '').replace(/\[severity:[^\]]+\]/g, '').trim()
+              const body = i.message
+                .replace(/^\[[^\]]+\]\s*/, '')
+                .replace(/\[severity:[^\]]+\]/g, '')
+                .trim()
               return (
                 <button
                   key={i.id}
@@ -199,7 +202,15 @@ export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapR
                     font: 'inherit',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      marginBottom: 8,
+                    }}
+                  >
                     <div
                       style={{
                         fontFamily: 'var(--m-num)',
@@ -231,7 +242,15 @@ export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapR
                       ))}
                     </div>
                   ) : null}
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 12 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      marginTop: 12,
+                    }}
+                  >
                     <span
                       className="m-btn"
                       data-variant={photo || resolved ? 'ghost' : 'primary'}

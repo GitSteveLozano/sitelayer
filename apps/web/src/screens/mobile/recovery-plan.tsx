@@ -105,10 +105,7 @@ export function MobileRecoveryPlan() {
       <MBody pad>
         {/* AT RISK hero — big-number variance in red. */}
         <div className="m-card" data-tone="accent" style={{ marginTop: 8, borderColor: 'var(--m-red)' }}>
-          <div
-            className="m-topbar-eyebrow"
-            style={{ fontWeight: 800, color: 'var(--m-red)', letterSpacing: '0.08em' }}
-          >
+          <div className="m-topbar-eyebrow" style={{ fontWeight: 800, color: 'var(--m-red)', letterSpacing: '0.08em' }}>
             ● AT RISK
           </div>
           <div style={{ marginTop: 12 }}>
@@ -178,9 +175,7 @@ export function MobileRecoveryPlan() {
                   >
                     {g.label}
                   </div>
-                  <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.4, marginTop: 6 }}>
-                    {g.detail}
-                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.4, marginTop: 6 }}>{g.detail}</div>
                   <div
                     className="m-topbar-eyebrow"
                     style={{ marginTop: 10, color: 'var(--m-ink-3)', display: 'flex', gap: 14, flexWrap: 'wrap' }}

@@ -41,10 +41,7 @@ export function MobileProjectLost() {
   const handleSave = () => {
     if (!reason) return
     const trimmed = note.trim()
-    mutation.mutate(
-      { reason, ...(trimmed ? { note: trimmed } : {}) },
-      { onSuccess: () => navigate(-1) },
-    )
+    mutation.mutate({ reason, ...(trimmed ? { note: trimmed } : {}) }, { onSuccess: () => navigate(-1) })
   }
 
   return (

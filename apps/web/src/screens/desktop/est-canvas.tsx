@@ -57,8 +57,7 @@ export function EstCanvas() {
   // --- Drafts (reuse mobile data layer; default to active/first) -----------
   const drafts = useTakeoffDrafts(projectId)
   const draftList = useMemo(() => drafts.data?.drafts ?? [], [drafts.data])
-  const activeDraft: TakeoffDraft | null =
-    draftList.find((d) => d.status === 'active') ?? draftList[0] ?? null
+  const activeDraft: TakeoffDraft | null = draftList.find((d) => d.status === 'active') ?? draftList[0] ?? null
   const activeDraftId = activeDraft?.id ?? null
 
   // --- Blueprints + pages ---------------------------------------------------
@@ -101,8 +100,7 @@ export function EstCanvas() {
   }, [serviceItemCode, items])
 
   const selectedItem = items.find((i) => i.code === serviceItemCode) ?? null
-  const unitForItem =
-    selectedItem?.unit ?? (tool === 'polygon' ? 'sqft' : tool === 'lineal' ? 'lf' : 'ea')
+  const unitForItem = selectedItem?.unit ?? (tool === 'polygon' ? 'sqft' : tool === 'lineal' ? 'lf' : 'ea')
 
   // --- Geometry (unchanged from mobile) ------------------------------------
   const draftQuantity = useMemo(() => {
@@ -126,8 +124,7 @@ export function EstCanvas() {
   }
 
   const minPoints = tool === 'polygon' ? 3 : tool === 'lineal' ? 2 : 1
-  const canSave =
-    !create.isPending && Boolean(serviceItemCode) && draftQuantity > 0 && draftPoints.length >= minPoints
+  const canSave = !create.isPending && Boolean(serviceItemCode) && draftQuantity > 0 && draftPoints.length >= minPoints
 
   const onSave = async () => {
     if (!canSave) return
@@ -169,10 +166,7 @@ export function EstCanvas() {
   // ---- Loading state -------------------------------------------------------
   if (loading) {
     return (
-      <div
-        className="d-content-full"
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-      >
+      <div className="d-content-full" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <span
           style={{
             fontFamily: 'var(--m-num)',
@@ -222,7 +216,14 @@ export function EstCanvas() {
             src={sourceImage.url}
             alt=""
             draggable={false}
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', opacity: 0.7 }}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              objectFit: 'contain',
+              opacity: 0.7,
+            }}
           />
         ) : null}
         <svg
@@ -404,13 +405,15 @@ export function EstCanvas() {
       <div style={floatBox({ top: 92, left: 16, width: 56 })}>
         <div style={{ ...floatHead, padding: '8px 0', textAlign: 'center' }}>TOOL</div>
         <div style={{ display: 'flex', flexDirection: 'column' }}>
-          {([
-            { tool: 'polygon', label: 'POLY' },
-            { tool: 'rect', label: 'RECT' },
-            { tool: 'lineal', label: 'LIN' },
-            { tool: 'count', label: 'PT' },
-            { tool: 'tap', label: 'TAP' },
-          ] as const).map((t, i, arr) => {
+          {(
+            [
+              { tool: 'polygon', label: 'POLY' },
+              { tool: 'rect', label: 'RECT' },
+              { tool: 'lineal', label: 'LIN' },
+              { tool: 'count', label: 'PT' },
+              { tool: 'tap', label: 'TAP' },
+            ] as const
+          ).map((t, i, arr) => {
             // RECT/TAP are aliases that drive the same underlying tool values as
             // the mobile surface (polygon / count); no new geometry is introduced.
             const value: Tool = t.tool === 'rect' ? 'polygon' : t.tool === 'tap' ? 'count' : (t.tool as Tool)
@@ -491,7 +494,14 @@ export function EstCanvas() {
           </MSelect>
 
           {/* Live measurement readout (big-number) */}
-          <div style={{ padding: '12px 14px', background: 'var(--m-ink)', color: 'var(--m-sand)', border: '2px solid var(--m-ink)' }}>
+          <div
+            style={{
+              padding: '12px 14px',
+              background: 'var(--m-ink)',
+              color: 'var(--m-sand)',
+              border: '2px solid var(--m-ink)',
+            }}
+          >
             <div
               style={{
                 fontFamily: 'var(--m-num)',
@@ -520,7 +530,13 @@ export function EstCanvas() {
             >
               {tool === 'count' ? `${draftPoints.length}` : formatQty(draftQuantity)}
               <span style={{ fontSize: 13, color: 'var(--m-ink-4)', marginLeft: 6 }}>
-                {tool === 'polygon' ? unitForItem : tool === 'lineal' ? unitForItem : draftPoints.length === 1 ? 'CT' : 'CTS'}
+                {tool === 'polygon'
+                  ? unitForItem
+                  : tool === 'lineal'
+                    ? unitForItem
+                    : draftPoints.length === 1
+                      ? 'CT'
+                      : 'CTS'}
               </span>
             </div>
           </div>
@@ -545,7 +561,9 @@ export function EstCanvas() {
           </div>
 
           <MButton variant="primary" onClick={() => void onSave()} disabled={!canSave}>
-            {create.isPending ? 'Saving…' : `Add ${draftQuantity > 0 ? formatQty(draftQuantity) : ''} ${unitForItem}`.trim()}
+            {create.isPending
+              ? 'Saving…'
+              : `Add ${draftQuantity > 0 ? formatQty(draftQuantity) : ''} ${unitForItem}`.trim()}
           </MButton>
 
           {error ? <div style={{ fontSize: 12, color: 'var(--m-red)' }}>{error}</div> : null}

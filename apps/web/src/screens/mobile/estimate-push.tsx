@@ -93,7 +93,8 @@ function LifecycleStepper({ state }: { state: EstimatePushState }) {
           const done = i < activeIdx
           const isLast = i === arr.length - 1
           // Terminal failure tints the final (POSTED) cell red so the strip reads at a glance.
-          const activeBg = isLast && terminalBad ? 'var(--m-red)' : isLast && terminalGood ? 'var(--m-green)' : 'var(--m-accent)'
+          const activeBg =
+            isLast && terminalBad ? 'var(--m-red)' : isLast && terminalGood ? 'var(--m-green)' : 'var(--m-accent)'
           const activeFg = isLast && (terminalBad || terminalGood) ? '#fff' : 'var(--m-accent-ink)'
           return (
             <div

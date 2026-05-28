@@ -61,7 +61,15 @@ export function MAiStripe({ tone, eyebrow, title, children, attribution, action,
             </div>
           ) : null}
           {title ? (
-            <div style={{ fontFamily: 'var(--m-font-display)', fontSize: 16, fontWeight: 700, letterSpacing: '-0.015em', marginBottom: 4 }}>
+            <div
+              style={{
+                fontFamily: 'var(--m-font-display)',
+                fontSize: 16,
+                fontWeight: 700,
+                letterSpacing: '-0.015em',
+                marginBottom: 4,
+              }}
+            >
               {title}
             </div>
           ) : null}

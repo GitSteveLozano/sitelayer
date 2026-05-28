@@ -17,10 +17,7 @@ export function EstItemLibrary() {
   const itemsQuery = useServiceItems()
   const [filter, setFilter] = useState<string>(ALL)
 
-  const items = useMemo<ServiceItem[]>(
-    () => itemsQuery.data?.serviceItems ?? [],
-    [itemsQuery.data?.serviceItems],
-  )
+  const items = useMemo<ServiceItem[]>(() => itemsQuery.data?.serviceItems ?? [], [itemsQuery.data?.serviceItems])
 
   const { categories, assemblies, divisions, avgRate } = useMemo(() => {
     const cats = new Set<string>()

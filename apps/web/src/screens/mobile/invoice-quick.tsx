@@ -8,14 +8,7 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
-import {
-  MBody,
-  MButton,
-  MButtonStack,
-  MInput,
-  MTextarea,
-  MTopBar,
-} from '../../components/m/index.js'
+import { MBody, MButton, MButtonStack, MInput, MTextarea, MTopBar } from '../../components/m/index.js'
 import { formatMoney } from './format.js'
 
 export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
@@ -33,7 +26,9 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
       <MBody>
         {/* MILESTONE / PROJECT SELECTOR — square option rows, accent fill on the
             selected one (drives the same setProjectId state the <select> did). */}
-        <div className="m-section-h" style={{ borderBottom: '2px solid var(--m-ink)' }}>Project · pick one</div>
+        <div className="m-section-h" style={{ borderBottom: '2px solid var(--m-ink)' }}>
+          Project · pick one
+        </div>
         <div style={{ padding: '14px 16px' }}>
           {projects.map((p) => {
             const active = p.id === projectId
@@ -59,10 +54,7 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
                 }}
               >
                 <span style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 14 }}>{p.name}</span>
-                <span
-                  className="num"
-                  style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', opacity: 0.75 }}
-                >
+                <span className="num" style={{ fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', opacity: 0.75 }}>
                   {active ? '● BILLING THIS' : '○ TAP TO BILL'}
                 </span>
               </button>
@@ -71,7 +63,9 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
         </div>
 
         {/* AMOUNT entry feeds the THIS INVOICE big-number below. */}
-        <div className="m-section-h" style={{ borderBottom: '2px solid var(--m-ink)' }}>Amount</div>
+        <div className="m-section-h" style={{ borderBottom: '2px solid var(--m-ink)' }}>
+          Amount
+        </div>
         <div style={{ padding: '14px 16px' }}>
           <MInput
             type="number"
@@ -83,7 +77,9 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
         </div>
 
         {/* THIS INVOICE — the big-number hero. */}
-        <div className="m-section-h" style={{ borderBottom: '2px solid var(--m-ink)' }}>This invoice</div>
+        <div className="m-section-h" style={{ borderBottom: '2px solid var(--m-ink)' }}>
+          This invoice
+        </div>
         <div
           style={{
             padding: '18px 16px',
@@ -120,7 +116,9 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
         </div>
 
         {/* MEMO. */}
-        <div className="m-section-h" style={{ borderBottom: '2px solid var(--m-ink)' }}>Memo</div>
+        <div className="m-section-h" style={{ borderBottom: '2px solid var(--m-ink)' }}>
+          Memo
+        </div>
         <div style={{ padding: '14px 16px' }}>
           <MTextarea
             value={memo}

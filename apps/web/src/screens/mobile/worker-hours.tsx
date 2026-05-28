@@ -107,7 +107,10 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
           eyebrow={`THIS WEEK · ${shortDate(dayBars[0]!.iso).toUpperCase()}–${shortDate(dayBars[6]!.iso).toUpperCase()}`}
           title={
             <span>
-              <span className="num" style={{ fontSize: 96, fontWeight: 700, letterSpacing: '-0.04em', lineHeight: 0.9 }}>
+              <span
+                className="num"
+                style={{ fontSize: 96, fontWeight: 700, letterSpacing: '-0.04em', lineHeight: 0.9 }}
+              >
                 {formatHoursMinutes(totalHours)}
               </span>
               <span
@@ -138,7 +141,14 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
             return (
               <div
                 key={d.iso}
-                style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, height: '100%' }}
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 8,
+                  height: '100%',
+                }}
               >
                 <div
                   style={{

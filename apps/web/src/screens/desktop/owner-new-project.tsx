@@ -243,7 +243,10 @@ function Field({
       </span>
       {children}
       {error ? (
-        <p id={htmlFor ? `${htmlFor}-err` : undefined} style={{ marginTop: 6, marginBottom: 0, color: 'var(--m-red)', fontSize: 12 }}>
+        <p
+          id={htmlFor ? `${htmlFor}-err` : undefined}
+          style={{ marginTop: 6, marginBottom: 0, color: 'var(--m-red)', fontSize: 12 }}
+        >
           {error}
         </p>
       ) : null}

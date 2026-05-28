@@ -241,7 +241,9 @@ export function ForemanMap({
           {pins.slice(0, 5).map((pin) => (
             <MListRow
               key={pin.id}
-              leading={<MAvatar initials={initialsFor(pin.worker.name)} tone={avatarToneFor(pin.worker.id)} size="sm" />}
+              leading={
+                <MAvatar initials={initialsFor(pin.worker.name)} tone={avatarToneFor(pin.worker.id)} size="sm" />
+              }
               headline={pin.worker.name}
               supporting={fences.find((p) => p.id === pin.projectId)?.name ?? pin.worker.role ?? 'Crew'}
               trailing={

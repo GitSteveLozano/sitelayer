@@ -204,10 +204,7 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
             {formatDecimalHours(totalHours, 1)}
             <span style={{ fontSize: 22, color: 'var(--m-ink-3)' }}> H</span>
           </div>
-          <div
-            className="m-kpi-eyebrow"
-            style={{ marginTop: 8, color: 'var(--m-ink-2)' }}
-          >
+          <div className="m-kpi-eyebrow" style={{ marginTop: 8, color: 'var(--m-ink-2)' }}>
             Burden {formatMoney(laborCost)} · {flaggedEntries.length} flag{flaggedEntries.length === 1 ? '' : 's'} ·{' '}
             {pending.length} pending
           </div>

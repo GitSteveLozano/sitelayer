@@ -103,9 +103,7 @@ export function WorkerScope({ bootstrap }: { bootstrap: BootstrapResponse | null
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
               <div className="m-topbar-eyebrow" style={{ color: 'var(--m-ink-4)' }}>
-                {sqftDone !== null
-                  ? `${sqftDone.toLocaleString('en-US')} SF DONE`
-                  : `${doneCount} STEPS DONE`}
+                {sqftDone !== null ? `${sqftDone.toLocaleString('en-US')} SF DONE` : `${doneCount} STEPS DONE`}
                 {targetSqft ? ` / ${targetSqft.toLocaleString('en-US')} SF` : ''}
               </div>
               <div className="num" style={{ color: 'var(--m-accent)', fontWeight: 700, letterSpacing: '0.04em' }}>
@@ -212,11 +210,7 @@ function StepRow({
             fontSize: 16,
           }}
         >
-          {isDone ? (
-            <MI.Check size={20} />
-          ) : (
-            <span className="num">{index + 1}</span>
-          )}
+          {isDone ? <MI.Check size={20} /> : <span className="num">{index + 1}</span>}
         </span>
         <span style={{ flex: 1, minWidth: 0 }}>
           <span
@@ -232,7 +226,10 @@ function StepRow({
           >
             {title}
           </span>
-          <span className="num" style={{ display: 'block', marginTop: 3, fontSize: 11, fontWeight: 600, color: subColor }}>
+          <span
+            className="num"
+            style={{ display: 'block', marginTop: 3, fontSize: 11, fontWeight: 600, color: subColor }}
+          >
             {describeStep(step)}
           </span>
         </span>

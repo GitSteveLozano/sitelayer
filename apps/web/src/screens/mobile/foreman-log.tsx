@@ -213,12 +213,8 @@ function DailyLogEditor({ log, bootstrap, onDone }: DailyLogEditorProps) {
         <MStat label="PHOTOS" value={String(photoCount)} />
         <MStat label="HOURS" value={formatDecimalHours(totalHours, 1)} />
         <MStat
-          label={
-            <span style={{ color: issuesCount > 0 ? 'var(--m-amber)' : undefined }}>ISSUES</span>
-          }
-          value={
-            <span style={{ color: issuesCount > 0 ? 'var(--m-amber)' : undefined }}>{String(issuesCount)}</span>
-          }
+          label={<span style={{ color: issuesCount > 0 ? 'var(--m-amber)' : undefined }}>ISSUES</span>}
+          value={<span style={{ color: issuesCount > 0 ? 'var(--m-amber)' : undefined }}>{String(issuesCount)}</span>}
         />
       </MStatStrip>
 

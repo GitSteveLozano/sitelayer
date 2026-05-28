@@ -117,11 +117,7 @@ export function MobileScaffoldInspectionScreen() {
 
         {lookup.error ? (
           <div style={{ padding: '12px 16px 0' }}>
-            <div
-              className="m-card"
-              data-tone="accent"
-              style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.35 }}
-            >
+            <div className="m-card" data-tone="accent" style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.35 }}>
               Tag not found for that token. Check it again or ask the office to re-print the sticker.
             </div>
           </div>
@@ -153,8 +149,7 @@ export function MobileScaffoldInspectionScreen() {
                         Last check {new Date(lastInspection.signed_at).toLocaleDateString()} —{' '}
                         <span
                           style={{
-                            color:
-                              lastInspection.status === 'pass' ? 'var(--m-good)' : 'var(--m-amber)',
+                            color: lastInspection.status === 'pass' ? 'var(--m-good)' : 'var(--m-amber)',
                             fontWeight: 700,
                           }}
                         >
@@ -165,9 +160,7 @@ export function MobileScaffoldInspectionScreen() {
                       'No inspections recorded yet.'
                     )
                   }
-                  supporting={
-                    lastInspection?.next_due_on ? <>Next due {lastInspection.next_due_on}</> : undefined
-                  }
+                  supporting={lastInspection?.next_due_on ? <>Next due {lastInspection.next_due_on}</> : undefined}
                 />
               </MListInset>
             </div>
@@ -244,8 +237,7 @@ export function MobileScaffoldInspectionScreen() {
                       color: 'var(--m-ink-3)',
                     }}
                   >
-                    Suggested status:{' '}
-                    <span style={{ color: 'var(--m-ink)', fontWeight: 700 }}>{computedStatus}</span>
+                    Suggested status: <span style={{ color: 'var(--m-ink)', fontWeight: 700 }}>{computedStatus}</span>
                   </div>
                 ) : null}
               </div>
@@ -276,8 +268,7 @@ export function MobileScaffoldInspectionScreen() {
               <div style={{ display: 'flex', gap: 8, padding: '14px 16px' }}>
                 {(['pass', 'fail', 'tagged_out'] as const).map((s) => {
                   const active = status === s
-                  const activeBg =
-                    s === 'pass' ? 'var(--m-good)' : s === 'fail' ? 'var(--m-amber)' : 'var(--m-red)'
+                  const activeBg = s === 'pass' ? 'var(--m-good)' : s === 'fail' ? 'var(--m-amber)' : 'var(--m-red)'
                   return (
                     <button
                       key={s}

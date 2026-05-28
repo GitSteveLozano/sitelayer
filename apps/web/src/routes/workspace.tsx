@@ -114,11 +114,13 @@ function CompanyWorkspace({ activeCompany }: { activeCompany: ActiveCompany }) {
 
   if (bootstrapQuery.isPending || sessionQuery.isPending) return <ColdStartSplash />
 
-  // Desktop v2 gate: owners on a wide viewport get the command-center surface
-  // (mounted at /desktop). Foreman/worker stay on the mobile shell. The bootstrap
-  // query is already warm so /desktop renders instantly. Deep full-screen routes
-  // (/projects/:id/setup, /clients, …) are App.tsx siblings and bypass this.
-  if (isDesktop && persona === 'owner') {
+  // Desktop v2 gate: owners on a wide viewport land on the command-center
+  // surface (mounted at /desktop). Scoped to the workspace ROOT only — deep
+  // routes (/projects/:id, /money, /schedule, …) still render in the shell so
+  // direct links + the mobile persona screens keep working for everyone; the
+  // command center keeps its own nav under /desktop/*. Foreman/worker always
+  // stay on the mobile shell.
+  if (isDesktop && persona === 'owner' && location.pathname === '/') {
     return <Navigate to="/desktop" replace />
   }
 
@@ -204,9 +206,7 @@ function needsOnboarding(error: unknown): boolean {
 function useIsDesktop(): boolean {
   const query = '(min-width: 1024px)'
   const [isDesktop, setIsDesktop] = useState<boolean>(() =>
-    typeof window !== 'undefined' && typeof window.matchMedia === 'function'
-      ? window.matchMedia(query).matches
-      : false,
+    typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(query).matches : false,
   )
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return

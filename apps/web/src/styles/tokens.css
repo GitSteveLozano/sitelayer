@@ -20,40 +20,40 @@
 
 :root {
   /* Surfaces — warm sand, no white, no gray */
-  --m-sand: #ede7da;        /* v2-sand: primary app background (light) */
-  --m-sand-2: #e0d8c5;      /* v2-sand-2: dark-theme border + dark offset-shadow color */
-  --m-bg: #ede7da;          /* app bg is sand now (was white) */
-  --m-card: #ede7da;        /* cards are sand with a 2px ink border, not white */
-  --m-card-soft: #f4efe3;   /* v2-sand-soft: raised/section-bar/inset background */
-  --m-line: #0f0e0c;        /* structural lines = ink (2px hard borders) */
-  --m-line-2: #c8c0ac;      /* v2-line-soft: 1px soft separators inside cards/rows */
+  --m-sand: #ede7da; /* v2-sand: primary app background (light) */
+  --m-sand-2: #e0d8c5; /* v2-sand-2: dark-theme border + dark offset-shadow color */
+  --m-bg: #ede7da; /* app bg is sand now (was white) */
+  --m-card: #ede7da; /* cards are sand with a 2px ink border, not white */
+  --m-card-soft: #f4efe3; /* v2-sand-soft: raised/section-bar/inset background */
+  --m-line: #0f0e0c; /* structural lines = ink (2px hard borders) */
+  --m-line-2: #c8c0ac; /* v2-line-soft: 1px soft separators inside cards/rows */
 
   /* Ink — warm near-black ramp (replaces all neutral grays) */
-  --m-ink: #0f0e0c;         /* v2-ink: primary text, all borders, primary button bg */
-  --m-ink-2: #2e2a23;       /* v2-ink-2: secondary text / canvas surface / dark section-bar */
+  --m-ink: #0f0e0c; /* v2-ink: primary text, all borders, primary button bg */
+  --m-ink-2: #2e2a23; /* v2-ink-2: secondary text / canvas surface / dark section-bar */
   /* --m-ink-3 darkened from v2's #5F584C to #50493e for WCAG AA (~5.4:1 on
    * sand #EDE7DA / ~5.0:1 on sand-soft #F4EFE3) — micro-labels are small. */
-  --m-ink-3: #50493e;       /* tertiary/quiet text, eyebrow, inactive tab */
-  --m-ink-4: #8b8474;       /* v2-ink-4: faintest text / disabled */
+  --m-ink-3: #50493e; /* tertiary/quiet text, eyebrow, inactive tab */
+  --m-ink-4: #8b8474; /* v2-ink-4: faintest text / disabled */
 
   /* Yellow — the SINGLE saturated accent.
    * v2 rule: yellow is highlight, primary button, active tab cell (full fill),
    * accent icon button, live pill. There are NO soft tinted accent backgrounds —
    * the *-soft accent vars now resolve to full yellow so legacy tint usages read
    * as full-fill yellow blocks. */
-  --m-accent: #ffd400;          /* v2-accent */
-  --m-accent-ink: #1f1900;      /* v2-accent-ink: text/icon ON the yellow */
-  --m-accent-soft: #ffd400;     /* no soft tint — full yellow */
-  --m-accent-soft-2: #ffd400;   /* no soft tint — full yellow */
+  --m-accent: #ffd400; /* v2-accent */
+  --m-accent-ink: #1f1900; /* v2-accent-ink: text/icon ON the yellow */
+  --m-accent-soft: #ffd400; /* no soft tint — full yellow */
+  --m-accent-soft-2: #ffd400; /* no soft tint — full yellow */
 
   /* Semantic — full-fill state colors, no soft tints */
-  --m-green: #1a8a4c;       /* v2-good */
+  --m-green: #1a8a4c; /* v2-good */
   --m-green-soft: #1a8a4c;
-  --m-red: #c7331e;         /* v2-bad: lost / over / stop-work / P0-CRIT */
+  --m-red: #c7331e; /* v2-bad: lost / over / stop-work / P0-CRIT */
   --m-red-soft: #c7331e;
-  --m-amber: #c58a14;       /* v2-warn: P1 / IMP */
+  --m-amber: #c58a14; /* v2-warn: P1 / IMP */
   --m-amber-soft: #c58a14;
-  --m-blue: #2e2a23;        /* no blue in v2 — collapse to warm ink-2 */
+  --m-blue: #2e2a23; /* no blue in v2 — collapse to warm ink-2 */
   --m-blue-soft: #2e2a23;
 
   /* Radii — SQUARE EVERYWHERE. The only round things are SVG geofence circles. */
@@ -68,8 +68,8 @@
   --m-shadow-1: none;
   --m-shadow-2: 6px 6px 0 var(--m-ink);
   --m-shadow-card: none;
-  --m-shadow-offset: 6px 6px 0 var(--m-ink);      /* standard float */
-  --m-shadow-offset-lg: 8px 8px 0 var(--m-ink);   /* phone frame / PDF sheet */
+  --m-shadow-offset: 6px 6px 0 var(--m-ink); /* standard float */
+  --m-shadow-offset-lg: 8px 8px 0 var(--m-ink); /* phone frame / PDF sheet */
 
   /* Stop-work / safety hazard hatch — overlay over --m-red for the full-screen
    * safety-interrupt state. */
@@ -99,12 +99,12 @@
   --m-bg: #0f0e0c;
   --m-card: #0f0e0c;
   --m-card-soft: #2e2a23;
-  --m-line: #e0d8c5;        /* borders/rules flip to sand-2 */
-  --m-line-2: #2e2a23;      /* soft row dividers use ink-2 */
+  --m-line: #e0d8c5; /* borders/rules flip to sand-2 */
+  --m-line-2: #2e2a23; /* soft row dividers use ink-2 */
 
-  --m-ink: #ede7da;         /* primary text = sand */
-  --m-ink-2: #e0d8c5;       /* brighter labels on dark */
-  --m-ink-3: #b8b0a0;       /* quiet/eyebrow on dark (AA on #0F0E0C) */
+  --m-ink: #ede7da; /* primary text = sand */
+  --m-ink-2: #e0d8c5; /* brighter labels on dark */
+  --m-ink-3: #b8b0a0; /* quiet/eyebrow on dark (AA on #0F0E0C) */
   --m-ink-4: #8b8474;
 
   /* yellow accent unchanged — the single loud CTA / active fill on dark */
