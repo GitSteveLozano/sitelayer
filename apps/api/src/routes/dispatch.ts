@@ -64,6 +64,7 @@ import { handleProjectBriefRoutes } from './project-briefs.js'
 import { handleWorkerRoutes } from './workers.js'
 import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
 import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
+import { handleChangeOrderRoutes } from './change-orders.js'
 import { handleLaborPayrollRunRoutes } from './labor-payroll-runs.js'
 import { handleEstimateShareRoutes } from './estimate-shares-admin.js'
 import { handleInventoryForecastRoutes } from './inventory-forecast.js'
@@ -768,6 +769,17 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     // Project lifecycle workflow (single 7-state machine: draft → … → archived)
     () =>
       handleProjectLifecycleRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Change orders (v2) — list/create + per-CO workflow snapshot + events
+    () =>
+      handleChangeOrderRoutes(req, url, {
         pool,
         company,
         currentUserId,
