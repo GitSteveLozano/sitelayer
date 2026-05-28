@@ -17,17 +17,18 @@ import { useNavigate } from 'react-router-dom'
 import { apiGet, type BootstrapResponse, type ProjectRow } from '@/lib/api'
 import {
   MAvatarGroup,
+  MBanner,
   MBody,
   MButton,
   MButtonRow,
   MI,
+  MKpi,
   MLargeHead,
-  MSectionH,
+  MPill,
   MTopBar,
   avatarToneFor,
   initialsFor,
 } from '../../components/m/index.js'
-import { MAiStripe } from '../../components/m/ai.js'
 import { request } from '../../lib/api/client.js'
 import type { ProjectBriefListResponse } from '../../lib/api/projects.js'
 import { formatDecimalHours, formatMoney, todayIso } from './format.js'
@@ -275,148 +276,183 @@ export function ForemanToday({ bootstrap, companySlug }: { bootstrap: BootstrapR
     }
   }
 
+  // Quiet/busy posture: when the field is clear, the screen leads with a
+  // big clock + "field is clear" line; when issues are open it leads with
+  // the hi-vis "From the field" attention banner.
+  const fieldClear = needYou === 0
+  const nowClock = formatClock(new Date())
+
   return (
     <>
       <MTopBar title="Today" />
       <MBody>
         <MLargeHead
           eyebrow={`FOREMAN · ${shortMonthDay()}`}
-          title={`${activeSites.length} ${activeSites.length === 1 ? 'site' : 'sites'} · ${workers.length} crew`}
-          sub={`${formatDecimalHours(totalHours, 1)} crew-hrs · ${formatMoney(todayLaborCost)} live`}
+          title={`${activeSites.length} ${activeSites.length === 1 ? 'SITE' : 'SITES'} · ${workers.length} CREW`}
+          sub={`${formatDecimalHours(totalHours, 1)} CREW-HRS · ${formatMoney(todayLaborCost)} LIVE`}
         />
-        {showOvernight ? (
-          <div style={{ padding: '0 16px' }}>
-            <MAiStripe
-              eyebrow="OVERNIGHT"
-              attribution={
-                <>
-                  Based on{' '}
-                  <strong>
-                    {overnight.total} change{overnight.total === 1 ? '' : 's'}
-                  </strong>{' '}
-                  since 5:00 PM yesterday ({overnight.scheduleCount} schedule · {overnight.issueCount} field ·{' '}
-                  {overnight.projectCount} project).
-                </>
-              }
-              action={
-                <MButton
-                  variant="quiet"
-                  size="sm"
-                  onClick={() => {
-                    // Freshest signal is usually a field issue. Route to
-                    // /field when any landed overnight; otherwise scroll
-                    // to the My sites list.
-                    if (overnight.issueCount > 0) {
-                      navigate('/field')
-                    } else if (typeof document !== 'undefined') {
-                      const el = document.getElementById('fm-today-sites')
-                      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-                    }
-                  }}
-                >
-                  See changes
-                </MButton>
-              }
-              onDismiss={dismissOvernight}
-            >
-              {overnight.buckets.slice(0, 3).map((label, idx) => (
-                <div key={idx} style={{ marginBottom: 4 }}>
-                  {label}
-                </div>
-              ))}
-            </MAiStripe>
-          </div>
-        ) : null}
+
+        {/* From-the-field hi-vis attention banner — bold yellow w/ ink CTA.
+            When quiet it flips to a neutral "field is clear" status banner. */}
         {needYou > 0 ? (
-          <div style={{ padding: '0 16px' }}>
-            <MAiStripe
-              eyebrow={`FROM THE FIELD · ${needYou} need ${needYou === 1 ? 'you' : 'you'}`}
-              tone="warn"
-              attribution={
-                <>
-                  Based on <strong>{needYou} open</strong> {needYou === 1 ? 'issue' : 'issues'} from the field today.
-                </>
-              }
-              action={
-                <MButton variant="quiet" size="sm" onClick={() => navigate('/field')}>
-                  See all
-                </MButton>
-              }
-            >
-              {openIssues.slice(0, 3).map((i) => {
-                const w = workers.find((x) => x.id === i.worker_id)
-                return (
-                  <div key={i.id} style={{ marginBottom: 4 }}>
-                    <strong style={{ color: 'var(--m-ink)' }}>{w?.name ?? 'A worker'}</strong> ·{' '}
-                    {projects.find((p) => p.id === i.project_id)?.name ?? 'unknown site'} —{' '}
-                    {i.message.replace(/^\[[^\]]+\]\s*/, '').slice(0, 60)}
+          <MBanner
+            tone="attention"
+            icon={<MI.AlertTri size={18} />}
+            title={`FROM THE FIELD · ${needYou} NEED YOU`}
+            body={
+              <>
+                {openIssues.slice(0, 3).map((i) => {
+                  const w = workers.find((x) => x.id === i.worker_id)
+                  return (
+                    <div key={i.id} style={{ marginBottom: 2 }}>
+                      <strong>{w?.name ?? 'A worker'}</strong> ·{' '}
+                      {projects.find((p) => p.id === i.project_id)?.name ?? 'unknown site'} —{' '}
+                      {i.message.replace(/^\[[^\]]+\]\s*/, '').slice(0, 60)}
+                    </div>
+                  )
+                })}
+              </>
+            }
+            action={
+              <MButton variant="primary" size="sm" onClick={() => navigate('/field')}>
+                See all
+              </MButton>
+            }
+          />
+        ) : (
+          <MBanner
+            tone="ok"
+            icon={<MI.Check size={18} />}
+            title="FIELD IS CLEAR"
+            body="No open pings from the crew."
+            action={<MPill tone="green" dot>CLEAR</MPill>}
+          />
+        )}
+
+        {/* Overnight delta — kept as a quiet status banner with a CTA. */}
+        {showOvernight ? (
+          <MBanner
+            tone="info"
+            title={
+              <>
+                OVERNIGHT · {overnight.total} CHANGE{overnight.total === 1 ? '' : 'S'}
+              </>
+            }
+            body={
+              <>
+                <div style={{ marginBottom: 4, fontFamily: 'var(--m-num)', fontSize: 11, letterSpacing: '0.04em' }}>
+                  SINCE 5:00 PM · {overnight.scheduleCount} SCHEDULE · {overnight.issueCount} FIELD ·{' '}
+                  {overnight.projectCount} PROJECT
+                </div>
+                {overnight.buckets.slice(0, 3).map((label, idx) => (
+                  <div key={idx} style={{ marginBottom: 2 }}>
+                    {label}
                   </div>
-                )
-              })}
-            </MAiStripe>
-          </div>
+                ))}
+              </>
+            }
+            action={
+              <MButton
+                variant="quiet"
+                size="sm"
+                onClick={() => {
+                  // Freshest signal is usually a field issue. Route to
+                  // /field when any landed overnight; otherwise scroll
+                  // to the My sites list. (Dismiss happens on the same tap.)
+                  dismissOvernight()
+                  if (overnight.issueCount > 0) {
+                    navigate('/field')
+                  } else if (typeof document !== 'undefined') {
+                    const el = document.getElementById('fm-today-sites')
+                    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                  }
+                }}
+              >
+                See changes
+              </MButton>
+            }
+          />
         ) : null}
+
+        {/* Big-number lead block: a clock when quiet, the live all-sites
+            spend when busy. Mono micro-labels, full-bleed hard rules. */}
         <div
           style={{
-            margin: '14px 16px',
-            background: '#1c1816',
-            color: '#f3ecdf',
-            borderRadius: 12,
-            padding: '14px 16px',
-            display: 'flex',
-            alignItems: 'baseline',
-            gap: 12,
+            padding: '24px 20px',
+            borderTop: '2px solid var(--m-ink)',
+            borderBottom: '2px solid var(--m-ink)',
           }}
         >
-          <div style={{ flex: 1 }}>
-            <div
-              style={{
-                fontSize: 10,
-                fontWeight: 600,
-                letterSpacing: '0.06em',
-                textTransform: 'uppercase',
-                color: '#aea69a',
-              }}
-            >
-              All sites · today
-            </div>
-            <div style={{ fontSize: 22, fontWeight: 700, marginTop: 2 }} className="num">
-              {formatMoney(todayLaborCost)}
-              <span style={{ color: '#aea69a', fontWeight: 500, fontSize: 14, marginLeft: 8 }}>live</span>
-            </div>
+          <div className="m-kpi-eyebrow">
+            {fieldClear
+              ? `TODAY · ${activeSites.length} ${activeSites.length === 1 ? 'SITE' : 'SITES'} OPEN`
+              : 'ALL SITES · SPENT TODAY'}
           </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 11, color: '#aea69a' }}>
-              <span style={{ color: 'var(--m-green)', fontWeight: 600 }}>● </span>
-              {formatDecimalHours(totalHours, 1)} crew-hrs
-            </div>
+          <div
+            className="num"
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontSize: fieldClear ? 64 : 56,
+              fontWeight: 800,
+              letterSpacing: '-0.035em',
+              lineHeight: 0.9,
+              marginTop: 8,
+              color: 'var(--m-ink)',
+            }}
+          >
+            {fieldClear ? nowClock : formatMoney(todayLaborCost)}
+          </div>
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+              marginTop: 8,
+            }}
+          >
+            <span style={{ color: 'var(--m-green)' }}>● </span>
+            {formatDecimalHours(totalHours, 1)} CREW-HRS LIVE
           </div>
         </div>
+
         <div id="fm-today-sites" />
-        <MSectionH>My sites</MSectionH>
+        <div className="m-section-bar">
+          <span>MY SITES</span>
+          <span>{sortedSites.length}</span>
+        </div>
         {sortedSites.length === 0 ? (
-          <div style={{ padding: 16, color: 'var(--m-ink-3)', fontSize: 13 }}>
+          <div
+            style={{
+              padding: '24px 20px',
+              fontFamily: 'var(--m-num)',
+              fontSize: 12,
+              letterSpacing: '0.04em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+            }}
+          >
             No active sites. Sites you're assigned to land here.
           </div>
         ) : (
-          <div style={{ padding: '4px 16px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {sortedSites.map((p) => (
-              <SiteCard
-                key={p.id}
-                project={p}
-                hours={todayHoursByProject.get(p.id) ?? 0}
-                workers={workers}
-                briefed={briefedSet.has(p.id)}
-                openBlockerCount={(issuesByProject.get(p.id) ?? []).length}
-                onBrief={() => navigate(`/brief/${p.id}`)}
-                onView={() => navigate(`/projects/${p.id}`)}
-              />
-            ))}
-          </div>
+          sortedSites.map((p) => (
+            <SiteCard
+              key={p.id}
+              project={p}
+              hours={todayHoursByProject.get(p.id) ?? 0}
+              workers={workers}
+              briefed={briefedSet.has(p.id)}
+              openBlockerCount={(issuesByProject.get(p.id) ?? []).length}
+              onBrief={() => navigate(`/brief/${p.id}`)}
+              onView={() => navigate(`/projects/${p.id}`)}
+            />
+          ))
         )}
-        <div style={{ padding: 16 }}>
+        <div style={{ padding: 20 }}>
           <MButton variant="primary" onClick={() => navigate('/brief')}>
-            Brief the crew
+            BRIEF THE CREW
           </MButton>
         </div>
       </MBody>
@@ -447,95 +483,83 @@ function SiteCard({
   const crewSize = workers.length
   const onSiteCount = hours > 0 ? Math.min(crewSize, Math.max(1, Math.round(hours / 4))) : 0
   const expected = Math.max(crewSize, onSiteCount)
-  const progressPct = project.target_sqft_per_hr ? Math.min(100, Math.round((hours / 8) * 100)) : null
+  const spentToday = hours * Number(project.labor_rate ?? 0)
+
+  // Status posture drives the full-bleed row tint + pill: blocked when an
+  // open issue exists, unbriefed when no brief sent, otherwise on.
+  const blocked = openBlockerCount > 0
+  const rowTint = blocked ? 'var(--m-sand)' : !briefed ? 'var(--m-card-soft)' : undefined
+  const meta = `${onSiteCount} OF ${expected} CREW · ${
+    hours > 0 ? `${formatDecimalHours(hours, 1)} HRS` : 'NO HRS YET'
+  }`
+
   return (
-    <div className="m-card" style={{ padding: 14 }}>
+    <div
+      style={{
+        padding: '18px 20px',
+        borderBottom: '2px solid var(--m-ink)',
+        background: rowTint,
+      }}
+    >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontSize: 17, fontWeight: 600, lineHeight: 1.2 }}>{project.name}</div>
-          <div className="m-quiet-sm" style={{ marginTop: 2 }}>
-            {project.customer_name || project.division_code}
-          </div>
+        <div
+          className="m-h-display"
+          style={{ fontSize: 22, lineHeight: 1, minWidth: 0, flex: 1, color: !briefed && !blocked ? 'var(--m-ink-3)' : 'var(--m-ink)' }}
+        >
+          {project.name.toUpperCase()}
         </div>
-        {!briefed ? (
-          <span
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              padding: '3px 7px',
-              borderRadius: 999,
-              background: 'var(--m-amber-soft, rgba(217,144,74,0.15))',
-              color: 'var(--m-amber, #c2772d)',
-              textTransform: 'uppercase',
-              letterSpacing: '0.06em',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            Needs brief
-          </span>
-        ) : null}
+        {blocked ? (
+          <MPill tone="red" dot>
+            BLOCKED
+          </MPill>
+        ) : !briefed ? (
+          <MPill tone="amber" dot>
+            UNBRIEFED
+          </MPill>
+        ) : (
+          <MPill tone="green" dot>
+            ON
+          </MPill>
+        )}
       </div>
+
       <div
         style={{
-          marginTop: 10,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 12,
-          fontSize: 13,
-          color: 'var(--m-ink-2)',
+          fontFamily: 'var(--m-num)',
+          fontSize: 11,
+          fontWeight: 600,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: 'var(--m-ink-3)',
+          marginTop: 6,
         }}
       >
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-          <MI.Users size={14} />
-          {onSiteCount} of {expected}
-        </span>
-        {progressPct !== null ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-            <span
-              style={{
-                display: 'inline-block',
-                width: 60,
-                height: 6,
-                borderRadius: 3,
-                background: 'var(--m-line)',
-                overflow: 'hidden',
-                position: 'relative',
-              }}
-            >
-              <span
-                style={{
-                  position: 'absolute',
-                  inset: 0,
-                  width: `${progressPct}%`,
-                  background: 'var(--m-accent)',
-                }}
-              />
-            </span>
-            {progressPct}%
-          </span>
-        ) : null}
-        {openBlockerCount > 0 ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--m-red)' }}>
-            <MI.AlertTri size={14} />
-            {openBlockerCount} open
-          </span>
-        ) : null}
+        {project.customer_name || project.division_code} · {meta}
+        {blocked ? <span style={{ color: 'var(--m-red)' }}> · {openBlockerCount} OPEN</span> : null}
       </div>
-      <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
-        <MAvatarGroup
-          avatars={workers.slice(0, 3).map((w) => ({ initials: initialsFor(w.name), tone: avatarToneFor(w.id) }))}
-          max={3}
-          size="sm"
+
+      <div style={{ marginTop: 14, display: 'flex', alignItems: 'flex-end', gap: 14 }}>
+        <MKpi
+          label="SPENT TODAY"
+          value={formatMoney(spentToday)}
+          meta={hours > 0 ? `${formatDecimalHours(hours, 1)} CREW-HRS` : 'NO HOURS YET'}
         />
-        <span className="num m-quiet-sm">{hours > 0 ? `${formatDecimalHours(hours, 1)} today` : 'no hours yet'}</span>
+        <div style={{ paddingBottom: 4 }}>
+          <MAvatarGroup
+            avatars={workers.slice(0, 3).map((w) => ({ initials: initialsFor(w.name), tone: avatarToneFor(w.id) }))}
+            max={3}
+            size="sm"
+          />
+        </div>
       </div>
-      <div style={{ marginTop: 12 }}>
+
+      <div style={{ marginTop: 14 }}>
         <MButtonRow>
           <MButton variant="primary" onClick={onBrief}>
-            Brief crew
+            BRIEF CREW
           </MButton>
           <MButton variant="ghost" onClick={onView}>
-            View site
+            VIEW SITE
           </MButton>
         </MButtonRow>
       </div>

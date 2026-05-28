@@ -297,37 +297,35 @@ function AttentionCard({
 }) {
   const [showWhy, setShowWhy] = useState(false)
   const accent = item.tone === 'red' ? 'var(--m-red)' : 'var(--m-accent)'
-  const accentInk = item.tone === 'red' ? 'var(--m-red)' : 'var(--m-accent-ink)'
 
   return (
     <div
       className="m-card"
       style={{
-        borderLeft: `3px solid ${accent}`,
-        boxShadow: 'var(--m-shadow-card)',
+        borderLeft: `6px solid ${accent}`,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 }}>
-        <div
-          style={{
-            color: accentInk,
-            fontSize: 10,
-            fontWeight: 700,
-            letterSpacing: '0.06em',
-            textTransform: 'uppercase',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 5,
-          }}
-        >
+        <span className="m-ai-eyebrow" data-tone={item.tone === 'red' ? 'warn' : undefined}>
           <Spark size={11} state="strong" />
           {item.eyebrow}
-        </div>
+        </span>
         <button type="button" className="m-ai-dismiss" aria-label="Dismiss" onClick={onDismiss}>
           <MI.X size={12} />
         </button>
       </div>
-      <div style={{ marginTop: 10, fontSize: 17, fontWeight: 700, lineHeight: 1.18 }}>{item.title}</div>
+      <div
+        style={{
+          marginTop: 10,
+          fontFamily: 'var(--m-font-display)',
+          fontSize: 17,
+          fontWeight: 700,
+          letterSpacing: '-0.015em',
+          lineHeight: 1.18,
+        }}
+      >
+        {item.title}
+      </div>
       <div style={{ marginTop: 7, color: 'var(--m-ink-2)', fontSize: 13, lineHeight: 1.35 }}>{item.body}</div>
       {showWhy ? (
         <div
@@ -336,7 +334,7 @@ function AttentionCard({
             fontSize: 12,
             color: 'var(--m-ink-3)',
             lineHeight: 1.4,
-            borderTop: '1px solid var(--m-line)',
+            borderTop: '1px solid var(--m-line-2)',
             paddingTop: 8,
           }}
         >
