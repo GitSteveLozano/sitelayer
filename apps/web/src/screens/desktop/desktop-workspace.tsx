@@ -34,6 +34,10 @@ import { EstQuantities } from './est-quantities'
 import { EstScaleVerify } from './est-scale-verify'
 import { FmToday } from './fm-today'
 import { FmCrew } from './fm-crew'
+import { EstCanvas } from './est-canvas'
+import { FmSchedule } from './fm-schedule'
+import { FmTime } from './fm-time'
+import { FmBrief } from './fm-brief'
 
 // lucide icons type as LucideProps; the DNavItem icon slot wants SVGProps.
 const asIcon = (C: ComponentType<LucideProps>) => C as unknown as ComponentType<SVGProps<SVGSVGElement>>
@@ -76,6 +80,8 @@ const OWNER_NAV: DNavSection[] = [
     items: [
       { to: '/desktop/fm/today', label: 'FM Today', icon: asIcon(Home) },
       { to: '/desktop/fm/crew', label: 'FM Crew', icon: asIcon(Users) },
+      { to: '/desktop/fm/schedule', label: 'FM Schedule', icon: asIcon(Calendar) },
+      { to: '/desktop/fm/time', label: 'FM Time', icon: asIcon(Calendar) },
     ],
   },
 ]
@@ -95,6 +101,8 @@ const CRUMB: Record<string, string> = {
   '/desktop/item-library': 'Item Library',
   '/desktop/fm/today': 'Foreman · Today',
   '/desktop/fm/crew': 'Foreman · Crew',
+  '/desktop/fm/schedule': 'Foreman · Schedule',
+  '/desktop/fm/time': 'Foreman · Time',
 }
 
 function DComingSoon({ name }: { name: string }) {
@@ -149,8 +157,12 @@ export function DesktopWorkspace({ bootstrap = null }: { bootstrap?: BootstrapRe
         <Route path="clients/:clientId" element={<EstClientProfile />} />
         <Route path="estimate/:projectId" element={<EstQuantities />} />
         <Route path="scale/:projectId" element={<EstScaleVerify />} />
+        <Route path="canvas/:projectId" element={<EstCanvas />} />
         <Route path="fm/today" element={<FmToday bootstrap={bootstrap} />} />
         <Route path="fm/crew" element={<FmCrew bootstrap={bootstrap} />} />
+        <Route path="fm/schedule" element={<FmSchedule bootstrap={bootstrap} />} />
+        <Route path="fm/time" element={<FmTime bootstrap={bootstrap} />} />
+        <Route path="fm/brief/:projectId" element={<FmBrief />} />
         <Route path="*" element={<DComingSoon name="Screen" />} />
       </Routes>
     </DShell>
