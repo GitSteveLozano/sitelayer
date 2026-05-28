@@ -10,6 +10,7 @@
  * Shares the data layer (hooks, entity APIs) and v2 tokens with mobile; only
  * the composition differs. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
+import { useState } from 'react'
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { Bell, Briefcase, Calendar, DollarSign, FileText, Home, Layers, Library, type LucideProps, Package, Plus, Settings, Sparkles, Users, UserSquare } from 'lucide-react'
@@ -132,6 +133,19 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
   const location = useLocation()
   const navigate = useNavigate()
   const crumb = CRUMB[location.pathname] ?? 'Sitelayer'
+  const [wearingOpen, setWearingOpen] = useState(false)
+
+  // WEARING ▾ — solo operators switch which hat they're in. On the desktop
+  // command center each hat routes to its home surface.
+  const HATS: Array<{ label: string; to: string }> = [
+    { label: 'Owner', to: '/desktop' },
+    { label: 'Estimator', to: '/desktop/takeoff' },
+    { label: 'Foreman', to: '/desktop/fm/today' },
+  ]
+  const goHat = (to: string) => {
+    setWearingOpen(false)
+    navigate(to)
+  }
 
   // Self-fetch bootstrap when not passed (the /desktop route mounts this
   // standalone). When workspace.tsx redirects a desktop owner here, the
@@ -145,7 +159,60 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
   const bootstrap = bootstrapProp ?? bootstrapQuery.data ?? null
 
   return (
-    <DShell sidebar={<DSidebar sections={OWNER_NAV} wearing="Owner" />}>
+    <DShell sidebar={<DSidebar sections={OWNER_NAV} wearing="Owner" onWearingClick={() => setWearingOpen((v) => !v)} />}>
+      {wearingOpen ? (
+        <div
+          role="menu"
+          aria-label="Switch hat"
+          style={{
+            position: 'fixed',
+            left: 14,
+            bottom: 64,
+            width: 204,
+            zIndex: 60,
+            background: 'var(--m-sand)',
+            border: '2px solid var(--m-ink)',
+            boxShadow: 'var(--m-shadow-offset)',
+          }}
+        >
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 10,
+              letterSpacing: '0.1em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+              padding: '10px 12px 4px',
+            }}
+          >
+            Switch hat
+          </div>
+          {HATS.map((h) => (
+            <button
+              key={h.to}
+              type="button"
+              role="menuitem"
+              onClick={() => goHat(h.to)}
+              style={{
+                display: 'block',
+                width: '100%',
+                textAlign: 'left',
+                padding: '10px 12px',
+                background: 'transparent',
+                border: 'none',
+                borderTop: '1px solid var(--m-line-2)',
+                fontFamily: 'var(--m-font-display)',
+                fontWeight: 700,
+                fontSize: 15,
+                color: 'var(--m-ink)',
+                cursor: 'pointer',
+              }}
+            >
+              {h.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
       <DTopbar
         crumb={crumb}
         actions={
