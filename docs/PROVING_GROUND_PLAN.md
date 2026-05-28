@@ -2,7 +2,7 @@
 
 **Status:** Draft, 2026-05-22
 **Owner:** Taylor
-**Companions:** `CONTEXT_HANDOFF_ARCHITECTURE.md`, `CONTEXT_HANDOFF_IMPLEMENTATION_PLAN.md`, `qbo-live-flip-checklist.md`
+**Companions:** `RUNBOOK_CONTEXT_HANDOFF.md`, `qbo-live-flip-checklist.md`
 
 ## Thesis
 
@@ -181,7 +181,7 @@ Total estimate: ~2 hours.
 - Operator thesis: `~/projects/digital-ontology/docs/agent-control-plane-vendor-map.md`
 - Drift concepts: `~/projects/digital-ontology/docs/ontology-maintenance-architecture.md`
 - 28-day window: `~/projects/digital-ontology/docs/subscription-leverage-plan-2026-05-21.md`
-- Context handoff design: `docs/CONTEXT_HANDOFF_ARCHITECTURE.md`, `docs/CONTEXT_HANDOFF_IMPLEMENTATION_PLAN.md`, `docs/RUNBOOK_CONTEXT_HANDOFF.md`
+- Context handoff ops: `docs/RUNBOOK_CONTEXT_HANDOFF.md` (pre-build architecture/implementation-plan docs removed once the feature shipped)
 - QBO live gate: `docs/qbo-live-flip-checklist.md`, `docs/RUNBOOK_QBO_CIRCUIT.md`
 - Coupling boundary: `~/projects/control-plane/docs/adr/0024-sitelayer-control-plane-coupling-default.md`
 - Audit escrow concept: `~/projects/digital-ontology/docs/agent-control-plane-vendor-map.md` §8
