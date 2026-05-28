@@ -107,57 +107,99 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
           eyebrow={`THIS WEEK · ${shortDate(dayBars[0]!.iso).toUpperCase()}–${shortDate(dayBars[6]!.iso).toUpperCase()}`}
           title={
             <span>
-              <span className="num" style={{ fontSize: 48, fontWeight: 600, letterSpacing: '-0.02em' }}>
+              <span className="num" style={{ fontSize: 96, fontWeight: 700, letterSpacing: '-0.04em', lineHeight: 0.9 }}>
                 {formatHoursMinutes(totalHours)}
               </span>
               <span
                 className="m-topbar-eyebrow"
-                style={{ display: 'block', marginTop: 4 }}
+                style={{ display: 'block', marginTop: 10 }}
               >{`OF ${WEEKLY_TARGET_HRS} HRS`}</span>
             </span>
           }
           sub={
-            <span className="num">
-              {formatMoney(grossPay)} gross · ~{formatMoney(grossPay * 0.79)} take-home
+            <span
+              className="num"
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontWeight: 600,
+                letterSpacing: '0.02em',
+                textTransform: 'uppercase',
+                color: 'var(--m-ink-2)',
+              }}
+            >
+              {formatMoney(grossPay)} GROSS · ~{formatMoney(grossPay * 0.79)} TAKE-HOME
             </span>
           }
         />
-        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, padding: '8px 4px 16px', height: 140 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, padding: '24px 4px 16px', height: 184 }}>
           {dayBars.map((d) => {
-            const height = Math.max(4, (d.hours / peak) * 110)
+            const height = Math.max(4, (d.hours / peak) * 130)
             const isToday = d.iso === todayIso()
             return (
               <div
                 key={d.iso}
-                style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}
+                style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, height: '100%' }}
               >
-                <span style={{ fontSize: 10, color: isToday ? 'var(--m-accent)' : 'var(--m-ink-3)', fontWeight: 600 }}>
-                  {d.hours > 0 ? d.hours.toFixed(1) : ''}
+                <div
+                  style={{
+                    flex: 1,
+                    width: '100%',
+                    display: 'flex',
+                    alignItems: 'flex-end',
+                    justifyContent: 'center',
+                    position: 'relative',
+                  }}
+                >
+                  {d.hours > 0 ? (
+                    <div
+                      style={{
+                        width: '80%',
+                        height,
+                        // Square brutalist bars. Today's bar is accent; logged
+                        // past days are the solid ink bar from the v2 design.
+                        background: isToday ? 'var(--m-accent)' : 'var(--m-ink)',
+                        position: 'relative',
+                      }}
+                    >
+                      {isToday ? (
+                        <span
+                          style={{
+                            position: 'absolute',
+                            top: -22,
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            fontFamily: 'var(--m-num)',
+                            fontSize: 11,
+                            fontWeight: 700,
+                            color: 'var(--m-ink)',
+                          }}
+                        >
+                          {d.hours.toFixed(1)}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : (
+                    // Days with no hours yet render as a dashed placeholder
+                    // (Fri–Sun in the design) so the strip reads as a full week.
+                    <div
+                      style={{
+                        width: '80%',
+                        height: Math.max(28, 130 * 0.4),
+                        border: '2px dashed var(--m-line-2)',
+                      }}
+                    />
+                  )}
+                </div>
+                <span
+                  style={{
+                    fontFamily: 'var(--m-num)',
+                    fontSize: 11,
+                    fontWeight: isToday ? 700 : 500,
+                    color: isToday ? 'var(--m-ink)' : 'var(--m-ink-3)',
+                  }}
+                >
+                  {d.label}
                 </span>
-                {d.hours > 0 ? (
-                  <div
-                    style={{
-                      width: '70%',
-                      height,
-                      // Today's bar is accent; logged past days are the
-                      // de-emphasized "black"/neutral bar from the design.
-                      background: isToday ? 'var(--m-accent)' : 'var(--m-line-2)',
-                      borderRadius: 4,
-                    }}
-                  />
-                ) : (
-                  // Days with no hours yet render as a dashed placeholder
-                  // (Fri–Sun in the design) so the strip reads as a full week.
-                  <div
-                    style={{
-                      width: '70%',
-                      height: Math.max(28, 110 * 0.4),
-                      border: '1.5px dashed var(--m-line-2)',
-                      borderRadius: 4,
-                    }}
-                  />
-                )}
-                <span style={{ fontSize: 10, color: isToday ? 'var(--m-accent)' : 'var(--m-ink-3)' }}>{d.label}</span>
               </div>
             )
           })}
@@ -210,7 +252,14 @@ export function WorkerHours({ bootstrap }: { bootstrap: BootstrapResponse | null
                 <div className="m-topbar-eyebrow">Pay period to date</div>
                 <div
                   className="num"
-                  style={{ fontSize: 28, fontWeight: 600, letterSpacing: '-0.02em', marginTop: 4, lineHeight: 1 }}
+                  style={{
+                    fontFamily: 'var(--m-font-display)',
+                    fontSize: 40,
+                    fontWeight: 700,
+                    letterSpacing: '-0.03em',
+                    marginTop: 6,
+                    lineHeight: 1,
+                  }}
                 >
                   {formatMoney(periodSummary.gross)}
                 </div>

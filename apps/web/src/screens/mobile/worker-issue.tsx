@@ -37,7 +37,6 @@ import {
   MChip,
   MChipRow,
   MI,
-  MTapCard,
   MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
@@ -45,6 +44,8 @@ import {
 type IssueCategory = {
   /** Displayed label */
   label: string
+  /** Short brutalist glyph shown big on the v2 tile (MATL / STOP / WX …). */
+  glyph: string
   /** Sub label */
   sub: string
   /** Maps to worker_issues.kind on the server. */
@@ -53,7 +54,8 @@ type IssueCategory = {
    *  server constraint is amended. */
   designKind: 'out_of_materials' | 'equipment_broken' | 'safety_concern' | 'weather_hold' | 'scope_question' | 'other'
   Icon: typeof MI.AlertTri
-  tone: 'amber' | 'red' | 'blue' | 'accent'
+  /** v2 tile fill: accent yellow, dark ink, or danger red. */
+  tone: 'accent' | 'dark' | 'danger'
 }
 
 type Severity = 'question' | 'slowing' | 'stopped'
@@ -61,50 +63,59 @@ type Severity = 'question' | 'slowing' | 'stopped'
 const CATEGORIES: ReadonlyArray<IssueCategory> = [
   {
     label: 'Out of materials',
+    glyph: 'MATL',
     sub: 'Need delivery',
     kind: 'materials_out',
     designKind: 'out_of_materials',
     Icon: MI.Layers,
-    tone: 'amber',
+    tone: 'accent',
   },
   {
     label: 'Equipment broken',
+    glyph: 'TOOL',
     sub: 'Tool / scaffold',
     kind: 'other',
     designKind: 'equipment_broken',
     Icon: MI.Drill,
-    tone: 'red',
+    tone: 'dark',
   },
   {
     label: 'Safety concern',
+    glyph: 'STOP',
     sub: 'Stop work',
     kind: 'safety',
     designKind: 'safety_concern',
     Icon: MI.ShieldAlert,
-    tone: 'red',
+    tone: 'danger',
   },
   {
     label: 'Weather hold',
+    glyph: 'WX',
     sub: 'Rain / wind',
     kind: 'other',
     designKind: 'weather_hold',
     Icon: MI.CloudRain,
-    tone: 'amber',
+    tone: 'dark',
   },
   {
     label: 'Scope question',
+    glyph: '?',
     sub: 'Need clarity',
     kind: 'other',
     designKind: 'scope_question',
     Icon: MI.AlertTri,
-    tone: 'blue',
+    tone: 'dark',
   },
-  { label: 'Other', sub: 'Type it out', kind: 'other', designKind: 'other', Icon: MI.Alert, tone: 'accent' },
+  { label: 'Other', glyph: '···', sub: 'Type it out', kind: 'other', designKind: 'other', Icon: MI.Alert, tone: 'dark' },
 ]
 
 export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug: string }) {
   const navigate = useNavigate()
   const [category, setCategory] = useState<IssueCategory | null>(null)
+  // UI-only highlight for the v2 tile grid before the worker hits SEND.
+  // Tapping a tile selects it (accent fill); SEND advances to the compose
+  // step via the existing setCategory transition. No data wiring touched.
+  const [picked, setPicked] = useState<IssueCategory | null>(null)
   const [message, setMessage] = useState('')
   const [severity, setSeverity] = useState<Severity>('question')
   const [voice, setVoice] = useState<{ blob: Blob; url: string; durationMs: number } | null>(null)
@@ -218,53 +229,72 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
       <MTopBar back title="Flag a problem" onBack={() => navigate('/today')} />
       <MBody pad>
         <div className="m-topbar-eyebrow" style={{ marginBottom: 12 }}>
-          WHAT'S THE ISSUE?
+          WHAT'S WRONG?
         </div>
-        {/* Aspect-ratio sizing keeps the tiles square on a phone but
-         * blows them up to ~800px tall on a wide desktop viewport, so
-         * cap the tile height. The grid still feels native at mobile
-         * widths because the cap is well above the natural square. */}
+        {/* 2×3 grid of large glove-target tiles. Reuses the v2-styled
+         * `.m-qa` primitive surface; the picked tile flips to accent
+         * yellow. Square min-height keeps every tile a fat tap target. */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          {CATEGORIES.map((c) => (
-            <MTapCard
-              key={c.designKind}
-              onClick={() => setCategory(c)}
-              style={{
-                aspectRatio: '1.1 / 1',
-                maxHeight: 180,
-                borderRadius: 14,
-                padding: 14,
-                cursor: 'pointer',
-                fontFamily: 'inherit',
-                color: 'inherit',
-                display: 'flex',
-                flexDirection: 'column',
-                justifyContent: 'space-between',
-                gap: 6,
-              }}
-            >
-              <span
+          {CATEGORIES.map((c) => {
+            const isPicked = picked?.designKind === c.designKind
+            return (
+              <button
+                key={c.designKind}
+                type="button"
+                className="m-qa"
+                data-tone={isPicked ? 'accent' : c.tone}
+                onClick={() => setPicked(c)}
+                aria-pressed={isPicked}
                 style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: 8,
-                  background: `var(--m-${c.tone === 'accent' ? 'accent' : c.tone}-soft)`,
-                  color: `var(--m-${c.tone === 'accent' ? 'accent' : c.tone})`,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
+                  minHeight: 120,
+                  justifyContent: 'space-between',
+                  gap: 8,
                 }}
               >
-                <c.Icon size={18} />
-              </span>
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>{c.label}</div>
-                <div className="m-quiet-sm" style={{ marginTop: 2 }}>
-                  {c.sub}
-                </div>
-              </div>
-            </MTapCard>
-          ))}
+                <span className="m-qa-icon">
+                  <c.Icon size={20} />
+                </span>
+                <span style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                  <span
+                    style={{
+                      fontFamily: 'var(--m-font-display)',
+                      fontSize: 30,
+                      fontWeight: 800,
+                      lineHeight: 1,
+                      letterSpacing: '-0.01em',
+                    }}
+                  >
+                    {c.glyph}
+                  </span>
+                  <span className="m-qa-label">{c.label}</span>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+        <div
+          style={{
+            fontFamily: 'var(--m-num)',
+            padding: '16px 0 4px',
+            fontSize: 12,
+            color: 'var(--m-ink-3)',
+            textTransform: 'uppercase',
+            letterSpacing: '0.06em',
+          }}
+        >
+          {picked ? `SELECTED · ${picked.glyph} · FOREMAN GETS THE PING` : 'PICK A TILE TO FLAG IT'}
+        </div>
+        <div style={{ marginTop: 16 }}>
+          <MButton
+            variant="primary"
+            data-size="worker"
+            disabled={!picked}
+            onClick={() => {
+              if (picked) setCategory(picked)
+            }}
+          >
+            Send to foreman
+          </MButton>
         </div>
       </MBody>
     </>

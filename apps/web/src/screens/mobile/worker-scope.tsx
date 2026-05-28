@@ -8,7 +8,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
-import { MAvatar, MBody, MButton, MI, MLargeHead, MTopBar, initialsFor } from '../../components/m/index.js'
+import { MBody, MButton, MI, MLargeHead, MTopBar } from '../../components/m/index.js'
 import { useProjectBriefs } from '../../lib/api/projects.js'
 import type { ProjectBriefStep } from '../../lib/api/project-briefs.js'
 import { timeOfDay, todayIso } from './format.js'
@@ -57,108 +57,86 @@ export function WorkerScope({ bootstrap }: { bootstrap: BootstrapResponse | null
 
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null)
 
+  const goalText = brief?.goal
+    ? brief.goal
+    : project
+      ? 'Continue scope per yesterday’s plan. Foreman brief loads here when sent.'
+      : 'No active project. Check with your foreman.'
+
   return (
     <>
       <MTopBar back title="Scope" onBack={() => navigate('/today')} />
-      <MBody pad>
+      <MBody>
         <MLargeHead
-          eyebrow="TODAY'S SCOPE"
+          eyebrow="SCOPE · TODAY"
           title={project?.division_code ?? 'Awaiting brief'}
           sub={project?.name ?? 'Foreman has not sent today’s brief yet.'}
         />
-        {/* Today's goal — dark accent-tinted card with the SF target
-            right-aligned and a real progress bar. */}
-        <div
-          style={{
-            marginTop: 8,
-            padding: 14,
-            borderRadius: 14,
-            background: 'var(--m-accent-soft)',
-            border: '1px solid var(--m-accent-soft-2)',
-          }}
-        >
+        {/* Goal slab — accent eyebrow tag + a big tight-font statement of
+            today's goal, sitting on the dark shell. */}
+        <div style={{ padding: 20, borderBottom: '2px solid var(--m-sand-2)' }}>
+          <div className="m-topbar-eyebrow" data-tone="accent" style={{ display: 'inline-block' }}>
+            {scopedAt ? `FROM ${(foreman?.name ?? 'FOREMAN').toUpperCase()} · ${scopedAt}` : "TODAY'S GOAL"}
+          </div>
           <div
-            className="m-topbar-eyebrow"
-            style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 700,
+              fontSize: 24,
+              lineHeight: 1.1,
+              letterSpacing: '-0.015em',
+              marginTop: 12,
+              color: 'var(--m-ink)',
+            }}
           >
-            <span>TODAY'S GOAL</span>
-            {targetSqft ? (
-              <span className="num" style={{ color: 'var(--m-accent-ink)', textTransform: 'none', fontWeight: 600 }}>
-                {targetSqft.toLocaleString('en-US')} sf
-              </span>
-            ) : null}
+            {goalText}
           </div>
-          <div style={{ fontSize: 15, fontWeight: 500, marginTop: 8, lineHeight: 1.45 }}>
-            {brief?.goal
-              ? brief.goal
-              : project
-                ? 'Continue scope per yesterday’s plan. Foreman brief loads here when sent.'
-                : 'No active project. Check with your foreman.'}
-          </div>
-          {targetSqft || steps.length > 0 ? (
-            <div style={{ marginTop: 14 }}>
-              <div
-                className="num"
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  fontSize: 10,
-                  color: 'var(--m-ink-3)',
-                  letterSpacing: '0.04em',
-                  marginBottom: 6,
-                }}
-              >
-                <span>
-                  {sqftDone !== null ? `${sqftDone.toLocaleString('en-US')} SF DONE` : `${doneCount} STEPS DONE`}
-                </span>
-                <span>{progressPct}% OF TODAY</span>
+        </div>
+        {/* Progress slab — mono SF-done / % row over a thick bar. */}
+        {targetSqft || steps.length > 0 ? (
+          <div
+            style={{
+              padding: '18px 20px',
+              borderBottom: '2px solid var(--m-sand-2)',
+              background: 'var(--m-card-soft)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <div className="m-topbar-eyebrow" style={{ color: 'var(--m-ink-4)' }}>
+                {sqftDone !== null
+                  ? `${sqftDone.toLocaleString('en-US')} SF DONE`
+                  : `${doneCount} STEPS DONE`}
+                {targetSqft ? ` / ${targetSqft.toLocaleString('en-US')} SF` : ''}
               </div>
-              <div className="m-progress">
-                <div className="m-progress-fill" style={{ width: `${progressPct}%` }} />
+              <div className="num" style={{ color: 'var(--m-accent)', fontWeight: 700, letterSpacing: '0.04em' }}>
+                {progressPct}% TODAY
               </div>
             </div>
-          ) : null}
-          {foreman ? (
-            <div
-              style={{
-                marginTop: 14,
-                paddingTop: 12,
-                borderTop: '1px solid var(--m-line)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 10,
-              }}
-            >
-              <MAvatar initials={initialsFor(foreman.name)} size="sm" />
-              <span className="m-quiet-sm">
-                Scoped by <strong style={{ color: 'var(--m-ink-2)' }}>{foreman.name}</strong>
-                {scopedAt ? ` · ${scopedAt}` : ''}
-              </span>
+            <div className="m-progress" style={{ height: 8, marginTop: 10 }}>
+              <div className="m-progress-fill" style={{ width: `${progressPct}%` }} />
             </div>
-          ) : null}
-        </div>
-        <div style={{ marginTop: 16 }}>
-          <div className="m-section-h">Steps</div>
-          {steps.length > 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {steps.map((step, idx) => (
-                <StepRow
-                  key={step.id ?? idx}
-                  index={idx}
-                  step={step}
-                  status={stepStatuses[idx] ?? 'upcoming'}
-                  expanded={expandedIdx === idx}
-                  onToggle={() => setExpandedIdx(expandedIdx === idx ? null : idx)}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="m-quiet-sm" style={{ padding: '4px 2px' }}>
-              No steps in today’s brief yet. Your foreman adds them in the morning brief.
-            </div>
-          )}
-        </div>
-        <div style={{ padding: '16px 0' }}>
+          </div>
+        ) : null}
+        {/* Numbered step list. */}
+        {steps.length > 0 ? (
+          <div>
+            {steps.map((step, idx) => (
+              <StepRow
+                key={step.id ?? idx}
+                index={idx}
+                step={step}
+                status={stepStatuses[idx] ?? 'upcoming'}
+                expanded={expandedIdx === idx}
+                onToggle={() => setExpandedIdx(expandedIdx === idx ? null : idx)}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="m-quiet-sm" style={{ padding: '16px 20px' }}>
+            No steps in today’s brief yet. Your foreman adds them in the morning brief.
+          </div>
+        )}
+        <div style={{ padding: '20px' }}>
           <MButton variant="ghost" onClick={() => navigate('/issue?category=scope_question')}>
             Question this scope
           </MButton>
@@ -169,10 +147,11 @@ export function WorkerScope({ bootstrap }: { bootstrap: BootstrapResponse | null
 }
 
 /**
- * One scope step, rendered as a dark card matching `wk-scope`. The status
- * marker is a 26px disc: green check when done, accent dot when in
- * progress, an outlined index number when upcoming. Active steps tint the
- * whole card accent and show a "NOW" tag. Tapping expands inline notes.
+ * One scope step, rendered as a full-bleed brutalist list row mirroring
+ * `V2WorkerScopeToday`. The status marker is a 36px square: green ✓ when
+ * done, an ink square w/ index when active, an outlined index when queued.
+ * The active row fills with accent and shows a "NOW" tag; done rows strike
+ * the title through. Tapping expands inline notes.
  */
 function StepRow({
   index,
@@ -190,13 +169,14 @@ function StepRow({
   const isDone = status === 'done'
   const isActive = status === 'in_progress'
   const title = step.title || `Step ${index + 1}`
+  const rowText = isActive ? 'var(--m-accent-ink)' : 'var(--m-ink)'
+  const subColor = isActive ? 'var(--m-accent-ink)' : 'var(--m-ink-4)'
   return (
     <div
       style={{
-        borderRadius: 12,
-        background: isActive ? 'var(--m-accent-soft)' : 'var(--m-card)',
-        border: isActive ? '1px solid var(--m-accent-soft-2)' : '1px solid var(--m-line)',
-        overflow: 'hidden',
+        borderBottom: '1px solid var(--m-line-2)',
+        background: isActive ? 'var(--m-accent)' : 'transparent',
+        color: rowText,
       }}
     >
       <button
@@ -206,10 +186,10 @@ function StepRow({
           width: '100%',
           background: 'transparent',
           border: 'none',
-          padding: 12,
+          padding: '16px 20px',
           display: 'flex',
           alignItems: 'center',
-          gap: 12,
+          gap: 14,
           textAlign: 'left',
           color: 'inherit',
           cursor: 'pointer',
@@ -218,54 +198,55 @@ function StepRow({
         <span
           aria-hidden
           style={{
-            width: 26,
-            height: 26,
-            borderRadius: 13,
+            width: 36,
+            height: 36,
             flexShrink: 0,
             display: 'inline-flex',
             alignItems: 'center',
             justifyContent: 'center',
-            background: isDone ? 'var(--m-green)' : isActive ? 'var(--m-accent)' : 'transparent',
-            border: isDone || isActive ? 'none' : '1.5px solid var(--m-line-2)',
-            color: '#fff',
+            background: isDone ? 'var(--m-green)' : isActive ? 'var(--m-sand)' : 'transparent',
+            border: isDone || isActive ? '2px solid var(--m-sand)' : '2px solid var(--m-sand-2)',
+            color: isDone || isActive ? '#fff' : 'var(--m-ink-4)',
+            fontFamily: 'var(--m-font-display)',
+            fontWeight: 800,
+            fontSize: 16,
           }}
         >
           {isDone ? (
-            <MI.Check size={15} />
+            <MI.Check size={20} />
           ) : (
-            <span
-              className="num"
-              style={{ fontSize: 11, fontWeight: 700, color: isActive ? '#fff' : 'var(--m-ink-3)' }}
-            >
-              {index + 1}
-            </span>
+            <span className="num">{index + 1}</span>
           )}
         </span>
         <span style={{ flex: 1, minWidth: 0 }}>
           <span
             style={{
               display: 'block',
-              fontSize: 13,
-              fontWeight: isActive ? 600 : 500,
-              color: isDone ? 'var(--m-ink-3)' : 'var(--m-ink)',
+              fontFamily: 'var(--m-font-display)',
+              fontSize: 15,
+              fontWeight: 600,
+              letterSpacing: '-0.005em',
+              color: isDone ? 'var(--m-ink-4)' : rowText,
               textDecoration: isDone ? 'line-through' : 'none',
             }}
           >
             {title}
           </span>
-          <span className="m-quiet-sm num" style={{ display: 'block', marginTop: 2 }}>
+          <span className="num" style={{ display: 'block', marginTop: 3, fontSize: 11, fontWeight: 600, color: subColor }}>
             {describeStep(step)}
           </span>
         </span>
         {isActive ? (
-          <span style={{ fontSize: 10, fontWeight: 700, color: 'var(--m-accent)', letterSpacing: '0.06em' }}>NOW</span>
+          <span className="num" style={{ fontWeight: 800, color: 'var(--m-accent-ink)', letterSpacing: '0.06em' }}>
+            NOW
+          </span>
         ) : null}
       </button>
       {expanded && (step.notes || step.materials) ? (
-        <div style={{ padding: '0 12px 12px 50px', color: 'var(--m-ink-2)', fontSize: 13, lineHeight: 1.5 }}>
+        <div style={{ padding: '0 20px 16px 70px', color: subColor, fontSize: 13, lineHeight: 1.5 }}>
           {step.notes ? <div>{step.notes}</div> : null}
           {step.materials ? (
-            <div className="m-quiet-sm" style={{ marginTop: 4 }}>
+            <div className="num" style={{ marginTop: 4, fontSize: 11, fontWeight: 600, color: subColor }}>
               Materials: {step.materials}
             </div>
           ) : null}
