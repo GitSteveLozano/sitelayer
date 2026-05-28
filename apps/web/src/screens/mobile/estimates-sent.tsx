@@ -21,7 +21,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MBody, MChip, MChipRow, MI, MPill, MTapCard, MTopBar } from '../../components/m/index.js'
+import { MBody, MButton, MChip, MChipRow, MListInset, MListRow, MPill, MTopBar } from '../../components/m/index.js'
 import { MEmptyState, MErrorState, MSkeletonList } from '../../components/m-states/index.js'
 import {
   useEstimateShareTimeline,
@@ -94,16 +94,32 @@ export function MobileEstimatesSent() {
                 Declined
               </MChip>
             </MChipRow>
+            <div className="m-section-bar">
+              <span>{filterLabel(filter)}</span>
+              <span style={{ color: 'var(--m-ink)' }}>
+                {visible.length} {visible.length === 1 ? 'share' : 'shares'}
+              </span>
+            </div>
             {visible.length === 0 ? (
-              <div style={{ padding: '40px 24px', textAlign: 'center', color: 'var(--m-ink-3)', fontSize: 13 }}>
+              <div
+                style={{
+                  padding: '40px 24px',
+                  textAlign: 'center',
+                  color: 'var(--m-ink-3)',
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 12,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                }}
+              >
                 No estimates match this filter.
               </div>
             ) : (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '4px 16px 16px' }}>
+              <MListInset>
                 {visible.map((row) => (
                   <SentRow key={row.id} row={row} onOpen={() => navigate(`/projects/${row.project_id}/estimate`)} />
                 ))}
-              </div>
+              </MListInset>
             )}
           </>
         )}
@@ -114,29 +130,45 @@ export function MobileEstimatesSent() {
 
 function SentRow({ row, onOpen }: { row: EstimateShareTimelineRow; onOpen: () => void }) {
   const tone = toneFor(row.status)
+  const awaiting = row.status === 'sent' || row.status === 'viewed'
+  const headline = (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      <span>{row.project_name}</span>
+      <MPill tone={tone} dot>
+        {statusPillShort(row.status)}
+      </MPill>
+    </div>
+  )
+  const supporting = (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      <span style={{ textTransform: 'none', letterSpacing: 0 }}>{row.customer_name ?? 'No customer'}</span>
+      <span>
+        Bid {formatMoney(row.bid_total)} · {sentLabel(row.sent_at)}
+      </span>
+      <span>{openedLabel(row)}</span>
+    </div>
+  )
   return (
-    <MTapCard onClick={onOpen} borderLeft={`4px solid var(--m-${tone ?? 'line-2'})`}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 }}>
-        <MPill tone={tone} dot>
-          {statusPillLabel(row)}
-        </MPill>
-        <MI.ChevRight size={14} style={{ color: 'var(--m-ink-3)' }} />
-      </div>
-      <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 2 }}>{row.project_name}</div>
-      <div style={{ fontSize: 12, color: 'var(--m-ink-3)' }}>{row.customer_name ?? 'No customer'}</div>
-      <div
-        style={{
-          marginTop: 8,
-          display: 'flex',
-          justifyContent: 'space-between',
-          fontSize: 12,
-          color: 'var(--m-ink-2)',
-        }}
-      >
-        <span>Bid {formatMoney(row.bid_total)}</span>
-        <span>{sentLabel(row.sent_at)}</span>
-      </div>
-    </MTapCard>
+    <MListRow
+      headline={headline}
+      supporting={supporting}
+      chev
+      onTap={onOpen}
+      trailing={
+        awaiting ? (
+          <MButton
+            variant="primary"
+            size="sm"
+            onClick={(e) => {
+              e.stopPropagation()
+              onOpen()
+            }}
+          >
+            Nudge
+          </MButton>
+        ) : undefined
+      }
+    />
   )
 }
 
@@ -155,14 +187,15 @@ function toneFor(status: EstimateShareTimelineStatus): 'green' | 'blue' | 'amber
   }
 }
 
-function statusPillLabel(row: EstimateShareTimelineRow): string {
-  switch (row.status) {
+/** Square status pill label — single token in the brutalist SENT/AWAITING/ACCEPTED idiom. */
+function statusPillShort(status: EstimateShareTimelineStatus): string {
+  switch (status) {
     case 'sent':
-      return 'Sent'
+      return 'Awaiting'
     case 'viewed':
-      return row.viewed_at ? `Viewed ${shortAgo(row.viewed_at)}` : 'Viewed'
+      return 'Viewed'
     case 'accepted':
-      return row.signer_name ? `Accepted · ${row.signer_name}` : 'Accepted'
+      return 'Accepted'
     case 'declined':
       return 'Declined'
     case 'expired':
@@ -170,8 +203,29 @@ function statusPillLabel(row: EstimateShareTimelineRow): string {
   }
 }
 
+function filterLabel(filter: FilterKey): string {
+  switch (filter) {
+    case 'all':
+      return 'All shares'
+    case 'awaiting':
+      return 'Awaiting response'
+    case 'accepted':
+      return 'Accepted'
+    case 'declined':
+      return 'Declined'
+  }
+}
+
 function sentLabel(iso: string): string {
   return `Sent ${shortAgo(iso)}`
+}
+
+/** Last-opened meta line. Mirrors the v2 "Last opened yesterday" detail. */
+function openedLabel(row: EstimateShareTimelineRow): string {
+  if (row.status === 'accepted') {
+    return row.signer_name ? `Signed by ${row.signer_name}` : 'Contract signed'
+  }
+  return row.viewed_at ? `Last opened ${shortAgo(row.viewed_at)}` : 'Not opened yet'
 }
 
 /**

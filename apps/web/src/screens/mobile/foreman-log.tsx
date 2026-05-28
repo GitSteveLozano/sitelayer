@@ -22,11 +22,11 @@ import {
   MBody,
   MButton,
   MI,
-  MKpi,
-  MKpiRow,
   MPill,
   MSectionH,
   MSelect,
+  MStat,
+  MStatStrip,
   MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
@@ -209,11 +209,18 @@ function DailyLogEditor({ log, bootstrap, onDone }: DailyLogEditorProps) {
 
   return (
     <>
-      <MKpiRow cols={3}>
-        <MKpi label="Photos" value={String(photoCount)} />
-        <MKpi label="Hours" value={formatDecimalHours(totalHours, 1)} />
-        <MKpi label="Issues" value={String(issuesCount)} metaTone={issuesCount > 0 ? 'amber' : undefined} />
-      </MKpiRow>
+      <MStatStrip>
+        <MStat label="PHOTOS" value={String(photoCount)} />
+        <MStat label="HOURS" value={formatDecimalHours(totalHours, 1)} />
+        <MStat
+          label={
+            <span style={{ color: issuesCount > 0 ? 'var(--m-amber)' : undefined }}>ISSUES</span>
+          }
+          value={
+            <span style={{ color: issuesCount > 0 ? 'var(--m-amber)' : undefined }}>{String(issuesCount)}</span>
+          }
+        />
+      </MStatStrip>
 
       {prefilled ? (
         <div style={{ padding: '8px 16px 0' }}>
@@ -232,7 +239,7 @@ function DailyLogEditor({ log, bootstrap, onDone }: DailyLogEditorProps) {
         />
       </div>
 
-      <MSectionH>Narrative</MSectionH>
+      <MSectionH>Agent draft</MSectionH>
       <div style={{ padding: '0 16px' }}>
         <VoiceToLogBlock
           dailyLogId={log.id}
@@ -261,7 +268,7 @@ function DailyLogEditor({ log, bootstrap, onDone }: DailyLogEditorProps) {
 
       <div style={{ padding: 16 }}>
         <MButton variant="primary" onClick={onSubmit} disabled={isSubmitted || submit.isPending}>
-          {isSubmitted ? 'Submitted' : submit.isPending ? 'Submitting…' : 'Send to office'}
+          {isSubmitted ? 'Submitted' : submit.isPending ? 'Submitting…' : 'Submit to PM'}
         </MButton>
       </div>
     </>
@@ -326,7 +333,7 @@ function PhotoTimeline({ log, briefs }: { log: DailyLog; briefs: { steps: unknow
 
   return (
     <>
-      <MSectionH>Photo timeline</MSectionH>
+      <MSectionH>Photos</MSectionH>
       {steps.length > 0 ? (
         <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 14 }}>
           {stepBuckets.map(({ step, idx, photos: stepPhotos }) => (
@@ -362,13 +369,18 @@ function PhotoTimeline({ log, briefs }: { log: DailyLog; briefs: { steps: unknow
 
 function PhotoStrip({ logId, photos }: { logId: string; photos: DailyLogPhotoMetadata[] }) {
   return (
-    <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
       {photos.map((photo) => (
         <img
           key={photo.id}
           src={dailyLogPhotoUrl(logId, photo.storage_key)}
           alt="Daily log"
-          style={{ width: 96, height: 96, borderRadius: 10, objectFit: 'cover', flexShrink: 0 }}
+          style={{
+            width: '100%',
+            aspectRatio: '1',
+            objectFit: 'cover',
+            border: '2px solid var(--m-ink)',
+          }}
         />
       ))}
     </div>

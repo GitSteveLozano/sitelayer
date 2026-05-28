@@ -22,6 +22,9 @@ export function BudgetTab({
 }) {
   const remaining = bid - spent
   const tone = pctSpent < 60 ? 'green' : pctSpent < 90 ? 'amber' : 'red'
+  // Bar fill state mirrors the v2 brutalist convention: 'over' once the
+  // job exceeds bid, 'risk' as it crowds the cap, else the accent default.
+  const barState = pctSpent >= 100 ? 'over' : pctSpent >= 90 ? 'risk' : pctSpent >= 60 ? 'risk' : 'good'
   return (
     <div style={{ paddingTop: 8 }}>
       {/* Closeout summary — the strategic centerpiece per the merged-
@@ -29,26 +32,38 @@ export function BudgetTab({
           at the top of the Budget tab so the owner sees the bottom line
           before drilling into per-code variance. */}
       <ClosingSummaryCard projectId={project.id} />
-      {/* Estimate-vs-actual variance per service_item_code — the closing
-          half of the foreman/owner feedback loop. Sits above the KPI
-          strip so the worst-offender code is the first thing the eye
-          lands on when the Budget tab opens. Self-hides on empty. */}
-      <LaborVariancePanel projectId={project.id} />
-      <MKpiRow cols={2}>
-        <MKpi label="Spent" value={formatMoney(spent)} meta={`of ${formatMoney(bid)}`} metaTone={tone} />
-        <MKpi label="Pace" value={formatDecimalHours(totalHours, 1)} meta={`@ $${project.labor_rate}/hr`} />
-      </MKpiRow>
-      <div style={{ padding: '12px 16px' }}>
-        <div className="m-progress">
-          <div
-            className="m-progress-fill"
-            style={{ width: `${Math.min(100, pctSpent)}%`, background: `var(--m-${tone})` }}
-          />
+      {/* SPENT VS BID hero — the big-number the owner reads first. Display
+          font, full-bleed block with a hard bottom rule, mono meta. */}
+      <div style={{ padding: '18px 16px', borderBottom: '2px solid var(--m-ink)' }}>
+        <MKpi
+          label="Spent vs bid"
+          value={formatMoney(spent)}
+          meta={`of ${formatMoney(bid)} bid`}
+          metaTone={tone}
+        />
+        <div className="m-progress" data-state={barState} style={{ marginTop: 14, height: 8 }}>
+          <div className="m-progress-fill" style={{ width: `${Math.min(100, pctSpent)}%` }} />
         </div>
-        <div style={{ fontSize: 12, color: 'var(--m-ink-3)', marginTop: 6 }}>
-          {pctSpent}% of bid · {formatMoney(remaining)} remaining
+        <div
+          className="num"
+          style={{
+            marginTop: 8,
+            fontSize: 11,
+            fontWeight: 600,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            color: 'var(--m-ink-2)',
+          }}
+        >
+          {pctSpent}% spent · {formatMoney(remaining)} remaining · {formatDecimalHours(totalHours, 1)} @ $
+          {project.labor_rate}/hr
         </div>
       </div>
+      {/* Estimate-vs-actual variance per service_item_code — the closing
+          half of the foreman/owner feedback loop. Per-code spend bars sit
+          right under the hero so the worst-offender code is the first
+          thing the eye lands on. Self-hides on empty. */}
+      <LaborVariancePanel projectId={project.id} />
       <MSectionH>Notes</MSectionH>
       <div style={{ padding: '0 16px 16px', fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>
         Budget calculated from logged labor entries × project labor rate. Materials and rentals not included in this
@@ -576,53 +591,35 @@ function LaborVariancePanel({ projectId }: { projectId: string }) {
   const hasMore = rows.length > topRows.length
 
   return (
-    <div style={{ padding: '0 16px 12px' }}>
-      <div
-        style={{
-          border: '1px solid var(--m-line)',
-          borderRadius: 12,
-          overflow: 'hidden',
-          background: 'var(--m-card)',
-        }}
-      >
+    <div>
+      <div className="m-section-bar">
+        <span>Spend by code · worst offenders</span>
+        <span>
+          {rows.length} {rows.length === 1 ? 'code' : 'codes'}
+        </span>
+      </div>
+      <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+        {topRows.map((row, idx) => (
+          <LaborVarianceRowItem key={row.service_item_code} row={row} isLast={idx === topRows.length - 1} />
+        ))}
+      </ul>
+      {hasMore ? (
         <div
+          className="num"
           style={{
-            padding: '10px 14px',
-            borderBottom: '1px solid var(--m-line)',
+            padding: '10px 20px',
+            borderTop: '1px solid var(--m-line)',
             fontSize: 10,
-            fontWeight: 700,
-            letterSpacing: '0.08em',
+            fontWeight: 600,
+            letterSpacing: '0.04em',
             textTransform: 'uppercase',
             color: 'var(--m-ink-3)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
           }}
         >
-          <span>Labor variance · worst offenders</span>
-          <span style={{ fontWeight: 500, textTransform: 'none', letterSpacing: 0, color: 'var(--m-ink-3)' }}>
-            {rows.length} {rows.length === 1 ? 'code' : 'codes'}
-          </span>
+          {rows.length - topRows.length} more code{rows.length - topRows.length === 1 ? '' : 's'} · full breakdown
+          coming soon
         </div>
-        <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
-          {topRows.map((row, idx) => (
-            <LaborVarianceRowItem key={row.service_item_code} row={row} isLast={idx === topRows.length - 1} />
-          ))}
-        </ul>
-        {hasMore ? (
-          <div
-            style={{
-              padding: '8px 14px',
-              borderTop: '1px solid var(--m-line)',
-              fontSize: 11,
-              color: 'var(--m-ink-3)',
-            }}
-          >
-            {rows.length - topRows.length} more code{rows.length - topRows.length === 1 ? '' : 's'} · full breakdown
-            coming soon
-          </div>
-        ) : null}
-      </div>
+      ) : null}
     </div>
   )
 }
@@ -632,24 +629,28 @@ function LaborVarianceRowItem({ row, isLast }: { row: LaborVarianceRow; isLast: 
   const absPct = Math.abs(pct)
   const tone: 'green' | 'amber' | 'red' = absPct < 10 ? 'green' : absPct <= 25 ? 'amber' : 'red'
   const sign = pct > 0 ? '+' : pct < 0 ? '−' : ''
-  const pillTone: 'green' | 'amber' | 'red' = tone
+  const hasEstimate = row.estimated_quantity > 0 || row.estimated_hours > 0
+  // Over-budget (actual ahead of estimate) reads as 'over'; otherwise the
+  // amber/red tone maps to 'risk'; green stays the accent default.
+  const barState: 'over' | 'risk' | 'good' = pct > 0 && tone === 'red' ? 'over' : tone === 'green' ? 'good' : 'risk'
+  // Spend bar fill: actual / estimated, capped at the track. The leftover
+  // over-budget remainder is rendered as a hard red overrun segment.
+  const fillPct = hasEstimate ? Math.min(100, absPct) : 0
 
   return (
     <li
       style={{
-        padding: '10px 14px',
+        padding: '14px 20px',
         borderBottom: isLast ? 'none' : '1px solid var(--m-line)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
       }}
     >
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+      <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, minWidth: 0 }}>
           <div
             style={{
+              fontFamily: 'var(--m-font-display)',
               fontSize: 13,
-              fontWeight: 600,
+              fontWeight: 700,
               color: 'var(--m-ink)',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -660,6 +661,7 @@ function LaborVarianceRowItem({ row, isLast }: { row: LaborVarianceRow; isLast: 
           </div>
           {row.division_code ? (
             <span
+              className="num"
               style={{
                 fontSize: 10,
                 fontWeight: 600,
@@ -667,24 +669,43 @@ function LaborVarianceRowItem({ row, isLast }: { row: LaborVarianceRow; isLast: 
                 color: 'var(--m-ink-3)',
                 background: 'var(--m-card-soft)',
                 border: '1px solid var(--m-line)',
-                borderRadius: 999,
                 padding: '1px 6px',
                 lineHeight: 1.3,
+                flexShrink: 0,
               }}
             >
               {row.division_code}
             </span>
           ) : null}
         </div>
-        <div className="num" style={{ fontSize: 11.5, color: 'var(--m-ink-3)', fontVariantNumeric: 'tabular-nums' }}>
-          {formatVarianceQty(row.actual_quantity)} / {formatVarianceQty(row.estimated_quantity)} {row.unit || 'sqft'}
+        <div
+          className="num"
+          style={{
+            fontSize: 12,
+            fontWeight: 800,
+            flexShrink: 0,
+            color: barState === 'over' ? 'var(--m-red)' : 'var(--m-ink)',
+          }}
+        >
+          {hasEstimate ? `${sign}${absPct.toFixed(0)}%` : 'no est.'}
         </div>
       </div>
-      <MPill tone={pillTone}>
-        <span className="num" style={{ fontVariantNumeric: 'tabular-nums', fontWeight: 600 }}>
-          {row.estimated_quantity > 0 || row.estimated_hours > 0 ? `${sign}${absPct.toFixed(0)}%` : 'no est.'}
-        </span>
-      </MPill>
+      <div
+        className="num"
+        style={{
+          fontSize: 10,
+          fontWeight: 600,
+          letterSpacing: '0.04em',
+          textTransform: 'uppercase',
+          color: 'var(--m-ink-3)',
+          marginTop: 4,
+        }}
+      >
+        {formatVarianceQty(row.actual_quantity)} / {formatVarianceQty(row.estimated_quantity)} {row.unit || 'sqft'}
+      </div>
+      <div className="m-progress" data-state={barState} style={{ marginTop: 8, height: 4 }}>
+        <div className="m-progress-fill" style={{ width: `${fillPct}%` }} />
+      </div>
     </li>
   )
 }

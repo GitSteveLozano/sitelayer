@@ -84,19 +84,53 @@ export function MobileRentalDispatch({
     }
   }
 
+  const canDispatch = !!projectId && picked.size > 0 && !busy && yards.length > 0
+  const dispatchYard = yards[0]
+
   return (
     <>
-      <MTopBar back title="Dispatch" onBack={() => navigate('/rentals')} />
+      <MTopBar back title="DISPATCH" onBack={() => navigate('/rentals')} />
       <MBody pad>
+        {/* TO PROJECT — square accent picker field, mono micro-label */}
         <MSectionH>To project</MSectionH>
-        <MSelect value={projectId} onChange={(e) => setProjectId(e.currentTarget.value)} style={{ width: '100%' }}>
-          <option value="">Pick a project…</option>
+        <MSelect
+          value={projectId}
+          onChange={(e) => setProjectId(e.currentTarget.value)}
+          style={{
+            width: '100%',
+            background: 'var(--m-accent)',
+            color: 'var(--m-accent-ink)',
+            fontFamily: 'var(--m-font-display)',
+            fontWeight: 700,
+            fontSize: 16,
+          }}
+        >
+          <option value="">PICK A PROJECT…</option>
           {projects.map((p) => (
             <option key={p.id} value={p.id}>
               {p.name}
             </option>
           ))}
         </MSelect>
+
+        {/* FROM YARD — mono micro-label readout of the dispatch origin */}
+        <MSectionH>From yard</MSectionH>
+        <div
+          style={{
+            padding: '14px 16px',
+            background: 'var(--m-card-soft)',
+            border: '2px solid var(--m-ink)',
+            fontFamily: 'var(--m-num)',
+            fontWeight: 600,
+            fontSize: 12,
+            color: dispatchYard ? 'var(--m-ink)' : 'var(--m-red)',
+            textTransform: 'uppercase',
+          }}
+        >
+          {dispatchYard ? dispatchYard.name : 'NO YARD AVAILABLE'}
+        </div>
+
+        {/* EQUIPMENT — square tap rows */}
         <MSectionH>Equipment</MSectionH>
         <MListInset>
           {items.length === 0 ? (
@@ -125,6 +159,8 @@ export function MobileRentalDispatch({
             })
           )}
         </MListInset>
+
+        {/* BILLING — square chip toggle */}
         <MSectionH>Billing</MSectionH>
         <MChipRow>
           <MChip active={billUpfront} onClick={() => setBillUpfront(true)}>
@@ -134,15 +170,36 @@ export function MobileRentalDispatch({
             At return
           </MChip>
         </MChipRow>
-        {error ? <div style={{ padding: '8px 16px 0', color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
-        <div style={{ padding: 16, marginTop: 12 }}>
+
+        {error ? (
+          <div
+            style={{
+              marginTop: 12,
+              padding: '12px 16px',
+              border: '2px solid var(--m-red)',
+              color: 'var(--m-red)',
+              fontFamily: 'var(--m-num)',
+              fontWeight: 600,
+              fontSize: 12,
+            }}
+          >
+            {error}
+          </div>
+        ) : null}
+
+        {/* CONFIRM — full-width primary CTA on a top-bordered footer */}
+        <div
+          style={{
+            marginTop: 24,
+            paddingTop: 16,
+            borderTop: '2px solid var(--m-ink)',
+          }}
+        >
           <MButtonStack>
-            <MButton
-              variant="primary"
-              disabled={!projectId || picked.size === 0 || busy || yards.length === 0}
-              onClick={handleDispatch}
-            >
-              {busy ? 'Dispatching…' : `Dispatch ${picked.size || 0} ${picked.size === 1 ? 'item' : 'items'}`}
+            <MButton variant="primary" disabled={!canDispatch} onClick={handleDispatch}>
+              {busy
+                ? 'DISPATCHING…'
+                : `CONFIRM · DISPATCH ${picked.size || 0} ${picked.size === 1 ? 'ITEM' : 'ITEMS'}`}
             </MButton>
             <MButton variant="ghost" onClick={() => navigate('/rentals')}>
               Cancel

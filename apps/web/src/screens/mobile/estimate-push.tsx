@@ -22,8 +22,6 @@ import {
   MBody,
   MButton,
   MButtonStack,
-  MKpi,
-  MKpiRow,
   MListInset,
   MListRow,
   MPill,
@@ -57,6 +55,71 @@ const STATE_TONE: Record<EstimatePushState, PillTone> = {
 }
 
 type BannerTone = 'info' | 'error' | 'ok' | 'warn'
+
+// Lifecycle stepper — the v2 brutalist segment strip (DRAFT→REVIEWED→APPROVED→POSTED).
+// Pure view-layer: each business state maps to one stepper index for active/done fill.
+const LIFECYCLE_STEPS = ['DRAFT', 'REVIEWED', 'APPROVED', 'POSTED'] as const
+const STATE_STEP_INDEX: Record<EstimatePushState, number> = {
+  drafted: 0,
+  reviewed: 1,
+  approved: 2,
+  posting: 3,
+  posted: 3,
+  failed: 3,
+  voided: 0,
+}
+
+function LifecycleStepper({ state }: { state: EstimatePushState }) {
+  const activeIdx = STATE_STEP_INDEX[state]
+  const terminalGood = state === 'posted'
+  const terminalBad = state === 'failed'
+  return (
+    <div style={{ padding: '18px 20px', borderBottom: '2px solid var(--m-ink)' }}>
+      <div
+        style={{
+          fontFamily: 'var(--m-num)',
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: '0.08em',
+          textTransform: 'uppercase',
+          color: 'var(--m-ink-3)',
+        }}
+      >
+        Lifecycle
+      </div>
+      <div style={{ marginTop: 10, display: 'flex', gap: 0, border: '2px solid var(--m-ink)' }}>
+        {LIFECYCLE_STEPS.map((step, i, arr) => {
+          const active = i === activeIdx
+          const done = i < activeIdx
+          const isLast = i === arr.length - 1
+          // Terminal failure tints the final (POSTED) cell red so the strip reads at a glance.
+          const activeBg = isLast && terminalBad ? 'var(--m-red)' : isLast && terminalGood ? 'var(--m-green)' : 'var(--m-accent)'
+          const activeFg = isLast && (terminalBad || terminalGood) ? '#fff' : 'var(--m-accent-ink)'
+          return (
+            <div
+              key={step}
+              style={{
+                flex: 1,
+                padding: '10px 0',
+                textAlign: 'center',
+                background: active ? activeBg : done ? 'var(--m-ink)' : 'transparent',
+                color: active ? activeFg : done ? 'var(--m-accent)' : 'var(--m-ink-4)',
+                borderRight: isLast ? 'none' : '2px solid var(--m-ink)',
+              }}
+            >
+              <div
+                className="num"
+                style={{ fontFamily: 'var(--m-num)', fontSize: 9, fontWeight: 800, letterSpacing: '0.04em' }}
+              >
+                {step}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
 
 export function MobileEstimatePush({ companySlug, companyRole }: { companySlug: string; companyRole: CompanyRole }) {
   const params = useParams<{ projectId: string; pushId: string }>()
@@ -128,11 +191,44 @@ export function MobileEstimatePush({ companySlug, companyRole }: { companySlug: 
     <>
       <MTopBar back title="Estimate push" onBack={back} />
       <MBody>
-        <div style={{ padding: '4px 16px 12px' }}>
-          <MPill tone={STATE_TONE[snapshot.state]} dot>
-            {STATE_LABEL[snapshot.state]}
-          </MPill>
+        {/* State header — mono dot-label + big-number total, v2 brutalist. */}
+        <div style={{ padding: '24px 20px 20px', borderBottom: '2px solid var(--m-ink)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <MPill tone={STATE_TONE[snapshot.state]} dot>
+              {STATE_LABEL[snapshot.state]}
+            </MPill>
+          </div>
+          <div
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 800,
+              fontSize: 48,
+              lineHeight: 0.92,
+              letterSpacing: '-0.035em',
+              marginTop: 16,
+              fontFeatureSettings: "'tnum'",
+              fontVariantNumeric: 'tabular-nums',
+            }}
+            className="num"
+          >
+            {formatMoney(subtotal)}
+          </div>
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+              marginTop: 8,
+            }}
+          >
+            Subtotal · {lines.length} {lines.length === 1 ? 'line' : 'lines'} ·{' '}
+            {ctx.qbo_estimate_id ? `QBO #${ctx.qbo_estimate_id.slice(-6)}` : 'QBO pending'}
+          </div>
         </div>
+        <LifecycleStepper state={snapshot.state} />
         {outOfSync ? (
           <div style={{ padding: '0 16px 8px' }}>
             <MBanner
@@ -165,15 +261,6 @@ export function MobileEstimatePush({ companySlug, companyRole }: { companySlug: 
           client={workRequestContext}
         />
         <WorkRequestEntityStatus entityType="estimate_push" entityId={pushId} />
-        <MKpiRow cols={2}>
-          <MKpi label="Subtotal" value={formatMoney(subtotal)} />
-          <MKpi
-            label="QBO"
-            value={ctx.qbo_estimate_id ? `#${ctx.qbo_estimate_id.slice(-6)}` : '—'}
-            meta={ctx.posted_at ? 'posted' : ctx.failed_at ? 'failed' : 'pending'}
-            metaTone={ctx.posted_at ? 'green' : ctx.failed_at ? 'red' : undefined}
-          />
-        </MKpiRow>
         <MSectionH>Line items</MSectionH>
         {lines.length === 0 ? (
           <div style={{ padding: '0 16px', color: 'var(--m-ink-3)', fontSize: 13 }}>No lines on this push.</div>

@@ -22,20 +22,14 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, type BootstrapResponse } from '@/lib/api'
 import { API_URL } from '../../lib/api/client.js'
 import {
-  MAvatar,
   MBanner,
   MBody,
   MButton,
   MButtonStack,
-  MChip,
-  MChipRow,
   MI,
-  MPill,
   MSectionH,
   MTextarea,
   MTopBar,
-  avatarToneFor,
-  initialsFor,
 } from '../../components/m/index.js'
 import { useFieldEvent, type FieldEventResolutionAction } from '../../machines/field-event.js'
 import { timeOfDay } from './format.js'
@@ -221,25 +215,42 @@ export function ForemanBlockerDetail({
           />
         ) : null}
         <div className="m-card" style={{ marginTop: 8 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {worker ? <MAvatar initials={initialsFor(worker.name)} tone={avatarToneFor(worker.id)} size="lg" /> : null}
-            <div>
-              <div style={{ fontSize: 16, fontWeight: 600 }}>{worker?.name ?? 'Unknown worker'}</div>
-              <div className="m-quiet-sm">{createdAt ? `${shortAgo(createdAt)} · ${timeOfDay(createdAt)}` : '—'}</div>
-            </div>
+          <div
+            className="m-topbar-eyebrow"
+            style={{
+              fontWeight: 800,
+              color: resolved ? 'var(--m-green)' : sevTone === 'red' ? 'var(--m-red)' : sevTone === 'amber' ? 'var(--m-amber)' : 'var(--m-ink-3)',
+            }}
+          >
+            ● {resolved ? 'RESOLVED' : (severity ?? 'open').toUpperCase()} · {worker?.name?.toUpperCase() ?? 'UNKNOWN WORKER'}
+            {createdAt ? ` · ${timeOfDay(createdAt).toUpperCase()}` : ''}
           </div>
-          <div style={{ borderTop: '1px solid var(--m-line)', margin: '12px 0' }} />
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <MPill tone={resolved ? 'green' : sevTone}>{resolved ? 'resolved' : (severity ?? 'open')}</MPill>
-            {ctx?.kind ? <MPill>{ctx.kind.replace(/_/g, ' ')}</MPill> : null}
+          <div
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 700,
+              fontSize: 22,
+              lineHeight: 1.1,
+              marginTop: 12,
+              color: 'var(--m-ink)',
+            }}
+          >
+            “{cleanedMessage}”
+          </div>
+          <div
+            className="m-topbar-eyebrow"
+            style={{ marginTop: 10, color: 'var(--m-ink-3)', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}
+          >
+            {project?.name ? <span>{project.name.toUpperCase()}</span> : null}
+            {createdAt ? <span>{shortAgo(createdAt).toUpperCase()}</span> : null}
+            {ctx?.kind ? <span>{ctx.kind.replace(/_/g, ' ').toUpperCase()}</span> : null}
             {lat !== null && lng !== null ? (
-              <span className="m-quiet-sm" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                <MI.MapPin size={14} />
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <MI.MapPin size={12} />
                 {lat.toFixed(4)}, {lng.toFixed(4)}
               </span>
             ) : null}
           </div>
-          <div style={{ fontSize: 15, lineHeight: 1.5, marginTop: 10 }}>{cleanedMessage}</div>
           {voiceAttachment ? (
             <div style={{ marginTop: 12 }}>
               <div className="m-topbar-eyebrow" style={{ marginBottom: 4 }}>
@@ -273,14 +284,39 @@ export function ForemanBlockerDetail({
           <>
             {!escalateMode ? (
               <>
-                <MSectionH>How are you fixing it?</MSectionH>
-                <MChipRow>
-                  {RESOLUTION_OPTIONS.map((opt) => (
-                    <MChip key={opt.id} active={action === opt.id} onClick={() => setAction(opt.id)}>
-                      {opt.label}
-                    </MChip>
-                  ))}
-                </MChipRow>
+                <MSectionH>Resolve · pick one</MSectionH>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {RESOLUTION_OPTIONS.map((opt) => {
+                    const active = action === opt.id
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setAction(opt.id)}
+                        aria-pressed={active}
+                        style={{
+                          display: 'flex',
+                          width: '100%',
+                          alignItems: 'center',
+                          gap: 14,
+                          padding: '16px 18px',
+                          background: active ? 'var(--m-accent)' : 'var(--m-card-soft)',
+                          color: active ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+                          border: '2px solid var(--m-ink)',
+                          textAlign: 'left',
+                          fontFamily: 'var(--m-font)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        <opt.Icon size={20} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 15 }}>{opt.label}</div>
+                        </div>
+                        <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 18 }}>→</div>
+                      </button>
+                    )
+                  })}
+                </div>
                 <MSectionH>Reply to worker</MSectionH>
                 <MTextarea
                   value={reply}
@@ -302,6 +338,12 @@ export function ForemanBlockerDetail({
                       Escalate to estimator
                     </MButton>
                   </MButtonStack>
+                  <div
+                    className="m-topbar-eyebrow"
+                    style={{ marginTop: 12, textAlign: 'center', color: 'var(--m-ink-3)', fontWeight: 600 }}
+                  >
+                    ● {worker?.name?.toUpperCase() ?? 'WORKER'} AUTO-NOTIFIED ON RESOLVE
+                  </div>
                 </div>
               </>
             ) : (
@@ -327,8 +369,11 @@ export function ForemanBlockerDetail({
             )}
           </>
         ) : (
-          <div style={{ padding: '16px', fontSize: 13, color: 'var(--m-green)', textAlign: 'center' }}>
-            Resolved {fe.snapshot?.context.resolved_at ? shortAgo(fe.snapshot.context.resolved_at) : ''}
+          <div
+            className="m-topbar-eyebrow"
+            style={{ padding: '16px', color: 'var(--m-green)', textAlign: 'center', fontWeight: 800 }}
+          >
+            ● RESOLVED {fe.snapshot?.context.resolved_at ? shortAgo(fe.snapshot.context.resolved_at).toUpperCase() : ''}
           </div>
         )}
       </MBody>
