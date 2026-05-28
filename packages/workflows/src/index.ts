@@ -363,3 +363,23 @@ export {
   type NotificationWorkflowSnapshot,
   type NotificationWorkflowState,
 } from './notification.js'
+
+export {
+  CHANGE_ORDER_ALL_STATES,
+  CHANGE_ORDER_EVENT_TYPES,
+  CHANGE_ORDER_TERMINAL_STATES,
+  CHANGE_ORDER_WORKFLOW_NAME,
+  CHANGE_ORDER_WORKFLOW_SCHEMA_VERSION,
+  ChangeOrderEventRequestSchema,
+  changeOrderWorkflow,
+  isHumanChangeOrderEvent,
+  nextChangeOrderEvents,
+  parseChangeOrderEventRequest,
+  transitionChangeOrderWorkflow,
+  type ChangeOrderEventParseResult,
+  type ChangeOrderEventRequest,
+  type ChangeOrderHumanEventType,
+  type ChangeOrderWorkflowEvent,
+  type ChangeOrderWorkflowSnapshot,
+  type ChangeOrderWorkflowState,
+} from './change-order.js'
