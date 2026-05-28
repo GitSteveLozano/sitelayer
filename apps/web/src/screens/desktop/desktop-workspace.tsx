@@ -25,6 +25,7 @@ import { OwnerMoney } from './owner-money'
 import { OwnerSchedule } from './owner-schedule'
 import { OwnerRentals } from './owner-rentals'
 import { OwnerSettings } from './owner-settings'
+import { OwnerProjectDetail } from './owner-project-detail'
 
 // lucide icons type as LucideProps; the DNavItem icon slot wants SVGProps.
 const asIcon = (C: ComponentType<LucideProps>) => C as unknown as ComponentType<SVGProps<SVGSVGElement>>
@@ -106,6 +107,7 @@ export function DesktopWorkspace({ bootstrap = null }: { bootstrap?: BootstrapRe
       <Routes>
         <Route index element={<OwnerDashboard bootstrap={bootstrap} />} />
         <Route path="projects" element={<OwnerProjects bootstrap={bootstrap} />} />
+        <Route path="projects/:projectId" element={<OwnerProjectDetail bootstrap={bootstrap} />} />
         <Route path="schedule" element={<OwnerSchedule bootstrap={bootstrap} />} />
         <Route path="money" element={<OwnerMoney bootstrap={bootstrap} />} />
         <Route path="approvals" element={<OwnerApprovals bootstrap={bootstrap} />} />
