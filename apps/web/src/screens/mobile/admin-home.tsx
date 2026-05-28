@@ -12,6 +12,7 @@ import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse, ProjectRow } from '@/lib/api'
 import {
   MAvatar,
+  MBanner,
   MBody,
   MButton,
   MChip,
@@ -28,6 +29,7 @@ import {
 } from '../../components/m/index.js'
 import { Spark } from '../../components/m/ai.js'
 import { MEmptyState } from '../../components/m-states/index.js'
+import { useActiveGuardrails, useGuardrailAction } from '@/lib/api/guardrails'
 import { formatDecimalHours, formatMoney, formatStatusLabel, statusTone, todayIso } from './format.js'
 
 export type AdminHomeProps = {
@@ -37,6 +39,16 @@ export type AdminHomeProps = {
 export function AdminHome({ bootstrap }: AdminHomeProps) {
   const navigate = useNavigate()
   const [view, setView] = useState<'today' | 'needs' | 'week' | 'all'>('today')
+
+  // v2 Guardrail attention card — company-wide triggered monitors. View-layer
+  // only: shows the highest-priority triggered guardrail above the dashboard
+  // body; renders nothing when none are triggered (calm-by-default).
+  const { data: guardrailsData } = useActiveGuardrails()
+  const { snooze } = useGuardrailAction()
+  const triggeredGuardrail = useMemo(
+    () => (guardrailsData?.guardrails ?? []).find((g) => g.status === 'triggered') ?? null,
+    [guardrailsData?.guardrails],
+  )
 
   const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
   const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
@@ -138,6 +150,38 @@ export function AdminHome({ bootstrap }: AdminHomeProps) {
         onAction={() => navigate('/projects/new')}
       />
       <MBody>
+        {triggeredGuardrail ? (
+          <div style={{ padding: '0 16px' }}>
+            <MBanner
+              tone="attention"
+              title={triggeredGuardrail.label}
+              body={triggeredGuardrail.detail}
+              action={
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <MButton
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      snooze.mutate({
+                        id: triggeredGuardrail.id,
+                        snoozedUntil: new Date(Date.now() + 86400000).toISOString(),
+                      })
+                    }
+                  >
+                    Snooze
+                  </MButton>
+                  <MButton
+                    size="sm"
+                    variant="primary"
+                    onClick={() => navigate(`/projects/${triggeredGuardrail.project_id}`)}
+                  >
+                    Open project
+                  </MButton>
+                </div>
+              }
+            />
+          </div>
+        ) : null}
         <MLargeHead
           eyebrow={new Date()
             .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })

@@ -1,21 +1,28 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import type { ReactNode } from 'react'
 import type { BootstrapResponse } from '@/lib/api'
 import { AdminHome } from './admin-home'
 
 /**
- * Render-smoke tests for the admin "Today" dashboard. The screen is a
- * pure renderer of its `bootstrap` prop plus `useNavigate`, so a
- * MemoryRouter wrapper and a minimal bootstrap fixture are enough — no
- * api/TanStack mocking required.
+ * Render-smoke tests for the admin "Today" dashboard. The screen renders its
+ * `bootstrap` prop plus a small `useActiveGuardrails` query (the calm-vs-
+ * attention card). The query has no data in tests, so the guardrail banner
+ * stays hidden (the calm default) — a MemoryRouter + a no-retry QueryClient
+ * wrapper and a minimal bootstrap fixture are enough; no api mocking required.
  */
 
 afterEach(cleanup)
 
 function wrap(node: ReactNode) {
-  return render(<MemoryRouter>{node}</MemoryRouter>)
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>{node}</MemoryRouter>
+    </QueryClientProvider>,
+  )
 }
 
 // Mirrors the proven fixture shape from foreman-today.test.ts so the

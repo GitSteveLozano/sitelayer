@@ -67,6 +67,9 @@ const ScaffoldDesignerScreen = lazy(() =>
 const ProjectBomsScreen = lazy(() =>
   import('@/screens/scaffold/project-boms').then((m) => ({ default: m.ProjectBomsScreen })),
 )
+const ChangeOrdersScreen = lazy(() =>
+  import('@/screens/mobile/change-orders').then((m) => ({ default: m.MobileChangeOrders })),
+)
 const TakeoffDetailScreen = lazy(() =>
   import('@/screens/projects/takeoff-detail').then((m) => ({ default: m.TakeoffDetailScreen })),
 )
@@ -218,6 +221,7 @@ function AppShellRoutes() {
       <Route path="/projects/:id/takeoff-canvas" element={<TakeoffCanvasScreen />} />
       <Route path="/projects/:id/takeoff-preview" element={<TakeoffPreviewScreen />} />
       <Route path="/projects/:id/boms" element={<ProjectBomsScreen />} />
+      <Route path="/projects/:projectId/change-orders" element={<ChangeOrdersScreen />} />
       <Route path="/scaffold-designer" element={<ScaffoldDesignerScreen />} />
       <Route path="/projects/:id/takeoff-summary" element={<TakeoffSummaryScreen />} />
       <Route path="/projects/:id/photo-measure" element={<PhotoMeasureScreen />} />
