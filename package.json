@@ -35,19 +35,19 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.59.1",
-    "@sentry/cli": "^3.4.1",
-    "@types/node": "^25.6.0",
+    "@playwright/test": "^1.60.0",
+    "@sentry/cli": "^3.4.3",
+    "@types/node": "^25.9.1",
     "@types/pngjs": "^6.0.5",
     "concurrently": "^9.1.2",
-    "eslint": "^10.3.0",
+    "eslint": "^10.4.0",
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^17.6.0",
     "pngjs": "^7.0.0",
     "prettier": "^3.8.3",
-    "tsx": "^4.20.3",
+    "tsx": "^4.22.3",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.59.2"
+    "typescript-eslint": "^8.60.0"
   }
 }
