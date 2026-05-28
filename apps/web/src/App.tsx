@@ -85,6 +85,14 @@ const ClientsListScreen = lazy(() =>
 const ClientProfileScreen = lazy(() =>
   import('@/screens/mobile/clients').then((m) => ({ default: m.MobileClientProfile })),
 )
+const ChatThreadScreen = lazy(() => import('@/screens/mobile/chat').then((m) => ({ default: m.MobileChatThread })))
+const BroadcastScreen = lazy(() => import('@/screens/mobile/broadcast').then((m) => ({ default: m.MobileBroadcast })))
+const NotificationsInboxScreen = lazy(() =>
+  import('@/screens/mobile/notifications-inbox').then((m) => ({ default: m.MobileNotificationsInbox })),
+)
+const ActivityLogScreen = lazy(() =>
+  import('@/screens/mobile/activity-log').then((m) => ({ default: m.MobileActivityLog })),
+)
 const TakeoffDetailScreen = lazy(() =>
   import('@/screens/projects/takeoff-detail').then((m) => ({ default: m.TakeoffDetailScreen })),
 )
@@ -241,6 +249,10 @@ function AppShellRoutes() {
       <Route path="/projects/:projectId/recovery" element={<RecoveryPlanScreen />} />
       <Route path="/clients" element={<ClientsListScreen />} />
       <Route path="/clients/:clientId" element={<ClientProfileScreen />} />
+      <Route path="/chat/:projectId" element={<ChatThreadScreen />} />
+      <Route path="/broadcast" element={<BroadcastScreen />} />
+      <Route path="/notifications" element={<NotificationsInboxScreen />} />
+      <Route path="/activity" element={<ActivityLogScreen />} />
       <Route path="/scaffold-designer" element={<ScaffoldDesignerScreen />} />
       <Route path="/projects/:id/takeoff-summary" element={<TakeoffSummaryScreen />} />
       <Route path="/projects/:id/photo-measure" element={<PhotoMeasureScreen />} />
