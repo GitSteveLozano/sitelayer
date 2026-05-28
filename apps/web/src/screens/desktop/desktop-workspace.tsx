@@ -11,9 +11,10 @@
  * the composition differs. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
 import { Route, Routes, useLocation } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { Bell, Briefcase, Calendar, DollarSign, Home, Layers, Library, type LucideProps, Package, Plus, Settings, Sparkles, Users, UserSquare } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
-import type { BootstrapResponse } from '@/lib/api'
+import { getActiveCompanySlug, queryKeys, request, type BootstrapResponse } from '@/lib/api'
 import { DShell, DSidebar, DTopbar, type DNavSection } from '@/components/d'
 import { MButton } from '@/components/m'
 import { OwnerDashboard } from './owner-dashboard'
@@ -120,9 +121,20 @@ function DComingSoon({ name }: { name: string }) {
   )
 }
 
-export function DesktopWorkspace({ bootstrap = null }: { bootstrap?: BootstrapResponse | null }) {
+export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstrap?: BootstrapResponse | null }) {
   const location = useLocation()
   const crumb = CRUMB[location.pathname] ?? 'Sitelayer'
+
+  // Self-fetch bootstrap when not passed (the /desktop route mounts this
+  // standalone). When workspace.tsx redirects a desktop owner here, the
+  // bootstrap query is already warm in the cache from CompanyWorkspace.
+  const companySlug = getActiveCompanySlug()
+  const bootstrapQuery = useQuery({
+    queryKey: queryKeys.bootstrap(companySlug ?? ''),
+    queryFn: () => request<BootstrapResponse>('/api/bootstrap', { companySlug: companySlug ?? undefined }),
+    enabled: bootstrapProp === null && Boolean(companySlug),
+  })
+  const bootstrap = bootstrapProp ?? bootstrapQuery.data ?? null
 
   return (
     <DShell sidebar={<DSidebar sections={OWNER_NAV} wearing="Owner" />}>
