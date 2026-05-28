@@ -33,6 +33,9 @@ const WorkspaceRoute = lazy(() => import('@/routes/workspace'))
 // admin-first workspace router became the root.
 const MRoute = lazy(() => import('@/routes/m'))
 const MPreviewRoute = lazy(() => import('@/screens/mobile-preview').then((m) => ({ default: m.MPreviewView })))
+const DesktopWorkspaceRoute = lazy(() =>
+  import('@/screens/desktop/desktop-workspace').then((m) => ({ default: m.DesktopWorkspace })),
+)
 
 // Specialized full-screen routes that don't fit the bottom-tab chrome.
 // These must match before the mobile-shell catch-all below. /more is
@@ -260,6 +263,7 @@ function AppShellRoutes() {
 
       {/* Dev-only primitive showcase. */}
       <Route path="/m-preview" element={<MPreviewRoute />} />
+      <Route path="/desktop/*" element={<DesktopWorkspaceRoute />} />
 
       {/* Legacy alias -- original mount of the mobile shell. */}
       <Route path="/m/*" element={<MRoute basePath="/m" />} />
