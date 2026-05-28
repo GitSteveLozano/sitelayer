@@ -588,7 +588,7 @@ function LaborVariancePanel({ projectId }: { projectId: string }) {
   return (
     <div>
       <div className="m-section-bar">
-        <span>Spend by code · worst offenders</span>
+        <span>Labor variance · worst offenders</span>
         <span>
           {rows.length} {rows.length === 1 ? 'code' : 'codes'}
         </span>
