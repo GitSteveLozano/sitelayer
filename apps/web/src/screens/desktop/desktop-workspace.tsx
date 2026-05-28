@@ -30,6 +30,10 @@ import { EstTakeoffProjects } from './est-takeoff-projects'
 import { EstAiQueue } from './est-ai-queue'
 import { EstItemLibrary } from './est-item-library'
 import { EstClientProfile } from './est-client-profile'
+import { EstQuantities } from './est-quantities'
+import { EstScaleVerify } from './est-scale-verify'
+import { FmToday } from './fm-today'
+import { FmCrew } from './fm-crew'
 
 // lucide icons type as LucideProps; the DNavItem icon slot wants SVGProps.
 const asIcon = (C: ComponentType<LucideProps>) => C as unknown as ComponentType<SVGProps<SVGSVGElement>>
@@ -67,6 +71,13 @@ const OWNER_NAV: DNavSection[] = [
       { to: '/desktop/item-library', label: 'Item Library', icon: asIcon(Library) },
     ],
   },
+  {
+    title: 'Foreman',
+    items: [
+      { to: '/desktop/fm/today', label: 'FM Today', icon: asIcon(Home) },
+      { to: '/desktop/fm/crew', label: 'FM Crew', icon: asIcon(Users) },
+    ],
+  },
 ]
 
 const CRUMB: Record<string, string> = {
@@ -82,6 +93,8 @@ const CRUMB: Record<string, string> = {
   '/desktop/takeoff': 'Takeoff',
   '/desktop/ai-queue': 'AI Queue',
   '/desktop/item-library': 'Item Library',
+  '/desktop/fm/today': 'Foreman · Today',
+  '/desktop/fm/crew': 'Foreman · Crew',
 }
 
 function DComingSoon({ name }: { name: string }) {
@@ -134,6 +147,10 @@ export function DesktopWorkspace({ bootstrap = null }: { bootstrap?: BootstrapRe
         <Route path="ai-queue" element={<EstAiQueue bootstrap={bootstrap} />} />
         <Route path="item-library" element={<EstItemLibrary />} />
         <Route path="clients/:clientId" element={<EstClientProfile />} />
+        <Route path="estimate/:projectId" element={<EstQuantities />} />
+        <Route path="scale/:projectId" element={<EstScaleVerify />} />
+        <Route path="fm/today" element={<FmToday bootstrap={bootstrap} />} />
+        <Route path="fm/crew" element={<FmCrew bootstrap={bootstrap} />} />
         <Route path="*" element={<DComingSoon name="Screen" />} />
       </Routes>
     </DShell>
