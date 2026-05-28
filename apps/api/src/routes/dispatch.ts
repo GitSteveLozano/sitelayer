@@ -67,6 +67,7 @@ import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
 import { handleChangeOrderRoutes } from './change-orders.js'
 import { handleGuardrailRoutes } from './guardrails.js'
 import { handleProjectLostReasonRoutes } from './project-lost-reasons.js'
+import { handleMessagingRoutes } from './messaging.js'
 import { handleLaborPayrollRunRoutes } from './labor-payroll-runs.js'
 import { handleEstimateShareRoutes } from './estimate-shares-admin.js'
 import { handleInventoryForecastRoutes } from './inventory-forecast.js'
@@ -804,6 +805,17 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     // Project lost reasons (v2) — get + upsert the categorised lost-bid capture
     () =>
       handleProjectLostReasonRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Cross-role comms (v2) — project chat threads + owner broadcasts
+    () =>
+      handleMessagingRoutes(req, url, {
         pool,
         company,
         currentUserId,

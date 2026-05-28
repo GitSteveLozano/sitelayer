@@ -1374,3 +1374,35 @@ export const LOST_REASON_CODES: readonly LostReasonCode[] = [
   'competitor',
   'other',
 ]
+
+// ---- Cross-role comms (100_messaging.sql) -------------------------------
+
+/** A role-tagged message in a project chat thread. */
+export interface ProjectMessage {
+  id: string
+  company_id: string
+  project_id: string
+  author_user_id: string
+  author_role: string
+  body: string
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export type BroadcastAudience = 'all' | 'foremen' | 'crew'
+
+/** An owner → crew one-way announcement (no replies). */
+export interface Broadcast {
+  id: string
+  company_id: string
+  author_user_id: string
+  audience: BroadcastAudience
+  body: string
+  project_id: string | null
+  version: number
+  created_at: string
+  updated_at: string
+}
+
+export const BROADCAST_AUDIENCES: readonly BroadcastAudience[] = ['all', 'foremen', 'crew']
