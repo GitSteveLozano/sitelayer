@@ -113,6 +113,32 @@ export function Overview({
           onTap={() => navigate('/log')}
         />
       </MListInset>
+      <MSectionH>Change &amp; risk</MSectionH>
+      <MListInset>
+        <MListRow
+          leading={<MI.FileText size={18} />}
+          leadingTone="accent"
+          headline="Change orders"
+          supporting="Scope addendums + value delta"
+          chev
+          onTap={() => navigate(`/projects/${project.id}/change-orders`)}
+        />
+        <MListRow
+          leading={<MI.AlertTri size={18} />}
+          leadingTone="red"
+          headline="Recovery plan"
+          supporting="At-risk guardrails + actions"
+          chev
+          onTap={() => navigate(`/projects/${project.id}/recovery`)}
+        />
+        <MListRow
+          leading={<MI.X size={18} />}
+          headline="Mark lost"
+          supporting="Capture the lost reason"
+          chev
+          onTap={() => navigate(`/projects/${project.id}/lost`)}
+        />
+      </MListInset>
     </div>
   )
 }
