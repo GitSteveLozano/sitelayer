@@ -34,6 +34,9 @@ const DOMAIN_ENTITY_TYPES = new Set([
   'estimate_share_link',
   'rental',
   'shipment',
+  'project_lost_reason',
+  'change_order',
+  'guardrail',
   // Global Clerk identity mirror (clerk_users). Audit rows for this entity are
   // only written when there IS a company to attribute the event to (e.g. a
   // future JIT-membership grant). The pre-tenancy webhook upsert itself is not

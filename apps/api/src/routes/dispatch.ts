@@ -65,6 +65,8 @@ import { handleWorkerRoutes } from './workers.js'
 import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
 import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
 import { handleChangeOrderRoutes } from './change-orders.js'
+import { handleGuardrailRoutes } from './guardrails.js'
+import { handleProjectLostReasonRoutes } from './project-lost-reasons.js'
 import { handleLaborPayrollRunRoutes } from './labor-payroll-runs.js'
 import { handleEstimateShareRoutes } from './estimate-shares-admin.js'
 import { handleInventoryForecastRoutes } from './inventory-forecast.js'
@@ -780,6 +782,28 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     // Change orders (v2) — list/create + per-CO workflow snapshot + events
     () =>
       handleChangeOrderRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Guardrails (v2) — per-project monitors + company-wide active + snooze/mute/clear
+    () =>
+      handleGuardrailRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Project lost reasons (v2) — get + upsert the categorised lost-bid capture
+    () =>
+      handleProjectLostReasonRoutes(req, url, {
         pool,
         company,
         currentUserId,
