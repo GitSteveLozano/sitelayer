@@ -10,9 +10,9 @@
  * Shares the data layer (hooks, entity APIs) and v2 tokens with mobile; only
  * the composition differs. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
-import { Route, Routes, useLocation } from 'react-router-dom'
+import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { Bell, Briefcase, Calendar, DollarSign, Home, Layers, Library, type LucideProps, Package, Plus, Settings, Sparkles, Users, UserSquare } from 'lucide-react'
+import { Bell, Briefcase, Calendar, DollarSign, FileText, Home, Layers, Library, type LucideProps, Package, Plus, Settings, Sparkles, Users, UserSquare } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import { getActiveCompanySlug, queryKeys, request, type BootstrapResponse } from '@/lib/api'
 import { DShell, DSidebar, DTopbar, type DNavSection } from '@/components/d'
@@ -39,6 +39,9 @@ import { EstCanvas } from './est-canvas'
 import { FmSchedule } from './fm-schedule'
 import { FmTime } from './fm-time'
 import { FmBrief } from './fm-brief'
+import { FmLog } from './fm-log'
+import { OwnerRentalsUtilization } from './owner-rentals-utilization'
+import { OwnerNewProject } from './owner-new-project'
 
 // lucide icons type as LucideProps; the DNavItem icon slot wants SVGProps.
 const asIcon = (C: ComponentType<LucideProps>) => C as unknown as ComponentType<SVGProps<SVGSVGElement>>
@@ -83,6 +86,7 @@ const OWNER_NAV: DNavSection[] = [
       { to: '/desktop/fm/crew', label: 'FM Crew', icon: asIcon(Users) },
       { to: '/desktop/fm/schedule', label: 'FM Schedule', icon: asIcon(Calendar) },
       { to: '/desktop/fm/time', label: 'FM Time', icon: asIcon(Calendar) },
+      { to: '/desktop/fm/log', label: 'FM Log', icon: asIcon(FileText) },
     ],
   },
 ]
@@ -104,6 +108,9 @@ const CRUMB: Record<string, string> = {
   '/desktop/fm/crew': 'Foreman · Crew',
   '/desktop/fm/schedule': 'Foreman · Schedule',
   '/desktop/fm/time': 'Foreman · Time',
+  '/desktop/fm/log': 'Foreman · Daily Log',
+  '/desktop/projects/new': 'New project',
+  '/desktop/rentals/utilization': 'Rentals · Utilization',
 }
 
 function DComingSoon({ name }: { name: string }) {
@@ -123,6 +130,7 @@ function DComingSoon({ name }: { name: string }) {
 
 export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstrap?: BootstrapResponse | null }) {
   const location = useLocation()
+  const navigate = useNavigate()
   const crumb = CRUMB[location.pathname] ?? 'Sitelayer'
 
   // Self-fetch bootstrap when not passed (the /desktop route mounts this
@@ -142,7 +150,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         crumb={crumb}
         actions={
           <>
-            <MButton size="sm" variant="primary">
+            <MButton size="sm" variant="primary" onClick={() => navigate('/desktop/projects/new')}>
               <PlusIcon /> New project
             </MButton>
             <Bell aria-hidden width={20} height={20} />
@@ -155,7 +163,10 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
       <Routes>
         <Route index element={<OwnerDashboard bootstrap={bootstrap} />} />
         <Route path="projects" element={<OwnerProjects bootstrap={bootstrap} />} />
+        <Route path="projects/new" element={<OwnerNewProject />} />
         <Route path="projects/:projectId" element={<OwnerProjectDetail bootstrap={bootstrap} />} />
+        <Route path="rentals/utilization" element={<OwnerRentalsUtilization />} />
+        <Route path="fm/log" element={<FmLog bootstrap={bootstrap} />} />
         <Route path="schedule" element={<OwnerSchedule bootstrap={bootstrap} />} />
         <Route path="money" element={<OwnerMoney bootstrap={bootstrap} />} />
         <Route path="approvals" element={<OwnerApprovals bootstrap={bootstrap} />} />
