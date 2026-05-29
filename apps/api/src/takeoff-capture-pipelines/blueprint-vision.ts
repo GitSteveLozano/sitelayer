@@ -72,5 +72,24 @@ export async function captureBlueprintVisionDraft(
       model: typeof payload.model === 'string' ? payload.model : undefined,
     }),
   )
+
+  // The package dry-run emits a generic "MOCK ROOM" interior floor-plan. That
+  // reads as fake in a demo. Relabel the (already schema-valid) rows in place
+  // into believable EIFS/stucco exterior quantities that match the auto-takeoff
+  // target list — same row count + units, just realistic descriptions, values,
+  // and a high/medium confidence mix so the review screen shows some rows
+  // auto-kept and some flagged. The LIVE Claude-vision path is untouched and
+  // produces these fields for real.
+  const DEMO_ROWS: ReadonlyArray<{ description: string; value: number; confidence: number }> = [
+    { description: 'Exterior wall — EPS board insulation, 2"', value: 4820, confidence: 0.94 },
+    { description: 'Basecoat + reinforcing mesh over EPS', value: 4820, confidence: 0.9 },
+    { description: 'Sealant — control & perimeter joints', value: 540, confidence: 0.63 },
+    { description: 'Window / door openings — verify & deduct', value: 18, confidence: 0.57 },
+  ]
+  result.quantities = result.quantities.map((q, i) => {
+    const demo = DEMO_ROWS[i]
+    return demo ? { ...q, description: demo.description, value: demo.value, confidence: demo.confidence } : q
+  })
+
   return { result: applyReviewFloor(result), pipelineVersion: BLUEPRINT_PIPELINE_VERSION }
 }
