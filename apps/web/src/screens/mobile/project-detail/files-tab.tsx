@@ -11,13 +11,42 @@
  * Loading renders skeleton rows; empty offers the "Open blueprints /
  * takeoff" CTA so the estimator can drop the first drawing.
  */
+import { useRef, useState, type ChangeEvent } from 'react'
 import type { ProjectRow } from '@/lib/api'
+import { useRole } from '@/lib/role'
 import { MButton, MPill, MSectionH } from '../../../components/m/index.js'
 import { MSkeletonList } from '../../../components/m-states/index.js'
-import { useProjectBlueprints, type BlueprintDocument } from '../../../lib/api/takeoff.js'
+import { useProjectBlueprints, useUploadBlueprint, type BlueprintDocument } from '../../../lib/api/takeoff.js'
 
 export function FilesTab({ project, navigate }: { project: ProjectRow; navigate: (path: string) => void }) {
   const query = useProjectBlueprints(project.id)
+
+  // Blueprint upload — admin/foreman/office only (hidden for worker).
+  const role = useRole()
+  const canUploadBlueprint = role === 'owner' || role === 'foreman'
+  const uploadBlueprint = useUploadBlueprint(project.id)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+
+  const onPickBlueprintFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null
+    e.target.value = ''
+    if (!file) return
+    setUploadError(null)
+    uploadBlueprint.mutate(file, {
+      onError: (err) => setUploadError(err instanceof Error ? err.message : 'Upload failed'),
+    })
+  }
+
+  const uploadInput = canUploadBlueprint ? (
+    <input
+      ref={fileInputRef}
+      type="file"
+      accept="application/pdf,image/*"
+      style={{ display: 'none' }}
+      onChange={onPickBlueprintFile}
+    />
+  ) : null
 
   if (query.isPending) {
     return (
@@ -56,6 +85,7 @@ export function FilesTab({ project, navigate }: { project: ProjectRow; navigate:
   if (blueprints.length === 0) {
     return (
       <div style={{ paddingTop: 8 }}>
+        {uploadInput}
         <div style={{ padding: '0 16px 12px' }}>
           <div
             style={{
@@ -90,9 +120,26 @@ export function FilesTab({ project, navigate }: { project: ProjectRow; navigate:
             >
               Drop a PDF or photo of the elevations and Sitelayer will help you measure scope on the takeoff canvas.
             </div>
-            <MButton variant="primary" size="sm" onClick={() => navigate(`/projects/${project.id}/takeoff`)}>
-              Open takeoff
-            </MButton>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {canUploadBlueprint ? (
+                <MButton
+                  variant="primary"
+                  size="sm"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadBlueprint.isPending}
+                >
+                  {uploadBlueprint.isPending ? 'Uploading…' : 'Upload blueprint'}
+                </MButton>
+              ) : null}
+              <MButton
+                variant={canUploadBlueprint ? 'ghost' : 'primary'}
+                size="sm"
+                onClick={() => navigate(`/projects/${project.id}/takeoff`)}
+              >
+                Open takeoff
+              </MButton>
+              {uploadError ? <div style={{ fontSize: 12, color: 'var(--m-red)' }}>{uploadError}</div> : null}
+            </div>
           </div>
         </div>
       </div>
@@ -101,7 +148,21 @@ export function FilesTab({ project, navigate }: { project: ProjectRow; navigate:
 
   return (
     <div style={{ paddingTop: 8 }}>
+      {uploadInput}
       <MSectionH>{`${blueprints.length} ${blueprints.length === 1 ? 'drawing' : 'drawings'}`}</MSectionH>
+      {canUploadBlueprint ? (
+        <div style={{ padding: '0 16px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <MButton
+            variant="primary"
+            size="sm"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadBlueprint.isPending}
+          >
+            {uploadBlueprint.isPending ? 'Uploading…' : '↑ Upload blueprint'}
+          </MButton>
+          {uploadError ? <div style={{ fontSize: 12, color: 'var(--m-red)' }}>{uploadError}</div> : null}
+        </div>
+      ) : null}
       <div style={{ padding: '0 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
         {blueprints.map((b) => (
           <BlueprintRow key={b.id} b={b} onTap={() => navigate(`/projects/${project.id}/takeoff`)} />

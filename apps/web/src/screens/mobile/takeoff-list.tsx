@@ -16,9 +16,10 @@
  * navigations 404. The blueprint thumbnail rows pass `?blueprint=<id>`
  * which the mobile screen reads to preselect the drawing.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { apiGet } from '@/lib/api'
+import { apiGet, useUploadBlueprint } from '@/lib/api'
+import { useRole } from '@/lib/role'
 import { MBody, MButton, MI, MListInset, MListRow, MPill, MSectionH, MTopBar } from '../../components/m/index.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
 import { shortDate } from './format.js'
@@ -42,6 +43,26 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
   const projectId = params.projectId ?? ''
   const [blueprints, setBlueprints] = useState<readonly BlueprintRow[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Bump to force a re-fetch after a successful upload.
+  const [reloadKey, setReloadKey] = useState(0)
+
+  // Blueprint upload — admin/foreman/office only (hidden for worker).
+  const role = useRole()
+  const canUploadBlueprint = role === 'owner' || role === 'foreman'
+  const uploadBlueprint = useUploadBlueprint(projectId)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+
+  const onPickBlueprintFile = (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null
+    e.target.value = ''
+    if (!file) return
+    setUploadError(null)
+    uploadBlueprint.mutate(file, {
+      onSuccess: () => setReloadKey((k) => k + 1),
+      onError: (err) => setUploadError(err instanceof Error ? err.message : 'Upload failed'),
+    })
+  }
 
   useEffect(() => {
     if (!projectId) return
@@ -58,12 +79,24 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
     return () => {
       cancelled = true
     }
-  }, [projectId, companySlug])
+  }, [projectId, companySlug, reloadKey])
 
   return (
     <>
       <MTopBar back title="Blueprints" onBack={() => navigate(`/projects/${projectId}`)} />
       <MBody>
+        {canUploadBlueprint ? (
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/pdf,image/*"
+            style={{ display: 'none' }}
+            onChange={onPickBlueprintFile}
+          />
+        ) : null}
+        {uploadError ? (
+          <div style={{ padding: '8px 16px 0', color: 'var(--m-red)', fontSize: 13 }}>{uploadError}</div>
+        ) : null}
         {error ? (
           <div style={{ padding: 24, color: 'var(--m-red)', fontSize: 13 }}>{error}</div>
         ) : blueprints === null ? (
@@ -75,8 +108,14 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
           <MEmptyState
             title="No drawings yet"
             body="You can still run a takeoff: enter manual quantities per scope item, or upload a drawing to trace polygons and compute square footage."
-            primaryLabel="Start takeoff"
-            onPrimary={() => navigate(`/projects/${projectId}/takeoff-mobile`)}
+            {...(canUploadBlueprint
+              ? {
+                  primaryLabel: uploadBlueprint.isPending ? 'Uploading…' : 'Upload a drawing',
+                  onPrimary: () => fileInputRef.current?.click(),
+                }
+              : {})}
+            secondaryLabel="Start takeoff"
+            onSecondary={() => navigate(`/projects/${projectId}/takeoff-mobile`)}
           />
         ) : (
           <>
@@ -108,10 +147,19 @@ export function MobileTakeoffList({ companySlug }: { companySlug: string }) {
                 />
               ))}
             </MListInset>
-            <div style={{ padding: '16px' }}>
+            <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
               <MButton variant="primary" onClick={() => navigate(`/projects/${projectId}/takeoff-mobile`)}>
                 Open mobile takeoff
               </MButton>
+              {canUploadBlueprint ? (
+                <MButton
+                  variant="ghost"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploadBlueprint.isPending}
+                >
+                  {uploadBlueprint.isPending ? 'Uploading…' : '↑ Upload blueprint'}
+                </MButton>
+              ) : null}
             </div>
           </>
         )}

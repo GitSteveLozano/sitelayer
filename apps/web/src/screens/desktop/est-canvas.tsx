@@ -34,6 +34,7 @@ import {
   useProjectMeasurements,
   useServiceItems,
   useTakeoffDrafts,
+  useUploadBlueprint,
   type BlueprintDocument,
   type BlueprintPage,
   type MeasurementGeometry,
@@ -43,8 +44,14 @@ import {
 } from '@/lib/api'
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
+import { useRole } from '@/lib/role'
 import { MButton, MPill, MSelect } from '@/components/m'
 import { DEmptyState } from '@/components/d'
+
+/** Accept filter for the blueprint file input — PDF plan sets + images.
+ * The upload control itself is gated to admin/foreman/office (owner/foreman
+ * personas), matching the API role gate on POST /api/projects/:id/blueprints. */
+const BLUEPRINT_UPLOAD_ACCEPT = 'application/pdf,image/*'
 
 type Tool = 'polygon' | 'lineal' | 'count'
 
@@ -78,6 +85,31 @@ export function EstCanvas() {
   const [blueprintId, setBlueprintId] = useState<string | null>(null)
   const activeBlueprint: BlueprintDocument | null =
     blueprintList.find((b) => b.id === blueprintId) ?? blueprintList[0] ?? null
+
+  // --- Blueprint upload (admin/foreman/office only) -------------------------
+  const role = useRole()
+  const canUploadBlueprint = role === 'owner' || role === 'foreman'
+  const uploadBlueprint = useUploadBlueprint(projectId)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+
+  const onPickBlueprintFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null
+    // Reset the input so re-picking the same file fires `change` again.
+    e.target.value = ''
+    if (!file) return
+    setUploadError(null)
+    uploadBlueprint.mutate(file, {
+      onSuccess: (doc) => {
+        // Refetch happens via the hook's invalidate; auto-select the new
+        // document so the canvas immediately underlays it.
+        setBlueprintId(doc.id)
+        setPageId(null)
+        void blueprints.refetch()
+      },
+      onError: (err) => setUploadError(err instanceof Error ? err.message : 'Upload failed'),
+    })
+  }
 
   const blueprintPages = useBlueprintPages(activeBlueprint?.id)
   const pages = useMemo(() => blueprintPages.data?.pages ?? [], [blueprintPages.data])
@@ -279,6 +311,19 @@ export function EstCanvas() {
 
   return (
     <div className="d-content-full" style={{ position: 'relative' }}>
+      {/* Hidden blueprint file input — shared by the palette + empty-state
+          upload buttons. Accepts PDF + images; the browser sets the
+          multipart boundary on the FormData POST. */}
+      {canUploadBlueprint ? (
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept={BLUEPRINT_UPLOAD_ACCEPT}
+          style={{ display: 'none' }}
+          onChange={onPickBlueprintFile}
+        />
+      ) : null}
+
       {/* ---- Full-bleed SVG drawing surface (same board space as mobile) ---- */}
       <div style={{ position: 'absolute', inset: 0, background: 'var(--m-ink-2)', overflow: 'hidden' }}>
         {sourceImage.url ? (
@@ -645,6 +690,20 @@ export function EstCanvas() {
               ))}
             </MSelect>
           ) : null}
+
+          {/* Upload blueprint — admin/foreman/office only (hidden for worker). */}
+          {canUploadBlueprint ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <MButton
+                variant="ghost"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploadBlueprint.isPending}
+              >
+                {uploadBlueprint.isPending ? 'Uploading…' : '↑ Upload blueprint'}
+              </MButton>
+              {uploadError ? <div style={{ fontSize: 12, color: 'var(--m-red)' }}>{uploadError}</div> : null}
+            </div>
+          ) : null}
           {activeBlueprint && pages.length > 1 ? (
             <MSelect value={activePage?.id ?? ''} onChange={(e) => setPageId(e.target.value)}>
               {pages.map((p) => (
@@ -843,6 +902,20 @@ export function EstCanvas() {
               mark="↓"
               title="Drop the plan set"
               body="Plan set, drawings, or architect's PDF — up to 200MB, multi-page OK. Sheets, cross-references, and scales read automatically. Or pick a blueprint from the Item palette."
+              action={
+                canUploadBlueprint ? (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center' }}>
+                    <MButton
+                      variant="primary"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploadBlueprint.isPending}
+                    >
+                      {uploadBlueprint.isPending ? 'Uploading…' : '↑ Upload blueprint'}
+                    </MButton>
+                    {uploadError ? <div style={{ fontSize: 12, color: 'var(--m-red)' }}>{uploadError}</div> : null}
+                  </div>
+                ) : undefined
+              }
             />
           </div>
         </div>

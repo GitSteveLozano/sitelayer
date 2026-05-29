@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { AgentSurface, AiEyebrow, Attribution, Spark, useRejectSheet, type SparkState } from '@/components/ai'
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
@@ -16,6 +16,7 @@ import {
   useTakeoffDrafts,
   useTakeoffDraftResult,
   useUpdateTakeoffDraft,
+  useUploadBlueprint,
   type BlueprintDocument,
   type BlueprintPage,
   type CapturedQuantity,
@@ -26,6 +27,7 @@ import {
   type TakeoffMeasurement,
 } from '@/lib/api'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
+import { useRole } from '@/lib/role'
 import { CalibrationBanner, PageCalibrationOverlay } from './page-calibration-overlay'
 import { PageStrip } from './page-strip'
 import { RevisionCompareStub } from './revision-compare-stub'
@@ -57,10 +59,30 @@ import { TakeoffTagSheet } from './takeoff-tag-sheet'
 export function TakeoffCanvasScreen() {
   const { id: projectId } = useParams<{ id: string }>()
   const [searchParams, setSearchParams] = useSearchParams()
-  const navigate = useNavigate()
   const blueprints = useProjectBlueprints(projectId)
   const serviceItems = useServiceItems()
   const create = useCreateMeasurement(projectId ?? '')
+
+  // Blueprint upload — admin/foreman/office only (hidden for worker).
+  const role = useRole()
+  const canUploadBlueprint = role === 'owner' || role === 'foreman'
+  const uploadBlueprint = useUploadBlueprint(projectId ?? '')
+  const blueprintFileInputRef = useRef<HTMLInputElement | null>(null)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+
+  const onPickBlueprintFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0] ?? null
+    e.target.value = ''
+    if (!file) return
+    setUploadError(null)
+    uploadBlueprint.mutate(file, {
+      onSuccess: (doc) => {
+        setBlueprint(doc.id)
+        void blueprints.refetch()
+      },
+      onError: (err) => setUploadError(err instanceof Error ? err.message : 'Upload failed'),
+    })
+  }
 
   const blueprintParam = searchParams.get('blueprint')
   const activeBlueprint: BlueprintDocument | null =
@@ -376,16 +398,35 @@ export function TakeoffCanvasScreen() {
         </div>
       </div>
 
+      {canUploadBlueprint ? (
+        <input
+          ref={blueprintFileInputRef}
+          type="file"
+          accept="application/pdf,image/*"
+          className="hidden"
+          onChange={onPickBlueprintFile}
+        />
+      ) : null}
+
       {blueprintList.length === 0 ? (
         <div className="px-4 pb-8">
           <Card>
             <div className="text-[13px] font-semibold">No blueprints uploaded</div>
             <div className="text-[12px] text-ink-3 mt-1">Upload a PDF or image to start drawing measurements.</div>
-            <div className="mt-3">
-              <MobileButton variant="primary" onClick={() => navigate(`/projects/${projectId}/setup`)}>
-                Upload blueprint
-              </MobileButton>
-            </div>
+            {canUploadBlueprint ? (
+              <div className="mt-3">
+                <MobileButton
+                  variant="primary"
+                  onClick={() => blueprintFileInputRef.current?.click()}
+                  disabled={uploadBlueprint.isPending}
+                >
+                  {uploadBlueprint.isPending ? 'Uploading…' : 'Upload blueprint'}
+                </MobileButton>
+                {uploadError ? <div className="text-[12px] text-warn mt-2">{uploadError}</div> : null}
+              </div>
+            ) : (
+              <div className="text-[12px] text-ink-3 mt-3">Ask an estimator or admin to upload the plan set.</div>
+            )}
           </Card>
         </div>
       ) : (

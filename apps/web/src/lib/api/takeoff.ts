@@ -14,7 +14,7 @@
 //     the user immediately rather than silently queue.
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { NetworkError, request } from './client'
+import { ApiError, API_URL, buildAuthHeaders, NetworkError, request } from './client'
 
 // ---------------------------------------------------------------------------
 // Blueprints + measurements (Phase 3 polygon canvas)
@@ -91,6 +91,79 @@ export function useProjectBlueprints(projectId: string | null | undefined) {
     queryKey: ['blueprints', 'by-project', projectId ?? ''],
     queryFn: () => request(`/api/projects/${encodeURIComponent(projectId!)}/blueprints`),
     enabled: Boolean(projectId),
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Blueprint upload (multipart → DO Spaces)
+// ---------------------------------------------------------------------------
+
+export interface UploadBlueprintOptions {
+  /** Override the stored file name; defaults to the File's own name. */
+  fileName?: string
+}
+
+/**
+ * Upload one blueprint (PDF or image). Mirrors `uploadDailyLogPhoto` — a
+ * FormData multipart POST so the PDF streams straight into Spaces via the
+ * API's busboy handler (`apps/api/src/blueprint-upload.ts`). The browser
+ * sets the multipart boundary on content-type; we must NOT set it. The
+ * server requires only the `blueprint_file` part (+ optional `file_name`).
+ * Returns the inserted `BlueprintDocument` row (API responds 201).
+ */
+export async function uploadBlueprint(
+  projectId: string,
+  file: File,
+  opts: UploadBlueprintOptions = {},
+): Promise<BlueprintDocument> {
+  const formData = new FormData()
+  formData.append('blueprint_file', file, file.name || 'blueprint.pdf')
+  const fileName = opts.fileName ?? file.name
+  if (fileName) formData.append('file_name', fileName)
+  const headers = await buildAuthHeaders()
+  const path = `/api/projects/${encodeURIComponent(projectId)}/blueprints`
+
+  const response = await fetch(`${API_URL}${path}`, {
+    method: 'POST',
+    headers,
+    body: formData,
+  })
+  if (!response.ok) {
+    const requestId = response.headers.get('x-request-id')
+    let body: unknown
+    try {
+      const ct = response.headers.get('content-type') ?? ''
+      body = ct.includes('application/json') ? await response.json() : await response.text()
+    } catch {
+      body = null
+    }
+    throw new ApiError({ status: response.status, path, method: 'POST', requestId, body })
+  }
+  return (await response.json()) as BlueprintDocument
+}
+
+export interface UseUploadBlueprintInput {
+  file: File
+  fileName?: string
+}
+
+/**
+ * TanStack mutation wrapping `uploadBlueprint`. On success it invalidates
+ * both the broad `['blueprints']` key (calibration/pages/import all live
+ * under it) and the specific by-project list so the takeoff surfaces
+ * refetch the new document. Accepts a bare `File` or `{ file, fileName }`.
+ */
+export function useUploadBlueprint(projectId: string) {
+  const qc = useQueryClient()
+  return useMutation<BlueprintDocument, Error, File | UseUploadBlueprintInput>({
+    mutationFn: (input) => {
+      if (input instanceof File) return uploadBlueprint(projectId, input)
+      return uploadBlueprint(projectId, input.file, input.fileName ? { fileName: input.fileName } : {})
+    },
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['blueprints'] })
+      void qc.invalidateQueries({ queryKey: ['blueprints', 'by-project', projectId] })
+    },
   })
 }
 
