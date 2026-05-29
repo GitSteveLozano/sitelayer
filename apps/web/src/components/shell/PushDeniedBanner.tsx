@@ -44,7 +44,13 @@ export function PushDeniedBanner() {
     >
       <span
         aria-hidden="true"
-        style={{ width: 14, height: 14, background: 'var(--m-accent)', border: '2px solid var(--m-ink)', flexShrink: 0 }}
+        style={{
+          width: 14,
+          height: 14,
+          background: 'var(--m-accent)',
+          border: '2px solid var(--m-ink)',
+          flexShrink: 0,
+        }}
       />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div

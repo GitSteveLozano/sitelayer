@@ -92,7 +92,14 @@ export async function handleMessagingRoutes(
             `insert into project_messages (company_id, project_id, author_user_id, author_role, body, meta)
              values ($1, $2, $3, $4, $5, $6::jsonb)
              returning ${MESSAGE_COLUMNS}`,
-            [ctx.company.id, projectId, ctx.currentUserId, authorRole, text, meta === null ? null : JSON.stringify(meta)],
+            [
+              ctx.company.id,
+              projectId,
+              ctx.currentUserId,
+              authorRole,
+              text,
+              meta === null ? null : JSON.stringify(meta),
+            ],
           )
           const row = inserted.rows[0]!
           await recordAudit(client, {

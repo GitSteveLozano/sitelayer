@@ -132,8 +132,19 @@ export function TakeoffAiTakeoffSetup({ companySlug }: { companySlug: string }) 
               aria-hidden
             />
             <span style={{ flex: 1, minWidth: 0, opacity: t.on ? 1 : 0.55 }}>
-              <span style={{ display: 'block', fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700 }}>{t.label}</span>
-              <span style={{ display: 'block', fontFamily: 'var(--m-num)', fontSize: 9, color: 'var(--m-ink-3)', marginTop: 3, fontWeight: 600 }}>
+              <span style={{ display: 'block', fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700 }}>
+                {t.label}
+              </span>
+              <span
+                style={{
+                  display: 'block',
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 9,
+                  color: 'var(--m-ink-3)',
+                  marginTop: 3,
+                  fontWeight: 600,
+                }}
+              >
                 {t.sub}
               </span>
             </span>
@@ -147,7 +158,9 @@ export function TakeoffAiTakeoffSetup({ companySlug }: { companySlug: string }) 
       <div style={{ padding: '14px 20px' }}>
         <div style={{ padding: '14px 16px', background: 'var(--m-card-soft)', border: '2px solid var(--m-ink)' }}>
           <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700 }}>ALL VERIFIED SHEETS · 22</div>
-          <div style={{ fontFamily: 'var(--m-num)', fontSize: 10, color: 'var(--m-ink-3)', marginTop: 4, fontWeight: 600 }}>
+          <div
+            style={{ fontFamily: 'var(--m-num)', fontSize: 10, color: 'var(--m-ink-3)', marginTop: 4, fontWeight: 600 }}
+          >
             A-101 · A-201..204 · M-101..104 · S-101..103 · …
           </div>
         </div>
@@ -217,9 +230,7 @@ function useReviewDraftId(projectId: string): string | null {
       : ''
   const draftsQuery = useTakeoffDrafts(stateDraftId ? null : projectId)
   if (stateDraftId) return stateDraftId
-  const latestCapture = (draftsQuery.data?.drafts ?? [])
-    .filter((d) => d.source && d.source !== 'manual')
-    .at(-1)
+  const latestCapture = (draftsQuery.data?.drafts ?? []).filter((d) => d.source && d.source !== 'manual').at(-1)
   return latestCapture?.id ?? null
 }
 
@@ -260,10 +271,7 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
 
   const accept = () => {
     if (!draftId || keptIds.length === 0 || promote.isPending) return
-    promote.mutate(
-      { quantity_ids: keptIds },
-      { onSuccess: () => navigate(`/projects/${projectId}/takeoff-mobile`) },
-    )
+    promote.mutate({ quantity_ids: keptIds }, { onSuccess: () => navigate(`/projects/${projectId}/takeoff-mobile`) })
   }
 
   return (
@@ -293,19 +301,25 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
               ? `${quantities.length} detected ${quantities.length === 1 ? 'quantity' : 'quantities'}.`
               : 'No quantities detected.'}
         </h2>
-        <div style={{ fontFamily: 'var(--m-num)', fontSize: 12, marginTop: 10, color: 'var(--m-ink-2)', fontWeight: 600 }}>
+        <div
+          style={{ fontFamily: 'var(--m-num)', fontSize: 12, marginTop: 10, color: 'var(--m-ink-2)', fontWeight: 600 }}
+        >
           {counts.ok} OK · {counts.review} NEEDS REVIEW · {counts.flag} FLAGGED
         </div>
       </div>
 
       <div style={{ flex: 1, overflow: 'auto' }}>
         {resultQuery.isError ? (
-          <div style={{ padding: 20, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-red)', fontWeight: 600 }}>
+          <div
+            style={{ padding: 20, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-red)', fontWeight: 600 }}
+          >
             Couldn&apos;t load the draft result. {resultQuery.error.message}
           </div>
         ) : null}
         {!resultQuery.isLoading && !resultQuery.isError && quantities.length === 0 ? (
-          <div style={{ padding: 20, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 }}>
+          <div
+            style={{ padding: 20, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 }}
+          >
             {draftId ? 'This draft has no detected quantities to review.' : 'Run the auto-takeoff to produce a draft.'}
           </div>
         ) : null}
@@ -350,7 +364,15 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
                   </MPill>
                 </div>
               </div>
-              <div style={{ fontFamily: 'var(--m-num)', fontSize: 14, fontWeight: 700, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+              <div
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 14,
+                  fontWeight: 700,
+                  textAlign: 'right',
+                  fontVariantNumeric: 'tabular-nums',
+                }}
+              >
                 {formatQty(q.value, q.unit)}
               </div>
             </button>
@@ -373,7 +395,11 @@ export function TakeoffAiTakeoffReview({ companySlug }: { companySlug: string })
         </div>
       ) : null}
       <div style={{ padding: '14px 20px', borderTop: '2px solid var(--m-ink)', display: 'flex', gap: 8 }}>
-        <MButton variant="ghost" onClick={() => navigate(`/projects/${projectId}/takeoff-ai/takeoff`)} style={{ flex: 1 }}>
+        <MButton
+          variant="ghost"
+          onClick={() => navigate(`/projects/${projectId}/takeoff-ai/takeoff`)}
+          style={{ flex: 1 }}
+        >
           Review {needsReview}
         </MButton>
         <MButton

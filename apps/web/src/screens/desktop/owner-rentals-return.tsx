@@ -54,8 +54,7 @@ const fieldLabel = {
 }
 
 function Fact({ label, value, valueTone }: { label: string; value: string; valueTone?: 'accent' | 'bad' | undefined }) {
-  const color =
-    valueTone === 'accent' ? 'var(--m-accent)' : valueTone === 'bad' ? 'var(--m-red)' : 'var(--m-ink)'
+  const color = valueTone === 'accent' ? 'var(--m-accent)' : valueTone === 'bad' ? 'var(--m-red)' : 'var(--m-ink)'
   return (
     <div
       style={{
@@ -255,8 +254,8 @@ export function OwnerRentalsReturn() {
                 />
                 {damageCharge && !activeProjectId ? (
                   <div style={{ marginTop: 8, fontSize: 12, color: 'var(--m-ink-3)' }}>
-                    No active dispatch found for this asset, so the charge can&apos;t be billed to a project. The
-                    damage will still be recorded on the movement ledger.
+                    No active dispatch found for this asset, so the charge can&apos;t be billed to a project. The damage
+                    will still be recorded on the movement ledger.
                   </div>
                 ) : null}
               </>

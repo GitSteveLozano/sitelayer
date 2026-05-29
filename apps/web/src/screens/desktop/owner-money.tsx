@@ -158,15 +158,7 @@ function formatDue(iso: string): string {
  * payment-reminder endpoint yet; the toggle list + selection state is real
  * so the UI responds.
  */
-function SendRemindersModal({
-  open,
-  onClose,
-  pending,
-}: {
-  open: boolean
-  onClose: () => void
-  pending: PendingRow[]
-}) {
+function SendRemindersModal({ open, onClose, pending }: { open: boolean; onClose: () => void; pending: PendingRow[] }) {
   // Selection map keyed by row id; default every recipient on.
   const [selected, setSelected] = useState<Record<string, boolean>>({})
 
@@ -198,7 +190,10 @@ function SendRemindersModal({
       onClose={onClose}
       width={520}
       title={
-        <span className="num" style={{ fontWeight: 800, fontSize: 12, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+        <span
+          className="num"
+          style={{ fontWeight: 800, fontSize: 12, letterSpacing: '0.06em', textTransform: 'uppercase' }}
+        >
           SEND REMINDERS · {formatMoney(selectedTotal)}
         </span>
       }

@@ -105,8 +105,7 @@ export function OwnerRentalsDispatch({ bootstrap }: { bootstrap: BootstrapRespon
     [allLocations, projectId],
   )
   const handoffWorker = workers.find((w) => w.id === workerId) ?? null
-  const canDispatch =
-    Boolean(projectId) && Boolean(fromYard) && Boolean(item) && !dispatch.isPending
+  const canDispatch = Boolean(projectId) && Boolean(fromYard) && Boolean(item) && !dispatch.isPending
 
   const handleDispatch = () => {
     if (!canDispatch || !item || !fromYard) return

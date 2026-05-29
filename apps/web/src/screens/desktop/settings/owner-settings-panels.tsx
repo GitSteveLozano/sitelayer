@@ -237,9 +237,7 @@ export function CompanySection() {
   const serverDraft = server ? profileToDraft(server) : EMPTY_PROFILE_DRAFT
   const dirty = useMemo(() => {
     if (!draft || !server) return false
-    return (Object.keys(EMPTY_PROFILE_DRAFT) as Array<keyof ProfileDraft>).some(
-      (k) => draft[k] !== serverDraft[k],
-    )
+    return (Object.keys(EMPTY_PROFILE_DRAFT) as Array<keyof ProfileDraft>).some((k) => draft[k] !== serverDraft[k])
   }, [draft, server, serverDraft])
 
   const save = async () => {
@@ -266,7 +264,13 @@ export function CompanySection() {
     <div className="d-stack">
       <SettingsCard eyebrow="Company profile">
         <FieldGrid>
-          <Field label="Company name" value={company?.name ?? ''} placeholder="LA Operations" readOnly hint="Set at company creation." />
+          <Field
+            label="Company name"
+            value={company?.name ?? ''}
+            placeholder="LA Operations"
+            readOnly
+            hint="Set at company creation."
+          />
           <Field label="URL slug" value={company?.slug ?? ''} hint="Used in links + the customer portal." readOnly />
         </FieldGrid>
       </SettingsCard>
@@ -280,12 +284,7 @@ export function CompanySection() {
       <SettingsCard
         eyebrow="Business details"
         action={
-          <MButton
-            size="sm"
-            variant="primary"
-            onClick={save}
-            disabled={!draft || !dirty || update.isPending}
-          >
+          <MButton size="sm" variant="primary" onClick={save} disabled={!draft || !dirty || update.isPending}>
             {update.isPending ? 'Saving…' : 'Save changes'}
           </MButton>
         }
@@ -331,8 +330,12 @@ export function CompanySection() {
             onChange={(v) => setField('address', v)}
           />
         </div>
-        {saveError ? <div style={{ fontSize: 12, color: 'var(--m-red, #c7331e)', marginTop: 12 }}>{saveError}</div> : null}
-        {saved && !dirty ? <div style={{ fontSize: 12, color: 'var(--m-good, #2c7a3f)', marginTop: 12 }}>Saved.</div> : null}
+        {saveError ? (
+          <div style={{ fontSize: 12, color: 'var(--m-red, #c7331e)', marginTop: 12 }}>{saveError}</div>
+        ) : null}
+        {saved && !dirty ? (
+          <div style={{ fontSize: 12, color: 'var(--m-good, #2c7a3f)', marginTop: 12 }}>Saved.</div>
+        ) : null}
         <div style={{ fontSize: 12, color: 'var(--m-ink-3)', marginTop: 12 }}>
           These flow through to estimates and invoices.
           {/* Logo upload is still unbuilt — it would need a Spaces upload path. */}
@@ -500,8 +503,12 @@ export function WorkingHoursSection() {
         <div style={{ fontSize: 12, color: 'var(--m-ink-3)', marginTop: 10 }}>
           Working days drive crew scheduling + loaded-labor day counts.
         </div>
-        {saveError ? <div style={{ fontSize: 12, color: 'var(--m-red, #c7331e)', marginTop: 10 }}>{saveError}</div> : null}
-        {saved && !dirty ? <div style={{ fontSize: 12, color: 'var(--m-good, #2c7a3f)', marginTop: 10 }}>Saved.</div> : null}
+        {saveError ? (
+          <div style={{ fontSize: 12, color: 'var(--m-red, #c7331e)', marginTop: 10 }}>{saveError}</div>
+        ) : null}
+        {saved && !dirty ? (
+          <div style={{ fontSize: 12, color: 'var(--m-good, #2c7a3f)', marginTop: 10 }}>Saved.</div>
+        ) : null}
       </SettingsCard>
 
       <SettingsCard eyebrow="Standard work window">
@@ -716,8 +723,8 @@ export function IntegrationsSection() {
       <div className="d-card" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
         <MPill tone="blue">Sync</MPill>
         <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--m-ink-2)' }}>
-          Connect external systems so Sitelayer can push estimates, invoices, and labor automatically. QBO is the
-          live accounting connector; the others land as they ship.
+          Connect external systems so Sitelayer can push estimates, invoices, and labor automatically. QBO is the live
+          accounting connector; the others land as they ship.
         </div>
       </div>
       {error ? (
@@ -755,8 +762,16 @@ type NotifPrefKey =
   | 'channel_clock_anomaly'
 
 const NOTIF_EVENTS: Array<{ key: NotifPrefKey; label: string; hint: string }> = [
-  { key: 'channel_assignment_change', label: 'Project assignment change', hint: 'When you’re added to / removed from a crew.' },
-  { key: 'channel_time_review_ready', label: 'Time review ready', hint: 'When a week of crew time is ready to approve.' },
+  {
+    key: 'channel_assignment_change',
+    label: 'Project assignment change',
+    hint: 'When you’re added to / removed from a crew.',
+  },
+  {
+    key: 'channel_time_review_ready',
+    label: 'Time review ready',
+    hint: 'When a week of crew time is ready to approve.',
+  },
   { key: 'channel_daily_log_reminder', label: 'Daily-log reminder', hint: 'End-of-day nudge to file the daily log.' },
   { key: 'channel_clock_anomaly', label: 'Clock anomaly', hint: 'Missed clock-out, overlap, or off-site punch.' },
 ]
@@ -804,12 +819,8 @@ export function NotificationsSection() {
     setDraft((prev) => (prev ? { ...prev, [key]: value } : prev))
   }
 
-  const usesSms = draft
-    ? NOTIF_EVENTS.some((e) => draft[e.key] === 'sms')
-    : false
-  const usesEmail = draft
-    ? NOTIF_EVENTS.some((e) => draft[e.key] === 'email')
-    : false
+  const usesSms = draft ? NOTIF_EVENTS.some((e) => draft[e.key] === 'sms') : false
+  const usesEmail = draft ? NOTIF_EVENTS.some((e) => draft[e.key] === 'email') : false
 
   // Mirror the API's contact-required guard so we don't fire a doomed PUT.
   const contactError = useMemo(() => {
@@ -902,8 +913,8 @@ export function NotificationsSection() {
       <div className="d-card" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
         <MPill tone="blue">Delivery</MPill>
         <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--m-ink-2)' }}>
-          Pick how each event reaches you. Choose one channel per event — push, SMS, email, or off. SMS and email
-          need a contact below.
+          Pick how each event reaches you. Choose one channel per event — push, SMS, email, or off. SMS and email need a
+          contact below.
         </div>
       </div>
 
@@ -966,9 +977,15 @@ export function NotificationsSection() {
             />
           </label>
         </FieldGrid>
-        {contactError ? <div style={{ fontSize: 12, color: 'var(--m-red, #c7331e)', marginTop: 10 }}>{contactError}</div> : null}
-        {saveError ? <div style={{ fontSize: 12, color: 'var(--m-red, #c7331e)', marginTop: 10 }}>{saveError}</div> : null}
-        {saved && !dirty ? <div style={{ fontSize: 12, color: 'var(--m-good, #2c7a3f)', marginTop: 10 }}>Saved.</div> : null}
+        {contactError ? (
+          <div style={{ fontSize: 12, color: 'var(--m-red, #c7331e)', marginTop: 10 }}>{contactError}</div>
+        ) : null}
+        {saveError ? (
+          <div style={{ fontSize: 12, color: 'var(--m-red, #c7331e)', marginTop: 10 }}>{saveError}</div>
+        ) : null}
+        {saved && !dirty ? (
+          <div style={{ fontSize: 12, color: 'var(--m-good, #2c7a3f)', marginTop: 10 }}>Saved.</div>
+        ) : null}
         <div style={{ marginTop: 14 }}>
           <MButton
             size="sm"
@@ -1010,9 +1027,7 @@ export function ProfileSection() {
           <MAvatar initials="SL" size="lg" />
           <div>
             <div style={{ fontWeight: 700, fontSize: 16, color: 'var(--m-ink)' }}>{displayName}</div>
-            <div style={{ fontSize: 13, color: 'var(--m-ink-3)' }}>
-              {company ? `Admin · ${company.name}` : 'Admin'}
-            </div>
+            <div style={{ fontSize: 13, color: 'var(--m-ink-3)' }}>{company ? `Admin · ${company.name}` : 'Admin'}</div>
           </div>
         </div>
         <FieldGrid>

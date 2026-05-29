@@ -73,8 +73,7 @@ function roleTagFor(event: AuditEvent): RoleTag | null {
   // the row didn't capture one.
   if (event.actor_role) return roleTagForRole(event.actor_role)
   const e = `${event.entity_type} ${event.action}`.toLowerCase()
-  if (/invoice|estimate|billing|payment|approve|company|integration/.test(e))
-    return { label: 'OWNER', tone: 'green' }
+  if (/invoice|estimate|billing|payment|approve|company|integration/.test(e)) return { label: 'OWNER', tone: 'green' }
   if (/field|issue|blocker|clock|measurement|takeoff/.test(e)) return { label: 'CREW', tone: undefined }
   if (/brief|message|schedule|daily_log|crew/.test(e)) return { label: 'FOREMAN', tone: 'accent' }
   return null

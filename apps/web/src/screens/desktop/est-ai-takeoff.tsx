@@ -127,8 +127,7 @@ export function EstAiTakeoffSetup() {
     capture.mutate(
       { kind: 'blueprint_vision', name: 'AI auto-takeoff', payload: { dryRun: true } },
       {
-        onSuccess: (res) =>
-          navigate(`/desktop/ai-takeoff/${projectId}/review`, { state: { draftId: res.draft.id } }),
+        onSuccess: (res) => navigate(`/desktop/ai-takeoff/${projectId}/review`, { state: { draftId: res.draft.id } }),
       },
     )
   }
@@ -341,9 +340,7 @@ function useTakeoffReviewDraftId(projectId: string): string | null {
       : ''
   const draftsQuery = useTakeoffDrafts(stateDraftId ? null : projectId)
   if (stateDraftId) return stateDraftId
-  const latestCapture = (draftsQuery.data?.drafts ?? [])
-    .filter((d) => d.source && d.source !== 'manual')
-    .at(-1)
+  const latestCapture = (draftsQuery.data?.drafts ?? []).filter((d) => d.source && d.source !== 'manual').at(-1)
   return latestCapture?.id ?? null
 }
 
@@ -377,10 +374,8 @@ export function EstAiTakeoffReview() {
   // Real local decision state so Keep/Reject update the UI + KPIs. High-
   // confidence rows default to kept; flagged/review rows wait for a decision.
   const [decisions, setDecisions] = useState<Record<string, RowDecision>>({})
-  const decisionFor = (r: TakeoffReviewRow): RowDecision =>
-    decisions[r.id] ?? (r.status === 'ok' ? 'kept' : 'pending')
-  const setDecision = (id: string, decision: RowDecision) =>
-    setDecisions((prev) => ({ ...prev, [id]: decision }))
+  const decisionFor = (r: TakeoffReviewRow): RowDecision => decisions[r.id] ?? (r.status === 'ok' ? 'kept' : 'pending')
+  const setDecision = (id: string, decision: RowDecision) => setDecisions((prev) => ({ ...prev, [id]: decision }))
 
   const counts = useMemo(() => {
     return rows.reduce(
@@ -424,9 +419,7 @@ export function EstAiTakeoffReview() {
         <span
           className="d-table-cell-strong"
           style={
-            decisionFor(r) === 'rejected'
-              ? { textDecoration: 'line-through', color: 'var(--m-ink-3)' }
-              : undefined
+            decisionFor(r) === 'rejected' ? { textDecoration: 'line-through', color: 'var(--m-ink-3)' } : undefined
           }
         >
           {r.item}
@@ -477,7 +470,8 @@ export function EstAiTakeoffReview() {
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
           <div>
             <DEyebrow>
-              {resultQuery.data?.source ? `Source · ${resultQuery.data.source}` : 'AI auto-takeoff'} · {rows.length} items
+              {resultQuery.data?.source ? `Source · ${resultQuery.data.source}` : 'AI auto-takeoff'} · {rows.length}{' '}
+              items
             </DEyebrow>
             <DH1>Review draft</DH1>
           </div>

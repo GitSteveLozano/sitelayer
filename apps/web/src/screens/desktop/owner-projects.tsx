@@ -79,7 +79,10 @@ function ProgressBar({ pct }: { pct: number }) {
           }}
         />
       </div>
-      <span className="num" style={{ fontSize: 11, fontWeight: 700, color: 'var(--m-ink-2)', minWidth: 34, textAlign: 'right' }}>
+      <span
+        className="num"
+        style={{ fontSize: 11, fontWeight: 700, color: 'var(--m-ink-2)', minWidth: 34, textAlign: 'right' }}
+      >
         {clamped}%
       </span>
     </div>
@@ -210,7 +213,15 @@ export function OwnerProjects({ bootstrap }: { bootstrap: BootstrapResponse | nu
   return (
     <div className="d-content">
       <div className="d-stack">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-end',
+            gap: 16,
+            flexWrap: 'wrap',
+          }}
+        >
           <div>
             <DEyebrow>Owner · Projects</DEyebrow>
             <DH1>
@@ -357,7 +368,10 @@ function NewProjectFormModal({ open, onClose }: { open: boolean; onClose: () => 
       open={open}
       onClose={handleClose}
       title={
-        <span className="num" style={{ fontWeight: 800, fontSize: 12, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+        <span
+          className="num"
+          style={{ fontWeight: 800, fontSize: 12, letterSpacing: '0.06em', textTransform: 'uppercase' }}
+        >
           NEW PROJECT
         </span>
       }
@@ -382,7 +396,9 @@ function NewProjectFormModal({ open, onClose }: { open: boolean; onClose: () => 
           aria-invalid={nameError ? true : undefined}
           style={{ width: '100%' }}
         />
-        {nameError ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--m-red)', fontSize: 12 }}>{nameError}</p> : null}
+        {nameError ? (
+          <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--m-red)', fontSize: 12 }}>{nameError}</p>
+        ) : null}
       </label>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 16 }}>

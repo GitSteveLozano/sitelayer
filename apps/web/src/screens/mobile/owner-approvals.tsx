@@ -24,11 +24,7 @@ import { MBanner, MBody, MPill, MTopBar } from '../../components/m/index.js'
 import type { MTone } from '../../components/m/list.js'
 import { MSkeletonList } from '../../components/m-states/index.js'
 import { useActiveGuardrails, useGuardrailAction, type Guardrail } from '../../lib/api/guardrails.js'
-import {
-  useAppendWorkRequestEvent,
-  useWorkRequests,
-  type ContextWorkItem,
-} from '../../lib/api/work-requests.js'
+import { useAppendWorkRequestEvent, useWorkRequests, type ContextWorkItem } from '../../lib/api/work-requests.js'
 
 const TIGHT = 'var(--m-font-display)'
 const MONO = 'var(--m-num)'
@@ -349,7 +345,13 @@ function EmptyState() {
   return (
     <div style={{ padding: '48px 24px', textAlign: 'center' }}>
       <div
-        style={{ width: 44, height: 44, margin: '0 auto', border: '2px solid var(--m-ink)', background: 'var(--m-sand-2)' }}
+        style={{
+          width: 44,
+          height: 44,
+          margin: '0 auto',
+          border: '2px solid var(--m-ink)',
+          background: 'var(--m-sand-2)',
+        }}
       />
       <div style={{ marginTop: 16, fontFamily: TIGHT, fontSize: 18, fontWeight: 700 }}>All caught up</div>
       <div style={{ marginTop: 6, fontFamily: MONO, fontSize: 11, fontWeight: 600, color: 'var(--m-ink-3)' }}>

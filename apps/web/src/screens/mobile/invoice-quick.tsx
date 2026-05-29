@@ -116,9 +116,7 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
           // estimate_lines" — the project hasn't had its estimate computed
           // yet. Surface it as guidance rather than a raw error.
           if (err instanceof ApiError && err.status === 400) {
-            setErrorMessage(
-              'This project has no estimate lines yet. Build/recompute the estimate before invoicing.',
-            )
+            setErrorMessage('This project has no estimate lines yet. Build/recompute the estimate before invoicing.')
             return
           }
           setErrorMessage(err instanceof Error ? err.message : 'Failed to create the invoice.')
@@ -242,12 +240,7 @@ export function MobileQuickInvoice({ bootstrap }: { bootstrap: BootstrapResponse
                   <div style={{ fontSize: 12, color: 'var(--m-ink-3)' }}>
                     No billing schedule yet. Seed a deposit / progress / final ladder from the contract value.
                   </div>
-                  <MButton
-                    variant="ghost"
-                    size="sm"
-                    disabled={createMilestones.isPending}
-                    onClick={seedLadder}
-                  >
+                  <MButton variant="ghost" size="sm" disabled={createMilestones.isPending} onClick={seedLadder}>
                     {createMilestones.isPending ? 'Seeding…' : 'Seed deposit / progress / final'}
                   </MButton>
                 </div>

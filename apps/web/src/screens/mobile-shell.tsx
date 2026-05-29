@@ -153,9 +153,7 @@ const TakeoffAutoscale = lazy(() =>
   import('./mobile/takeoff-autoscale.js').then((m) => ({ default: m.TakeoffAutoscale })),
 )
 const TakeoffIngest = lazy(() => import('./mobile/takeoff-ingest.js').then((m) => ({ default: m.TakeoffIngest })))
-const MobileInvoiceSent = lazy(() =>
-  import('./mobile/invoice-sent.js').then((m) => ({ default: m.MobileInvoiceSent })),
-)
+const MobileInvoiceSent = lazy(() => import('./mobile/invoice-sent.js').then((m) => ({ default: m.MobileInvoiceSent })))
 const WorkerClockinManual = lazy(() =>
   import('./mobile/worker-clockin.js').then((m) => ({ default: m.WorkerClockinManual })),
 )
@@ -356,10 +354,7 @@ export function MobileShell({
               path="projects/:projectId/takeoff-ai/autoscale"
               element={<TakeoffAutoscale companySlug={companySlug} />}
             />
-            <Route
-              path="projects/:projectId/takeoff-ai/ingest"
-              element={<TakeoffIngest companySlug={companySlug} />}
-            />
+            <Route path="projects/:projectId/takeoff-ai/ingest" element={<TakeoffIngest companySlug={companySlug} />} />
             <Route
               path="projects/:projectId/*"
               element={<MobileProjectDetail bootstrap={bootstrap} companyRole={companyRole} />}

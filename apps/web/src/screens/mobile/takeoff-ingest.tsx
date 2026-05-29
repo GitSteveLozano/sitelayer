@@ -38,7 +38,8 @@ type IngestStep = {
 }
 
 function stepsFor(isDone: boolean, sheetCount: number | null): IngestStep[] {
-  const sheetLabel = sheetCount != null ? `${sheetCount} SHEET${sheetCount === 1 ? '' : 'S'} DETECTED` : 'SHEETS DETECTED'
+  const sheetLabel =
+    sheetCount != null ? `${sheetCount} SHEET${sheetCount === 1 ? '' : 'S'} DETECTED` : 'SHEETS DETECTED'
   return [
     { label: 'PDF UPLOADED', done: true },
     { label: sheetLabel, done: sheetCount != null, active: sheetCount == null && !isDone },
@@ -100,12 +101,38 @@ export function TakeoffIngest({ companySlug }: { companySlug: string }) {
         </div>
 
         {/* Error banner */}
-        <div style={{ padding: '24px 20px', background: 'var(--m-red)', color: '#fff', borderBottom: '2px solid var(--m-ink)' }}>
-          <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 800, letterSpacing: '0.08em' }}>● COULDN&apos;T PARSE</div>
-          <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 32, lineHeight: 0.95, marginTop: 14 }}>
+        <div
+          style={{
+            padding: '24px 20px',
+            background: 'var(--m-red)',
+            color: '#fff',
+            borderBottom: '2px solid var(--m-ink)',
+          }}
+        >
+          <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 800, letterSpacing: '0.08em' }}>
+            ● COULDN&apos;T PARSE
+          </div>
+          <div
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 800,
+              fontSize: 32,
+              lineHeight: 0.95,
+              marginTop: 14,
+            }}
+          >
             This PDF has no text layer.
           </div>
-          <div style={{ fontFamily: 'var(--m-num)', fontSize: 12, marginTop: 10, color: 'rgba(255,255,255,.85)', fontWeight: 600, lineHeight: 1.5 }}>
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 12,
+              marginTop: 10,
+              color: 'rgba(255,255,255,.85)',
+              fontWeight: 600,
+              lineHeight: 1.5,
+            }}
+          >
             SCANNED OR IMAGE-ONLY · WE CAN&apos;T READ TITLE BLOCKS OR SCALES AUTOMATICALLY.
           </div>
         </div>
@@ -138,7 +165,16 @@ export function TakeoffIngest({ companySlug }: { companySlug: string }) {
           <div className="m-topbar-eyebrow" style={{ color: 'var(--m-ink-3)' }}>
             OTHER FAILURE MODES
           </div>
-          <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, marginTop: 8, color: 'var(--m-ink-2)', fontWeight: 600, lineHeight: 1.6 }}>
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              marginTop: 8,
+              color: 'var(--m-ink-2)',
+              fontWeight: 600,
+              lineHeight: 1.6,
+            }}
+          >
             · CORRUPT / TRUNCATED
             <br />· ENCRYPTED (NEEDS PASSWORD)
             <br />· OVERSIZED (&gt; 200MB)
@@ -184,7 +220,9 @@ export function TakeoffIngest({ companySlug }: { companySlug: string }) {
         >
           {isDone ? 'Plan set ready.' : 'AI reading the plan set…'}
         </h2>
-        <div style={{ fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)', marginTop: 10, fontWeight: 500 }}>
+        <div
+          style={{ fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)', marginTop: 10, fontWeight: 500 }}
+        >
           {blueprintsQuery.isLoading
             ? 'Loading blueprint…'
             : fileName
@@ -198,7 +236,13 @@ export function TakeoffIngest({ companySlug }: { companySlug: string }) {
         {steps.map((s) => (
           <div
             key={s.label}
-            style={{ padding: '14px 20px', display: 'flex', alignItems: 'center', gap: 14, borderBottom: '1px solid var(--m-line-2)' }}
+            style={{
+              padding: '14px 20px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14,
+              borderBottom: '1px solid var(--m-line-2)',
+            }}
           >
             <span
               style={{
@@ -232,7 +276,15 @@ export function TakeoffIngest({ companySlug }: { companySlug: string }) {
                 {s.label}
               </div>
               {s.sub ? (
-                <div style={{ fontFamily: 'var(--m-num)', fontSize: 10, color: 'var(--m-ink-3)', marginTop: 3, fontWeight: 600 }}>
+                <div
+                  style={{
+                    fontFamily: 'var(--m-num)',
+                    fontSize: 10,
+                    color: 'var(--m-ink-3)',
+                    marginTop: 3,
+                    fontWeight: 600,
+                  }}
+                >
                   {s.sub}
                 </div>
               ) : null}
@@ -250,7 +302,15 @@ export function TakeoffIngest({ companySlug }: { companySlug: string }) {
       ) : null}
       {isParsing ? (
         <div style={{ padding: '16px 20px', borderTop: '2px solid var(--m-ink)' }}>
-          <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, color: 'var(--m-ink-3)', textAlign: 'center', fontWeight: 600 }}>
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              color: 'var(--m-ink-3)',
+              textAlign: 'center',
+              fontWeight: 600,
+            }}
+          >
             ~22 SECONDS REMAINING
           </div>
         </div>

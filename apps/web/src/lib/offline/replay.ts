@@ -114,8 +114,7 @@ async function runReplay(): Promise<{ replayed: number; dropped: number; deferre
             extra: {
               error: err.message_for_user(),
               id: row.id,
-              payloadKeys:
-                row.payload && typeof row.payload === 'object' ? Object.keys(row.payload) : undefined,
+              payloadKeys: row.payload && typeof row.payload === 'object' ? Object.keys(row.payload) : undefined,
             },
           })
           continue

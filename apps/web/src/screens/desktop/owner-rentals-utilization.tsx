@@ -89,8 +89,7 @@ export function OwnerRentalsUtilization() {
         : rows.length > 0
           ? Math.round(rows.reduce((sum, r) => sum + r.utilizationPct, 0) / rows.length)
           : 0
-    const idleRevenuePerDay =
-      (Number(utilizationQuery.data?.totals?.total_idle_revenue_per_day_cents ?? 0) || 0) / 100
+    const idleRevenuePerDay = (Number(utilizationQuery.data?.totals?.total_idle_revenue_per_day_cents ?? 0) || 0) / 100
     return { rows, fleetAvgUtil, idleRevenuePerDay }
   }, [utilizationQuery.data?.items, utilizationQuery.data?.totals])
 

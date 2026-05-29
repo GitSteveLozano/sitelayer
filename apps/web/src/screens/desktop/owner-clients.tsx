@@ -14,16 +14,7 @@ import { useId, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useCustomers, useCreateCustomer } from '@/lib/api/customers'
 import { useProjects, type ProjectListRow } from '@/lib/api/projects'
-import {
-  DataTable,
-  DEmptyState,
-  DEyebrow,
-  DH1,
-  DKpi,
-  DKpiStrip,
-  DModal,
-  type DColumn,
-} from '@/components/d'
+import { DataTable, DEmptyState, DEyebrow, DH1, DKpi, DKpiStrip, DModal, type DColumn } from '@/components/d'
 import { MButton, MInput, MPill } from '@/components/m'
 import { formatMoney } from '../mobile/format.js'
 
@@ -122,7 +113,10 @@ export function OwnerClients() {
 
     // HOT pill — a client with active work AND top-quartile lifetime value
     // among clients with any value. Cheap, derived, no new data.
-    const valued = rows.map((r) => r.lifetimeValue).filter((v) => v > 0).sort((a, b) => b - a)
+    const valued = rows
+      .map((r) => r.lifetimeValue)
+      .filter((v) => v > 0)
+      .sort((a, b) => b - a)
     const hotThreshold = valued.length > 0 ? valued[Math.floor(valued.length * 0.25)]! : Infinity
     for (const r of rows) {
       r.hot = r.activeProjects > 0 && r.lifetimeValue >= hotThreshold && r.lifetimeValue > 0
@@ -145,7 +139,11 @@ export function OwnerClients() {
         </span>
       ),
     },
-    { key: 'org', header: 'Org', render: (r) => <MPill tone={r.org === 'QuickBooks' ? 'green' : undefined}>{r.org}</MPill> },
+    {
+      key: 'org',
+      header: 'Org',
+      render: (r) => <MPill tone={r.org === 'QuickBooks' ? 'green' : undefined}>{r.org}</MPill>,
+    },
     { key: 'projects', header: 'Projects', numeric: true, render: (r) => r.projectCount },
     { key: 'lifetime', header: 'Lifetime value', numeric: true, render: (r) => formatMoney(r.lifetimeValue) },
     {
@@ -166,7 +164,15 @@ export function OwnerClients() {
   return (
     <div className="d-content">
       <div className="d-stack">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-end',
+            gap: 16,
+            flexWrap: 'wrap',
+          }}
+        >
           <div>
             <DEyebrow>Owner · Clients</DEyebrow>
             <DH1>
@@ -267,7 +273,10 @@ function AddClientModal({ open, onClose }: { open: boolean; onClose: () => void 
       onClose={handleClose}
       width={480}
       title={
-        <span className="num" style={{ fontWeight: 800, fontSize: 12, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+        <span
+          className="num"
+          style={{ fontWeight: 800, fontSize: 12, letterSpacing: '0.06em', textTransform: 'uppercase' }}
+        >
           ADD CLIENT
         </span>
       }
@@ -293,7 +302,9 @@ function AddClientModal({ open, onClose }: { open: boolean; onClose: () => void 
           autoFocus
           style={{ width: '100%' }}
         />
-        {nameError ? <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--m-red)', fontSize: 12 }}>{nameError}</p> : null}
+        {nameError ? (
+          <p style={{ marginTop: 6, marginBottom: 0, color: 'var(--m-red)', fontSize: 12 }}>{nameError}</p>
+        ) : null}
       </label>
       {error ? <div style={{ color: 'var(--m-red)', fontSize: 13, marginTop: 14 }}>{error}</div> : null}
     </DModal>

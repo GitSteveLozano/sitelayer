@@ -290,10 +290,7 @@ export function MEmptyState({
 export function MSkeletonRow() {
   return (
     <div className="m-list-row" aria-busy="true">
-      <span
-        className="m-l-leading"
-        style={{ background: 'var(--m-ink-3)', opacity: 0.3, borderRadius: 0 }}
-      />
+      <span className="m-l-leading" style={{ background: 'var(--m-ink-3)', opacity: 0.3, borderRadius: 0 }} />
       <div className="m-l-body">
         <div
           style={{

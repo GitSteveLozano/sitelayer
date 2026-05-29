@@ -58,9 +58,10 @@ export function TakeoffAutoscale({ companySlug }: { companySlug: string }) {
     () =>
       pages.map((p) => {
         const calibrated = Boolean(p.calibration_set_at)
-        const scaleText = calibrated && p.calibration_world_distance
-          ? `${p.calibration_world_distance} ${p.calibration_world_unit ?? ''}`.trim()
-          : docScale ?? 'UNSET'
+        const scaleText =
+          calibrated && p.calibration_world_distance
+            ? `${p.calibration_world_distance} ${p.calibration_world_unit ?? ''}`.trim()
+            : (docScale ?? 'UNSET')
         return {
           id: p.id,
           code: `P-${p.page_number}`,
@@ -78,10 +79,7 @@ export function TakeoffAutoscale({ companySlug }: { companySlug: string }) {
   const check = (id: string) => setChecked((prev) => ({ ...prev, [id]: true }))
 
   const sheets = useMemo<ScaleSheet[]>(
-    () =>
-      dataSheets.map((s) =>
-        checked[s.id] ? { ...s, verified: true, locallyChecked: true } : s,
-      ),
+    () => dataSheets.map((s) => (checked[s.id] ? { ...s, verified: true, locallyChecked: true } : s)),
     [dataSheets, checked],
   )
 
@@ -123,7 +121,9 @@ export function TakeoffAutoscale({ companySlug }: { companySlug: string }) {
           {verifiedInList}
           <span style={{ color: 'var(--m-ink-3)' }}> / {totalSheets}</span>
         </div>
-        <div style={{ fontFamily: 'var(--m-num)', fontSize: 12, marginTop: 6, fontWeight: 600, color: 'var(--m-ink-2)' }}>
+        <div
+          style={{ fontFamily: 'var(--m-num)', fontSize: 12, marginTop: 6, fontWeight: 600, color: 'var(--m-ink-2)' }}
+        >
           VERIFIED · {toReview} TO REVIEW
         </div>
         <div
@@ -145,19 +145,29 @@ export function TakeoffAutoscale({ companySlug }: { companySlug: string }) {
       {/* Per-sheet scale list (real blueprint pages) */}
       <div style={{ flex: 1, overflow: 'auto' }}>
         {pagesQuery.isLoading || blueprintsQuery.isLoading ? (
-          <div style={{ padding: 20, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 }}>
+          <div
+            style={{ padding: 20, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 }}
+          >
             Loading sheets…
           </div>
         ) : null}
         {!pagesQuery.isLoading && !blueprintsQuery.isLoading && totalSheets === 0 ? (
-          <div style={{ padding: 20, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 }}>
+          <div
+            style={{ padding: 20, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 }}
+          >
             {latestDoc ? 'This blueprint has no pages to verify.' : 'No blueprint uploaded yet.'}
           </div>
         ) : null}
         {sheets.map((s) => (
           <div
             key={s.id}
-            style={{ padding: '14px 20px', borderBottom: '1px solid var(--m-line-2)', display: 'flex', alignItems: 'center', gap: 14 }}
+            style={{
+              padding: '14px 20px',
+              borderBottom: '1px solid var(--m-line-2)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14,
+            }}
           >
             <span
               style={{
@@ -180,7 +190,9 @@ export function TakeoffAutoscale({ companySlug }: { companySlug: string }) {
             </span>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
-                <span style={{ fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700, color: 'var(--m-ink-3)' }}>{s.code}</span>
+                <span style={{ fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700, color: 'var(--m-ink-3)' }}>
+                  {s.code}
+                </span>
                 <span style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 14 }}>{s.label}</span>
               </div>
               <div

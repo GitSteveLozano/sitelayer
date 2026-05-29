@@ -82,8 +82,7 @@ export function OwnerApprovals({ bootstrap }: { bootstrap: BootstrapResponse | n
   const { snooze, mute, clear } = useGuardrailAction()
   const workEvent = useAppendWorkRequestEvent()
   const coEvent = useAnyProjectChangeOrderEvent()
-  const busy =
-    snooze.isPending || mute.isPending || clear.isPending || workEvent.isPending || coEvent.isPending
+  const busy = snooze.isPending || mute.isPending || clear.isPending || workEvent.isPending || coEvent.isPending
 
   const changeOrdersLoading = changeOrderQueries.some((q) => q.isPending)
   const changeOrdersError = changeOrderQueries.find((q) => q.error)?.error ?? null

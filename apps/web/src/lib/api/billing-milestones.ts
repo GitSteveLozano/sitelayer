@@ -130,8 +130,7 @@ export function useCreateBillingMilestones(projectId: string) {
 export function usePatchBillingMilestone(projectId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (args: { id: string; input: PatchBillingMilestoneInput }) =>
-      patchBillingMilestone(args.id, args.input),
+    mutationFn: (args: { id: string; input: PatchBillingMilestoneInput }) => patchBillingMilestone(args.id, args.input),
     onSuccess: () => qc.invalidateQueries({ queryKey: KEYS.byProject(projectId) }),
   })
 }

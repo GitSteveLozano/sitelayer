@@ -73,19 +73,11 @@ export function OfflineBanner() {
     >
       {online ? (
         // Square pulsing status block — catching up.
-        <span
-          className="shrink-0"
-          style={{ width: 12, height: 12, background: 'currentColor' }}
-          aria-hidden="true"
-        />
+        <span className="shrink-0" style={{ width: 12, height: 12, background: 'currentColor' }} aria-hidden="true" />
       ) : (
         // Square red status block — offline. Brutalist: hard edges, full
         // fill, no glyph. Uses the red token so it inverts with the theme.
-        <span
-          className="shrink-0"
-          style={{ width: 14, height: 14, background: 'var(--m-red)' }}
-          aria-hidden="true"
-        />
+        <span className="shrink-0" style={{ width: 14, height: 14, background: 'var(--m-red)' }} aria-hidden="true" />
       )}
       <span className="flex-1 min-w-0 truncate">
         {online ? `${pending} change${pending === 1 ? '' : 's'} catching up…` : offlineLabel}

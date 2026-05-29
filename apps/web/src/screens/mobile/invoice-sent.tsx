@@ -236,7 +236,9 @@ export function MobileInvoiceSent({ bootstrap }: { bootstrap: BootstrapResponse 
             {subtotal ? formatMoney(subtotal) : '$0'}
           </div>
           <div style={{ marginTop: 10, fontFamily: MONO, fontWeight: 600, fontSize: 12, color: 'var(--m-accent-ink)' }}>
-            {ctx?.qbo_estimate_id ? `QBO #${ctx.qbo_estimate_id}` : `${ctx?.lines.length ?? 0} LINES · v${snapshot.state_version}`}
+            {ctx?.qbo_estimate_id
+              ? `QBO #${ctx.qbo_estimate_id}`
+              : `${ctx?.lines.length ?? 0} LINES · v${snapshot.state_version}`}
           </div>
         </div>
 
@@ -341,7 +343,15 @@ export function MobileInvoiceSent({ bootstrap }: { bootstrap: BootstrapResponse 
         {/* Action bar — the real forward transitions from next_events drive the
             "nudge/advance" controls (the QBO push). MARK PAID is a real manual
             milestone status set (migration 104), not a QBO payment webhook. */}
-        <div style={{ padding: '14px 20px 18px', borderTop: '2px solid var(--m-ink)', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div
+          style={{
+            padding: '14px 20px 18px',
+            borderTop: '2px solid var(--m-ink)',
+            display: 'flex',
+            gap: 8,
+            flexWrap: 'wrap',
+          }}
+        >
           {snapshot.next_events.length === 0 ? (
             <span style={{ flex: 1 }}>
               <MButton variant="ghost" onClick={back}>

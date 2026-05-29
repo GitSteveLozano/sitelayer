@@ -110,8 +110,7 @@ export function EstAiCountSetup() {
     capture.mutate(
       { kind: 'blueprint_vision', name: 'AI auto-count', payload: { dryRun: true } },
       {
-        onSuccess: (res) =>
-          navigate(`/desktop/ai-count/${projectId}/review`, { state: { draftId: res.draft.id } }),
+        onSuccess: (res) => navigate(`/desktop/ai-count/${projectId}/review`, { state: { draftId: res.draft.id } }),
       },
     )
   }
@@ -227,7 +226,15 @@ export function EstAiCountSetup() {
               {capture.isPending ? 'Scanning…' : 'Run · ~30s'}
             </MButton>
             {capture.isError ? (
-              <div style={{ marginTop: 10, fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700, color: 'var(--m-red)' }}>
+              <div
+                style={{
+                  marginTop: 10,
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: 'var(--m-red)',
+                }}
+              >
                 ● {capture.error.message || 'Capture failed — try again.'}
               </div>
             ) : null}
@@ -292,9 +299,7 @@ function useCountReviewDraftId(projectId: string): string | null {
       : ''
   const draftsQuery = useTakeoffDrafts(stateDraftId ? null : projectId)
   if (stateDraftId) return stateDraftId
-  const latestCapture = (draftsQuery.data?.drafts ?? [])
-    .filter((d) => d.source && d.source !== 'manual')
-    .at(-1)
+  const latestCapture = (draftsQuery.data?.drafts ?? []).filter((d) => d.source && d.source !== 'manual').at(-1)
   return latestCapture?.id ?? null
 }
 
@@ -366,8 +371,7 @@ export function EstAiCountReview() {
   const [decisions, setDecisions] = useState<Record<string, Decision>>({})
 
   const decisionFor = (d: CountDetection): Decision => decisions[d.id] ?? 'pending'
-  const setDecision = (id: string, decision: Decision) =>
-    setDecisions((prev) => ({ ...prev, [id]: decision }))
+  const setDecision = (id: string, decision: Decision) => setDecisions((prev) => ({ ...prev, [id]: decision }))
 
   // J/K navigate · Y keep · N reject — the keyboard contract the banner
   // advertises. Acting on a row also advances to the next one so the estimator
@@ -603,7 +607,15 @@ export function EstAiCountReview() {
             )
           })}
           {!resultQuery.isLoading && dets.length === 0 ? (
-            <div style={{ padding: '16px 20px', fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 }}>
+            <div
+              style={{
+                padding: '16px 20px',
+                fontFamily: 'var(--m-num)',
+                fontSize: 12,
+                color: 'var(--m-ink-3)',
+                fontWeight: 600,
+              }}
+            >
               {resultQuery.isError
                 ? `Couldn't load the count result. ${resultQuery.error.message}`
                 : draftId
@@ -612,7 +624,15 @@ export function EstAiCountReview() {
             </div>
           ) : null}
           {promote.isError ? (
-            <div style={{ padding: '12px 20px 0', fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700, color: 'var(--m-red)' }}>
+            <div
+              style={{
+                padding: '12px 20px 0',
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                fontWeight: 700,
+                color: 'var(--m-red)',
+              }}
+            >
               ● {promote.error.message || 'Promote failed — try again.'}
             </div>
           ) : null}

@@ -251,7 +251,15 @@ function GeofenceMap({ offFence = false }: { offFence?: boolean }) {
                 </>
               )}
             </circle>
-            <rect x="132" y="122" width="16" height="16" fill="var(--m-accent)" stroke="var(--m-line)" strokeWidth="2" />
+            <rect
+              x="132"
+              y="122"
+              width="16"
+              height="16"
+              fill="var(--m-accent)"
+              stroke="var(--m-line)"
+              strokeWidth="2"
+            />
           </>
         )}
         <text x="14" y="206" fontFamily="var(--m-num)" fontSize="9" fill={markerColor} fontWeight="600">

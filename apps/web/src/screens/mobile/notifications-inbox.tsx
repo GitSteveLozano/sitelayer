@@ -71,9 +71,7 @@ function groupFor(iso: string): Group {
   const then = new Date(ts)
   if (now.getTime() - ts < 3 * 3600_000) return 'NOW'
   const sameDay =
-    now.getFullYear() === then.getFullYear() &&
-    now.getMonth() === then.getMonth() &&
-    now.getDate() === then.getDate()
+    now.getFullYear() === then.getFullYear() && now.getMonth() === then.getMonth() && now.getDate() === then.getDate()
   return sameDay ? 'TODAY' : 'EARLIER'
 }
 

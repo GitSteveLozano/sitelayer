@@ -12,16 +12,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import type { BroadcastAudience } from '@sitelayer/domain'
-import {
-  MBanner,
-  MBody,
-  MButton,
-  MPill,
-  MSectionH,
-  MSelect,
-  MTextarea,
-  MTopBar,
-} from '../../components/m/index.js'
+import { MBanner, MBody, MButton, MPill, MSectionH, MSelect, MTextarea, MTopBar } from '../../components/m/index.js'
 import { useBroadcasts, usePostBroadcast } from '../../lib/api/messaging.js'
 import { useProjects } from '../../lib/api/projects.js'
 import { useWorkers } from '../../lib/api/workers.js'
@@ -81,7 +72,13 @@ export function MobileBroadcast() {
   const canSend = trimmed.length > 0 && !overLimit && !projectRequiredButMissing && !post.isPending
 
   const sendCount =
-    audience === 'by_project' ? null : audience === 'all' ? counts.all : audience === 'foremen' ? counts.foremen : counts.crew
+    audience === 'by_project'
+      ? null
+      : audience === 'all'
+        ? counts.all
+        : audience === 'foremen'
+          ? counts.foremen
+          : counts.crew
 
   const handleSend = () => {
     if (!canSend) return
@@ -199,7 +196,15 @@ export function MobileBroadcast() {
             gap: 10,
           }}
         >
-          <span style={{ width: 14, height: 14, background: 'var(--m-accent)', border: '1.5px solid var(--m-ink)', flexShrink: 0 }} />
+          <span
+            style={{
+              width: 14,
+              height: 14,
+              background: 'var(--m-accent)',
+              border: '1.5px solid var(--m-ink)',
+              flexShrink: 0,
+            }}
+          />
           <span style={{ ...MONO, flex: 1, fontSize: 11, fontWeight: 600 }}>PUSH · SMS · EMAIL · ALL THREE</span>
         </div>
 

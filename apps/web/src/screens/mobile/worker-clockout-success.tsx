@@ -127,7 +127,13 @@ export function WorkerClockoutSuccess() {
           </div>
           <div
             className="m-topbar-eyebrow"
-            style={{ color: 'var(--m-ink-4)', marginTop: 12, textTransform: 'none', fontSize: 11, position: 'relative' }}
+            style={{
+              color: 'var(--m-ink-4)',
+              marginTop: 12,
+              textTransform: 'none',
+              fontSize: 11,
+              position: 'relative',
+            }}
           >
             {punchedOutAt ? `Punched out ${timeOfDay(punchedOutAt)}` : 'Shift logged'}
           </div>
@@ -210,13 +216,7 @@ function ConfettiTicks({ reducedMotion }: { reducedMotion: boolean }) {
       {ticks.map((x, i) => (
         <rect key={x} x={x} y={6} width={4} height={10} fill={i % 2 === 0 ? 'var(--m-green)' : 'var(--m-accent)'}>
           {reducedMotion ? null : (
-            <animate
-              attributeName="y"
-              values="10;4;10"
-              dur="2.6s"
-              begin={`${i * 0.18}s`}
-              repeatCount="indefinite"
-            />
+            <animate attributeName="y" values="10;4;10" dur="2.6s" begin={`${i * 0.18}s`} repeatCount="indefinite" />
           )}
         </rect>
       ))}

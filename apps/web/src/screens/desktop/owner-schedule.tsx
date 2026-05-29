@@ -393,7 +393,15 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
   return (
     <div className="d-content">
       <div className="d-stack">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'flex-end',
+            gap: 16,
+            flexWrap: 'wrap',
+          }}
+        >
           <div>
             <DEyebrow>Owner · Schedule</DEyebrow>
             <DH1>

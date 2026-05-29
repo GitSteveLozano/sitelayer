@@ -22,8 +22,14 @@ const APPS = {
     // on 2026-05-16 for the audit-follow-up bundle (#316): the headless
     // workflow factory, offline-queue Blob safety, clock-event photo
     // upload helper, and the scaffold-catalog + companycam screens that
-    // landed via rebase from main.
-    lazyAppChunkGzipBudget: 56 * 1024,
+    // landed via rebase from main. 56KB → 64KB on 2026-05-29 (#431) for the
+    // Desktop v2 command-center build-out: the desktop-workspace lazy chunk
+    // (the entire owner/estimator/foreman desktop app, loaded only when an
+    // owner hits /desktop) took on rentals asset-detail/dispatch/return, the
+    // canvas AI-assist palette + AI count/takeoff review, the settings panels
+    // (company/working-hours/integrations/notifications), and the owner
+    // approval/invoice modals — ~58KB gzip for the whole command center.
+    lazyAppChunkGzipBudget: 64 * 1024,
     nonAppPrefixes: ['vendor-', 'web-vitals-', 'rolldown-runtime-', 'workbox-'],
     requireSentryLazy: false,
   },

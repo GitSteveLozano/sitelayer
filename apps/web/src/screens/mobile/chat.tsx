@@ -16,12 +16,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
 import type { ProjectMessage } from '@/lib/api/messaging'
-import {
-  useMarkThreadRead,
-  useMessageSummary,
-  usePostProjectMessage,
-  useProjectMessages,
-} from '@/lib/api/messaging'
+import { useMarkThreadRead, useMessageSummary, usePostProjectMessage, useProjectMessages } from '@/lib/api/messaging'
 import { useProjectAssignments } from '@/lib/api/project-assignments'
 import { MAvatar, MButton, MInput, MListInset, MListRow, MPill, MTopBar } from '../../components/m/index.js'
 import type { MTone } from '../../components/m/list.js'
@@ -339,13 +334,7 @@ export function MobileChatThread() {
   )
 }
 
-function MessageRow({
-  message,
-  authorNames,
-}: {
-  message: ProjectMessage
-  authorNames: ReadonlyMap<string, string>
-}) {
+function MessageRow({ message, authorNames }: { message: ProjectMessage; authorNames: ReadonlyMap<string, string> }) {
   const tone = roleTone(message.author_role)
   const attached = attachedBlocker(message)
   const highlight = approvalHighlight(message)

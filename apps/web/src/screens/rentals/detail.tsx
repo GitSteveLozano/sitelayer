@@ -304,9 +304,7 @@ function MovementRow({ movement }: { movement: InventoryMovement }) {
                 ? 'Repair'
                 : 'Adjusted'
   const tone: 'good' | 'warn' | 'default' =
-    movement.movement_type === 'damaged' ||
-    movement.movement_type === 'lost' ||
-    movement.movement_type === 'repair'
+    movement.movement_type === 'damaged' || movement.movement_type === 'lost' || movement.movement_type === 'repair'
       ? 'warn'
       : movement.movement_type === 'deliver'
         ? 'good'

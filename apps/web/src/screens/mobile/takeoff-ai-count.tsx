@@ -132,8 +132,18 @@ export function TakeoffAiCountSetup({ companySlug }: { companySlug: string }) {
             ◯
           </span>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 16 }}>DIFFUSER · 24&quot; ROUND</div>
-            <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, color: 'var(--m-ink-3)', marginTop: 4, fontWeight: 600 }}>
+            <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 16 }}>
+              DIFFUSER · 24&quot; ROUND
+            </div>
+            <div
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                color: 'var(--m-ink-3)',
+                marginTop: 4,
+                fontWeight: 600,
+              }}
+            >
               OR: <span style={{ textDecoration: 'underline' }}>PICK DIFFERENT</span>
             </div>
           </div>
@@ -173,7 +183,16 @@ export function TakeoffAiCountSetup({ companySlug }: { companySlug: string }) {
             )
           })}
         </div>
-        <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, color: 'var(--m-ink-3)', marginTop: 10, fontWeight: 600, lineHeight: 1.45 }}>
+        <div
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            color: 'var(--m-ink-3)',
+            marginTop: 10,
+            fontWeight: 600,
+            lineHeight: 1.45,
+          }}
+        >
           NORMAL = HIGH-CONF AUTO + REVIEW THE EDGES.
         </div>
       </div>
@@ -215,9 +234,20 @@ export function TakeoffAiCountSetup({ companySlug }: { companySlug: string }) {
               aria-hidden
             />
             <span style={{ flex: 1, minWidth: 0, opacity: s.dim ? 0.4 : 1 }}>
-              <span style={{ display: 'block', fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700 }}>{s.label}</span>
+              <span style={{ display: 'block', fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700 }}>
+                {s.label}
+              </span>
               {s.sub ? (
-                <span style={{ display: 'block', fontFamily: 'var(--m-num)', fontSize: 9, color: 'var(--m-ink-3)', marginTop: 3, fontWeight: 600 }}>
+                <span
+                  style={{
+                    display: 'block',
+                    fontFamily: 'var(--m-num)',
+                    fontSize: 9,
+                    color: 'var(--m-ink-3)',
+                    marginTop: 3,
+                    fontWeight: 600,
+                  }}
+                >
                   {s.sub}
                 </span>
               ) : null}
@@ -229,7 +259,15 @@ export function TakeoffAiCountSetup({ companySlug }: { companySlug: string }) {
       <div style={{ flex: 1 }} />
       <div style={{ padding: '14px 20px 18px', borderTop: '2px solid var(--m-ink)' }}>
         {capture.isError ? (
-          <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700, color: 'var(--m-red)', marginBottom: 10 }}>
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 700,
+              color: 'var(--m-red)',
+              marginBottom: 10,
+            }}
+          >
             ● {capture.error.message || 'Capture failed — try again.'}
           </div>
         ) : null}
@@ -269,9 +307,7 @@ function useCountReviewDraftId(projectId: string): string | null {
       : ''
   const draftsQuery = useTakeoffDrafts(stateDraftId ? null : projectId)
   if (stateDraftId) return stateDraftId
-  const latestCapture = (draftsQuery.data?.drafts ?? [])
-    .filter((d) => d.source && d.source !== 'manual')
-    .at(-1)
+  const latestCapture = (draftsQuery.data?.drafts ?? []).filter((d) => d.source && d.source !== 'manual').at(-1)
   return latestCapture?.id ?? null
 }
 
@@ -311,10 +347,7 @@ export function TakeoffAiCountReview({ companySlug }: { companySlug: string }) {
 
   const approve = () => {
     if (!draftId || keptIds.length === 0 || promote.isPending) return
-    promote.mutate(
-      { quantity_ids: keptIds },
-      { onSuccess: () => navigate(`/projects/${projectId}/takeoff-mobile`) },
-    )
+    promote.mutate({ quantity_ids: keptIds }, { onSuccess: () => navigate(`/projects/${projectId}/takeoff-mobile`) })
   }
 
   return (
@@ -341,7 +374,9 @@ export function TakeoffAiCountReview({ companySlug }: { companySlug: string }) {
           {resultQuery.isLoading ? '…' : total - rejectedCount}
           <span style={{ fontSize: 24, color: 'var(--m-ink-4)', marginLeft: 6 }}> KEPT</span>
         </div>
-        <div style={{ fontFamily: 'var(--m-num)', fontSize: 12, marginTop: 8, color: 'var(--m-ink-4)', fontWeight: 600 }}>
+        <div
+          style={{ fontFamily: 'var(--m-num)', fontSize: 12, marginTop: 8, color: 'var(--m-ink-4)', fontWeight: 600 }}
+        >
           HIGH {confidenceBuckets.HIGH} · MED {confidenceBuckets.MED} · LOW {confidenceBuckets.LOW}
         </div>
       </div>
@@ -363,12 +398,16 @@ export function TakeoffAiCountReview({ companySlug }: { companySlug: string }) {
       </div>
       <div style={{ flex: 1, overflow: 'auto' }}>
         {resultQuery.isError ? (
-          <div style={{ padding: 20, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-red)', fontWeight: 600 }}>
+          <div
+            style={{ padding: 20, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-red)', fontWeight: 600 }}
+          >
             Couldn&apos;t load the count result. {resultQuery.error.message}
           </div>
         ) : null}
         {!resultQuery.isLoading && !resultQuery.isError && quantities.length === 0 ? (
-          <div style={{ padding: 20, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 }}>
+          <div
+            style={{ padding: 20, fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 }}
+          >
             {draftId ? 'This draft has no detected quantities.' : 'Run the count to produce a draft.'}
           </div>
         ) : null}
@@ -392,14 +431,32 @@ export function TakeoffAiCountReview({ companySlug }: { companySlug: string }) {
                 type="button"
                 onClick={() => setActive(i)}
                 aria-pressed={on}
-                style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, background: 'transparent', border: 'none', textAlign: 'left', cursor: 'pointer' }}
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  background: 'transparent',
+                  border: 'none',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                }}
               >
-                <span style={{ width: 8, height: 8, background: isKept ? 'var(--m-accent)' : 'var(--m-red)' }} aria-hidden />
+                <span
+                  style={{ width: 8, height: 8, background: isKept ? 'var(--m-accent)' : 'var(--m-red)' }}
+                  aria-hidden
+                />
                 <span style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 12, fontWeight: 700, minWidth: 0 }}>
                   {q.description || q.masterformatCode || q.id} · {formatQty(q.value, q.unit)}
                 </span>
                 <MPill
-                  tone={confidenceLabel(q.confidence) === 'HIGH' ? 'green' : confidenceLabel(q.confidence) === 'MED' ? 'amber' : 'red'}
+                  tone={
+                    confidenceLabel(q.confidence) === 'HIGH'
+                      ? 'green'
+                      : confidenceLabel(q.confidence) === 'MED'
+                        ? 'amber'
+                        : 'red'
+                  }
                 >
                   {confidenceLabel(q.confidence)}
                 </MPill>
@@ -458,7 +515,11 @@ export function TakeoffAiCountReview({ companySlug }: { companySlug: string }) {
         </div>
       ) : null}
       <div style={{ padding: '14px 20px', display: 'flex', gap: 8, borderTop: '2px solid var(--m-ink)' }}>
-        <MButton variant="ghost" onClick={() => navigate(`/projects/${projectId}/takeoff-ai/count`)} style={{ flex: 1 }}>
+        <MButton
+          variant="ghost"
+          onClick={() => navigate(`/projects/${projectId}/takeoff-ai/count`)}
+          style={{ flex: 1 }}
+        >
           Re-run
         </MButton>
         <MButton

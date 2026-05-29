@@ -23,10 +23,7 @@ export interface ColdStartSplashProps {
 
 export function ColdStartSplash({ status = 'Syncing to projects · offline ready' }: ColdStartSplashProps) {
   return (
-    <div
-      className="min-h-dvh flex flex-col"
-      style={{ background: 'var(--m-accent)', color: 'var(--m-accent-ink)' }}
-    >
+    <div className="min-h-dvh flex flex-col" style={{ background: 'var(--m-accent)', color: 'var(--m-accent-ink)' }}>
       <div
         className="flex-1 flex flex-col justify-center px-8 relative overflow-hidden"
         style={{ position: 'relative' }}
@@ -38,8 +35,7 @@ export function ColdStartSplash({ status = 'Syncing to projects · offline ready
             position: 'absolute',
             inset: 0,
             opacity: 0.08,
-            backgroundImage:
-              'repeating-linear-gradient(135deg, transparent 0 22px, var(--m-ink) 22px 26px)',
+            backgroundImage: 'repeating-linear-gradient(135deg, transparent 0 22px, var(--m-ink) 22px 26px)',
           }}
         />
         <div style={{ position: 'relative' }}>

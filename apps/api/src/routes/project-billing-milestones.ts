@@ -129,7 +129,14 @@ function defaultLadder(contractValue: number | null): MilestoneInput[] {
   const amountFor = (pct: number): number | null =>
     contractValue !== null && Number.isFinite(contractValue) ? Math.round((contractValue * pct) / 100) : null
   return [
-    { label: 'Deposit · 30%', pct: 30, amount: amountFor(30), sort_order: 0, status: 'not_yet', estimate_push_id: null },
+    {
+      label: 'Deposit · 30%',
+      pct: 30,
+      amount: amountFor(30),
+      sort_order: 0,
+      status: 'not_yet',
+      estimate_push_id: null,
+    },
     {
       label: 'Progress · 50%',
       pct: 50,
@@ -240,16 +247,7 @@ export async function handleProjectBillingMilestoneRoutes(
                      case when $7 = 'not_yet' then null else now() end,
                      case when $7 = 'paid' then now() else null end)
              returning ${MILESTONE_COLUMNS}`,
-            [
-              ctx.company.id,
-              projectId,
-              m.label,
-              m.pct,
-              m.amount,
-              m.sort_order,
-              m.status,
-              m.estimate_push_id,
-            ],
+            [ctx.company.id, projectId, m.label, m.pct, m.amount, m.sort_order, m.status, m.estimate_push_id],
           )
           rows.push(inserted.rows[0]!)
         }

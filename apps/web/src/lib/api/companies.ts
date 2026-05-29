@@ -187,8 +187,7 @@ export function useWorkingHours(companyId: string | null | undefined) {
   return useQuery<WorkingHoursResponse>({
     queryKey: ['companies', companyId ?? '', 'working-hours'],
     enabled: Boolean(companyId),
-    queryFn: () =>
-      request<WorkingHoursResponse>(`/api/companies/${encodeURIComponent(companyId!)}/working-hours`),
+    queryFn: () => request<WorkingHoursResponse>(`/api/companies/${encodeURIComponent(companyId!)}/working-hours`),
   })
 }
 
