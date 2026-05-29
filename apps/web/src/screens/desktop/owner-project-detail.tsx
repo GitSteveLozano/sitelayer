@@ -127,8 +127,11 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
             </MPill>
           </div>
           <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+            <MButton variant="primary" onClick={() => navigate(`/desktop/canvas/${projectId}`)}>
+              Takeoff →
+            </MButton>
             {!onTrack ? (
-              <MButton variant="primary" onClick={() => setOverlay('recovery')}>
+              <MButton variant="ghost" onClick={() => setOverlay('recovery')}>
                 Recovery plan
               </MButton>
             ) : null}
