@@ -23,6 +23,13 @@ type CompanyRow = {
   modules?: Record<string, boolean>
   slug?: string
   name?: string
+  // Company-profile scalars (migration 102).
+  legal_name?: string | null
+  license_no?: string | null
+  address?: string | null
+  phone?: string | null
+  website?: string | null
+  working_hours?: unknown
 }
 type ServiceItemRow = { company_id: string; code: string }
 type MembershipRow = { company_id: string; clerk_user_id: string; role: string }
@@ -118,6 +125,36 @@ class FakePool {
       const c = this.companies.find((x) => x.id === id)
       return {
         rows: c ? [{ ot_service_item_code: c.ot_service_item_code }] : [],
+        rowCount: c ? 1 : 0,
+      }
+    }
+
+    // GET /api/companies/:id/profile (migration 102) — scalar identity read.
+    if (/^select legal_name, license_no, address, phone, website from companies/i.test(trimmed)) {
+      const [id] = params as [string]
+      const c = this.companies.find((x) => x.id === id)
+      return {
+        rows: c
+          ? [
+              {
+                legal_name: c.legal_name ?? null,
+                license_no: c.license_no ?? null,
+                address: c.address ?? null,
+                phone: c.phone ?? null,
+                website: c.website ?? null,
+              },
+            ]
+          : [],
+        rowCount: c ? 1 : 0,
+      }
+    }
+
+    // GET /api/companies/:id/working-hours (migration 102).
+    if (/^select working_hours from companies/i.test(trimmed)) {
+      const [id] = params as [string]
+      const c = this.companies.find((x) => x.id === id)
+      return {
+        rows: c ? [{ working_hours: c.working_hours ?? null }] : [],
         rowCount: c ? 1 : 0,
       }
     }
@@ -644,5 +681,109 @@ describe('GET /api/me/memberships', () => {
     expect(handled).toBe(true)
     expect(responses[0]?.status).toBe(200)
     expect(responses[0]?.body).toEqual({ memberships: [] })
+  })
+})
+
+// Company profile + working hours (migration 102). The mutating PATCH/PUT
+// paths run through withMutationTx (module-level pool), which a fake ctx.pool
+// cannot exercise without booting attachMutationTx + a live connection — out
+// of scope for a DB-free unit test. The GET reads and the role gate run on
+// ctx.pool, so they are covered here.
+describe('GET /api/companies/:id/profile', () => {
+  it('returns the scalar profile fields for any member', async () => {
+    const pool = new FakePool()
+    pool.companies.push({
+      id: 'co-1',
+      ot_service_item_code: null,
+      legal_name: 'LA Operations, Inc.',
+      license_no: 'CSLB 1012345',
+      address: '1200 Industrial Blvd',
+      phone: '(310) 555-0142',
+      website: 'https://laoperations.com',
+    })
+    pool.memberships.push({ company_id: 'co-1', clerk_user_id: 'user_member', role: 'member' })
+    const { ctx, responses } = makeCtx(pool, 'user_member')
+
+    const handled = await handleCompanyRoutes({ method: 'GET' } as never, buildUrl('/api/companies/co-1/profile'), ctx)
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(200)
+    expect(responses[0]?.body).toEqual({
+      legal_name: 'LA Operations, Inc.',
+      license_no: 'CSLB 1012345',
+      address: '1200 Industrial Blvd',
+      phone: '(310) 555-0142',
+      website: 'https://laoperations.com',
+    })
+  })
+
+  it('returns nulls for an unfilled profile', async () => {
+    const pool = new FakePool()
+    pool.companies.push({ id: 'co-1', ot_service_item_code: null })
+    pool.memberships.push({ company_id: 'co-1', clerk_user_id: 'user_member', role: 'member' })
+    const { ctx, responses } = makeCtx(pool, 'user_member')
+
+    await handleCompanyRoutes({ method: 'GET' } as never, buildUrl('/api/companies/co-1/profile'), ctx)
+    expect(responses[0]?.status).toBe(200)
+    expect(responses[0]?.body).toEqual({
+      legal_name: null,
+      license_no: null,
+      address: null,
+      phone: null,
+      website: null,
+    })
+  })
+
+  it('returns 403 for non-members', async () => {
+    const pool = new FakePool()
+    pool.companies.push({ id: 'co-1', ot_service_item_code: null })
+    const { ctx, responses } = makeCtx(pool, 'user_stranger')
+
+    await handleCompanyRoutes({ method: 'GET' } as never, buildUrl('/api/companies/co-1/profile'), ctx)
+    expect(responses[0]?.status).toBe(403)
+  })
+})
+
+describe('GET /api/companies/:id/working-hours', () => {
+  it('returns the saved working-hours document for any member', async () => {
+    const wh = {
+      days: { mon: true, tue: true, wed: true, thu: true, fri: true, sat: false, sun: false },
+      day_start: '07:00',
+      day_end: '16:00',
+      ot_rule: '8h',
+      holidays: [{ name: 'Christmas Day', date: 'Dec 25' }],
+    }
+    const pool = new FakePool()
+    pool.companies.push({ id: 'co-1', ot_service_item_code: null, working_hours: wh })
+    pool.memberships.push({ company_id: 'co-1', clerk_user_id: 'user_member', role: 'member' })
+    const { ctx, responses } = makeCtx(pool, 'user_member')
+
+    const handled = await handleCompanyRoutes(
+      { method: 'GET' } as never,
+      buildUrl('/api/companies/co-1/working-hours'),
+      ctx,
+    )
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(200)
+    expect(responses[0]?.body).toEqual({ working_hours: wh })
+  })
+
+  it('returns null when the company has never saved working hours', async () => {
+    const pool = new FakePool()
+    pool.companies.push({ id: 'co-1', ot_service_item_code: null })
+    pool.memberships.push({ company_id: 'co-1', clerk_user_id: 'user_member', role: 'member' })
+    const { ctx, responses } = makeCtx(pool, 'user_member')
+
+    await handleCompanyRoutes({ method: 'GET' } as never, buildUrl('/api/companies/co-1/working-hours'), ctx)
+    expect(responses[0]?.status).toBe(200)
+    expect(responses[0]?.body).toEqual({ working_hours: null })
+  })
+
+  it('returns 403 for non-members', async () => {
+    const pool = new FakePool()
+    pool.companies.push({ id: 'co-1', ot_service_item_code: null })
+    const { ctx, responses } = makeCtx(pool, 'user_stranger')
+
+    await handleCompanyRoutes({ method: 'GET' } as never, buildUrl('/api/companies/co-1/working-hours'), ctx)
+    expect(responses[0]?.status).toBe(403)
   })
 })

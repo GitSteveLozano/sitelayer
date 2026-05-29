@@ -132,6 +132,25 @@ export function FmToday({ bootstrap }: { bootstrap: BootstrapResponse | null }) 
         </MPill>
       ),
     },
+    {
+      key: 'brief',
+      header: '',
+      render: (r) => (
+        // SiteRow.id is the project id (see activeSites mapping above), so the
+        // FM Brief route (fm/brief/:projectId) is keyed off it. Stop the click
+        // from bubbling to the row's project-detail navigation.
+        <MButton
+          size="sm"
+          variant="ghost"
+          onClick={(e) => {
+            e.stopPropagation()
+            navigate(`/desktop/fm/brief/${r.id}`)
+          }}
+        >
+          Brief crew
+        </MButton>
+      ),
+    },
   ]
 
   const siteWord = activeSites.length === 1 ? 'site' : 'sites'

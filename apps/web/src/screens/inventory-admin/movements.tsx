@@ -15,8 +15,9 @@ const TYPES: ReadonlyArray<InventoryMovement['movement_type']> = [
   'return',
   'transfer',
   'adjustment',
-  'damage',
-  'loss',
+  'damaged',
+  'lost',
+  'repair',
 ]
 
 const TONE_BY_TYPE: Record<InventoryMovement['movement_type'], 'good' | 'warn' | 'default'> = {
@@ -24,8 +25,9 @@ const TONE_BY_TYPE: Record<InventoryMovement['movement_type'], 'good' | 'warn' |
   return: 'default',
   transfer: 'default',
   adjustment: 'default',
-  damage: 'warn',
-  loss: 'warn',
+  damaged: 'warn',
+  lost: 'warn',
+  repair: 'warn',
 }
 
 export function InventoryMovementsAdminScreen() {

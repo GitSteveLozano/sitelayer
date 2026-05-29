@@ -122,6 +122,26 @@ const ProjectRentalContractScreen = lazy(() =>
   import('@/screens/inventory-admin').then((m) => ({ default: m.ProjectRentalContractScreen })),
 )
 
+// Net-new v2 full-screen surfaces that manage their own layout (MShell /
+// MTopBar) and therefore mount at the root, NOT inside MobileShell. The
+// invite / first-run / denied screens are onboarding-style takeovers like
+// /welcome; owner-approvals is the owner's full-screen approval inbox.
+const MobileOwnerApprovals = lazy(() =>
+  import('@/screens/mobile/owner-approvals').then((m) => ({ default: m.MobileOwnerApprovals })),
+)
+const WorkerInviteScreen = lazy(() =>
+  import('@/screens/mobile/worker-invite').then((m) => ({ default: m.WorkerInviteScreen })),
+)
+const ForemanInviteScreen = lazy(() =>
+  import('@/screens/mobile/foreman-invite').then((m) => ({ default: m.ForemanInviteScreen })),
+)
+const ForemanFirstRunScreen = lazy(() =>
+  import('@/screens/mobile/foreman-first-run').then((m) => ({ default: m.ForemanFirstRunScreen })),
+)
+const ForemanDeniedScreen = lazy(() =>
+  import('@/screens/mobile/foreman-denied').then((m) => ({ default: m.ForemanDeniedScreen })),
+)
+
 // Single client for the whole app. v2 uses TanStack Query for fetching
 // and caching; offline-aware mutations land in Phase 1.
 const queryClient = new QueryClient({
@@ -280,6 +300,15 @@ function AppShellRoutes() {
       <Route path="/onboarding" element={<OnboardingRoute />} />
       <Route path="/permissions/location" element={<LocationPrimeRoute />} />
       <Route path="/permissions/notifications" element={<NotificationsPrimeRoute />} />
+
+      {/* Owner approvals inbox + invite / first-run / denied flows --
+          full-screen surfaces that manage their own MShell chrome, so they
+          mount here rather than inside the bottom-tab MobileShell. */}
+      <Route path="/approvals" element={<MobileOwnerApprovals />} />
+      <Route path="/invite/worker" element={<WorkerInviteScreen />} />
+      <Route path="/invite/foreman" element={<ForemanInviteScreen />} />
+      <Route path="/foreman/first-run" element={<ForemanFirstRunScreen />} />
+      <Route path="/foreman/denied/:id" element={<ForemanDeniedScreen />} />
 
       {/* Desktop v2 account-setup wizard -- full-screen, no command-center chrome. */}
       <Route path="/welcome" element={<WelcomeRoute />} />

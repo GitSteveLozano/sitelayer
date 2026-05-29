@@ -9,7 +9,8 @@
 import { useMemo, useState } from 'react'
 import type { BootstrapResponse } from '@/lib/api'
 import { DEyebrow, DH1 } from '@/components/d'
-import { MChip, MChipRow, MPill, MAvatar } from '@/components/m'
+import { MButton, MChip, MChipRow, MPill, MAvatar } from '@/components/m'
+import { NewAssignmentModal } from './project-drawers'
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] as const
 
@@ -283,6 +284,7 @@ function FourWeekTimeline({
 
 export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const [view, setView] = useState<ScheduleView>('week')
+  const [assignmentOpen, setAssignmentOpen] = useState(false)
 
   const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
   const schedules = useMemo(() => bootstrap?.schedules ?? [], [bootstrap?.schedules])
@@ -391,12 +393,17 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
   return (
     <div className="d-content">
       <div className="d-stack">
-        <div>
-          <DEyebrow>Owner · Schedule</DEyebrow>
-          <DH1>
-            This week — {active.length} {active.length === 1 ? 'job' : 'jobs'}
-            {totalAssigned > 0 ? `, ${totalAssigned} crew assigned.` : ', nothing booked yet.'}
-          </DH1>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: 16, flexWrap: 'wrap' }}>
+          <div>
+            <DEyebrow>Owner · Schedule</DEyebrow>
+            <DH1>
+              This week — {active.length} {active.length === 1 ? 'job' : 'jobs'}
+              {totalAssigned > 0 ? `, ${totalAssigned} crew assigned.` : ', nothing booked yet.'}
+            </DH1>
+          </div>
+          <MButton size="sm" variant="primary" onClick={() => setAssignmentOpen(true)}>
+            New assignment
+          </MButton>
         </div>
 
         <MChipRow>
@@ -545,6 +552,11 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
           </div>
         )}
       </div>
+
+      {/* NEW ASSIGNMENT modal (Desktop v2 · DNewAssignmentModal) — the
+          imported presentational port; its footer SAVE button is a no-op
+          stub today (no onSubmit prop on the shared modal). */}
+      <NewAssignmentModal open={assignmentOpen} onClose={() => setAssignmentOpen(false)} />
     </div>
   )
 }

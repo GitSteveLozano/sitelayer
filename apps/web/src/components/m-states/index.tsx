@@ -1,12 +1,18 @@
 /**
  * Five system states required for every list / detail / async surface.
- * Per the design handoff (Design Overview/design_system/screenshots/st-*.png):
+ * v2 brutalist (Steve's v2, 2026-05-28) — square corners, hard 2px ink
+ * borders, mono UPPERCASE micro-labels, big numbers, full-fill state
+ * colors (no soft tints). Matches the V2State* components in the design
+ * handoff (steve.html · Section 18 system states).
  *
- *   - Offline   — header banner + queued count
- *   - Error     — integration-specific error with retry CTA
- *   - Empty     — first-run state, one CTA, no decorative illustrations
- *   - Loading   — skeleton matching the real layout (no spinners on lists)
- *   - Permission — explains *why* we need the capability + Open settings
+ *   - Offline   — ink banner + queued count (MOfflineHeader)
+ *   - Error     — "ERROR CODE" block: SLR_xxx · GATEWAY TIMEOUT + path/time
+ *   - Empty     — left-aligned 3-square graphic mark, "NO PROJECTS", CTA
+ *   - Loading   — skeleton as square 2px-ink slabs (no border-radius)
+ *   - Permission — explains *why* + Open settings, square accent mark
+ *
+ * All colors come from the `--m-*` tokens so the worker dark theme
+ * (`.m-dark` shell wrapper) inverts these for free.
  */
 import type { ReactNode } from 'react'
 import { MBanner } from '../m/banner.js'
@@ -17,19 +23,43 @@ export function MOfflineHeader({ queuedCount, onRetry }: { queuedCount: number; 
   return (
     <div
       style={{
-        background: '#1c1816',
-        color: '#f3ecdf',
-        padding: '12px 14px',
+        background: 'var(--m-ink)',
+        color: 'var(--m-sand)',
+        padding: '14px 20px',
         margin: '10px 16px',
-        borderRadius: 12,
+        border: '2px solid var(--m-ink)',
         display: 'flex',
         alignItems: 'center',
-        gap: 10,
+        gap: 12,
       }}
     >
-      <span style={{ width: 6, height: 6, borderRadius: 3, background: 'var(--m-amber)' }} />
-      <div style={{ flex: 1, fontSize: 13 }}>
-        Offline · {queuedCount} change{queuedCount === 1 ? '' : 's'} will sync when you're back
+      <span style={{ width: 14, height: 14, background: 'var(--m-red)', flexShrink: 0 }} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            color: 'var(--m-red)',
+          }}
+        >
+          Offline
+        </div>
+        <div
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 600,
+            color: 'var(--m-ink-4)',
+            marginTop: 3,
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
+          }}
+        >
+          {queuedCount} change{queuedCount === 1 ? '' : 's'} will sync when you're back
+        </div>
       </div>
       {onRetry ? (
         <button
@@ -37,12 +67,17 @@ export function MOfflineHeader({ queuedCount, onRetry }: { queuedCount: number; 
           onClick={onRetry}
           style={{
             background: 'transparent',
-            border: '1px solid #3a3329',
-            color: '#f3ecdf',
-            borderRadius: 999,
-            padding: '4px 12px',
-            fontSize: 12,
-            fontWeight: 500,
+            border: '1.5px solid var(--m-sand-2)',
+            color: 'var(--m-sand)',
+            borderRadius: 0,
+            padding: '6px 12px',
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.04em',
+            textTransform: 'uppercase',
+            cursor: 'pointer',
+            flexShrink: 0,
           }}
         >
           Retry
@@ -59,6 +94,8 @@ export function MErrorState({
   onPrimary,
   secondaryLabel,
   onSecondary,
+  code = 'SLR_504 · GATEWAY TIMEOUT',
+  detail,
 }: {
   title: ReactNode
   body: ReactNode
@@ -66,38 +103,101 @@ export function MErrorState({
   onPrimary?: () => void
   secondaryLabel?: string
   onSecondary?: () => void
+  /** Mono error code line, e.g. "SLR_504 · GATEWAY TIMEOUT". */
+  code?: string
+  /** Mono path/timestamp line under the code, e.g. "3:24 PM · projects/x/photos". */
+  detail?: string
 }) {
   return (
-    <div style={{ padding: '40px 24px', textAlign: 'center' }}>
+    <div style={{ padding: '32px 20px 24px' }}>
+      {/* Square error mark — full-fill red, hard ink border, big "!" */}
       <div
         style={{
-          width: 56,
-          height: 56,
-          margin: '0 auto 16px',
-          borderRadius: 14,
-          background: 'var(--m-red-soft)',
-          color: 'var(--m-red)',
-          display: 'inline-flex',
+          width: 72,
+          height: 72,
+          background: 'var(--m-red)',
+          color: '#fff',
+          border: '2px solid var(--m-ink)',
+          display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
+          fontFamily: 'var(--m-font-display)',
+          fontWeight: 800,
+          fontSize: 42,
+          lineHeight: 1,
+        }}
+        aria-hidden="true"
+      >
+        !
+      </div>
+      <div
+        style={{
+          fontFamily: 'var(--m-font-display)',
+          fontSize: 28,
+          fontWeight: 800,
+          letterSpacing: '-0.02em',
+          lineHeight: 1,
+          marginTop: 24,
+          color: 'var(--m-red)',
         }}
       >
-        <MI.Alert size={26} />
+        {title}
       </div>
-      <div style={{ fontSize: 19, fontWeight: 600, marginBottom: 6 }}>{title}</div>
-      <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5, marginBottom: 18 }}>{body}</div>
-      <MButtonStack>
-        {primaryLabel ? (
-          <MButton variant="primary" onClick={onPrimary}>
-            {primaryLabel}
-          </MButton>
+      <div style={{ fontSize: 14, color: 'var(--m-ink-2)', lineHeight: 1.5, marginTop: 12 }}>{body}</div>
+
+      {/* ERROR CODE block — mono code + path/time. */}
+      <div
+        style={{
+          marginTop: 24,
+          padding: 16,
+          background: 'var(--m-card-soft)',
+          border: '2px solid var(--m-ink)',
+        }}
+      >
+        <div
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 10,
+            fontWeight: 500,
+            color: 'var(--m-ink-3)',
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+          }}
+        >
+          Error code
+        </div>
+        <div style={{ fontFamily: 'var(--m-num)', fontSize: 14, fontWeight: 700, marginTop: 8 }}>{code}</div>
+        {detail ? (
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 600,
+              color: 'var(--m-ink-3)',
+              marginTop: 6,
+            }}
+          >
+            {detail}
+          </div>
         ) : null}
-        {secondaryLabel ? (
-          <MButton variant="ghost" onClick={onSecondary}>
-            {secondaryLabel}
-          </MButton>
-        ) : null}
-      </MButtonStack>
+      </div>
+
+      {primaryLabel || secondaryLabel ? (
+        <div style={{ marginTop: 24 }}>
+          <MButtonStack>
+            {primaryLabel ? (
+              <MButton variant="primary" onClick={onPrimary}>
+                {primaryLabel}
+              </MButton>
+            ) : null}
+            {secondaryLabel ? (
+              <MButton variant="ghost" onClick={onSecondary}>
+                {secondaryLabel}
+              </MButton>
+            ) : null}
+          </MButtonStack>
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -118,57 +218,89 @@ export function MEmptyState({
   onSecondary?: () => void
 }) {
   return (
-    <div style={{ padding: '60px 24px 24px', textAlign: 'center' }}>
+    <div
+      style={{
+        padding: '48px 24px 24px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-start',
+      }}
+    >
+      {/* Left-aligned 3-square graphic mark: accent / sand / ink, shared 2px ink border. */}
+      <div style={{ display: 'flex', gap: 0, marginBottom: 32 }} aria-hidden="true">
+        <div style={{ width: 60, height: 60, background: 'var(--m-accent)', border: '2px solid var(--m-ink)' }} />
+        <div
+          style={{
+            width: 60,
+            height: 60,
+            background: 'var(--m-sand)',
+            border: '2px solid var(--m-ink)',
+            borderLeft: 'none',
+          }}
+        />
+        <div
+          style={{
+            width: 60,
+            height: 60,
+            background: 'var(--m-ink)',
+            border: '2px solid var(--m-ink)',
+            borderLeft: 'none',
+          }}
+        />
+      </div>
       <div
         style={{
-          width: 96,
-          height: 80,
-          margin: '0 auto 18px',
-          borderRadius: 12,
-          background: 'var(--m-accent-soft)',
-          border: '2px dashed var(--m-accent)',
-          color: 'var(--m-accent)',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
+          fontFamily: 'var(--m-font-display)',
+          fontSize: 28,
+          fontWeight: 800,
+          letterSpacing: '-0.02em',
+          lineHeight: 1,
         }}
       >
-        <MI.FileText size={28} />
+        {title}
       </div>
-      <div style={{ fontSize: 19, fontWeight: 600, marginBottom: 6 }}>{title}</div>
-      <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5, marginBottom: 18 }}>{body}</div>
-      <MButtonStack>
-        {primaryLabel ? (
-          <MButton variant="primary" onClick={onPrimary}>
-            {primaryLabel}
-          </MButton>
-        ) : null}
-        {secondaryLabel ? (
-          <MButton variant="ghost" onClick={onSecondary}>
-            {secondaryLabel}
-          </MButton>
-        ) : null}
-      </MButtonStack>
+      <div style={{ fontSize: 14, color: 'var(--m-ink-2)', lineHeight: 1.5, marginTop: 14, maxWidth: 280 }}>{body}</div>
+
+      {primaryLabel || secondaryLabel ? (
+        <div style={{ marginTop: 32, width: '100%' }}>
+          <MButtonStack>
+            {primaryLabel ? (
+              <MButton variant="primary" onClick={onPrimary}>
+                {primaryLabel}
+              </MButton>
+            ) : null}
+            {secondaryLabel ? (
+              <MButton variant="ghost" onClick={onSecondary}>
+                {secondaryLabel}
+              </MButton>
+            ) : null}
+          </MButtonStack>
+        </div>
+      ) : null}
     </div>
   )
 }
 
 /**
  * Skeleton loading row. Render N of these in a list to show the same
- * structure that the real data will fill — no spinners, no shimmer,
- * just the layout with placeholder bars.
+ * structure that the real data will fill — no spinners, no shimmer.
+ * v2: square 2px-ink slabs (placeholder bars have square corners and
+ * use the ink-3 token at low opacity, never a soft tint).
  */
 export function MSkeletonRow() {
   return (
     <div className="m-list-row" aria-busy="true">
-      <span className="m-l-leading" style={{ background: 'var(--m-card-soft)' }} />
+      <span
+        className="m-l-leading"
+        style={{ background: 'var(--m-ink-3)', opacity: 0.3, borderRadius: 0 }}
+      />
       <div className="m-l-body">
         <div
           style={{
             width: '50%',
-            height: 11,
-            borderRadius: 4,
-            background: 'var(--m-card-soft)',
+            height: 12,
+            borderRadius: 0,
+            background: 'var(--m-line-2)',
             marginBottom: 6,
           }}
         />
@@ -176,8 +308,8 @@ export function MSkeletonRow() {
           style={{
             width: '32%',
             height: 9,
-            borderRadius: 4,
-            background: 'var(--m-card-soft)',
+            borderRadius: 0,
+            background: 'var(--m-line-2)',
           }}
         />
       </div>
@@ -213,34 +345,48 @@ export function MPermissionState({
   icon?: ReactNode
 }) {
   return (
-    <div style={{ padding: '50px 24px 24px', textAlign: 'center' }}>
+    <div style={{ padding: '32px 20px 24px' }}>
+      {/* Square accent mark — hard ink border, no radius. */}
       <div
         style={{
-          width: 56,
-          height: 56,
-          margin: '0 auto 18px',
-          borderRadius: 14,
-          background: 'var(--m-accent-soft)',
+          width: 72,
+          height: 72,
+          background: 'var(--m-accent)',
           color: 'var(--m-accent-ink)',
-          display: 'inline-flex',
+          border: '2px solid var(--m-ink)',
+          display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
         }}
       >
-        {icon ?? <MI.MapPin size={26} />}
+        {icon ?? <MI.MapPin size={30} />}
       </div>
-      <div style={{ fontSize: 19, fontWeight: 600, marginBottom: 6 }}>{title}</div>
-      <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.5, marginBottom: 18 }}>{body}</div>
-      <MButtonStack>
-        <MButton variant="primary" onClick={onPrimary}>
-          {primaryLabel}
-        </MButton>
-        {secondaryLabel ? (
-          <MButton variant="ghost" onClick={onSecondary}>
-            {secondaryLabel}
+      <div
+        style={{
+          fontFamily: 'var(--m-font-display)',
+          fontSize: 28,
+          fontWeight: 800,
+          letterSpacing: '-0.02em',
+          lineHeight: 1,
+          marginTop: 24,
+        }}
+      >
+        {title}
+      </div>
+      <div style={{ fontSize: 14, color: 'var(--m-ink-2)', lineHeight: 1.5, marginTop: 12 }}>{body}</div>
+
+      <div style={{ marginTop: 32 }}>
+        <MButtonStack>
+          <MButton variant="primary" onClick={onPrimary}>
+            {primaryLabel}
           </MButton>
-        ) : null}
-      </MButtonStack>
+          {secondaryLabel ? (
+            <MButton variant="ghost" onClick={onSecondary}>
+              {secondaryLabel}
+            </MButton>
+          ) : null}
+        </MButtonStack>
+      </div>
     </div>
   )
 }

@@ -1,11 +1,17 @@
 import {
+  Activity,
+  Bell,
   Briefcase,
   Calendar,
+  CheckSquare,
   ClipboardList,
   Clock,
+  DollarSign,
   FileText,
   Home,
   Layers,
+  MessageSquare,
+  Megaphone,
   Package,
   Plug,
   Receipt,
@@ -39,7 +45,7 @@ import type { ComponentType, SVGProps } from 'react'
  *                Inventory admin / Bonus simulator / Audit).
  *   - YOU      — per-user prefs.
  */
-export type NavGroupKey = 'primary' | 'workflow' | 'workspace' | 'you'
+export type NavGroupKey = 'primary' | 'workflow' | 'money-comms' | 'workspace' | 'you'
 
 export interface NavItem {
   key: string
@@ -77,6 +83,25 @@ export const WORKFLOW_NAV: ReadonlyArray<NavItem> = [
   { key: 'assignments', to: '/projects/assignments', label: 'Assignments', icon: Users },
 ]
 
+/**
+ * Money & comms — owner-facing surfaces that were net-new in v2 and were
+ * previously only reachable from the orphaned MobileSettingsHome. Surfacing
+ * them in the More tab (the live admin "More" destination) is the fix for
+ * the dead owner screens: Money / Clients / Messages / Broadcast / Activity /
+ * Notifications / Approvals all resolve to routes registered in App.tsx
+ * (or the shell, for Money). Owner-only IA, so this group is rendered for
+ * the admin/owner persona.
+ */
+export const MONEY_COMMS_NAV: ReadonlyArray<NavItem> = [
+  { key: 'money', to: '/money', label: 'Money', detail: 'Cash flow, net, pending', icon: DollarSign },
+  { key: 'approvals', to: '/approvals', label: 'Approvals', detail: 'Owner authorization inbox', icon: CheckSquare },
+  { key: 'clients', to: '/clients', label: 'Clients', detail: 'Profiles, lifetime value, win rate', icon: Users },
+  { key: 'messages', to: '/chat', label: 'Messages', detail: 'Project chat threads', icon: MessageSquare },
+  { key: 'broadcast', to: '/broadcast', label: 'Broadcast', detail: 'One-way crew announcement', icon: Megaphone },
+  { key: 'activity', to: '/activity', label: 'Activity', detail: 'Company-wide audit timeline', icon: Activity },
+  { key: 'notifications-inbox', to: '/notifications', label: 'Notifications', detail: 'Your inbox', icon: Bell },
+]
+
 export const WORKSPACE_NAV: ReadonlyArray<NavItem> = [
   { key: 'catalog', to: '/more/catalog', label: 'Catalog', icon: ClipboardList },
   { key: 'integrations', to: '/more/integrations', label: 'Integrations', icon: Plug },
@@ -95,6 +120,7 @@ export const YOU_NAV: ReadonlyArray<NavItem> = [
 export const NAV_GROUPS: ReadonlyArray<NavGroup> = [
   { key: 'primary', items: PRIMARY_NAV },
   { key: 'workflow', title: 'Workflow', items: WORKFLOW_NAV },
+  { key: 'money-comms', title: 'Money & comms', items: MONEY_COMMS_NAV },
   { key: 'workspace', title: 'Workspace', items: WORKSPACE_NAV },
   { key: 'you', title: 'You', items: YOU_NAV },
 ]

@@ -88,3 +88,21 @@ export function useChangeOrderEvent(projectId: string) {
     },
   })
 }
+
+/**
+ * Cross-project change-order event mutation — for surfaces (e.g. the owner
+ * approvals inbox) that act on COs from several projects at once. Invalidates
+ * every change-order query so the originating project's list refreshes
+ * regardless of which project the CO belongs to.
+ */
+export function useAnyProjectChangeOrderEvent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (args: { id: string; event: ChangeOrderHumanEventType; stateVersion: number; reason?: string }) =>
+      dispatchChangeOrderEvent(args.id, args.event, args.stateVersion, args.reason),
+    onSuccess: (snap) => {
+      qc.invalidateQueries({ queryKey: KEYS.all() })
+      qc.invalidateQueries({ queryKey: KEYS.detail(snap.context.id) })
+    },
+  })
+}

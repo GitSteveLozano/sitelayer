@@ -71,6 +71,7 @@ import {
   MSectionH,
   MSelect,
   MTopBar,
+  Spark,
 } from '../../components/m/index.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
 import { TakeoffImportSheet } from './takeoff-import-sheet.js'
@@ -151,6 +152,10 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
   // --- Entry state ----------------------------------------------------------
   const [mode, setMode] = useState<Mode>('manual')
   const [tool, setTool] = useState<Tool>('polygon')
+  // The tool *label* the user picked (POLY/RECT/LIN/PT). RECT shares the
+  // `polygon` tool value, so we track the label separately to highlight the
+  // right chip without changing the draw behavior.
+  const [toolLabel, setToolLabel] = useState<'POLY' | 'RECT' | 'LIN' | 'PT'>('POLY')
   const [serviceItemCode, setServiceItemCode] = useState('')
   const [manualQty, setManualQty] = useState('')
   const [draftPoints, setDraftPoints] = useState<TakeoffPoint[]>([])
@@ -358,11 +363,68 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                   />
                 </div>
 
+                {/* --- AI launch button --- */}
+                <div style={{ padding: '10px 16px 0' }}>
+                  {/* "● AI" — launches the mobile AI-takeoff flow (chooser → count /
+                      auto-takeoff lanes). Brutalist ink slab with the Spark marker. */}
+                  <button
+                    type="button"
+                    onClick={() => navigate(`/projects/${projectId}/takeoff-ai`)}
+                    style={{
+                      width: '100%',
+                      minHeight: 52,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 12,
+                      padding: '0 16px',
+                      background: 'var(--m-ink)',
+                      color: 'var(--m-sand)',
+                      border: '2px solid var(--m-ink)',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                      <Spark size={16} state="strong" />
+                      <span style={{ minWidth: 0 }}>
+                        <span
+                          style={{
+                            display: 'block',
+                            fontFamily: 'var(--m-num)',
+                            fontSize: 10,
+                            fontWeight: 700,
+                            letterSpacing: '0.08em',
+                            color: 'var(--m-accent)',
+                          }}
+                        >
+                          AI
+                        </span>
+                        <span
+                          style={{
+                            display: 'block',
+                            fontFamily: 'var(--m-font-display)',
+                            fontSize: 16,
+                            fontWeight: 800,
+                            letterSpacing: '-0.01em',
+                            marginTop: 1,
+                          }}
+                        >
+                          Count or draft with AI
+                        </span>
+                      </span>
+                    </span>
+                    <MI.ChevRight size={20} />
+                  </button>
+                </div>
+
                 {/* --- Canvas (draw mode) --- */}
                 {mode === 'draw' ? (
                   <div style={{ padding: '10px 16px 0' }}>
-                    {/* Mono tool toolbar — square brutalist chips (POLY/LIN/PT). Labels are
-                        view-only; the underlying tool values + handlers are unchanged. */}
+                    {/* Mono tool toolbar — square brutalist chips (POLY/RECT/LIN/PT/TAP).
+                        POLY/LIN/PT drive the existing draw handlers unchanged. RECT is a
+                        polygon alias (tap the 4 corners). TAP hands off to the AI tap-to-
+                        detect canvas. */}
                     <div
                       style={{
                         display: 'flex',
@@ -374,24 +436,35 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                       {(
                         [
                           { tool: 'polygon', label: 'POLY' },
+                          { tool: 'polygon', label: 'RECT' },
                           { tool: 'lineal', label: 'LIN' },
                           { tool: 'count', label: 'PT' },
+                          { tool: null, label: 'TAP' },
                         ] as const
                       ).map((t, i, arr) => {
-                        const on = tool === t.tool
+                        // TAP is the AI hand-off (tool: null); never an active draw tool.
+                        // RECT shares the polygon tool value, so highlight it only when
+                        // its label is the user's pick (tracked alongside the tool).
+                        const isTap = t.tool === null
+                        const on = isTap ? false : t.label === toolLabel
                         return (
                           <button
-                            key={t.tool}
+                            key={t.label}
                             type="button"
                             onClick={() => {
+                              if (t.tool === null) {
+                                navigate(`/projects/${projectId}/takeoff-ai/detect`)
+                                return
+                              }
                               setTool(t.tool)
+                              setToolLabel(t.label)
                               setDraftPoints([])
                             }}
                             style={{
                               flex: 1,
                               padding: '14px 0',
                               background: on ? 'var(--m-accent)' : 'transparent',
-                              color: on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
+                              color: isTap ? 'var(--m-accent)' : on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
                               border: 'none',
                               borderRight: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
                               fontFamily: 'var(--m-num)',

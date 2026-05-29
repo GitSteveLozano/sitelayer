@@ -20,6 +20,11 @@ export default mergeConfig(
       environment: 'jsdom',
       include: ['src/**/*.test.{ts,tsx}'],
       globals: false,
+      // The routes-load smoke test imports @/routes/workspace, which
+      // transitively pulls the heavy desktop-v2 + three.js graph and can
+      // exceed Vitest's 5000ms default under full-suite load. Bump the
+      // per-test timeout so it's deterministic rather than load-flaky.
+      testTimeout: 30000,
       // Vitest defaults to running in the workspace root. Pinning the
       // root keeps test discovery scoped to web even when invoked
       // from the monorepo root.

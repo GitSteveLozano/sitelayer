@@ -131,6 +131,37 @@ const MobileWorkRequests = lazy(() =>
 const MobileWorkRequestDetail = lazy(() =>
   import('./mobile/work-request-detail.js').then((m) => ({ default: m.MobileWorkRequestDetail })),
 )
+const TakeoffAiChooser = lazy(() =>
+  import('./mobile/takeoff-ai-chooser.js').then((m) => ({ default: m.TakeoffAiChooser })),
+)
+const TakeoffAutoDetect = lazy(() =>
+  import('./mobile/takeoff-auto-detect.js').then((m) => ({ default: m.TakeoffAutoDetect })),
+)
+const TakeoffAiCountSetup = lazy(() =>
+  import('./mobile/takeoff-ai-count.js').then((m) => ({ default: m.TakeoffAiCountSetup })),
+)
+const TakeoffAiCountReview = lazy(() =>
+  import('./mobile/takeoff-ai-count.js').then((m) => ({ default: m.TakeoffAiCountReview })),
+)
+const TakeoffAiTakeoffSetup = lazy(() =>
+  import('./mobile/takeoff-ai-takeoff.js').then((m) => ({ default: m.TakeoffAiTakeoffSetup })),
+)
+const TakeoffAiTakeoffReview = lazy(() =>
+  import('./mobile/takeoff-ai-takeoff.js').then((m) => ({ default: m.TakeoffAiTakeoffReview })),
+)
+const TakeoffAutoscale = lazy(() =>
+  import('./mobile/takeoff-autoscale.js').then((m) => ({ default: m.TakeoffAutoscale })),
+)
+const TakeoffIngest = lazy(() => import('./mobile/takeoff-ingest.js').then((m) => ({ default: m.TakeoffIngest })))
+const MobileInvoiceSent = lazy(() =>
+  import('./mobile/invoice-sent.js').then((m) => ({ default: m.MobileInvoiceSent })),
+)
+const WorkerClockinManual = lazy(() =>
+  import('./mobile/worker-clockin.js').then((m) => ({ default: m.WorkerClockinManual })),
+)
+const WorkerClockoutSuccess = lazy(() =>
+  import('./mobile/worker-clockout-success.js').then((m) => ({ default: m.WorkerClockoutSuccess })),
+)
 
 export type MobileShellProps = {
   bootstrap: BootstrapResponse | null
@@ -277,6 +308,8 @@ export function MobileShell({
               element={<ForemanBlockerDetail bootstrap={bootstrap} companySlug={companySlug} />}
             />
             <Route path="clockin" element={<WorkerClockinConfirm />} />
+            <Route path="clockin/manual" element={<WorkerClockinManual />} />
+            <Route path="clockout" element={<WorkerClockoutSuccess />} />
             <Route path="scope" element={<WorkerScope bootstrap={bootstrap} />} />
             <Route path="issue" element={<WorkerIssue bootstrap={bootstrap} companySlug={companySlug} />} />
             <Route path="projects" element={<MobileProjectsList bootstrap={bootstrap} />} />
@@ -298,6 +331,35 @@ export function MobileShell({
               element={<MobileEstimatePush companySlug={companySlug} companyRole={companyRole} />}
             />
             <Route path="projects/:projectId/shipments/:shipmentId" element={<ShipmentDetailScreen />} />
+            <Route path="projects/:projectId/takeoff-ai" element={<TakeoffAiChooser companySlug={companySlug} />} />
+            <Route
+              path="projects/:projectId/takeoff-ai/detect"
+              element={<TakeoffAutoDetect companySlug={companySlug} />}
+            />
+            <Route
+              path="projects/:projectId/takeoff-ai/count"
+              element={<TakeoffAiCountSetup companySlug={companySlug} />}
+            />
+            <Route
+              path="projects/:projectId/takeoff-ai/count/review"
+              element={<TakeoffAiCountReview companySlug={companySlug} />}
+            />
+            <Route
+              path="projects/:projectId/takeoff-ai/takeoff"
+              element={<TakeoffAiTakeoffSetup companySlug={companySlug} />}
+            />
+            <Route
+              path="projects/:projectId/takeoff-ai/takeoff/review"
+              element={<TakeoffAiTakeoffReview companySlug={companySlug} />}
+            />
+            <Route
+              path="projects/:projectId/takeoff-ai/autoscale"
+              element={<TakeoffAutoscale companySlug={companySlug} />}
+            />
+            <Route
+              path="projects/:projectId/takeoff-ai/ingest"
+              element={<TakeoffIngest companySlug={companySlug} />}
+            />
             <Route
               path="projects/:projectId/*"
               element={<MobileProjectDetail bootstrap={bootstrap} companyRole={companyRole} />}
@@ -328,6 +390,7 @@ export function MobileShell({
             <Route path="rentals/lifecycle/:id" element={<RentalLifecycleDetailScreen />} />
             <Route path="rentals/*" element={<MobileRentals companySlug={companySlug} companyRole={companyRole} />} />
             <Route path="invoice/new" element={<MobileQuickInvoice bootstrap={bootstrap} />} />
+            <Route path="invoice-sent/:projectId" element={<MobileInvoiceSent bootstrap={bootstrap} />} />
             <Route path="money" element={<OwnerMoney bootstrap={bootstrap} />} />
             <Route path="chat" element={<MobileChatList bootstrap={bootstrap} />} />
             <Route
@@ -440,6 +503,7 @@ function inferRoleModeFromPath(pathname: string, basePath: string): RoleMode | n
     segment === 'more' ||
     segment === 'settings' ||
     segment === 'invoice' ||
+    segment === 'invoice-sent' ||
     segment === 'work'
   ) {
     return 'admin'
@@ -447,7 +511,13 @@ function inferRoleModeFromPath(pathname: string, basePath: string): RoleMode | n
   if (segment === 'crew' || segment === 'map' || segment === 'field' || segment === 'brief' || segment === 'foreman') {
     return 'foreman'
   }
-  if (segment === 'scope' || segment === 'hours' || segment === 'clockin' || segment === 'issue') {
+  if (
+    segment === 'scope' ||
+    segment === 'hours' ||
+    segment === 'clockin' ||
+    segment === 'clockout' ||
+    segment === 'issue'
+  ) {
     return 'worker'
   }
   return null

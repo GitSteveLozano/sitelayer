@@ -34,6 +34,14 @@ class FakePool {
    *  service_item_divisions for the override-catalog enforcement check. */
   serviceItemDivisions: Array<{ company_id: string; service_item_code: string; division_code: string }> = []
 
+  /** (company_id|id) -> { name, deleted } backing the projects JOIN in the
+   *  company-wide review feed (GET /api/takeoff-drafts). */
+  projects = new Map<string, { name: string; deleted: boolean }>()
+
+  setProject(companyId: string, projectId: string, name: string, deleted = false) {
+    this.projects.set(`${companyId}|${projectId}`, { name, deleted })
+  }
+
   setProjectDivision(companyId: string, projectId: string, divisionCode: string | null) {
     this.projectDivisions.set(`${companyId}|${projectId}`, divisionCode)
   }
@@ -85,6 +93,44 @@ class FakePool {
       const rows = this.serviceItemDivisions.filter(
         (row) => row.company_id === companyId && codes.includes(row.service_item_code),
       )
+      return { rows, rowCount: rows.length }
+    }
+
+    // ---- takeoff_drafts: company-wide review feed (GET /api/takeoff-drafts) ----
+    // Reproduces the handler's WHERE/JOIN/ORDER from the SQL text + params so
+    // we exercise the real filter wiring rather than a hand-rolled mirror.
+    if (/from takeoff_drafts d\s+join projects p/i.test(sql)) {
+      const companyId = params[0] as string
+      // The handler appends `d.source = $2` only when a ?source= filter is set.
+      const sourceFilter = /d\.source = \$2/.test(sql) ? (params[1] as string) : null
+      const reviewOnly = /d\.review_required = true/.test(sql)
+      const rows = this.drafts
+        .filter((d) => d.company_id === companyId)
+        .filter((d) => d.deleted_at === null)
+        .filter((d) => d.source !== 'manual')
+        .filter((d) => d.takeoff_result_json != null)
+        .filter((d) => (sourceFilter ? d.source === sourceFilter : true))
+        .filter((d) => (reviewOnly ? d.review_required === true : true))
+        .filter((d) => {
+          const proj = this.projects.get(`${companyId}|${d.project_id as string}`)
+          return proj != null && !proj.deleted
+        })
+        .map((d) => {
+          const proj = this.projects.get(`${companyId}|${d.project_id as string}`)
+          const result = d.takeoff_result_json as { quantities?: unknown[] } | null
+          const quantities = result && Array.isArray(result.quantities) ? result.quantities.length : 0
+          return {
+            id: d.id,
+            project_id: d.project_id,
+            project_name: proj?.name ?? null,
+            name: d.name,
+            source: d.source,
+            review_required: d.review_required,
+            quantities_count: quantities,
+            created_at: d.created_at,
+          }
+        })
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at)))
       return { rows, rowCount: rows.length }
     }
 
@@ -530,5 +576,146 @@ describe('handleTakeoffDraftRoutes — POST /promote', () => {
     expect(pool.syncEvents).toHaveLength(0)
     expect(pool.outbox).toHaveLength(0)
     expect(pool.auditEvents).toHaveLength(0)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// GET /api/takeoff-drafts — company-wide AI-takeoff review feed.
+// ---------------------------------------------------------------------------
+
+const FEED_PATH = '/api/takeoff-drafts'
+
+type FeedRow = {
+  id: string
+  project_id: string
+  project_name: string
+  name: string
+  source: string
+  review_required: boolean
+  quantities_count: number
+  created_at: string
+}
+
+/** Push a feed-shaped draft row. Defaults to a review-required
+ *  blueprint_vision draft with a 2-quantity stored result. */
+function seedFeedDraft(pool: FakePool, overrides: Partial<Row> = {}) {
+  pool.drafts.push({
+    id: `draft-${pool.drafts.length + 1}`,
+    company_id: COMPANY_ID,
+    project_id: PROJECT_ID,
+    name: `Capture #${pool.drafts.length + 1}`,
+    type: 'measurement',
+    status: 'active',
+    source: 'blueprint_vision',
+    review_required: true,
+    pipeline_version: '0.1.0',
+    takeoff_result_json: { quantities: [{ id: 'q1' }, { id: 'q2' }] },
+    version: 1,
+    deleted_at: null,
+    created_at: '2026-05-09T08:00:00.000Z',
+    updated_at: '2026-05-09T08:00:00.000Z',
+    ...overrides,
+  })
+}
+
+describe('handleTakeoffDraftRoutes — GET /api/takeoff-drafts (company feed)', () => {
+  it('lists capture drafts across projects with project_name + quantities_count', async () => {
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'Maple Tower')
+    seedFeedDraft(pool)
+    const { ctx, responses } = makeCtx(pool)
+
+    const handled = await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(FEED_PATH), ctx)
+    expect(handled).toBe(true)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    const body = responses[0]?.body as { drafts: FeedRow[] }
+    expect(body.drafts).toHaveLength(1)
+    expect(body.drafts[0]?.project_name).toBe('Maple Tower')
+    expect(body.drafts[0]?.source).toBe('blueprint_vision')
+    expect(body.drafts[0]?.quantities_count).toBe(2)
+    expect(body.drafts[0]?.review_required).toBe(true)
+  })
+
+  it('orders newest-first by created_at', async () => {
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'P')
+    seedFeedDraft(pool, { id: 'older', created_at: '2026-05-01T00:00:00.000Z' })
+    seedFeedDraft(pool, { id: 'newer', created_at: '2026-05-20T00:00:00.000Z' })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(FEED_PATH), ctx)
+    const body = responses[0]?.body as { drafts: FeedRow[] }
+    expect(body.drafts.map((d) => d.id)).toEqual(['newer', 'older'])
+  })
+
+  it('excludes manual drafts, drafts without a stored result, and soft-deleted ones', async () => {
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'P')
+    seedFeedDraft(pool, { id: 'keep' })
+    seedFeedDraft(pool, { id: 'manual', source: 'manual' })
+    seedFeedDraft(pool, { id: 'no-result', takeoff_result_json: null })
+    seedFeedDraft(pool, { id: 'deleted', deleted_at: '2026-05-10T00:00:00.000Z' })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(FEED_PATH), ctx)
+    const body = responses[0]?.body as { drafts: FeedRow[] }
+    expect(body.drafts.map((d) => d.id)).toEqual(['keep'])
+  })
+
+  it('hides drafts whose project has been soft-deleted', async () => {
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'Gone', true)
+    seedFeedDraft(pool)
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(FEED_PATH), ctx)
+    const body = responses[0]?.body as { drafts: FeedRow[] }
+    expect(body.drafts).toHaveLength(0)
+  })
+
+  it('filters by ?source=', async () => {
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'P')
+    seedFeedDraft(pool, { id: 'bp', source: 'blueprint_vision' })
+    seedFeedDraft(pool, { id: 'drone', source: 'drone' })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(`${FEED_PATH}?source=blueprint_vision`), ctx)
+    const body = responses[0]?.body as { drafts: FeedRow[] }
+    expect(body.drafts.map((d) => d.id)).toEqual(['bp'])
+  })
+
+  it('filters by ?review_required=1', async () => {
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'P')
+    seedFeedDraft(pool, { id: 'flagged', review_required: true })
+    seedFeedDraft(pool, { id: 'clean', review_required: false })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(`${FEED_PATH}?review_required=1`), ctx)
+    const body = responses[0]?.body as { drafts: FeedRow[] }
+    expect(body.drafts.map((d) => d.id)).toEqual(['flagged'])
+  })
+
+  it('returns 400 for an unknown ?source= value', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(`${FEED_PATH}?source=manual`), ctx)
+    expect(responses[0]?.status).toBe(400)
+    expect((responses[0]?.body as { error: string }).error).toMatch(/source must be one of/i)
+  })
+
+  it('only returns the requesting tenant drafts', async () => {
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'Mine')
+    pool.setProject(OTHER_COMPANY_ID, PROJECT_ID, 'Theirs')
+    seedFeedDraft(pool, { id: 'mine' })
+    seedFeedDraft(pool, { id: 'theirs', company_id: OTHER_COMPANY_ID })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(FEED_PATH), ctx)
+    const body = responses[0]?.body as { drafts: FeedRow[] }
+    expect(body.drafts.map((d) => d.id)).toEqual(['mine'])
   })
 })

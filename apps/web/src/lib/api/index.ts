@@ -69,6 +69,8 @@ export {
   fetchWorkRequests,
   retryWorkRequestMeshDispatch,
   reverseWorkRequest,
+  useAppendWorkRequestEvent,
+  useWorkRequests,
   type AppendWorkRequestEventInput,
   type AppendWorkRequestEventResponse,
   type ContextHandoffEvent,
@@ -291,15 +293,18 @@ export {
 } from './bonus-rules'
 
 export {
+  createEstimatePush,
   dispatchEstimatePushEvent,
   estimatePushLineRate,
   estimatePushLineUnit,
   estimatePushQueryKeys,
   fetchEstimatePush,
   fetchEstimatePushes,
+  useCreateEstimatePush,
   useDispatchEstimatePushEvent,
   useEstimatePush,
   useEstimatePushes,
+  type CreateEstimatePushResult,
   type EstimatePushHumanEvent,
   type EstimatePushLine,
   type EstimatePushListParams,

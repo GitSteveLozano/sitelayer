@@ -4,8 +4,12 @@ import { registerServiceWorker } from '@/pwa/register'
 /**
  * Service-worker update banner — sits under OfflineBanner. When the
  * background SW detects a new build, this component flips visible
- * with a "Tap to update" affordance. Clicking calls the registered
+ * with a "tap to update" affordance. Clicking calls the registered
  * `updateSW(true)` which activates the new SW + reloads.
+ *
+ * v2 brutalist (aligned to V2StateStale): full-fill ACCENT strip, square
+ * pulsing ink block, mono "NEW VERSION" eyebrow over the reload prompt.
+ * All colors are `--m-*` tokens so the worker dark theme inverts cleanly.
  *
  * Production-only — `registerServiceWorker` no-ops outside of
  * PROD bundles, so dev still hot-reloads via Vite.
@@ -47,11 +51,38 @@ export function UpdateBanner() {
       onClick={onTap}
       role="status"
       aria-live="polite"
-      className="block w-full text-left px-4 py-2.5 bg-accent text-white text-[13px] font-medium"
+      className="block w-full text-left"
+      style={{
+        padding: '12px 20px',
+        background: 'var(--m-accent)',
+        color: 'var(--m-accent-ink)',
+        borderBottom: '2px solid var(--m-ink)',
+        borderTop: '2px solid var(--m-ink)',
+        cursor: 'pointer',
+      }}
     >
-      <span className="inline-flex items-center gap-2">
-        <span aria-hidden="true">↻</span>
-        {updating ? 'Updating…' : 'New version — tap to update'}
+      <span className="inline-flex items-center gap-2.5">
+        <span
+          aria-hidden="true"
+          style={{
+            width: 12,
+            height: 12,
+            background: 'var(--m-ink)',
+            animation: 'm-pulse 1s infinite',
+            flexShrink: 0,
+          }}
+        />
+        <span
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+          }}
+        >
+          {updating ? 'Updating…' : 'New version · tap to reload'}
+        </span>
       </span>
     </button>
   )

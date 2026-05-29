@@ -128,6 +128,82 @@ export function usePatchCompanySettings(companyId: string) {
   })
 }
 
+// ---- Company profile (migration 102) -------------------------------------
+// Editable scalar identity fields surfaced in Owner Settings → Company.
+// Read via GET /api/companies/:id/profile; saved via PATCH (admin-only).
+// Every field is nullable; an unsaved field reads back `null`.
+export interface CompanyProfile {
+  legal_name: string | null
+  license_no: string | null
+  address: string | null
+  phone: string | null
+  website: string | null
+}
+
+export function useCompanyProfile(companyId: string | null | undefined) {
+  return useQuery<CompanyProfile>({
+    queryKey: ['companies', companyId ?? '', 'profile'],
+    enabled: Boolean(companyId),
+    queryFn: () => request<CompanyProfile>(`/api/companies/${encodeURIComponent(companyId!)}/profile`),
+  })
+}
+
+export function useUpdateCompanyProfile(companyId: string) {
+  const qc = useQueryClient()
+  // PATCH takes a partial diff: send only the fields that changed. A field
+  // set to `null` clears it; omitting it leaves it untouched.
+  return useMutation<CompanyProfile, Error, Partial<CompanyProfile>>({
+    mutationFn: (input) =>
+      request<CompanyProfile>(`/api/companies/${encodeURIComponent(companyId)}/profile`, {
+        method: 'PATCH',
+        json: input,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['companies', companyId, 'profile'] }),
+  })
+}
+
+// ---- Working hours (migration 102) ---------------------------------------
+// Standard work window + working days + holidays. GET returns the saved
+// document or `null` (the UI falls back to defaults); PUT replaces the whole
+// document (admin-only).
+export type WorkingHoursWeekday = 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun'
+export type WorkingHoursOtRule = '8h' | '10h' | '40w'
+export interface WorkingHoursHoliday {
+  name: string
+  date: string
+}
+export interface WorkingHours {
+  days: Record<WorkingHoursWeekday, boolean>
+  day_start: string
+  day_end: string
+  ot_rule: WorkingHoursOtRule
+  holidays: WorkingHoursHoliday[]
+}
+export interface WorkingHoursResponse {
+  working_hours: WorkingHours | null
+}
+
+export function useWorkingHours(companyId: string | null | undefined) {
+  return useQuery<WorkingHoursResponse>({
+    queryKey: ['companies', companyId ?? '', 'working-hours'],
+    enabled: Boolean(companyId),
+    queryFn: () =>
+      request<WorkingHoursResponse>(`/api/companies/${encodeURIComponent(companyId!)}/working-hours`),
+  })
+}
+
+export function useUpdateWorkingHours(companyId: string) {
+  const qc = useQueryClient()
+  return useMutation<WorkingHoursResponse, Error, WorkingHours>({
+    mutationFn: (input) =>
+      request<WorkingHoursResponse>(`/api/companies/${encodeURIComponent(companyId)}/working-hours`, {
+        method: 'PUT',
+        json: input,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['companies', companyId, 'working-hours'] }),
+  })
+}
+
 export function useInviteMember(companyId: string) {
   const qc = useQueryClient()
   return useMutation<unknown, Error, CreateMembershipRequest>({

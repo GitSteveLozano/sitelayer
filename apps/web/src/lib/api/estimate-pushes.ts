@@ -168,6 +168,28 @@ export function useEstimatePushes(params: EstimatePushListParams = {}) {
   })
 }
 
+/**
+ * React wrapper around `createEstimatePush` — snapshots a project's current
+ * estimate_lines into a new estimate_push. Used by the mobile "Quick invoice"
+ * create flow. On a successful create the new snapshot is primed into the
+ * detail cache and the list cache is invalidated so the financial list +
+ * state-filter chips repaint. A 409 (open push already exists) is surfaced
+ * as a typed `{ kind: 'conflict', openId }` result rather than an error so
+ * callers can hop straight to the in-progress invoice.
+ */
+export function useCreateEstimatePush() {
+  const qc = useQueryClient()
+  return useMutation<CreateEstimatePushResult, Error, { projectId: string }>({
+    mutationFn: ({ projectId }) => createEstimatePush(projectId),
+    onSuccess: (result) => {
+      if (result.kind === 'created') {
+        qc.setQueryData(KEYS.detail(result.pushId), result.snapshot)
+      }
+      qc.invalidateQueries({ queryKey: KEYS.all() })
+    },
+  })
+}
+
 export function useEstimatePush(id: string | null | undefined) {
   return useQuery<EstimatePushSnapshot>({
     queryKey: KEYS.detail(id ?? ''),

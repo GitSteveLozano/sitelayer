@@ -1377,6 +1377,22 @@ export const LOST_REASON_CODES: readonly LostReasonCode[] = [
 
 // ---- Cross-role comms (100_messaging.sql) -------------------------------
 
+/**
+ * Structured marker carried on a project chat message (project_messages.meta,
+ * migration 105). Lets auto-posted / approval / field-intake messages render
+ * first-class markers instead of body-sniffing. Open shape: `kind` discriminates
+ * the known markers, but unknown keys are tolerated (the UI falls back to the
+ * legacy heuristic for rows without a recognised marker).
+ *   - { kind: 'approval', amount?: number }       → approval highlight bubble
+ *   - { linked_field_event_id: '<uuid>' }         → field-intake blocker banner
+ */
+export interface ProjectMessageMeta {
+  kind?: string
+  amount?: number
+  linked_field_event_id?: string
+  [key: string]: unknown
+}
+
 /** A role-tagged message in a project chat thread. */
 export interface ProjectMessage {
   id: string
@@ -1385,9 +1401,27 @@ export interface ProjectMessage {
   author_user_id: string
   author_role: string
   body: string
+  /** Structured marker (migration 105); null for legacy rows. */
+  meta: ProjectMessageMeta | null
   version: number
   created_at: string
   updated_at: string
+}
+
+/**
+ * Thread summary projection for the chat list (migration 105 + GET
+ * /api/projects/:id/messages/summary): the latest message preview plus the
+ * caller's unread count, so the list can show a real preview + unread badge
+ * without pulling the whole thread.
+ */
+export interface ProjectMessageSummary {
+  last_message: {
+    body: string
+    author_user_id: string
+    author_role: string
+    created_at: string
+  } | null
+  unread_count: number
 }
 
 export type BroadcastAudience = 'all' | 'foremen' | 'crew'

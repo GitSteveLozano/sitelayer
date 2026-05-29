@@ -5,10 +5,10 @@
  * PENDING = sent/awaiting/estimating projects). No new API calls. See
  * docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { BootstrapResponse } from '@/lib/api'
-import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, type DColumn } from '@/components/d'
-import { MPill } from '@/components/m'
+import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, DModal, type DColumn } from '@/components/d'
+import { MButton, MPill } from '@/components/m'
 import { formatMoney } from '../mobile/format.js'
 
 type PendingRow = {
@@ -17,6 +17,8 @@ type PendingRow = {
   customer: string
   amount: number
   status: string
+  /** NET-30 derived due date (created_at + 30d) — presentational. */
+  dueAt: string
 }
 
 type MoneyModel = {
@@ -30,6 +32,7 @@ type MoneyModel = {
 
 export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const model = useMemo(() => deriveMoney(bootstrap), [bootstrap])
+  const [remindersOpen, setRemindersOpen] = useState(false)
 
   const monthLabel = new Date().toLocaleDateString('en-US', { month: 'long' }).toUpperCase()
   const netTone = model.net >= 0 ? 'var(--m-green)' : 'var(--m-red)'
@@ -39,6 +42,7 @@ export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null 
     { key: 'name', header: 'Project', render: (r) => <span className="d-table-cell-strong">{r.name}</span> },
     { key: 'customer', header: 'Client', render: (r) => r.customer },
     { key: 'amount', header: 'Amount', numeric: true, render: (r) => formatMoney(r.amount) },
+    { key: 'due', header: 'Due', render: (r) => formatDue(r.dueAt) },
     {
       key: 'status',
       header: 'Status',
@@ -113,13 +117,174 @@ export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null 
 
         <DataTable<PendingRow>
           title="Pending"
+          action={
+            <MButton
+              size="sm"
+              variant="primary"
+              onClick={() => setRemindersOpen(true)}
+              disabled={model.pending.length === 0}
+            >
+              Send reminders
+            </MButton>
+          }
           columns={columns}
           rows={model.pending}
           rowKey={(r) => r.id}
           empty="Nothing pending. Sent and awaiting estimates land here."
         />
       </div>
+
+      <SendRemindersModal open={remindersOpen} onClose={() => setRemindersOpen(false)} pending={model.pending} />
     </div>
+  )
+}
+
+/** "MAY 7" style short due-date label. */
+function formatDue(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+/**
+ * MONEY · SEND REMINDERS bulk action (design DSendReminders).
+ *
+ * The exported `SendModal` from project-drawers.tsx is a single-recipient
+ * presentational port (hardcoded "John Marchetti", no recipient-toggle
+ * props), so it doesn't fit the bulk per-recipient toggle list the design
+ * calls for. This is a minimal local `DModal` that lists each pending
+ * recipient with a checkbox toggle (all on by default) and a count in the
+ * send button. The actual send is a TODO stub — there is no unified
+ * payment-reminder endpoint yet; the toggle list + selection state is real
+ * so the UI responds.
+ */
+function SendRemindersModal({
+  open,
+  onClose,
+  pending,
+}: {
+  open: boolean
+  onClose: () => void
+  pending: PendingRow[]
+}) {
+  // Selection map keyed by row id; default every recipient on.
+  const [selected, setSelected] = useState<Record<string, boolean>>({})
+
+  const isOn = (id: string) => selected[id] ?? true
+  const toggle = (id: string) => setSelected((prev) => ({ ...prev, [id]: !(prev[id] ?? true) }))
+  const selectedCount = pending.filter((p) => isOn(p.id)).length
+  const selectedTotal = pending.filter((p) => isOn(p.id)).reduce((sum, p) => sum + p.amount, 0)
+
+  const handleSend = () => {
+    // TODO(wire): bulk payment-reminder send. No unified reminder endpoint
+    // exists yet (notifications are per-workflow), so this is a no-op stub.
+    const ids = pending.filter((p) => isOn(p.id)).map((p) => p.id)
+    console.log('[owner-money] send reminders (not wired):', ids)
+    onClose()
+  }
+
+  const sectionLabel: React.CSSProperties = {
+    fontFamily: 'var(--m-num)',
+    fontSize: 10,
+    fontWeight: 700,
+    color: 'var(--m-ink-3)',
+    letterSpacing: '0.06em',
+    marginBottom: 6,
+  }
+
+  return (
+    <DModal
+      open={open}
+      onClose={onClose}
+      width={520}
+      title={
+        <span className="num" style={{ fontWeight: 800, fontSize: 12, letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+          SEND REMINDERS · {formatMoney(selectedTotal)}
+        </span>
+      }
+      footer={
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+          <MButton variant="ghost" onClick={onClose}>
+            Cancel
+          </MButton>
+          <MButton variant="primary" onClick={handleSend} disabled={selectedCount === 0}>
+            Send · {selectedCount} {selectedCount === 1 ? 'reminder' : 'reminders'}
+          </MButton>
+        </div>
+      }
+    >
+      <div style={sectionLabel}>RECIPIENTS</div>
+      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {pending.length === 0 ? (
+          <div style={{ fontSize: 13, color: 'var(--m-ink-3)' }}>Nothing pending to remind on.</div>
+        ) : (
+          pending.map((p) => {
+            const on = isOn(p.id)
+            return (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => toggle(p.id)}
+                aria-pressed={on}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 12,
+                  padding: '12px 14px',
+                  border: '2px solid var(--m-ink)',
+                  background: on ? 'var(--m-card-soft)' : 'transparent',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  width: '100%',
+                }}
+              >
+                <span style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <span
+                    aria-hidden
+                    style={{
+                      width: 18,
+                      height: 18,
+                      flexShrink: 0,
+                      border: '2px solid var(--m-ink)',
+                      background: on ? 'var(--m-accent)' : 'transparent',
+                      color: 'var(--m-accent-ink)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 12,
+                      fontWeight: 800,
+                    }}
+                  >
+                    {on ? '✓' : ''}
+                  </span>
+                  <span>
+                    <span style={{ display: 'block', fontSize: 14, fontWeight: 700, color: 'var(--m-ink)' }}>
+                      {p.customer || p.name}
+                    </span>
+                    <span
+                      className="num"
+                      style={{ display: 'block', fontSize: 10, color: 'var(--m-ink-3)', marginTop: 2, fontWeight: 600 }}
+                    >
+                      {p.name} · DUE {formatDue(p.dueAt).toUpperCase()}
+                    </span>
+                  </span>
+                </span>
+                <span className="num" style={{ fontSize: 14, fontWeight: 700, color: 'var(--m-ink)' }}>
+                  {formatMoney(p.amount)}
+                </span>
+              </button>
+            )
+          })
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16 }}>
+        <div style={{ width: 18, height: 18, background: 'var(--m-accent)', border: '2px solid var(--m-ink)' }} />
+        <span style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 600 }}>
+          INCLUDE PAYMENT LINK · TRACK OPEN
+        </span>
+      </div>
+    </DModal>
   )
 }
 
@@ -158,6 +323,8 @@ function deriveMoney(bootstrap: BootstrapResponse | null): MoneyModel {
       customer: p.customer_name,
       amount: Number(p.bid_total ?? 0),
       status: p.status.replace(/[_-]+/g, ' ').toUpperCase(),
+      // NET-30 derived due date off created_at — presentational, no ledger.
+      dueAt: addDays(p.created_at, 30),
     }))
 
   return { net, inflow, outflow, margin, trend, pending }
@@ -173,4 +340,12 @@ function buildTrend(net: number): number[] {
 function isActiveStatus(status: string): boolean {
   const s = status.toLowerCase()
   return s.includes('progress') || s.includes('active')
+}
+
+/** ISO date + n days, returned as an ISO string (falls back to now() on bad input). */
+function addDays(iso: string | undefined, days: number): string {
+  const base = iso ? new Date(iso) : new Date()
+  const d = Number.isNaN(base.getTime()) ? new Date() : base
+  d.setDate(d.getDate() + days)
+  return d.toISOString()
 }

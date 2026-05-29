@@ -296,13 +296,17 @@ function MovementRow({ movement }: { movement: InventoryMovement }) {
         ? 'Returned'
         : movement.movement_type === 'transfer'
           ? 'Transferred'
-          : movement.movement_type === 'damage'
+          : movement.movement_type === 'damaged'
             ? 'Damaged'
-            : movement.movement_type === 'loss'
+            : movement.movement_type === 'lost'
               ? 'Lost'
-              : 'Adjusted'
+              : movement.movement_type === 'repair'
+                ? 'Repair'
+                : 'Adjusted'
   const tone: 'good' | 'warn' | 'default' =
-    movement.movement_type === 'damage' || movement.movement_type === 'loss'
+    movement.movement_type === 'damaged' ||
+    movement.movement_type === 'lost' ||
+    movement.movement_type === 'repair'
       ? 'warn'
       : movement.movement_type === 'deliver'
         ? 'good'

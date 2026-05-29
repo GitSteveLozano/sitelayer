@@ -60,6 +60,55 @@ export function useTakeoffDrafts(projectId: string | null | undefined, options: 
   })
 }
 
+// ---------------------------------------------------------------------------
+// Company-wide AI-takeoff review feed (Wave 5).
+// Backed by GET /api/takeoff-drafts — capture-pipeline drafts across every
+// project in the company, so the estimator's "Review drafts" lane renders
+// one feed instead of an N+1 fan-out over the per-project hook above.
+// ---------------------------------------------------------------------------
+
+/** One row of the company-wide review feed. Projection of `takeoff_drafts`
+ *  joined to `projects` for the human-readable project name; `quantities_count`
+ *  is derived server-side from the stored `TakeoffResult`. */
+export interface CompanyTakeoffDraft {
+  id: string
+  project_id: string
+  project_name: string
+  name: string
+  source: 'roomplan' | 'photogrammetry' | 'drone' | 'blueprint_vision'
+  review_required: boolean
+  quantities_count: number
+  created_at: string
+}
+
+export interface CompanyTakeoffDraftsFilters {
+  /** Restrict to one capture pipeline (omit for all pipelines). */
+  source?: CompanyTakeoffDraft['source']
+  /** Only drafts the pipeline flagged for review. */
+  reviewRequired?: boolean
+}
+
+const companyDraftsKey = (filters: CompanyTakeoffDraftsFilters) =>
+  ['takeoff-drafts', 'company-feed', filters.source ?? 'all', filters.reviewRequired ? 'review' : 'any'] as const
+
+/**
+ * List capture-pipeline takeoff drafts across all of the company's projects.
+ * Manual canvas drafts are excluded server-side — this feed only carries
+ * drafts that need estimator review before promotion.
+ */
+export function useCompanyTakeoffDrafts(filters: CompanyTakeoffDraftsFilters = {}) {
+  return useQuery<{ drafts: CompanyTakeoffDraft[] }>({
+    queryKey: companyDraftsKey(filters),
+    queryFn: () => {
+      const qs = new URLSearchParams()
+      if (filters.source) qs.set('source', filters.source)
+      if (filters.reviewRequired) qs.set('review_required', '1')
+      const suffix = qs.toString() ? `?${qs.toString()}` : ''
+      return request(`/api/takeoff-drafts${suffix}`)
+    },
+  })
+}
+
 export function useCreateTakeoffDraft(projectId: string) {
   const qc = useQueryClient()
   return useMutation<{ draft: TakeoffDraft }, Error, { name: string; type?: string }>({

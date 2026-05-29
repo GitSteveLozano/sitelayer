@@ -1,4 +1,6 @@
+import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query'
 import { request } from './client'
+import { queryKeys } from './keys'
 import { emitControlPlaneTrace } from '@/lib/control-plane-trace'
 
 export type WorkItemStatus =
@@ -450,6 +452,35 @@ export function reverseWorkRequest(id: string, input: ReverseWorkRequestInput): 
   return request<ReverseWorkRequestResponse>(`/api/work-requests/${encodeURIComponent(id)}/reverse`, {
     method: 'POST',
     json: input,
+  })
+}
+
+/** List work requests (field material / equipment / issue requests) for the company. */
+export function useWorkRequests(
+  params: ListWorkRequestsParams = {},
+  options?: Partial<UseQueryOptions<ListWorkRequestsResponse>>,
+) {
+  return useQuery<ListWorkRequestsResponse>({
+    queryKey: queryKeys.workRequests.list(params),
+    queryFn: () => fetchWorkRequests(params),
+    ...options,
+  })
+}
+
+/**
+ * Append a handoff event to a work request (approve via `resolution.accepted`,
+ * decline via `work_item.status_changed` → `wont_do`, reply via
+ * `message.added`). Invalidates the work-request list + detail on success.
+ */
+export function useAppendWorkRequestEvent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (args: { id: string; input: AppendWorkRequestEventInput }) =>
+      appendWorkRequestEvent(args.id, args.input),
+    onSuccess: (response) => {
+      qc.invalidateQueries({ queryKey: queryKeys.workRequests.all() })
+      qc.invalidateQueries({ queryKey: queryKeys.workRequests.detail(response.work_item.id) })
+    },
   })
 }
 
