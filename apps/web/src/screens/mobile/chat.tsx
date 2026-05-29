@@ -255,7 +255,8 @@ export function MobileChatThread() {
   useEffect(() => {
     if (!projectId || !latestMessageId) return
     markReadMutate()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // markReadMutate is stable (TanStack Query mutate identity); intentionally
+    // omitted. The react-hooks/exhaustive-deps rule is not enabled in this repo.
   }, [projectId, latestMessageId])
 
   // Resolve author clerk_user_ids → display names from the project roster.

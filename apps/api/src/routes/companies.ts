@@ -91,7 +91,6 @@ type ProfileField = (typeof PROFILE_FIELDS)[number]
 // modules / portal_settings). HH:MM times, a fixed OT-rule enum, the seven
 // weekday flags, and a bounded holiday list.
 const HHMM_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
-const WEEKDAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as const
 const WorkingHoursSchema = z
   .object({
     days: z.object({

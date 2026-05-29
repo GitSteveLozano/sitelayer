@@ -66,6 +66,8 @@ import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
 import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
 import { handleChangeOrderRoutes } from './change-orders.js'
 import { handleGuardrailRoutes } from './guardrails.js'
+import { handleInventoryServiceTicketRoutes } from './inventory-service-tickets.js'
+import { handleProjectBillingMilestoneRoutes } from './project-billing-milestones.js'
 import { handleProjectLostReasonRoutes } from './project-lost-reasons.js'
 import { handleMessagingRoutes } from './messaging.js'
 import { handleLaborPayrollRunRoutes } from './labor-payroll-runs.js'
@@ -794,6 +796,28 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     // Guardrails (v2) — per-project monitors + company-wide active + snooze/mute/clear
     () =>
       handleGuardrailRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Inventory service tickets — maintenance lifecycle (open → in_service → done)
+    () =>
+      handleInventoryServiceTicketRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Project billing milestones (v2) — deposit/progress/final schedule with manual paid status
+    () =>
+      handleProjectBillingMilestoneRoutes(req, url, {
         pool,
         company,
         currentUserId,
