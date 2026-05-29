@@ -35,8 +35,22 @@ import {
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import { getActiveCompanySlug, queryKeys, request, type BootstrapResponse } from '@/lib/api'
-import { DShell, DSidebar, DTopbar, type DNavSection } from '@/components/d'
+import {
+  DCommandPalette,
+  DMenu,
+  DNotifPanel,
+  DShell,
+  DSidebar,
+  DTopbar,
+  useCommandPaletteHotkey,
+  type DCommandGroup,
+  type DNavSection,
+  type DNotifGroup,
+} from '@/components/d'
 import { MButton } from '@/components/m'
+import { DesktopOnboarding } from './onboarding/onboarding'
+import { EstAiTakeoffSetup, EstAiTakeoffReview } from './est-ai-takeoff'
+import { EstAiCountSetup, EstAiCountReview } from './est-ai-count'
 import { OwnerDashboard } from './owner-dashboard'
 import { OwnerProjects } from './owner-projects'
 import { OwnerTeam } from './owner-team'
@@ -167,6 +181,11 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
   const navigate = useNavigate()
   const crumb = CRUMB[location.pathname] ?? 'Sitelayer'
   const [wearingOpen, setWearingOpen] = useState(false)
+  const [cmdkOpen, setCmdkOpen] = useState(false)
+  const [cmdkQuery, setCmdkQuery] = useState('')
+  const [notifOpen, setNotifOpen] = useState(false)
+  const [avatarOpen, setAvatarOpen] = useState(false)
+  useCommandPaletteHotkey(setCmdkOpen)
 
   // WEARING ▾ — solo operators switch which hat they're in. On the desktop
   // command center each hat routes to its home surface.
@@ -190,6 +209,73 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
     enabled: bootstrapProp === null && Boolean(companySlug),
   })
   const bootstrap = bootstrapProp ?? bootstrapQuery.data ?? null
+
+  // ⌘K command palette — fuzzy over projects/clients/items + nav targets.
+  const q = cmdkQuery.trim().toLowerCase()
+  const has = (s: string | null | undefined) => !q || (s ?? '').toLowerCase().includes(q)
+  const closeCmdk = (to: string) => {
+    setCmdkOpen(false)
+    setCmdkQuery('')
+    navigate(to)
+  }
+  const cmdkGroups: DCommandGroup[] = [
+    {
+      label: 'Projects',
+      items: (bootstrap?.projects ?? [])
+        .filter((p) => has(p.name) || has(p.customer_name))
+        .slice(0, 6)
+        .map((p) => ({
+          id: `proj-${p.id}`,
+          label: p.name,
+          hint: p.customer_name ?? undefined,
+          onSelect: () => closeCmdk(`/desktop/projects/${p.id}`),
+        })),
+    },
+    {
+      label: 'Clients',
+      items: (bootstrap?.customers ?? [])
+        .filter((c) => !c.deleted_at && has(c.name))
+        .slice(0, 5)
+        .map((c) => ({ id: `cust-${c.id}`, label: c.name, onSelect: () => closeCmdk('/desktop/clients') })),
+    },
+    {
+      label: 'Items',
+      items: (bootstrap?.serviceItems ?? [])
+        .filter((it) => has(it.name) || has(it.code))
+        .slice(0, 5)
+        .map((it) => ({
+          id: `item-${it.code}`,
+          label: it.name,
+          hint: it.code,
+          onSelect: () => closeCmdk('/desktop/item-library'),
+        })),
+    },
+    {
+      label: 'Go to',
+      items: [
+        { id: 'go-dash', label: 'Dashboard', to: '/desktop' },
+        { id: 'go-projects', label: 'Projects', to: '/desktop/projects' },
+        { id: 'go-money', label: 'Money', to: '/desktop/money' },
+        { id: 'go-schedule', label: 'Schedule', to: '/desktop/schedule' },
+        { id: 'go-takeoff', label: 'Takeoff', to: '/desktop/takeoff' },
+        { id: 'go-settings', label: 'Settings', to: '/desktop/settings' },
+      ]
+        .filter((i) => has(i.label))
+        .map((i) => ({ id: i.id, label: i.label, onSelect: () => closeCmdk(i.to) })),
+    },
+  ]
+  const notifGroups: DNotifGroup[] = [
+    {
+      label: 'Today',
+      items: [{ id: 'welcome', title: 'Welcome to the command center', meta: 'Desktop v2', tone: null }],
+    },
+  ]
+  const signOut = () => {
+    setAvatarOpen(false)
+    const clerk = (window as unknown as { Clerk?: { signOut: (cb?: () => void) => void } }).Clerk
+    if (clerk && typeof clerk.signOut === 'function') clerk.signOut(() => navigate('/sign-in'))
+    else navigate('/sign-in')
+  }
 
   return (
     <DShell
@@ -252,16 +338,124 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         crumb={crumb}
         actions={
           <>
+            <MButton size="sm" variant="quiet" onClick={() => setCmdkOpen(true)}>
+              Search ⌘K
+            </MButton>
             <MButton size="sm" variant="primary" onClick={() => navigate('/desktop/projects/new')}>
               <PlusIcon /> New project
             </MButton>
-            <Bell aria-hidden width={20} height={20} />
-            <span className="m-avatar" data-size="sm" aria-hidden>
-              SL
-            </span>
+            <button
+              type="button"
+              aria-label="Notifications"
+              onClick={() => setNotifOpen(true)}
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                color: 'var(--m-ink)',
+              }}
+            >
+              <Bell aria-hidden width={20} height={20} />
+            </button>
+            <button
+              type="button"
+              aria-label="Account menu"
+              onClick={() => setAvatarOpen((v) => !v)}
+              style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
+            >
+              <span className="m-avatar" data-size="sm" aria-hidden>
+                SL
+              </span>
+            </button>
           </>
         }
       />
+      <DCommandPalette
+        open={cmdkOpen}
+        onClose={() => setCmdkOpen(false)}
+        query={cmdkQuery}
+        onQueryChange={setCmdkQuery}
+        groups={cmdkGroups}
+      />
+      <DNotifPanel
+        open={notifOpen}
+        onClose={() => setNotifOpen(false)}
+        groups={notifGroups}
+        onMarkAll={() => setNotifOpen(false)}
+      />
+      <DMenu
+        open={avatarOpen}
+        onClose={() => setAvatarOpen(false)}
+        label="Account"
+        style={{ top: 56, right: 24, width: 240 }}
+      >
+        <div
+          style={{
+            padding: '14px 16px',
+            borderBottom: '2px solid var(--m-ink)',
+            background: 'var(--m-card-soft)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+          }}
+        >
+          <span className="m-avatar" data-size="sm" aria-hidden>
+            SL
+          </span>
+          <div>
+            <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 14 }}>
+              {bootstrap?.company?.name ?? 'Sitelayer'}
+            </div>
+            <div style={{ fontFamily: 'var(--m-num)', fontSize: 9, color: 'var(--m-ink-3)', marginTop: 2 }}>
+              OWNER · ALL HATS
+            </div>
+          </div>
+        </div>
+        {[
+          { label: 'Profile', onClick: () => goHat('/desktop'), danger: false },
+          {
+            label: 'Settings',
+            onClick: () => {
+              setAvatarOpen(false)
+              navigate('/desktop/settings')
+            },
+            danger: false,
+          },
+          {
+            label: 'Switch role',
+            onClick: () => {
+              setAvatarOpen(false)
+              setWearingOpen(true)
+            },
+            danger: false,
+          },
+          { label: 'Sign out', onClick: signOut, danger: true },
+        ].map((it) => (
+          <button
+            key={it.label}
+            type="button"
+            role="menuitem"
+            onClick={it.onClick}
+            style={{
+              display: 'block',
+              width: '100%',
+              textAlign: 'left',
+              padding: '12px 16px',
+              background: 'transparent',
+              border: 'none',
+              borderTop: '1px solid var(--m-line-2)',
+              cursor: 'pointer',
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 700,
+              fontSize: 15,
+              color: it.danger ? 'var(--m-red)' : 'var(--m-ink)',
+            }}
+          >
+            {it.label}
+          </button>
+        ))}
+      </DMenu>
       <Routes>
         <Route index element={<OwnerDashboard bootstrap={bootstrap} />} />
         <Route path="projects" element={<OwnerProjects bootstrap={bootstrap} />} />
@@ -291,6 +485,11 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         <Route path="fm/schedule" element={<FmSchedule bootstrap={bootstrap} />} />
         <Route path="fm/time" element={<FmTime bootstrap={bootstrap} />} />
         <Route path="fm/brief/:projectId" element={<FmBrief />} />
+        <Route path="onboarding" element={<DesktopOnboarding onComplete={() => navigate('/desktop/projects/new')} />} />
+        <Route path="ai-takeoff/:projectId" element={<EstAiTakeoffSetup />} />
+        <Route path="ai-takeoff/:projectId/review" element={<EstAiTakeoffReview />} />
+        <Route path="ai-count/:projectId" element={<EstAiCountSetup />} />
+        <Route path="ai-count/:projectId/review" element={<EstAiCountReview />} />
         <Route path="*" element={<DComingSoon name="Screen" />} />
       </Routes>
     </DShell>

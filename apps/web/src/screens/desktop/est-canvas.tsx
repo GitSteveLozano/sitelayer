@@ -43,9 +43,18 @@ import {
 } from '@/lib/api'
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
-import { MButton, MSelect } from '@/components/m'
+import { MButton, MPill, MSelect } from '@/components/m'
+import { DEmptyState } from '@/components/d'
 
 type Tool = 'polygon' | 'lineal' | 'count'
+
+// Canvas interaction modes layered over the drawing surface (ported from
+// Steve's Desktop v2 mockup `DCanvasScale` / `DCanvasItemPalette` /
+// `DCanvasEditMeasure` / `DCanvasBulkSelect` in /tmp/steve3/04_app.js).
+//   draw   — default; tap to add points to a draft measurement.
+//   scale  — calibrate the sheet scale from a drawn reference line.
+//   select — marquee / multi-select committed measurements for bulk actions.
+type CanvasMode = 'draw' | 'scale' | 'select'
 
 const MAX_POLYGON_POINTS = 64
 
@@ -95,6 +104,21 @@ export function EstCanvas() {
   const [savedToast, setSavedToast] = useState<string | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
 
+  // --- Canvas interaction states (Desktop v2 mockup ports) -----------------
+  const [mode, setMode] = useState<CanvasMode>('draw')
+  // Scale-calibration overlay (DCanvasScale): the real-world length the user
+  // types for the reference line they drew. Provisional until applied.
+  const [scaleLength, setScaleLength] = useState('24')
+  // Item command-palette (DCanvasItemPalette): "/"-triggered scope-item picker.
+  const [itemPaletteOpen, setItemPaletteOpen] = useState(false)
+  const [itemQuery, setItemQuery] = useState('')
+  // Edit popover (DCanvasEditMeasure): the single committed measurement that
+  // is currently selected for reassign / duplicate / delete.
+  const [selectedMeasurementId, setSelectedMeasurementId] = useState<string | null>(null)
+  // Bulk-select toolbar (DCanvasBulkSelect): the set of measurements picked
+  // while in marquee/select mode.
+  const [bulkSelected, setBulkSelected] = useState<Set<string>>(() => new Set())
+
   useEffect(() => {
     if (!serviceItemCode && items[0]) setServiceItemCode(items[0].code)
   }, [serviceItemCode, items])
@@ -111,6 +135,16 @@ export function EstCanvas() {
 
   // EXACT same CTM math as takeoff-mobile.tsx — do not change.
   const onCanvasTap = (e: ReactPointerEvent<SVGSVGElement>) => {
+    // In select/scale mode the canvas tap is not a draft-point append: select
+    // mode tapping empty space clears the marquee selection; scale mode lets
+    // the calibration overlay drive instead. Only draw mode appends points.
+    if (mode !== 'draw') {
+      if (mode === 'select') {
+        setBulkSelected(new Set())
+        setSelectedMeasurementId(null)
+      }
+      return
+    }
     const svg = svgRef.current
     if (!svg) return
     if (tool === 'polygon' && draftPoints.length >= MAX_POLYGON_POINTS) return
@@ -160,6 +194,42 @@ export function EstCanvas() {
   )
   const totals = useMemo(() => buildScopeTotals(draftMeasurements), [draftMeasurements])
   const grandTotal = totals.reduce((s, t) => s + t.quantity, 0)
+
+  // --- Selection derivations for the edit popover + bulk-select toolbar -----
+  const selectedMeasurement = useMemo(
+    () => blueprintMeasurements.find((m) => m.id === selectedMeasurementId) ?? null,
+    [blueprintMeasurements, selectedMeasurementId],
+  )
+  const selectedIndex = selectedMeasurement
+    ? blueprintMeasurements.findIndex((m) => m.id === selectedMeasurement.id)
+    : -1
+  const bulkRows = useMemo(
+    () => blueprintMeasurements.filter((m) => bulkSelected.has(m.id)),
+    [blueprintMeasurements, bulkSelected],
+  )
+  const bulkTotal = useMemo(() => round2(bulkRows.reduce((s, m) => s + (Number(m.quantity) || 0), 0)), [bulkRows])
+
+  // Item command-palette: filter the scope items by the typed query.
+  const paletteItems = useMemo(() => {
+    const q = itemQuery.trim().toLowerCase()
+    const list = q ? items.filter((it) => `${it.code} ${it.name}`.toLowerCase().includes(q)) : items
+    return list.slice(0, 6)
+  }, [items, itemQuery])
+
+  // Toggle a committed measurement into the bulk set. Exactly-one selected
+  // shows the single-edit action bar (DCanvasEditMeasure); two-or-more shows
+  // the marquee bulk toolbar (DCanvasBulkSelect). `selectedMeasurementId`
+  // mirrors the single case so the polygon highlight + edit bar share state.
+  const onMeasurementClick = (id: string) => {
+    if (mode !== 'select') return
+    setBulkSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      setSelectedMeasurementId(next.size === 1 ? (Array.from(next)[0] ?? null) : null)
+      return next
+    })
+  }
 
   const loading = drafts.isLoading || blueprints.isLoading
 
@@ -260,15 +330,24 @@ export function EstCanvas() {
           {/* Saved measurements on this blueprint (same render as mobile) */}
           {blueprintMeasurements.map((m) => {
             const geo = m.geometry as MeasurementGeometry
+            // Selection state drives the highlight (edit popover = single,
+            // bulk-select = many). Ported from DCanvasEditMeasure /
+            // DCanvasBulkSelect; clickable only outside draw mode.
+            const isSelected = m.id === selectedMeasurementId || bulkSelected.has(m.id)
+            const interactive = mode !== 'draw'
+            const onClick = interactive ? () => onMeasurementClick(m.id) : undefined
+            const fillSel = isSelected ? 'rgba(255,212,0,0.45)' : 'rgba(217,144,74,0.18)'
+            const strokeSel = isSelected ? 'var(--m-ink)' : 'var(--m-accent)'
+            const strokeWSel = isSelected ? 0.7 : 0.4
             if (geo.kind === 'polygon' && geo.points && geo.points.length >= 3) {
               const c = calculatePolygonCentroid(geo.points)
               return (
-                <g key={m.id}>
+                <g key={m.id} onClick={onClick} style={{ cursor: interactive ? 'pointer' : undefined }}>
                   <polygon
                     points={geo.points.map((p) => `${p.x},${p.y}`).join(' ')}
-                    fill="rgba(217,144,74,0.18)"
-                    stroke="var(--m-accent)"
-                    strokeWidth={0.4}
+                    fill={fillSel}
+                    stroke={strokeSel}
+                    strokeWidth={strokeWSel}
                   />
                   {c ? (
                     <text x={c.x} y={c.y} fontSize={3} textAnchor="middle" fill="var(--m-accent)" fontWeight={700}>
@@ -282,18 +361,28 @@ export function EstCanvas() {
               return (
                 <polyline
                   key={m.id}
+                  onClick={onClick}
+                  style={{ cursor: interactive ? 'pointer' : undefined }}
                   points={geo.points.map((p) => `${p.x},${p.y}`).join(' ')}
                   fill="none"
-                  stroke="var(--m-accent)"
-                  strokeWidth={0.5}
+                  stroke={strokeSel}
+                  strokeWidth={isSelected ? 0.8 : 0.5}
                 />
               )
             }
             if (geo.kind === 'count' && geo.points) {
               return (
-                <g key={m.id}>
+                <g key={m.id} onClick={onClick} style={{ cursor: interactive ? 'pointer' : undefined }}>
                   {geo.points.map((p, i) => (
-                    <circle key={i} cx={p.x} cy={p.y} r={0.8} fill="var(--m-accent)" />
+                    <circle
+                      key={i}
+                      cx={p.x}
+                      cy={p.y}
+                      r={isSelected ? 1.1 : 0.8}
+                      fill="var(--m-accent)"
+                      stroke={isSelected ? 'var(--m-ink)' : undefined}
+                      strokeWidth={isSelected ? 0.3 : undefined}
+                    />
                   ))}
                 </g>
               )
@@ -407,40 +496,64 @@ export function EstCanvas() {
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {(
             [
-              { tool: 'polygon', label: 'POLY' },
-              { tool: 'rect', label: 'RECT' },
-              { tool: 'lineal', label: 'LIN' },
-              { tool: 'count', label: 'PT' },
-              { tool: 'tap', label: 'TAP' },
+              { kind: 'draw', tool: 'polygon', label: 'POLY' },
+              { kind: 'draw', tool: 'rect', label: 'RECT' },
+              { kind: 'draw', tool: 'lineal', label: 'LIN' },
+              { kind: 'draw', tool: 'count', label: 'PT' },
+              { kind: 'draw', tool: 'tap', label: 'TAP' },
+              // SCALE / SEL are interaction modes (DCanvasScale / DCanvasBulkSelect),
+              // not new geometry tools — they layer overlays over the same canvas.
+              { kind: 'mode', mode: 'scale', label: 'SCALE' },
+              { kind: 'mode', mode: 'select', label: 'SEL' },
             ] as const
           ).map((t, i, arr) => {
+            const isDraw = t.kind === 'draw'
             // RECT/TAP are aliases that drive the same underlying tool values as
             // the mobile surface (polygon / count); no new geometry is introduced.
-            const value: Tool = t.tool === 'rect' ? 'polygon' : t.tool === 'tap' ? 'count' : (t.tool as Tool)
-            const on =
-              (t.tool === 'polygon' && tool === 'polygon') ||
-              (t.tool === 'lineal' && tool === 'lineal') ||
-              (t.tool === 'count' && tool === 'count')
+            const value: Tool = isDraw
+              ? t.tool === 'rect'
+                ? 'polygon'
+                : t.tool === 'tap'
+                  ? 'count'
+                  : (t.tool as Tool)
+              : 'polygon'
+            const on = isDraw
+              ? mode === 'draw' &&
+                ((t.tool === 'polygon' && tool === 'polygon') ||
+                  (t.tool === 'lineal' && tool === 'lineal') ||
+                  (t.tool === 'count' && tool === 'count') ||
+                  // RECT/TAP highlight when their alias tool is active.
+                  (t.tool === 'rect' && tool === 'polygon') ||
+                  (t.tool === 'tap' && tool === 'count'))
+              : mode === t.mode
             return (
               <button
                 key={t.label}
                 type="button"
                 onClick={() => {
-                  setTool(value)
+                  if (isDraw) {
+                    setMode('draw')
+                    setTool(value)
+                  } else {
+                    setMode(t.mode)
+                  }
                   setDraftPoints([])
+                  setSelectedMeasurementId(null)
+                  setBulkSelected(new Set())
                 }}
                 style={{
                   width: 56,
-                  height: 56,
+                  height: 48,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   background: on ? 'var(--m-accent)' : 'var(--m-sand)',
                   color: on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
                   border: 'none',
+                  borderTop: t.kind === 'mode' && arr[i - 1]?.kind === 'draw' ? '2px solid var(--m-ink)' : 'none',
                   borderBottom: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
                   fontFamily: 'var(--m-num)',
-                  fontSize: 11,
+                  fontSize: 10,
                   fontWeight: 800,
                   letterSpacing: '0.04em',
                   cursor: 'pointer',
@@ -605,6 +718,448 @@ export function EstCanvas() {
           )}
         </div>
       </div>
+
+      {/* ---- DCanvasSheetRef · sheet-reference chip (bottom-left) ---- */}
+      <div
+        style={floatBox({
+          bottom: 16,
+          left: 16,
+          padding: '8px 12px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        })}
+      >
+        <span
+          style={{
+            width: 8,
+            height: 8,
+            background: activeBlueprint ? 'var(--m-green)' : 'var(--m-ink-3)',
+            flexShrink: 0,
+          }}
+          aria-hidden
+        />
+        <span
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            color: 'var(--m-ink)',
+          }}
+        >
+          {activeBlueprint
+            ? `Sheet · ${activeBlueprint.file_name}${activePage ? ` · pg ${activePage.page_number}` : ''}`
+            : 'No sheet · grid only'}
+        </span>
+        {activeBlueprint?.sheet_scale ? (
+          <span style={{ fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700, color: 'var(--m-ink-3)' }}>
+            {activeBlueprint.sheet_scale}
+          </span>
+        ) : null}
+      </div>
+
+      {/* ---- DCanvasEmpty · no-drawing dropzone (uses DEmptyState) ---- */}
+      {!activeBlueprint && mode === 'draw' ? (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            pointerEvents: 'none',
+          }}
+        >
+          <div
+            style={{
+              pointerEvents: 'auto',
+              background: 'var(--m-card)',
+              border: '3px dashed var(--m-ink)',
+              maxWidth: 520,
+            }}
+          >
+            <DEmptyState
+              mark="↓"
+              title="Drop the plan set"
+              body="Plan set, drawings, or architect's PDF — up to 200MB, multi-page OK. Sheets, cross-references, and scales read automatically. Or pick a blueprint from the Item palette."
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {/* ---- DCanvasScale · scale-calibration overlay (center) ---- */}
+      {mode === 'scale' ? (
+        <div
+          style={floatBox({
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            width: 420,
+          })}
+        >
+          <div style={floatHead}>● Set scale · {activeBlueprint?.file_name ?? 'sheet'}</div>
+          <div style={{ padding: 24 }}>
+            <div
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                color: 'var(--m-ink-3)',
+                fontWeight: 600,
+                lineHeight: 1.5,
+              }}
+            >
+              YOU DREW A LINE. ENTER ITS REAL-WORLD LENGTH:
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
+              <div
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  alignItems: 'baseline',
+                  gap: 6,
+                  padding: '12px 14px',
+                  background: 'var(--m-card-soft)',
+                  border: '2px solid var(--m-ink)',
+                }}
+              >
+                <input
+                  value={scaleLength}
+                  onChange={(e) => setScaleLength(e.target.value.replace(/[^\d.]/g, ''))}
+                  inputMode="decimal"
+                  aria-label="Real-world length"
+                  style={{
+                    width: 80,
+                    background: 'transparent',
+                    border: 'none',
+                    outline: 'none',
+                    fontFamily: 'var(--m-font-display)',
+                    fontWeight: 800,
+                    fontSize: 32,
+                    color: 'var(--m-ink)',
+                  }}
+                />
+                <span style={{ fontSize: 16, color: 'var(--m-ink-3)', fontWeight: 700 }}>FT</span>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontFamily: 'var(--m-num)', fontSize: 10, color: 'var(--m-ink-3)', fontWeight: 600 }}>
+                  = 1:48
+                </div>
+                <div
+                  style={{
+                    fontFamily: 'var(--m-num)',
+                    fontSize: 10,
+                    color: 'var(--m-accent-ink)',
+                    fontWeight: 700,
+                    marginTop: 3,
+                  }}
+                >
+                  ● PROVISIONAL
+                </div>
+              </div>
+            </div>
+            <div
+              style={{
+                padding: '12px 14px',
+                background: 'var(--m-accent)',
+                color: 'var(--m-accent-ink)',
+                marginTop: 16,
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                fontWeight: 600,
+                lineHeight: 1.5,
+              }}
+            >
+              AI can detect + verify scale on all sheets at once.
+            </div>
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <MButton variant="ghost" onClick={() => setMode('draw')}>
+                Apply to sheet
+              </MButton>
+              <MButton variant="primary" onClick={() => navigate(`/desktop/scale/${projectId}`)}>
+                AI verify all
+              </MButton>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ---- DCanvasItemPalette · "/"-style scope-item command palette ---- */}
+      {itemPaletteOpen ? (
+        <div
+          style={floatBox({
+            top: 120,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            width: 520,
+          })}
+        >
+          <div
+            style={{
+              padding: '14px 18px',
+              borderBottom: '2px solid var(--m-ink)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              background: 'var(--m-card)',
+            }}
+          >
+            <span
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontWeight: 800,
+                fontSize: 14,
+                color: 'var(--m-accent-ink)',
+                background: 'var(--m-accent)',
+                padding: '2px 8px',
+              }}
+              aria-hidden
+            >
+              /
+            </span>
+            <input
+              autoFocus
+              value={itemQuery}
+              onChange={(e) => setItemQuery(e.target.value)}
+              placeholder="Assign item…"
+              aria-label="Assign scope item"
+              style={{
+                flex: 1,
+                background: 'transparent',
+                border: 'none',
+                outline: 'none',
+                fontFamily: 'var(--m-font-display)',
+                fontWeight: 700,
+                fontSize: 18,
+                color: 'var(--m-ink)',
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && paletteItems[0]) {
+                  setServiceItemCode(paletteItems[0].code)
+                  setItemPaletteOpen(false)
+                  setItemQuery('')
+                } else if (e.key === 'Escape') {
+                  setItemPaletteOpen(false)
+                }
+              }}
+            />
+            <span style={{ fontFamily: 'var(--m-num)', fontSize: 10, color: 'var(--m-ink-3)', fontWeight: 600 }}>
+              ↑↓ NAVIGATE · ⏎ SELECT
+            </span>
+          </div>
+          {paletteItems.length === 0 ? (
+            <div style={{ padding: '14px 18px', fontSize: 13, color: 'var(--m-ink-3)' }}>No matching items.</div>
+          ) : (
+            paletteItems.map((it, i) => {
+              const hot = it.code === serviceItemCode || (serviceItemCode === '' && i === 0)
+              return (
+                <button
+                  key={it.code}
+                  type="button"
+                  onClick={() => {
+                    setServiceItemCode(it.code)
+                    setItemPaletteOpen(false)
+                    setItemQuery('')
+                  }}
+                  style={{
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '12px 18px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 14,
+                    background: hot ? 'var(--m-accent)' : 'var(--m-card)',
+                    color: hot ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+                    border: 'none',
+                    borderBottom: '1px solid var(--m-line-2)',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span
+                    style={{
+                      fontFamily: 'var(--m-num)',
+                      fontSize: 9,
+                      fontWeight: 700,
+                      width: 54,
+                      color: hot ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
+                    }}
+                  >
+                    {it.code}
+                  </span>
+                  <span style={{ flex: 1, fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 15 }}>
+                    {it.name}
+                  </span>
+                  <span style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700 }}>
+                    {(it.unit ?? '').toUpperCase()}
+                  </span>
+                </button>
+              )
+            })
+          )}
+        </div>
+      ) : null}
+
+      {/* ---- DCanvasEditMeasure · single-selection contextual action bar ---- */}
+      {mode === 'select' && selectedMeasurement && bulkSelected.size === 1 ? (
+        <div
+          style={floatBox({
+            bottom: 24,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            alignItems: 'stretch',
+          })}
+        >
+          <div style={{ padding: '14px 20px', borderRight: '2px solid var(--m-ink)' }}>
+            <span
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontSize: 10,
+                fontWeight: 700,
+                color: 'var(--m-accent-ink)',
+                background: 'var(--m-accent)',
+                display: 'inline-block',
+                padding: '2px 6px',
+              }}
+            >
+              SELECTED · {selectedIndex >= 0 ? selectedIndex + 1 : '—'} OF {blueprintMeasurements.length}
+            </span>
+            <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 24, marginTop: 6 }}>
+              {formatQty(Number(selectedMeasurement.quantity))} {selectedMeasurement.unit} ·{' '}
+              {selectedMeasurement.service_item_code}
+            </div>
+          </div>
+          {(
+            [
+              { l: 'REASSIGN', action: () => setItemPaletteOpen(true) },
+              { l: 'EDIT GEOM', action: () => {} },
+              { l: 'DUPLICATE', action: () => {} },
+              { l: 'DELETE', danger: true, action: () => setSelectedMeasurementId(null) },
+            ] as const
+          ).map((b, i, arr) => (
+            <button
+              key={b.l}
+              type="button"
+              onClick={b.action}
+              style={{
+                padding: '0 22px',
+                background: 'var(--m-card)',
+                color: 'danger' in b && b.danger ? 'var(--m-red)' : 'var(--m-ink)',
+                border: 'none',
+                borderRight: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                cursor: 'pointer',
+              }}
+            >
+              {b.l}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {/* ---- DCanvasBulkSelect · marquee multi-selection toolbar (2+) ---- */}
+      {mode === 'select' && bulkSelected.size >= 2 ? (
+        <div
+          style={floatBox({
+            bottom: 24,
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            alignItems: 'stretch',
+          })}
+        >
+          <div style={{ padding: '14px 24px', borderRight: '2px solid var(--m-ink)' }}>
+            <div style={{ fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 700, color: 'var(--m-ink-3)' }}>
+              MARQUEE SELECTION · {bulkSelected.size} {bulkSelected.size === 1 ? 'ITEM' : 'ITEMS'}
+            </div>
+            <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 28, marginTop: 6 }}>
+              {formatQty(bulkTotal)}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setItemPaletteOpen(true)}
+            style={{
+              padding: '0 24px',
+              background: 'var(--m-card)',
+              border: 'none',
+              borderRight: '2px solid var(--m-ink)',
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              cursor: 'pointer',
+            }}
+          >
+            REASSIGN ITEM
+          </button>
+          <button
+            type="button"
+            onClick={() => setBulkSelected(new Set())}
+            style={{
+              padding: '0 24px',
+              background: 'var(--m-card)',
+              color: 'var(--m-red)',
+              border: 'none',
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              cursor: 'pointer',
+            }}
+          >
+            DELETE {bulkSelected.size}
+          </button>
+        </div>
+      ) : null}
+
+      {/* ---- "/" affordance to open the item palette while drawing ---- */}
+      {mode === 'draw' && !itemPaletteOpen ? (
+        <button
+          type="button"
+          onClick={() => setItemPaletteOpen(true)}
+          aria-label="Assign item (command palette)"
+          style={floatBox({
+            bottom: 16,
+            right: 16,
+            padding: '8px 12px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            cursor: 'pointer',
+          })}
+        >
+          <span
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontWeight: 800,
+              fontSize: 12,
+              color: 'var(--m-accent-ink)',
+              background: 'var(--m-accent)',
+              padding: '1px 6px',
+            }}
+            aria-hidden
+          >
+            /
+          </span>
+          <span
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              color: 'var(--m-ink)',
+            }}
+          >
+            ASSIGN ITEM
+          </span>
+          {selectedItem ? <MPill tone="accent">{selectedItem.code}</MPill> : null}
+        </button>
+      ) : null}
     </div>
   )
 }
