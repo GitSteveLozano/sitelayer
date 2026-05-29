@@ -65,6 +65,10 @@ type CanvasMode = 'draw' | 'scale' | 'select'
 
 const MAX_POLYGON_POINTS = 64
 
+// Canvas zoom bounds (PlanSwift-style navigation).
+const MIN_ZOOM = 0.4
+const MAX_ZOOM = 12
+
 export function EstCanvas() {
   const params = useParams<{ projectId: string }>()
   const navigate = useNavigate()
@@ -136,6 +140,14 @@ export function EstCanvas() {
   const [savedToast, setSavedToast] = useState<string | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
 
+  // --- Zoom + pan (canvas navigation) --------------------------------------
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const [zoom, setZoom] = useState(1)
+  const [pan, setPan] = useState({ x: 0, y: 0 })
+  const [handMode, setHandMode] = useState(false)
+  const [spaceHeld, setSpaceHeld] = useState(false)
+  const [panning, setPanning] = useState(false)
+
   // --- Canvas interaction states (Desktop v2 mockup ports) -----------------
   const [mode, setMode] = useState<CanvasMode>('draw')
   // Scale-calibration overlay (DCanvasScale): the real-world length the user
@@ -187,6 +199,100 @@ export function EstCanvas() {
     pt.y = e.clientY
     const local = pt.matrixTransform(ctm.inverse())
     setDraftPoints((prev) => [...prev, { x: round2(clamp(local.x, 0, 100)), y: round2(clamp(local.y, 0, 100)) }])
+  }
+
+  // --- Zoom + pan (PlanSwift-style canvas navigation) ----------------------
+  // The drawing math above relies on svg.getScreenCTM(), which already folds
+  // in the CSS transform on the zoom wrapper below — so a click still maps to
+  // the correct 0–100 board point at any zoom/pan. No change to onCanvasTap.
+  const zoomRef = useRef(1)
+  const panRef = useRef({ x: 0, y: 0 })
+  useEffect(() => {
+    zoomRef.current = zoom
+  }, [zoom])
+  useEffect(() => {
+    panRef.current = pan
+  }, [pan])
+
+  // Zoom by `factor` around a point (cx, cy) given in container pixels so the
+  // content under that point stays put (cursor- or center-anchored).
+  const applyZoom = (factor: number, cx: number, cy: number) => {
+    const z = zoomRef.current
+    const nz = clamp(z * factor, MIN_ZOOM, MAX_ZOOM)
+    if (nz === z) return
+    const p = panRef.current
+    const ux = (cx - p.x) / z
+    const uy = (cy - p.y) / z
+    setZoom(nz)
+    setPan({ x: cx - ux * nz, y: cy - uy * nz })
+  }
+  const zoomBy = (factor: number) => {
+    const rect = containerRef.current?.getBoundingClientRect()
+    applyZoom(factor, (rect?.width ?? 0) / 2, (rect?.height ?? 0) / 2)
+  }
+  const resetView = () => {
+    setZoom(1)
+    setPan({ x: 0, y: 0 })
+  }
+
+  // Non-passive wheel listener: preventDefault stops the PAGE from scrolling
+  // (Steve's "scrolling issues") and zooms toward the cursor instead.
+  useEffect(() => {
+    const cont = containerRef.current
+    if (!cont) return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const rect = cont.getBoundingClientRect()
+      applyZoom(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX - rect.left, e.clientY - rect.top)
+    }
+    cont.addEventListener('wheel', onWheel, { passive: false })
+    return () => cont.removeEventListener('wheel', onWheel)
+    // applyZoom reads live values via refs, so an empty dep array is correct.
+  }, [])
+
+  // Hold Space to pan (Figma-style), but never while typing in an input.
+  useEffect(() => {
+    const isTyping = (t: EventTarget | null) => t instanceof HTMLElement && /^(input|textarea|select)$/i.test(t.tagName)
+    const kd = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && !isTyping(e.target)) {
+        e.preventDefault()
+        setSpaceHeld(true)
+      }
+    }
+    const ku = (e: KeyboardEvent) => {
+      if (e.code === 'Space') setSpaceHeld(false)
+    }
+    window.addEventListener('keydown', kd)
+    window.addEventListener('keyup', ku)
+    return () => {
+      window.removeEventListener('keydown', kd)
+      window.removeEventListener('keyup', ku)
+    }
+  }, [])
+
+  const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
+  const onPointerDownCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
+    // Middle-button, Space-hold, or the Hand tool pans instead of drawing.
+    if (e.button === 1 || spaceHeld || handMode) {
+      e.preventDefault()
+      e.currentTarget.setPointerCapture?.(e.pointerId)
+      panStartRef.current = { x: e.clientX, y: e.clientY, panX: panRef.current.x, panY: panRef.current.y }
+      setPanning(true)
+      return
+    }
+    onCanvasTap(e)
+  }
+  const onPointerMoveCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
+    const start = panStartRef.current
+    if (!start) return
+    setPan({ x: start.panX + (e.clientX - start.x), y: start.panY + (e.clientY - start.y) })
+  }
+  const onPointerUpCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
+    if (panStartRef.current) {
+      panStartRef.current = null
+      setPanning(false)
+      e.currentTarget.releasePointerCapture?.(e.pointerId)
+    }
   }
 
   const minPoints = tool === 'polygon' ? 3 : tool === 'lineal' ? 2 : 1
@@ -289,6 +395,8 @@ export function EstCanvas() {
     ? `${activeBlueprint.file_name}${activePage ? ` · pg ${activePage.page_number}` : ''}`
     : 'No drawing — grid only'
 
+  const canvasCursor = panning ? 'grabbing' : handMode || spaceHeld ? 'grab' : 'crosshair'
+
   // Floating-palette shared chrome (translated from template .dt-float / .dt-float-head).
   const floatBox = (extra: React.CSSProperties): React.CSSProperties => ({
     position: 'absolute',
@@ -324,140 +432,175 @@ export function EstCanvas() {
         />
       ) : null}
 
-      {/* ---- Full-bleed SVG drawing surface (same board space as mobile) ---- */}
-      <div style={{ position: 'absolute', inset: 0, background: 'var(--m-ink-2)', overflow: 'hidden' }}>
-        {sourceImage.url ? (
-          <img
-            src={sourceImage.url}
-            alt=""
-            draggable={false}
+      {/* ---- Full-bleed SVG drawing surface (same board space as mobile) ----
+          The container clips + owns the wheel/zoom listener; the inner wrapper
+          carries the zoom/pan CSS transform so the blueprint image and the SVG
+          overlay scale + pan together and stay mutually aligned. */}
+      <div
+        ref={containerRef}
+        style={{ position: 'absolute', inset: 0, background: 'var(--m-ink-2)', overflow: 'hidden' }}
+      >
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            transformOrigin: '0 0',
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            willChange: 'transform',
+          }}
+        >
+          {sourceImage.url ? (
+            <img
+              src={sourceImage.url}
+              alt=""
+              draggable={false}
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                objectFit: 'contain',
+                opacity: 0.7,
+              }}
+            />
+          ) : null}
+          <svg
+            ref={svgRef}
+            viewBox="0 0 100 100"
+            preserveAspectRatio="none"
+            onPointerDown={onPointerDownCanvas}
+            onPointerMove={onPointerMoveCanvas}
+            onPointerUp={onPointerUpCanvas}
+            onPointerCancel={onPointerUpCanvas}
             style={{
               position: 'absolute',
               inset: 0,
               width: '100%',
               height: '100%',
-              objectFit: 'contain',
-              opacity: 0.7,
+              touchAction: 'none',
+              cursor: canvasCursor,
             }}
-          />
-        ) : null}
-        <svg
-          ref={svgRef}
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-          onPointerDown={onCanvasTap}
-          style={{
-            position: 'absolute',
-            inset: 0,
-            width: '100%',
-            height: '100%',
-            touchAction: 'none',
-            cursor: 'crosshair',
-          }}
-        >
-          <g aria-hidden="true">
-            {/* Fine grid every 2 units */}
-            {Array.from({ length: 51 }, (_, i) => (
-              <line key={`fh${i}`} x1={0} x2={100} y1={i * 2} y2={i * 2} stroke="var(--m-ink-3)" strokeWidth={0.1} />
-            ))}
-            {Array.from({ length: 51 }, (_, i) => (
-              <line key={`fv${i}`} x1={i * 2} x2={i * 2} y1={0} y2={100} stroke="var(--m-ink-3)" strokeWidth={0.1} />
-            ))}
-            {/* Coarse grid every 10 units */}
-            {Array.from({ length: 11 }, (_, i) => (
-              <line key={`h${i}`} x1={0} x2={100} y1={i * 10} y2={i * 10} stroke="var(--m-ink-4)" strokeWidth={0.25} />
-            ))}
-            {Array.from({ length: 11 }, (_, i) => (
-              <line key={`v${i}`} x1={i * 10} x2={i * 10} y1={0} y2={100} stroke="var(--m-ink-4)" strokeWidth={0.25} />
-            ))}
-          </g>
-
-          {/* Saved measurements on this blueprint (same render as mobile) */}
-          {blueprintMeasurements.map((m) => {
-            const geo = m.geometry as MeasurementGeometry
-            // Selection state drives the highlight (edit popover = single,
-            // bulk-select = many). Ported from DCanvasEditMeasure /
-            // DCanvasBulkSelect; clickable only outside draw mode.
-            const isSelected = m.id === selectedMeasurementId || bulkSelected.has(m.id)
-            const interactive = mode !== 'draw'
-            const onClick = interactive ? () => onMeasurementClick(m.id) : undefined
-            const fillSel = isSelected ? 'rgba(255,212,0,0.45)' : 'rgba(217,144,74,0.18)'
-            const strokeSel = isSelected ? 'var(--m-ink)' : 'var(--m-accent)'
-            const strokeWSel = isSelected ? 0.7 : 0.4
-            if (geo.kind === 'polygon' && geo.points && geo.points.length >= 3) {
-              const c = calculatePolygonCentroid(geo.points)
-              return (
-                <g key={m.id} onClick={onClick} style={{ cursor: interactive ? 'pointer' : undefined }}>
-                  <polygon
-                    points={geo.points.map((p) => `${p.x},${p.y}`).join(' ')}
-                    fill={fillSel}
-                    stroke={strokeSel}
-                    strokeWidth={strokeWSel}
-                  />
-                  {c ? (
-                    <text x={c.x} y={c.y} fontSize={3} textAnchor="middle" fill="var(--m-accent)" fontWeight={700}>
-                      {formatQty(Number(m.quantity))}
-                    </text>
-                  ) : null}
-                </g>
-              )
-            }
-            if (geo.kind === 'lineal' && geo.points && geo.points.length >= 2) {
-              return (
-                <polyline
-                  key={m.id}
-                  onClick={onClick}
-                  style={{ cursor: interactive ? 'pointer' : undefined }}
-                  points={geo.points.map((p) => `${p.x},${p.y}`).join(' ')}
-                  fill="none"
-                  stroke={strokeSel}
-                  strokeWidth={isSelected ? 0.8 : 0.5}
+          >
+            <g aria-hidden="true">
+              {/* Fine grid every 2 units */}
+              {Array.from({ length: 51 }, (_, i) => (
+                <line key={`fh${i}`} x1={0} x2={100} y1={i * 2} y2={i * 2} stroke="var(--m-ink-3)" strokeWidth={0.1} />
+              ))}
+              {Array.from({ length: 51 }, (_, i) => (
+                <line key={`fv${i}`} x1={i * 2} x2={i * 2} y1={0} y2={100} stroke="var(--m-ink-3)" strokeWidth={0.1} />
+              ))}
+              {/* Coarse grid every 10 units */}
+              {Array.from({ length: 11 }, (_, i) => (
+                <line
+                  key={`h${i}`}
+                  x1={0}
+                  x2={100}
+                  y1={i * 10}
+                  y2={i * 10}
+                  stroke="var(--m-ink-4)"
+                  strokeWidth={0.25}
                 />
-              )
-            }
-            if (geo.kind === 'count' && geo.points) {
-              return (
-                <g key={m.id} onClick={onClick} style={{ cursor: interactive ? 'pointer' : undefined }}>
-                  {geo.points.map((p, i) => (
-                    <circle
-                      key={i}
-                      cx={p.x}
-                      cy={p.y}
-                      r={isSelected ? 1.1 : 0.8}
-                      fill="var(--m-accent)"
-                      stroke={isSelected ? 'var(--m-ink)' : undefined}
-                      strokeWidth={isSelected ? 0.3 : undefined}
-                    />
-                  ))}
-                </g>
-              )
-            }
-            return null
-          })}
+              ))}
+              {Array.from({ length: 11 }, (_, i) => (
+                <line
+                  key={`v${i}`}
+                  x1={i * 10}
+                  x2={i * 10}
+                  y1={0}
+                  y2={100}
+                  stroke="var(--m-ink-4)"
+                  strokeWidth={0.25}
+                />
+              ))}
+            </g>
 
-          {/* Draft-in-progress (same render as mobile) */}
-          {tool === 'polygon' && draftPoints.length >= 3 ? (
-            <polygon
-              points={draftPoints.map((p) => `${p.x},${p.y}`).join(' ')}
-              fill="rgba(201,138,46,0.2)"
-              stroke="var(--m-amber)"
-              strokeWidth={0.4}
-              strokeDasharray="0.8 0.8"
-            />
-          ) : null}
-          {(tool === 'polygon' || tool === 'lineal') && draftPoints.length >= 2 ? (
-            <polyline
-              points={draftPoints.map((p) => `${p.x},${p.y}`).join(' ')}
-              fill="none"
-              stroke="var(--m-amber)"
-              strokeWidth={0.5}
-              strokeDasharray="0.8 0.8"
-            />
-          ) : null}
-          {draftPoints.map((p, i) => (
-            <circle key={i} cx={p.x} cy={p.y} r={tool === 'count' ? 1 : 0.8} fill="var(--m-amber)" />
-          ))}
-        </svg>
+            {/* Saved measurements on this blueprint (same render as mobile) */}
+            {blueprintMeasurements.map((m) => {
+              const geo = m.geometry as MeasurementGeometry
+              // Selection state drives the highlight (edit popover = single,
+              // bulk-select = many). Ported from DCanvasEditMeasure /
+              // DCanvasBulkSelect; clickable only outside draw mode.
+              const isSelected = m.id === selectedMeasurementId || bulkSelected.has(m.id)
+              const interactive = mode !== 'draw'
+              const onClick = interactive ? () => onMeasurementClick(m.id) : undefined
+              const fillSel = isSelected ? 'rgba(255,212,0,0.45)' : 'rgba(217,144,74,0.18)'
+              const strokeSel = isSelected ? 'var(--m-ink)' : 'var(--m-accent)'
+              const strokeWSel = isSelected ? 0.7 : 0.4
+              if (geo.kind === 'polygon' && geo.points && geo.points.length >= 3) {
+                const c = calculatePolygonCentroid(geo.points)
+                return (
+                  <g key={m.id} onClick={onClick} style={{ cursor: interactive ? 'pointer' : undefined }}>
+                    <polygon
+                      points={geo.points.map((p) => `${p.x},${p.y}`).join(' ')}
+                      fill={fillSel}
+                      stroke={strokeSel}
+                      strokeWidth={strokeWSel}
+                    />
+                    {c ? (
+                      <text x={c.x} y={c.y} fontSize={3} textAnchor="middle" fill="var(--m-accent)" fontWeight={700}>
+                        {formatQty(Number(m.quantity))}
+                      </text>
+                    ) : null}
+                  </g>
+                )
+              }
+              if (geo.kind === 'lineal' && geo.points && geo.points.length >= 2) {
+                return (
+                  <polyline
+                    key={m.id}
+                    onClick={onClick}
+                    style={{ cursor: interactive ? 'pointer' : undefined }}
+                    points={geo.points.map((p) => `${p.x},${p.y}`).join(' ')}
+                    fill="none"
+                    stroke={strokeSel}
+                    strokeWidth={isSelected ? 0.8 : 0.5}
+                  />
+                )
+              }
+              if (geo.kind === 'count' && geo.points) {
+                return (
+                  <g key={m.id} onClick={onClick} style={{ cursor: interactive ? 'pointer' : undefined }}>
+                    {geo.points.map((p, i) => (
+                      <circle
+                        key={i}
+                        cx={p.x}
+                        cy={p.y}
+                        r={isSelected ? 1.1 : 0.8}
+                        fill="var(--m-accent)"
+                        stroke={isSelected ? 'var(--m-ink)' : undefined}
+                        strokeWidth={isSelected ? 0.3 : undefined}
+                      />
+                    ))}
+                  </g>
+                )
+              }
+              return null
+            })}
+
+            {/* Draft-in-progress (same render as mobile) */}
+            {tool === 'polygon' && draftPoints.length >= 3 ? (
+              <polygon
+                points={draftPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+                fill="rgba(201,138,46,0.2)"
+                stroke="var(--m-amber)"
+                strokeWidth={0.4}
+                strokeDasharray="0.8 0.8"
+              />
+            ) : null}
+            {(tool === 'polygon' || tool === 'lineal') && draftPoints.length >= 2 ? (
+              <polyline
+                points={draftPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+                fill="none"
+                stroke="var(--m-amber)"
+                strokeWidth={0.5}
+                strokeDasharray="0.8 0.8"
+              />
+            ) : null}
+            {draftPoints.map((p, i) => (
+              <circle key={i} cx={p.x} cy={p.y} r={tool === 'count' ? 1 : 0.8} fill="var(--m-amber)" />
+            ))}
+          </svg>
+        </div>
       </div>
 
       {/* ---- Top strip: sheet name + DONE / total ---- */}
@@ -605,6 +748,57 @@ export function EstCanvas() {
                 }}
               >
                 {t.label}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* ---- VIEW palette (zoom + pan), below the TOOL palette ---- */}
+      <div style={floatBox({ top: 456, left: 16, width: 56 })}>
+        <div style={{ ...floatHead, padding: '8px 0', textAlign: 'center' }}>VIEW</div>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          {(
+            [
+              { label: '＋', title: 'Zoom in', onClick: () => zoomBy(1.25) },
+              { label: `${Math.round(zoom * 100)}%`, title: 'Reset view', onClick: resetView, small: true },
+              { label: '－', title: 'Zoom out', onClick: () => zoomBy(0.8) },
+              { label: '⤢', title: 'Fit to screen', onClick: resetView },
+              {
+                label: '✋',
+                title: 'Pan (or hold Space / middle-drag)',
+                onClick: () => setHandMode((h) => !h),
+                toggle: true,
+              },
+            ] as const
+          ).map((b, i, arr) => {
+            const active = 'toggle' in b && b.toggle && handMode
+            return (
+              <button
+                key={b.title}
+                type="button"
+                title={b.title}
+                aria-label={b.title}
+                aria-pressed={'toggle' in b && b.toggle ? handMode : undefined}
+                onClick={b.onClick}
+                style={{
+                  width: 56,
+                  height: 40,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: active ? 'var(--m-accent)' : 'var(--m-sand)',
+                  color: active ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+                  border: 'none',
+                  borderBottom: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 'small' in b && b.small ? 10 : 16,
+                  fontWeight: 800,
+                  letterSpacing: '0.02em',
+                  cursor: 'pointer',
+                }}
+              >
+                {b.label}
               </button>
             )
           })}
