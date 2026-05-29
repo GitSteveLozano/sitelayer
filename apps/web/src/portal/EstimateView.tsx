@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { MBanner, MBody, MButton, MButtonStack, MTextarea, MTopBar } from '@/components/m'
 import { usePortalEstimateSignature } from '@/machines/portal-estimate-signature'
 import { type PortalEstimateView } from './api'
+import { IssueReporter } from './IssueReporter'
 import { SignatureCapture } from './SignatureCapture'
 
 /**
@@ -271,6 +272,9 @@ function Shell({ title, sub, children }: { title: string; sub?: string; children
           {children}
         </div>
       </MBody>
+      {/* Invited-guest issue-report pill (observability T2). Renders null unless
+          VITE_TRACE_BEACON_URL is set AND an invite token is present — inert by default. */}
+      <IssueReporter />
     </div>
   )
 }
