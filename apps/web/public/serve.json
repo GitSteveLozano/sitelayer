@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/serve.json",
+  "headers": [
+    {
+      "comment": "Content-hashed build assets never change for a given URL — cache hard.",
+      "source": "assets/**",
+      "headers": [{ "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }]
+    },
+    {
+      "comment": "App shell, service worker, and manifest MUST revalidate so a new deploy's SW + index are picked up immediately (the stale-PWA-cache fix). The SW itself owns offline caching of these via its precache.",
+      "source": "**/@(index.html|sw.js|service-worker.js|registerSW.js|manifest.webmanifest|workbox-*.js)",
+      "headers": [{ "key": "Cache-Control", "value": "no-cache" }]
+    }
+  ]
+}

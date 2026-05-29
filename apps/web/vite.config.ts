@@ -46,20 +46,33 @@ const baseNoTrailing = base.endsWith('/') ? base.slice(0, -1) : base
 
 export default defineConfig({
   base,
+  // Baked-in build identity so the client can detect when the server has a
+  // newer build (see src/pwa/version-guard.ts). The deploy passes
+  // APP_BUILD_SHA / GIT_SHA into the web build; falls back to 'dev' locally,
+  // where the version guard is a no-op.
+  define: {
+    'import.meta.env.VITE_BUILD_SHA': JSON.stringify(
+      process.env.VITE_BUILD_SHA ?? process.env.APP_BUILD_SHA ?? process.env.GIT_SHA ?? 'dev',
+    ),
+  },
   plugins: [
     react(),
     VitePWA({
-      // Phase 0 ships the install/offline-shell substrate only. Background
-      // sync for the offline mutation queue is a Phase 1 concern.
-      registerType: 'prompt',
+      // autoUpdate (NOT 'prompt'): paired with skipWaiting/clientsClaim below so
+      // a new deploy's SW activates and claims open tabs immediately. The actual
+      // page refresh to the new assets is driven by the controllerchange handler
+      // in src/pwa/register.ts. 'prompt' + skipWaiting was self-defeating — the
+      // SW never entered "waiting", so onNeedRefresh never fired and the banner
+      // never showed, leaving open tabs on the stale bundle until a manual reload.
+      registerType: 'autoUpdate',
       injectRegister: false,
       includeAssets: ['icons/icon.svg', 'icons/maskable.svg'],
       manifest: {
         name: 'Sitelayer',
         short_name: 'Sitelayer',
         description: 'Construction operations — takeoff, time, rentals, sync.',
-        theme_color: '#d9904a',
-        background_color: '#f5f1ec',
+        theme_color: '#ffd400',
+        background_color: '#ede7da',
         display: 'standalone',
         orientation: 'portrait',
         start_url: base,
