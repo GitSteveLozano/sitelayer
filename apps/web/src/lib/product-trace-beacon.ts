@@ -83,7 +83,7 @@ function sessionId(): string {
   try {
     let id = sessionStorage.getItem(SESSION_KEY)
     if (!id) {
-      id = (crypto?.randomUUID?.() ?? `s_${Date.now()}_${Math.random().toString(36).slice(2)}`)
+      id = crypto?.randomUUID?.() ?? `s_${Date.now()}_${Math.random().toString(36).slice(2)}`
       sessionStorage.setItem(SESSION_KEY, id)
     }
     return id
@@ -113,7 +113,9 @@ function flush(): void {
     if (typeof navigator !== 'undefined' && typeof navigator.sendBeacon === 'function') {
       navigator.sendBeacon(url, new Blob([body], { type: 'application/json' }))
     } else if (typeof fetch === 'function') {
-      void fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {})
+      void fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(
+        () => {},
+      )
     }
   } catch {
     /* never throw into the caller */
@@ -148,7 +150,8 @@ export function beaconTraceEvent(input: BeaconInput): void {
   try {
     const p = input.payload ?? {}
     const stateAfter = String((p.user_state as Record<string, unknown> | undefined)?.state ?? p.state ?? '')
-    const errLike = FAILURE_EVENT_HINTS.some((h) => input.event_type.toLowerCase().includes(h)) || input.severity === 'error'
+    const errLike =
+      FAILURE_EVENT_HINTS.some((h) => input.event_type.toLowerCase().includes(h)) || input.severity === 'error'
     buffer.push({
       session_id: sessionId(),
       seq: seq++,

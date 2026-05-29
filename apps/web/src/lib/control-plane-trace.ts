@@ -48,13 +48,25 @@ export function emitControlPlaneTrace(
   if (typeof bridge?.emit !== 'function') {
     // No operator extension (every real visitor): the public client beacon path
     // (consent-gated, OFF by default). This is how a records-nothing session is observed.
-    beaconTraceEvent({ event_type: eventType, event_class: traceEventClass(eventType), route_path: readRoutePath() ?? '', severity, payload })
+    beaconTraceEvent({
+      event_type: eventType,
+      event_class: traceEventClass(eventType),
+      route_path: readRoutePath() ?? '',
+      severity,
+      payload,
+    })
     return false
   }
 
   const activeTrace = readActiveControlPlaneTrace()
   if (!activeTrace) {
-    beaconTraceEvent({ event_type: eventType, event_class: traceEventClass(eventType), route_path: readRoutePath() ?? '', severity, payload })
+    beaconTraceEvent({
+      event_type: eventType,
+      event_class: traceEventClass(eventType),
+      route_path: readRoutePath() ?? '',
+      severity,
+      payload,
+    })
     return false
   }
 
