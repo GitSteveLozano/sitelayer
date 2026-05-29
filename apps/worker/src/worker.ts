@@ -27,6 +27,7 @@ import { createWorkRequestStaleRunner } from './runners/work-request-stale.js'
 import { createLaneHealthKeeper } from './runners/lane-health-keeper.js'
 import { runIfLaneActive } from './dispatch-lanes.js'
 import { createAuditEscrowTickRunner } from './runners/audit-escrow-tick.js'
+import { startMeshTraceForwarder } from './runners/mesh-trace-forward.js'
 import type { AgentDrainSummary } from './runner-utils.js'
 
 const logger = createLogger('worker')
@@ -93,6 +94,10 @@ const voiceToLogRunner = createVoiceToLogRunner({ pool })
 const companyCamPollRunner = createCompanyCamPollRunner({ pool })
 const welcomeEmailRunner = createWelcomeEmailRunner({ pool, logger })
 const checkStuckPostingWorkflows = createStuckWorkflowAlertsRunner({ pool, logger })
+// Observability spectrum (T3, records-nothing): isolated, env-gated forwarder of
+// workflow_event_log → mesh product-trace ingest. No-op unless MESH_TRACE_* env is
+// set; never wired into the critical lifecycle/queue path. See runners/mesh-trace-forward.ts.
+startMeshTraceForwarder({ pool, logger: { info: (m: string) => logger.info(m) } })
 
 // Blueprint storage GC + queue prune (cost-control runners shipped
 // 2026-05-17 after the cost audit flagged orphaned Spaces objects and
