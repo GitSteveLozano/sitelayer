@@ -18,6 +18,21 @@ import type { QueueClient } from '../index.js'
 //             accidentally release entries that have since been
 //             re-locked by a later run.
 //
+// Ordering safety (APPROVE → REOPEN race): the lock and unlock rows for
+// the same run can land in one poll batch and commit in either order
+// (each row runs in its own tx). If unlock committed first under the old
+// code it no-oped (review_run_id wasn't stamped yet) and the later lock
+// won, stranding the entries 'review_locked_at' while the run sat at
+// 'pending'. To make the lock order-independent the lock UPDATE now also
+// requires the run to still be 'approved' (correlated EXISTS on
+// time_review_runs in the same statement). A REOPEN's outbox row can only
+// exist because the REOPEN state transition already committed
+// (state='pending') in the same tx that enqueued the unlock — so by the
+// time either row is claimed the run is no longer 'approved' and the lock
+// matches zero rows regardless of which row commits first. This is the
+// same "human event is authoritative" guard the rental-billing push uses
+// (status !== 'posting').
+//
 // No external API call, no failure path beyond DB errors. The handler
 // runs each row in its own transaction so a stuck row doesn't strand
 // earlier ones in the same heartbeat.
@@ -125,6 +140,16 @@ export async function processLockLaborEntries(
         // Only stamp rows that aren't already locked. A replay (same
         // state_version) is a no-op; a later run trying to re-lock the
         // same entries would also no-op until the prior run is unlocked.
+        //
+        // The lock is ALSO gated on the run still being 'approved': the
+        // correlated EXISTS re-reads the run row, so a REOPEN that already
+        // moved the run back to 'pending' (and enqueued the racing unlock)
+        // turns this UPDATE into a zero-row no-op. Without it, a lock that
+        // commits after the unlock would strand the entries under a
+        // reopened run. Folding the guard into the same statement keeps the
+        // lock atomic and order-independent (same "human event is
+        // authoritative" idea as the rental-billing push's
+        // status !== 'posting' check).
         if (ids.length > 0) {
           await client.query(
             `update labor_entries
@@ -132,7 +157,13 @@ export async function processLockLaborEntries(
                    review_run_id = $2
              where company_id = $1
                and id = any($4::uuid[])
-               and review_locked_at is null`,
+               and review_locked_at is null
+               and exists (
+                 select 1 from time_review_runs r
+                  where r.company_id = $1
+                    and r.id = $2
+                    and r.state = 'approved'
+               )`,
             [companyId, payload.run_id, payload.approved_at, ids],
           )
         }

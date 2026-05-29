@@ -81,26 +81,56 @@ export async function handleServiceItemRoutes(
       ctx.sendJson(400, { error: 'code and name are required' })
       return true
     }
-    const item = await withMutationTx(async (client: PoolClient) => {
-      const result = await client.query(
+    // service_items_company_id_code_key is a plain UNIQUE (company_id,
+    // code) — it does NOT exclude soft-deleted rows, so a soft-deleted
+    // row still occupies the code's slot. A naive INSERT therefore throws
+    // 23505 (→ 500) for both a live duplicate and a recreate-after-delete.
+    // ON CONFLICT DO UPDATE … WHERE deleted_at IS NOT NULL restores the
+    // soft-deleted row in place (clearing deleted_at, resetting fields,
+    // bumping version monotonically); an INSERT returns the new row. A live
+    // (not-deleted) duplicate matches the conflict target but fails the
+    // WHERE predicate, so nothing is returned → 409 instead of 500.
+    const result = await withMutationTx(async (client: PoolClient) => {
+      const inserted = await client.query(
         `
         insert into service_items (company_id, code, name, category, unit, default_rate, source, version, created_at)
         values ($1, $2, $3, $4, $5, $6, coalesce($7, 'manual'), 1, now())
-        returning code, name, category, unit, default_rate, source, version, created_at
+        on conflict (company_id, code) do update set
+          name = excluded.name,
+          category = excluded.category,
+          unit = excluded.unit,
+          default_rate = excluded.default_rate,
+          source = excluded.source,
+          deleted_at = null,
+          version = service_items.version + 1,
+          updated_at = now()
+        where service_items.deleted_at is not null
+        returning code, name, category, unit, default_rate, source, version, created_at, (xmax = 0) as inserted
         `,
         [ctx.company.id, code, name, category, unit, body.default_rate ?? null, body.source ?? 'manual'],
       )
-      const row = result.rows[0]
+      const row = inserted.rows[0]
+      // No row → the conflict target was a live (not soft-deleted) row, so
+      // the WHERE predicate suppressed the UPDATE: this code already exists.
+      if (!row) return { kind: 'conflict' as const }
+      // xmax = 0 on a freshly INSERTed row; non-zero when the row was
+      // updated (restored) via the DO UPDATE path.
+      const wasInsert = (row as { inserted?: boolean }).inserted === true
+      const { inserted: _inserted, ...item } = row as Record<string, unknown>
       await recordMutationLedger(client, {
         companyId: ctx.company.id,
         entityType: 'service_item',
         entityId: code,
-        action: 'create',
-        row,
+        action: wasInsert ? 'create' : 'restore',
+        row: item,
       })
-      return row
+      return { kind: 'ok' as const, item }
     })
-    ctx.sendJson(201, item)
+    if (result.kind === 'conflict') {
+      ctx.sendJson(409, { error: `service item code "${code}" already exists` })
+      return true
+    }
+    ctx.sendJson(201, result.item)
     return true
   }
 

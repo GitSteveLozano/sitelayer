@@ -4,7 +4,20 @@ import { Sentry } from './instrument.js'
 import { getRequestContext } from '@sitelayer/logger'
 import { isAuditableEntity, recordAudit } from './audit.js'
 import { observeAudit } from './metrics.js'
+import { HttpError } from './http-utils.js'
 import { enqueueNotificationRow, listCompanyAdminIds, type EnqueueNotificationInput } from './notifications.js'
+
+/** Postgres unique_violation SQLSTATE. */
+const PG_UNIQUE_VIOLATION = '23505'
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === PG_UNIQUE_VIOLATION
+  )
+}
 
 export type LedgerExecutor = Pick<Pool | PoolClient, 'query'>
 
@@ -367,29 +380,47 @@ export async function recordWorkflowEvent(
   // persists.
   const { sentryTrace, baggage } = currentTraceHeaders()
   const requestId = getRequestContext()?.requestId ?? null
-  await executor.query(
-    `
-    insert into workflow_event_log (
-      company_id, workflow_name, schema_version, entity_type, entity_id,
-      state_version, event_type, event_payload, snapshot_after,
-      actor_user_id, request_id, sentry_trace, sentry_baggage
+  try {
+    await executor.query(
+      `
+      insert into workflow_event_log (
+        company_id, workflow_name, schema_version, entity_type, entity_id,
+        state_version, event_type, event_payload, snapshot_after,
+        actor_user_id, request_id, sentry_trace, sentry_baggage
+      )
+      values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
+      `,
+      [
+        args.companyId,
+        args.workflowName,
+        args.schemaVersion,
+        args.entityType,
+        args.entityId,
+        args.stateVersion,
+        args.eventType,
+        JSON.stringify(args.eventPayload),
+        JSON.stringify(args.snapshotAfter),
+        args.actorUserId ?? null,
+        requestId,
+        sentryTrace,
+        baggage,
+      ],
     )
-    values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
-    `,
-    [
-      args.companyId,
-      args.workflowName,
-      args.schemaVersion,
-      args.entityType,
-      args.entityId,
-      args.stateVersion,
-      args.eventType,
-      JSON.stringify(args.eventPayload),
-      JSON.stringify(args.snapshotAfter),
-      args.actorUserId ?? null,
-      requestId,
-      sentryTrace,
-      baggage,
-    ],
-  )
+  } catch (err) {
+    // The (entity_id, workflow_name, state_version) unique key (migration
+    // 106) rejects a duplicate write for the SAME transition of the SAME
+    // workflow — i.e. a replayed/double-submitted event at a state_version
+    // that was already recorded. That is a stale-write conflict, not a
+    // server fault, so surface it as a clean 409 rather than a bare 500.
+    // (Migration 106 already removed the cross-workflow false collision that
+    // used to throw here; this backstop preserves the single-workflow dedupe
+    // semantics every workflow relies on.)
+    if (isUniqueViolation(err)) {
+      throw new HttpError(
+        409,
+        `workflow event already recorded for ${args.workflowName} at state_version ${args.stateVersion} — reload and retry`,
+      )
+    }
+    throw err
+  }
 }

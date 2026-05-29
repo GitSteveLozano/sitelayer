@@ -97,6 +97,28 @@ function decodeBlueprintFileBase64(contentsBase64: string): Buffer {
   return Buffer.from(source, 'base64')
 }
 
+/**
+ * Normalize a client-supplied `sheet_scale` into the form the
+ * `numeric(12,4)` column accepts. `sheet_scale` is a unitless ratio
+ * (e.g. 0.25), not a draftsman's label like "1/4in=1ft" — passing the
+ * raw label straight to Postgres throws 22P02 (invalid_text_representation)
+ * which surfaces as an opaque 500. Returns `undefined` when no value was
+ * supplied (caller treats that as "leave column unchanged"), a finite
+ * number when it parses, or `null` when the value is present but not a
+ * finite number (caller turns that into a 400).
+ */
+function parseSheetScale(raw: unknown): number | null | undefined {
+  if (raw === undefined || raw === null) return undefined
+  if (typeof raw === 'number') return Number.isFinite(raw) ? raw : null
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed) return undefined
+    const parsed = Number(trimmed)
+    return Number.isFinite(parsed) ? parsed : null
+  }
+  return null
+}
+
 async function persistBlueprintFile(
   storage: BlueprintStorage,
   companyId: string,
@@ -348,6 +370,11 @@ export async function handleBlueprintRoutes(
       body = await ctx.readBody()
     }
     const expectedVersion = parseExpectedVersion(body.expected_version ?? body.version)
+    const sheetScale = parseSheetScale(body.sheet_scale)
+    if (sheetScale === null) {
+      ctx.sendJson(400, { error: 'sheet_scale must be a finite number (a unitless ratio, e.g. 0.25)' })
+      return true
+    }
     const fileContentsBase64 = String(body.file_contents_base64 ?? body.file_contents ?? '').trim()
     const storagePath = multipartResult
       ? multipartResult.storagePath
@@ -382,7 +409,7 @@ export async function handleBlueprintRoutes(
           body.preview_type ?? null,
           body.calibration_length ?? null,
           body.calibration_unit ?? null,
-          body.sheet_scale ?? null,
+          sheetScale ?? null,
           expectedVersion,
         ],
       )
@@ -581,7 +608,7 @@ export async function handleBlueprintRoutes(
         if (copyMeasurements) {
           const sourceMeasurements = await client.query(
             `
-          select project_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code
+          select project_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, draft_id
           from takeoff_measurements
           where company_id = $1 and blueprint_document_id = $2 and deleted_at is null
           order by created_at asc
@@ -601,6 +628,7 @@ export async function handleBlueprintRoutes(
             const geometries: string[] = []
             const divisionCodes: Array<string | null> = []
             const pageIds: Array<string | null> = []
+            const draftIds: string[] = []
             const copiedPageBySourceId = new Map(copiedPages.rows.map((p) => [p.source_page_id, p.new_page_id]))
             for (const measurement of sourceMeasurements.rows) {
               projectIds.push(measurement.project_id)
@@ -613,11 +641,14 @@ export async function handleBlueprintRoutes(
               geometries.push(JSON.stringify(measurement.geometry ?? {}))
               divisionCodes.push(measurement.division_code ?? null)
               pageIds.push(measurement.page_id ? (copiedPageBySourceId.get(measurement.page_id) ?? null) : null)
+              // draft_id is NOT NULL on takeoff_measurements; the copied
+              // measurement stays in the same draft as its source row.
+              draftIds.push(measurement.draft_id)
             }
             await client.query(
               `
             insert into takeoff_measurements (
-              company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code
+              company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, draft_id
             )
             select
               $1::uuid,
@@ -630,11 +661,12 @@ export async function handleBlueprintRoutes(
               t.notes,
               t.geometry::jsonb,
               1,
-              t.division_code
+              t.division_code,
+              t.draft_id::uuid
             from unnest(
               $3::text[], $4::text[], $5::text[], $6::text[],
-              $7::text[], $8::text[], $9::text[], $10::text[]
-            ) as t(project_id, service_item_code, quantity, unit, notes, geometry, division_code, page_id)
+              $7::text[], $8::text[], $9::text[], $10::text[], $11::text[]
+            ) as t(project_id, service_item_code, quantity, unit, notes, geometry, division_code, page_id, draft_id)
             `,
               [
                 ctx.company.id,
@@ -647,6 +679,7 @@ export async function handleBlueprintRoutes(
                 geometries,
                 divisionCodes,
                 pageIds,
+                draftIds,
               ],
             )
           }

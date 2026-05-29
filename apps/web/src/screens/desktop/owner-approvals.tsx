@@ -84,7 +84,15 @@ export function OwnerApprovals({ bootstrap }: { bootstrap: BootstrapResponse | n
   const coEvent = useAnyProjectChangeOrderEvent()
   const busy = snooze.isPending || mute.isPending || clear.isPending || workEvent.isPending || coEvent.isPending
 
-  const changeOrdersLoading = changeOrderQueries.some((q) => q.isPending)
+  // Change orders fan out across the bootstrap project list, so they only
+  // start once `bootstrap` has threaded in (standalone /desktop/approvals
+  // self-fetches it). Treat an EMPTY fan-out (no projects yet / no projects
+  // at all) as "not loading" — an enabled-but-not-yet-mounted query in an
+  // empty `useQueries` set must never hold the whole screen on a spinner.
+  // `some()` on `[]` is already false, but we also guard the "still waiting
+  // on bootstrap" window: while projects are unknown the CO rail simply
+  // contributes nothing, exactly like the sibling owner-clients roster.
+  const changeOrdersLoading = changeOrderQueries.length > 0 && changeOrderQueries.some((q) => q.isPending)
   const changeOrdersError = changeOrderQueries.find((q) => q.error)?.error ?? null
 
   const rows = useMemo<ApprovalRow[]>(() => {
@@ -135,7 +143,14 @@ export function OwnerApprovals({ bootstrap }: { bootstrap: BootstrapResponse | n
     return out
   }, [guardrailsQuery.data?.guardrails, workRequestsQuery.data?.work_items, changeOrderQueries, projectName])
 
-  const loading = guardrailsQuery.isPending || workRequestsQuery.isPending || changeOrdersLoading
+  // Only block on a true cold load — the two always-enabled primary rails
+  // (guardrails + work-requests) still resolving with nothing to show yet.
+  // Once either has data (or the CO fan-out has produced rows) we render the
+  // queue and let late rails fill in, so a slow/empty change-order fan-out or
+  // a not-yet-threaded `bootstrap` prop can never strand the screen on the
+  // spinner. This mirrors the sibling owner-clients screen, which renders
+  // data-or-empty rather than gating the whole view behind `isPending`.
+  const loading = (guardrailsQuery.isPending || workRequestsQuery.isPending || changeOrdersLoading) && rows.length === 0
   const error = guardrailsQuery.error || workRequestsQuery.error || changeOrdersError
 
   const onApprove = (row: ApprovalRow) => {

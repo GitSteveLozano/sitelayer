@@ -400,6 +400,32 @@ export async function handleProjectRoutes(req: http.IncomingMessage, url: URL, c
         ? null
         : parseOptionalNumber(body.auto_clock_correction_window_seconds)
     const patchDailyBudget = body.daily_budget_cents === undefined ? null : parseOptionalNumber(body.daily_budget_cents)
+
+    // Validate the auto-clock window bounds at the route boundary so an
+    // out-of-range value returns a clear 400 instead of tripping the DB
+    // CHECK constraints (projects_auto_clock_grace_chk 0..3600,
+    // projects_auto_clock_correction_chk 0..1800) and surfacing as a bare
+    // 500. Mirror the exact DB bounds; only validate when a real number was
+    // supplied (the `case when $n::boolean` UPDATE leaves the column
+    // untouched when the field is absent, and an explicit null is a no-op).
+    if (
+      patchAutoClockGrace != null &&
+      (!Number.isFinite(patchAutoClockGrace) || patchAutoClockGrace < 0 || patchAutoClockGrace > 3600)
+    ) {
+      ctx.sendJson(400, {
+        error: 'auto_clock_out_grace_seconds must be between 0 and 3600 seconds',
+      })
+      return true
+    }
+    if (
+      patchAutoClockCorrection != null &&
+      (!Number.isFinite(patchAutoClockCorrection) || patchAutoClockCorrection < 0 || patchAutoClockCorrection > 1800)
+    ) {
+      ctx.sendJson(400, {
+        error: 'auto_clock_correction_window_seconds must be between 0 and 1800 seconds',
+      })
+      return true
+    }
     return patchVersionedEntity({
       ctx,
       body,

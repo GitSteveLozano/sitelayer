@@ -82,10 +82,16 @@ export function EstClientProfile() {
   const winRate = decided > 0 ? Math.round((wins / decided) * 100) : null
   const avgMargin = projects.length > 0 ? lifetimeValue / projects.length : 0
 
-  const isPending = customersQuery.isPending || projectsQuery.isPending
-
-  // Loading — both reference lists still resolving and no customer yet.
-  if (isPending && !customer) {
+  // Whether the customer can even be resolved is decided solely by the
+  // customers query — the projects query only feeds the KPI strip + tables,
+  // which render data-or-empty on their own. Gating the whole screen on
+  // BOTH (`customersQuery.isPending || projectsQuery.isPending`) meant a slow
+  // or not-yet-threaded projects load stranded the page on "Loading client…"
+  // forever even though the customer (and a 200 from /api/projects) were
+  // already in hand. Block only while the customer roster is still resolving
+  // and we haven't matched a customer yet; once it settles we either render
+  // the profile or the not-found state, and projects fill in independently.
+  if (customersQuery.isPending && !customer) {
     return (
       <div className="d-content">
         <div style={{ color: 'var(--m-ink-3)' }}>Loading client…</div>

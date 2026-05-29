@@ -23,14 +23,32 @@ function round4(value: number): number {
 }
 
 async function lookupRole(pool: Pool, companyId: string, userId: string): Promise<string | null> {
+  // Deterministic role resolution: a user can have duplicate
+  // company_memberships rows (no unique constraint historically guaranteed
+  // it). Without an explicit order a member/foreman/bookkeeper row could win
+  // the `limit 1` over an admin row purely on physical row order, leaking the
+  // company-wide revenue/cost/margin roll-up. Rank by privilege so the
+  // highest-privilege membership always wins; admin/office (admin-equivalent)
+  // sort first. Parameterized — only the role value comes from the DB.
   const result = await pool.query<{ role: string }>(
-    'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+    `select role
+       from company_memberships
+      where company_id = $1 and clerk_user_id = $2
+      order by case role
+                 when 'admin' then 0
+                 when 'office' then 1
+                 when 'foreman' then 2
+                 when 'bookkeeper' then 3
+                 when 'member' then 4
+                 else 5
+               end asc
+      limit 1`,
     [companyId, userId],
   )
   return result.rows[0]?.role ?? null
 }
 
-async function listAnalytics(pool: Pool, companyId: string) {
+async function listAnalytics(_pool: Pool, companyId: string) {
   // Note (perf): the labor_entries + material_bills scans below are
   // company-wide. The total-cost aggregates need the full history per
   // project so we cannot cap by date without changing semantics. At
@@ -133,7 +151,7 @@ async function listAnalytics(pool: Pool, companyId: string) {
   }
 }
 
-async function listDivisionAnalytics(pool: Pool, companyId: string, options: { since?: string | null } = {}) {
+async function listDivisionAnalytics(_pool: Pool, companyId: string, options: { since?: string | null } = {}) {
   const since = options.since && options.since.trim() ? options.since.trim() : null
 
   const projectQueryParams: Array<string> = [companyId]

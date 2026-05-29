@@ -1,6 +1,7 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
 import { z } from 'zod'
+import { normalizeCompanyRole } from '@sitelayer/domain'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from '../onboarding.js'
 import { recordAudit } from '../audit.js'
 import { HttpError, parseJsonBody } from '../http-utils.js'
@@ -215,7 +216,7 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
       [companyId, userId],
     )
-    if (!adminCheck.rows[0] || adminCheck.rows[0].role !== 'admin') {
+    if (!adminCheck.rows[0] || normalizeCompanyRole(adminCheck.rows[0].role) !== 'admin') {
       sendJson(403, { error: 'admin role required' })
       return true
     }
@@ -287,7 +288,7 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
       [companyId, userId],
     )
-    if (!adminCheck.rows[0] || adminCheck.rows[0].role !== 'admin') {
+    if (!adminCheck.rows[0] || normalizeCompanyRole(adminCheck.rows[0].role) !== 'admin') {
       sendJson(403, { error: 'admin role required' })
       return true
     }
@@ -398,7 +399,7 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
       [companyId, userId],
     )
-    if (!adminCheck.rows[0] || adminCheck.rows[0].role !== 'admin') {
+    if (!adminCheck.rows[0] || normalizeCompanyRole(adminCheck.rows[0].role) !== 'admin') {
       sendJson(403, { error: 'admin role required' })
       return true
     }
@@ -506,7 +507,7 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
       [companyId, userId],
     )
-    if (!adminCheck.rows[0] || adminCheck.rows[0].role !== 'admin') {
+    if (!adminCheck.rows[0] || normalizeCompanyRole(adminCheck.rows[0].role) !== 'admin') {
       sendJson(403, { error: 'admin role required' })
       return true
     }
@@ -710,7 +711,7 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
       'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
       [targetCompanyId, userId],
     )
-    if (!adminCheck.rows[0] || adminCheck.rows[0].role !== 'admin') {
+    if (!adminCheck.rows[0] || normalizeCompanyRole(adminCheck.rows[0].role) !== 'admin') {
       sendJson(403, { error: 'admin role required' })
       return true
     }

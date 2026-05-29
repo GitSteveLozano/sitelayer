@@ -684,7 +684,13 @@ const server = http.createServer(async (req, res) => {
               if (
                 await handleCompanyRoutes(req, url, {
                   pool,
-                  userId: identity.userId,
+                  // Act-as-aware identity (matches how getCompany resolves the
+                  // user above): under the dev `x-sitelayer-act-as` bypass the
+                  // company-settings role checks must read the impersonated
+                  // user's membership, not the raw Clerk/default identity.
+                  // `getCurrentUserId` returns the override only when
+                  // tier !== 'prod', so the prod path is unchanged.
+                  userId: getCurrentUserId(req),
                   sendJson: (status, body) => sendJson(res, status, body, req),
                   readBody: () => readBody(req),
                 })

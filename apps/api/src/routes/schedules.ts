@@ -398,9 +398,13 @@ export async function handleScheduleRoutes(
       let skipped = 0
       const created: Array<Record<string, unknown>> = []
       for (const src of source.rows) {
+        // pg returns the `date` column `scheduled_for` as a JS Date
+        // (and over the wire it can also arrive as a full ISO string).
+        // `new Date(scheduled_for)` parses both shapes correctly, whereas
+        // appending `T00:00:00Z` to either produces an Invalid Date and
+        // makes the downstream toISOString() throw RangeError.
         const offsetDays = Math.round(
-          (new Date(`${src.scheduled_for}T00:00:00Z`).getTime() - new Date(`${fromMonday}T00:00:00Z`).getTime()) /
-            86_400_000,
+          (new Date(src.scheduled_for).getTime() - new Date(`${fromMonday}T00:00:00Z`).getTime()) / 86_400_000,
         )
         const targetDate = new Date(`${toMonday}T00:00:00Z`)
         targetDate.setUTCDate(targetDate.getUTCDate() + offsetDays)
