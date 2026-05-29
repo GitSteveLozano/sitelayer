@@ -30,6 +30,7 @@ import {
 import {
   useBlueprintPages,
   useCreateMeasurement,
+  useDeleteMeasurement,
   useProjectBlueprints,
   useProjectMeasurements,
   useServiceItems,
@@ -129,6 +130,7 @@ export function EstCanvas() {
   // --- Measurements ---------------------------------------------------------
   const measurements = useProjectMeasurements(projectId, { draftId: activeDraftId })
   const create = useCreateMeasurement(projectId)
+  const removeMeasurement = useDeleteMeasurement()
   const serviceItems = useServiceItems()
   const items = useMemo(() => serviceItems.data?.serviceItems ?? [], [serviceItems.data])
 
@@ -369,6 +371,56 @@ export function EstCanvas() {
       setSelectedMeasurementId(next.size === 1 ? (Array.from(next)[0] ?? null) : null)
       return next
     })
+  }
+
+  const clearSelection = () => {
+    setSelectedMeasurementId(null)
+    setBulkSelected(new Set())
+  }
+
+  // Real delete (was a no-op that only cleared the highlight).
+  const onDeleteSelected = () => {
+    if (!selectedMeasurement) return
+    removeMeasurement.mutate({ id: selectedMeasurement.id })
+    clearSelection()
+  }
+  const onBulkDelete = () => {
+    for (const id of bulkSelected) removeMeasurement.mutate({ id })
+    clearSelection()
+  }
+
+  // Real duplicate (was a no-op): copy the geometry shifted a few board units
+  // so the clone is visibly offset, keeping the same item/unit + sheet.
+  const onDuplicateSelected = async () => {
+    if (!selectedMeasurement) return
+    const geo = selectedMeasurement.geometry as MeasurementGeometry
+    const points = geo.points?.map((p) => ({ x: round2(clamp(p.x + 3, 0, 100)), y: round2(clamp(p.y + 3, 0, 100)) }))
+    if (!points) return
+    await create.mutateAsync({
+      blueprint_document_id: activeBlueprint?.id ?? null,
+      page_id: activePage?.id ?? null,
+      service_item_code: selectedMeasurement.service_item_code,
+      unit: selectedMeasurement.unit,
+      geometry: { ...geo, points } as MeasurementGeometry,
+      draft_id: activeDraftId,
+    })
+    clearSelection()
+  }
+
+  // Real "edit geometry" (was a no-op): pick the shape back up into the draft
+  // (tool + item + points), remove the original, and drop into draw mode so the
+  // user can adjust the points and re-save.
+  const onEditGeom = () => {
+    if (!selectedMeasurement) return
+    const geo = selectedMeasurement.geometry as MeasurementGeometry
+    if (geo.points) {
+      setTool(geo.kind === 'lineal' ? 'lineal' : geo.kind === 'count' ? 'count' : 'polygon')
+      setServiceItemCode(selectedMeasurement.service_item_code)
+      setDraftPoints(geo.points.map((p) => ({ x: p.x, y: p.y })))
+    }
+    removeMeasurement.mutate({ id: selectedMeasurement.id })
+    clearSelection()
+    setMode('draw')
   }
 
   const loading = drafts.isLoading || blueprints.isLoading
@@ -1361,9 +1413,9 @@ export function EstCanvas() {
           {(
             [
               { l: 'REASSIGN', action: () => setItemPaletteOpen(true) },
-              { l: 'EDIT GEOM', action: () => {} },
-              { l: 'DUPLICATE', action: () => {} },
-              { l: 'DELETE', danger: true, action: () => setSelectedMeasurementId(null) },
+              { l: 'EDIT GEOM', action: onEditGeom },
+              { l: 'DUPLICATE', action: () => void onDuplicateSelected() },
+              { l: 'DELETE', danger: true, action: onDeleteSelected },
             ] as const
           ).map((b, i, arr) => (
             <button
@@ -1427,7 +1479,7 @@ export function EstCanvas() {
           </button>
           <button
             type="button"
-            onClick={() => setBulkSelected(new Set())}
+            onClick={onBulkDelete}
             style={{
               padding: '0 24px',
               background: 'var(--m-card)',
