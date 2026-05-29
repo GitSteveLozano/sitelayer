@@ -11,6 +11,8 @@ const REDACTION = {
   status: 'summary_only',
   reason: 'sitelayer_client_trace_tap',
 } as const
+import { beaconTraceEvent } from './product-trace-beacon'
+
 const EVENT_SCHEMA_VERSION = 'operator_event_taxonomy.v1'
 
 export function readActiveControlPlaneTrace(): { trace_id: string } | null {
@@ -43,10 +45,30 @@ export function emitControlPlaneTrace(
   severity: TraceSeverity = 'debug',
 ): boolean {
   const bridge = readTraceBridge()
-  if (typeof bridge?.emit !== 'function') return false
+  if (typeof bridge?.emit !== 'function') {
+    // No operator extension (every real visitor): the public client beacon path
+    // (consent-gated, OFF by default). This is how a records-nothing session is observed.
+    beaconTraceEvent({
+      event_type: eventType,
+      event_class: traceEventClass(eventType),
+      route_path: readRoutePath() ?? '',
+      severity,
+      payload,
+    })
+    return false
+  }
 
   const activeTrace = readActiveControlPlaneTrace()
-  if (!activeTrace) return false
+  if (!activeTrace) {
+    beaconTraceEvent({
+      event_type: eventType,
+      event_class: traceEventClass(eventType),
+      route_path: readRoutePath() ?? '',
+      severity,
+      payload,
+    })
+    return false
+  }
 
   try {
     void Promise.resolve(
