@@ -31,6 +31,7 @@ import {
   useBlueprintPages,
   useCreateMeasurement,
   useDeleteMeasurement,
+  usePatchMeasurement,
   useProjectBlueprints,
   useProjectMeasurements,
   useServiceItems,
@@ -131,6 +132,7 @@ export function EstCanvas() {
   const measurements = useProjectMeasurements(projectId, { draftId: activeDraftId })
   const create = useCreateMeasurement(projectId)
   const removeMeasurement = useDeleteMeasurement()
+  const patchMeasurement = usePatchMeasurement()
   const serviceItems = useServiceItems()
   const items = useMemo(() => serviceItems.data?.serviceItems ?? [], [serviceItems.data])
 
@@ -158,6 +160,9 @@ export function EstCanvas() {
   // Item command-palette (DCanvasItemPalette): "/"-triggered scope-item picker.
   const [itemPaletteOpen, setItemPaletteOpen] = useState(false)
   const [itemQuery, setItemQuery] = useState('')
+  // When set, the next item picked in the palette REASSIGNS these committed
+  // measurements instead of setting the draft item (REASSIGN actions).
+  const [reassignIds, setReassignIds] = useState<string[] | null>(null)
   // Edit popover (DCanvasEditMeasure): the single committed measurement that
   // is currently selected for reassign / duplicate / delete.
   const [selectedMeasurementId, setSelectedMeasurementId] = useState<string | null>(null)
@@ -421,6 +426,24 @@ export function EstCanvas() {
     removeMeasurement.mutate({ id: selectedMeasurement.id })
     clearSelection()
     setMode('draw')
+  }
+
+  // Item-palette pick: if a REASSIGN is pending, re-tag those committed
+  // measurements; otherwise set the draft item for new geometry.
+  const applyItemPick = (code: string) => {
+    if (reassignIds && reassignIds.length > 0) {
+      for (const id of reassignIds) {
+        const m = blueprintMeasurements.find((mm) => mm.id === id)
+        if (!m) continue
+        patchMeasurement.mutate({ id, service_item_code: code, expected_version: m.version })
+      }
+      setReassignIds(null)
+      clearSelection()
+    } else {
+      setServiceItemCode(code)
+    }
+    setItemPaletteOpen(false)
+    setItemQuery('')
   }
 
   const loading = drafts.isLoading || blueprints.isLoading
@@ -1316,11 +1339,10 @@ export function EstCanvas() {
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && paletteItems[0]) {
-                  setServiceItemCode(paletteItems[0].code)
-                  setItemPaletteOpen(false)
-                  setItemQuery('')
+                  applyItemPick(paletteItems[0].code)
                 } else if (e.key === 'Escape') {
                   setItemPaletteOpen(false)
+                  setReassignIds(null)
                 }
               }}
             />
@@ -1337,11 +1359,7 @@ export function EstCanvas() {
                 <button
                   key={it.code}
                   type="button"
-                  onClick={() => {
-                    setServiceItemCode(it.code)
-                    setItemPaletteOpen(false)
-                    setItemQuery('')
-                  }}
+                  onClick={() => applyItemPick(it.code)}
                   style={{
                     width: '100%',
                     textAlign: 'left',
@@ -1412,7 +1430,13 @@ export function EstCanvas() {
           </div>
           {(
             [
-              { l: 'REASSIGN', action: () => setItemPaletteOpen(true) },
+              {
+                l: 'REASSIGN',
+                action: () => {
+                  if (selectedMeasurement) setReassignIds([selectedMeasurement.id])
+                  setItemPaletteOpen(true)
+                },
+              },
               { l: 'EDIT GEOM', action: onEditGeom },
               { l: 'DUPLICATE', action: () => void onDuplicateSelected() },
               { l: 'DELETE', danger: true, action: onDeleteSelected },
@@ -1462,7 +1486,10 @@ export function EstCanvas() {
           </div>
           <button
             type="button"
-            onClick={() => setItemPaletteOpen(true)}
+            onClick={() => {
+              setReassignIds(Array.from(bulkSelected))
+              setItemPaletteOpen(true)
+            }}
             style={{
               padding: '0 24px',
               background: 'var(--m-card)',
@@ -1501,7 +1528,10 @@ export function EstCanvas() {
       {mode === 'draw' && !itemPaletteOpen ? (
         <button
           type="button"
-          onClick={() => setItemPaletteOpen(true)}
+          onClick={() => {
+            setReassignIds(null)
+            setItemPaletteOpen(true)
+          }}
           aria-label="Assign item (command palette)"
           style={floatBox({
             bottom: 16,

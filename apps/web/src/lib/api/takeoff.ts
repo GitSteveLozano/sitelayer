@@ -241,6 +241,27 @@ export function useDeleteMeasurement() {
   })
 }
 
+export interface PatchMeasurementInput {
+  id: string
+  service_item_code?: string
+  unit?: string
+  notes?: string | null
+  expected_version?: number
+}
+
+/** Versioned update of a committed measurement (e.g. reassign its service item). */
+export function usePatchMeasurement() {
+  const qc = useQueryClient()
+  return useMutation<TakeoffMeasurement, Error, PatchMeasurementInput>({
+    mutationFn: ({ id, ...body }) =>
+      request<TakeoffMeasurement>(`/api/takeoff/measurements/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        json: body,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['takeoff'] }),
+  })
+}
+
 // ---------------------------------------------------------------------------
 // Multi-condition tags (3A)
 // ---------------------------------------------------------------------------
