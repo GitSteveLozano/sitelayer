@@ -34,6 +34,7 @@ type ForwarderConfig = {
   projectKey: string
   intervalMs: number
   windowMinutes: number
+  requestTimeoutMs: number
 }
 
 function readConfig(): ForwarderConfig | null {
@@ -48,6 +49,12 @@ function readConfig(): ForwarderConfig | null {
     projectKey: process.env.MESH_TRACE_PROJECT_KEY?.trim() || 'sitelayer',
     intervalMs: Number(process.env.MESH_TRACE_FORWARD_INTERVAL_MS ?? '60000') || 60000,
     windowMinutes: Number(process.env.MESH_TRACE_FORWARD_WINDOW_MIN ?? '10') || 10,
+    // Hard ceiling on each ingest POST. If mesh/the operator gateway is down or
+    // hanging, the fetch aborts fast instead of holding a socket open for the OS
+    // TCP timeout (minutes) — which, combined with the overlap guard below,
+    // guarantees a dead operator stack can NEVER pile up work in / degrade the
+    // sitelayer worker (invoicing / QBO sync stay unaffected).
+    requestTimeoutMs: Number(process.env.MESH_TRACE_FORWARD_TIMEOUT_MS ?? '8000') || 8000,
   }
 }
 
@@ -117,7 +124,13 @@ async function forwardOnce(pool: Pool, cfg: ForwarderConfig, log: (m: string) =>
   const path = '/api/product-trace/ingest'
   const body = JSON.stringify({ project_key: cfg.projectKey, tier: 3, events })
   const base = cfg.url.replace(/\/$/, '')
-  const res = await fetch(base + path, { method: 'POST', headers: signedHeaders(cfg, path, body), body })
+  const res = await fetch(base + path, {
+    method: 'POST',
+    headers: signedHeaders(cfg, path, body),
+    body,
+    // Fail fast if the operator stack is unreachable/hanging — never block on a dead host.
+    signal: AbortSignal.timeout(cfg.requestTimeoutMs),
+  })
   if (!res.ok) {
     log(`mesh-trace-forward: ingest HTTP ${res.status}`)
     return
@@ -143,8 +156,20 @@ export function startMeshTraceForwarder(deps: {
     return { stop: () => {} }
   }
   log(`mesh-trace-forward: enabled → ${cfg.url} (project=${cfg.projectKey}, every ${cfg.intervalMs}ms)`)
+  // Overlap guard: if a tick is still in flight (mesh slow/down even within the
+  // request timeout), skip the next one rather than stacking concurrent fetches
+  // + DB queries. With requestTimeoutMs as the hard ceiling, at most ONE forward
+  // is ever in flight, so a dead operator stack can never exhaust the worker's
+  // pg pool or memory — sitelayer's critical path is structurally insulated.
+  let inFlight = false
   const timer = setInterval(() => {
-    forwardOnce(deps.pool, cfg, log).catch((err) => log(`mesh-trace-forward: tick error: ${err?.message ?? err}`))
+    if (inFlight) return
+    inFlight = true
+    forwardOnce(deps.pool, cfg, log)
+      .catch((err) => log(`mesh-trace-forward: tick error: ${err?.message ?? err}`))
+      .finally(() => {
+        inFlight = false
+      })
   }, cfg.intervalMs)
   if (typeof timer.unref === 'function') timer.unref()
   return { stop: () => clearInterval(timer) }
