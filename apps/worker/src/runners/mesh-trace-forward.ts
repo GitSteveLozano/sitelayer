@@ -53,7 +53,14 @@ function readConfig(): ForwarderConfig | null {
 
 // Terminal/failure workflow states + events → outcome=failed (the keeper's
 // strongest issue signal). Everything else is succeeded.
-const FAILURE_STATES = new Set(['failed', 'voided', 'declined', 'failed_provider', 'failed_clerk_unreachable', 'failed_clerk_not_found'])
+const FAILURE_STATES = new Set([
+  'failed',
+  'voided',
+  'declined',
+  'failed_provider',
+  'failed_clerk_unreachable',
+  'failed_clerk_not_found',
+])
 const FAILURE_EVENTS = new Set(['POST_FAILED', 'SYNC_FAILED', 'FAILED'])
 
 type Row = {
@@ -123,11 +130,16 @@ async function forwardOnce(pool: Pool, cfg: ForwarderConfig, log: (m: string) =>
  * not configured. Never throws into the caller — all errors are swallowed +
  * logged so the worker's critical path is unaffected.
  */
-export function startMeshTraceForwarder(deps: { pool: Pool; logger?: { info: (m: string) => void; warn?: (m: string) => void } }): { stop: () => void } {
+export function startMeshTraceForwarder(deps: {
+  pool: Pool
+  logger?: { info: (m: string) => void; warn?: (m: string) => void }
+}): { stop: () => void } {
   const log = (m: string) => (deps.logger?.info ? deps.logger.info(m) : console.log(m))
   const cfg = readConfig()
   if (!cfg) {
-    log('mesh-trace-forward: disabled (set MESH_TRACE_FORWARD_URL + MESH_TRACE_HMAC_COMPONENT + MESH_TRACE_HMAC_SECRET to enable)')
+    log(
+      'mesh-trace-forward: disabled (set MESH_TRACE_FORWARD_URL + MESH_TRACE_HMAC_COMPONENT + MESH_TRACE_HMAC_SECRET to enable)',
+    )
     return { stop: () => {} }
   }
   log(`mesh-trace-forward: enabled → ${cfg.url} (project=${cfg.projectKey}, every ${cfg.intervalMs}ms)`)
