@@ -72,7 +72,9 @@ export function RoleSwitcher() {
         data-testid="role-switcher-handle"
         style={{
           position: 'fixed',
-          bottom: 16,
+          // Clear the mobile bottom tab bar (64px + safe area) so the
+          // switcher isn't covered/uncovered on phones.
+          bottom: 'calc(env(safe-area-inset-bottom, 0px) + 76px)',
           right: 16,
           zIndex: 9999,
           background: '#1a1a1a',
@@ -95,7 +97,8 @@ export function RoleSwitcher() {
       data-testid="role-switcher"
       style={{
         position: 'fixed',
-        bottom: 16,
+        // Clear the mobile bottom tab bar (64px + safe area).
+        bottom: 'calc(env(safe-area-inset-bottom, 0px) + 76px)',
         right: 16,
         zIndex: 9999,
         background: '#1a1a1a',
