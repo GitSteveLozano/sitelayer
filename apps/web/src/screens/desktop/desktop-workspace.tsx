@@ -48,7 +48,6 @@ import {
   type DNotifGroup,
 } from '@/components/d'
 import { MButton } from '@/components/m'
-import { DesktopOnboarding } from './onboarding/onboarding'
 import { EstAiTakeoffSetup, EstAiTakeoffReview } from './est-ai-takeoff'
 import { EstAiCountSetup, EstAiCountReview } from './est-ai-count'
 import { OwnerDashboard } from './owner-dashboard'
@@ -485,7 +484,6 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         <Route path="fm/schedule" element={<FmSchedule bootstrap={bootstrap} />} />
         <Route path="fm/time" element={<FmTime bootstrap={bootstrap} />} />
         <Route path="fm/brief/:projectId" element={<FmBrief />} />
-        <Route path="onboarding" element={<DesktopOnboarding onComplete={() => navigate('/desktop/projects/new')} />} />
         <Route path="ai-takeoff/:projectId" element={<EstAiTakeoffSetup />} />
         <Route path="ai-takeoff/:projectId/review" element={<EstAiTakeoffReview />} />
         <Route path="ai-count/:projectId" element={<EstAiCountSetup />} />

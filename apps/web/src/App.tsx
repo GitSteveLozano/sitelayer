@@ -1,5 +1,5 @@
 import { lazy, Suspense } from 'react'
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useNavigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { SignedIn, SignedOut, SignIn, SignUp } from '@clerk/clerk-react'
 import { AuthProvider, isClerkConfigured } from '@/lib/auth'
@@ -35,6 +35,13 @@ const MRoute = lazy(() => import('@/routes/m'))
 const MPreviewRoute = lazy(() => import('@/screens/mobile-preview').then((m) => ({ default: m.MPreviewView })))
 const DesktopWorkspaceRoute = lazy(() =>
   import('@/screens/desktop/desktop-workspace').then((m) => ({ default: m.DesktopWorkspace })),
+)
+// Desktop v2 account-setup wizard (steve-desktop-3). Full-screen, pre-workspace
+// — mounted at the root (NOT under /desktop) so it renders without the command-
+// center sidebar/topbar chrome. `/onboarding` is already the mobile install /
+// permission-prime flow, so this uses `/welcome`.
+const DesktopOnboardingRoute = lazy(() =>
+  import('@/screens/desktop/onboarding/onboarding').then((m) => ({ default: m.DesktopOnboarding })),
 )
 
 // Specialized full-screen routes that don't fit the bottom-tab chrome.
@@ -274,6 +281,9 @@ function AppShellRoutes() {
       <Route path="/permissions/location" element={<LocationPrimeRoute />} />
       <Route path="/permissions/notifications" element={<NotificationsPrimeRoute />} />
 
+      {/* Desktop v2 account-setup wizard -- full-screen, no command-center chrome. */}
+      <Route path="/welcome" element={<WelcomeRoute />} />
+
       {/* Dev-only primitive showcase. */}
       <Route path="/m-preview" element={<MPreviewRoute />} />
       <Route path="/desktop/*" element={<DesktopWorkspaceRoute />} />
@@ -285,4 +295,12 @@ function AppShellRoutes() {
       <Route path="/*" element={<WorkspaceRoute />} />
     </Routes>
   )
+}
+
+// Full-screen desktop onboarding wrapper. Lives at /welcome so it renders
+// outside the desktop command-center shell; on completion it drops the user
+// into the workspace.
+function WelcomeRoute() {
+  const navigate = useNavigate()
+  return <DesktopOnboardingRoute onComplete={() => navigate('/desktop')} />
 }
