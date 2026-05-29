@@ -10,25 +10,10 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiGet, apiPatch, type BootstrapResponse } from '@/lib/api'
-import {
-  MBody,
-  MButton,
-  MChip,
-  MChipRow,
-  MI,
-  MListInset,
-  MListRow,
-  MPill,
-  MSectionH,
-  MTopBar,
-  avatarToneFor,
-  initialsFor,
-  MAvatar,
-} from '../../components/m/index.js'
+import { apiGet, type BootstrapResponse } from '@/lib/api'
+import { MBody, MChip, MChipRow, MI, MPill, MTopBar } from '../../components/m/index.js'
 import { MAiStripe } from '../../components/m/ai.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
-import { timeOfDay } from './format.js'
 
 type IssueRow = {
   id: string
@@ -48,8 +33,6 @@ export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapR
   const navigate = useNavigate()
   const [issues, setIssues] = useState<readonly IssueRow[] | null>(null)
   const [filter, setFilter] = useState<Filter>('all')
-  const [selected, setSelected] = useState<IssueRow | null>(null)
-  const [busy, setBusy] = useState(false)
 
   const refresh = async () => {
     try {
@@ -84,30 +67,6 @@ export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapR
     if (filter === 'photos') return open.filter((i) => isPhotoLog(i))
     return open
   }, [issues, filter])
-
-  if (selected) {
-    return (
-      <ForemanIssueDetail
-        issue={selected}
-        bootstrap={bootstrap}
-        busy={busy}
-        onResolve={async () => {
-          setBusy(true)
-          try {
-            await apiPatch(`/api/worker-issues/${selected.id}`, { resolved: true }, companySlug)
-            await refresh()
-            setSelected(null)
-          } catch {
-            // PATCH /api/worker-issues/:id is wired; on any error close anyway.
-            setSelected(null)
-          } finally {
-            setBusy(false)
-          }
-        }}
-        onBack={() => setSelected(null)}
-      />
-    )
-  }
 
   return (
     <>
@@ -304,84 +263,6 @@ function ClusterStripe({ issues, bootstrap }: { issues: readonly IssueRow[]; boo
         Likely the same root cause. Resolve once and ack the rest.
       </MAiStripe>
     </div>
-  )
-}
-
-function ForemanIssueDetail({
-  issue,
-  bootstrap,
-  busy,
-  onResolve,
-  onBack,
-}: {
-  issue: IssueRow
-  bootstrap: BootstrapResponse | null
-  busy: boolean
-  onResolve: () => void
-  onBack: () => void
-}) {
-  const w = bootstrap?.workers.find((x) => x.id === issue.worker_id)
-  const p = bootstrap?.projects.find((x) => x.id === issue.project_id)
-  const resolved = Boolean(issue.resolved_at)
-  return (
-    <>
-      <MTopBar back title="Field event" sub={p?.name} onBack={onBack} />
-      <MBody pad>
-        <div className="m-card">
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {w ? <MAvatar initials={initialsFor(w.name)} tone={avatarToneFor(w.id)} size="lg" /> : null}
-            <div>
-              <div style={{ fontSize: 16, fontWeight: 600 }}>{w?.name ?? 'Unknown worker'}</div>
-              <div className="m-quiet-sm">
-                {shortAgo(issue.created_at)} · {timeOfDay(issue.created_at)}
-              </div>
-            </div>
-          </div>
-          <div style={{ borderTop: '1px solid var(--m-line)', margin: '12px 0' }} />
-          <MPill tone={resolved ? 'green' : issue.kind === 'safety' ? 'red' : 'amber'}>
-            {issue.kind.replace(/_/g, ' ')}
-          </MPill>
-          <div style={{ fontSize: 15, lineHeight: 1.5, marginTop: 10 }}>
-            {issue.message.replace(/^\[[^\]]+\]\s*/, '')}
-          </div>
-        </div>
-        {!resolved ? (
-          <>
-            <MSectionH>How are you fixing it?</MSectionH>
-            <MListInset>
-              <MListRow
-                leading={<MI.Truck size={18} />}
-                headline="Order more"
-                supporting="Drewski's preferred vendor"
-                chev
-              />
-              <MListRow
-                leading={<MI.Home size={18} />}
-                headline="Bring from another site"
-                supporting="Pick a truck"
-                chev
-              />
-              <MListRow
-                leading={<MI.Check size={18} />}
-                headline="Use what's on hand"
-                supporting="Reply to worker"
-                chev
-              />
-              <MListRow leading={<MI.Clock size={18} />} headline="Park for now" supporting="Low priority" chev />
-            </MListInset>
-            <div style={{ padding: 16 }}>
-              <MButton variant="primary" onClick={onResolve} disabled={busy}>
-                {busy ? 'Resolving…' : 'Send & resolve'}
-              </MButton>
-            </div>
-          </>
-        ) : (
-          <div style={{ padding: '16px', fontSize: 13, color: 'var(--m-green)', textAlign: 'center' }}>
-            Resolved {issue.resolved_at ? shortAgo(issue.resolved_at) : ''}
-          </div>
-        )}
-      </MBody>
-    </>
   )
 }
 

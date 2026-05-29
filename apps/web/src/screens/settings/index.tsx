@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Avatar, Card, Row } from '@/components/mobile'
 import { ProjectSwitcherSheet } from '@/components/nav/ProjectSwitcherSheet'
-import { WORKFLOW_NAV, WORKSPACE_NAV } from '@/components/nav/nav-items'
+import { MONEY_COMMS_NAV, WORKFLOW_NAV, WORKSPACE_NAV } from '@/components/nav/nav-items'
 import { useOnlineStatus } from '@/lib/offline/online-status'
 import { useRole, writeRoleOverride, type Role } from '@/lib/role'
 import { NotificationPreferencesScreen } from './notifications'
@@ -92,6 +92,11 @@ export function SettingsScreen() {
 
       {/* WORKFLOW group */}
       <NavGroup title="Workflow" rows={WORKFLOW_NAV} />
+
+      {/* MONEY & COMMS group — owner surfaces (Money / Clients / Messages /
+          Broadcast / Activity / Notifications / Approvals) that were
+          previously unreachable from the live More tab. */}
+      <NavGroup title="Money & comms" rows={MONEY_COMMS_NAV} />
 
       {/* WORKSPACE group */}
       <NavGroup title="Workspace" rows={WORKSPACE_NAV} />

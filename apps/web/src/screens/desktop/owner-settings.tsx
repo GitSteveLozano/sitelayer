@@ -1,28 +1,38 @@
 /**
  * Owner desktop settings (Desktop v2 · Owner · Settings).
  *
- * Fuller spec: a LEFT sub-nav column listing every settings section
+ * A LEFT sub-nav column listing the design's 9 settings sections
  * (Company / Pricing Book / Loaded Labor / Working Hours / Integrations /
  * Roles + Permissions / Notifications / Profile / Help) + a RIGHT content
  * panel for the selected section, all inside the desktop `.d-content`.
+ * Defaults to Company, matching steve-desktop-3.
  *
  * Real data is wired where a hook exists (Pricing Book → useServiceItems,
  * Loaded Labor → useLaborBurdenToday, Roles + Permissions → COMPANY_ROLES
- * capability matrix). Every other section renders a clean structured
- * placeholder card — no fake data. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
+ * capability matrix). The other six panels (Company / Working Hours /
+ * Integrations / Notifications / Profile / Help) live in
+ * settings/owner-settings-panels.tsx; they render the full design structure
+ * with clearly-labeled placeholder data + TODO(wire) notes because they have
+ * no dedicated backend API yet. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
 import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
 import { COMPANY_ROLES, type CompanyRole } from '@sitelayer/domain'
 import { useServiceItems, type ServiceItem } from '@/lib/api/service-items'
 import { useLaborBurdenToday, type LaborBurdenWorkerResult } from '@/lib/api/labor-burden'
 import { DataTable, DEyebrow, DH1, type DColumn } from '@/components/d'
 import { MButton, MPill } from '@/components/m'
 import { formatMoney } from '../mobile/format.js'
+import {
+  CompanySection,
+  HelpSection,
+  IntegrationsSection,
+  NotificationsSection,
+  ProfileSection,
+  WorkingHoursSection,
+} from './settings/owner-settings-panels'
 
 type SectionKey =
   | 'company'
-  | 'pricing'
   | 'pricing-book'
   | 'loaded-labor'
   | 'hours'
@@ -39,9 +49,11 @@ interface SectionDef {
   title: string
 }
 
+// The 9 entries match the steve-desktop-3 settings nav exactly. There is no
+// standalone "Pricing" tab — pricing rates live in the canonical Item Library
+// (Pricing Book here is the in-settings view of that catalog).
 const SECTIONS: SectionDef[] = [
   { key: 'company', label: 'Company', eyebrow: 'Owner · Settings', title: 'Company' },
-  { key: 'pricing', label: 'Pricing', eyebrow: 'Owner · Settings', title: 'Pricing' },
   { key: 'pricing-book', label: 'Pricing Book', eyebrow: 'Owner · Settings', title: 'Pricing book' },
   { key: 'loaded-labor', label: 'Loaded Labor', eyebrow: 'Owner · Settings', title: 'Loaded labor' },
   { key: 'hours', label: 'Working Hours', eyebrow: 'Owner · Settings', title: 'Working hours' },
@@ -51,19 +63,6 @@ const SECTIONS: SectionDef[] = [
   { key: 'profile', label: 'Profile', eyebrow: 'Owner · Settings', title: 'Profile' },
   { key: 'help', label: 'Help', eyebrow: 'Owner · Settings', title: 'Help' },
 ]
-
-const PLACEHOLDER_COPY: Partial<Record<SectionKey, string>> = {
-  company:
-    'Configure your company name, address, license numbers, and branding here. Settings entered here flow through to estimates and invoices.',
-  hours:
-    'Configure standard working hours, overtime thresholds, and holiday calendars used to compute crew schedules and loaded labor.',
-  integrations:
-    'Connect and manage external systems (QuickBooks Online, etc.). Connection status and sync controls will appear here once an integration is linked.',
-  notifications:
-    'Configure which events send notifications, the channels used (email / SMS / push), and per-role delivery preferences.',
-  profile: 'Manage your own account: display name, email, and personal notification preferences.',
-  help: 'Documentation, keyboard shortcuts, and support contact. Configure how your team reaches support here.',
-}
 
 // ---- Roles + Permissions matrix ------------------------------------------
 // Static capability matrix across the 5 canonical COMPANY_ROLES. This mirrors
@@ -108,17 +107,6 @@ const CAPABILITY_MATRIX: CapabilityRow[] = [
     allowed: { admin: true, foreman: false, office: false, member: false, bookkeeper: false },
   },
 ]
-
-function PlaceholderCard({ section }: { section: SectionDef }) {
-  return (
-    <div className="d-card" style={{ color: 'var(--m-ink-3)' }}>
-      <div className="d-eyebrow">{section.label}</div>
-      <div style={{ fontSize: 14, marginTop: 8, lineHeight: 1.5 }}>
-        {PLACEHOLDER_COPY[section.key] ?? 'This section is in progress.'}
-      </div>
-    </div>
-  )
-}
 
 function PricingBookSection() {
   const itemsQuery = useServiceItems()
@@ -254,119 +242,33 @@ function RolesSection() {
   )
 }
 
-// ---- Pricing overview ----------------------------------------------------
-// Per the v2 spec, "Settings → Pricing" is the SAME canonical item library —
-// there is no second pricebook. This panel gives a short overview (item count
-// + category spread from the live catalog) and a context note, then deep-links
-// to the Item Library at /desktop/item-library where owners write rates.
-function PricingOverviewSection() {
-  const navigate = useNavigate()
-  const itemsQuery = useServiceItems()
-  const items = useMemo<ServiceItem[]>(() => itemsQuery.data?.serviceItems ?? [], [itemsQuery.data?.serviceItems])
-
-  const categoryCount = useMemo(() => {
-    const set = new Set<string>()
-    for (const it of items) {
-      if (it.category) set.add(it.category)
-    }
-    return set.size
-  }, [items])
-
-  const ratedCount = useMemo(() => items.filter((it) => it.default_rate != null).length, [items])
-
-  return (
-    <div className="d-stack">
-      <div
-        className="d-card"
-        style={{
-          display: 'flex',
-          alignItems: 'flex-start',
-          gap: 12,
-          borderLeft: '3px solid var(--m-accent)',
-        }}
-      >
-        <MPill tone="blue">Canonical</MPill>
-        <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--m-ink-2)' }}>
-          Settings → Pricing = canonical item library · owner write. There is no second pricebook — rates live in the
-          shared Item Library so estimates, takeoffs, and invoices all read the same source of truth.
-        </div>
-      </div>
-
-      <div className="d-card">
-        <div className="d-eyebrow">Item library overview</div>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
-            gap: 16,
-            marginTop: 14,
-          }}
-        >
-          {[
-            { label: 'Items', value: items.length },
-            { label: 'Categories', value: categoryCount },
-            { label: 'With a rate', value: ratedCount },
-          ].map((stat) => (
-            <div key={stat.label}>
-              <div
-                style={{
-                  fontFamily: 'var(--m-font-display)',
-                  fontWeight: 800,
-                  fontSize: 32,
-                  lineHeight: 1,
-                  color: 'var(--m-ink)',
-                }}
-              >
-                {itemsQuery.isLoading ? '—' : stat.value}
-              </div>
-              <div
-                style={{
-                  fontFamily: 'var(--m-num)',
-                  fontSize: 11,
-                  fontWeight: 700,
-                  letterSpacing: '0.06em',
-                  textTransform: 'uppercase',
-                  color: 'var(--m-ink-3)',
-                  marginTop: 6,
-                }}
-              >
-                {stat.label}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div style={{ marginTop: 18 }}>
-          <MButton
-            variant="primary"
-            size="sm"
-            onClick={() => navigate('/desktop/item-library')}
-            aria-label="Open the canonical item library"
-          >
-            Open Item Library →
-          </MButton>
-        </div>
-      </div>
-    </div>
-  )
-}
-
 function SectionBody({ section }: { section: SectionDef }) {
   switch (section.key) {
-    case 'pricing':
-      return <PricingOverviewSection />
+    case 'company':
+      return <CompanySection />
     case 'pricing-book':
       return <PricingBookSection />
     case 'loaded-labor':
       return <LoadedLaborSection />
+    case 'hours':
+      return <WorkingHoursSection />
+    case 'integrations':
+      return <IntegrationsSection />
     case 'roles':
       return <RolesSection />
+    case 'notifications':
+      return <NotificationsSection />
+    case 'profile':
+      return <ProfileSection />
+    case 'help':
+      return <HelpSection />
     default:
-      return <PlaceholderCard section={section} />
+      return null
   }
 }
 
 export function OwnerSettings() {
-  const [active, setActive] = useState<SectionKey>('pricing')
+  const [active, setActive] = useState<SectionKey>('company')
   const section = SECTIONS.find((s) => s.key === active) ?? SECTIONS[0]!
 
   return (

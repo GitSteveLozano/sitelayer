@@ -58,6 +58,9 @@ import { OwnerClients } from './owner-clients'
 import { OwnerMoney } from './owner-money'
 import { OwnerSchedule } from './owner-schedule'
 import { OwnerRentals } from './owner-rentals'
+import { OwnerRentalsAsset } from './owner-rentals-asset'
+import { OwnerRentalsDispatch } from './owner-rentals-dispatch'
+import { OwnerRentalsReturn } from './owner-rentals-return'
 import { OwnerSettings } from './owner-settings'
 import { OwnerProjectDetail } from './owner-project-detail'
 import { EstTakeoffProjects } from './est-takeoff-projects'
@@ -461,6 +464,9 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         <Route path="projects/new" element={<OwnerNewProject />} />
         <Route path="projects/:projectId" element={<OwnerProjectDetail bootstrap={bootstrap} />} />
         <Route path="rentals/utilization" element={<OwnerRentalsUtilization />} />
+        <Route path="rentals/:itemId" element={<OwnerRentalsAsset />} />
+        <Route path="rentals/:itemId/dispatch" element={<OwnerRentalsDispatch bootstrap={bootstrap} />} />
+        <Route path="rentals/:itemId/return" element={<OwnerRentalsReturn />} />
         <Route path="fm/log" element={<FmLog bootstrap={bootstrap} />} />
         <Route path="messages" element={<OwnerMessages bootstrap={bootstrap} />} />
         <Route path="broadcast" element={<OwnerBroadcast />} />

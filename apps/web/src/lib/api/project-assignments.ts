@@ -71,6 +71,20 @@ export function useAllAssignments() {
 }
 
 /**
+ * One project's assignment roster. Used by the chat thread to resolve a
+ * message author's `clerk_user_id` into the assignee's display name
+ * (`assignee_name`, falling back to the id). Disabled until a project id
+ * is known so the chat-list screen doesn't fire it.
+ */
+export function useProjectAssignments(projectId: string | null | undefined) {
+  return useQuery({
+    queryKey: projectAssignmentKeys.list(projectId ?? ''),
+    queryFn: () => fetchProjectAssignments(projectId!),
+    enabled: Boolean(projectId),
+  })
+}
+
+/**
  * One assignment list query per project id. `useQueries` keeps each
  * project's cache entry independent (so a single project's add/remove
  * invalidates just that key) while letting the screen aggregate the

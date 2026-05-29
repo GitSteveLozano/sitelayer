@@ -11,16 +11,28 @@
  *   - EstAiTakeoffReview — accept/adjust the AI-detected quantities and
  *     "ACCEPT DRAFT". OK rows are kept; review/flag rows get a Review action.
  *
- * There is no company-wide AI-drafts feed hook yet (same gap noted in
- * est-ai-queue.tsx), so the mockup's demo targets/rows stay as presentational
- * content. The real run/accept handlers are local-state no-ops wired to the UI
- * — a TODO marks where the capture pipeline
- * (POST /api/projects/:id/takeoff-drafts/capture + .../:draftId/promote) lands.
+ * WIRED to the real capture pipeline. Setup RUN posts to the takeoff-drafts
+ * capture endpoint (kind=blueprint_vision, dry-run-safe JSON payload — no
+ * Anthropic spend unless BLUEPRINT_VISION_MODE=live + ANTHROPIC_API_KEY are set
+ * on the API) and routes to REVIEW carrying the real draft id. REVIEW reads the
+ * draft's stored TakeoffResult and promotes the kept quantities to committed
+ * `takeoff_measurements` via .../:draftId/promote.
+ *
+ * The symbol→item target toggles + sheet scope stay presentational — the
+ * capture endpoint takes no per-target/per-sheet selection (GAP LIST). They
+ * still gate RUN (≥1 target).
  */
 import { useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, DLoadingState, type DColumn } from '@/components/d'
 import { MAiStripe, MButton, MPill } from '@/components/m'
+import {
+  useCaptureTakeoffDraft,
+  usePromoteCapturedQuantities,
+  useTakeoffDraftResult,
+  useTakeoffDrafts,
+  type CapturedQuantity,
+} from '@/lib/api/takeoff-drafts'
 
 // ---------------------------------------------------------------------------
 // Shared blueprint backdrop + floating-palette chrome (translated from the
@@ -94,11 +106,10 @@ export function EstAiTakeoffSetup() {
   const navigate = useNavigate()
   const projectId = params.projectId ?? ''
 
-  // Demo targets stay presentational; the on/off toggles are real local state
-  // so the palette is interactive. // TODO: persist targets + run the capture
-  // pipeline (POST /api/projects/:id/takeoff-drafts/capture) once wired.
+  // Target toggles stay presentational (the capture endpoint takes no
+  // per-target selection — GAP). They still gate RUN (≥1 target).
   const [targets, setTargets] = useState<TakeoffTarget[]>(SETUP_TARGETS)
-  const [running, setRunning] = useState(false)
+  const capture = useCaptureTakeoffDraft(projectId)
 
   const toggleTarget = (index: number) => {
     setTargets((prev) => prev.map((t, i) => (i === index ? { ...t, on: !t.on } : t)))
@@ -107,10 +118,18 @@ export function EstAiTakeoffSetup() {
   const enabledCount = targets.filter((t) => t.on).length
 
   const runTakeoff = () => {
-    setRunning(true)
-    // No capture pipeline run yet — jump straight to the review lane so the
-    // estimator can see what the AI produced.
-    navigate(projectId ? `/desktop/ai-takeoff/${projectId}/review` : '/desktop/ai-queue')
+    if (!projectId || capture.isPending) {
+      if (!projectId) navigate('/desktop/ai-queue')
+      return
+    }
+    // Dry-run-safe capture (JSON body → deterministic stub on the API; no live
+    // Anthropic spend). Carries the real draft id into the review lane.
+    capture.mutate(
+      { kind: 'blueprint_vision', name: 'AI auto-takeoff', payload: { dryRun: true } },
+      {
+        onSuccess: (res) => navigate(`/desktop/ai-takeoff/${projectId}/review`, { state: { draftId: res.draft.id } }),
+      },
+    )
   }
 
   return (
@@ -243,9 +262,22 @@ export function EstAiTakeoffSetup() {
           >
             DRAFT 22 SHEETS · {enabledCount} TARGETS · ~3M · REVIEW BEFORE ACCEPT
           </div>
-          <MButton variant="primary" onClick={runTakeoff} disabled={running || enabledCount === 0}>
-            {running ? 'Starting…' : 'Run auto-takeoff →'}
+          <MButton variant="primary" onClick={runTakeoff} disabled={capture.isPending || enabledCount === 0}>
+            {capture.isPending ? 'Drafting…' : 'Run auto-takeoff →'}
           </MButton>
+          {capture.isError ? (
+            <div
+              style={{
+                marginTop: 10,
+                fontFamily: 'var(--m-num)',
+                fontSize: 10,
+                fontWeight: 700,
+                color: 'var(--m-red)',
+              }}
+            >
+              ● {capture.error.message || 'Capture failed — try again.'}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>
@@ -253,7 +285,9 @@ export function EstAiTakeoffSetup() {
 }
 
 // ---------------------------------------------------------------------------
-// EstAiTakeoffReview — accept/adjust AI-detected quantities, ACCEPT DRAFT.
+// EstAiTakeoffReview — accept/adjust AI-detected quantities (from the real
+// captured TakeoffResult), then promote the kept ones to committed
+// `takeoff_measurements`.
 // ---------------------------------------------------------------------------
 type TakeoffStatus = 'ok' | 'review' | 'flag'
 
@@ -265,14 +299,50 @@ type TakeoffReviewRow = {
   status: TakeoffStatus
 }
 
-const REVIEW_ROWS: TakeoffReviewRow[] = [
-  { id: 'eps-2', item: 'EPS Board · 2"', qty: '4,785 SF', confidence: 'HIGH', status: 'ok' },
-  { id: 'basecoat', item: 'Basecoat · polymer', qty: '4,785 SF', confidence: 'HIGH', status: 'ok' },
-  { id: 'stone', item: 'Stone veneer', qty: '420 SF', confidence: 'HIGH', status: 'ok' },
-  { id: 'sealant', item: 'Sealant joint', qty: '320 LF', confidence: 'MED', status: 'review' },
-  { id: 'diffuser', item: 'Diffuser · 24"', qty: '214 EA', confidence: 'HIGH', status: 'ok' },
-  { id: 'flashing', item: 'Parapet flashing', qty: '180 LF', confidence: 'LOW', status: 'flag' },
-]
+/** Confidence floor mirrors the API's review_required gate (q.confidence < 0.5). */
+function statusForConfidence(confidence: number): TakeoffStatus {
+  if (confidence >= 0.8) return 'ok'
+  if (confidence >= 0.5) return 'review'
+  return 'flag'
+}
+
+function confidenceLabelFor(confidence: number): 'HIGH' | 'MED' | 'LOW' {
+  if (confidence >= 0.8) return 'HIGH'
+  if (confidence >= 0.5) return 'MED'
+  return 'LOW'
+}
+
+function formatQty(value: number, unit: string): string {
+  const rounded = Number.isInteger(value) ? value : Math.round(value * 100) / 100
+  return `${rounded.toLocaleString()} ${unit.toUpperCase()}`
+}
+
+function quantityToRow(q: CapturedQuantity): TakeoffReviewRow {
+  return {
+    id: q.id,
+    item: q.description || q.masterformatCode || q.uniformatCode || q.id,
+    qty: formatQty(q.value, q.unit),
+    confidence: confidenceLabelFor(q.confidence),
+    status: statusForConfidence(q.confidence),
+  }
+}
+
+/**
+ * Resolve the draft id to review: prefer the one handed over by the setup
+ * screen via navigation state; otherwise fall back to the most-recent
+ * capture-sourced draft for the project (covers deep-links / refresh).
+ */
+function useTakeoffReviewDraftId(projectId: string): string | null {
+  const location = useLocation()
+  const stateDraftId =
+    location.state && typeof location.state === 'object' && 'draftId' in location.state
+      ? String((location.state as { draftId?: unknown }).draftId ?? '')
+      : ''
+  const draftsQuery = useTakeoffDrafts(stateDraftId ? null : projectId)
+  if (stateDraftId) return stateDraftId
+  const latestCapture = (draftsQuery.data?.drafts ?? []).filter((d) => d.source && d.source !== 'manual').at(-1)
+  return latestCapture?.id ?? null
+}
 
 // Status accent bar color — the amber/review tone maps to the accent token.
 function statusBar(status: TakeoffStatus): string {
@@ -283,15 +353,29 @@ function confidenceTone(confidence: TakeoffReviewRow['confidence']): 'green' | '
   return confidence === 'HIGH' ? 'green' : confidence === 'MED' ? 'amber' : 'red'
 }
 
+// Per-row review decision. OK rows are kept by default; review/flag rows stay
+// 'pending' until the estimator keeps or rejects them.
+type RowDecision = 'pending' | 'kept' | 'rejected'
+
 export function EstAiTakeoffReview() {
   const params = useParams<{ projectId: string }>()
   const navigate = useNavigate()
   const projectId = params.projectId ?? ''
 
-  // Demo draft stays presentational. // TODO: back with a real draft snapshot
-  // from the capture pipeline (takeoff_drafts.source='blueprint_vision') and
-  // promote selected quantities via .../:draftId/promote.
-  const rows = useMemo<TakeoffReviewRow[]>(() => REVIEW_ROWS, [])
+  const draftId = useTakeoffReviewDraftId(projectId)
+  const resultQuery = useTakeoffDraftResult(draftId)
+  const promote = usePromoteCapturedQuantities(projectId, draftId)
+
+  const rows = useMemo<TakeoffReviewRow[]>(
+    () => (resultQuery.data?.takeoff_result.quantities ?? []).map(quantityToRow),
+    [resultQuery.data],
+  )
+
+  // Real local decision state so Keep/Reject update the UI + KPIs. High-
+  // confidence rows default to kept; flagged/review rows wait for a decision.
+  const [decisions, setDecisions] = useState<Record<string, RowDecision>>({})
+  const decisionFor = (r: TakeoffReviewRow): RowDecision => decisions[r.id] ?? (r.status === 'ok' ? 'kept' : 'pending')
+  const setDecision = (id: string, decision: RowDecision) => setDecisions((prev) => ({ ...prev, [id]: decision }))
 
   const counts = useMemo(() => {
     return rows.reduce(
@@ -303,12 +387,22 @@ export function EstAiTakeoffReview() {
     )
   }, [rows])
 
-  const [accepting, setAccepting] = useState(false)
+  // Live keep/reject tallies drive the accept affordance + KPI meta.
+  const keptIds = rows.filter((r) => decisionFor(r) === 'kept').map((r) => r.id)
+  const keptCount = keptIds.length
+  const rejectedCount = rows.filter((r) => decisionFor(r) === 'rejected').length
+  const pendingCount = rows.filter((r) => decisionFor(r) === 'pending').length
+
   const acceptDraft = () => {
-    setAccepting(true)
-    // No promote endpoint wired yet — route to the project's quantities review.
-    navigate(projectId ? `/desktop/estimate/${projectId}` : '/desktop/ai-queue')
+    if (!draftId || keptCount === 0 || promote.isPending) return
+    // Promote only the kept rows into committed `takeoff_measurements`, then
+    // route to the project's estimate where the new scope shows up.
+    promote.mutate(
+      { quantity_ids: keptIds },
+      { onSuccess: () => navigate(projectId ? `/desktop/estimate/${projectId}` : '/desktop/ai-queue') },
+    )
   }
+  const accepting = promote.isPending
 
   const columns: Array<DColumn<TakeoffReviewRow>> = [
     {
@@ -318,7 +412,20 @@ export function EstAiTakeoffReview() {
         <span style={{ display: 'inline-block', width: 8, height: 28, background: statusBar(r.status) }} aria-hidden />
       ),
     },
-    { key: 'item', header: 'Item', render: (r) => <span className="d-table-cell-strong">{r.item}</span> },
+    {
+      key: 'item',
+      header: 'Item',
+      render: (r) => (
+        <span
+          className="d-table-cell-strong"
+          style={
+            decisionFor(r) === 'rejected' ? { textDecoration: 'line-through', color: 'var(--m-ink-3)' } : undefined
+          }
+        >
+          {r.item}
+        </span>
+      ),
+    },
     {
       key: 'confidence',
       header: 'Confidence',
@@ -333,16 +440,27 @@ export function EstAiTakeoffReview() {
       key: 'action',
       header: '',
       numeric: true,
-      render: (r) =>
-        r.status === 'ok' ? (
-          <MPill tone="green" dot>
-            Keep
-          </MPill>
-        ) : (
-          <MButton size="sm" variant="ghost" onClick={() => {}}>
-            Review
-          </MButton>
-        ),
+      render: (r) => {
+        const decision = decisionFor(r)
+        return (
+          <span style={{ display: 'inline-flex', gap: 6, justifyContent: 'flex-end' }}>
+            <MButton
+              size="sm"
+              variant={decision === 'kept' ? 'primary' : 'ghost'}
+              onClick={() => setDecision(r.id, 'kept')}
+            >
+              Keep
+            </MButton>
+            <MButton
+              size="sm"
+              variant={decision === 'rejected' ? 'primary' : 'ghost'}
+              onClick={() => setDecision(r.id, 'rejected')}
+            >
+              Reject
+            </MButton>
+          </span>
+        )
+      },
     },
   ]
 
@@ -351,13 +469,22 @@ export function EstAiTakeoffReview() {
       <div className="d-stack">
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
           <div>
-            <DEyebrow>Drafted in 42s · 6 items · 22 sheets</DEyebrow>
+            <DEyebrow>
+              {resultQuery.data?.source ? `Source · ${resultQuery.data.source}` : 'AI auto-takeoff'} · {rows.length}{' '}
+              items
+            </DEyebrow>
             <DH1>Review draft</DH1>
           </div>
-          <MButton variant="primary" onClick={acceptDraft} disabled={accepting}>
-            {accepting ? 'Accepting…' : 'Accept draft'}
+          <MButton variant="primary" onClick={acceptDraft} disabled={accepting || keptCount === 0 || !draftId}>
+            {accepting ? 'Promoting…' : `Accept ${keptCount} kept`}
           </MButton>
         </div>
+
+        {promote.isError ? (
+          <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700, color: 'var(--m-red)' }}>
+            ● {promote.error.message || 'Promote failed — try again.'}
+          </div>
+        ) : null}
 
         <MAiStripe
           eyebrow="AI auto-takeoff"
@@ -370,34 +497,48 @@ export function EstAiTakeoffReview() {
 
         <DKpiStrip>
           <DKpi
-            label="OK"
-            value={String(counts.ok)}
-            meta="High confidence"
-            metaTone={counts.ok > 0 ? 'good' : undefined}
+            label="Kept"
+            value={String(keptCount)}
+            meta={`${counts.ok} high-confidence`}
+            metaTone={keptCount > 0 ? 'good' : undefined}
           />
           <DKpi
-            label="Review"
-            value={String(counts.review)}
-            tone={counts.review > 0 ? 'accent' : undefined}
-            meta="Needs a look"
+            label="Pending"
+            value={String(pendingCount)}
+            tone={pendingCount > 0 ? 'accent' : undefined}
+            meta={pendingCount > 0 ? 'Needs a decision' : 'All reviewed'}
           />
           <DKpi
-            label="Flagged"
-            value={String(counts.flag)}
-            meta={counts.flag > 0 ? 'Low confidence' : 'None'}
-            metaTone={counts.flag > 0 ? 'bad' : undefined}
+            label="Rejected"
+            value={String(rejectedCount)}
+            meta={rejectedCount > 0 ? 'Dropped from draft' : 'None'}
+            metaTone={rejectedCount > 0 ? 'bad' : undefined}
           />
         </DKpiStrip>
 
         {accepting ? (
           <DLoadingState label="Promoting accepted quantities…" />
+        ) : resultQuery.isLoading ? (
+          <DLoadingState label="Loading captured draft…" />
+        ) : resultQuery.isError ? (
+          <DataTable<TakeoffReviewRow>
+            title="AI takeoff draft"
+            columns={columns}
+            rows={[]}
+            rowKey={(r) => r.id}
+            empty={`Couldn't load the draft result. ${resultQuery.error.message}`}
+          />
         ) : (
           <DataTable<TakeoffReviewRow>
             title="AI takeoff draft"
             columns={columns}
             rows={rows}
             rowKey={(r) => r.id}
-            empty="No detected quantities. Run the auto-takeoff to populate this draft."
+            empty={
+              draftId
+                ? 'This draft has no detected quantities.'
+                : 'No detected quantities. Run the auto-takeoff to populate this draft.'
+            }
           />
         )}
       </div>

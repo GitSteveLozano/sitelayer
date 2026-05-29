@@ -145,7 +145,13 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
         const res = await apiPost<{ clockEvent?: ClockEvent }>(`/api/clock/${kind}`, body, companySlug)
         if (res.clockEvent) {
           setEvents((cur) => [...cur, res.clockEvent!])
-          if (kind === 'in') navigate('/clockin')
+          // Manual punches land on the explicit confirm surfaces. A
+          // hand-punch in routes to the geofence-MISS manual screen (we
+          // can't claim "on site" for a manual punch); the auto-geofence
+          // path uses `/clockin` (auto success) directly via `onAutoIn`.
+          // A punch out routes to the end-of-shift wrap-up.
+          if (kind === 'in') navigate('/clockin/manual')
+          else navigate('/clockout')
         }
       } finally {
         setBusy(null)

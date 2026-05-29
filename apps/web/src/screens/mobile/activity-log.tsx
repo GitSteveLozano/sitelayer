@@ -17,11 +17,67 @@
  */
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MChip, MChipRow, MShell, MTopBar } from '../../components/m/index.js'
+import { MChip, MChipRow, MPill, MShell, MTopBar } from '../../components/m/index.js'
+import type { MTone } from '../../components/m/list.js'
 import { useAuditEvents, useProjects, type AuditEvent } from '../../lib/api/index.js'
 
 const MONO = 'var(--m-num)'
 const TIGHT = 'var(--m-font-display)'
+
+// ---------------------------------------------------------------------------
+// Category chips (ALL / TIME / MONEY / FIELD / BRIEFS) — mirrors the
+// V2ActivityLog filter row. Each audit event is bucketed by its entity_type.
+// ---------------------------------------------------------------------------
+type Category = 'all' | 'time' | 'money' | 'field' | 'briefs'
+
+const CATEGORIES: ReadonlyArray<{ id: Category; label: string }> = [
+  { id: 'all', label: 'ALL' },
+  { id: 'time', label: 'TIME' },
+  { id: 'money', label: 'MONEY' },
+  { id: 'field', label: 'FIELD' },
+  { id: 'briefs', label: 'BRIEFS' },
+]
+
+function categoryFor(event: AuditEvent): Exclude<Category, 'all'> | null {
+  const e = `${event.entity_type} ${event.action}`.toLowerCase()
+  if (/labor|clock|time|payroll|schedule|crew/.test(e)) return 'time'
+  if (/invoice|estimate|billing|payment|material_bill|rental|payroll|damage/.test(e)) return 'money'
+  if (/field|issue|blocker|guardrail|takeoff|measurement|daily_log|inspection|stop_work/.test(e)) return 'field'
+  if (/brief|message|broadcast|notification|log/.test(e)) return 'briefs'
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Role chip per row. The audit ledger DOES carry the actor's company role
+// (audit_events.actor_role, exposed on AuditEvent), so we tag straight off it
+// when present. Older rows (and some system-context writes) left it null; for
+// those we fall back to inferring the role from the entity/action surface
+// (owner-money/invoice ≈ OWNER, field flags ≈ CREW, briefs/schedule ≈ FOREMAN).
+// System actors (no actor_user_id) stay untagged.
+// ---------------------------------------------------------------------------
+type RoleTag = { label: string; tone: MTone | undefined }
+
+// Company roles → display label + tone. `admin`/`office` read as OWNER-side
+// (green), `foreman` as accent, everyone else (member/crew/bookkeeper) plain.
+function roleTagForRole(role: string): RoleTag {
+  const r = role.toLowerCase()
+  if (r === 'admin' || r === 'office' || r === 'owner') return { label: 'OWNER', tone: 'green' }
+  if (r === 'foreman') return { label: 'FOREMAN', tone: 'accent' }
+  if (r === 'bookkeeper') return { label: 'BOOKKEEPER', tone: 'blue' }
+  return { label: r.toUpperCase(), tone: undefined }
+}
+
+function roleTagFor(event: AuditEvent): RoleTag | null {
+  if (!event.actor_user_id) return null
+  // Prefer the real recorded role; only guess from the entity surface when
+  // the row didn't capture one.
+  if (event.actor_role) return roleTagForRole(event.actor_role)
+  const e = `${event.entity_type} ${event.action}`.toLowerCase()
+  if (/invoice|estimate|billing|payment|approve|company|integration/.test(e)) return { label: 'OWNER', tone: 'green' }
+  if (/field|issue|blocker|clock|measurement|takeoff/.test(e)) return { label: 'CREW', tone: undefined }
+  if (/brief|message|schedule|daily_log|crew/.test(e)) return { label: 'FOREMAN', tone: 'accent' }
+  return null
+}
 
 // Map an audit action to a tone color. Creates read green, destructive
 // actions read red, the rest stay neutral ink.
@@ -88,12 +144,17 @@ function dayKey(iso: string): string {
 export function MobileActivityLog() {
   const navigate = useNavigate()
   const [projectId, setProjectId] = useState<string | null>(null)
+  const [category, setCategory] = useState<Category>('all')
 
   const events = useAuditEvents({ limit: 200 })
   const projects = useProjects({ limit: 50 })
 
   const rows = events.data?.events ?? []
-  const filtered = useMemo(() => (projectId ? rows.filter((e) => e.entity_id === projectId) : rows), [rows, projectId])
+  const filtered = useMemo(() => {
+    let out = projectId ? rows.filter((e) => e.entity_id === projectId) : rows
+    if (category !== 'all') out = out.filter((e) => categoryFor(e) === category)
+    return out
+  }, [rows, projectId, category])
 
   // Group consecutive entries by day. The hook already returns rows
   // newest-first; we keep that order and emit a divider whenever the day
@@ -115,13 +176,23 @@ export function MobileActivityLog() {
     <MShell>
       <MTopBar back title="Activity" eyebrow="ALL ROLES" onBack={() => navigate(-1)} />
 
+      {/* Category chips — ALL / TIME / MONEY / FIELD / BRIEFS. */}
+      <MChipRow>
+        {CATEGORIES.map((c) => (
+          <MChip key={c.id} active={category === c.id} onClick={() => setCategory(c.id)}>
+            {c.label}
+          </MChip>
+        ))}
+      </MChipRow>
+
+      {/* Per-project scope (kept from the existing wiring). */}
       {projectRows.length > 0 ? (
         <MChipRow>
-          <MChip active={projectId === null} onClick={() => setProjectId(null)}>
-            ALL
+          <MChip outline active={projectId === null} onClick={() => setProjectId(null)}>
+            ALL PROJECTS
           </MChip>
           {projectRows.map((p) => (
-            <MChip key={p.id} active={projectId === p.id} onClick={() => setProjectId(p.id)}>
+            <MChip key={p.id} outline active={projectId === p.id} onClick={() => setProjectId(p.id)}>
               {p.name}
             </MChip>
           ))}
@@ -134,7 +205,7 @@ export function MobileActivityLog() {
             LOADING…
           </div>
         ) : groups.length === 0 ? (
-          <EmptyState filtered={projectId !== null} />
+          <EmptyState filtered={projectId !== null || category !== 'all'} />
         ) : (
           groups.map((group) => (
             <section key={group.day}>
@@ -166,6 +237,7 @@ export function MobileActivityLog() {
 
 function ActivityRow({ event }: { event: AuditEvent }) {
   const tone = toneFor(event.action)
+  const roleTag = roleTagFor(event)
   return (
     <div
       style={{
@@ -183,17 +255,21 @@ function ActivityRow({ event }: { event: AuditEvent }) {
       </div>
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div
-          style={{
-            fontFamily: TIGHT,
-            fontSize: 15,
-            fontWeight: 700,
-            letterSpacing: '-0.01em',
-            color: 'var(--m-ink)',
-            lineHeight: 1.2,
-          }}
-        >
-          {humanize(event)}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {roleTag ? <MPill tone={roleTag.tone}>{roleTag.label}</MPill> : null}
+          <div
+            style={{
+              fontFamily: TIGHT,
+              fontSize: 15,
+              fontWeight: 700,
+              letterSpacing: '-0.01em',
+              color: 'var(--m-ink)',
+              lineHeight: 1.2,
+              minWidth: 0,
+            }}
+          >
+            {humanize(event)}
+          </div>
         </div>
         <div
           style={{

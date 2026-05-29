@@ -10,6 +10,10 @@ export interface AuditEvent {
   entity_type: string
   entity_id: string | null
   actor_user_id: string | null
+  // The company role of the actor at the time of the event, when recordAudit
+  // captured it (audit_events.actor_role). Null for system actors and for
+  // legacy rows written before the role was stamped.
+  actor_role: string | null
   action: string
   before: unknown
   after: unknown

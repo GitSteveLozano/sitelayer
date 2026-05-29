@@ -5,7 +5,7 @@ import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from '../onboarding.js'
 import { recordAudit } from '../audit.js'
 import { HttpError, parseJsonBody } from '../http-utils.js'
 import { observeAudit } from '../metrics.js'
-import { enqueueNotification, recordMutationOutbox } from '../mutation-tx.js'
+import { enqueueNotification, recordMutationOutbox, withMutationTx } from '../mutation-tx.js'
 
 // JSON-object guard used for the modules / portal_settings PATCH bodies.
 // The route writes `modules || $2::jsonb` and `portal_settings || $3::jsonb`,
@@ -51,6 +51,71 @@ const CompanySettingsPatchSchema = z
     ot_service_item_code: z.union([z.string(), z.null()]),
   })
   .strict()
+
+// Company profile PATCH (migration 102): the editable scalar identity
+// fields an owner fills in over time. Every field is optional so a panel
+// can save just the diff; at least one must be present. Each accepts a
+// string (trimmed → stored, empty → NULL) or an explicit null to clear.
+// A short, generous max keeps a single row from absorbing a pasted blob;
+// these flow onto estimates/invoices so they stay human-length.
+const ProfileFieldSchema = z.union([z.string().max(2000), z.null()])
+const CompanyProfilePatchSchema = z
+  .object({
+    legal_name: ProfileFieldSchema.optional(),
+    license_no: ProfileFieldSchema.optional(),
+    address: ProfileFieldSchema.optional(),
+    phone: ProfileFieldSchema.optional(),
+    website: ProfileFieldSchema.optional(),
+  })
+  .strict()
+  .refine(
+    (v) =>
+      v.legal_name !== undefined ||
+      v.license_no !== undefined ||
+      v.address !== undefined ||
+      v.phone !== undefined ||
+      v.website !== undefined,
+    { message: 'at least one profile field is required' },
+  )
+
+// The five scalar profile columns, in the order they are written by the
+// PATCH route. Kept as a const so the SQL builder and the response shaping
+// stay in sync.
+const PROFILE_FIELDS = ['legal_name', 'license_no', 'address', 'phone', 'website'] as const
+type ProfileField = (typeof PROFILE_FIELDS)[number]
+
+// Working-hours PUT (migration 102). The full document is replaced on
+// every save (PUT semantics) — the panel always holds the complete shape,
+// so a merge would only add ambiguity. Validation here is the integrity
+// gate (companies.working_hours carries no DB constraint, mirroring
+// modules / portal_settings). HH:MM times, a fixed OT-rule enum, the seven
+// weekday flags, and a bounded holiday list.
+const HHMM_PATTERN = /^([01]\d|2[0-3]):[0-5]\d$/
+const WorkingHoursSchema = z
+  .object({
+    days: z.object({
+      mon: z.boolean(),
+      tue: z.boolean(),
+      wed: z.boolean(),
+      thu: z.boolean(),
+      fri: z.boolean(),
+      sat: z.boolean(),
+      sun: z.boolean(),
+    }),
+    day_start: z.string().regex(HHMM_PATTERN, 'day_start must be HH:MM'),
+    day_end: z.string().regex(HHMM_PATTERN, 'day_end must be HH:MM'),
+    ot_rule: z.enum(['8h', '10h', '40w']),
+    holidays: z
+      .array(
+        z.object({
+          name: z.string().trim().min(1).max(120),
+          date: z.string().trim().min(1).max(40),
+        }),
+      )
+      .max(60),
+  })
+  .strict()
+type WorkingHours = z.infer<typeof WorkingHoursSchema>
 
 export type CompanyRouteCtx = {
   pool: Pool
@@ -289,6 +354,198 @@ export async function handleCompanyRoutes(req: http.IncomingMessage, url: URL, c
     })
     observeAudit('company', 'update_settings')
     sendJson(200, { ot_service_item_code: updatedRow.ot_service_item_code })
+    return true
+  }
+
+  // ---- Company profile scalars (migration 102) -------------------------
+  // GET /api/companies/:id/profile — the editable identity fields the Owner
+  // Settings Company panel loads + saves. Any member may read (same shape
+  // and access posture as /settings); PATCH is admin-only like every other
+  // company write. Kept on its own path (not folded into /settings) so each
+  // body stays a narrow whitelist.
+  const profileMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/profile$/)
+  if (req.method === 'GET' && profileMatch) {
+    const companyId = profileMatch[1]!
+    const member = await pool.query<{ role: string }>(
+      'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+      [companyId, userId],
+    )
+    if (!member.rows[0]) {
+      sendJson(403, { error: 'not a member of this company' })
+      return true
+    }
+    const result = await pool.query<Record<ProfileField, string | null>>(
+      'select legal_name, license_no, address, phone, website from companies where id = $1 limit 1',
+      [companyId],
+    )
+    const row = result.rows[0]
+    if (!row) {
+      sendJson(404, { error: 'company not found' })
+      return true
+    }
+    sendJson(200, {
+      legal_name: row.legal_name,
+      license_no: row.license_no,
+      address: row.address,
+      phone: row.phone,
+      website: row.website,
+    })
+    return true
+  }
+  if (req.method === 'PATCH' && profileMatch) {
+    const companyId = profileMatch[1]!
+    const adminCheck = await pool.query<{ role: string }>(
+      'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+      [companyId, userId],
+    )
+    if (!adminCheck.rows[0] || adminCheck.rows[0].role !== 'admin') {
+      sendJson(403, { error: 'admin role required' })
+      return true
+    }
+    const parsed = parseJsonBody(CompanyProfilePatchSchema, await readBody())
+    if (!parsed.ok) {
+      sendJson(400, { error: parsed.error })
+      return true
+    }
+    // Build a partial UPDATE from only the supplied keys. Each present
+    // value is normalized: a string trims (empty → NULL so a cleared field
+    // reads back null), an explicit null clears. Parameterized — column
+    // names come from the PROFILE_FIELDS allowlist, never from input.
+    const value = parsed.value
+    const setClauses: string[] = []
+    const params: Array<string | null> = [companyId]
+    for (const field of PROFILE_FIELDS) {
+      const raw = value[field]
+      if (raw === undefined) continue
+      let next: string | null
+      if (raw === null) {
+        next = null
+      } else {
+        const trimmed = raw.trim()
+        next = trimmed === '' ? null : trimmed
+      }
+      params.push(next)
+      setClauses.push(`${field} = $${params.length}`)
+    }
+    // The schema's refine guarantees at least one field, so setClauses is
+    // non-empty here; guard defensively regardless.
+    if (setClauses.length === 0) {
+      sendJson(400, { error: 'at least one profile field is required' })
+      return true
+    }
+    const result = await withMutationTx(companyId, async (client) => {
+      const before = await client.query<Record<ProfileField, string | null>>(
+        'select legal_name, license_no, address, phone, website from companies where id = $1 limit 1',
+        [companyId],
+      )
+      if (!before.rows[0]) return null
+      const updated = await client.query<Record<ProfileField, string | null>>(
+        `update companies set ${setClauses.join(', ')} where id = $1
+         returning legal_name, license_no, address, phone, website`,
+        params,
+      )
+      const after = updated.rows[0]
+      if (!after) throw new HttpError(500, 'company profile update returned no row')
+      await recordAudit(client, {
+        companyId,
+        actorUserId: userId,
+        entityType: 'company',
+        entityId: companyId,
+        action: 'update_profile',
+        before: before.rows[0],
+        after,
+      })
+      return after
+    })
+    if (!result) {
+      sendJson(404, { error: 'company not found' })
+      return true
+    }
+    observeAudit('company', 'update_profile')
+    sendJson(200, {
+      legal_name: result.legal_name,
+      license_no: result.license_no,
+      address: result.address,
+      phone: result.phone,
+      website: result.website,
+    })
+    return true
+  }
+
+  // ---- Working hours (migration 102) -----------------------------------
+  // GET /api/companies/:id/working-hours — returns the saved document or
+  // null when the company has never configured working hours (the UI then
+  // falls back to its defaults). PUT replaces the whole document (the panel
+  // always holds the complete shape). Any member reads; PUT is admin-only.
+  const workingHoursMatch = url.pathname.match(/^\/api\/companies\/([^/]+)\/working-hours$/)
+  if (req.method === 'GET' && workingHoursMatch) {
+    const companyId = workingHoursMatch[1]!
+    const member = await pool.query<{ role: string }>(
+      'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+      [companyId, userId],
+    )
+    if (!member.rows[0]) {
+      sendJson(403, { error: 'not a member of this company' })
+      return true
+    }
+    const result = await pool.query<{ working_hours: WorkingHours | null }>(
+      'select working_hours from companies where id = $1 limit 1',
+      [companyId],
+    )
+    const row = result.rows[0]
+    if (!row) {
+      sendJson(404, { error: 'company not found' })
+      return true
+    }
+    sendJson(200, { working_hours: row.working_hours })
+    return true
+  }
+  if (req.method === 'PUT' && workingHoursMatch) {
+    const companyId = workingHoursMatch[1]!
+    const adminCheck = await pool.query<{ role: string }>(
+      'select role from company_memberships where company_id = $1 and clerk_user_id = $2 limit 1',
+      [companyId, userId],
+    )
+    if (!adminCheck.rows[0] || adminCheck.rows[0].role !== 'admin') {
+      sendJson(403, { error: 'admin role required' })
+      return true
+    }
+    const parsed = parseJsonBody(WorkingHoursSchema, await readBody())
+    if (!parsed.ok) {
+      sendJson(400, { error: parsed.error })
+      return true
+    }
+    const nextHours = parsed.value
+    const result = await withMutationTx(companyId, async (client) => {
+      const before = await client.query<{ working_hours: WorkingHours | null }>(
+        'select working_hours from companies where id = $1 limit 1',
+        [companyId],
+      )
+      if (!before.rows[0]) return null
+      const updated = await client.query<{ working_hours: WorkingHours | null }>(
+        `update companies set working_hours = $2::jsonb where id = $1
+         returning working_hours`,
+        [companyId, JSON.stringify(nextHours)],
+      )
+      const after = updated.rows[0]
+      if (!after) throw new HttpError(500, 'working_hours update returned no row')
+      await recordAudit(client, {
+        companyId,
+        actorUserId: userId,
+        entityType: 'company',
+        entityId: companyId,
+        action: 'update_working_hours',
+        before: before.rows[0]?.working_hours ?? null,
+        after: after.working_hours,
+      })
+      return after
+    })
+    if (!result) {
+      sendJson(404, { error: 'company not found' })
+      return true
+    }
+    observeAudit('company', 'update_working_hours')
+    sendJson(200, { working_hours: result.working_hours })
     return true
   }
 

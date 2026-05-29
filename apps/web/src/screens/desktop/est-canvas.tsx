@@ -566,6 +566,65 @@ export function EstCanvas() {
         </div>
       </div>
 
+      {/* ---- AI ASSIST palette (top-right, left of the item palette) ----
+          Launcher for the AI setup flows. The setup routes
+          (/desktop/ai-count/:projectId, /desktop/ai-takeoff/:projectId)
+          already exist in desktop-workspace.tsx; this palette is what makes
+          them reachable from the working takeoff canvas. (DEstTakeoffCanvas
+          top-right "● AI ASSIST" palette in Steve's Desktop v2 mockup.) */}
+      <div style={floatBox({ top: 92, right: 312, width: 220 })}>
+        <div style={floatHead}>● AI Assist</div>
+        <div style={{ display: 'flex', flexDirection: 'column' }}>
+          {(
+            [
+              { label: 'AUTO-COUNT A SYMBOL', to: `/desktop/ai-count/${projectId}` },
+              { label: 'AUTO-TAKEOFF JOB', to: `/desktop/ai-takeoff/${projectId}` },
+            ] as const
+          ).map((b, i, arr) => (
+            <button
+              key={b.label}
+              type="button"
+              onClick={() => navigate(b.to)}
+              disabled={!projectId}
+              style={{
+                width: '100%',
+                textAlign: 'left',
+                padding: '12px 14px',
+                background: 'var(--m-sand)',
+                color: 'var(--m-ink)',
+                border: 'none',
+                borderBottom: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                fontWeight: 800,
+                letterSpacing: '0.04em',
+                cursor: projectId ? 'pointer' : 'default',
+                opacity: projectId ? 1 : 0.4,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+              }}
+            >
+              <span
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontWeight: 800,
+                  fontSize: 11,
+                  color: 'var(--m-accent-ink)',
+                  background: 'var(--m-accent)',
+                  padding: '1px 6px',
+                  flexShrink: 0,
+                }}
+                aria-hidden
+              >
+                AI
+              </span>
+              {b.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* ---- ITEM / quantities palette (right) ---- */}
       <div style={floatBox({ top: 92, right: 16, width: 280, maxHeight: 'calc(100% - 108px)', overflow: 'auto' })}>
         <div style={floatHead}>Item · Quantities</div>

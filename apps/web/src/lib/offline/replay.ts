@@ -107,7 +107,15 @@ async function runReplay(): Promise<{ replayed: number; dropped: number; deferre
           Sentry.captureMessage(`offline replay dropped: ${row.kind}`, {
             level: 'warning',
             tags: { offline_kind: row.kind, status: String(err.status) },
-            extra: { error: err.message_for_user(), payload: row.payload },
+            // Send only safe metadata — the raw payload can contain
+            // free-text notes / customer PII and there's no beforeSend
+            // scrubber on the web SDK, so report the shape (keys + id),
+            // never the values.
+            extra: {
+              error: err.message_for_user(),
+              id: row.id,
+              payloadKeys: row.payload && typeof row.payload === 'object' ? Object.keys(row.payload) : undefined,
+            },
           })
           continue
         }

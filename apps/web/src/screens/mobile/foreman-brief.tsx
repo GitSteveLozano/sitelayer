@@ -72,6 +72,12 @@ export function ForemanBrief({
   // Tracks whether the user has manually touched the form so we don't
   // clobber their edits when the prefill query lands later.
   const [dirty, setDirty] = useState(false)
+  // BRIEF · PREVIEW — "Preview" shows the crew-facing read-only render
+  // first; only "Push to crew" actually sends. This flag flips the
+  // composer into that preview surface. (Previously both buttons shared
+  // `handleSend`, so "Preview" pushed immediately — the v2 drift this
+  // fixes.)
+  const [previewing, setPreviewing] = useState(false)
 
   // Pre-fill sources.
   const yesterdayBrief = useProjectBriefs(projectId || null, yesterdayIso())
@@ -130,11 +136,20 @@ export function ForemanBrief({
     return res
   })
 
+  // Push — the only path that actually sends the brief to the crew.
   const handleSend = () => {
     if (!project) return
     const trimmed = goal.trim()
     if (!trimmed) return
     submit({ projectId: project.id, goal: trimmed, steps, materials })
+  }
+  // Preview — read-only crew-facing render, no send. Requires a project +
+  // a non-empty goal (same gate as send) so the preview reflects a
+  // pushable brief.
+  const handlePreview = () => {
+    if (!project) return
+    if (!goal.trim()) return
+    setPreviewing(true)
   }
   const busy = isSubmitting
 
@@ -166,6 +181,24 @@ export function ForemanBrief({
   const removeStep = (idx: number) => {
     setDirty(true)
     setSteps((cur) => cur.filter((_, i) => i !== idx))
+  }
+
+  // BRIEF · PREVIEW — read-only crew-facing render. Reached only via the
+  // "Preview" button; "Back to edit" returns to the composer, "Push to
+  // crew" runs the same `handleSend` so there is exactly one send path.
+  if (previewing) {
+    return (
+      <BriefPreview
+        projectName={project?.name ?? null}
+        goal={goal.trim()}
+        steps={steps}
+        materials={materials}
+        busy={busy}
+        error={error}
+        onBack={() => setPreviewing(false)}
+        onPush={handleSend}
+      />
+    )
   }
 
   return (
@@ -371,7 +404,12 @@ export function ForemanBrief({
               {project ? `BRIEF FOR ${project.name.toUpperCase()}` : 'PICK A PROJECT TO BRIEF'}
             </div>
             <div className="m-btn-row" style={{ marginTop: 12 }}>
-              <MButton variant="ghost" onClick={handleSend} disabled={busy || !project} style={{ flex: 1 }}>
+              <MButton
+                variant="ghost"
+                onClick={handlePreview}
+                disabled={busy || !project || !goal.trim()}
+                style={{ flex: 1 }}
+              >
                 Preview
               </MButton>
               <MButton variant="primary" onClick={handleSend} disabled={busy || !project} style={{ flex: 2 }}>
@@ -380,6 +418,173 @@ export function ForemanBrief({
             </div>
           </>
         )}
+      </MBody>
+    </>
+  )
+}
+
+/**
+ * BRIEF · PREVIEW (`V2ForemanBriefPreview`). A read-only render of the
+ * brief as the crew will see it on `wk-scope` — the goal slab, numbered
+ * step list, and materials — so the foreman can sanity-check before it
+ * goes out. This surface NEVER sends on its own; the only send is the
+ * explicit "Push to crew" button, which calls the same `handleSend` the
+ * composer uses (one send path, no drift).
+ */
+function BriefPreview({
+  projectName,
+  goal,
+  steps,
+  materials,
+  busy,
+  error,
+  onBack,
+  onPush,
+}: {
+  projectName: string | null
+  goal: string
+  steps: ProjectBriefStep[]
+  materials: { description: string; quantity?: string }[]
+  busy: boolean
+  error: string | null
+  onBack: () => void
+  onPush: () => void
+}) {
+  return (
+    <>
+      <MTopBar back title="Preview brief" sub={projectName ?? undefined} onBack={onBack} />
+      <MBody>
+        {/* PREVIEW eyebrow strip — makes the read-only / not-yet-sent
+            state unmistakable. */}
+        <div
+          style={{
+            ...monoLabelStyle,
+            margin: '16px 20px 0',
+            padding: '10px 12px',
+            background: 'var(--m-sand-2)',
+            border: '1px solid var(--m-line)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <MI.FileText size={14} />
+          PREVIEW · NOT SENT YET
+        </div>
+
+        {/* Goal slab — mirrors wk-scope's crew-facing goal treatment. */}
+        <div style={{ padding: 20, borderBottom: '2px solid var(--m-sand-2)' }}>
+          <div className="m-topbar-eyebrow" data-tone="accent" style={{ display: 'inline-block' }}>
+            TODAY'S GOAL
+          </div>
+          <div
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 700,
+              fontSize: 24,
+              lineHeight: 1.1,
+              letterSpacing: '-0.015em',
+              marginTop: 12,
+              color: 'var(--m-ink)',
+            }}
+          >
+            {goal || 'No goal set yet.'}
+          </div>
+        </div>
+
+        {/* Numbered step list — same ordinal markers the worker sees. */}
+        <MSectionH>{`STEP PLAN · ${steps.length}`}</MSectionH>
+        {steps.length === 0 ? (
+          <div className="m-quiet-sm" style={{ padding: '12px 20px' }}>
+            No steps yet. Go back and add the morning plan.
+          </div>
+        ) : (
+          <div>
+            {steps.map((step, idx) => (
+              <div
+                key={step.id ?? idx}
+                style={{
+                  borderBottom: '1px solid var(--m-line-2)',
+                  padding: '16px 20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 36,
+                    height: 36,
+                    flexShrink: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: '2px solid var(--m-sand-2)',
+                    color: 'var(--m-ink-4)',
+                    fontFamily: 'var(--m-font-display)',
+                    fontWeight: 800,
+                    fontSize: 16,
+                  }}
+                >
+                  <span className="num">{idx + 1}</span>
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span
+                    style={{
+                      display: 'block',
+                      fontFamily: 'var(--m-font-display)',
+                      fontSize: 15,
+                      fontWeight: 600,
+                      letterSpacing: '-0.005em',
+                      color: 'var(--m-ink)',
+                    }}
+                  >
+                    {step.title || `Step ${idx + 1}`}
+                  </span>
+                  {step.materials ? (
+                    <span
+                      className="num"
+                      style={{ display: 'block', marginTop: 3, fontSize: 11, fontWeight: 600, color: 'var(--m-ink-4)' }}
+                    >
+                      {step.materials}
+                    </span>
+                  ) : null}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Materials & deliveries — read-only echo of the composer list. */}
+        {materials.length > 0 ? (
+          <>
+            <MSectionH>MATERIALS &amp; DELIVERIES</MSectionH>
+            <MListInset>
+              {materials.map((m, idx) => (
+                <MListRow
+                  key={idx}
+                  leading={<MI.Truck size={18} />}
+                  headline={m.description || 'Material'}
+                  supporting={m.quantity || undefined}
+                />
+              ))}
+            </MListInset>
+          </>
+        ) : null}
+
+        {error ? <div style={{ margin: '12px 20px 0', color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
+
+        <div style={{ padding: 20 }}>
+          <div className="m-btn-row">
+            <MButton variant="ghost" onClick={onBack} disabled={busy} style={{ flex: 1 }}>
+              Back to edit
+            </MButton>
+            <MButton variant="primary" onClick={onPush} disabled={busy} style={{ flex: 2 }}>
+              {busy ? 'Pushing…' : 'Push to crew'}
+            </MButton>
+          </div>
+        </div>
       </MBody>
     </>
   )

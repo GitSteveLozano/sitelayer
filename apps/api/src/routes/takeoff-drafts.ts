@@ -45,6 +45,12 @@ export type TakeoffDraftRouteCtx = {
 const ALLOWED_STATUS = new Set(['active', 'archived'])
 const ALLOWED_CAPTURE_KINDS = new Set(['roomplan', 'photogrammetry', 'drone', 'blueprint_vision'])
 
+// Capture sources the company-wide review feed (GET /api/takeoff-drafts)
+// accepts as a `?source=` filter. Manual drafts are excluded from the feed
+// entirely (the review lane only cares about pipeline-produced drafts), so
+// 'manual' is intentionally absent here.
+const ALLOWED_FEED_SOURCES = new Set(['roomplan', 'photogrammetry', 'drone', 'blueprint_vision'])
+
 // Placeholder cost per blueprint page Claude Opus reads. The real cost
 // is token-driven (input + output) but the Anthropic SDK call site does
 // not surface usage today; we record a flat per-page estimate so the
@@ -328,6 +334,87 @@ export async function handleTakeoffDraftRoutes(
   url: URL,
   ctx: TakeoffDraftRouteCtx,
 ): Promise<boolean> {
+  // GET /api/takeoff-drafts — company-wide AI-takeoff review feed.
+  //
+  // Lists capture-pipeline drafts across ALL of the company's projects so the
+  // estimator's "Review drafts" lane (est-ai-queue.tsx) has a single feed
+  // instead of an N+1 fan-out over the per-project GET. Only pipeline-produced
+  // drafts (source <> 'manual') with a stored TakeoffResult are returned —
+  // manual canvas drafts never need review here.
+  //
+  // Filters:
+  //   ?source=blueprint_vision   restrict to one capture pipeline
+  //   ?review_required=1         only drafts the pipeline flagged for review
+  //
+  // The exact-match regex keeps this from colliding with the project-scoped
+  // (`/api/projects/:projectId/takeoff-drafts`) or per-draft
+  // (`/api/takeoff-drafts/:id`, `/api/takeoff-drafts/:id/result`,
+  // `/api/takeoff-drafts/:id/duplicate`) routes below. Read-only GET: the RLS
+  // company_isolation policy + SET LOCAL app.company_id inside
+  // withCompanyClient scope every row to the caller's company, and the
+  // explicit company_id predicate is belt-and-suspenders for that.
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/takeoff-drafts$/)) {
+    // $1 = company_id; subsequent placeholders appended per active filter.
+    const params: unknown[] = [ctx.company.id]
+    const conditions = [
+      `d.company_id = $1`,
+      `d.deleted_at is null`,
+      `d.source <> 'manual'`,
+      `d.takeoff_result_json is not null`,
+    ]
+
+    const sourceParam = url.searchParams.get('source')
+    if (sourceParam !== null && sourceParam !== '') {
+      if (!ALLOWED_FEED_SOURCES.has(sourceParam)) {
+        ctx.sendJson(400, {
+          error: `source must be one of ${[...ALLOWED_FEED_SOURCES].join(', ')}`,
+        })
+        return true
+      }
+      params.push(sourceParam)
+      conditions.push(`d.source = $${params.length}`)
+    }
+
+    // Accept the documented `1` as well as the usual truthy spellings so the
+    // hook can pass `?review_required=1` without surprises. Any other value
+    // (including `0`) leaves the feed unfiltered on this dimension.
+    const reviewRequiredParam = url.searchParams.get('review_required')
+    if (reviewRequiredParam === '1' || reviewRequiredParam === 'true') {
+      conditions.push(`d.review_required = true`)
+    }
+
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{
+        id: string
+        project_id: string
+        project_name: string
+        name: string
+        source: string
+        review_required: boolean
+        quantities_count: number
+        created_at: string
+      }>(
+        `select
+            d.id,
+            d.project_id,
+            p.name as project_name,
+            d.name,
+            d.source,
+            d.review_required,
+            coalesce(jsonb_array_length(d.takeoff_result_json -> 'quantities'), 0) as quantities_count,
+            d.created_at
+         from takeoff_drafts d
+         join projects p
+           on p.company_id = d.company_id and p.id = d.project_id and p.deleted_at is null
+        where ${conditions.join(' and ')}
+        order by d.created_at desc`,
+        params,
+      ),
+    )
+    ctx.sendJson(200, { drafts: result.rows })
+    return true
+  }
+
   // POST /api/projects/:projectId/takeoff-drafts/capture (Phase C.2)
   if (req.method === 'POST' && url.pathname.match(/^\/api\/projects\/[^/]+\/takeoff-drafts\/capture$/)) {
     if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true

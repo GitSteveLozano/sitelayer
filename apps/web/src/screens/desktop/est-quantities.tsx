@@ -14,8 +14,10 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, getActiveCompanySlug, type ProjectSummary } from '@/lib/api'
 import { useEstimateBuilder } from '@/machines/estimate-builder'
 import { createEstimatePush } from '@/lib/api/estimate-pushes'
+import { estimatePdfUrl } from '@/lib/api/estimate'
 import { DataTable, DEyebrow, DH1, type DColumn } from '@/components/d'
 import { MButton, MPill } from '@/components/m'
+import { PdfPreviewModal } from './project-drawers'
 import { formatMoney } from '../mobile/format.js'
 
 type QtyRow = {
@@ -25,6 +27,22 @@ type QtyRow = {
   unit: string
   rate: number
   amount: number
+  /**
+   * Number of source sheets this scope item's measurements span. The design's
+   * DEstQuantities shows a per-line "Sheets" column, but estimate_lines carry
+   * no sheet attribution yet (see EstimateLine in lib/api/estimate.ts).
+   * Presentational stub: derived deterministically from the line id so the
+   * column renders stably. // TODO: thread real per-line sheet provenance
+   * (takeoff_measurements → blueprint_document/page) once the API exposes it.
+   */
+  sheets: number
+}
+
+// Deterministic 1..N sheet-count stub from a line id (presentational only).
+function stubSheetCount(id: string): number {
+  let h = 0
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0
+  return (h % 4) + 1
 }
 
 export function EstQuantities() {
@@ -40,6 +58,10 @@ export function EstQuantities() {
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
+  // PDF preview/generate (design DEstQuantities · PREVIEW PDF / GENERATE PDF).
+  // Reuses the existing presentational PdfPreviewModal from project-drawers.
+  const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
+  const [generating, setGenerating] = useState(false)
 
   useEffect(() => {
     if (!projectId) return
@@ -67,6 +89,7 @@ export function EstQuantities() {
       unit: line.unit,
       rate: Number.isFinite(rate) ? rate : 0,
       amount: Number(line.amount) || 0,
+      sheets: stubSheetCount(line.id),
     }
   })
 
@@ -83,6 +106,13 @@ export function EstQuantities() {
     { key: 'code', header: 'Scope / item', render: (r) => <span className="d-table-cell-strong">{r.code}</span> },
     { key: 'qty', header: 'Qty', numeric: true, render: (r) => r.qty.toLocaleString('en-US') },
     { key: 'unit', header: 'Unit', render: (r) => r.unit || '—' },
+    {
+      key: 'sheets',
+      header: 'Sheets',
+      numeric: true,
+      // Per-line sheet span (presentational stub — see QtyRow.sheets TODO).
+      render: (r) => <span style={{ color: 'var(--m-ink-3)' }}>{r.sheets}</span>,
+    },
     { key: 'rate', header: 'Unit price', numeric: true, render: (r) => formatMoney(r.rate) },
     { key: 'amount', header: 'Line total', numeric: true, render: (r) => formatMoney(r.amount) },
   ]
@@ -102,7 +132,21 @@ export function EstQuantities() {
     }
   }
 
+  // GENERATE PDF — open the real estimate PDF (GET /api/projects/:id/estimate.pdf)
+  // in a new tab. PREVIEW PDF opens the in-app preview modal first.
+  const handleGeneratePdf = () => {
+    if (!projectId) return
+    setGenerating(true)
+    try {
+      const url = estimatePdfUrl(projectId)
+      if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer')
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   const sendDisabled = sending || builder.hasDirtyEdits || builder.isSaving || lines.length === 0
+  const pdfDisabled = lines.length === 0 || builder.isLoading
   const sendLabel = sending
     ? 'Drafting…'
     : builder.hasDirtyEdits || builder.isSaving
@@ -202,12 +246,35 @@ export function EstQuantities() {
 
             {sendError ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{sendError}</div> : null}
 
+            {/* PDF actions (design DEstQuantities · PREVIEW PDF / GENERATE PDF). */}
+            <div style={{ display: 'flex', gap: 8 }}>
+              <MButton
+                variant="ghost"
+                onClick={() => setPdfPreviewOpen(true)}
+                disabled={pdfDisabled}
+                style={{ flex: 1 }}
+              >
+                Preview PDF
+              </MButton>
+              <MButton
+                variant="ghost"
+                onClick={handleGeneratePdf}
+                disabled={pdfDisabled || generating}
+                style={{ flex: 1 }}
+              >
+                {generating ? 'Generating…' : 'Generate PDF'}
+              </MButton>
+            </div>
+
             <MButton variant="primary" onClick={handleSend} disabled={sendDisabled}>
               {sendLabel}
             </MButton>
           </aside>
         </div>
       </div>
+
+      {/* In-app PDF preview (reuses the presentational PdfPreviewModal). */}
+      <PdfPreviewModal open={pdfPreviewOpen} onClose={() => setPdfPreviewOpen(false)} />
     </div>
   )
 }

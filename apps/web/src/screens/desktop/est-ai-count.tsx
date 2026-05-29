@@ -10,14 +10,29 @@
  *     keyboard-driven review panel (J/K navigate · Y keep · N reject). Low-
  *     confidence detections are flagged red; APPROVE keeps the clean set.
  *
- * Same gap as est-ai-queue.tsx / est-ai-takeoff.tsx: no company-wide AI-count
- * feed hook yet, so the mockup's demo detections stay presentational. Run /
- * approve are local-state handlers with a TODO for the capture pipeline.
+ * WIRED to the real capture pipeline. Setup RUN posts to the takeoff-drafts
+ * capture endpoint (kind=blueprint_vision, dry-run-safe JSON payload — no
+ * Anthropic spend) and routes to REVIEW with the real draft id. REVIEW reads
+ * the draft's stored TakeoffResult and promotes the kept quantities to
+ * committed `takeoff_measurements` via .../:draftId/promote.
+ *
+ * GAP: the pipeline returns whole-draft quantities, not a per-symbol count
+ * keyed to the clicked symbol. The symbol/sensitivity/sheet-scope controls
+ * stay presentational; REVIEW lists the captured quantities in the keep/reject
+ * lane. A dedicated single-symbol auto-count endpoint is a GAP. The board
+ * marker overlay is decorative.
  */
-import { useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { DEyebrow } from '@/components/d'
 import { MButton, MPill } from '@/components/m'
+import {
+  useCaptureTakeoffDraft,
+  usePromoteCapturedQuantities,
+  useTakeoffDraftResult,
+  useTakeoffDrafts,
+  type CapturedQuantity,
+} from '@/lib/api/takeoff-drafts'
 
 type Sensitivity = 'STRICT' | 'NORMAL' | 'LOOSE'
 
@@ -78,7 +93,7 @@ export function EstAiCountSetup() {
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(sheets.map((s) => [s, true])),
   )
-  const [running, setRunning] = useState(false)
+  const capture = useCaptureTakeoffDraft(projectId)
 
   const toggleSheet = (sheet: string) => {
     setSelected((prev) => ({ ...prev, [sheet]: !prev[sheet] }))
@@ -86,9 +101,18 @@ export function EstAiCountSetup() {
   const selectedCount = sheets.filter((s) => selected[s]).length
 
   const runCount = () => {
-    setRunning(true)
-    // No capture pipeline run yet — jump to the count review lane.
-    navigate(projectId ? `/desktop/ai-count/${projectId}/review` : '/desktop/ai-queue')
+    if (!projectId || capture.isPending) {
+      if (!projectId) navigate('/desktop/ai-queue')
+      return
+    }
+    // Dry-run-safe capture (JSON body → deterministic stub on the API; no live
+    // Anthropic spend). Carries the real draft id into the review lane.
+    capture.mutate(
+      { kind: 'blueprint_vision', name: 'AI auto-count', payload: { dryRun: true } },
+      {
+        onSuccess: (res) => navigate(`/desktop/ai-count/${projectId}/review`, { state: { draftId: res.draft.id } }),
+      },
+    )
   }
 
   return (
@@ -198,9 +222,22 @@ export function EstAiCountSetup() {
           </div>
 
           <div style={{ marginTop: 18 }}>
-            <MButton variant="primary" onClick={runCount} disabled={running || selectedCount === 0}>
-              {running ? 'Starting…' : 'Run · ~30s'}
+            <MButton variant="primary" onClick={runCount} disabled={capture.isPending || selectedCount === 0}>
+              {capture.isPending ? 'Scanning…' : 'Run · ~30s'}
             </MButton>
+            {capture.isError ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: 'var(--m-red)',
+                }}
+              >
+                ● {capture.error.message || 'Capture failed — try again.'}
+              </div>
+            ) : null}
           </div>
         </div>
       </div>
@@ -215,17 +252,56 @@ type CountStatus = 'ok' | 'review' | 'flag'
 
 type CountDetection = {
   id: string
+  label: string
+  qty: string
   confidence: 'HIGH' | 'MED' | 'LOW'
   status: CountStatus
 }
 
-const DETECTIONS: CountDetection[] = [
-  { id: 'D-118', confidence: 'HIGH', status: 'ok' },
-  { id: 'D-119', confidence: 'HIGH', status: 'ok' },
-  { id: 'D-201', confidence: 'LOW', status: 'flag' },
-  { id: 'D-202', confidence: 'MED', status: 'review' },
-  { id: 'D-203', confidence: 'LOW', status: 'flag' },
-]
+/** Confidence floor mirrors the API's review_required gate (q.confidence < 0.5). */
+function statusForConfidence(confidence: number): CountStatus {
+  if (confidence >= 0.8) return 'ok'
+  if (confidence >= 0.5) return 'review'
+  return 'flag'
+}
+
+function confidenceLabelFor(confidence: number): 'HIGH' | 'MED' | 'LOW' {
+  if (confidence >= 0.8) return 'HIGH'
+  if (confidence >= 0.5) return 'MED'
+  return 'LOW'
+}
+
+function formatQty(value: number, unit: string): string {
+  const rounded = Number.isInteger(value) ? value : Math.round(value * 100) / 100
+  return `${rounded.toLocaleString()} ${unit.toUpperCase()}`
+}
+
+function quantityToDetection(q: CapturedQuantity): CountDetection {
+  return {
+    id: q.id,
+    label: q.description || q.masterformatCode || q.uniformatCode || q.id,
+    qty: formatQty(q.value, q.unit),
+    confidence: confidenceLabelFor(q.confidence),
+    status: statusForConfidence(q.confidence),
+  }
+}
+
+/**
+ * Resolve the draft id to review: prefer the one handed over by the setup
+ * screen via navigation state; otherwise fall back to the most-recent
+ * capture-sourced draft for the project (covers deep-links / refresh).
+ */
+function useCountReviewDraftId(projectId: string): string | null {
+  const location = useLocation()
+  const stateDraftId =
+    location.state && typeof location.state === 'object' && 'draftId' in location.state
+      ? String((location.state as { draftId?: unknown }).draftId ?? '')
+      : ''
+  const draftsQuery = useTakeoffDrafts(stateDraftId ? null : projectId)
+  if (stateDraftId) return stateDraftId
+  const latestCapture = (draftsQuery.data?.drafts ?? []).filter((d) => d.source && d.source !== 'manual').at(-1)
+  return latestCapture?.id ?? null
+}
 
 // Marker positions in the review canvas (x, y, low?) — verbatim from mockup.
 const MARKERS: Array<[number, number, boolean]> = [
@@ -244,24 +320,112 @@ function statusBg(status: CountStatus): string {
   return status === 'flag' ? 'var(--m-red)' : status === 'review' ? 'var(--m-accent)' : 'var(--m-green)'
 }
 
+// Mono Y/N chip mirroring the keyboard keep/reject contract for click users.
+function decisionChip(on: boolean, kind: 'keep' | 'reject'): React.CSSProperties {
+  const tone = kind === 'keep' ? 'var(--m-green)' : 'var(--m-red)'
+  return {
+    width: 24,
+    height: 24,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    background: on ? tone : 'transparent',
+    color: on ? 'var(--m-sand)' : tone,
+    border: `2px solid ${tone}`,
+    fontFamily: 'var(--m-num)',
+    fontSize: 11,
+    fontWeight: 800,
+    cursor: 'pointer',
+    flexShrink: 0,
+  }
+}
+
+// Per-detection review decision. 'pending' detections inherit their AI status
+// until the estimator keeps/rejects them with Y/N (or a click).
+type Decision = 'pending' | 'kept' | 'rejected'
+
 export function EstAiCountReview() {
   const params = useParams<{ projectId: string }>()
   const navigate = useNavigate()
   const projectId = params.projectId ?? ''
 
-  // Demo detections stay presentational. // TODO: back with the real count
-  // result + promote via .../:draftId/promote.
-  const dets = useMemo<CountDetection[]>(() => DETECTIONS, [])
-  const [active, setActive] = useState(0)
-  const [approving, setApproving] = useState(false)
+  const draftId = useCountReviewDraftId(projectId)
+  const resultQuery = useTakeoffDraftResult(draftId)
+  const promote = usePromoteCapturedQuantities(projectId, draftId)
 
-  const total = 214
-  const flagged = dets.filter((d) => d.status !== 'ok').length
-  const kept = total - flagged
+  // Real captured quantities, mapped into the detection row shape.
+  const dets = useMemo<CountDetection[]>(
+    () => (resultQuery.data?.takeoff_result.quantities ?? []).map(quantityToDetection),
+    [resultQuery.data],
+  )
+
+  // Default the active row to the first flagged detection so the estimator
+  // lands on the one that needs a decision, not row 0.
+  const firstFlagged = useMemo(() => {
+    const idx = dets.findIndex((d) => d.status !== 'ok')
+    return idx >= 0 ? idx : 0
+  }, [dets])
+  const [active, setActive] = useState(firstFlagged)
+
+  // Per-row keep/reject decisions. Keyed by detection id so reordering stays safe.
+  const [decisions, setDecisions] = useState<Record<string, Decision>>({})
+
+  const decisionFor = (d: CountDetection): Decision => decisions[d.id] ?? 'pending'
+  const setDecision = (id: string, decision: Decision) => setDecisions((prev) => ({ ...prev, [id]: decision }))
+
+  // J/K navigate · Y keep · N reject — the keyboard contract the banner
+  // advertises. Acting on a row also advances to the next one so the estimator
+  // can clear the flagged set without leaving the keyboard.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Don't hijack keys while typing in an input/textarea.
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return
+      }
+      const key = e.key.toLowerCase()
+      if (key === 'j') {
+        e.preventDefault()
+        setActive((i) => Math.min(i + 1, dets.length - 1))
+      } else if (key === 'k') {
+        e.preventDefault()
+        setActive((i) => Math.max(i - 1, 0))
+      } else if (key === 'y') {
+        e.preventDefault()
+        const d = dets[active]
+        if (d) setDecision(d.id, 'kept')
+        setActive((i) => Math.min(i + 1, dets.length - 1))
+      } else if (key === 'n') {
+        e.preventDefault()
+        const d = dets[active]
+        if (d) setDecision(d.id, 'rejected')
+        setActive((i) => Math.min(i + 1, dets.length - 1))
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [active, dets])
+
+  const total = dets.length
+  // High-confidence detections are auto-kept; flagged rows are kept only once
+  // the estimator explicitly keeps them. Rejected rows drop out of the count.
+  const keptDets = dets.filter((d) => {
+    const decision = decisionFor(d)
+    if (decision === 'rejected') return false
+    if (decision === 'kept') return true
+    return d.status === 'ok'
+  })
+  const kept = keptDets.length
+  const keptIds = keptDets.map((d) => d.id)
+  const rejectedCount = dets.filter((d) => decisionFor(d) === 'rejected').length
+  const approving = promote.isPending
 
   const approve = () => {
-    setApproving(true)
-    navigate(projectId ? `/desktop/estimate/${projectId}` : '/desktop/ai-queue')
+    if (!draftId || keptIds.length === 0 || promote.isPending) return
+    promote.mutate(
+      { quantity_ids: keptIds },
+      { onSuccess: () => navigate(projectId ? `/desktop/estimate/${projectId}` : '/desktop/ai-queue') },
+    )
   }
 
   return (
@@ -322,7 +486,10 @@ export function EstAiCountReview() {
         {/* Keyboard review panel */}
         <div style={{ overflowY: 'auto', background: 'var(--m-card)' }}>
           <div style={{ padding: 20, borderBottom: '2px solid var(--m-ink)' }}>
-            <DEyebrow>AI · {total} found</DEyebrow>
+            <DEyebrow>
+              {resultQuery.isLoading ? 'AI · loading…' : `AI · ${total} found`}
+              {resultQuery.data?.source ? ` · ${resultQuery.data.source}` : ''}
+            </DEyebrow>
             <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 36, marginTop: 6 }}>
               {kept} <span style={{ fontSize: 16, color: 'var(--m-green)' }}>kept</span>
             </div>
@@ -335,7 +502,8 @@ export function EstAiCountReview() {
                 fontWeight: 600,
               }}
             >
-              {flagged} LOW-CONF FLAGGED
+              {dets.filter((d) => d.status !== 'ok').length} LOW-CONF FLAGGED
+              {rejectedCount > 0 ? ` · ${rejectedCount} REJECTED` : ''}
             </div>
             <div
               style={{
@@ -354,37 +522,123 @@ export function EstAiCountReview() {
           </div>
           {dets.map((d, i) => {
             const on = i === active
+            const decision = decisionFor(d)
             return (
-              <button
+              <div
                 key={d.id}
-                type="button"
-                onClick={() => setActive(i)}
+                role="button"
+                tabIndex={0}
                 aria-pressed={on}
+                onClick={() => setActive(i)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    setActive(i)
+                  }
+                }}
                 style={{
                   width: '100%',
                   textAlign: 'left',
                   padding: '14px 20px',
                   borderBottom: '1px solid var(--m-line-2)',
+                  borderLeft: on ? '4px solid var(--m-ink)' : '4px solid transparent',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 12,
                   background: on ? 'var(--m-accent)' : 'transparent',
-                  border: 'none',
-                  borderTop: 'none',
+                  opacity: decision === 'rejected' ? 0.5 : 1,
                   cursor: 'pointer',
                 }}
               >
                 <span style={{ width: 8, height: 8, background: statusBg(d.status) }} aria-hidden />
-                <span style={{ flex: 1, fontFamily: 'var(--m-num)', fontSize: 12, fontWeight: 700 }}>{d.id}</span>
-                <MPill tone={d.confidence === 'HIGH' ? 'green' : d.confidence === 'MED' ? 'amber' : 'red'}>
-                  {d.confidence}
-                </MPill>
-              </button>
+                <span
+                  style={{
+                    flex: 1,
+                    minWidth: 0,
+                    fontFamily: 'var(--m-num)',
+                    fontSize: 12,
+                    fontWeight: 700,
+                    textDecoration: decision === 'rejected' ? 'line-through' : 'none',
+                  }}
+                >
+                  {d.label} · {d.qty}
+                </span>
+                {decision === 'kept' ? (
+                  <MPill tone="green" dot>
+                    KEPT
+                  </MPill>
+                ) : decision === 'rejected' ? (
+                  <MPill tone="red" dot>
+                    REJECTED
+                  </MPill>
+                ) : (
+                  <MPill tone={d.confidence === 'HIGH' ? 'green' : d.confidence === 'MED' ? 'amber' : 'red'}>
+                    {d.confidence}
+                  </MPill>
+                )}
+                {/* Y/N affordances mirror the keyboard contract for click users. */}
+                <span style={{ display: 'flex', gap: 4 }}>
+                  <button
+                    type="button"
+                    aria-label={`Keep ${d.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setActive(i)
+                      setDecision(d.id, 'kept')
+                    }}
+                    style={decisionChip(decision === 'kept', 'keep')}
+                  >
+                    Y
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Reject ${d.id}`}
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setActive(i)
+                      setDecision(d.id, 'rejected')
+                    }}
+                    style={decisionChip(decision === 'rejected', 'reject')}
+                  >
+                    N
+                  </button>
+                </span>
+              </div>
             )
           })}
+          {!resultQuery.isLoading && dets.length === 0 ? (
+            <div
+              style={{
+                padding: '16px 20px',
+                fontFamily: 'var(--m-num)',
+                fontSize: 12,
+                color: 'var(--m-ink-3)',
+                fontWeight: 600,
+              }}
+            >
+              {resultQuery.isError
+                ? `Couldn't load the count result. ${resultQuery.error.message}`
+                : draftId
+                  ? 'This draft has no detected quantities.'
+                  : 'Run the count to produce a draft.'}
+            </div>
+          ) : null}
+          {promote.isError ? (
+            <div
+              style={{
+                padding: '12px 20px 0',
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                fontWeight: 700,
+                color: 'var(--m-red)',
+              }}
+            >
+              ● {promote.error.message || 'Promote failed — try again.'}
+            </div>
+          ) : null}
           <div style={{ padding: '16px 20px' }}>
-            <MButton variant="primary" onClick={approve} disabled={approving}>
-              {approving ? 'Approving…' : `Approve ${kept} clean`}
+            <MButton variant="primary" onClick={approve} disabled={approving || kept === 0 || !draftId}>
+              {approving ? 'Promoting…' : `Approve ${kept} clean`}
             </MButton>
           </div>
         </div>

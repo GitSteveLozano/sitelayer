@@ -59,6 +59,24 @@ function relativeAge(iso: string): string {
   return `${Math.floor(s / 604_800)}W`
 }
 
+// Bucket a notification into the design's NOW / TODAY / EARLIER groups
+// (mirrors V2NotifOwner's NOW + TODAY section bars). NOW = within the last
+// ~3 hours, TODAY = same calendar day, EARLIER = anything older.
+type Group = 'NOW' | 'TODAY' | 'EARLIER'
+
+function groupFor(iso: string): Group {
+  const ts = Date.parse(iso)
+  if (!Number.isFinite(ts)) return 'EARLIER'
+  const now = new Date()
+  const then = new Date(ts)
+  if (now.getTime() - ts < 3 * 3600_000) return 'NOW'
+  const sameDay =
+    now.getFullYear() === then.getFullYear() && now.getMonth() === then.getMonth() && now.getDate() === then.getDate()
+  return sameDay ? 'TODAY' : 'EARLIER'
+}
+
+const GROUP_ORDER: readonly Group[] = ['NOW', 'TODAY', 'EARLIER']
+
 type Filter = 'all' | 'unread'
 
 const FILTERS: ReadonlyArray<{ id: Filter; label: string }> = [
@@ -82,6 +100,14 @@ export function MobileNotificationsInbox() {
   })
 
   const rows = query.data?.notifications ?? []
+
+  // Group rows into NOW / TODAY / EARLIER section bars (design grouping),
+  // preserving the API's newest-first order within each group.
+  const grouped = useMemo(() => {
+    const buckets: Record<Group, NotificationRow[]> = { NOW: [], TODAY: [], EARLIER: [] }
+    for (const n of rows) buckets[groupFor(n.created_at)].push(n)
+    return GROUP_ORDER.map((g) => ({ group: g, items: buckets[g] })).filter((s) => s.items.length > 0)
+  }, [rows])
 
   const onTap = (n: NotificationRow) => {
     if (!n.read_at) markRead.mutate(n.id)
@@ -128,11 +154,28 @@ export function MobileNotificationsInbox() {
             {filter === 'unread' ? 'NO UNREAD NOTIFICATIONS' : 'INBOX EMPTY'}
           </div>
         ) : (
-          <div style={{ borderTop: '2px solid var(--m-ink)' }}>
-            {rows.map((n) => (
-              <NotificationRowView key={n.id} n={n} onTap={() => onTap(n)} />
-            ))}
-          </div>
+          grouped.map((section) => (
+            <section key={section.group}>
+              <div
+                style={{
+                  padding: '10px 16px',
+                  borderTop: '2px solid var(--m-ink)',
+                  borderBottom: '1px solid var(--m-line-2)',
+                  background: 'var(--m-sand-2)',
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  color: 'var(--m-ink-2)',
+                }}
+              >
+                {section.group}
+              </div>
+              {section.items.map((n) => (
+                <NotificationRowView key={n.id} n={n} onTap={() => onTap(n)} />
+              ))}
+            </section>
+          ))
         )}
       </MBody>
     </>

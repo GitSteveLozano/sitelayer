@@ -121,7 +121,11 @@ export interface InventoryMovement {
   from_location_id: string | null
   to_location_id: string | null
   project_id: string | null
-  movement_type: 'deliver' | 'return' | 'transfer' | 'adjustment' | 'damage' | 'loss'
+  // Canonical server-side movement types (apps/api rental-inventory.types.ts
+  // `MOVEMENT_TYPES`). The POST handler `normalizeEnum`s anything else to
+  // `adjustment`, so a damaged-return must post `'damaged'` (not `'damage'`),
+  // a loss `'lost'`, and a service flag `'repair'`.
+  movement_type: 'deliver' | 'return' | 'transfer' | 'adjustment' | 'damaged' | 'lost' | 'repair'
   quantity: string
   occurred_on: string
   ticket_number: string | null

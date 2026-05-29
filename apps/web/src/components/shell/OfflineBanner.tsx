@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { useOnlineStatus } from '@/lib/offline/online-status'
 import { offlineMutationCount, subscribeOfflineMutations } from '@/lib/offline/queue'
 import { replayOfflineQueue } from '@/lib/offline/replay'
-import { cn } from '@/lib/cn'
 
 /**
  * Sticky offline indicator. Renders when navigator.onLine is false OR
@@ -15,6 +14,12 @@ import { cn } from '@/lib/cn'
  * without knowing it. The badge becomes a warning-tone strip with the
  * cloud-off glyph; the inline pending-count is appended so they still
  * see how much work is sitting in the queue.
+ *
+ * v2 brutalist (aligned to V2StateOffline): offline is a full-fill ink
+ * banner with a square red status block; the catching-up state stays an
+ * amber-fill strip. Every color is a `--m-*` token (NOT a hardcoded hex)
+ * so the worker dark theme (`.m-dark` shell wrapper) inverts it for
+ * free — that's the V2StateOfflineWorker requirement.
  *
  * Mounted inside AppShell so it shows on every screen.
  */
@@ -50,36 +55,29 @@ export function OfflineBanner() {
 
   return (
     <div
-      className={cn(
-        'sticky top-0 z-40 px-4 py-2',
-        'flex items-center gap-3 text-[12px] font-medium',
-        online ? 'bg-warn-soft text-warn' : 'bg-ink text-[#f3ecdf]',
-      )}
+      className="sticky top-0 z-40 px-5 py-3 flex items-center gap-3"
+      style={{
+        background: online ? 'var(--m-amber)' : 'var(--m-ink)',
+        color: online ? '#fff' : 'var(--m-sand)',
+        borderBottom: '2px solid var(--m-ink)',
+        fontFamily: 'var(--m-num)',
+        fontSize: 11,
+        fontWeight: 600,
+        letterSpacing: '0.04em',
+        textTransform: 'uppercase',
+      }}
       role="status"
       aria-live="polite"
       data-testid="offline-banner"
       data-online={online ? 'true' : 'false'}
     >
       {online ? (
-        <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" aria-hidden="true" />
+        // Square pulsing status block — catching up.
+        <span className="shrink-0" style={{ width: 12, height: 12, background: 'currentColor' }} aria-hidden="true" />
       ) : (
-        // Cloud-off glyph — inline SVG so we don't pay for the lucide
-        // dependency tree on every render. Sized to match the other
-        // banner indicators.
-        <svg
-          className="w-3.5 h-3.5 shrink-0"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          aria-hidden="true"
-        >
-          <path d="M2 2l20 20" />
-          <path d="M5.2 5.2A8 8 0 0 0 12 19h6a4 4 0 0 0 1.7-7.6" />
-          <path d="M9 5a8 8 0 0 1 12 4 4 4 0 0 1 .5 7.8" />
-        </svg>
+        // Square red status block — offline. Brutalist: hard edges, full
+        // fill, no glyph. Uses the red token so it inverts with the theme.
+        <span className="shrink-0" style={{ width: 14, height: 14, background: 'var(--m-red)' }} aria-hidden="true" />
       )}
       <span className="flex-1 min-w-0 truncate">
         {online ? `${pending} change${pending === 1 ? '' : 's'} catching up…` : offlineLabel}
@@ -88,7 +86,20 @@ export function OfflineBanner() {
         <button
           type="button"
           onClick={() => void replayOfflineQueue()}
-          className="text-[11px] font-semibold underline-offset-2 hover:underline"
+          className="shrink-0"
+          style={{
+            background: 'transparent',
+            border: '1.5px solid currentColor',
+            color: 'inherit',
+            borderRadius: 0,
+            padding: '4px 10px',
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.04em',
+            textTransform: 'uppercase',
+            cursor: 'pointer',
+          }}
         >
           Retry now
         </button>

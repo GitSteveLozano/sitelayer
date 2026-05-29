@@ -32,6 +32,10 @@ export function WorkerScope({ bootstrap }: { bootstrap: BootstrapResponse | null
 
   const stepStatuses = useMemo<ScopeStepStatus[]>(() => deriveStepStatuses(steps), [steps])
   const doneCount = stepStatuses.filter((s) => s === 'done').length
+  // SCOPE · DONE 100% — the celebratory treatment fires only when every
+  // step in the brief is explicitly checked (not merely when an sqft
+  // progress bar hits 100%). A brief with zero steps is never "done".
+  const allDone = steps.length > 0 && doneCount === steps.length
 
   // Today's goal target (SF) comes from the project's target throughput;
   // reported progress prefers per-step `sqft_done`. The percentage is
@@ -68,10 +72,15 @@ export function WorkerScope({ bootstrap }: { bootstrap: BootstrapResponse | null
       <MTopBar back title="Scope" onBack={() => navigate('/today')} />
       <MBody>
         <MLargeHead
-          eyebrow="SCOPE · TODAY"
+          eyebrow={allDone ? 'SCOPE · DONE' : 'SCOPE · TODAY'}
           title={project?.division_code ?? 'Awaiting brief'}
           sub={project?.name ?? 'Foreman has not sent today’s brief yet.'}
         />
+        {/* SCOPE · DONE 100% — celebratory hero shown when every step is
+            checked. Replaces the running progress slab with a settled
+            "all clear" treatment; the step list below still renders so the
+            worker can review what they completed. */}
+        {allDone ? <ScopeDoneHero stepCount={steps.length} sqftDone={sqftDone} /> : null}
         {/* Goal slab — accent eyebrow tag + a big tight-font statement of
             today's goal, sitting on the dark shell. */}
         <div style={{ padding: 20, borderBottom: '2px solid var(--m-sand-2)' }}>
@@ -92,8 +101,9 @@ export function WorkerScope({ bootstrap }: { bootstrap: BootstrapResponse | null
             {goalText}
           </div>
         </div>
-        {/* Progress slab — mono SF-done / % row over a thick bar. */}
-        {targetSqft || steps.length > 0 ? (
+        {/* Progress slab — mono SF-done / % row over a thick bar. Hidden
+            once everything's checked; the done hero carries the 100%. */}
+        {!allDone && (targetSqft || steps.length > 0) ? (
           <div
             style={{
               padding: '18px 20px',
@@ -249,6 +259,69 @@ function StepRow({
           ) : null}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+/**
+ * SCOPE · DONE 100% hero (`V2WorkerScopeDone`). A settled, celebratory
+ * slab the worker sees once every step in today's brief is checked off.
+ * Brutalist v2 framing: a solid green field with a big check mark, a
+ * "SCOPE DONE" eyebrow, and a mono summary line. No running bar — this is
+ * the terminal, all-clear state, distinct from the in-progress view.
+ */
+function ScopeDoneHero({ stepCount, sqftDone }: { stepCount: number; sqftDone: number | null }) {
+  return (
+    <div
+      style={{
+        margin: 20,
+        border: '2px solid var(--m-green)',
+        background: 'var(--m-green)',
+        color: '#fff',
+        padding: '24px 20px',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 16,
+      }}
+    >
+      <span
+        aria-hidden
+        style={{
+          width: 56,
+          height: 56,
+          flexShrink: 0,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          border: '2px solid #fff',
+        }}
+      >
+        <MI.Check size={32} />
+      </span>
+      <div style={{ minWidth: 0 }}>
+        <div
+          className="m-topbar-eyebrow"
+          style={{ color: '#fff', opacity: 0.85, fontWeight: 700, letterSpacing: '0.08em' }}
+        >
+          SCOPE DONE · 100%
+        </div>
+        <div
+          style={{
+            fontFamily: 'var(--m-font-display)',
+            fontWeight: 800,
+            fontSize: 26,
+            lineHeight: 1.05,
+            letterSpacing: '-0.02em',
+            marginTop: 6,
+          }}
+        >
+          Every step checked.
+        </div>
+        <div className="num" style={{ marginTop: 6, fontSize: 12, fontWeight: 600, color: '#fff', opacity: 0.9 }}>
+          {stepCount} step{stepCount === 1 ? '' : 's'} complete
+          {sqftDone !== null ? ` · ${sqftDone.toLocaleString('en-US')} SF` : ''}
+        </div>
+      </div>
     </div>
   )
 }
