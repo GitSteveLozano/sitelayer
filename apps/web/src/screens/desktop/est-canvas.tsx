@@ -247,8 +247,10 @@ export function EstCanvas() {
     }
     cont.addEventListener('wheel', onWheel, { passive: false })
     return () => cont.removeEventListener('wheel', onWheel)
-    // applyZoom reads live values via refs, so an empty dep array is correct.
-  }, [])
+    // Re-run when loading flips: the container ref is null during the loading
+    // early-return, so the listener must (re)attach once the canvas mounts.
+    // applyZoom reads live zoom/pan via refs, so those aren't deps.
+  }, [drafts.isLoading, blueprints.isLoading])
 
   // Hold Space to pan (Figma-style), but never while typing in an input.
   useEffect(() => {
