@@ -35,6 +35,7 @@ import {
 import { useQboConnection } from '@/lib/api'
 import { NotificationPreferencesScreen } from './notifications.js'
 import { PushOnboardingCard } from './push-onboarding.js'
+import { traceBeaconConsentGranted, setTraceBeaconConsent } from '../../lib/product-trace-beacon.js'
 
 const ROLE_LABEL: Record<string, string> = {
   admin: 'Owner / PM',
@@ -54,6 +55,9 @@ export function MobileSettingsHome({
   navigate?: (path: string) => void
 }) {
   const [section, setSection] = useState<'home' | 'notifications'>('home')
+  // T1 "help debug my session": opt into anonymized in-app diagnostics (the
+  // observability client beacon). OFF by default; flips setTraceBeaconConsent.
+  const [debugConsent, setDebugConsent] = useState(traceBeaconConsentGranted())
 
   if (section === 'notifications') {
     return (
@@ -206,6 +210,22 @@ export function MobileSettingsHome({
             supporting="Push, SMS, email per event"
             chev
             onTap={() => setSection('notifications')}
+          />
+          <MListRow
+            leading={<MI.Alert size={18} />}
+            leadingTone="blue"
+            headline="Help debug my session"
+            supporting={
+              debugConsent
+                ? 'On — sharing anonymized in-app diagnostics'
+                : 'Off — opt in to share anonymized diagnostics that help us fix issues'
+            }
+            trailing={<MPill>{debugConsent ? 'On' : 'Off'}</MPill>}
+            onTap={() => {
+              const next = !debugConsent
+              setTraceBeaconConsent(next)
+              setDebugConsent(next)
+            }}
           />
           <MListRow
             leading={<MI.ShieldAlert size={18} />}
