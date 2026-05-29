@@ -200,6 +200,10 @@ export async function handlePublicPortalRoutes(
       ctx.sendJson(resolved.status, { error: resolved.error })
       return true
     }
+    if (!resolved.allows.has('shipments')) {
+      ctx.sendJson(403, { error: 'shipments not allowed on this portal link' })
+      return true
+    }
     if (resolved.link.project_id && resolved.link.project_id !== projectId) {
       ctx.sendJson(403, { error: 'project not allowed' })
       return true

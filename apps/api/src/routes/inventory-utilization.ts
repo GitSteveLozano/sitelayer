@@ -84,16 +84,31 @@ export async function handleInventoryUtilizationRoutes(
         i.unit,
         i.default_rental_rate,
         coalesce((
-          select sum(case
-            -- New receipt into the yard (no from_location): + stock
-            when m.movement_type in ('deliver', 'transfer', 'adjustment') and m.from_location_id is null then m.quantity
-            -- Damage / loss removes from owned stock regardless of locations
-            when m.movement_type in ('damage', 'loss') then -m.quantity
-            -- Return-to-supplier (no to_location): - stock
-            when m.movement_type = 'return' and m.to_location_id is null then -m.quantity
-            else 0
-          end)
+          -- Net movement-ledger balance by location_type, mirroring the
+          -- totals block of this same response and
+          -- /api/inventory/items/availability (movement_balances CTE) so the
+          -- two never contradict. A unit is "owned/available" while it sits
+          -- in a usable location (yard / job / in_transit / repair); units
+          -- routed into a lost or damaged location drain owned stock.
+          -- We key on location_type (NOT movement_type) because that is what
+          -- the persisted data carries — movement_type uses the canonical
+          -- spellings 'damaged'/'lost' (rental-inventory.types.ts:337), never
+          -- 'damage'/'loss', so a movement_type filter silently missed every
+          -- damaged/lost unit and overstated availability.
+          select sum(
+            case
+              when m.to_location_id is not null and coalesce(tl.location_type, '') not in ('lost', 'damaged') then m.quantity
+              else 0
+            end
+            -
+            case
+              when m.from_location_id is not null and coalesce(fl.location_type, '') not in ('lost', 'damaged') then m.quantity
+              else 0
+            end
+          )
           from inventory_movements m
+          left join inventory_locations fl on fl.company_id = m.company_id and fl.id = m.from_location_id
+          left join inventory_locations tl on tl.company_id = m.company_id and tl.id = m.to_location_id
           where m.company_id = i.company_id and m.inventory_item_id = i.id
         ), 0)::numeric(12,2) as movement_balance,
         coalesce((

@@ -10,7 +10,7 @@
  * Shares the data layer (hooks, entity APIs) and v2 tokens with mobile; only
  * the composition differs. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import {
@@ -34,7 +34,9 @@ import {
   UserSquare,
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
-import { getActiveCompanySlug, queryKeys, request, type BootstrapResponse } from '@/lib/api'
+import { getActiveCompanySlug, queryKeys, request, type BootstrapResponse, type SessionResponse } from '@/lib/api'
+import { normalizeMobileShellRole } from '@/lib/active-context'
+import { membershipRoleToPersona, RoleContext, type Role } from '@/lib/role'
 import {
   DCommandPalette,
   DMenu,
@@ -211,6 +213,32 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
     enabled: bootstrapProp === null && Boolean(companySlug),
   })
   const bootstrap = bootstrapProp ?? bootstrapQuery.data ?? null
+
+  // RoleContext for the desktop command-center tree. App.tsx mounts this
+  // surface directly at `/desktop/*` (NOT through routes/workspace.tsx), so
+  // without this provider every role-gated control underneath falls back to
+  // `useRole()`'s default `'worker'` — which hides owner/foreman affordances
+  // like the est-canvas "Upload blueprint" button. Resolve the persona from
+  // the real session membership role the same way CompanyWorkspace does.
+  // The desktop surface is owner-gated (workspace.tsx only sends owners here),
+  // so the safe default while the session loads is `'owner'`. Shares the same
+  // `['session', slug]` cache key as CompanyWorkspace, so when a redirected
+  // owner lands here the role is already warm. The local act-as / role
+  // override still wins inside `useRole()`, keeping the dev RoleSwitcher and
+  // the WEARING hat-switch's route navigation intact.
+  const sessionQuery = useQuery({
+    queryKey: queryKeys.session(companySlug ?? ''),
+    queryFn: () => request<SessionResponse>('/api/session', { companySlug: companySlug ?? undefined }),
+    enabled: Boolean(companySlug),
+  })
+  const persona = useMemo<Role>(() => {
+    const session = sessionQuery.data ?? null
+    const sessionRole =
+      session?.memberships?.find((membership) => membership.slug === companySlug)?.role ?? session?.user?.role ?? null
+    if (sessionRole === null) return 'owner'
+    const companyRole = normalizeMobileShellRole(sessionRole)
+    return companyRole === 'admin' || companyRole === 'office' ? 'owner' : membershipRoleToPersona(companyRole)
+  }, [sessionQuery.data, companySlug])
 
   // ⌘K command palette — fuzzy over projects/clients/items + nav targets.
   const q = cmdkQuery.trim().toLowerCase()
@@ -458,44 +486,46 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
           </button>
         ))}
       </DMenu>
-      <Routes>
-        <Route index element={<OwnerDashboard bootstrap={bootstrap} />} />
-        <Route path="projects" element={<OwnerProjects bootstrap={bootstrap} />} />
-        <Route path="projects/new" element={<OwnerNewProject />} />
-        <Route path="projects/:projectId" element={<OwnerProjectDetail bootstrap={bootstrap} />} />
-        <Route path="rentals/utilization" element={<OwnerRentalsUtilization />} />
-        <Route path="rentals/:itemId" element={<OwnerRentalsAsset />} />
-        <Route path="rentals/:itemId/dispatch" element={<OwnerRentalsDispatch bootstrap={bootstrap} />} />
-        <Route path="rentals/:itemId/return" element={<OwnerRentalsReturn />} />
-        <Route path="fm/log" element={<FmLog bootstrap={bootstrap} />} />
-        <Route path="messages" element={<OwnerMessages bootstrap={bootstrap} />} />
-        <Route path="broadcast" element={<OwnerBroadcast />} />
-        <Route path="activity" element={<OwnerActivity />} />
-        <Route path="schedule" element={<OwnerSchedule bootstrap={bootstrap} />} />
-        <Route path="money" element={<OwnerMoney bootstrap={bootstrap} />} />
-        <Route path="approvals" element={<OwnerApprovals bootstrap={bootstrap} />} />
-        <Route path="team" element={<OwnerTeam bootstrap={bootstrap} />} />
-        <Route path="clients" element={<OwnerClients />} />
-        <Route path="rentals" element={<OwnerRentals />} />
-        <Route path="settings" element={<OwnerSettings />} />
-        <Route path="takeoff" element={<EstTakeoffProjects bootstrap={bootstrap} />} />
-        <Route path="ai-queue" element={<EstAiQueue bootstrap={bootstrap} />} />
-        <Route path="item-library" element={<EstItemLibrary />} />
-        <Route path="clients/:clientId" element={<EstClientProfile />} />
-        <Route path="estimate/:projectId" element={<EstQuantities />} />
-        <Route path="scale/:projectId" element={<EstScaleVerify />} />
-        <Route path="canvas/:projectId" element={<EstCanvas />} />
-        <Route path="fm/today" element={<FmToday bootstrap={bootstrap} />} />
-        <Route path="fm/crew" element={<FmCrew bootstrap={bootstrap} />} />
-        <Route path="fm/schedule" element={<FmSchedule bootstrap={bootstrap} />} />
-        <Route path="fm/time" element={<FmTime bootstrap={bootstrap} />} />
-        <Route path="fm/brief/:projectId" element={<FmBrief />} />
-        <Route path="ai-takeoff/:projectId" element={<EstAiTakeoffSetup />} />
-        <Route path="ai-takeoff/:projectId/review" element={<EstAiTakeoffReview />} />
-        <Route path="ai-count/:projectId" element={<EstAiCountSetup />} />
-        <Route path="ai-count/:projectId/review" element={<EstAiCountReview />} />
-        <Route path="*" element={<DComingSoon name="Screen" />} />
-      </Routes>
+      <RoleContext.Provider value={persona}>
+        <Routes>
+          <Route index element={<OwnerDashboard bootstrap={bootstrap} />} />
+          <Route path="projects" element={<OwnerProjects bootstrap={bootstrap} />} />
+          <Route path="projects/new" element={<OwnerNewProject />} />
+          <Route path="projects/:projectId" element={<OwnerProjectDetail bootstrap={bootstrap} />} />
+          <Route path="rentals/utilization" element={<OwnerRentalsUtilization />} />
+          <Route path="rentals/:itemId" element={<OwnerRentalsAsset />} />
+          <Route path="rentals/:itemId/dispatch" element={<OwnerRentalsDispatch bootstrap={bootstrap} />} />
+          <Route path="rentals/:itemId/return" element={<OwnerRentalsReturn />} />
+          <Route path="fm/log" element={<FmLog bootstrap={bootstrap} />} />
+          <Route path="messages" element={<OwnerMessages bootstrap={bootstrap} />} />
+          <Route path="broadcast" element={<OwnerBroadcast />} />
+          <Route path="activity" element={<OwnerActivity />} />
+          <Route path="schedule" element={<OwnerSchedule bootstrap={bootstrap} />} />
+          <Route path="money" element={<OwnerMoney bootstrap={bootstrap} />} />
+          <Route path="approvals" element={<OwnerApprovals bootstrap={bootstrap} />} />
+          <Route path="team" element={<OwnerTeam bootstrap={bootstrap} />} />
+          <Route path="clients" element={<OwnerClients />} />
+          <Route path="rentals" element={<OwnerRentals />} />
+          <Route path="settings" element={<OwnerSettings />} />
+          <Route path="takeoff" element={<EstTakeoffProjects bootstrap={bootstrap} />} />
+          <Route path="ai-queue" element={<EstAiQueue bootstrap={bootstrap} />} />
+          <Route path="item-library" element={<EstItemLibrary />} />
+          <Route path="clients/:clientId" element={<EstClientProfile />} />
+          <Route path="estimate/:projectId" element={<EstQuantities />} />
+          <Route path="scale/:projectId" element={<EstScaleVerify />} />
+          <Route path="canvas/:projectId" element={<EstCanvas />} />
+          <Route path="fm/today" element={<FmToday bootstrap={bootstrap} />} />
+          <Route path="fm/crew" element={<FmCrew bootstrap={bootstrap} />} />
+          <Route path="fm/schedule" element={<FmSchedule bootstrap={bootstrap} />} />
+          <Route path="fm/time" element={<FmTime bootstrap={bootstrap} />} />
+          <Route path="fm/brief/:projectId" element={<FmBrief />} />
+          <Route path="ai-takeoff/:projectId" element={<EstAiTakeoffSetup />} />
+          <Route path="ai-takeoff/:projectId/review" element={<EstAiTakeoffReview />} />
+          <Route path="ai-count/:projectId" element={<EstAiCountSetup />} />
+          <Route path="ai-count/:projectId/review" element={<EstAiCountReview />} />
+          <Route path="*" element={<DComingSoon name="Screen" />} />
+        </Routes>
+      </RoleContext.Provider>
     </DShell>
   )
 }

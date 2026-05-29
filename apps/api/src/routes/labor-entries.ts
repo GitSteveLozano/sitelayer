@@ -135,7 +135,7 @@ export async function handleLaborEntryRoutes(
         `
       select id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on, division_code, version, deleted_at, created_at
       from labor_entries
-      where company_id = $1 and ($2 = '' or project_id = $2)
+      where company_id = $1 and ($2 = '' or project_id = $2::uuid)
       order by occurred_on desc, created_at desc
       limit $3 offset $4
       `,

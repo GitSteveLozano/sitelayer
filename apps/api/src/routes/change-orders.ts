@@ -301,10 +301,20 @@ export async function handleChangeOrderRoutes(
           schemaVersion: CHANGE_ORDER_WORKFLOW_SCHEMA_VERSION,
           entityType: 'change_order',
           entityId: id,
-          stateVersion: row.state_version,
+          // PRE-transition state_version (the version the event was
+          // dispatched against), mirroring rental-billing-state.ts:214. The
+          // unique (entity_id, state_version) constraint then rejects a
+          // replayed transition, and the read endpoint reads this as
+          // `from_state_version` with `snapshot_after->>'state_version'`
+          // (== this + 1) as `to_state_version`.
+          stateVersion,
           eventType,
           eventPayload: { event: eventType, reason: reason ?? null },
-          snapshotAfter: rowToContext(row),
+          // snapshot_after must carry a `state` key (the read endpoint
+          // projects snapshot_after->>'state' as to_state / from_state).
+          // The reducer's nextSnapshot is already that shape; rowToContext
+          // keys on `status` instead, leaving to_state blank for every CO.
+          snapshotAfter: nextSnapshot,
           actorUserId: ctx.currentUserId,
         })
         await recordAudit(client, {

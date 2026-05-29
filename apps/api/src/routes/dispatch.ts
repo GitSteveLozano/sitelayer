@@ -335,7 +335,13 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       handleWorkRequestRoutes(req, url, {
         pool,
         company,
-        identity,
+        // Act-as-aware identity: created_by / actor attribution and the
+        // member-scoped read filters inside the handler key off
+        // identity.userId. Under the dev RoleSwitcher the raw identity is the
+        // demo-user, so override userId with the impersonated user id while
+        // preserving source/role. `currentUserId` resolves to the act-as
+        // override only when tier !== 'prod', so prod attribution is unchanged.
+        identity: { ...identity, userId: currentUserId },
         tier: ctx.tier,
         buildSha: getBuildSha(),
         requireRole,
@@ -725,7 +731,10 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       handleClockRoutes(req, url, {
         pool,
         company,
-        currentUserId: identity.userId,
+        // Act-as-aware (matches every other dispatch entry, e.g. daily-logs):
+        // clock in/out must attribute to the impersonated user under the dev
+        // RoleSwitcher, not the raw demo-user identity.
+        currentUserId,
         requireRole: requireRoleStr,
         readBody,
         sendJson,
@@ -969,7 +978,10 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
       handleAnalyticsRoutes(req, url, {
         pool,
         company,
-        currentUserId: identity.userId,
+        // Act-as-aware: the /divisions + /service-item-productivity role
+        // lookups must read the impersonated user's membership under the dev
+        // RoleSwitcher, not the raw identity (which would skip the gate).
+        currentUserId,
         requireRole: requireRoleStr,
         sendJson,
       }),
