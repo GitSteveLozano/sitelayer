@@ -553,12 +553,14 @@ export {
   useCreateMeasurement,
   useDeleteMeasurement,
   useImportTakeoff,
+  uploadBlueprint,
   useProjectBlueprints,
   useProjectMeasurements,
   useQboCustomFields,
   useRemoveTakeoffTag,
   useTakeoffTags,
   useUpdateTakeoffTag,
+  useUploadBlueprint,
   useUpsertQboCustomField,
   type Assembly,
   type AssemblyComponent,
@@ -571,6 +573,8 @@ export {
   type TakeoffMeasurement,
   type TakeoffTag,
   type UpdateTakeoffTagInput,
+  type UploadBlueprintOptions,
+  type UseUploadBlueprintInput,
 } from './takeoff'
 
 export {
