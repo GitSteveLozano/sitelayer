@@ -33,7 +33,14 @@ function inviteToken(): string {
   }
 }
 
-type Ev = { event_class: string; route_path: string; outcome: string; error_code: string; occurred_at: string; payload: Record<string, unknown> }
+type Ev = {
+  event_class: string
+  route_path: string
+  outcome: string
+  error_code: string
+  occurred_at: string
+  payload: Record<string, unknown>
+}
 
 export function IssueReporter() {
   const beaconUrl = env('VITE_TRACE_BEACON_URL').replace(/\/+$/, '')
@@ -89,7 +96,13 @@ export function IssueReporter() {
     const body = JSON.stringify({ events })
     try {
       if (navigator.sendBeacon) navigator.sendBeacon(beaconUrl, new Blob([body], { type: 'application/json' }))
-      else void fetch(beaconUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {})
+      else
+        void fetch(beaconUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+          keepalive: true,
+        }).catch(() => {})
     } catch {
       /* fire-and-forget */
     }
@@ -101,31 +114,72 @@ export function IssueReporter() {
   }
 
   const pill: React.CSSProperties = {
-    position: 'fixed', right: 16, bottom: 16, zIndex: 9999,
-    padding: '10px 14px', borderRadius: 999, border: '1px solid var(--m-line, #ccc)',
-    background: 'var(--m-card, #fff)', color: 'var(--m-ink, #111)', fontSize: 13, cursor: 'pointer',
+    position: 'fixed',
+    right: 16,
+    bottom: 16,
+    zIndex: 9999,
+    padding: '10px 14px',
+    borderRadius: 999,
+    border: '1px solid var(--m-line, #ccc)',
+    background: 'var(--m-card, #fff)',
+    color: 'var(--m-ink, #111)',
+    fontSize: 13,
+    cursor: 'pointer',
     boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
   }
 
   if (sent) return <div style={{ ...pill, color: 'var(--m-green, #2a8)' }}>Thanks — issue sent ✓</div>
-  if (!open) return <button type="button" style={pill} onClick={() => setOpen(true)}>Report an issue</button>
+  if (!open)
+    return (
+      <button type="button" style={pill} onClick={() => setOpen(true)}>
+        Report an issue
+      </button>
+    )
 
   return (
-    <div style={{ ...pill, width: 280, padding: 14, display: 'flex', flexDirection: 'column', gap: 8, cursor: 'default' }}>
+    <div
+      style={{ ...pill, width: 280, padding: 14, display: 'flex', flexDirection: 'column', gap: 8, cursor: 'default' }}
+    >
       <div style={{ fontWeight: 600, fontSize: 13 }}>Report an issue</div>
       <textarea
         value={note}
         onChange={(e) => setNote(e.target.value)}
         placeholder="What went wrong? (no personal info needed)"
         rows={3}
-        style={{ width: '100%', fontSize: 13, padding: 8, borderRadius: 8, border: '1px solid var(--m-line, #ccc)', resize: 'vertical' }}
+        style={{
+          width: '100%',
+          fontSize: 13,
+          padding: 8,
+          borderRadius: 8,
+          border: '1px solid var(--m-line, #ccc)',
+          resize: 'vertical',
+        }}
       />
       <div style={{ fontSize: 11, color: 'var(--m-ink-3, #888)' }}>
         Shares recent error signals + your note (no page contents, no personal info).
       </div>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-        <button type="button" style={{ ...pill, position: 'static', boxShadow: 'none', padding: '6px 12px' }} onClick={() => setOpen(false)}>Cancel</button>
-        <button type="button" style={{ ...pill, position: 'static', boxShadow: 'none', padding: '6px 12px', background: 'var(--m-accent, #06c)', color: '#fff' }} onClick={send}>Send</button>
+        <button
+          type="button"
+          style={{ ...pill, position: 'static', boxShadow: 'none', padding: '6px 12px' }}
+          onClick={() => setOpen(false)}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          style={{
+            ...pill,
+            position: 'static',
+            boxShadow: 'none',
+            padding: '6px 12px',
+            background: 'var(--m-accent, #06c)',
+            color: '#fff',
+          }}
+          onClick={send}
+        >
+          Send
+        </button>
       </div>
     </div>
   )
