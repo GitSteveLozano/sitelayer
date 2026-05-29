@@ -45,7 +45,11 @@ export function RoleSwitcher() {
       return
     }
     setActive(userId)
-    window.location.reload()
+    // Navigate to the site root (not reload-in-place): each persona has a
+    // different home surface — owner lands on /desktop via the gate, while
+    // field roles (foreman/worker) land on their mobile field app. Reloading
+    // in place would strand a field role on the desktop shell.
+    window.location.assign('/')
   }
 
   const clear = () => {
