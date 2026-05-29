@@ -7,6 +7,7 @@ import { createRoot } from 'react-dom/client'
 import App from './App'
 import { startOfflineReplayLoop } from './lib/offline/replay'
 import { installChunkReloadHandler } from './lib/pwa/chunk-reload'
+import { initVersionGuard } from './pwa/version-guard'
 import './styles/globals.css'
 // m.css is the design-token + component CSS for the mobile shell at /m/*
 // (migrated from apps/web in #229). Loaded eagerly so /m routes render
@@ -50,6 +51,11 @@ startOfflineReplayLoop()
 // resulting ChunkLoadError / "Failed to fetch dynamically imported
 // module" and force one reload per session to pick up the new bundle.
 installChunkReloadHandler()
+
+// Build-version guard: detects a newer server build (vs the SHA baked into
+// this bundle) and applies it via the SW / a hard reload, so a deploy reaches
+// every client without a manual cache-clear. No-op in dev / unbuilt.
+initVersionGuard()
 
 function LazyErrorBoundary({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
   // Suspense fallback IS the children: while the Sentry boundary chunk
