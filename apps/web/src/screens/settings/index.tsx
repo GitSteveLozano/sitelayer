@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
+import { MBody } from '@/components/m'
 import { Avatar, Card, Row } from '@/components/mobile'
 import { ProjectSwitcherSheet } from '@/components/nav/ProjectSwitcherSheet'
 import { MONEY_COMMS_NAV, WORKFLOW_NAV, WORKSPACE_NAV } from '@/components/nav/nav-items'
@@ -49,7 +50,7 @@ export function SettingsScreen() {
 
   if (section === 'notifications') {
     return (
-      <div>
+      <MBody>
         <button
           type="button"
           onClick={() => setSection('home')}
@@ -58,68 +59,70 @@ export function SettingsScreen() {
           ← Back
         </button>
         <NotificationPreferencesScreen />
-      </div>
+      </MBody>
     )
   }
 
   return (
-    <div className="px-5 pt-6 pb-12 max-w-2xl">
-      <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">More</div>
-      <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">Everything else</h1>
+    <MBody>
+      <div className="px-5 pt-6 pb-12 max-w-2xl">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.06em] text-ink-3">More</div>
+        <h1 className="mt-1 font-display text-[28px] font-bold tracking-tight leading-tight">Everything else</h1>
 
-      {/* User identity card — taps open the project switcher per panel 4 */}
-      <button
-        type="button"
-        onClick={() => setSwitcherOpen(true)}
-        className="mt-5 w-full text-left rounded-[16px] bg-card-soft px-4 py-4 flex items-center gap-3 active:bg-line/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-      >
-        <Avatar size="lg" tone="amber" initials="ME" />
-        <div className="flex-1 min-w-0">
-          <div className="text-[15px] font-semibold tracking-tight truncate">Signed-in user</div>
-          <div className="text-[11px] text-ink-3 truncate mt-0.5">{ROLE_LABEL[role]} · Sitelayer</div>
-          <div className="mt-1.5 inline-flex items-center gap-1.5 text-[11px]">
-            <span
-              aria-hidden="true"
-              className={`inline-block w-1.5 h-1.5 rounded-full ${online ? 'bg-good' : 'bg-warn'}`}
-            />
-            <span className={online ? 'text-good' : 'text-warn'}>{online ? 'Synced' : 'Offline · queued'}</span>
+        {/* User identity card — taps open the project switcher per panel 4 */}
+        <button
+          type="button"
+          onClick={() => setSwitcherOpen(true)}
+          className="mt-5 w-full text-left rounded-[16px] bg-card-soft px-4 py-4 flex items-center gap-3 active:bg-line/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        >
+          <Avatar size="lg" tone="amber" initials="ME" />
+          <div className="flex-1 min-w-0">
+            <div className="text-[15px] font-semibold tracking-tight truncate">Signed-in user</div>
+            <div className="text-[11px] text-ink-3 truncate mt-0.5">{ROLE_LABEL[role]} · Sitelayer</div>
+            <div className="mt-1.5 inline-flex items-center gap-1.5 text-[11px]">
+              <span
+                aria-hidden="true"
+                className={`inline-block w-1.5 h-1.5 rounded-full ${online ? 'bg-good' : 'bg-warn'}`}
+              />
+              <span className={online ? 'text-good' : 'text-warn'}>{online ? 'Synced' : 'Offline · queued'}</span>
+            </div>
           </div>
-        </div>
-        <span aria-hidden="true" className="text-ink-4 text-[18px]">
-          ›
-        </span>
-      </button>
+          <span aria-hidden="true" className="text-ink-4 text-[18px]">
+            ›
+          </span>
+        </button>
 
-      {/* WORKFLOW group */}
-      <NavGroup title="Workflow" rows={WORKFLOW_NAV} />
+        {/* WORKFLOW group */}
+        <NavGroup title="Workflow" rows={WORKFLOW_NAV} />
 
-      {/* MONEY & COMMS group — owner surfaces (Money / Clients / Messages /
+        {/* MONEY & COMMS group — owner surfaces (Money / Clients / Messages /
           Broadcast / Activity / Notifications / Approvals) that were
           previously unreachable from the live More tab. */}
-      <NavGroup title="Money & comms" rows={MONEY_COMMS_NAV} />
+        <NavGroup title="Money & comms" rows={MONEY_COMMS_NAV} />
 
-      {/* WORKSPACE group */}
-      <NavGroup title="Workspace" rows={WORKSPACE_NAV} />
+        {/* WORKSPACE group */}
+        <NavGroup title="Workspace" rows={WORKSPACE_NAV} />
 
-      {/* YOU group */}
-      <div className="mt-6">
-        <div className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-3">You</div>
-        <Card>
-          <PushOnboardingCard />
-          <button type="button" onClick={() => setSection('notifications')} className="block w-full text-left mt-3">
-            <Row
-              headline="Notification preferences"
-              supporting="Pick push / SMS / email per event type."
-              chev
-              noBorder
-            />
-          </button>
-          <RoleOverrideCard currentRole={role} />
-        </Card>
+        {/* YOU group */}
+        <div className="mt-6">
+          <div className="px-1 pb-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-ink-3">You</div>
+          <Card>
+            <PushOnboardingCard />
+            <button type="button" onClick={() => setSection('notifications')} className="block w-full text-left mt-3">
+              <Row
+                headline="Notification preferences"
+                supporting="Pick push / SMS / email per event type."
+                chev
+                noBorder
+              />
+            </button>
+            <RoleOverrideCard currentRole={role} />
+          </Card>
+        </div>
+
+        <ProjectSwitcherSheet open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
       </div>
-
-      <ProjectSwitcherSheet open={switcherOpen} onClose={() => setSwitcherOpen(false)} />
-    </div>
+    </MBody>
   )
 }
 

@@ -552,6 +552,7 @@ export {
   useCreateAssembly,
   useCreateMeasurement,
   useDeleteMeasurement,
+  usePatchMeasurement,
   useImportTakeoff,
   uploadBlueprint,
   useProjectBlueprints,
