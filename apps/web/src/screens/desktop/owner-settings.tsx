@@ -12,6 +12,7 @@
  * placeholder card — no fake data. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { COMPANY_ROLES, type CompanyRole } from '@sitelayer/domain'
 import { useServiceItems, type ServiceItem } from '@/lib/api/service-items'
 import { useLaborBurdenToday, type LaborBurdenWorkerResult } from '@/lib/api/labor-burden'
@@ -22,6 +23,7 @@ import { formatMoney } from '../mobile/format.js'
 type SectionKey =
   | 'company'
   | 'pricing'
+  | 'pricing-book'
   | 'loaded-labor'
   | 'hours'
   | 'integrations'
@@ -39,7 +41,8 @@ interface SectionDef {
 
 const SECTIONS: SectionDef[] = [
   { key: 'company', label: 'Company', eyebrow: 'Owner · Settings', title: 'Company' },
-  { key: 'pricing', label: 'Pricing Book', eyebrow: 'Owner · Settings', title: 'Pricing book' },
+  { key: 'pricing', label: 'Pricing', eyebrow: 'Owner · Settings', title: 'Pricing' },
+  { key: 'pricing-book', label: 'Pricing Book', eyebrow: 'Owner · Settings', title: 'Pricing book' },
   { key: 'loaded-labor', label: 'Loaded Labor', eyebrow: 'Owner · Settings', title: 'Loaded labor' },
   { key: 'hours', label: 'Working Hours', eyebrow: 'Owner · Settings', title: 'Working hours' },
   { key: 'integrations', label: 'Integrations', eyebrow: 'Owner · Settings', title: 'Integrations' },
@@ -251,9 +254,107 @@ function RolesSection() {
   )
 }
 
+// ---- Pricing overview ----------------------------------------------------
+// Per the v2 spec, "Settings → Pricing" is the SAME canonical item library —
+// there is no second pricebook. This panel gives a short overview (item count
+// + category spread from the live catalog) and a context note, then deep-links
+// to the Item Library at /desktop/item-library where owners write rates.
+function PricingOverviewSection() {
+  const navigate = useNavigate()
+  const itemsQuery = useServiceItems()
+  const items = useMemo<ServiceItem[]>(() => itemsQuery.data?.serviceItems ?? [], [itemsQuery.data?.serviceItems])
+
+  const categoryCount = useMemo(() => {
+    const set = new Set<string>()
+    for (const it of items) {
+      if (it.category) set.add(it.category)
+    }
+    return set.size
+  }, [items])
+
+  const ratedCount = useMemo(() => items.filter((it) => it.default_rate != null).length, [items])
+
+  return (
+    <div className="d-stack">
+      <div
+        className="d-card"
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          gap: 12,
+          borderLeft: '3px solid var(--m-accent)',
+        }}
+      >
+        <MPill tone="blue">Canonical</MPill>
+        <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--m-ink-2)' }}>
+          Settings → Pricing = canonical item library · owner write. There is no second pricebook — rates live in the
+          shared Item Library so estimates, takeoffs, and invoices all read the same source of truth.
+        </div>
+      </div>
+
+      <div className="d-card">
+        <div className="d-eyebrow">Item library overview</div>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
+            gap: 16,
+            marginTop: 14,
+          }}
+        >
+          {[
+            { label: 'Items', value: items.length },
+            { label: 'Categories', value: categoryCount },
+            { label: 'With a rate', value: ratedCount },
+          ].map((stat) => (
+            <div key={stat.label}>
+              <div
+                style={{
+                  fontFamily: 'var(--m-font-display)',
+                  fontWeight: 800,
+                  fontSize: 32,
+                  lineHeight: 1,
+                  color: 'var(--m-ink)',
+                }}
+              >
+                {itemsQuery.isLoading ? '—' : stat.value}
+              </div>
+              <div
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  color: 'var(--m-ink-3)',
+                  marginTop: 6,
+                }}
+              >
+                {stat.label}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginTop: 18 }}>
+          <MButton
+            variant="primary"
+            size="sm"
+            onClick={() => navigate('/desktop/item-library')}
+            aria-label="Open the canonical item library"
+          >
+            Open Item Library →
+          </MButton>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function SectionBody({ section }: { section: SectionDef }) {
   switch (section.key) {
     case 'pricing':
+      return <PricingOverviewSection />
+    case 'pricing-book':
       return <PricingBookSection />
     case 'loaded-labor':
       return <LoadedLaborSection />

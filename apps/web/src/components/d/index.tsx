@@ -3,7 +3,8 @@
  * (.d-* classes on the shared v2 tokens). Used only by the >=1024px owner/
  * estimator desktop surface (screens/desktop/*). Mobile is untouched.
  */
-import type { ComponentType, ReactNode, SVGProps } from 'react'
+import { useEffect, useState } from 'react'
+import type { ComponentType, CSSProperties, ReactNode, SVGProps } from 'react'
 import { NavLink } from 'react-router-dom'
 
 type Icon = ComponentType<SVGProps<SVGSVGElement>>
@@ -219,6 +220,376 @@ export function DTabBar({
           {t.label}
         </button>
       ))}
+    </div>
+  )
+}
+
+// ---- Overlay surfaces: drawer · modal · command palette · menu -----------
+// Steve's Desktop v2 lifecycle drawers, invoice/send modals, ⌘K palette,
+// notifications panel, and anchored menus. Ported from the steve-desktop-3
+// mockup (dt/--d-* → repo .d-*/--m-* tokens). All close on Escape + scrim.
+
+function useEscapeClose(open: boolean, onClose: () => void) {
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+}
+
+/** Right-side drawer over a dimmed backdrop (recovery / change-order / post-mortem). */
+export function DDrawer({
+  open,
+  onClose,
+  title,
+  tone,
+  width = 440,
+  children,
+}: {
+  open: boolean
+  onClose: () => void
+  title: ReactNode
+  tone?: 'accent' | 'bad' | undefined
+  width?: number
+  children: ReactNode
+}) {
+  useEscapeClose(open, onClose)
+  if (!open) return null
+  return (
+    <div className="d-scrim" onMouseDown={onClose}>
+      <aside
+        className="d-drawer"
+        style={{ width }}
+        role="dialog"
+        aria-modal="true"
+        aria-label={typeof title === 'string' ? title : 'Drawer'}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="d-drawer-head" data-tone={tone}>
+          <span className="d-drawer-title">{title}</span>
+          <button type="button" className="d-drawer-x" onClick={onClose} aria-label="Close">
+            ✕
+          </button>
+        </div>
+        <div className="d-drawer-body">{children}</div>
+      </aside>
+    </div>
+  )
+}
+
+/** Centered modal over a scrim (invoice · send · new project / assignment · PDF preview). */
+export function DModal({
+  open,
+  onClose,
+  title,
+  width = 560,
+  footer,
+  children,
+}: {
+  open: boolean
+  onClose: () => void
+  title?: ReactNode
+  width?: number
+  footer?: ReactNode
+  children: ReactNode
+}) {
+  useEscapeClose(open, onClose)
+  if (!open) return null
+  return (
+    <div className="d-scrim d-scrim-center" onMouseDown={onClose}>
+      <div
+        className="d-modal"
+        style={{ width }}
+        role="dialog"
+        aria-modal="true"
+        aria-label={typeof title === 'string' ? title : 'Dialog'}
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        {title ? <div className="d-modal-head">{title}</div> : null}
+        <div className="d-modal-body">{children}</div>
+        {footer ? <div className="d-modal-foot">{footer}</div> : null}
+      </div>
+    </div>
+  )
+}
+
+// ---- Command palette (⌘K) ------------------------------------------------
+export interface DCommandItem {
+  id: string
+  label: ReactNode
+  hint?: ReactNode
+  onSelect: () => void
+}
+export interface DCommandGroup {
+  label: string
+  items: DCommandItem[]
+}
+/** Wire ⌘K / Ctrl-K to toggle the palette. Mount once in the shell. */
+export function useCommandPaletteHotkey(setOpen: (fn: (v: boolean) => boolean) => void) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setOpen((v) => !v)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [setOpen])
+}
+export function DCommandPalette({
+  open,
+  onClose,
+  query,
+  onQueryChange,
+  groups,
+  placeholder = 'Search projects, clients, items…',
+}: {
+  open: boolean
+  onClose: () => void
+  query: string
+  onQueryChange: (q: string) => void
+  groups: DCommandGroup[]
+  placeholder?: string
+}) {
+  const [active, setActive] = useState(0)
+  useEscapeClose(open, onClose)
+  useEffect(() => {
+    setActive(0)
+  }, [query, open])
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      const flat = groups.flatMap((g) => g.items)
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setActive((i) => Math.min(i + 1, flat.length - 1))
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setActive((i) => Math.max(i - 1, 0))
+      } else if (e.key === 'Enter') {
+        e.preventDefault()
+        flat[active]?.onSelect()
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, groups, active])
+  if (!open) return null
+  let cursor = -1
+  const hasResults = groups.some((g) => g.items.length > 0)
+  return (
+    <div className="d-scrim d-scrim-top" onMouseDown={onClose}>
+      <div
+        className="d-cmdk"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Command palette"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="d-cmdk-head">
+          <span className="d-cmdk-key" aria-hidden>
+            ⌘K
+          </span>
+          <input
+            className="d-cmdk-input"
+            autoFocus
+            value={query}
+            placeholder={placeholder}
+            onChange={(e) => onQueryChange(e.target.value)}
+            aria-label="Search"
+          />
+          <span className="d-cmdk-hint" aria-hidden>
+            ↑↓ · ⏎
+          </span>
+        </div>
+        <div className="d-cmdk-results">
+          {!hasResults ? (
+            <div className="d-cmdk-empty">No matches.</div>
+          ) : (
+            groups.map((g) =>
+              g.items.length === 0 ? null : (
+                <div key={g.label}>
+                  <div className="d-cmdk-group">{g.label}</div>
+                  {g.items.map((it) => {
+                    cursor += 1
+                    const i = cursor
+                    return (
+                      <button
+                        key={it.id}
+                        type="button"
+                        className="d-cmdk-item"
+                        data-active={i === active}
+                        onMouseEnter={() => setActive(i)}
+                        onClick={() => it.onSelect()}
+                      >
+                        <span>{it.label}</span>
+                        {it.hint ? <span className="d-cmdk-itemhint">{it.hint}</span> : null}
+                      </button>
+                    )
+                  })}
+                </div>
+              ),
+            )
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---- Notifications panel -------------------------------------------------
+export interface DNotifItem {
+  id: string
+  title: ReactNode
+  meta?: ReactNode
+  tone?: 'good' | 'bad' | null
+  onClick?: () => void
+}
+export interface DNotifGroup {
+  label: string
+  items: DNotifItem[]
+}
+export function DNotifPanel({
+  open,
+  onClose,
+  groups,
+  onMarkAll,
+}: {
+  open: boolean
+  onClose: () => void
+  groups: DNotifGroup[]
+  onMarkAll?: () => void
+}) {
+  useEscapeClose(open, onClose)
+  if (!open) return null
+  return (
+    <div className="d-scrim" onMouseDown={onClose}>
+      <aside
+        className="d-drawer d-notif"
+        style={{ width: 380 }}
+        role="dialog"
+        aria-modal="true"
+        aria-label="Notifications"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="d-notif-head">
+          <span className="d-notif-title">Notifications</span>
+          {onMarkAll ? (
+            <button type="button" className="d-notif-markall" onClick={onMarkAll}>
+              MARK ALL
+            </button>
+          ) : null}
+        </div>
+        {groups.map((g) => (
+          <div key={g.label}>
+            <div className="d-notif-group">{g.label}</div>
+            {g.items.map((n) => (
+              <button key={n.id} type="button" className="d-notif-item" onClick={n.onClick}>
+                <span className="d-notif-bar" data-tone={n.tone ?? undefined} />
+                <span className="d-notif-text">
+                  <span className="d-notif-itemtitle">{n.title}</span>
+                  {n.meta ? <span className="d-notif-meta">{n.meta}</span> : null}
+                </span>
+              </button>
+            ))}
+          </div>
+        ))}
+      </aside>
+    </div>
+  )
+}
+
+// ---- Anchored menu (avatar · role switcher) ------------------------------
+export function DMenu({
+  open,
+  onClose,
+  style,
+  label,
+  children,
+}: {
+  open: boolean
+  onClose: () => void
+  style?: CSSProperties
+  label?: string
+  children: ReactNode
+}) {
+  useEscapeClose(open, onClose)
+  if (!open) return null
+  return (
+    <>
+      <div className="d-menu-scrim" onMouseDown={onClose} />
+      <div className="d-menu" style={style} role="menu" aria-label={label} onMouseDown={(e) => e.stopPropagation()}>
+        {children}
+      </div>
+    </>
+  )
+}
+
+// ---- Content states: empty · error · loading -----------------------------
+export function DEmptyState({
+  mark = '○',
+  title = 'Nothing here yet',
+  body = 'When data arrives it shows up here.',
+  action,
+}: {
+  mark?: string
+  title?: ReactNode
+  body?: ReactNode
+  action?: ReactNode
+}) {
+  return (
+    <div className="d-state">
+      <div className="d-state-mark" aria-hidden>
+        <span className="d-state-sq d-state-sq-accent" />
+        <span className="d-state-sq" />
+        <span className="d-state-sq d-state-sq-ink">{mark}</span>
+      </div>
+      <div className="d-state-title">{title}</div>
+      <div className="d-state-body">{body}</div>
+      {action ? <div className="d-state-action">{action}</div> : null}
+    </div>
+  )
+}
+export function DErrorState({
+  title = 'Couldn’t load',
+  body = 'The server didn’t answer. Your work is safe.',
+  code,
+  actions,
+}: {
+  title?: ReactNode
+  body?: ReactNode
+  code?: ReactNode
+  actions?: ReactNode
+}) {
+  return (
+    <div className="d-state">
+      <div className="d-state-bang" aria-hidden>
+        !
+      </div>
+      <div className="d-state-title" data-tone="bad">
+        {title}
+      </div>
+      <div className="d-state-body">{body}</div>
+      {code ? <div className="d-state-code">{code}</div> : null}
+      {actions ? <div className="d-state-action">{actions}</div> : null}
+    </div>
+  )
+}
+export function DLoadingState({ label = 'Loading…' }: { label?: string }) {
+  return (
+    <div className="d-state">
+      <div className="d-state-mark" aria-hidden>
+        <span className="d-state-sq d-state-sq-accent d-pulse" />
+        <span className="d-state-sq d-pulse" />
+        <span className="d-state-sq d-state-sq-ink d-pulse" />
+      </div>
+      <div className="d-state-body" style={{ marginTop: 18 }}>
+        {label}
+      </div>
     </div>
   )
 }

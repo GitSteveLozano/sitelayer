@@ -25,7 +25,10 @@ import { useProjectCloseoutSummary } from '@/lib/api/closeout-summary'
 import { useDailyLogs, type DailyLog } from '@/lib/api/daily-logs'
 import { useProjectBlueprints, type BlueprintDocument } from '@/lib/api/takeoff'
 import { useProjectChangeOrders, type ChangeOrder } from '@/lib/api/change-orders'
+import { ChangeOrderDrawer, InvoiceModal, PostMortemDrawer, RecoveryDrawer } from './project-drawers'
 import { formatMoney, formatStatusLabel, shortDate } from '../mobile/format.js'
+
+type ProjectOverlay = 'recovery' | 'change-order' | 'post-mortem' | 'invoice' | null
 
 type TabKey = 'overview' | 'budget' | 'crew' | 'logs' | 'files' | 'activity'
 
@@ -43,6 +46,7 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
   const navigate = useNavigate()
   const projectId = params.projectId ?? ''
   const [tab, setTab] = useState<TabKey>('overview')
+  const [overlay, setOverlay] = useState<ProjectOverlay>(null)
 
   // Project identity — prefer bootstrap (already in-memory for the desktop
   // shell). If a deep link lands on a project that isn't in the bootstrap
@@ -122,6 +126,24 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
               {onTrack ? 'On track' : 'At risk'}
             </MPill>
           </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 14, flexWrap: 'wrap' }}>
+            {!onTrack ? (
+              <MButton variant="primary" onClick={() => setOverlay('recovery')}>
+                Recovery plan
+              </MButton>
+            ) : null}
+            <MButton variant="ghost" onClick={() => setOverlay('change-order')}>
+              + Change order
+            </MButton>
+            <MButton variant="ghost" onClick={() => setOverlay('invoice')}>
+              Invoice
+            </MButton>
+            {status === 'done' || status === 'archived' ? (
+              <MButton variant="ghost" onClick={() => setOverlay('post-mortem')}>
+                Post-mortem
+              </MButton>
+            ) : null}
+          </div>
         </div>
 
         <DKpiStrip>
@@ -172,6 +194,10 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
           />
         </div>
       </div>
+      <RecoveryDrawer open={overlay === 'recovery'} onClose={() => setOverlay(null)} />
+      <ChangeOrderDrawer open={overlay === 'change-order'} onClose={() => setOverlay(null)} />
+      <PostMortemDrawer open={overlay === 'post-mortem'} onClose={() => setOverlay(null)} />
+      <InvoiceModal open={overlay === 'invoice'} onClose={() => setOverlay(null)} />
     </div>
   )
 }

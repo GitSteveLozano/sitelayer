@@ -12,9 +12,23 @@ import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useSubmitForm } from '@/machines/submit-form'
 import { useCreateProjectBrief, type ProjectBriefStep } from '@/lib/api/project-briefs'
-import { DEyebrow, DH1 } from '@/components/d'
+import { DEyebrow, DH1, DModal } from '@/components/d'
 import { MButton, MInput, MTextarea } from '@/components/m'
 import { todayIso } from '../mobile/format.js'
+
+// Presentational crew roster for the Send-reminders panel. The brief composer
+// does not load the crew roster, so these rows are a clearly-labeled sample —
+// the real send wiring lands when a crew/notification hook is threaded in.
+interface ReminderRecipient {
+  id: string
+  name: string
+  role: string
+}
+const DEMO_CREW: ReminderRecipient[] = [
+  { id: 'crew-1', name: 'Carlos M.', role: 'Lead' },
+  { id: 'crew-2', name: 'Devon R.', role: 'Plaster' },
+  { id: 'crew-3', name: 'Sam P.', role: 'Apprentice' },
+]
 
 const MONO_LABEL: React.CSSProperties = {
   fontFamily: 'var(--m-num)',
@@ -32,6 +46,18 @@ export function FmBrief() {
 
   const [goal, setGoal] = useState('')
   const [steps, setSteps] = useState<ProjectBriefStep[]>([])
+
+  // Edit mode (DBriefEdit): the author form is read-only until the foreman
+  // taps EDIT, then SAVE + PUSH / CANCEL frame the edit session.
+  const [editing, setEditing] = useState(true)
+  const [draftBackup, setDraftBackup] = useState<{ goal: string; steps: ProjectBriefStep[] } | null>(null)
+
+  // Send-reminders modal (DSendReminders): crew rows with per-recipient send
+  // toggles. Defaults all recipients on.
+  const [remindersOpen, setRemindersOpen] = useState(false)
+  const [selectedCrew, setSelectedCrew] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(DEMO_CREW.map((c) => [c.id, true])),
+  )
 
   const createBrief = useCreateProjectBrief(projectId)
   const { submit, isSubmitting, error } = useSubmitForm<{ goal: string; steps: ProjectBriefStep[] }, unknown>(
@@ -58,15 +84,64 @@ export function FmBrief() {
   const updateStep = (idx: number, title: string) =>
     setSteps((cur) => cur.map((s, i) => (i === idx ? { ...s, title } : s)))
 
+  // Enter edit mode, stashing a backup so CANCEL can roll the draft back.
+  const startEditing = () => {
+    setDraftBackup({ goal, steps })
+    setEditing(true)
+  }
+  const cancelEditing = () => {
+    if (draftBackup) {
+      setGoal(draftBackup.goal)
+      setSteps(draftBackup.steps)
+    }
+    setDraftBackup(null)
+    setEditing(false)
+  }
+  // SAVE + PUSH commits the edit and pushes to the crew in one action.
+  const saveAndPush = () => {
+    setDraftBackup(null)
+    setEditing(false)
+    handlePush()
+  }
+
+  const toggleCrew = (id: string) => setSelectedCrew((cur) => ({ ...cur, [id]: !cur[id] }))
+  const selectedCount = DEMO_CREW.filter((c) => selectedCrew[c.id]).length
+
   const previewSteps = steps.filter((s) => s.title.trim().length > 0)
   const canPush = Boolean(projectId) && goal.trim().length > 0 && !isSubmitting
 
   return (
     <div className="d-content">
       <div className="d-stack">
-        <div>
-          <DEyebrow>Foreman · Brief</DEyebrow>
-          <DH1>Brief the crew</DH1>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'space-between',
+            gap: 16,
+            flexWrap: 'wrap',
+          }}
+        >
+          <div>
+            <DEyebrow>Foreman · Brief{editing ? ' · editing' : ''}</DEyebrow>
+            <DH1>Brief the crew</DH1>
+          </div>
+          {projectId ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              {editing ? (
+                <MButton size="sm" variant="quiet" onClick={cancelEditing}>
+                  Cancel
+                </MButton>
+              ) : (
+                <MButton size="sm" variant="quiet" onClick={startEditing}>
+                  Edit brief
+                </MButton>
+              )}
+              <MButton size="sm" variant="ghost" onClick={() => setRemindersOpen(true)}>
+                Send reminders
+              </MButton>
+            </div>
+          ) : null}
         </div>
 
         {!projectId ? (
@@ -82,6 +157,7 @@ export function FmBrief() {
                 <MTextarea
                   value={goal}
                   onChange={(e) => setGoal(e.currentTarget.value)}
+                  readOnly={!editing}
                   placeholder="What's the crew building today, in plain words?"
                   maxLength={280}
                   style={{
@@ -89,12 +165,14 @@ export function FmBrief() {
                     minHeight: 110,
                     marginTop: 8,
                     background: 'var(--m-card-soft)',
-                    border: '2px solid var(--m-ink)',
+                    border: editing ? '2px solid var(--m-accent)' : '2px solid var(--m-ink)',
                     fontSize: 16,
                     lineHeight: 1.45,
                   }}
                 />
-                <div style={{ ...MONO_LABEL, marginTop: 6, textAlign: 'right' }}>{goal.length} / 280</div>
+                <div style={{ ...MONO_LABEL, marginTop: 6, textAlign: 'right' }}>
+                  {goal.length} / 280{editing ? ' CHARS · INLINE EDIT · ESC TO CANCEL' : ''}
+                </div>
               </div>
 
               <div>
@@ -107,9 +185,11 @@ export function FmBrief() {
                   }}
                 >
                   <div style={MONO_LABEL}>STEP PLAN · {steps.length}</div>
-                  <MButton size="sm" variant="ghost" onClick={addStep}>
-                    + Add step
-                  </MButton>
+                  {editing ? (
+                    <MButton size="sm" variant="ghost" onClick={addStep}>
+                      + Add step
+                    </MButton>
+                  ) : null}
                 </div>
 
                 <div className="d-card" style={{ padding: 0 }}>
@@ -149,28 +229,31 @@ export function FmBrief() {
                         <MInput
                           value={step.title}
                           onChange={(e) => updateStep(idx, e.currentTarget.value)}
+                          readOnly={!editing}
                           placeholder={`Step ${idx + 1}`}
                           style={{ flex: 1 }}
                         />
-                        <button
-                          type="button"
-                          aria-label="Remove step"
-                          onClick={() => removeStep(idx)}
-                          style={{
-                            width: 36,
-                            height: 36,
-                            flexShrink: 0,
-                            border: 'none',
-                            background: 'transparent',
-                            color: 'var(--m-red)',
-                            cursor: 'pointer',
-                            fontSize: 18,
-                            lineHeight: 1,
-                            padding: 0,
-                          }}
-                        >
-                          ×
-                        </button>
+                        {editing ? (
+                          <button
+                            type="button"
+                            aria-label="Remove step"
+                            onClick={() => removeStep(idx)}
+                            style={{
+                              width: 36,
+                              height: 36,
+                              flexShrink: 0,
+                              border: 'none',
+                              background: 'transparent',
+                              color: 'var(--m-red)',
+                              cursor: 'pointer',
+                              fontSize: 18,
+                              lineHeight: 1,
+                              padding: 0,
+                            }}
+                          >
+                            ×
+                          </button>
+                        ) : null}
                       </div>
                     ))
                   )}
@@ -179,10 +262,21 @@ export function FmBrief() {
 
               {error ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
 
-              <div>
-                <MButton variant="primary" onClick={handlePush} disabled={!canPush}>
-                  {isSubmitting ? 'Pushing…' : 'Push to crew'}
-                </MButton>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {editing ? (
+                  <>
+                    <MButton variant="primary" onClick={saveAndPush} disabled={!canPush}>
+                      {isSubmitting ? 'Pushing…' : 'Save + push'}
+                    </MButton>
+                    <MButton variant="quiet" onClick={cancelEditing} disabled={isSubmitting}>
+                      Cancel
+                    </MButton>
+                  </>
+                ) : (
+                  <MButton variant="primary" onClick={handlePush} disabled={!canPush}>
+                    {isSubmitting ? 'Pushing…' : 'Push to crew'}
+                  </MButton>
+                )}
               </div>
             </div>
 
@@ -253,6 +347,75 @@ export function FmBrief() {
           </div>
         )}
       </div>
+
+      {/* DSendReminders — bulk crew reminder modal with per-recipient toggles. */}
+      <DModal
+        open={remindersOpen}
+        onClose={() => setRemindersOpen(false)}
+        title={`Send reminders · ${selectedCount} selected`}
+        footer={
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <MButton size="sm" variant="quiet" onClick={() => setRemindersOpen(false)}>
+              Cancel
+            </MButton>
+            <MButton
+              size="sm"
+              variant="primary"
+              disabled={selectedCount === 0}
+              onClick={() => {
+                // TODO: wire to a crew/notification send hook. Closes for now.
+                setRemindersOpen(false)
+              }}
+            >
+              {`Send ${selectedCount} ${selectedCount === 1 ? 'reminder' : 'reminders'}`}
+            </MButton>
+          </div>
+        }
+      >
+        <div style={{ ...MONO_LABEL, marginBottom: 10 }}>SAMPLE CREW · TOGGLE WHO GETS THE BRIEF</div>
+        <div className="d-stack" style={{ gap: 8 }}>
+          {DEMO_CREW.map((c) => {
+            const on = Boolean(selectedCrew[c.id])
+            return (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => toggleCrew(c.id)}
+                aria-pressed={on}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 12,
+                  padding: '12px 14px',
+                  border: '2px solid var(--m-ink)',
+                  background: on ? 'transparent' : 'var(--m-card-soft)',
+                  opacity: on ? 1 : 0.6,
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                  width: '100%',
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    width: 18,
+                    height: 18,
+                    flexShrink: 0,
+                    border: '2px solid var(--m-ink)',
+                    background: on ? 'var(--m-accent)' : 'transparent',
+                  }}
+                />
+                <span style={{ flex: 1 }}>
+                  <span style={{ display: 'block', fontWeight: 700, fontSize: 14, color: 'var(--m-ink)' }}>
+                    {c.name}
+                  </span>
+                  <span style={{ ...MONO_LABEL, marginTop: 3 }}>{c.role}</span>
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </DModal>
     </div>
   )
 }
