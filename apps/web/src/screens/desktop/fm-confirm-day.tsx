@@ -168,7 +168,7 @@ export function FmConfirmDay({ bootstrap }: { bootstrap: BootstrapResponse | nul
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: '28px 1fr 150px 90px',
+              gridTemplateColumns: '28px minmax(0, 1fr) 150px 90px',
               gap: 10,
               padding: '6px 4px',
               fontFamily: 'var(--m-num)',
@@ -196,7 +196,7 @@ export function FmConfirmDay({ bootstrap }: { bootstrap: BootstrapResponse | nul
                 key={w.id}
                 style={{
                   display: 'grid',
-                  gridTemplateColumns: '28px 1fr 150px 90px',
+                  gridTemplateColumns: '28px minmax(0, 1fr) 150px 90px',
                   gap: 10,
                   alignItems: 'center',
                   padding: '6px 4px',

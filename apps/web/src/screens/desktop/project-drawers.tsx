@@ -261,7 +261,9 @@ export function ChangeOrderDrawer({ open, projectId, onClose }: OverlayProps & {
             rows={3}
             style={{ marginTop: 8, width: '100%' }}
           />
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 14 }}>
+          <div
+            style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 12, marginTop: 14 }}
+          >
             <div>
               <div style={sectionLabel}>VALUE DELTA ($)</div>
               <MInput
@@ -782,7 +784,7 @@ export function PdfPreviewModal({ open, onClose }: OverlayProps) {
         </div>
       }
     >
-      <div style={{ display: 'grid', gridTemplateColumns: '220px 1fr', minHeight: 460 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '220px minmax(0, 1fr)', minHeight: 460 }}>
         <div style={{ borderRight: '2px solid var(--m-ink)', background: 'var(--m-card-soft)', padding: 20 }}>
           <div style={{ ...sectionLabel, color: 'var(--m-ink-3)' }}>CONTENT</div>
           <div style={{ marginTop: 14, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -885,7 +887,7 @@ export function NewProjectModal({ open, onClose }: OverlayProps) {
         Crestline North Annex
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14, marginTop: 16 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 14, marginTop: 16 }}>
         <div>
           <div style={sectionLabel}>CLIENT</div>
           <div
@@ -978,7 +980,7 @@ export function NewAssignmentModal({ open, onClose }: OverlayProps) {
         </div>
       }
     >
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 14 }}>
         <div>
           <div style={sectionLabel}>PROJECT</div>
           <div
