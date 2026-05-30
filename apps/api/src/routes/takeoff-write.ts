@@ -37,6 +37,10 @@ type PreparedTakeoffMeasurementInput = {
   // Compressed client-side (≈ 30–80KB) so it fits inline; the
   // photo-bucket follow-on will swap this for a Spaces storage key.
   imageThumbnail: string | null
+  // PlanSwift Phase 1 cutout/deduct: when true this polygon is a deduction
+  // (e.g. a window/door opening) and the estimate subtracts its area from the
+  // net for its service item. `quantity` itself stays the positive area.
+  isDeduction: boolean
 }
 
 const ELEVATION_VOCAB = new Set(['east', 'south', 'west', 'north', 'roof', 'other'])
@@ -135,6 +139,8 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     throw new HttpError(400, `${label}.quantity must be a non-negative number`)
   }
 
+  const isDeduction = input.is_deduction === true
+
   return {
     serviceItemCode,
     quantity,
@@ -146,6 +152,7 @@ function prepareTakeoffMeasurementInput(rawInput: unknown, label = 'measurement'
     divisionCode,
     elevation,
     imageThumbnail,
+    isDeduction,
   }
 }
 
@@ -320,10 +327,10 @@ export async function handleTakeoffWriteRoutes(
       const insertResult = await client.query(
         `
         insert into takeoff_measurements (
-          company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id
+          company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id, is_deduction
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13)
-        returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
+        values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13, $14)
+        returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, version, deleted_at, created_at
         `,
         [
           ctx.company.id,
@@ -339,6 +346,7 @@ export async function handleTakeoffWriteRoutes(
           measurementInput.elevation,
           measurementInput.imageThumbnail,
           draftId,
+          measurementInput.isDeduction,
         ],
       )
       const row = insertResult.rows[0]
@@ -478,10 +486,10 @@ export async function handleTakeoffWriteRoutes(
         const insertResult = await client.query(
           `
           insert into takeoff_measurements (
-            company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id
+            company_id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, version, division_code, elevation, image_thumbnail, draft_id, is_deduction
           )
-          values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13)
-          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
+          values ($1, $2, $3, $4, $5, $6, $7, $8, coalesce($9::jsonb, '{}'::jsonb), 1, $10, $11, $12, $13, $14)
+          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, division_code, elevation, image_thumbnail, draft_id, is_deduction, version, deleted_at, created_at
           `,
           [
             ctx.company.id,
@@ -497,6 +505,7 @@ export async function handleTakeoffWriteRoutes(
             measurement.elevation,
             measurement.imageThumbnail,
             bulkDraftId,
+            measurement.isDeduction,
           ],
         )
         createdRows.push(insertResult.rows[0])
