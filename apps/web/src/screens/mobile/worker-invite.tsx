@@ -36,8 +36,9 @@ export function WorkerInviteScreen() {
   const onAccept = () => {
     setBusy(true)
     // TODO(wire): POST accept, then persist the membership.
-    // Chain straight into permission priming → Today.
-    navigate('/foreman/first-run?next=/today', { replace: true })
+    // Chain into the dark worker-specific first-run (not the foreman light
+    // carousel), which primes permissions → Today.
+    navigate('/worker/first-run?next=/today', { replace: true })
   }
 
   const onDecline = () => {

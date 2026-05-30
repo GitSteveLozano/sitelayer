@@ -1,20 +1,26 @@
-// Assembly drill-down hooks for the Estimate Builder line-item expand panel.
+// Assembly resource hooks for the Estimator · Assemblies editor and the
+// Estimate Builder line-item drill-down.
 //
-// `apps/web/src/lib/api/takeoff.ts` already exposes `useAssembly(id)` which
-// loads a single assembly by uuid plus its components. The Estimate Builder
-// works the other direction — given a `service_item_code` for an estimate
-// line, surface the underlying assembly (materials, labor, waste %, margin)
-// without forcing the caller to look up the uuid first.
+// The list/detail/create/add-component hooks already live in
+// `apps/web/src/lib/api/takeoff.ts` (Phase 3F); this module re-exports
+// them and adds the editor-only mutations the new Assemblies screen needs
+// (rename header, soft-delete, edit a component, remove a component) so a
+// screen has one import surface for the whole CRUD set.
 //
-// GET /api/assemblies?service_item_code=X returns the list; we take the
-// most recently-created entry as the "current" assembly for that code (the
-// API orders by `created_at desc` for that filter — see assemblies.ts).
-// When that returns at least one assembly we re-use the existing detail
-// hook to fetch components.
+// `useAssemblyByServiceItem` (Estimate Builder drill-down) stays here too:
+// given a `service_item_code` it resolves the current assembly + its
+// components in one call.
 
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { request } from './client'
-import type { Assembly, AssemblyComponent } from './takeoff'
+import {
+  type Assembly,
+  type AssemblyComponent,
+  useAddAssemblyComponent,
+  useAssemblies,
+  useAssembly,
+  useCreateAssembly,
+} from './takeoff'
 
 const KEYS = {
   byServiceItem: (code: string) => ['assemblies', 'by-service-item', code] as const,
@@ -31,6 +37,8 @@ interface AssemblyDetailResponse {
   assembly: Assembly
   components: AssemblyComponent[]
 }
+
+export type AssemblyComponentKind = 'material' | 'labor' | 'sub' | 'freight'
 
 /**
  * Fetch the current assembly for a service-item-code in a single call.
@@ -56,4 +64,71 @@ export function useAssemblyByServiceItem(code: string | null | undefined) {
   })
 }
 
-export type { Assembly, AssemblyComponent }
+/** PATCH the assembly header (rename / retarget service item / unit). */
+export function useUpdateAssembly() {
+  const qc = useQueryClient()
+  return useMutation<
+    { assembly: Assembly },
+    Error,
+    {
+      id: string
+      name?: string
+      service_item_code?: string
+      description?: string | null
+      unit?: string
+    }
+  >({
+    mutationFn: ({ id, ...body }) =>
+      request(`/api/assemblies/${encodeURIComponent(id)}`, { method: 'PATCH', json: body }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assemblies'] }),
+  })
+}
+
+/** Soft-delete an assembly. */
+export function useDeleteAssembly() {
+  const qc = useQueryClient()
+  return useMutation<{ assembly: Assembly }, Error, { id: string }>({
+    mutationFn: ({ id }) => request(`/api/assemblies/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assemblies'] }),
+  })
+}
+
+/** PATCH one component (and recompute the parent's cached total_rate server-side). */
+export function useUpdateAssemblyComponent() {
+  const qc = useQueryClient()
+  return useMutation<
+    { component: AssemblyComponent },
+    Error,
+    {
+      assemblyId: string
+      componentId: string
+      kind?: AssemblyComponentKind
+      name?: string
+      quantity_per_unit?: number
+      unit?: string
+      unit_cost?: number
+      waste_pct?: number
+    }
+  >({
+    mutationFn: ({ assemblyId, componentId, ...body }) =>
+      request(`/api/assemblies/${encodeURIComponent(assemblyId)}/components/${encodeURIComponent(componentId)}`, {
+        method: 'PATCH',
+        json: body,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assemblies'] }),
+  })
+}
+
+/** Remove one component (and recompute the parent's cached total_rate server-side). */
+export function useRemoveAssemblyComponent() {
+  const qc = useQueryClient()
+  return useMutation<{ component: AssemblyComponent }, Error, { assemblyId: string; componentId: string }>({
+    mutationFn: ({ assemblyId, componentId }) =>
+      request(`/api/assemblies/${encodeURIComponent(assemblyId)}/components/${encodeURIComponent(componentId)}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['assemblies'] }),
+  })
+}
+
+export { type Assembly, type AssemblyComponent, useAddAssemblyComponent, useAssemblies, useAssembly, useCreateAssembly }
