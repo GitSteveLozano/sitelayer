@@ -6,9 +6,12 @@
  * This reuses the EXACT create logic from the mobile project-create form
  * (`screens/mobile/project-new.tsx`): the same `apiPost('/api/projects', ...)`
  * body shape, the same `CustomerDedupPicker` linkage, and the same field set
- * (name, client, division, bid value). No new endpoints. On success we
- * navigate to the desktop project detail route. See owner-dashboard.tsx for
- * the d-content / d-stack / DEyebrow / DH1 primitive pattern.
+ * the mobile flow collects — name, client, division, bid value, labor rate,
+ * and target sf/hr. Labor rate + target sf/hr feed the spent/margin/forecast
+ * math, so the desktop flow must capture them too (they were missing, which
+ * left desktop-created projects with labor_rate=0). No new endpoints. On
+ * success we navigate to the desktop project detail route. See
+ * owner-dashboard.tsx for the d-content / d-stack / DEyebrow / DH1 pattern.
  */
 import { useId, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -35,6 +38,8 @@ export function OwnerNewProject() {
   const [address, setAddress] = useState('')
   const [divisionCode, setDivisionCode] = useState<(typeof DIVISIONS)[number]>('D4')
   const [bidTotal, setBidTotal] = useState('')
+  const [laborRate, setLaborRate] = useState('')
+  const [targetSqftPerHr, setTargetSqftPerHr] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   // Only surface inline validation after a submit attempt.
@@ -67,6 +72,8 @@ export function OwnerNewProject() {
           // send a field the route would reject.
           division_code: divisionCode,
           bid_total: bidTotal ? Number(bidTotal) : 0,
+          labor_rate: laborRate ? Number(laborRate) : 0,
+          target_sqft_per_hr: targetSqftPerHr ? Number(targetSqftPerHr) : null,
           status: 'lead',
         },
         companySlug,
@@ -186,16 +193,38 @@ export function OwnerNewProject() {
               </MSelect>
             </Field>
 
-            <Field label="Bid value ($)">
-              <MInput
-                type="number"
-                inputMode="decimal"
-                value={bidTotal}
-                onChange={(e) => setBidTotal(e.currentTarget.value)}
-                placeholder="19268"
-                style={{ width: '100%' }}
-              />
-            </Field>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+              <Field label="Bid value ($)">
+                <MInput
+                  type="number"
+                  inputMode="decimal"
+                  value={bidTotal}
+                  onChange={(e) => setBidTotal(e.currentTarget.value)}
+                  placeholder="19268"
+                  style={{ width: '100%' }}
+                />
+              </Field>
+              <Field label="Labor rate ($/hr)">
+                <MInput
+                  type="number"
+                  inputMode="decimal"
+                  value={laborRate}
+                  onChange={(e) => setLaborRate(e.currentTarget.value)}
+                  placeholder="38"
+                  style={{ width: '100%' }}
+                />
+              </Field>
+              <Field label="Target sf/hr">
+                <MInput
+                  type="number"
+                  inputMode="decimal"
+                  value={targetSqftPerHr}
+                  onChange={(e) => setTargetSqftPerHr(e.currentTarget.value)}
+                  placeholder="4.73"
+                  style={{ width: '100%' }}
+                />
+              </Field>
+            </div>
 
             {error ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
 

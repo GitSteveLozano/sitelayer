@@ -28,6 +28,7 @@ import {
   type TakeoffPoint,
 } from '@sitelayer/domain'
 import {
+  ApiError,
   useBlueprintPages,
   useCreateMeasurement,
   useDeleteMeasurement,
@@ -45,6 +46,8 @@ import {
   type TakeoffMeasurement,
 } from '@/lib/api'
 import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
+import { EstAiCountSetupPanel } from './est-ai-count'
+import { EstAiTakeoffSetupPanel } from './est-ai-takeoff'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { useRole } from '@/lib/role'
 import { MButton, MPill, MSelect } from '@/components/m'
@@ -63,7 +66,7 @@ type Tool = 'polygon' | 'lineal' | 'count'
 //   draw   — default; tap to add points to a draft measurement.
 //   scale  — calibrate the sheet scale from a drawn reference line.
 //   select — marquee / multi-select committed measurements for bulk actions.
-type CanvasMode = 'draw' | 'scale' | 'select'
+type CanvasMode = 'draw' | 'scale' | 'select' | 'ai-count' | 'ai-takeoff'
 
 const MAX_POLYGON_POINTS = 64
 
@@ -279,6 +282,19 @@ export function EstCanvas() {
     }
   }, [])
 
+  // Escape dismisses the Scale-calibration overlay. The scale box is a
+  // hand-rolled float div that bypasses the shared DModal/DDrawer
+  // `useEscapeClose` behavior, so it needs its own Escape handler to stay
+  // consistent with every other overlay in desktop-v2.
+  useEffect(() => {
+    if (mode !== 'scale' && mode !== 'ai-count' && mode !== 'ai-takeoff') return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setMode('draw')
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [mode])
+
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
   const onPointerDownCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
     // Middle-button, Space-hold, or the Hand tool pans instead of drawing.
@@ -320,6 +336,10 @@ export function EstCanvas() {
         blueprint_document_id: activeBlueprint?.id ?? null,
         page_id: activePage?.id ?? null,
         service_item_code: serviceItemCode,
+        // Carry the item's own curated division (e.g. Air Barrier → D5) so the
+        // measurement passes the catalog guard instead of falling back to the
+        // project division and 422ing. Supports multi-division projects too.
+        division_code: selectedItem?.divisions?.[0] ?? null,
         unit: unitForItem,
         geometry,
         draft_id: activeDraftId,
@@ -331,7 +351,10 @@ export function EstCanvas() {
           : `Added ${formatQty(draftQuantity)} ${unitForItem} of ${serviceItemCode}.`,
       )
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Save failed')
+      // Surface the server's human-readable reason (e.g. the catalog rejection
+      // "service item not in curated catalog for any division") instead of the
+      // raw `POST …/measurement → 422` ApiError.message.
+      setError(e instanceof ApiError ? e.message_for_user() : e instanceof Error ? e.message : 'Save failed')
     }
   }
 
@@ -796,6 +819,14 @@ export function EstCanvas() {
                 key={t.label}
                 type="button"
                 onClick={() => {
+                  // Don't silently discard a drawn-but-unsaved measurement when
+                  // switching tools/modes (e.g. after a failed save, clicking
+                  // SEL used to wipe the polygon with no warning).
+                  if (
+                    draftPoints.length > 0 &&
+                    !window.confirm('Discard the unsaved measurement you are drawing?')
+                  )
+                    return
                   if (isDraw) {
                     setMode('draw')
                     setTool(value)
@@ -893,14 +924,19 @@ export function EstCanvas() {
         <div style={{ display: 'flex', flexDirection: 'column' }}>
           {(
             [
-              { label: 'AUTO-COUNT A SYMBOL', to: `/desktop/ai-count/${projectId}` },
-              { label: 'AUTO-TAKEOFF JOB', to: `/desktop/ai-takeoff/${projectId}` },
+              { label: 'AUTO-COUNT A SYMBOL', mode: 'ai-count' as const },
+              { label: 'AUTO-TAKEOFF JOB', mode: 'ai-takeoff' as const },
             ] as const
           ).map((b, i, arr) => (
             <button
               key={b.label}
               type="button"
-              onClick={() => navigate(b.to)}
+              onClick={() => {
+                // Don't silently discard an in-progress (drawn but unsaved) measurement.
+                if (draftPoints.length > 0 && !window.confirm('Discard the unsaved measurement you are drawing?'))
+                  return
+                setMode(b.mode)
+              }}
               disabled={!projectId}
               style={{
                 width: '100%',
@@ -991,6 +1027,7 @@ export function EstCanvas() {
             {items.map((it: ServiceItem) => (
               <option key={it.code} value={it.code}>
                 {it.code} — {it.name}
+                {it.divisions && it.divisions.length > 0 ? ` · ${it.divisions.join('/')}` : ''}
               </option>
             ))}
           </MSelect>
@@ -1286,6 +1323,23 @@ export function EstCanvas() {
             </div>
           </div>
         </div>
+      ) : null}
+
+      {/* ---- AI Count / AI Takeoff SETUP overlays (canvas stays visible behind;
+          Escape or ✕ dismisses; RUN routes to the heavy review screen) ---- */}
+      {mode === 'ai-count' ? (
+        <EstAiCountSetupPanel
+          projectId={projectId}
+          onClose={() => setMode('draw')}
+          onReviewDraft={(id) => navigate(`/desktop/ai-count/${projectId}/review`, { state: { draftId: id } })}
+        />
+      ) : null}
+      {mode === 'ai-takeoff' ? (
+        <EstAiTakeoffSetupPanel
+          projectId={projectId}
+          onClose={() => setMode('draw')}
+          onReviewDraft={(id) => navigate(`/desktop/ai-takeoff/${projectId}/review`, { state: { draftId: id } })}
+        />
       ) : null}
 
       {/* ---- DCanvasItemPalette · "/"-style scope-item command palette ---- */}

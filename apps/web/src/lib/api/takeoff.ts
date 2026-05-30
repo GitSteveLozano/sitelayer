@@ -190,6 +190,8 @@ export interface CreateMeasurementInput {
   blueprint_document_id?: string | null
   page_id?: string | null
   service_item_code: string
+  /** The item's curated division (e.g. D5 for Air Barrier). When omitted the API falls back to the project's division, which can trip the 422 catalog guard. */
+  division_code?: string | null
   quantity?: number
   unit?: string
   notes?: string | null

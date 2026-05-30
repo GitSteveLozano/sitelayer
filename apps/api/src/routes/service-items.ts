@@ -52,12 +52,24 @@ export async function handleServiceItemRoutes(
   ctx: ServiceItemRouteCtx,
 ): Promise<boolean> {
   if (req.method === 'GET' && url.pathname === '/api/service-items') {
+    // `divisions` is the curated service_item_divisions cross-reference for
+    // each item. The takeoff canvas needs it so it can save a measurement with
+    // the item's own division_code (e.g. "Air Barrier" → D5) instead of falling
+    // back to the project division and tripping the 422 catalog guard.
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query(
-        `select code, name, category, unit, default_rate, source, version
-       from service_items
-       where company_id = $1 and deleted_at is null
-       order by name asc`,
+        `select si.code, si.name, si.category, si.unit, si.default_rate, si.source, si.version,
+                coalesce(
+                  array_agg(sid.division_code order by sid.division_code)
+                    filter (where sid.division_code is not null),
+                  '{}'
+                ) as divisions
+       from service_items si
+       left join service_item_divisions sid
+         on sid.company_id = si.company_id and sid.service_item_code = si.code
+       where si.company_id = $1 and si.deleted_at is null
+       group by si.code, si.name, si.category, si.unit, si.default_rate, si.source, si.version
+       order by si.name asc`,
         [ctx.company.id],
       ),
     )
@@ -124,6 +136,17 @@ export async function handleServiceItemRoutes(
         action: wasInsert ? 'create' : 'restore',
         row: item,
       })
+      // Auto-curate the new item against every division this company has so it
+      // is immediately measurable on any project (the takeoff catalog guard in
+      // takeoff-write.ts rejects items with no service_item_divisions row).
+      // Idempotent; admins can prune the cross-reference afterwards. Mirrors the
+      // backfill in migration 107.
+      await client.query(
+        `insert into service_item_divisions (company_id, service_item_code, division_code)
+         select $1, $2, d.code from divisions d where d.company_id = $1
+         on conflict (company_id, service_item_code, division_code) do nothing`,
+        [ctx.company.id, code],
+      )
       return { kind: 'ok' as const, item }
     })
     if (result.kind === 'conflict') {

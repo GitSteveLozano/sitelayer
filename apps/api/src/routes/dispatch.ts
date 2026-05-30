@@ -62,6 +62,7 @@ import { handleTimeReviewRunRoutes } from './time-review-runs.js'
 import { handleWorkerIssueRoutes } from './worker-issues.js'
 import { handleProjectBriefRoutes } from './project-briefs.js'
 import { handleWorkerRoutes } from './workers.js'
+import { handlePaymentReminderRoutes } from './payment-reminders.js'
 import { handleSystemRoutes, handleDebugTraceRoute } from './system.js'
 import { handleProjectLifecycleRoutes } from './project-lifecycle.js'
 import { handleChangeOrderRoutes } from './change-orders.js'
@@ -220,6 +221,17 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         readBody,
         sendJson,
         checkVersion,
+      }),
+
+    // Payment-reminder bulk send (owner-money)
+    () =>
+      handlePaymentReminderRoutes(req, url, {
+        pool,
+        company,
+        currentUserId,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
       }),
 
     // Pricing-profile routes

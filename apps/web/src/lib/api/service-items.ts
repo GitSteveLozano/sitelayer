@@ -17,6 +17,8 @@ export interface ServiceItem {
   default_rate: string | null
   source: string
   version: number
+  /** Curated service_item_divisions codes this item is valid for (may be empty). */
+  divisions?: string[]
 }
 
 export interface ServiceItemListResponse {

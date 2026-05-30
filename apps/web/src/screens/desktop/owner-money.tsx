@@ -7,6 +7,7 @@
  */
 import { useMemo, useState } from 'react'
 import type { BootstrapResponse } from '@/lib/api'
+import { useSendPaymentReminders } from '@/lib/api/payment-reminders'
 import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, DModal, type DColumn } from '@/components/d'
 import { MButton, MPill } from '@/components/m'
 import { formatMoney } from '../mobile/format.js'
@@ -167,12 +168,12 @@ function SendRemindersModal({ open, onClose, pending }: { open: boolean; onClose
   const selectedCount = pending.filter((p) => isOn(p.id)).length
   const selectedTotal = pending.filter((p) => isOn(p.id)).reduce((sum, p) => sum + p.amount, 0)
 
+  const sendReminders = useSendPaymentReminders()
+
   const handleSend = () => {
-    // TODO(wire): bulk payment-reminder send. No unified reminder endpoint
-    // exists yet (notifications are per-workflow), so this is a no-op stub.
     const ids = pending.filter((p) => isOn(p.id)).map((p) => p.id)
-    console.log('[owner-money] send reminders (not wired):', ids)
-    onClose()
+    if (ids.length === 0 || sendReminders.isPending) return
+    sendReminders.mutate({ project_ids: ids }, { onSuccess: () => onClose() })
   }
 
   const sectionLabel: React.CSSProperties = {
@@ -202,8 +203,10 @@ function SendRemindersModal({ open, onClose, pending }: { open: boolean; onClose
           <MButton variant="ghost" onClick={onClose}>
             Cancel
           </MButton>
-          <MButton variant="primary" onClick={handleSend} disabled={selectedCount === 0}>
-            Send · {selectedCount} {selectedCount === 1 ? 'reminder' : 'reminders'}
+          <MButton variant="primary" onClick={handleSend} disabled={selectedCount === 0 || sendReminders.isPending}>
+            {sendReminders.isPending
+              ? 'Sending…'
+              : `Send · ${selectedCount} ${selectedCount === 1 ? 'reminder' : 'reminders'}`}
           </MButton>
         </div>
       }

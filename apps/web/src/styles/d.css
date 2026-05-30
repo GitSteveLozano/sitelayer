@@ -153,6 +153,9 @@
 .d-search {
   flex: 1;
   max-width: 420px;
+  /* Floor so the input can't be squeezed below its placeholder width
+     ("Search projects, clients, items…") and clip it on narrower desktops. */
+  min-width: 300px;
   height: 38px;
   border: 2px solid var(--m-ink);
   background: var(--m-card);
@@ -168,6 +171,9 @@
   display: flex;
   align-items: center;
   gap: 12px;
+  /* Keep the bell + avatar + actions intact instead of being pushed off the
+     right edge when the topbar gets tight; the search input absorbs the slack. */
+  flex-shrink: 0;
 }
 .d-content {
   flex: 1;
@@ -211,7 +217,9 @@
 .d-kpi-strip {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: 1fr;
+  /* minmax(0, 1fr) lets the tracks shrink below their min-content width so a
+     wide currency value can't force a document-level horizontal scrollbar. */
+  grid-auto-columns: minmax(0, 1fr);
   border: 2px solid var(--m-ink);
 }
 .d-kpi-strip > .d-kpi + .d-kpi {
@@ -220,6 +228,7 @@
 .d-kpi {
   padding: 18px 22px;
   background: var(--m-card);
+  min-width: 0;
 }
 .d-kpi[data-tone='accent'] {
   background: var(--m-accent);
@@ -249,6 +258,27 @@
 .d-kpi-v .d-kpi-unit {
   font-size: 22px;
   opacity: 0.55;
+}
+
+/* Narrow-desktop collapse (1024–1280px): shrink the big KPI numbers and tighten
+   topbar/content padding so the KPI strip and topbar fit without truncation or a
+   horizontal scrollbar. No effect at >=1280px, so the common case is unchanged. */
+@media (max-width: 1280px) {
+  .d-kpi-v {
+    font-size: 30px;
+  }
+  .d-kpi-v .d-kpi-unit {
+    font-size: 18px;
+  }
+  .d-kpi {
+    padding: 16px 16px;
+  }
+  .d-topbar {
+    padding: 0 16px;
+  }
+  .d-content {
+    padding: 24px 20px 40px;
+  }
 }
 .d-kpi-meta {
   font-family: var(--m-num);
