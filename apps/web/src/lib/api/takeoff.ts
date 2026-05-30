@@ -82,6 +82,8 @@ export interface TakeoffMeasurement {
    */
   image_thumbnail: string | null
   geometry: MeasurementGeometry | CaptureGeometry | Record<string, never>
+  /** PlanSwift Phase 1 cutout/deduct: when true this polygon is a deduction (e.g. a window/door opening) and its area subtracts from the net for its service item. */
+  is_deduction?: boolean
   version: number
   created_at: string
 }
@@ -198,6 +200,8 @@ export interface CreateMeasurementInput {
   elevation?: string | null
   image_thumbnail?: string | null
   geometry: MeasurementGeometry
+  /** PlanSwift Phase 1 cutout/deduct: mark this polygon as a deduction (e.g. a window/door opening). Its area subtracts from the net for its service item. */
+  is_deduction?: boolean
   /** Phase A.2: route the measurement to a specific takeoff draft. When omitted, the API falls back to the project's default draft. */
   draft_id?: string | null
 }
@@ -248,6 +252,8 @@ export interface PatchMeasurementInput {
   service_item_code?: string
   unit?: string
   notes?: string | null
+  /** Toggle cutout/deduct on an existing measurement. */
+  is_deduction?: boolean
   expected_version?: number
 }
 

@@ -132,11 +132,13 @@ export function EstCanvas() {
   )
   const sourceImage = useAuthenticatedObjectUrl(blueprintReference?.texturePath)
 
-  // Phase 1b (flag-gated): render the ORIGINAL PDF via PDFium for crisp vector
-  // zoom instead of the server-rasterized page PNG. Off by default; opt in with
-  // localStorage['sitelayer.pdf_engine'] = 'pdfium'. Falls back to the image
-  // path for non-PDF blueprints or while the PDF document is still loading.
-  const pdfEngineOn = typeof window !== 'undefined' && window.localStorage?.getItem('sitelayer.pdf_engine') === 'pdfium'
+  // Phase 1: render the ORIGINAL PDF via PDFium for crisp vector zoom instead of
+  // the server-rasterized page PNG. ON by default now that the drawing surface
+  // (large-sheet cap, snapping, undo/redo, on-canvas dimensions) is in place;
+  // set localStorage['sitelayer.pdf_engine'] = 'image' to fall back to the
+  // rasterized PNG. Non-PDF blueprints and the still-loading window also fall
+  // back to the image path.
+  const pdfEngineOn = typeof window !== 'undefined' && window.localStorage?.getItem('sitelayer.pdf_engine') !== 'image'
   const blueprintIsPdf = (activeBlueprint?.file_name ?? '').toLowerCase().endsWith('.pdf')
   const pdfDocUrl = useAuthenticatedObjectUrl(
     pdfEngineOn && blueprintIsPdf && activeBlueprint
@@ -186,6 +188,20 @@ export function EstCanvas() {
   // Bulk-select toolbar (DCanvasBulkSelect): the set of measurements picked
   // while in marquee/select mode.
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(() => new Set())
+  // Redo stack for draft points (PlanSwift-style undo/redo): UNDO pushes the
+  // popped vertex here, REDO pops it back. Any new vertex / tool change / save
+  // clears it (you can't redo into a diverged draft).
+  const [redoStack, setRedoStack] = useState<TakeoffPoint[]>([])
+  // Vertex + ortho snapping toggle. When on, a tapped point snaps to a nearby
+  // existing vertex or locks to horizontal/vertical from the previous point —
+  // the precision PlanSwift drawing-surface behaviour. Persisted per-operator.
+  const [snapEnabled, setSnapEnabled] = useState(() =>
+    typeof localStorage !== 'undefined' ? localStorage.getItem('sitelayer.snap') !== 'off' : true,
+  )
+  // Cutout/deduct mode (polygon only): when on, the next saved polygon is a
+  // deduction (window/door opening) whose area subtracts from the net for its
+  // service item. Sticky so several openings can be cut in a row.
+  const [deduct, setDeduct] = useState(false)
 
   useEffect(() => {
     if (!serviceItemCode && items[0]) setServiceItemCode(items[0].code)
@@ -222,7 +238,9 @@ export function EstCanvas() {
     pt.x = e.clientX
     pt.y = e.clientY
     const local = pt.matrixTransform(ctm.inverse())
-    setDraftPoints((prev) => [...prev, { x: round2(clamp(local.x, 0, 100)), y: round2(clamp(local.y, 0, 100)) }])
+    const snapped = snapPoint({ x: clamp(local.x, 0, 100), y: clamp(local.y, 0, 100) })
+    setRedoStack([])
+    setDraftPoints((prev) => [...prev, { x: round2(snapped.x), y: round2(snapped.y) }])
   }
 
   // --- Zoom + pan (PlanSwift-style canvas navigation) ----------------------
@@ -356,9 +374,12 @@ export function EstCanvas() {
         division_code: selectedItem?.divisions?.[0] ?? null,
         unit: unitForItem,
         geometry,
+        // Cutout/deduct only applies to area (polygon) takeoff.
+        is_deduction: tool === 'polygon' && deduct,
         draft_id: activeDraftId,
       })
       setDraftPoints([])
+      setRedoStack([])
       setSavedToast(
         'queued' in res && res.queued
           ? 'Saved offline — will sync when you reconnect.'
@@ -376,6 +397,71 @@ export function EstCanvas() {
   const blueprintMeasurements = draftMeasurements.filter(
     (m) => activeBlueprint && m.blueprint_document_id === activeBlueprint.id,
   )
+
+  // All committed vertices on this sheet — snap targets so a new measurement
+  // can latch onto the corner of an existing one (PlanSwift vertex snapping).
+  const committedVertices = useMemo<TakeoffPoint[]>(() => {
+    const out: TakeoffPoint[] = []
+    for (const m of blueprintMeasurements) {
+      const geo = m.geometry as MeasurementGeometry
+      if (geo.points) for (const p of geo.points) out.push({ x: p.x, y: p.y })
+    }
+    return out
+  }, [blueprintMeasurements])
+
+  // Snap a raw board-space point: first to a nearby existing vertex, else lock
+  // to horizontal/vertical from the previous draft point when within a small
+  // angular threshold. Pure — returns the raw point unchanged when snap is off
+  // or nothing is in range.
+  const snapPoint = (raw: TakeoffPoint): TakeoffPoint => {
+    if (!snapEnabled) return raw
+    const SNAP_VERTEX_DIST = 1.4 // board units (0–100 space)
+    let best: TakeoffPoint | null = null
+    let bestD = SNAP_VERTEX_DIST
+    for (const p of draftPoints) {
+      const d = Math.hypot(p.x - raw.x, p.y - raw.y)
+      if (d < bestD) {
+        bestD = d
+        best = p
+      }
+    }
+    for (const p of committedVertices) {
+      const d = Math.hypot(p.x - raw.x, p.y - raw.y)
+      if (d < bestD) {
+        bestD = d
+        best = p
+      }
+    }
+    if (best) return { x: best.x, y: best.y }
+    const prev = draftPoints[draftPoints.length - 1]
+    if (prev) {
+      const dx = raw.x - prev.x
+      const dy = raw.y - prev.y
+      const adx = Math.abs(dx)
+      const ady = Math.abs(dy)
+      const tanThreshold = Math.tan((6 * Math.PI) / 180) // ~6°
+      if (adx > 0.01 || ady > 0.01) {
+        if (ady <= adx * tanThreshold) return { x: raw.x, y: prev.y } // horizontal lock
+        if (adx <= ady * tanThreshold) return { x: prev.x, y: raw.y } // vertical lock
+      }
+    }
+    return raw
+  }
+
+  // Undo/redo over draft vertices. UNDO pops the last point and stashes it so
+  // REDO can replay it; REDO pulls the most-recent stashed point back on.
+  const undoPoint = () => {
+    const last = draftPoints[draftPoints.length - 1]
+    if (!last) return
+    setRedoStack((r) => [...r, last])
+    setDraftPoints((p) => p.slice(0, -1))
+  }
+  const redoPoint = () => {
+    const next = redoStack[redoStack.length - 1]
+    if (!next) return
+    setRedoStack((r) => r.slice(0, -1))
+    setDraftPoints((p) => [...p, next])
+  }
   const totals = useMemo(() => buildScopeTotals(draftMeasurements), [draftMeasurements])
   const grandTotal = totals.reduce((s, t) => s + t.quantity, 0)
 
@@ -661,16 +747,24 @@ export function EstCanvas() {
               const strokeWSel = isSelected ? 0.7 : 0.4
               if (geo.kind === 'polygon' && geo.points && geo.points.length >= 3) {
                 const c = calculatePolygonCentroid(geo.points)
+                // Cutout/deduct measurements render in red with a "−" prefix on
+                // the quantity so a deducted opening reads as a subtraction.
+                const isDed = m.is_deduction === true
+                const polyFill = isDed ? (isSelected ? 'rgba(214,69,69,0.4)' : 'rgba(214,69,69,0.16)') : fillSel
+                const polyStroke = isDed ? 'var(--m-red)' : strokeSel
+                const labelFill = isDed ? 'var(--m-red)' : 'var(--m-accent)'
                 return (
                   <g key={m.id} onClick={onClick} style={{ cursor: interactive ? 'pointer' : undefined }}>
                     <polygon
                       points={geo.points.map((p) => `${p.x},${p.y}`).join(' ')}
-                      fill={fillSel}
-                      stroke={strokeSel}
+                      fill={polyFill}
+                      stroke={polyStroke}
                       strokeWidth={strokeWSel}
+                      strokeDasharray={isDed ? '1.2 0.8' : undefined}
                     />
                     {c ? (
-                      <text x={c.x} y={c.y} fontSize={3} textAnchor="middle" fill="var(--m-accent)" fontWeight={700}>
+                      <text x={c.x} y={c.y} fontSize={3} textAnchor="middle" fill={labelFill} fontWeight={700}>
+                        {isDed ? '−' : ''}
                         {formatQty(Number(m.quantity))}
                       </text>
                     ) : null}
@@ -710,12 +804,13 @@ export function EstCanvas() {
               return null
             })}
 
-            {/* Draft-in-progress (same render as mobile) */}
+            {/* Draft-in-progress (same render as mobile). In cutout/deduct mode
+                the polygon draws in red to signal it will subtract. */}
             {tool === 'polygon' && draftPoints.length >= 3 ? (
               <polygon
                 points={draftPoints.map((p) => `${p.x},${p.y}`).join(' ')}
-                fill="rgba(201,138,46,0.2)"
-                stroke="var(--m-amber)"
+                fill={deduct ? 'rgba(214,69,69,0.18)' : 'rgba(201,138,46,0.2)'}
+                stroke={deduct ? 'var(--m-red)' : 'var(--m-amber)'}
                 strokeWidth={0.4}
                 strokeDasharray="0.8 0.8"
               />
@@ -732,6 +827,45 @@ export function EstCanvas() {
             {draftPoints.map((p, i) => (
               <circle key={i} cx={p.x} cy={p.y} r={tool === 'count' ? 1 : 0.8} fill="var(--m-amber)" />
             ))}
+            {/* Live on-canvas dimension label — the running quantity rendered on
+                the shape as you draw, same style as committed measurements. */}
+            {tool === 'polygon' && draftPoints.length >= 3
+              ? (() => {
+                  const c = calculatePolygonCentroid(draftPoints)
+                  return c ? (
+                    <text
+                      x={c.x}
+                      y={c.y}
+                      fontSize={3}
+                      textAnchor="middle"
+                      fill={deduct ? 'var(--m-red)' : 'var(--m-amber)'}
+                      fontWeight={700}
+                      pointerEvents="none"
+                    >
+                      {deduct ? '−' : ''}
+                      {formatQty(draftQuantity)} {unitForItem}
+                    </text>
+                  ) : null
+                })()
+              : null}
+            {tool === 'lineal' && draftPoints.length >= 2
+              ? (() => {
+                  const last = draftPoints[draftPoints.length - 1]
+                  return last ? (
+                    <text
+                      x={last.x}
+                      y={last.y - 1.6}
+                      fontSize={3}
+                      textAnchor="middle"
+                      fill="var(--m-amber)"
+                      fontWeight={700}
+                      pointerEvents="none"
+                    >
+                      {formatQty(draftQuantity)} {unitForItem}
+                    </text>
+                  ) : null
+                })()
+              : null}
           </svg>
         </div>
       </div>
@@ -864,6 +998,7 @@ export function EstCanvas() {
                     setMode(t.mode)
                   }
                   setDraftPoints([])
+                  setRedoStack([])
                   setSelectedMeasurementId(null)
                   setBulkSelected(new Set())
                 }}
@@ -1113,7 +1248,7 @@ export function EstCanvas() {
           <div style={{ display: 'flex', gap: 6 }}>
             <button
               type="button"
-              onClick={() => setDraftPoints((p) => p.slice(0, -1))}
+              onClick={undoPoint}
               disabled={draftPoints.length === 0}
               style={ghostChip(draftPoints.length === 0)}
             >
@@ -1121,12 +1256,61 @@ export function EstCanvas() {
             </button>
             <button
               type="button"
-              onClick={() => setDraftPoints([])}
+              onClick={redoPoint}
+              disabled={redoStack.length === 0}
+              style={ghostChip(redoStack.length === 0)}
+            >
+              REDO
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setDraftPoints([])
+                setRedoStack([])
+              }}
               disabled={draftPoints.length === 0}
               style={ghostChip(draftPoints.length === 0)}
             >
               CLEAR
             </button>
+            <button
+              type="button"
+              onClick={() =>
+                setSnapEnabled((on) => {
+                  const next = !on
+                  try {
+                    localStorage.setItem('sitelayer.snap', next ? 'on' : 'off')
+                  } catch {
+                    /* private mode */
+                  }
+                  return next
+                })
+              }
+              title="Snap new points to nearby vertices and to horizontal/vertical"
+              style={{
+                ...ghostChip(false),
+                ...(snapEnabled
+                  ? { background: 'var(--m-ink)', color: 'var(--m-paper)', borderColor: 'var(--m-ink)' }
+                  : {}),
+              }}
+            >
+              SNAP {snapEnabled ? 'ON' : 'OFF'}
+            </button>
+            {tool === 'polygon' ? (
+              <button
+                type="button"
+                onClick={() => setDeduct((on) => !on)}
+                title="Cutout: subtract this area from the net (e.g. a window or door opening)"
+                style={{
+                  ...ghostChip(false),
+                  ...(deduct
+                    ? { background: 'var(--m-red)', color: 'var(--m-paper)', borderColor: 'var(--m-red)' }
+                    : {}),
+                }}
+              >
+                DEDUCT {deduct ? 'ON' : 'OFF'}
+              </button>
+            ) : null}
           </div>
 
           <MButton variant="primary" onClick={() => void onSave()} disabled={!canSave}>
@@ -1690,7 +1874,10 @@ function buildScopeTotals(measurements: TakeoffMeasurement[]): ScopeTotal[] {
   const buckets = new Map<string, { quantity: number; units: Set<string>; count: number }>()
   for (const m of measurements) {
     const bucket = buckets.get(m.service_item_code) ?? { quantity: 0, units: new Set<string>(), count: 0 }
-    bucket.quantity += Number(m.quantity) || 0
+    // Cutout/deduct measurements subtract their area from the net for the item,
+    // matching the signed estimate-line derivation on the server.
+    const sign = m.is_deduction ? -1 : 1
+    bucket.quantity += (Number(m.quantity) || 0) * sign
     bucket.units.add(m.unit)
     bucket.count += 1
     buckets.set(m.service_item_code, bucket)
