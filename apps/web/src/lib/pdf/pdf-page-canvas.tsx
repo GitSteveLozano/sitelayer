@@ -77,11 +77,34 @@ export function PdfPageCanvas({ doc, pageNumber, scale, className, style, onErro
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const handle = doc.renderPage({ pageNumber, canvas, scale })
-    void handle.promise.catch((err: unknown) => {
-      onError?.(err instanceof Error ? err : new Error(String(err)))
-    })
-    return () => handle.cancel()
+    let cancelled = false
+    let handle: { promise: Promise<void>; cancel(): void } | null = null
+    void (async () => {
+      // Clamp the effective render scale by page size so a large sheet (e.g. a
+      // 34x22" plan) at high zoom can't allocate a multi-hundred-MB canvas or
+      // exceed the browser's max canvas dimension. ~4096px/side keeps it safe
+      // while still far crisper than the rasterized PNG.
+      let effectiveScale = scale
+      try {
+        const size = await doc.getPageSize(pageNumber)
+        if (cancelled) return
+        const MAX_SIDE = 4096
+        const fit = Math.min(MAX_SIDE / size.width, MAX_SIDE / size.height)
+        effectiveScale = Math.max(1, Math.min(scale, fit))
+      } catch {
+        // fall back to the requested scale if the size lookup fails
+      }
+      const live = canvasRef.current
+      if (cancelled || !live) return
+      handle = doc.renderPage({ pageNumber, canvas: live, scale: effectiveScale })
+      void handle.promise.catch((err: unknown) => {
+        if (!cancelled) onError?.(err instanceof Error ? err : new Error(String(err)))
+      })
+    })()
+    return () => {
+      cancelled = true
+      handle?.cancel()
+    }
   }, [doc, pageNumber, scale, onError])
 
   return <canvas ref={canvasRef} className={className} style={style} />
