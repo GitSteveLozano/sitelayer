@@ -18,6 +18,7 @@ import { estimateCsvUrl, estimatePdfUrl } from '@/lib/api/estimate'
 import { DataTable, DEyebrow, DH1, type DColumn } from '@/components/d'
 import { MButton, MPill } from '@/components/m'
 import { PdfPreviewModal } from './project-drawers'
+import { ProjectRatesModal } from './est-project-rates'
 import { formatMoney } from '../mobile/format.js'
 
 type QtyRow = {
@@ -62,6 +63,8 @@ export function EstQuantities() {
   // Reuses the existing presentational PdfPreviewModal from project-drawers.
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
   const [generating, setGenerating] = useState(false)
+  // Project-specific rate overrides (Cavy 4/11).
+  const [ratesOpen, setRatesOpen] = useState(false)
 
   useEffect(() => {
     if (!projectId) return
@@ -303,6 +306,11 @@ export function EstQuantities() {
 
             {sendError ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{sendError}</div> : null}
 
+            {/* Project rates (Cavy 4/11 — per-project rate overrides). */}
+            <MButton variant="ghost" onClick={() => setRatesOpen(true)}>
+              Project rates
+            </MButton>
+
             {/* PDF actions (design DEstQuantities · PREVIEW PDF / GENERATE PDF). */}
             <div style={{ display: 'flex', gap: 8 }}>
               <MButton
@@ -335,6 +343,14 @@ export function EstQuantities() {
 
       {/* In-app PDF preview (reuses the presentational PdfPreviewModal). */}
       <PdfPreviewModal open={pdfPreviewOpen} onClose={() => setPdfPreviewOpen(false)} />
+
+      {/* Per-project rate overrides — recomputes the estimate on save. */}
+      <ProjectRatesModal
+        projectId={projectId}
+        open={ratesOpen}
+        onClose={() => setRatesOpen(false)}
+        onSaved={() => builder.refresh()}
+      />
     </div>
   )
 }

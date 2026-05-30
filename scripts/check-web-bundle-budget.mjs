@@ -35,7 +35,11 @@ const APPS = {
     // cutout/deduct-area mode (DEDUCT toggle + signed render). The heavy PDFium
     // engine itself is NOT here — it's split into the exempt `vendor-pdf`
     // chunk; this is just the app-side drawing logic. ~64.2KB gzip.
-    lazyAppChunkGzipBudget: 68 * 1024,
+    // 68KB → 72KB on 2026-05-30 for the Cavy-backlog estimator build-out in the
+    // desktop-workspace chunk: the scope-vs-bid card + the per-project rate
+    // editor (ProjectRatesModal), with the foreman Confirm-Day + estimate-vs-
+    // actuals screens still to land. ~67.2KB gzip.
+    lazyAppChunkGzipBudget: 72 * 1024,
     nonAppPrefixes: ['vendor-', 'web-vitals-', 'rolldown-runtime-', 'workbox-'],
     requireSentryLazy: false,
   },
