@@ -166,130 +166,130 @@ export function EstAiTakeoffSetupPanel({
         </button>
       </div>
       <div style={{ padding: 18 }}>
-          <div style={label}>Targets · symbol → item</div>
-          <div style={{ marginTop: 10, border: '2px solid var(--m-ink)' }}>
-            {targets.map((t, i) => (
-              <button
-                key={t.sym}
-                type="button"
-                onClick={() => toggleTarget(i)}
+        <div style={label}>Targets · symbol → item</div>
+        <div style={{ marginTop: 10, border: '2px solid var(--m-ink)' }}>
+          {targets.map((t, i) => (
+            <button
+              key={t.sym}
+              type="button"
+              onClick={() => toggleTarget(i)}
+              style={{
+                width: '100%',
+                textAlign: 'left',
+                padding: '10px 12px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                borderBottom: i < targets.length - 1 ? '1px solid var(--m-line-2)' : 'none',
+                background: t.on ? 'transparent' : 'var(--m-card-soft)',
+                cursor: 'pointer',
+              }}
+              aria-pressed={t.on}
+            >
+              <span
                 style={{
-                  width: '100%',
-                  textAlign: 'left',
-                  padding: '10px 12px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  borderBottom: i < targets.length - 1 ? '1px solid var(--m-line-2)' : 'none',
-                  background: t.on ? 'transparent' : 'var(--m-card-soft)',
-                  cursor: 'pointer',
+                  width: 16,
+                  height: 16,
+                  background: t.on ? 'var(--m-accent)' : 'transparent',
+                  border: '2px solid var(--m-ink)',
+                  flexShrink: 0,
                 }}
-                aria-pressed={t.on}
-              >
+                aria-hidden
+              />
+              <span style={{ flex: 1, minWidth: 0 }}>
+                <span style={{ fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 800 }}>
+                  {t.sym} <span style={{ color: 'var(--m-ink-3)' }}>→ {t.item}</span>
+                </span>
                 <span
                   style={{
-                    width: 16,
-                    height: 16,
-                    background: t.on ? 'var(--m-accent)' : 'transparent',
-                    border: '2px solid var(--m-ink)',
-                    flexShrink: 0,
+                    display: 'block',
+                    fontFamily: 'var(--m-num)',
+                    fontSize: 8,
+                    color: 'var(--m-ink-3)',
+                    marginTop: 2,
+                    fontWeight: 600,
                   }}
-                  aria-hidden
-                />
-                <span style={{ flex: 1, minWidth: 0 }}>
-                  <span style={{ fontFamily: 'var(--m-num)', fontSize: 10, fontWeight: 800 }}>
-                    {t.sym} <span style={{ color: 'var(--m-ink-3)' }}>→ {t.item}</span>
-                  </span>
-                  <span
-                    style={{
-                      display: 'block',
-                      fontFamily: 'var(--m-num)',
-                      fontSize: 8,
-                      color: 'var(--m-ink-3)',
-                      marginTop: 2,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {t.param}
-                  </span>
+                >
+                  {t.param}
                 </span>
-              </button>
-            ))}
-          </div>
-          <button
-            type="button"
-            style={{
-              width: '100%',
-              marginTop: 8,
-              padding: 8,
-              background: 'transparent',
-              border: '2px dashed var(--m-line-2)',
-              fontFamily: 'var(--m-num)',
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: '0.06em',
-              color: 'var(--m-ink-3)',
-              cursor: 'pointer',
-            }}
-          >
-            + ADD TARGET
-          </button>
-
-          <div style={{ ...label, marginTop: 16 }}>Sheet scope</div>
-          <div
-            style={{
-              marginTop: 8,
-              padding: '10px 12px',
-              background: 'var(--m-card-soft)',
-              border: '2px solid var(--m-ink)',
-            }}
-          >
-            <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700 }}>ALL VERIFIED · 22 SHEETS</div>
-            <div
-              style={{
-                fontFamily: 'var(--m-num)',
-                fontSize: 9,
-                color: 'var(--m-ink-3)',
-                marginTop: 3,
-                fontWeight: 600,
-              }}
-            >
-              A-101 · A-201..204 · M-101..104 · …
-            </div>
-          </div>
-
-          <div
-            style={{
-              padding: '10px 12px',
-              background: 'var(--m-accent)',
-              color: 'var(--m-accent-ink)',
-              marginTop: 14,
-              fontFamily: 'var(--m-num)',
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: '0.04em',
-            }}
-          >
-            DRAFT 22 SHEETS · {enabledCount} TARGETS · ~3M · REVIEW BEFORE ACCEPT
-          </div>
-          <MButton variant="primary" onClick={runTakeoff} disabled={capture.isPending || enabledCount === 0}>
-            {capture.isPending ? 'Drafting…' : 'Run auto-takeoff →'}
-          </MButton>
-          {capture.isError ? (
-            <div
-              style={{
-                marginTop: 10,
-                fontFamily: 'var(--m-num)',
-                fontSize: 10,
-                fontWeight: 700,
-                color: 'var(--m-red)',
-              }}
-            >
-              ● {capture.error.message || 'Capture failed — try again.'}
-            </div>
-          ) : null}
+              </span>
+            </button>
+          ))}
         </div>
+        <button
+          type="button"
+          style={{
+            width: '100%',
+            marginTop: 8,
+            padding: 8,
+            background: 'transparent',
+            border: '2px dashed var(--m-line-2)',
+            fontFamily: 'var(--m-num)',
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            color: 'var(--m-ink-3)',
+            cursor: 'pointer',
+          }}
+        >
+          + ADD TARGET
+        </button>
+
+        <div style={{ ...label, marginTop: 16 }}>Sheet scope</div>
+        <div
+          style={{
+            marginTop: 8,
+            padding: '10px 12px',
+            background: 'var(--m-card-soft)',
+            border: '2px solid var(--m-ink)',
+          }}
+        >
+          <div style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 700 }}>ALL VERIFIED · 22 SHEETS</div>
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 9,
+              color: 'var(--m-ink-3)',
+              marginTop: 3,
+              fontWeight: 600,
+            }}
+          >
+            A-101 · A-201..204 · M-101..104 · …
+          </div>
+        </div>
+
+        <div
+          style={{
+            padding: '10px 12px',
+            background: 'var(--m-accent)',
+            color: 'var(--m-accent-ink)',
+            marginTop: 14,
+            fontFamily: 'var(--m-num)',
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.04em',
+          }}
+        >
+          DRAFT 22 SHEETS · {enabledCount} TARGETS · ~3M · REVIEW BEFORE ACCEPT
+        </div>
+        <MButton variant="primary" onClick={runTakeoff} disabled={capture.isPending || enabledCount === 0}>
+          {capture.isPending ? 'Drafting…' : 'Run auto-takeoff →'}
+        </MButton>
+        {capture.isError ? (
+          <div
+            style={{
+              marginTop: 10,
+              fontFamily: 'var(--m-num)',
+              fontSize: 10,
+              fontWeight: 700,
+              color: 'var(--m-red)',
+            }}
+          >
+            ● {capture.error.message || 'Capture failed — try again.'}
+          </div>
+        ) : null}
       </div>
+    </div>
   )
 }
 

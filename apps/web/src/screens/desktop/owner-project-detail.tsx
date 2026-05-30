@@ -206,24 +206,24 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
         </div>
       </div>
       <RecoveryDrawer
-          open={overlay === 'recovery'}
-          onClose={() => setOverlay(null)}
-          projectId={projectId}
-          daysLeft={daysLeft}
-          bidTotal={bidTotal}
-          laborRate={laborRate}
-          spent={spent}
-        />
+        open={overlay === 'recovery'}
+        onClose={() => setOverlay(null)}
+        projectId={projectId}
+        daysLeft={daysLeft}
+        bidTotal={bidTotal}
+        laborRate={laborRate}
+        spent={spent}
+      />
       <ChangeOrderDrawer open={overlay === 'change-order'} projectId={projectId} onClose={() => setOverlay(null)} />
       <PostMortemDrawer open={overlay === 'post-mortem'} onClose={() => setOverlay(null)} projectId={projectId} />
       <InvoiceModal
-          open={overlay === 'invoice'}
-          onClose={() => setOverlay(null)}
-          projectId={projectId}
-          projectName={name}
-          customerName={customer}
-          contractValue={bidTotal}
-        />
+        open={overlay === 'invoice'}
+        onClose={() => setOverlay(null)}
+        projectId={projectId}
+        projectName={name}
+        customerName={customer}
+        contractValue={bidTotal}
+      />
     </div>
   )
 }

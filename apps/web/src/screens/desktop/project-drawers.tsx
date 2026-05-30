@@ -537,7 +537,14 @@ function milestoneStatusLabel(status: BillingMilestone['status']): string {
 
 /** G5 · Milestone billing list + NET 30 + send button, bound to the project's
  * real billing milestones (seed-on-empty + estimate_push send). */
-export function InvoiceModal({ open, onClose, projectId, projectName, customerName, contractValue }: InvoiceModalProps) {
+export function InvoiceModal({
+  open,
+  onClose,
+  projectId,
+  projectName,
+  customerName,
+  contractValue,
+}: InvoiceModalProps) {
   const milestonesQuery = useBillingMilestones(open ? projectId : null)
   const createMilestones = useCreateBillingMilestones(projectId)
   const createPush = useCreateEstimatePush()
