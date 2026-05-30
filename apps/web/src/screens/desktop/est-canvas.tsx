@@ -198,6 +198,10 @@ export function EstCanvas() {
   const [snapEnabled, setSnapEnabled] = useState(() =>
     typeof localStorage !== 'undefined' ? localStorage.getItem('sitelayer.snap') !== 'off' : true,
   )
+  // Cutout/deduct mode (polygon only): when on, the next saved polygon is a
+  // deduction (window/door opening) whose area subtracts from the net for its
+  // service item. Sticky so several openings can be cut in a row.
+  const [deduct, setDeduct] = useState(false)
 
   useEffect(() => {
     if (!serviceItemCode && items[0]) setServiceItemCode(items[0].code)
@@ -370,6 +374,8 @@ export function EstCanvas() {
         division_code: selectedItem?.divisions?.[0] ?? null,
         unit: unitForItem,
         geometry,
+        // Cutout/deduct only applies to area (polygon) takeoff.
+        is_deduction: tool === 'polygon' && deduct,
         draft_id: activeDraftId,
       })
       setDraftPoints([])
@@ -741,16 +747,24 @@ export function EstCanvas() {
               const strokeWSel = isSelected ? 0.7 : 0.4
               if (geo.kind === 'polygon' && geo.points && geo.points.length >= 3) {
                 const c = calculatePolygonCentroid(geo.points)
+                // Cutout/deduct measurements render in red with a "−" prefix on
+                // the quantity so a deducted opening reads as a subtraction.
+                const isDed = m.is_deduction === true
+                const polyFill = isDed ? (isSelected ? 'rgba(214,69,69,0.4)' : 'rgba(214,69,69,0.16)') : fillSel
+                const polyStroke = isDed ? 'var(--m-red)' : strokeSel
+                const labelFill = isDed ? 'var(--m-red)' : 'var(--m-accent)'
                 return (
                   <g key={m.id} onClick={onClick} style={{ cursor: interactive ? 'pointer' : undefined }}>
                     <polygon
                       points={geo.points.map((p) => `${p.x},${p.y}`).join(' ')}
-                      fill={fillSel}
-                      stroke={strokeSel}
+                      fill={polyFill}
+                      stroke={polyStroke}
                       strokeWidth={strokeWSel}
+                      strokeDasharray={isDed ? '1.2 0.8' : undefined}
                     />
                     {c ? (
-                      <text x={c.x} y={c.y} fontSize={3} textAnchor="middle" fill="var(--m-accent)" fontWeight={700}>
+                      <text x={c.x} y={c.y} fontSize={3} textAnchor="middle" fill={labelFill} fontWeight={700}>
+                        {isDed ? '−' : ''}
                         {formatQty(Number(m.quantity))}
                       </text>
                     ) : null}
@@ -790,12 +804,13 @@ export function EstCanvas() {
               return null
             })}
 
-            {/* Draft-in-progress (same render as mobile) */}
+            {/* Draft-in-progress (same render as mobile). In cutout/deduct mode
+                the polygon draws in red to signal it will subtract. */}
             {tool === 'polygon' && draftPoints.length >= 3 ? (
               <polygon
                 points={draftPoints.map((p) => `${p.x},${p.y}`).join(' ')}
-                fill="rgba(201,138,46,0.2)"
-                stroke="var(--m-amber)"
+                fill={deduct ? 'rgba(214,69,69,0.18)' : 'rgba(201,138,46,0.2)'}
+                stroke={deduct ? 'var(--m-red)' : 'var(--m-amber)'}
                 strokeWidth={0.4}
                 strokeDasharray="0.8 0.8"
               />
@@ -823,10 +838,11 @@ export function EstCanvas() {
                       y={c.y}
                       fontSize={3}
                       textAnchor="middle"
-                      fill="var(--m-amber)"
+                      fill={deduct ? 'var(--m-red)' : 'var(--m-amber)'}
                       fontWeight={700}
                       pointerEvents="none"
                     >
+                      {deduct ? '−' : ''}
                       {formatQty(draftQuantity)} {unitForItem}
                     </text>
                   ) : null
@@ -1280,6 +1296,21 @@ export function EstCanvas() {
             >
               SNAP {snapEnabled ? 'ON' : 'OFF'}
             </button>
+            {tool === 'polygon' ? (
+              <button
+                type="button"
+                onClick={() => setDeduct((on) => !on)}
+                title="Cutout: subtract this area from the net (e.g. a window or door opening)"
+                style={{
+                  ...ghostChip(false),
+                  ...(deduct
+                    ? { background: 'var(--m-red)', color: 'var(--m-paper)', borderColor: 'var(--m-red)' }
+                    : {}),
+                }}
+              >
+                DEDUCT {deduct ? 'ON' : 'OFF'}
+              </button>
+            ) : null}
           </div>
 
           <MButton variant="primary" onClick={() => void onSave()} disabled={!canSave}>
@@ -1843,7 +1874,10 @@ function buildScopeTotals(measurements: TakeoffMeasurement[]): ScopeTotal[] {
   const buckets = new Map<string, { quantity: number; units: Set<string>; count: number }>()
   for (const m of measurements) {
     const bucket = buckets.get(m.service_item_code) ?? { quantity: 0, units: new Set<string>(), count: 0 }
-    bucket.quantity += Number(m.quantity) || 0
+    // Cutout/deduct measurements subtract their area from the net for the item,
+    // matching the signed estimate-line derivation on the server.
+    const sign = m.is_deduction ? -1 : 1
+    bucket.quantity += (Number(m.quantity) || 0) * sign
     bucket.units.add(m.unit)
     bucket.count += 1
     buckets.set(m.service_item_code, bucket)

@@ -84,7 +84,7 @@ export async function handleTakeoffMeasurementRoutes(
     const result = await withCompanyClient(ctx.company.id, (c) =>
       c.query(
         `
-      select id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, elevation, image_thumbnail, draft_id, version, deleted_at, created_at
+      select id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, elevation, image_thumbnail, draft_id, is_deduction, version, deleted_at, created_at
       from takeoff_measurements
       where company_id = $1 and project_id = $2 and deleted_at is null ${draftFilter}
       order by created_at desc
@@ -247,10 +247,11 @@ export async function handleTakeoffMeasurementRoutes(
             geometry = coalesce($8::jsonb, geometry),
             elevation = coalesce($10, elevation),
             page_id = coalesce($11, page_id),
+            is_deduction = coalesce($12, is_deduction),
             version = version + 1,
             updated_at = now()
           where company_id = $1 and id = $2 and deleted_at is null and ($9::int is null or version = $9)
-          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, elevation, version, deleted_at, created_at, updated_at
+          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, elevation, is_deduction, version, deleted_at, created_at, updated_at
           `,
           [
             ctx.company.id,
@@ -272,6 +273,7 @@ export async function handleTakeoffMeasurementRoutes(
                   return v
                 })(),
             patchPageId,
+            body.is_deduction === undefined ? null : body.is_deduction === true,
           ],
         )
         const row = result.rows[0]

@@ -146,10 +146,11 @@ export async function createEstimateFromMeasurements(
     unit: string
     notes: string | null
     division_code: string | null
+    is_deduction: boolean
   }>(
     draftId
-      ? 'select service_item_code, quantity, unit, notes, division_code from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
-      : 'select service_item_code, quantity, unit, notes, division_code from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
+      ? 'select service_item_code, quantity, unit, notes, division_code, is_deduction from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
+      : 'select service_item_code, quantity, unit, notes, division_code, is_deduction from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
     draftId ? [companyId, projectId, draftId] : [companyId, projectId],
   )
 
@@ -208,13 +209,20 @@ export async function createEstimateFromMeasurements(
     for (const measurement of measurementsResult.rows) {
       const resolved = priceIndex.get(measurement.service_item_code)
       const rate = resolved?.price ?? 0
-      const amount = Number(measurement.quantity) * rate
+      // PlanSwift Phase 1 cutout/deduct: a deduction measurement (e.g. a window
+      // opening) contributes a NEGATIVE quantity + amount so the net rolls up
+      // correctly everywhere downstream — scope-vs-bid totals, the estimate
+      // PDF, and the QBO push all just sum the signed line values. The stored
+      // measurement quantity stays positive; only the derived line is signed.
+      const sign = measurement.is_deduction ? -1 : 1
+      const signedQuantity = Number(measurement.quantity) * sign
+      const amount = signedQuantity * rate
       // Per WhatsApp:227-229: an estimate line inherits the measurement's
       // division_code when the takeoff captured one, otherwise falls back to
       // the project's division_code so existing flows keep working.
       const effectiveDivisionCode = measurement.division_code ?? projectDivisionCode
       codes.push(measurement.service_item_code)
-      quantities.push(String(measurement.quantity))
+      quantities.push(String(signedQuantity))
       units.push(resolved?.unit || measurement.unit)
       rates.push(String(rate))
       amounts.push(String(amount))
