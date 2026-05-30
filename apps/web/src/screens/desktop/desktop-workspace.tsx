@@ -58,6 +58,8 @@ import { OwnerTeam } from './owner-team'
 import { OwnerApprovals } from './owner-approvals'
 import { OwnerClients } from './owner-clients'
 import { OwnerMoney } from './owner-money'
+import { OwnerJobCosts } from './est-actuals'
+import { FmConfirmDay } from './fm-confirm-day'
 import { OwnerSchedule } from './owner-schedule'
 import { OwnerRentals } from './owner-rentals'
 import { OwnerRentalsAsset } from './owner-rentals-asset'
@@ -100,6 +102,7 @@ const OWNER_NAV: DNavSection[] = [
     title: 'Money + People',
     items: [
       { to: '/desktop/money', label: 'Money', icon: asIcon(DollarSign) },
+      { to: '/desktop/job-costs', label: 'Job costs', icon: asIcon(DollarSign) },
       { to: '/desktop/approvals', label: 'Approvals', icon: asIcon(Users) },
       { to: '/desktop/team', label: 'Team', icon: asIcon(Users) },
       { to: '/desktop/clients', label: 'Clients', icon: asIcon(UserSquare) },
@@ -135,6 +138,7 @@ const OWNER_NAV: DNavSection[] = [
       { to: '/desktop/fm/crew', label: 'FM Crew', icon: asIcon(Users) },
       { to: '/desktop/fm/schedule', label: 'FM Schedule', icon: asIcon(Calendar) },
       { to: '/desktop/fm/time', label: 'FM Time', icon: asIcon(Calendar) },
+      { to: '/desktop/fm/confirm', label: 'FM Confirm Day', icon: asIcon(Calendar) },
       { to: '/desktop/fm/log', label: 'FM Log', icon: asIcon(FileText) },
     ],
   },
@@ -502,6 +506,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
           <Route path="activity" element={<OwnerActivity />} />
           <Route path="schedule" element={<OwnerSchedule bootstrap={bootstrap} />} />
           <Route path="money" element={<OwnerMoney bootstrap={bootstrap} />} />
+          <Route path="job-costs" element={<OwnerJobCosts />} />
           <Route path="approvals" element={<OwnerApprovals bootstrap={bootstrap} />} />
           <Route path="team" element={<OwnerTeam bootstrap={bootstrap} />} />
           <Route path="clients" element={<OwnerClients />} />
@@ -518,6 +523,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
           <Route path="fm/crew" element={<FmCrew bootstrap={bootstrap} />} />
           <Route path="fm/schedule" element={<FmSchedule bootstrap={bootstrap} />} />
           <Route path="fm/time" element={<FmTime bootstrap={bootstrap} />} />
+          <Route path="fm/confirm" element={<FmConfirmDay bootstrap={bootstrap} />} />
           <Route path="fm/brief/:projectId" element={<FmBrief />} />
           <Route path="ai-takeoff/:projectId" element={<EstAiTakeoffSetup />} />
           <Route path="ai-takeoff/:projectId/review" element={<EstAiTakeoffReview />} />
