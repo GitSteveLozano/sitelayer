@@ -36,8 +36,82 @@ export type EstimatePdfDivision = {
   ext: number | string
 }
 
+/**
+ * PlanSwift-parity report types (Phase 3 — report builder). One estimate model,
+ * four audiences:
+ *   - summary      — internal estimate overview (the original; default).
+ *   - customer     — client-facing proposal: line items + the sell total only;
+ *                    NO internal cost breakdown / margin / tenant slug.
+ *   - rfq          — request-for-quote to subs/suppliers: scope (desc/qty/unit)
+ *                    with a blank "Your price" column; no rates/totals.
+ *   - cost_vs_sell — internal margin analysis: cost vs sell + margin $ / %.
+ */
+export type ReportKind = 'summary' | 'customer' | 'rfq' | 'cost_vs_sell'
+
+type ReportConfig = {
+  /** Document + heading title. */
+  title: string
+  /** Internal-only tenant slug in the header (off for client/sub-facing copies). */
+  showTenantSlug: boolean
+  /** Show the sell Rate column on each line. */
+  showRate: boolean
+  /** Show the extended sell amount column on each line. */
+  showExt: boolean
+  /** RFQ: a blank "Your price" column for the sub to fill in. */
+  showPriceColumn: boolean
+  /** Which totals block to render. */
+  totals: 'costs' | 'sell_only' | 'cost_vs_sell' | 'none'
+  /** Internal bid-vs-scope variance block. */
+  showVariance: boolean
+}
+
+export const REPORT_CONFIG: Record<ReportKind, ReportConfig> = {
+  summary: {
+    title: 'Estimate',
+    showTenantSlug: true,
+    showRate: true,
+    showExt: true,
+    showPriceColumn: false,
+    totals: 'costs',
+    showVariance: true,
+  },
+  customer: {
+    title: 'Proposal',
+    showTenantSlug: false,
+    showRate: true,
+    showExt: true,
+    showPriceColumn: false,
+    totals: 'sell_only',
+    showVariance: false,
+  },
+  rfq: {
+    title: 'Request for Quote',
+    showTenantSlug: false,
+    showRate: false,
+    showExt: false,
+    showPriceColumn: true,
+    totals: 'none',
+    showVariance: false,
+  },
+  cost_vs_sell: {
+    title: 'Cost vs Sell',
+    showTenantSlug: true,
+    showRate: true,
+    showExt: true,
+    showPriceColumn: false,
+    totals: 'cost_vs_sell',
+    showVariance: true,
+  },
+}
+
+export function isReportKind(value: unknown): value is ReportKind {
+  return value === 'summary' || value === 'customer' || value === 'rfq' || value === 'cost_vs_sell'
+}
+
 export type EstimatePdfInput = {
   company: { name: string; slug: string }
+  /** Which report to render. Defaults to 'summary' (the original estimate). */
+  report?: ReportKind
   project: {
     name: string
     customer_name: string | null
@@ -52,7 +126,10 @@ export type EstimatePdfInput = {
     labor: number
     material: number
     overhead: number
+    /** Total COST (labor + material + overhead). */
     total: number
+    /** Total SELL (what the client pays — sum of line ext / estimateTotal). */
+    sell: number
   }
   generatedAt?: Date
   appUrl?: string
@@ -65,6 +142,7 @@ export type EstimatePdfInput = {
  */
 export function buildEstimatePdfInputFromSummary(args: {
   company: { name: string; slug: string }
+  report?: ReportKind
   summary: {
     project: {
       name: string
@@ -92,6 +170,7 @@ export function buildEstimatePdfInputFromSummary(args: {
   appUrl?: string
 }): EstimatePdfInput {
   const { summary, company, appUrl } = args
+  const sell = Number(summary.metrics.estimateTotal ?? 0)
   const divisions: EstimatePdfDivision[] = summary.estimateLines.map((line) => ({
     description: line.service_item_code,
     qty: line.quantity,
@@ -110,6 +189,7 @@ export function buildEstimatePdfInputFromSummary(args: {
 
   return {
     company,
+    ...(args.report ? { report: args.report } : {}),
     project: {
       name: summary.project.name,
       customer_name: summary.project.customer_name,
@@ -124,6 +204,7 @@ export function buildEstimatePdfInputFromSummary(args: {
       material: material + sub,
       overhead,
       total,
+      sell,
     },
     ...(appUrl ? { appUrl } : {}),
   }
@@ -134,13 +215,14 @@ export function buildEstimatePdfInputFromSummary(args: {
  * `PassThrough` in tests). Resolves once the document is fully written.
  */
 export function renderEstimatePdf(input: EstimatePdfInput, sink: Writable): Promise<void> {
+  const cfg = REPORT_CONFIG[input.report ?? 'summary']
   const doc = new PDFDocument({
     size: 'LETTER',
     margins: { top: 54, bottom: 54, left: 54, right: 54 },
     info: {
-      Title: `Estimate — ${input.project.name}`,
+      Title: `${cfg.title} — ${input.project.name}`,
       Author: input.company.name,
-      Subject: 'Sitelayer Estimate',
+      Subject: `Sitelayer ${cfg.title}`,
     },
   })
 
@@ -152,7 +234,9 @@ export function renderEstimatePdf(input: EstimatePdfInput, sink: Writable): Prom
 
     // Header
     doc.fontSize(18).font('Helvetica-Bold').text(input.company.name, { continued: false })
-    doc.fontSize(9).font('Helvetica').fillColor('#555555').text(`Tenant slug: ${input.company.slug}`)
+    if (cfg.showTenantSlug) {
+      doc.fontSize(9).font('Helvetica').fillColor('#555555').text(`Tenant slug: ${input.company.slug}`)
+    }
     doc.moveDown(0.8)
     doc.fillColor('#000000')
 
@@ -160,7 +244,7 @@ export function renderEstimatePdf(input: EstimatePdfInput, sink: Writable): Prom
     doc
       .fontSize(13)
       .font('Helvetica-Bold')
-      .text(`Estimate · ${safe(input.project.name)}`)
+      .text(`${cfg.title} · ${safe(input.project.name)}`)
     doc.fontSize(10).font('Helvetica')
     doc.text(`Customer: ${safe(input.project.customer_name)}`)
     doc.text(`Location: ${safe(input.project.location ?? null)}`)
@@ -169,7 +253,7 @@ export function renderEstimatePdf(input: EstimatePdfInput, sink: Writable): Prom
     }
     doc.moveDown(0.6)
 
-    // Divisions table
+    // Divisions table — columns vary by report kind.
     const tableTop = doc.y
     const colX = {
       description: 54,
@@ -182,8 +266,9 @@ export function renderEstimatePdf(input: EstimatePdfInput, sink: Writable): Prom
     doc.text('Description', colX.description, tableTop)
     doc.text('Qty', colX.qty, tableTop)
     doc.text('Unit', colX.unit, tableTop)
-    doc.text('Rate', colX.rate, tableTop)
-    doc.text('Ext', colX.ext, tableTop)
+    if (cfg.showRate) doc.text('Rate', colX.rate, tableTop)
+    if (cfg.showExt) doc.text('Ext', colX.ext, tableTop)
+    if (cfg.showPriceColumn) doc.text('Your price', colX.rate, tableTop)
     doc
       .moveTo(54, tableTop + 14)
       .lineTo(558, tableTop + 14)
@@ -201,46 +286,80 @@ export function renderEstimatePdf(input: EstimatePdfInput, sink: Writable): Prom
           doc.addPage()
           rowY = 54
         }
+        doc.fillColor('#000000')
         doc.text(safe(line.description), colX.description, rowY, { width: 250 })
         doc.text(String(line.qty ?? ''), colX.qty, rowY)
         doc.text(safe(line.unit), colX.unit, rowY)
-        doc.text(money(line.rate), colX.rate, rowY)
-        doc.text(money(line.ext), colX.ext, rowY)
+        if (cfg.showRate) doc.text(money(line.rate), colX.rate, rowY)
+        if (cfg.showExt) doc.text(money(line.ext), colX.ext, rowY)
+        if (cfg.showPriceColumn) {
+          // Blank ruled cell for the sub/supplier to write their unit price.
+          doc
+            .moveTo(colX.rate, rowY + 11)
+            .lineTo(558, rowY + 11)
+            .strokeColor('#cccccc')
+            .stroke()
+        }
         rowY += 18
       }
     }
     doc.moveDown(1)
     doc.y = Math.max(doc.y, rowY + 8)
 
-    // Totals
-    doc.font('Helvetica-Bold').fontSize(11).fillColor('#000000').text('Totals', 54, doc.y)
-    doc.font('Helvetica').fontSize(10)
-    const totalsLines: Array<[string, string]> = [
-      ['Labor', money(input.totals.labor)],
-      ['Material', money(input.totals.material)],
-      ['Overhead', money(input.totals.overhead)],
-      ['Total', money(input.totals.total)],
-    ]
-    for (const [label, value] of totalsLines) {
-      doc.text(label, 380, doc.y, { continued: true })
-      doc.text(`  ${value}`, { align: 'right' })
+    // Totals — block depends on the report's audience.
+    if (cfg.totals !== 'none') {
+      const cost = Number(input.totals.total) || 0
+      const sell = Number(input.totals.sell) || 0
+      let totalsLines: Array<[string, string]> = []
+      let heading = 'Totals'
+      if (cfg.totals === 'costs') {
+        totalsLines = [
+          ['Labor', money(input.totals.labor)],
+          ['Material', money(input.totals.material)],
+          ['Overhead', money(input.totals.overhead)],
+          ['Total cost', money(cost)],
+        ]
+      } else if (cfg.totals === 'sell_only') {
+        heading = 'Total'
+        totalsLines = [['Total', money(sell)]]
+      } else if (cfg.totals === 'cost_vs_sell') {
+        const marginDollars = sell - cost
+        const marginPct = sell > 0 ? (marginDollars / sell) * 100 : 0
+        heading = 'Cost vs Sell'
+        totalsLines = [
+          ['Total cost', money(cost)],
+          ['Sell price', money(sell)],
+          ['Margin', money(marginDollars)],
+          ['Margin %', `${marginPct.toFixed(1)}%`],
+        ]
+      }
+      doc.font('Helvetica-Bold').fontSize(11).fillColor('#000000').text(heading, 54, doc.y)
+      doc.font('Helvetica').fontSize(10)
+      for (const [label, value] of totalsLines) {
+        doc.text(label, 380, doc.y, { continued: true })
+        doc.text(`  ${value}`, { align: 'right' })
+      }
     }
 
-    // Bid vs Scope variance
-    const scope =
-      input.project.scope_total === null || input.project.scope_total === undefined
-        ? null
-        : Number(input.project.scope_total)
-    const bid =
-      input.project.bid_total === null || input.project.bid_total === undefined ? null : Number(input.project.bid_total)
-    if (scope !== null && Number.isFinite(scope) && bid !== null && Number.isFinite(bid)) {
-      const variance = bid - scope
-      doc.moveDown(0.6)
-      doc.font('Helvetica-Bold').text('Bid vs Scope variance')
-      doc.font('Helvetica')
-      doc.text(`Bid total: ${money(bid)}`)
-      doc.text(`Scope total: ${money(scope)}`)
-      doc.text(`Variance (bid − scope): ${money(variance)}`)
+    // Bid vs Scope variance (internal reports only).
+    if (cfg.showVariance) {
+      const scope =
+        input.project.scope_total === null || input.project.scope_total === undefined
+          ? null
+          : Number(input.project.scope_total)
+      const bid =
+        input.project.bid_total === null || input.project.bid_total === undefined
+          ? null
+          : Number(input.project.bid_total)
+      if (scope !== null && Number.isFinite(scope) && bid !== null && Number.isFinite(bid)) {
+        const variance = bid - scope
+        doc.moveDown(0.6)
+        doc.font('Helvetica-Bold').text('Bid vs Scope variance')
+        doc.font('Helvetica')
+        doc.text(`Bid total: ${money(bid)}`)
+        doc.text(`Scope total: ${money(scope)}`)
+        doc.text(`Variance (bid − scope): ${money(variance)}`)
+      }
     }
 
     // Footer
@@ -274,6 +393,7 @@ export async function buildEstimatePdfResponse(args: {
   role: string
   allowed: readonly string[]
   company: { name: string; slug: string }
+  report?: ReportKind
   fetchSummary: () => Promise<Parameters<typeof buildEstimatePdfInputFromSummary>[0]['summary'] | null>
   appUrl?: string
 }): Promise<EstimatePdfRouteResult> {
@@ -282,8 +402,10 @@ export async function buildEstimatePdfResponse(args: {
   }
   const summary = await args.fetchSummary()
   if (!summary) return { kind: 'not_found' }
+  const report = args.report ?? 'summary'
   const input = buildEstimatePdfInputFromSummary({
     company: args.company,
+    report,
     summary,
     ...(args.appUrl ? { appUrl: args.appUrl } : {}),
   })
@@ -294,6 +416,8 @@ export async function buildEstimatePdfResponse(args: {
     chunks.push(chunk as Buffer)
   })
   await renderEstimatePdf(input, sink)
-  const filename = `estimate-${(summary.project.name ?? 'estimate').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80)}.pdf`
+  const namePart = (summary.project.name ?? 'estimate').replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80)
+  const prefix = report === 'summary' ? 'estimate' : `${report.replace(/_/g, '-')}-report`
+  const filename = `${prefix}-${namePart}.pdf`
   return { kind: 'ok', filename, pdf: Buffer.concat(chunks) }
 }

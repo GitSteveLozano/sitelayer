@@ -14,9 +14,17 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, getActiveCompanySlug, type ProjectSummary } from '@/lib/api'
 import { useEstimateBuilder } from '@/machines/estimate-builder'
 import { createEstimatePush } from '@/lib/api/estimate-pushes'
-import { estimateCsvUrl, estimatePdfUrl, estimateXlsxUrl, type EstimateLine } from '@/lib/api/estimate'
+import {
+  estimateCsvUrl,
+  estimatePdfUrl,
+  estimateReportUrl,
+  estimateXlsxUrl,
+  ESTIMATE_REPORTS,
+  type EstimateLine,
+  type EstimateReportKind,
+} from '@/lib/api/estimate'
 import { DataTable, DEyebrow, DH1, type DColumn } from '@/components/d'
-import { MButton, MPill } from '@/components/m'
+import { MButton, MPill, MSelect } from '@/components/m'
 import { PdfPreviewModal } from './project-drawers'
 import { ProjectRatesModal } from './est-project-rates'
 import { formatMoney } from '../mobile/format.js'
@@ -170,6 +178,8 @@ export function EstQuantities() {
   const [generating, setGenerating] = useState(false)
   // Project-specific rate overrides (Cavy 4/11).
   const [ratesOpen, setRatesOpen] = useState(false)
+  // Phase 3 report builder: which report PDF to download.
+  const [reportKind, setReportKind] = useState<EstimateReportKind>('customer')
 
   useEffect(() => {
     if (!projectId) return
@@ -358,6 +368,14 @@ export function EstQuantities() {
   const handleExportXlsx = () => {
     if (!projectId) return
     const url = estimateXlsxUrl(projectId)
+    if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
+  // REPORTS (Phase 3) — download the selected report kind (Customer proposal /
+  // RFQ / Cost-vs-sell / internal Estimate) as a PDF.
+  const handleDownloadReport = () => {
+    if (!projectId) return
+    const url = estimateReportUrl(projectId, reportKind)
     if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer')
   }
 
@@ -561,6 +579,25 @@ export function EstQuantities() {
               </MButton>
               <MButton variant="ghost" onClick={handleExportXlsx} disabled={pdfDisabled} style={{ minWidth: 0 }}>
                 Export XLSX
+              </MButton>
+            </div>
+
+            {/* REPORTS (Phase 3) — pick an audience-specific report PDF. */}
+            <div style={{ display: 'grid', gap: 8 }}>
+              <div className="d-kpi-l">Reports</div>
+              <MSelect
+                aria-label="Report type"
+                value={reportKind}
+                onChange={(e) => setReportKind(e.target.value as EstimateReportKind)}
+              >
+                {ESTIMATE_REPORTS.map((r) => (
+                  <option key={r.kind} value={r.kind}>
+                    {r.label}
+                  </option>
+                ))}
+              </MSelect>
+              <MButton variant="ghost" onClick={handleDownloadReport} disabled={pdfDisabled} style={{ minWidth: 0 }}>
+                Download report
               </MButton>
             </div>
 
