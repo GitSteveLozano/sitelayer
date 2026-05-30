@@ -23,6 +23,7 @@ import { handleMaterialBillRoutes } from './material-bills.js'
 import { handleNotificationPreferenceRoutes } from './notification-preferences.js'
 import { handleNotificationRoutes } from './notifications.js'
 import { handlePricingProfileRoutes } from './pricing-profiles.js'
+import { handlePricingOverrideRoutes } from './pricing-overrides.js'
 import { handleProjectAssignmentRoutes } from './project-assignments.js'
 import { handleProjectRoutes } from './projects.js'
 import { handlePushSubscriptionRoutes } from './push-subscriptions.js'
@@ -243,6 +244,16 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         readBody,
         sendJson,
         checkVersion,
+      }),
+
+    // Per-project / per-customer pricing override routes
+    () =>
+      handlePricingOverrideRoutes(req, url, {
+        pool,
+        company,
+        requireRole: requireRoleStr,
+        readBody,
+        sendJson,
       }),
 
     // Bonus-rule routes
