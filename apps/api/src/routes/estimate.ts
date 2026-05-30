@@ -1,5 +1,6 @@
 import type http from 'node:http'
 import type { Pool } from 'pg'
+import ExcelJS from 'exceljs'
 import { compareBidVsScope } from '@sitelayer/domain'
 import type { ActiveCompany } from '../auth-types.js'
 import {
@@ -68,6 +69,48 @@ function buildEstimateCsv(
   }
   rows.push(['', '', '', 'Total', total.toFixed(2)].map(csvCell).join(','))
   return `\ufeff${rows.join('\r\n')}\r\n`
+}
+
+/**
+ * PlanSwift-parity Excel export (Phase 0). Same line-item shape as the CSV, but
+ * a real .xlsx workbook with a bold header, numeric Rate/Amount columns, and a
+ * bold total row so estimators can drop it straight into their own sheets.
+ */
+async function buildEstimateXlsx(
+  projectName: string,
+  lines: Array<{
+    service_item_code: string
+    quantity: number | string
+    unit: string
+    rate: number | string
+    amount: number | string
+  }>,
+): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook()
+  wb.creator = 'Sitelayer'
+  const ws = wb.addWorksheet('Estimate')
+  ws.addRow(['Project', projectName]).font = { bold: true }
+  ws.addRow([])
+  ws.addRow(['Item', 'Quantity', 'Unit', 'Rate', 'Amount']).font = { bold: true }
+  let total = 0
+  for (const line of lines) {
+    ws.addRow([
+      line.service_item_code,
+      Number(line.quantity) || 0,
+      line.unit,
+      Number(line.rate) || 0,
+      Number(line.amount) || 0,
+    ])
+    total += Number(line.amount) || 0
+  }
+  ws.addRow(['', '', '', 'Total', Number(total.toFixed(2))]).font = { bold: true }
+  ws.getColumn(4).numFmt = '#,##0.00'
+  ws.getColumn(5).numFmt = '#,##0.00'
+  ws.columns.forEach((col) => {
+    col.width = 18
+  })
+  const buffer = await wb.xlsx.writeBuffer()
+  return Buffer.from(buffer as ArrayBuffer)
 }
 
 type ForecastMeasurementInput = {
@@ -713,6 +756,26 @@ export async function handleEstimateRoutes(
     const csv = buildEstimateCsv(summary.project.name, summary.estimateLines)
     const filename = `estimate-${summary.project.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80)}.csv`
     ctx.sendFileContent('text/csv; charset=utf-8', filename, csv)
+    return true
+  }
+
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\.xlsx$/)) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project id must be a valid uuid' })
+      return true
+    }
+    const draftId = await resolveDraftIdParam(ctx, url, {}, projectId)
+    if (draftId === undefined) return true
+    const summary = await summarizeProject(ctx.pool, ctx.company.id, projectId, { draftId })
+    if (!summary) {
+      ctx.sendJson(404, { error: 'project not found' })
+      return true
+    }
+    const xlsx = await buildEstimateXlsx(summary.project.name, summary.estimateLines)
+    const filename = `estimate-${summary.project.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80)}.xlsx`
+    ctx.sendFileContent('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', filename, xlsx)
     return true
   }
 

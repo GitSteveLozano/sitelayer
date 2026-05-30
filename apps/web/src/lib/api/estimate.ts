@@ -106,3 +106,10 @@ export function estimateCsvUrl(projectId: string, draftId: string | null = null)
   const qs = draftId ? `?draft_id=${encodeURIComponent(draftId)}` : ''
   return `${API_URL}/api/projects/${encodeURIComponent(projectId)}/estimate.csv${qs}`
 }
+
+/** Build the estimate .xlsx (real Excel workbook) download URL — same auth/draft
+ * model as the PDF/CSV. PlanSwift-parity formatted export. */
+export function estimateXlsxUrl(projectId: string, draftId: string | null = null): string {
+  const qs = draftId ? `?draft_id=${encodeURIComponent(draftId)}` : ''
+  return `${API_URL}/api/projects/${encodeURIComponent(projectId)}/estimate.xlsx${qs}`
+}
