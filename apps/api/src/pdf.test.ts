@@ -133,3 +133,50 @@ describe('buildEstimatePdfResponse (route handler shape)', () => {
     expect(result.kind).toBe('not_found')
   })
 })
+
+describe('report kinds (Phase 3 report builder)', () => {
+  const company = { name: 'LA Operations', slug: 'la-operations' }
+  const allowed = ['admin', 'office'] as const
+
+  it('threads the report kind + sell total into the input', () => {
+    const input = buildEstimatePdfInputFromSummary({ company, report: 'customer', summary: baseSummary })
+    expect(input.report).toBe('customer')
+    expect(input.totals.sell).toBe(47_500) // estimateTotal
+    expect(input.totals.total).toBe(38_500) // cost
+  })
+
+  it('defaults to the summary report when no kind is given', () => {
+    const input = buildEstimatePdfInputFromSummary({ company, summary: baseSummary })
+    expect(input.report).toBeUndefined()
+  })
+
+  it('renders a valid PDF for every report kind', async () => {
+    for (const report of ['summary', 'customer', 'rfq', 'cost_vs_sell'] as const) {
+      const input = buildEstimatePdfInputFromSummary({ company, report, summary: baseSummary })
+      const buf = await collectPdf(input)
+      expect(buf.length).toBeGreaterThan(500)
+      expect(buf.slice(0, 4).toString('ascii')).toBe('%PDF')
+    }
+  })
+
+  it('buildEstimatePdfResponse filename prefix reflects the report kind', async () => {
+    const cases: Array<['summary' | 'customer' | 'rfq' | 'cost_vs_sell' | undefined, RegExp]> = [
+      [undefined, /^estimate-/],
+      ['summary', /^estimate-/],
+      ['customer', /^customer-report-/],
+      ['rfq', /^rfq-report-/],
+      ['cost_vs_sell', /^cost-vs-sell-report-/],
+    ]
+    for (const [report, pattern] of cases) {
+      const result = await buildEstimatePdfResponse({
+        role: 'admin',
+        allowed,
+        company,
+        ...(report ? { report } : {}),
+        fetchSummary: async () => baseSummary,
+      })
+      expect(result.kind).toBe('ok')
+      if (result.kind === 'ok') expect(result.filename).toMatch(pattern)
+    }
+  })
+})

@@ -12,7 +12,7 @@ import {
 } from '../mutation-tx.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
 import { assertServiceItemCatalogStatus, rejectionMessageForCatalog } from '../catalog.js'
-import { buildEstimatePdfInputFromSummary, type EstimatePdfInput } from '../pdf.js'
+import { buildEstimatePdfInputFromSummary, isReportKind, type EstimatePdfInput } from '../pdf.js'
 import { resolvePrices } from '../pricing.js'
 import { explodeMeasurement, loadAssembliesByMeasurement } from '../assembly-explode.js'
 import { loadDefaultPricingProfileConfig } from '../pricing-profile-config.js'
@@ -811,6 +811,10 @@ export async function handleEstimateRoutes(
     }
     const draftId = await resolveDraftIdParam(ctx, url, {}, projectId)
     if (draftId === undefined) return true
+    // PlanSwift-parity report kinds (Phase 3): ?report=customer|rfq|cost_vs_sell.
+    // Unknown / absent → the original 'summary' estimate.
+    const reportParam = url.searchParams.get('report')
+    const report = isReportKind(reportParam) ? reportParam : 'summary'
     const summary = await summarizeProject(ctx.pool, ctx.company.id, projectId, { draftId })
     if (!summary) {
       ctx.sendJson(404, { error: 'project not found' })
@@ -818,10 +822,13 @@ export async function handleEstimateRoutes(
     }
     const pdfInput = buildEstimatePdfInputFromSummary({
       company: { name: ctx.company.name, slug: ctx.company.slug },
+      report,
       summary,
       appUrl: process.env.APP_PUBLIC_URL ?? 'https://sitelayer.sandolab.xyz',
     })
-    const filename = `estimate-${summary.project.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80)}.pdf`
+    const namePart = summary.project.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80)
+    const prefix = report === 'summary' ? 'estimate' : `${report.replace(/_/g, '-')}-report`
+    const filename = `${prefix}-${namePart}.pdf`
     await ctx.sendPdf(`attachment; filename="${filename}"`, pdfInput)
     return true
   }
