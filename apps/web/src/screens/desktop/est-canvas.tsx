@@ -568,7 +568,10 @@ export function EstCanvas() {
               <PdfPageCanvas
                 doc={pdfDocState.doc}
                 pageNumber={activePage?.page_number ?? 1}
-                scale={2}
+                // Render resolution tracks the canvas zoom so the page stays crisp
+                // as you zoom in (vs a fixed raster). Quantized to integer steps to
+                // avoid re-rendering on every wheel tick, and capped to bound memory.
+                scale={Math.min(6, Math.max(2, Math.ceil(zoom) * 2))}
                 style={{
                   position: 'absolute',
                   inset: 0,
