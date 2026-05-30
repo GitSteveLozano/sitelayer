@@ -334,15 +334,20 @@ type TakeoffReviewRow = {
   status: TakeoffStatus
 }
 
-/** Confidence floor mirrors the API's review_required gate (q.confidence < 0.5). */
+// Mirrors REVIEW_REQUIRED_CONFIDENCE_FLOOR (0.7) in @sitelayer/capture-schema:
+// the API flags any captured quantity below this as review_required. Keep in sync.
+const REVIEW_CONFIDENCE_FLOOR = 0.7
+
+/** Rows at/above the API review floor are safe to keep by default; below it the
+ * estimator must review before accepting. <0.5 is flagged as low-confidence. */
 function statusForConfidence(confidence: number): TakeoffStatus {
-  if (confidence >= 0.8) return 'ok'
+  if (confidence >= REVIEW_CONFIDENCE_FLOOR) return 'ok'
   if (confidence >= 0.5) return 'review'
   return 'flag'
 }
 
 function confidenceLabelFor(confidence: number): 'HIGH' | 'MED' | 'LOW' {
-  if (confidence >= 0.8) return 'HIGH'
+  if (confidence >= REVIEW_CONFIDENCE_FLOOR) return 'HIGH'
   if (confidence >= 0.5) return 'MED'
   return 'LOW'
 }
