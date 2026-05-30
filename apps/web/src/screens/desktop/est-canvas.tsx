@@ -822,10 +822,7 @@ export function EstCanvas() {
                   // Don't silently discard a drawn-but-unsaved measurement when
                   // switching tools/modes (e.g. after a failed save, clicking
                   // SEL used to wipe the polygon with no warning).
-                  if (
-                    draftPoints.length > 0 &&
-                    !window.confirm('Discard the unsaved measurement you are drawing?')
-                  )
+                  if (draftPoints.length > 0 && !window.confirm('Discard the unsaved measurement you are drawing?'))
                     return
                   if (isDraw) {
                     setMode('draw')

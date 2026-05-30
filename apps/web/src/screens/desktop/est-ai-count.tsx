@@ -151,113 +151,113 @@ export function EstAiCountSetupPanel({
         </button>
       </div>
       <div style={{ padding: 18 }}>
-          <div style={{ ...label, fontWeight: 600 }}>Clicked · A-104 sheet</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
-            <span
-              style={{
-                width: 44,
-                height: 44,
-                background: 'var(--m-accent)',
-                border: '2px solid var(--m-ink)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontFamily: 'var(--m-font-display)',
-                fontWeight: 800,
-                fontSize: 18,
-              }}
-              aria-hidden
-            >
-              ◯
-            </span>
-            <span style={{ fontSize: 14, fontWeight: 700 }}>Diffuser · 24" round</span>
-          </div>
+        <div style={{ ...label, fontWeight: 600 }}>Clicked · A-104 sheet</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
+          <span
+            style={{
+              width: 44,
+              height: 44,
+              background: 'var(--m-accent)',
+              border: '2px solid var(--m-ink)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 800,
+              fontSize: 18,
+            }}
+            aria-hidden
+          >
+            ◯
+          </span>
+          <span style={{ fontSize: 14, fontWeight: 700 }}>Diffuser · 24" round</span>
+        </div>
 
-          <div style={{ ...label, marginTop: 18 }}>Sensitivity</div>
-          <div style={{ display: 'flex', border: '2px solid var(--m-ink)', marginTop: 8 }}>
-            {(['STRICT', 'NORMAL', 'LOOSE'] as const).map((s, i, arr) => {
-              const on = sensitivity === s
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => setSensitivity(s)}
-                  aria-pressed={on}
-                  style={{
-                    flex: 1,
-                    padding: '10px 0',
-                    background: on ? 'var(--m-accent)' : 'transparent',
-                    color: on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
-                    border: 'none',
-                    borderRight: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
-                    fontFamily: 'var(--m-num)',
-                    fontSize: 10,
-                    fontWeight: 700,
-                    cursor: 'pointer',
-                  }}
-                >
-                  {s}
-                </button>
-              )
-            })}
-          </div>
-
-          <div style={{ ...label, marginTop: 18 }}>Scan · {selectedCount} mech sheets</div>
-          <div style={{ marginTop: 8 }}>
-            {sheets.map((s) => {
-              const on = Boolean(selected[s])
-              return (
-                <button
-                  key={s}
-                  type="button"
-                  onClick={() => toggleSheet(s)}
-                  aria-pressed={on}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    padding: '5px 0',
-                    width: '100%',
-                    background: 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <span
-                    style={{
-                      width: 16,
-                      height: 16,
-                      background: on ? 'var(--m-accent)' : 'transparent',
-                      border: '2px solid var(--m-ink)',
-                    }}
-                    aria-hidden
-                  />
-                  <span style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 600 }}>{s}</span>
-                </button>
-              )
-            })}
-          </div>
-
-          <div style={{ marginTop: 18 }}>
-            <MButton variant="primary" onClick={runCount} disabled={capture.isPending || selectedCount === 0}>
-              {capture.isPending ? 'Scanning…' : 'Run · ~30s'}
-            </MButton>
-            {capture.isError ? (
-              <div
+        <div style={{ ...label, marginTop: 18 }}>Sensitivity</div>
+        <div style={{ display: 'flex', border: '2px solid var(--m-ink)', marginTop: 8 }}>
+          {(['STRICT', 'NORMAL', 'LOOSE'] as const).map((s, i, arr) => {
+            const on = sensitivity === s
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => setSensitivity(s)}
+                aria-pressed={on}
                 style={{
-                  marginTop: 10,
+                  flex: 1,
+                  padding: '10px 0',
+                  background: on ? 'var(--m-accent)' : 'transparent',
+                  color: on ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
+                  border: 'none',
+                  borderRight: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
                   fontFamily: 'var(--m-num)',
                   fontSize: 10,
                   fontWeight: 700,
-                  color: 'var(--m-red)',
+                  cursor: 'pointer',
                 }}
               >
-                ● {capture.error.message || 'Capture failed — try again.'}
-              </div>
-            ) : null}
-          </div>
+                {s}
+              </button>
+            )
+          })}
+        </div>
+
+        <div style={{ ...label, marginTop: 18 }}>Scan · {selectedCount} mech sheets</div>
+        <div style={{ marginTop: 8 }}>
+          {sheets.map((s) => {
+            const on = Boolean(selected[s])
+            return (
+              <button
+                key={s}
+                type="button"
+                onClick={() => toggleSheet(s)}
+                aria-pressed={on}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '5px 0',
+                  width: '100%',
+                  background: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                <span
+                  style={{
+                    width: 16,
+                    height: 16,
+                    background: on ? 'var(--m-accent)' : 'transparent',
+                    border: '2px solid var(--m-ink)',
+                  }}
+                  aria-hidden
+                />
+                <span style={{ fontFamily: 'var(--m-num)', fontSize: 11, fontWeight: 600 }}>{s}</span>
+              </button>
+            )
+          })}
+        </div>
+
+        <div style={{ marginTop: 18 }}>
+          <MButton variant="primary" onClick={runCount} disabled={capture.isPending || selectedCount === 0}>
+            {capture.isPending ? 'Scanning…' : 'Run · ~30s'}
+          </MButton>
+          {capture.isError ? (
+            <div
+              style={{
+                marginTop: 10,
+                fontFamily: 'var(--m-num)',
+                fontSize: 10,
+                fontWeight: 700,
+                color: 'var(--m-red)',
+              }}
+            >
+              ● {capture.error.message || 'Capture failed — try again.'}
+            </div>
+          ) : null}
         </div>
       </div>
+    </div>
   )
 }
 
