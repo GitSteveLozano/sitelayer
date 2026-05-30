@@ -962,6 +962,7 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         readBody,
         sendJson,
         sendPdf: ctx.sendPdf,
+        sendFileContent: ctx.sendFileContent,
       }),
 
     // Estimate-push workflow snapshots/events

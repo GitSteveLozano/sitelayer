@@ -14,7 +14,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, getActiveCompanySlug, type ProjectSummary } from '@/lib/api'
 import { useEstimateBuilder } from '@/machines/estimate-builder'
 import { createEstimatePush } from '@/lib/api/estimate-pushes'
-import { estimatePdfUrl } from '@/lib/api/estimate'
+import { estimateCsvUrl, estimatePdfUrl } from '@/lib/api/estimate'
 import { DataTable, DEyebrow, DH1, type DColumn } from '@/components/d'
 import { MButton, MPill } from '@/components/m'
 import { PdfPreviewModal } from './project-drawers'
@@ -145,6 +145,14 @@ export function EstQuantities() {
     }
   }
 
+  // EXPORT CSV — download the estimate line items as a spreadsheet
+  // (GET /api/projects/:id/estimate.csv). PlanSwift-parity quick win.
+  const handleExportCsv = () => {
+    if (!projectId) return
+    const url = estimateCsvUrl(projectId)
+    if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
   const sendDisabled = sending || builder.hasDirtyEdits || builder.isSaving || lines.length === 0
   const pdfDisabled = lines.length === 0 || builder.isLoading
   const sendLabel = sending
@@ -263,6 +271,9 @@ export function EstQuantities() {
                 style={{ flex: 1 }}
               >
                 {generating ? 'Generating…' : 'Generate PDF'}
+              </MButton>
+              <MButton variant="ghost" onClick={handleExportCsv} disabled={pdfDisabled} style={{ flex: 1 }}>
+                Export CSV
               </MButton>
             </div>
 
