@@ -49,6 +49,8 @@ import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
 import { EstAiCountSetupPanel } from './est-ai-count'
 import { EstAiTakeoffSetupPanel } from './est-ai-takeoff'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
+import { arcPolyline } from '@/lib/takeoff/arc'
+import { detectSheetScale, type DetectedScale } from '@/lib/takeoff/sheet-scale'
 import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
 import { useRole } from '@/lib/role'
 import { MButton, MPill, MSelect } from '@/components/m'
@@ -59,7 +61,7 @@ import { DEmptyState } from '@/components/d'
  * personas), matching the API role gate on POST /api/projects/:id/blueprints. */
 const BLUEPRINT_UPLOAD_ACCEPT = 'application/pdf,image/*'
 
-type Tool = 'polygon' | 'rect' | 'lineal' | 'count'
+type Tool = 'polygon' | 'rect' | 'lineal' | 'arc' | 'count'
 
 // Canvas interaction modes layered over the drawing surface (ported from
 // Steve's Desktop v2 mockup `DCanvasScale` / `DCanvasItemPalette` /
@@ -147,6 +149,33 @@ export function EstCanvas() {
   )
   const pdfDocState = usePdfDocument(pdfDocUrl.url ?? null)
 
+  // Auto-scale: when a PDF page is open, read its extracted text and detect the
+  // title-block drawing scale (1/4" = 1'-0", 1" = 20', ...). Surfaced read-only
+  // as a hint — it does not change measurement quantities (board→world
+  // calibration is a separate piece of work).
+  const [detectedScale, setDetectedScale] = useState<DetectedScale | null>(null)
+  const activePageNumber = activePage?.page_number ?? 1
+  useEffect(() => {
+    const doc = pdfDocState.doc
+    if (!doc?.getPageText) {
+      setDetectedScale(null)
+      return
+    }
+    let cancelled = false
+    setDetectedScale(null)
+    void doc
+      .getPageText(activePageNumber)
+      .then((txt) => {
+        if (!cancelled) setDetectedScale(detectSheetScale(txt))
+      })
+      .catch(() => {
+        if (!cancelled) setDetectedScale(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [pdfDocState.doc, activePageNumber])
+
   // --- Measurements ---------------------------------------------------------
   const measurements = useProjectMeasurements(projectId, { draftId: activeDraftId })
   const create = useCreateMeasurement(projectId)
@@ -208,17 +237,27 @@ export function EstCanvas() {
   }, [serviceItemCode, items])
 
   const selectedItem = items.find((i) => i.code === serviceItemCode) ?? null
-  // Area tools (freeform polygon + drag rectangle) share the same square-foot
-  // geometry/semantics; lineal = length, count = each.
+  // Area tools (freeform polygon + drag rectangle) share square-foot semantics;
+  // lineal-like tools (freeform lineal + 3-point arc) share linear-foot length.
   const isAreaTool = tool === 'polygon' || tool === 'rect'
-  const unitForItem = selectedItem?.unit ?? (isAreaTool ? 'sqft' : tool === 'lineal' ? 'lf' : 'ea')
+  const isLinealLike = tool === 'lineal' || tool === 'arc'
+  const unitForItem = selectedItem?.unit ?? (isAreaTool ? 'sqft' : isLinealLike ? 'lf' : 'ea')
+
+  // The 3-point arc draft (start, through, end). Tessellated into a lineal
+  // polyline for length/render/save once all three control points are placed.
+  const arcCurve = useMemo(() => {
+    if (tool !== 'arc' || draftPoints.length !== 3) return null
+    const [a, b, c] = draftPoints
+    return a && b && c ? arcPolyline(a, b, c) : null
+  }, [tool, draftPoints])
 
   // --- Geometry (unchanged from mobile) ------------------------------------
   const draftQuantity = useMemo(() => {
     if (tool === 'polygon' || tool === 'rect') return round2(calculatePolygonArea(draftPoints))
     if (tool === 'lineal') return round2(calculateLinealLength(draftPoints))
+    if (tool === 'arc') return arcCurve ? round2(calculateLinealLength(arcCurve)) : 0
     return draftPoints.length
-  }, [tool, draftPoints])
+  }, [tool, draftPoints, arcCurve])
 
   // EXACT same CTM math as takeoff-mobile.tsx — do not change.
   const onCanvasTap = (e: ReactPointerEvent<SVGSVGElement>) => {
@@ -235,6 +274,7 @@ export function EstCanvas() {
     const svg = svgRef.current
     if (!svg) return
     if (tool === 'polygon' && draftPoints.length >= MAX_POLYGON_POINTS) return
+    if (tool === 'arc' && draftPoints.length >= 3) return // arc = exactly 3 control points
     const ctm = svg.getScreenCTM()
     if (!ctm) return
     const pt = svg.createSVGPoint()
@@ -413,7 +453,7 @@ export function EstCanvas() {
     }
   }
 
-  const minPoints = tool === 'polygon' || tool === 'rect' ? 3 : tool === 'lineal' ? 2 : 1
+  const minPoints = tool === 'polygon' || tool === 'rect' ? 3 : tool === 'arc' ? 3 : tool === 'lineal' ? 2 : 1
   const canSave = !create.isPending && Boolean(serviceItemCode) && draftQuantity > 0 && draftPoints.length >= minPoints
 
   const onSave = async () => {
@@ -422,8 +462,10 @@ export function EstCanvas() {
     setSavedToast(null)
     try {
       let geometry: MeasurementGeometry
-      // RECT is an input method that produces a polygon; it saves as one.
+      // RECT produces a polygon; ARC tessellates its 3 control points into a
+      // lineal polyline. Both reuse the existing geometry kinds — no new model.
       if (tool === 'polygon' || tool === 'rect') geometry = { kind: 'polygon', points: draftPoints }
+      else if (tool === 'arc') geometry = { kind: 'lineal', points: arcCurve ?? draftPoints }
       else if (tool === 'lineal') geometry = { kind: 'lineal', points: draftPoints }
       else geometry = { kind: 'count', points: draftPoints }
       const res = await create.mutateAsync({
@@ -908,6 +950,17 @@ export function EstCanvas() {
                 strokeDasharray="0.8 0.8"
               />
             ) : null}
+            {/* ARC preview: tessellated curve once 3 control points are set, a
+                dashed straight hint before that. */}
+            {tool === 'arc' && draftPoints.length >= 2 ? (
+              <polyline
+                points={(arcCurve ?? draftPoints).map((p) => `${p.x},${p.y}`).join(' ')}
+                fill="none"
+                stroke="var(--m-amber)"
+                strokeWidth={0.5}
+                strokeDasharray={arcCurve ? undefined : '0.8 0.8'}
+              />
+            ) : null}
             {draftPoints.map((p, i) => (
               <circle key={i} cx={p.x} cy={p.y} r={tool === 'count' ? 1 : 0.8} fill="var(--m-amber)" />
             ))}
@@ -939,6 +992,24 @@ export function EstCanvas() {
                     <text
                       x={last.x}
                       y={last.y - 1.6}
+                      fontSize={3}
+                      textAnchor="middle"
+                      fill="var(--m-amber)"
+                      fontWeight={700}
+                      pointerEvents="none"
+                    >
+                      {formatQty(draftQuantity)} {unitForItem}
+                    </text>
+                  ) : null
+                })()
+              : null}
+            {tool === 'arc' && arcCurve
+              ? (() => {
+                  const mid = arcCurve[Math.floor(arcCurve.length / 2)]
+                  return mid ? (
+                    <text
+                      x={mid.x}
+                      y={mid.y - 1.6}
                       fontSize={3}
                       textAnchor="middle"
                       fill="var(--m-amber)"
@@ -995,6 +1066,26 @@ export function EstCanvas() {
           >
             {sheetLabel}
           </span>
+          {detectedScale ? (
+            <span
+              title={
+                detectedScale.labeled
+                  ? 'Drawing scale detected from the title block'
+                  : 'Possible drawing scale found on this sheet'
+              }
+              style={{
+                fontFamily: 'var(--m-num)',
+                fontSize: 10,
+                fontWeight: 700,
+                letterSpacing: '0.04em',
+                color: 'var(--m-accent)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              SCALE {detectedScale.label}
+              {detectedScale.labeled ? '' : ' (?)'}
+            </span>
+          ) : null}
         </div>
         <span style={{ display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
           <span style={{ textAlign: 'right' }}>
@@ -1038,6 +1129,7 @@ export function EstCanvas() {
               { kind: 'draw', tool: 'polygon', label: 'POLY' },
               { kind: 'draw', tool: 'rect', label: 'RECT' },
               { kind: 'draw', tool: 'lineal', label: 'LIN' },
+              { kind: 'draw', tool: 'arc', label: 'ARC' },
               { kind: 'draw', tool: 'count', label: 'PT' },
               { kind: 'draw', tool: 'tap', label: 'TAP' },
               // SCALE / SEL are interaction modes (DCanvasScale / DCanvasBulkSelect),
@@ -1056,6 +1148,7 @@ export function EstCanvas() {
                 ((t.tool === 'polygon' && tool === 'polygon') ||
                   (t.tool === 'rect' && tool === 'rect') ||
                   (t.tool === 'lineal' && tool === 'lineal') ||
+                  (t.tool === 'arc' && tool === 'arc') ||
                   (t.tool === 'count' && tool === 'count') ||
                   // TAP highlights when the count tool is active.
                   (t.tool === 'tap' && tool === 'count'))
@@ -1299,9 +1392,11 @@ export function EstCanvas() {
                 ? `POLY · ${draftPoints.length} PTS`
                 : tool === 'rect'
                   ? `RECT · ${draftPoints.length ? 'DRAWN' : 'DRAG'}`
-                  : tool === 'lineal'
-                    ? `LIN · ${draftPoints.length} PTS`
-                    : `PT · ${draftPoints.length}`}
+                  : tool === 'arc'
+                    ? `ARC · ${draftPoints.length}/3`
+                    : tool === 'lineal'
+                      ? `LIN · ${draftPoints.length} PTS`
+                      : `PT · ${draftPoints.length}`}
             </div>
             <div
               style={{
