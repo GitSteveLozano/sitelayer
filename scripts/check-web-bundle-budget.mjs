@@ -29,7 +29,13 @@ const APPS = {
     // canvas AI-assist palette + AI count/takeoff review, the settings panels
     // (company/working-hours/integrations/notifications), and the owner
     // approval/invoice modals — ~58KB gzip for the whole command center.
-    lazyAppChunkGzipBudget: 64 * 1024,
+    // 64KB → 68KB on 2026-05-30 for PlanSwift Phase 1 takeoff drawing-surface
+    // additions in the desktop-workspace chunk (est-canvas): vertex/ortho
+    // snapping, point-level undo/redo, on-canvas dimension labels, and
+    // cutout/deduct-area mode (DEDUCT toggle + signed render). The heavy PDFium
+    // engine itself is NOT here — it's split into the exempt `vendor-pdf`
+    // chunk; this is just the app-side drawing logic. ~64.2KB gzip.
+    lazyAppChunkGzipBudget: 68 * 1024,
     nonAppPrefixes: ['vendor-', 'web-vitals-', 'rolldown-runtime-', 'workbox-'],
     requireSentryLazy: false,
   },
