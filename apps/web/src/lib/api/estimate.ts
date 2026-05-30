@@ -122,3 +122,28 @@ export function estimateXlsxUrl(projectId: string, draftId: string | null = null
   const qs = draftId ? `?draft_id=${encodeURIComponent(draftId)}` : ''
   return `${API_URL}/api/projects/${encodeURIComponent(projectId)}/estimate.xlsx${qs}`
 }
+
+/** PlanSwift-parity report kinds (Phase 3 report builder). One estimate model,
+ * four audiences. `summary` is the original internal estimate. */
+export type EstimateReportKind = 'summary' | 'customer' | 'rfq' | 'cost_vs_sell'
+
+export const ESTIMATE_REPORTS: ReadonlyArray<{ kind: EstimateReportKind; label: string }> = [
+  { kind: 'summary', label: 'Estimate (internal)' },
+  { kind: 'customer', label: 'Customer proposal' },
+  { kind: 'rfq', label: 'RFQ (for subs)' },
+  { kind: 'cost_vs_sell', label: 'Cost vs sell' },
+]
+
+/** Build a report PDF download URL for a report kind (rides the estimate.pdf
+ * route with ?report=). */
+export function estimateReportUrl(
+  projectId: string,
+  report: EstimateReportKind,
+  draftId: string | null = null,
+): string {
+  const params = new URLSearchParams()
+  if (report !== 'summary') params.set('report', report)
+  if (draftId) params.set('draft_id', draftId)
+  const qs = params.toString()
+  return `${API_URL}/api/projects/${encodeURIComponent(projectId)}/estimate.pdf${qs ? `?${qs}` : ''}`
+}
