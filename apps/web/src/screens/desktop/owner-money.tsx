@@ -6,11 +6,27 @@
  * docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
 import { useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
 import { useSendPaymentReminders } from '@/lib/api/payment-reminders'
-import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, DModal, type DColumn } from '@/components/d'
-import { MButton, MPill } from '@/components/m'
+import { useOwnerInvoices, type OwnerInvoiceRow } from '@/lib/api/owner-invoices'
+import {
+  DataTable,
+  DEmptyState,
+  DErrorState,
+  DEyebrow,
+  DH1,
+  DKpi,
+  DKpiStrip,
+  DLoadingState,
+  DModal,
+  DTabBar,
+  type DColumn,
+} from '@/components/d'
+import { MButton, MPill, type MTone } from '@/components/m'
 import { formatMoney } from '../mobile/format.js'
+
+type MoneyTab = 'cashflow' | 'books'
 
 type PendingRow = {
   id: string
@@ -34,6 +50,7 @@ type MoneyModel = {
 export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const model = useMemo(() => deriveMoney(bootstrap), [bootstrap])
   const [remindersOpen, setRemindersOpen] = useState(false)
+  const [tab, setTab] = useState<MoneyTab>('cashflow')
 
   const monthLabel = new Date().toLocaleDateString('en-US', { month: 'long' }).toUpperCase()
   const netTone = model.net >= 0 ? 'var(--m-green)' : 'var(--m-red)'
@@ -60,84 +77,281 @@ export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null 
       <div className="d-stack">
         <div>
           <DEyebrow>Owner · Money</DEyebrow>
-          <DH1>Cash flow</DH1>
+          <DH1>{tab === 'books' ? 'Books · Invoices' : 'Cash flow'}</DH1>
         </div>
 
-        <DKpiStrip>
-          <DKpi
-            label={`Net this month · ${monthLabel}`}
-            value={
-              <span style={{ color: netTone }}>
-                {model.net >= 0 ? '+' : '-'}
-                {formatMoney(Math.abs(model.net))}
-              </span>
-            }
-            tone="accent"
-            meta={model.net >= 0 ? 'In the black' : 'Underwater'}
-            metaTone={model.net >= 0 ? 'good' : 'bad'}
-          />
-          <DKpi label="In" value={formatMoney(model.inflow)} meta="Active bid value" metaTone="good" />
-          <DKpi label="Out" value={formatMoney(model.outflow)} meta="Labor cost burned" metaTone="bad" />
-          <DKpi
-            label="Avg margin"
-            value={`${Math.round(model.margin * 100)}%`}
-            meta={model.inflow > 0 ? 'Net ÷ in' : 'No active value'}
-          />
-        </DKpiStrip>
-
-        {/* 12-month NET trend — square bars via divs (mirrors the mobile chart) */}
-        <div className="d-table-wrap">
-          <div className="d-table-head">
-            <span className="d-table-head-title">Last 12 months · Net</span>
-          </div>
-          <div style={{ padding: '20px 16px' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 140 }}>
-              {model.trend.map((v, i) => (
-                <div
-                  key={i}
-                  style={{
-                    flex: 1,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    justifyContent: 'flex-end',
-                    height: '100%',
-                  }}
-                >
-                  <div
-                    style={{
-                      height: `${Math.max(2, (v / trendMax) * 100)}%`,
-                      background: i === model.trend.length - 1 ? 'var(--m-accent)' : 'var(--m-ink)',
-                      border: '1px solid var(--m-line)',
-                    }}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <DataTable<PendingRow>
-          title="Pending"
-          action={
-            <MButton
-              size="sm"
-              variant="primary"
-              onClick={() => setRemindersOpen(true)}
-              disabled={model.pending.length === 0}
-            >
-              Send reminders
-            </MButton>
-          }
-          columns={columns}
-          rows={model.pending}
-          rowKey={(r) => r.id}
-          empty="Nothing pending. Sent and awaiting estimates land here."
+        <DTabBar
+          tabs={[
+            { key: 'cashflow', label: 'Cash flow' },
+            { key: 'books', label: 'Books · Invoices' },
+          ]}
+          active={tab}
+          onSelect={(k) => setTab(k as MoneyTab)}
         />
+
+        {tab === 'books' ? (
+          <BooksPanel bootstrap={bootstrap} />
+        ) : (
+          <CashFlowPanel
+            model={model}
+            monthLabel={monthLabel}
+            netTone={netTone}
+            trendMax={trendMax}
+            columns={columns}
+            onSendReminders={() => setRemindersOpen(true)}
+          />
+        )}
       </div>
 
       <SendRemindersModal open={remindersOpen} onClose={() => setRemindersOpen(false)} pending={model.pending} />
     </div>
   )
+}
+
+/** Existing "Cash flow" surface — KPIs + 12-month NET trend + Pending table. */
+function CashFlowPanel({
+  model,
+  monthLabel,
+  netTone,
+  trendMax,
+  columns,
+  onSendReminders,
+}: {
+  model: MoneyModel
+  monthLabel: string
+  netTone: string
+  trendMax: number
+  columns: Array<DColumn<PendingRow>>
+  onSendReminders: () => void
+}) {
+  return (
+    <>
+      <DKpiStrip>
+        <DKpi
+          label={`Net this month · ${monthLabel}`}
+          value={
+            <span style={{ color: netTone }}>
+              {model.net >= 0 ? '+' : '-'}
+              {formatMoney(Math.abs(model.net))}
+            </span>
+          }
+          tone="accent"
+          meta={model.net >= 0 ? 'In the black' : 'Underwater'}
+          metaTone={model.net >= 0 ? 'good' : 'bad'}
+        />
+        <DKpi label="In" value={formatMoney(model.inflow)} meta="Active bid value" metaTone="good" />
+        <DKpi label="Out" value={formatMoney(model.outflow)} meta="Labor cost burned" metaTone="bad" />
+        <DKpi
+          label="Avg margin"
+          value={`${Math.round(model.margin * 100)}%`}
+          meta={model.inflow > 0 ? 'Net ÷ in' : 'No active value'}
+        />
+      </DKpiStrip>
+
+      {/* 12-month NET trend — square bars via divs (mirrors the mobile chart) */}
+      <div className="d-table-wrap">
+        <div className="d-table-head">
+          <span className="d-table-head-title">Last 12 months · Net</span>
+        </div>
+        <div style={{ padding: '20px 16px' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8, height: 140 }}>
+            {model.trend.map((v, i) => (
+              <div
+                key={i}
+                style={{
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'flex-end',
+                  height: '100%',
+                }}
+              >
+                <div
+                  style={{
+                    height: `${Math.max(2, (v / trendMax) * 100)}%`,
+                    background: i === model.trend.length - 1 ? 'var(--m-accent)' : 'var(--m-ink)',
+                    border: '1px solid var(--m-line)',
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <DataTable<PendingRow>
+        title="Pending"
+        action={
+          <MButton size="sm" variant="primary" onClick={onSendReminders} disabled={model.pending.length === 0}>
+            Send reminders
+          </MButton>
+        }
+        columns={columns}
+        rows={model.pending}
+        rowKey={(r) => r.id}
+        empty="Nothing pending. Sent and awaiting estimates land here."
+      />
+    </>
+  )
+}
+
+/**
+ * MONEY · BOOKS / INVOICES surface (design "Books + Invoices").
+ *
+ * Composes the company's two real billing surfaces — QBO estimate pushes and
+ * rental billing runs — into one invoice ledger via `useOwnerInvoices`. There
+ * is no single unified invoices endpoint, so the list is labelled as a
+ * composite. Columns: Project / Client / Amount / Status / Date. Rows drill
+ * into the owner project detail; unpaid (non-posted, non-voided) invoices can
+ * be nudged through the existing payment-reminders flow.
+ */
+function BooksPanel({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
+  const navigate = useNavigate()
+  const { rows, isLoading, isError, refetch } = useOwnerInvoices(bootstrap)
+  const [remindersOpen, setRemindersOpen] = useState(false)
+
+  // Reminder candidates = invoices that are sent-but-not-settled (anything not
+  // already posted to QBO or voided). Reuses the bulk payment-reminders flow,
+  // which keys off project id — so collapse to one entry per project, summing
+  // the open amount across that project's outstanding invoices.
+  const reminderRows = useMemo<PendingRow[]>(() => {
+    const byProject = new Map<string, PendingRow>()
+    for (const r of rows) {
+      if (r.status === 'posted' || r.status === 'voided') continue
+      const existing = byProject.get(r.projectId)
+      if (existing) {
+        existing.amount += r.amount
+      } else {
+        byProject.set(r.projectId, {
+          id: r.projectId,
+          name: r.projectName,
+          customer: r.clientName,
+          amount: r.amount,
+          status: invoiceStatusLabel(r.status),
+          dueAt: r.date,
+        })
+      }
+    }
+    return [...byProject.values()]
+  }, [rows])
+
+  const totalOutstanding = useMemo(() => reminderRows.reduce((sum, r) => sum + r.amount, 0), [reminderRows])
+  const postedCount = useMemo(() => rows.filter((r) => r.posted).length, [rows])
+
+  const columns: Array<DColumn<OwnerInvoiceRow>> = [
+    {
+      key: 'project',
+      header: 'Project',
+      render: (r) => <span className="d-table-cell-strong">{r.projectName}</span>,
+    },
+    { key: 'client', header: 'Client', render: (r) => r.clientName },
+    {
+      key: 'kind',
+      header: 'Source',
+      render: (r) => (
+        <MPill tone={r.kind === 'rental' ? 'blue' : 'accent'}>{r.kind === 'rental' ? 'Rental' : 'Estimate'}</MPill>
+      ),
+    },
+    { key: 'amount', header: 'Amount', numeric: true, render: (r) => formatMoney(r.amount) },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (r) => (
+        <MPill tone={invoiceStatusTone(r.status)} dot>
+          {invoiceStatusLabel(r.status)}
+        </MPill>
+      ),
+    },
+    { key: 'date', header: 'Date', render: (r) => formatDate(r.date) },
+  ]
+
+  if (isLoading) return <DLoadingState label="Loading invoices…" />
+  if (isError) {
+    return (
+      <DErrorState
+        title="Couldn’t load invoices"
+        body="The estimate-push and rental-billing lists didn’t answer."
+        actions={
+          <MButton size="sm" variant="primary" onClick={() => refetch()}>
+            Retry
+          </MButton>
+        }
+      />
+    )
+  }
+
+  return (
+    <>
+      <DKpiStrip>
+        <DKpi label="Invoices" value={String(rows.length)} meta="Estimate pushes + rental runs" tone="accent" />
+        <DKpi
+          label="Outstanding"
+          value={formatMoney(totalOutstanding)}
+          meta={`${reminderRows.length} not yet settled`}
+          metaTone={reminderRows.length > 0 ? 'bad' : 'good'}
+        />
+        <DKpi label="Posted to QBO" value={String(postedCount)} meta="Synced invoices" metaTone="good" />
+      </DKpiStrip>
+
+      {rows.length === 0 ? (
+        <DEmptyState
+          title="No invoices yet"
+          body="Estimate pushes and rental billing runs land here once they’re created."
+        />
+      ) : (
+        <DataTable<OwnerInvoiceRow>
+          title="Invoices · estimate pushes + rental runs"
+          action={
+            <MButton
+              size="sm"
+              variant="primary"
+              onClick={() => setRemindersOpen(true)}
+              disabled={reminderRows.length === 0}
+            >
+              Send reminders
+            </MButton>
+          }
+          columns={columns}
+          rows={rows}
+          rowKey={(r) => `${r.kind}:${r.id}`}
+          onRowClick={(r) => navigate(`/desktop/projects/${r.projectId}`)}
+          empty="No invoices yet."
+        />
+      )}
+
+      <SendRemindersModal open={remindersOpen} onClose={() => setRemindersOpen(false)} pending={reminderRows} />
+    </>
+  )
+}
+
+/** Map a workflow status to an MPill tone for the Books table. */
+function invoiceStatusTone(status: OwnerInvoiceRow['status']): MTone {
+  switch (status) {
+    case 'posted':
+      return 'green'
+    case 'failed':
+      return 'red'
+    case 'voided':
+      return 'amber'
+    case 'approved':
+    case 'posting':
+      return 'accent'
+    default:
+      // drafted / reviewed / generated — in-flight, awaiting settlement.
+      return 'blue'
+  }
+}
+
+/** Human-readable status label (e.g. "drafted" → "DRAFTED"). */
+function invoiceStatusLabel(status: OwnerInvoiceRow['status']): string {
+  return status.replace(/[_-]+/g, ' ').toUpperCase()
+}
+
+/** "May 7" short date label off an ISO timestamp. */
+function formatDate(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 /** "MAY 7" style short due-date label. */

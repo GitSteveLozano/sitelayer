@@ -39,7 +39,11 @@ const APPS = {
     // desktop-workspace chunk: the scope-vs-bid card + the per-project rate
     // editor (ProjectRatesModal), with the foreman Confirm-Day + estimate-vs-
     // actuals screens still to land. ~67.2KB gzip.
-    lazyAppChunkGzipBudget: 72 * 1024,
+    // 72KB → 84KB on 2026-05-30 for the design-parity build-out riding the
+    // desktop-workspace lazy chunk: Assembly editor, company/project rate
+    // editors, the Books/Invoices money tab, the New-Assignment / Brief-Edit /
+    // Send-Reminders flows, and the rentals day-rate editor. ~76.3KB gzip.
+    lazyAppChunkGzipBudget: 84 * 1024,
     nonAppPrefixes: ['vendor-', 'web-vitals-', 'rolldown-runtime-', 'workbox-'],
     requireSentryLazy: false,
   },

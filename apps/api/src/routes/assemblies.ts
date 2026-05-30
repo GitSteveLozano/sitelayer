@@ -54,13 +54,38 @@ interface ComponentRow {
 }
 
 /**
+ * Recompute and persist an assembly's cached `total_rate` from its
+ * components. total_rate = sum(quantity_per_unit * (1 + waste_pct/100) *
+ * unit_cost). Callers must already hold a FOR UPDATE lock on the header
+ * row so concurrent component edits don't race this recompute. Also bumps
+ * the header `version` so the cached rate has the same optimistic-lock
+ * provenance as a direct header edit.
+ */
+async function recomputeAssemblyTotal(client: PoolClient, companyId: string, assemblyId: string): Promise<void> {
+  const recompute = await client.query<{ total: string }>(
+    `select coalesce(sum(quantity_per_unit * (1 + waste_pct / 100.0) * unit_cost), 0) as total
+     from service_item_assembly_components where company_id = $1 and assembly_id = $2`,
+    [companyId, assemblyId],
+  )
+  await client.query(
+    `update service_item_assemblies
+       set total_rate = $3, updated_at = now(), version = version + 1
+     where company_id = $1 and id = $2`,
+    [companyId, assemblyId, recompute.rows[0]?.total ?? '0'],
+  )
+}
+
+/**
  * PlanSwift-style assemblies (Phase 3F).
  *
- *   GET  /api/assemblies                     list active assemblies
- *   POST /api/assemblies                     create
- *   GET  /api/assemblies/:id                 detail with components
- *   POST /api/assemblies/:id/components      add a component
- *   DELETE /api/assemblies/:id               soft-delete
+ *   GET    /api/assemblies                            list active assemblies
+ *   POST   /api/assemblies                            create
+ *   GET    /api/assemblies/:id                        detail with components
+ *   PATCH  /api/assemblies/:id                        rename / retarget header
+ *   POST   /api/assemblies/:id/components             add a component
+ *   PATCH  /api/assemblies/:id/components/:cid        edit a component
+ *   DELETE /api/assemblies/:id/components/:cid        remove a component
+ *   DELETE /api/assemblies/:id                        soft-delete
  *
  * total_rate on the header is the cached sum of components' contribution
  * per unit-of-assembly. Updated whenever a component is added; the
@@ -129,6 +154,83 @@ export async function handleAssemblyRoutes(
   }
 
   const detailMatch = url.pathname.match(/^\/api\/assemblies\/([^/]+)$/)
+
+  // PATCH /api/assemblies/:id — rename the header / retarget its
+  // service_item_code or unit. Component edits go through the
+  // /:id/components routes below; this only touches the header fields.
+  if (req.method === 'PATCH' && detailMatch) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const id = detailMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const body = await ctx.readBody()
+    const sets: string[] = []
+    const values: unknown[] = [ctx.company.id, id]
+    if (body.name !== undefined) {
+      const name = typeof body.name === 'string' ? body.name.trim() : ''
+      if (!name) {
+        ctx.sendJson(400, { error: 'name must be a non-empty string' })
+        return true
+      }
+      values.push(name)
+      sets.push(`name = $${values.length}`)
+    }
+    if (body.service_item_code !== undefined) {
+      const code = typeof body.service_item_code === 'string' ? body.service_item_code.trim() : ''
+      if (!code) {
+        ctx.sendJson(400, { error: 'service_item_code must be a non-empty string' })
+        return true
+      }
+      values.push(code)
+      sets.push(`service_item_code = $${values.length}`)
+    }
+    if (body.description !== undefined) {
+      values.push(typeof body.description === 'string' ? body.description.slice(0, 2048) : null)
+      sets.push(`description = $${values.length}`)
+    }
+    if (body.unit !== undefined) {
+      const unit = typeof body.unit === 'string' && body.unit.trim() ? body.unit.trim() : ''
+      if (!unit) {
+        ctx.sendJson(400, { error: 'unit must be a non-empty string' })
+        return true
+      }
+      values.push(unit)
+      sets.push(`unit = $${values.length}`)
+    }
+    if (sets.length === 0) {
+      ctx.sendJson(400, { error: 'no updatable fields supplied' })
+      return true
+    }
+    const updated = await withMutationTx(async (client: PoolClient) => {
+      const result = await client.query<AssemblyRow>(
+        `update service_item_assemblies
+           set ${sets.join(', ')}, updated_at = now(), version = version + 1
+         where company_id = $1 and id = $2 and deleted_at is null
+         returning ${ASSEMBLY_COLUMNS}`,
+        values,
+      )
+      const row = result.rows[0]
+      if (!row) return null
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'service_item_assembly',
+        entityId: row.id,
+        action: 'update',
+        row: row,
+        actorUserId: ctx.currentUserId,
+      })
+      return row
+    })
+    if (!updated) {
+      ctx.sendJson(404, { error: 'assembly not found' })
+      return true
+    }
+    ctx.sendJson(200, { assembly: updated })
+    return true
+  }
+
   if (req.method === 'GET' && detailMatch) {
     const id = detailMatch[1]!
     if (!isValidUuid(id)) {
@@ -216,19 +318,8 @@ export async function handleAssemblyRoutes(
          returning ${COMPONENT_COLUMNS}`,
         [ctx.company.id, assemblyId, kind, name, qty, unit, unitCost, waste, sortOrder],
       )
-      // total_rate = sum(quantity_per_unit * (1 + waste_pct/100) * unit_cost)
-      // across components.
-      const recompute = await client.query<{ total: string }>(
-        `select coalesce(sum(quantity_per_unit * (1 + waste_pct / 100.0) * unit_cost), 0) as total
-         from service_item_assembly_components where company_id = $1 and assembly_id = $2`,
-        [ctx.company.id, assemblyId],
-      )
-      await client.query(
-        `update service_item_assemblies
-           set total_rate = $3, updated_at = now(), version = version + 1
-         where company_id = $1 and id = $2`,
-        [ctx.company.id, assemblyId, recompute.rows[0]?.total ?? '0'],
-      )
+      // Refresh the cached header rate from all components.
+      await recomputeAssemblyTotal(client, ctx.company.id, assemblyId)
       const componentRow = insert.rows[0]
       if (!componentRow) throw new HttpError(500, 'assembly component insert returned no row')
       await recordMutationLedger(client, {
@@ -246,6 +337,152 @@ export async function handleAssemblyRoutes(
       return true
     }
     ctx.sendJson(201, { component: result })
+    return true
+  }
+
+  // PATCH / DELETE a single component. Both recompute the parent
+  // assembly's cached total_rate the same way the component-create path
+  // does, holding a FOR UPDATE lock on the header so concurrent edits
+  // don't race the recompute.
+  const componentItemMatch = url.pathname.match(/^\/api\/assemblies\/([^/]+)\/components\/([^/]+)$/)
+  if ((req.method === 'PATCH' || req.method === 'DELETE') && componentItemMatch) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const assemblyId = componentItemMatch[1]!
+    const componentId = componentItemMatch[2]!
+    if (!isValidUuid(assemblyId) || !isValidUuid(componentId)) {
+      ctx.sendJson(400, { error: 'assembly id and component id must be valid uuids' })
+      return true
+    }
+
+    if (req.method === 'PATCH') {
+      const body = await ctx.readBody()
+      const sets: string[] = []
+      const values: unknown[] = [ctx.company.id, assemblyId, componentId]
+      if (body.kind !== undefined) {
+        const kind = typeof body.kind === 'string' ? body.kind.trim() : ''
+        if (!['material', 'labor', 'sub', 'freight'].includes(kind)) {
+          ctx.sendJson(400, { error: 'kind must be material|labor|sub|freight' })
+          return true
+        }
+        values.push(kind)
+        sets.push(`kind = $${values.length}`)
+      }
+      if (body.name !== undefined) {
+        const name = typeof body.name === 'string' ? body.name.trim() : ''
+        if (!name) {
+          ctx.sendJson(400, { error: 'name must be a non-empty string' })
+          return true
+        }
+        values.push(name)
+        sets.push(`name = $${values.length}`)
+      }
+      if (body.quantity_per_unit !== undefined) {
+        const qty = Number(body.quantity_per_unit)
+        if (!Number.isFinite(qty) || qty < 0) {
+          ctx.sendJson(400, { error: 'quantity_per_unit must be >= 0' })
+          return true
+        }
+        values.push(qty)
+        sets.push(`quantity_per_unit = $${values.length}`)
+      }
+      if (body.unit !== undefined) {
+        const unit = typeof body.unit === 'string' && body.unit.trim() ? body.unit.trim() : ''
+        if (!unit) {
+          ctx.sendJson(400, { error: 'unit must be a non-empty string' })
+          return true
+        }
+        values.push(unit)
+        sets.push(`unit = $${values.length}`)
+      }
+      if (body.unit_cost !== undefined) {
+        const unitCost = Number(body.unit_cost)
+        if (!Number.isFinite(unitCost) || unitCost < 0) {
+          ctx.sendJson(400, { error: 'unit_cost must be >= 0' })
+          return true
+        }
+        values.push(unitCost)
+        sets.push(`unit_cost = $${values.length}`)
+      }
+      if (body.waste_pct !== undefined) {
+        const waste = Number(body.waste_pct)
+        if (!Number.isFinite(waste) || waste < 0) {
+          ctx.sendJson(400, { error: 'waste_pct must be >= 0' })
+          return true
+        }
+        values.push(waste)
+        sets.push(`waste_pct = $${values.length}`)
+      }
+      if (sets.length === 0) {
+        ctx.sendJson(400, { error: 'no updatable fields supplied' })
+        return true
+      }
+      const result = await withMutationTx(async (client: PoolClient) => {
+        const owner = await client.query(
+          `select 1 from service_item_assemblies
+           where company_id = $1 and id = $2 and deleted_at is null for update`,
+          [ctx.company.id, assemblyId],
+        )
+        if (owner.rowCount === 0) return null
+        const update = await client.query<ComponentRow>(
+          `update service_item_assembly_components
+             set ${sets.join(', ')}, updated_at = now()
+           where company_id = $1 and assembly_id = $2 and id = $3
+           returning ${COMPONENT_COLUMNS}`,
+          values,
+        )
+        const componentRow = update.rows[0]
+        if (!componentRow) return null
+        await recomputeAssemblyTotal(client, ctx.company.id, assemblyId)
+        await recordMutationLedger(client, {
+          companyId: ctx.company.id,
+          entityType: 'service_item_assembly_component',
+          entityId: componentRow.id,
+          action: 'update',
+          row: componentRow,
+          actorUserId: ctx.currentUserId,
+        })
+        return componentRow
+      })
+      if (!result) {
+        ctx.sendJson(404, { error: 'assembly component not found' })
+        return true
+      }
+      ctx.sendJson(200, { component: result })
+      return true
+    }
+
+    // DELETE
+    const removed = await withMutationTx(async (client: PoolClient) => {
+      const owner = await client.query(
+        `select 1 from service_item_assemblies
+         where company_id = $1 and id = $2 and deleted_at is null for update`,
+        [ctx.company.id, assemblyId],
+      )
+      if (owner.rowCount === 0) return null
+      const del = await client.query<ComponentRow>(
+        `delete from service_item_assembly_components
+         where company_id = $1 and assembly_id = $2 and id = $3
+         returning ${COMPONENT_COLUMNS}`,
+        [ctx.company.id, assemblyId, componentId],
+      )
+      const componentRow = del.rows[0]
+      if (!componentRow) return null
+      await recomputeAssemblyTotal(client, ctx.company.id, assemblyId)
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'service_item_assembly_component',
+        entityId: componentRow.id,
+        action: 'delete',
+        row: componentRow,
+        actorUserId: ctx.currentUserId,
+      })
+      return componentRow
+    })
+    if (!removed) {
+      ctx.sendJson(404, { error: 'assembly component not found' })
+      return true
+    }
+    ctx.sendJson(200, { component: removed })
     return true
   }
 

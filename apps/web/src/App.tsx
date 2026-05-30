@@ -138,6 +138,18 @@ const ForemanInviteScreen = lazy(() =>
 const ForemanFirstRunScreen = lazy(() =>
   import('@/screens/mobile/foreman-first-run').then((m) => ({ default: m.ForemanFirstRunScreen })),
 )
+const WorkerFirstRunScreen = lazy(() =>
+  import('@/screens/mobile/worker-first-run').then((m) => ({ default: m.WorkerFirstRunScreen })),
+)
+const EstimatorInviteScreen = lazy(() =>
+  import('@/screens/mobile/estimator-invite').then((m) => ({ default: m.EstimatorInviteScreen })),
+)
+const EstimatorFirstRunScreen = lazy(() =>
+  import('@/screens/mobile/estimator-first-run').then((m) => ({ default: m.EstimatorFirstRunScreen })),
+)
+const OwnerOnboardingScreen = lazy(() =>
+  import('@/screens/mobile/owner-onboarding').then((m) => ({ default: m.OwnerOnboardingScreen })),
+)
 const ForemanDeniedScreen = lazy(() =>
   import('@/screens/mobile/foreman-denied').then((m) => ({ default: m.ForemanDeniedScreen })),
 )
@@ -305,9 +317,13 @@ function AppShellRoutes() {
           full-screen surfaces that manage their own MShell chrome, so they
           mount here rather than inside the bottom-tab MobileShell. */}
       <Route path="/approvals" element={<MobileOwnerApprovals />} />
+      <Route path="/owner/onboarding" element={<OwnerOnboardingScreen />} />
       <Route path="/invite/worker" element={<WorkerInviteScreen />} />
       <Route path="/invite/foreman" element={<ForemanInviteScreen />} />
+      <Route path="/invite/estimator" element={<EstimatorInviteScreen />} />
       <Route path="/foreman/first-run" element={<ForemanFirstRunScreen />} />
+      <Route path="/worker/first-run" element={<WorkerFirstRunScreen />} />
+      <Route path="/estimator/first-run" element={<EstimatorFirstRunScreen />} />
       <Route path="/foreman/denied/:id" element={<ForemanDeniedScreen />} />
 
       {/* Desktop v2 account-setup wizard -- full-screen, no command-center chrome. */}
