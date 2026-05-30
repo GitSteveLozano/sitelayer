@@ -31,6 +31,43 @@ export type EstimateRouteCtx = {
    * framework-free.
    */
   sendPdf: (contentDisposition: string, input: EstimatePdfInput) => Promise<void>
+  /** Stream a non-JSON file body (CORS headers applied by the ctx owner). */
+  sendFileContent: (mimeType: string, fileName: string, content: Buffer | string) => void
+}
+
+function csvCell(value: unknown): string {
+  const s = value === null || value === undefined ? '' : String(value)
+  return `"${s.replace(/"/g, '""')}"`
+}
+
+/**
+ * Serialize an estimate's line items to CSV (Excel-friendly: UTF-8 BOM + CRLF
+ * so Excel opens it cleanly). Columns mirror the estimate PDF, plus a trailing
+ * Total row. PlanSwift-parity quick win — opens directly in a spreadsheet; a
+ * formatted .xlsx (exceljs) can layer on later.
+ */
+function buildEstimateCsv(
+  projectName: string,
+  lines: Array<{
+    service_item_code: string
+    quantity: number | string
+    unit: string
+    rate: number | string
+    amount: number | string
+  }>,
+): string {
+  const rows: string[] = [
+    ['Project', projectName].map(csvCell).join(','),
+    '',
+    ['Item', 'Quantity', 'Unit', 'Rate', 'Amount'].map(csvCell).join(','),
+  ]
+  let total = 0
+  for (const line of lines) {
+    rows.push([line.service_item_code, line.quantity, line.unit, line.rate, line.amount].map(csvCell).join(','))
+    total += Number(line.amount) || 0
+  }
+  rows.push(['', '', '', 'Total', total.toFixed(2)].map(csvCell).join(','))
+  return `﻿${rows.join('\r\n')}\r\n`
 }
 
 type ForecastMeasurementInput = {
@@ -648,6 +685,26 @@ export async function handleEstimateRoutes(
     })
     const filename = `estimate-${summary.project.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80)}.pdf`
     await ctx.sendPdf(`attachment; filename="${filename}"`, pdfInput)
+    return true
+  }
+
+  if (req.method === 'GET' && url.pathname.match(/^\/api\/projects\/[^/]+\/estimate\.csv$/)) {
+    if (!ctx.requireRole(['admin', 'office'])) return true
+    const projectId = url.pathname.split('/')[3] ?? ''
+    if (!isValidUuid(projectId)) {
+      ctx.sendJson(400, { error: 'project id must be a valid uuid' })
+      return true
+    }
+    const draftId = await resolveDraftIdParam(ctx, url, {}, projectId)
+    if (draftId === undefined) return true
+    const summary = await summarizeProject(ctx.pool, ctx.company.id, projectId, { draftId })
+    if (!summary) {
+      ctx.sendJson(404, { error: 'project not found' })
+      return true
+    }
+    const csv = buildEstimateCsv(summary.project.name, summary.estimateLines)
+    const filename = `estimate-${summary.project.name.replace(/[^A-Za-z0-9._-]+/g, '_').slice(0, 80)}.csv`
+    ctx.sendFileContent('text/csv; charset=utf-8', filename, csv)
     return true
   }
 

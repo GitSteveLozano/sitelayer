@@ -99,3 +99,10 @@ export function estimatePdfUrl(projectId: string, draftId: string | null = null)
   const qs = draftId ? `?draft_id=${encodeURIComponent(draftId)}` : ''
   return `${API_URL}/api/projects/${encodeURIComponent(projectId)}/estimate.pdf${qs}`
 }
+
+/** Build the estimate CSV (Excel-friendly) download URL — same auth/draft
+ * model as the PDF. Opens directly in a spreadsheet. */
+export function estimateCsvUrl(projectId: string, draftId: string | null = null): string {
+  const qs = draftId ? `?draft_id=${encodeURIComponent(draftId)}` : ''
+  return `${API_URL}/api/projects/${encodeURIComponent(projectId)}/estimate.csv${qs}`
+}

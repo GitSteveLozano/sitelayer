@@ -175,6 +175,7 @@ function makeCtx(pool: FakePool, overrides: Partial<EstimateRouteCtx> = {}) {
       responses.push({ status, body })
     },
     sendPdf: async () => undefined,
+    sendFileContent: () => undefined,
     ...overrides,
   }
   return { ctx, responses, reads }
