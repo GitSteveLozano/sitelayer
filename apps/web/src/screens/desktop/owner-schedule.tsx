@@ -166,9 +166,9 @@ function FourWeekTimeline({
         }}
       >
         {/* Week header */}
-        <div style={{ display: 'grid', gridTemplateColumns: '140px 1fr', borderBottom: line }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '140px minmax(0, 1fr)', borderBottom: line }}>
           <div style={{ ...headerCell, borderRight: line }} />
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
             {[0, 1, 2, 3].map((w) => (
               <div key={w} style={{ ...headerCell, borderRight: w < 3 ? line : 'none' }}>
                 {weekLabel(anchorMonday, w)}
@@ -185,7 +185,7 @@ function FourWeekTimeline({
               key={proj.id}
               style={{
                 display: 'grid',
-                gridTemplateColumns: '140px 1fr',
+                gridTemplateColumns: '140px minmax(0, 1fr)',
                 borderBottom: isLast ? 'none' : '1px solid var(--m-line-2)',
               }}
             >
@@ -561,10 +561,11 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
         )}
       </div>
 
-      {/* NEW ASSIGNMENT modal (Desktop v2 · DNewAssignmentModal) — the
-          imported presentational port; its footer SAVE button is a no-op
-          stub today (no onSubmit prop on the shared modal). */}
-      <NewAssignmentModal open={assignmentOpen} onClose={() => setAssignmentOpen(false)} />
+      {/* NEW ASSIGNMENT modal (Desktop v2 · DNewAssignmentModal) — a real
+          schedule-create form. Projects come from the bootstrap list; on
+          save it POSTs /api/schedules and the create hook invalidates the
+          bootstrap cache so the new draft assignment lands on the grid. */}
+      <NewAssignmentModal open={assignmentOpen} onClose={() => setAssignmentOpen(false)} projects={projects} />
     </div>
   )
 }

@@ -31,12 +31,13 @@ import {
   useInventoryLocations,
   useInventoryMovements,
   useInventoryUtilization,
+  usePatchInventoryItem,
   type InventoryMovement,
   type UtilizationRow,
 } from '@/lib/api/rentals'
 import { useOpenServiceTicket, useServiceTickets } from '@/lib/api/inventory-service-tickets'
 import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, DModal, type DColumn } from '@/components/d'
-import { MButton, MPill } from '@/components/m'
+import { MButton, MInput, MPill } from '@/components/m'
 import { formatMoney, shortDate } from '../mobile/format.js'
 
 // Real dispatch-derived status from the utilization rollup: on-rent when
@@ -80,6 +81,10 @@ export function OwnerRentalsAsset() {
   const navigate = useNavigate()
   const itemId = params.itemId ?? ''
   const [flagOpen, setFlagOpen] = useState(false)
+  // Edit day-rate modal state. `rateDraft` is the in-flight dollar string the
+  // owner is typing; it seeds from the current item rate when the modal opens.
+  const [rateOpen, setRateOpen] = useState(false)
+  const [rateDraft, setRateDraft] = useState('')
 
   const itemsQuery = useInventoryItems()
   const locationsQuery = useInventoryLocations()
@@ -89,6 +94,10 @@ export function OwnerRentalsAsset() {
   // aside; the create path is the "Flag for service" action below).
   const serviceTicketsQuery = useServiceTickets({ itemId })
   const flagService = useOpenServiceTicket()
+  // Day-rate write path — PATCH /api/inventory/items/:id (default_rental_rate),
+  // versioned with the item's optimistic `version`. Refresh comes for free
+  // via the hook's `['inventory']` query invalidation.
+  const patchItem = usePatchInventoryItem(itemId)
 
   const item = useMemo(
     () => (itemsQuery.data?.inventoryItems ?? []).find((i) => i.id === itemId) ?? null,
@@ -180,6 +189,29 @@ export function OwnerRentalsAsset() {
         notes: 'Flagged for service from owner rentals',
       },
       { onSuccess: () => setFlagOpen(false) },
+    )
+  }
+
+  // Seed the draft from the current rate and open the editor.
+  const openRateEditor = () => {
+    patchItem.reset()
+    setRateDraft(String(rate))
+    setRateOpen(true)
+  }
+
+  // A valid rate is a finite, non-negative number (the API clamps with
+  // parseNonNegativeNumber, but we guard the button so a bad value can't be
+  // submitted and silently coerced to 0).
+  const parsedRate = Number(rateDraft)
+  const rateValid = rateDraft.trim() !== '' && Number.isFinite(parsedRate) && parsedRate >= 0
+  const rateUnchanged = rateValid && parsedRate === rate
+  const canSaveRate = rateValid && !rateUnchanged && !patchItem.isPending
+
+  const handleSaveRate = () => {
+    if (!canSaveRate) return
+    patchItem.mutate(
+      { default_rental_rate: parsedRate, expected_version: item.version },
+      { onSuccess: () => setRateOpen(false) },
     )
   }
 
@@ -275,8 +307,29 @@ export function OwnerRentalsAsset() {
               </>
             ) : null}
 
-            <div className="d-eyebrow" style={{ marginTop: 22 }}>
-              Day rate
+            <div
+              className="d-eyebrow"
+              style={{ marginTop: 22, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}
+            >
+              <span>Day rate</span>
+              <button
+                type="button"
+                onClick={openRateEditor}
+                style={{
+                  appearance: 'none',
+                  border: 'none',
+                  background: 'none',
+                  padding: 0,
+                  cursor: 'pointer',
+                  font: 'inherit',
+                  letterSpacing: 'inherit',
+                  textTransform: 'inherit',
+                  color: 'var(--m-accent)',
+                  fontWeight: 700,
+                }}
+              >
+                Edit
+              </button>
             </div>
             <div style={{ marginTop: 8, fontSize: 24, fontWeight: 800, fontFamily: 'var(--m-num)' }}>
               {formatMoney(rate)}
@@ -328,6 +381,67 @@ export function OwnerRentalsAsset() {
         {flagService.isError ? (
           <div style={{ marginTop: 12, fontSize: 13, color: 'var(--m-red)', fontWeight: 600 }}>
             {flagService.error instanceof Error ? flagService.error.message : 'Could not flag for service.'}
+          </div>
+        ) : null}
+      </DModal>
+
+      {/* Edit day rate — PATCHes the inventory item's default_rental_rate
+          (the asset's catalog day rate) through the existing versioned
+          inventory-items update path. A 409 means another writer bumped the
+          item; the surfaced error tells the owner to reopen with fresh data. */}
+      <DModal
+        open={rateOpen}
+        onClose={() => setRateOpen(false)}
+        title={`Edit day rate · ${item.code}`}
+        footer={
+          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+            <MButton variant="ghost" onClick={() => setRateOpen(false)}>
+              Cancel
+            </MButton>
+            <MButton variant="primary" disabled={!canSaveRate} onClick={handleSaveRate}>
+              {patchItem.isPending ? 'Saving…' : 'Save day rate'}
+            </MButton>
+          </div>
+        }
+      >
+        <div style={{ fontSize: 14, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>
+          The catalog day rate for <strong>{item.description}</strong>. New dispatches and idle-revenue figures use this
+          rate.
+        </div>
+        <div className="d-eyebrow" style={{ marginTop: 18 }}>
+          Day rate (per {item.unit || 'day'})
+        </div>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'auto minmax(0, 1fr)',
+            alignItems: 'center',
+            gap: 8,
+            marginTop: 8,
+          }}
+        >
+          <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--m-ink-3)' }}>$</span>
+          <MInput
+            type="number"
+            min={0}
+            step="0.01"
+            inputMode="decimal"
+            value={rateDraft}
+            autoFocus
+            onChange={(e) => setRateDraft(e.currentTarget.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && canSaveRate) handleSaveRate()
+            }}
+          />
+        </div>
+        {rateDraft.trim() !== '' && !rateValid ? (
+          <div style={{ marginTop: 10, fontSize: 13, color: 'var(--m-red)', fontWeight: 600 }}>
+            Enter a non-negative dollar amount.
+          </div>
+        ) : null}
+        {patchItem.isError ? (
+          <div style={{ marginTop: 12, fontSize: 13, color: 'var(--m-red)', fontWeight: 600 }}>
+            {patchItem.error instanceof Error ? patchItem.error.message : 'Could not update the day rate.'}
           </div>
         ) : null}
       </DModal>

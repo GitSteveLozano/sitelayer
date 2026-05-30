@@ -15,12 +15,13 @@
  * with clearly-labeled placeholder data + TODO(wire) notes because they have
  * no dedicated backend API yet. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { COMPANY_ROLES, type CompanyRole } from '@sitelayer/domain'
 import { useServiceItems, type ServiceItem } from '@/lib/api/service-items'
 import { useLaborBurdenToday, type LaborBurdenWorkerResult } from '@/lib/api/labor-burden'
-import { DataTable, DEyebrow, DH1, type DColumn } from '@/components/d'
-import { MButton, MPill } from '@/components/m'
+import { useDeletePricingOverride, usePricingOverrides, useUpsertPricingOverride } from '@/lib/api/pricing-overrides'
+import { DataTable, DEyebrow, DH1, DModal, type DColumn } from '@/components/d'
+import { MButton, MInput, MPill } from '@/components/m'
 import { formatMoney } from '../mobile/format.js'
 import {
   CompanySection,
@@ -108,9 +109,33 @@ const CAPABILITY_MATRIX: CapabilityRow[] = [
   },
 ]
 
+// ---- Pricing Book (company rate book) ------------------------------------
+// The COMPANY-level rate book. Every service item shows its catalog default
+// rate plus the company-wide override when one is set (the highest-but-one
+// rung of the pricing chain: project → customer → company → qbo → default).
+// Edit / + Add open the company-rates editor, which upserts
+// company_pricing_overrides via /api/company/pricing-overrides. A per-project
+// or per-customer rate card still beats the company rate downstream.
+const COMPANY_SCOPE = { kind: 'company' as const }
+
 function PricingBookSection() {
   const itemsQuery = useServiceItems()
-  const rows = useMemo<ServiceItem[]>(() => itemsQuery.data?.serviceItems ?? [], [itemsQuery.data?.serviceItems])
+  const items = useMemo<ServiceItem[]>(() => itemsQuery.data?.serviceItems ?? [], [itemsQuery.data?.serviceItems])
+  const overridesQuery = usePricingOverrides(COMPANY_SCOPE)
+  const [editorOpen, setEditorOpen] = useState(false)
+  const [focusCode, setFocusCode] = useState<string | null>(null)
+
+  // Company override rate per service-item code (string), when set.
+  const overrideByCode = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const o of overridesQuery.data?.overrides ?? []) map.set(o.service_item_code, String(Number(o.rate)))
+    return map
+  }, [overridesQuery.data])
+
+  const openEditor = (code: string | null) => {
+    setFocusCode(code)
+    setEditorOpen(true)
+  }
 
   const columns: Array<DColumn<ServiceItem>> = [
     { key: 'name', header: 'Item', render: (r) => <span className="d-table-cell-strong">{r.name}</span> },
@@ -118,20 +143,30 @@ function PricingBookSection() {
     { key: 'unit', header: 'Unit', render: (r) => r.unit || '—' },
     {
       key: 'default_rate',
-      header: 'Rate',
+      header: 'Default',
       numeric: true,
       render: (r) => (r.default_rate == null ? '—' : formatMoney(r.default_rate)),
     },
     {
+      key: 'company_rate',
+      header: 'Company rate',
+      numeric: true,
+      render: (r) => {
+        const ovr = overrideByCode.get(r.code)
+        if (ovr == null) return <span style={{ color: 'var(--m-ink-3)' }}>—</span>
+        return <span style={{ color: 'var(--m-accent-ink, #111)', fontWeight: 600 }}>{formatMoney(Number(ovr))}</span>
+      },
+    },
+    {
       key: 'edit',
       header: '',
-      render: () => (
+      render: (r) => (
         <MButton
           size="sm"
           variant="quiet"
           onClick={(e) => {
             e.stopPropagation()
-            // TODO: wire to a pricing-item editor sheet (usePatchServiceItem).
+            openEditor(r.code)
           }}
         >
           Edit
@@ -141,24 +176,181 @@ function PricingBookSection() {
   ]
 
   return (
-    <DataTable<ServiceItem>
-      title="Service items"
-      action={
-        <MButton
-          size="sm"
-          variant="quiet"
-          onClick={() => {
-            // TODO: wire to a new-pricing-item editor sheet (useCreateServiceItem).
+    <>
+      <DataTable<ServiceItem>
+        title="Service items"
+        action={
+          <MButton size="sm" variant="quiet" onClick={() => openEditor(null)}>
+            + Add item
+          </MButton>
+        }
+        columns={columns}
+        rows={items}
+        rowKey={(r) => r.code}
+        onRowClick={(r) => openEditor(r.code)}
+        empty="No service items yet. Items added to your catalog show up here with their billing rates."
+      />
+      <CompanyRatesModal open={editorOpen} items={items} focusCode={focusCode} onClose={() => setEditorOpen(false)} />
+    </>
+  )
+}
+
+// Company rate-book editor. Mirrors est-project-rates.tsx's ProjectRatesModal
+// but for the company scope: each service item shows its catalog default + a
+// company override input. Blank clears the override (falls back to default).
+// There is no estimate recompute here — the company rate book is a standing
+// catalog, not a single project's estimate.
+function CompanyRatesModal({
+  open,
+  items,
+  focusCode,
+  onClose,
+}: {
+  open: boolean
+  items: ServiceItem[]
+  focusCode: string | null
+  onClose: () => void
+}) {
+  const overridesQuery = usePricingOverrides(COMPANY_SCOPE, open)
+  const upsert = useUpsertPricingOverride(COMPANY_SCOPE)
+  const remove = useDeletePricingOverride(COMPANY_SCOPE)
+
+  const originalByCode = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const o of overridesQuery.data?.overrides ?? []) map.set(o.service_item_code, String(Number(o.rate)))
+    return map
+  }, [overridesQuery.data])
+
+  const [edits, setEdits] = useState<Record<string, string>>({})
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  // Seed editable values from the loaded overrides when the modal opens.
+  useEffect(() => {
+    if (!open) return
+    const seed: Record<string, string> = {}
+    for (const [code, rate] of originalByCode) seed[code] = rate
+    setEdits(seed)
+    setError(null)
+  }, [open, originalByCode])
+
+  const handleSave = async () => {
+    setSaving(true)
+    setError(null)
+    try {
+      for (const item of items) {
+        const code = item.code
+        const next = (edits[code] ?? '').trim()
+        const original = originalByCode.get(code) ?? ''
+        if (next === original) continue
+        if (next === '') {
+          if (original !== '') await remove.mutateAsync({ service_item_code: code })
+          continue
+        }
+        const rate = Number(next)
+        if (!Number.isFinite(rate) || rate < 0) {
+          setError(`"${code}" rate must be a non-negative number.`)
+          setSaving(false)
+          return
+        }
+        await upsert.mutateAsync({ service_item_code: code, rate })
+      }
+      onClose()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <DModal
+      open={open}
+      onClose={onClose}
+      title="Company rates"
+      width={640}
+      footer={
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, width: '100%' }}>
+          <span style={{ fontSize: 12, color: error ? 'var(--m-red)' : 'var(--m-ink-3)' }}>
+            {error ?? 'Blank = use the catalog default. Company rates apply to every project unless overridden.'}
+          </span>
+          <span style={{ display: 'flex', gap: 8 }}>
+            <MButton variant="ghost" onClick={onClose} disabled={saving}>
+              Cancel
+            </MButton>
+            <MButton variant="primary" onClick={() => void handleSave()} disabled={saving || overridesQuery.isLoading}>
+              {saving ? 'Saving…' : 'Save rates'}
+            </MButton>
+          </span>
+        </div>
+      }
+    >
+      <div style={{ display: 'grid', gap: 2, maxHeight: '60vh', overflow: 'auto' }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) 64px 110px 120px',
+            gap: 10,
+            padding: '6px 4px',
+            fontFamily: 'var(--m-num)',
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            color: 'var(--m-ink-3)',
+            position: 'sticky',
+            top: 0,
+            background: 'var(--m-paper)',
           }}
         >
-          + Add item
-        </MButton>
-      }
-      columns={columns}
-      rows={rows}
-      rowKey={(r) => r.code}
-      empty="No service items yet. Items added to your catalog show up here with their billing rates."
-    />
+          <span>Service item</span>
+          <span>Unit</span>
+          <span style={{ textAlign: 'right' }}>Default</span>
+          <span style={{ textAlign: 'right' }}>Company rate</span>
+        </div>
+        {items.length === 0 ? (
+          <div style={{ padding: 12, color: 'var(--m-ink-3)', fontSize: 13 }}>Loading items…</div>
+        ) : null}
+        {items.map((item) => {
+          const def = item.default_rate == null ? null : Number(item.default_rate)
+          const isFocus = focusCode != null && item.code === focusCode
+          return (
+            <label
+              key={item.code}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'minmax(0, 1fr) 64px 110px 120px',
+                gap: 10,
+                alignItems: 'center',
+                padding: '6px 4px',
+                borderTop: '1px solid var(--m-line, rgba(0,0,0,0.06))',
+                background: isFocus ? 'var(--m-card-soft, rgba(0,0,0,0.03))' : undefined,
+              }}
+            >
+              <span style={{ fontSize: 13, fontWeight: 600, minWidth: 0 }}>
+                {item.code}
+                <span style={{ color: 'var(--m-ink-3)', fontWeight: 400 }}> — {item.name}</span>
+              </span>
+              <span style={{ fontSize: 12, color: 'var(--m-ink-3)' }}>{item.unit || '—'}</span>
+              <span className="num" style={{ textAlign: 'right', fontSize: 13, color: 'var(--m-ink-3)' }}>
+                {def == null ? '—' : `$${def.toFixed(2)}`}
+              </span>
+              <MInput
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="0.01"
+                autoFocus={isFocus}
+                value={edits[item.code] ?? ''}
+                placeholder={def == null ? 'default' : def.toFixed(2)}
+                onChange={(e) => setEdits((prev) => ({ ...prev, [item.code]: e.target.value }))}
+                style={{ width: '100%', textAlign: 'right', fontFamily: 'var(--m-num)' }}
+              />
+            </label>
+          )
+        })}
+      </div>
+    </DModal>
   )
 }
 

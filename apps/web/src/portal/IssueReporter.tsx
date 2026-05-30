@@ -120,15 +120,15 @@ export function IssueReporter() {
     zIndex: 9999,
     padding: '10px 14px',
     borderRadius: 999,
-    border: '1px solid var(--m-line, #ccc)',
-    background: 'var(--m-card, #fff)',
-    color: 'var(--m-ink, #111)',
+    border: '1px solid var(--m-line, var(--p-line))',
+    background: 'var(--m-card, var(--p-paper))',
+    color: 'var(--m-ink, var(--p-ink))',
     fontSize: 13,
     cursor: 'pointer',
-    boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+    boxShadow: 'var(--p-pill-shadow)',
   }
 
-  if (sent) return <div style={{ ...pill, color: 'var(--m-green, #2a8)' }}>Thanks — issue sent ✓</div>
+  if (sent) return <div style={{ ...pill, color: 'var(--m-green)' }}>Thanks — issue sent ✓</div>
   if (!open)
     return (
       <button type="button" style={pill} onClick={() => setOpen(true)}>
@@ -151,11 +151,11 @@ export function IssueReporter() {
           fontSize: 13,
           padding: 8,
           borderRadius: 8,
-          border: '1px solid var(--m-line, #ccc)',
+          border: '1px solid var(--m-line, var(--p-line))',
           resize: 'vertical',
         }}
       />
-      <div style={{ fontSize: 11, color: 'var(--m-ink-3, #888)' }}>
+      <div style={{ fontSize: 11, color: 'var(--m-ink-3, var(--p-text-4))' }}>
         Shares recent error signals + your note (no page contents, no personal info).
       </div>
       <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -173,8 +173,8 @@ export function IssueReporter() {
             position: 'static',
             boxShadow: 'none',
             padding: '6px 12px',
-            background: 'var(--m-accent, #06c)',
-            color: '#fff',
+            background: 'var(--m-accent, var(--p-ink))',
+            color: 'var(--p-paper)',
           }}
           onClick={send}
         >

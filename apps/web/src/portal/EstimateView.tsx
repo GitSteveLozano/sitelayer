@@ -49,7 +49,9 @@ export function EstimateView() {
   if (!view) {
     return (
       <Shell title="Estimate">
-        <div style={{ padding: 24, textAlign: 'center', color: 'var(--m-ink-3, #64748b)', fontSize: 14 }}>Loading…</div>
+        <div style={{ padding: 24, textAlign: 'center', color: 'var(--m-ink-3, var(--p-slate-ink-3))', fontSize: 14 }}>
+          Loading…
+        </div>
       </Shell>
     )
   }
@@ -108,12 +110,12 @@ export function EstimateView() {
       {signature.mode === 'accepting' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Sign to accept</h3>
-          <p style={{ margin: 0, fontSize: 13, color: 'var(--m-ink-3, #64748b)' }}>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--m-ink-3, var(--p-slate-ink-3))' }}>
             Type your full name and sign below. By accepting you agree to the line items and totals shown above.
           </p>
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 12, color: 'var(--m-ink-3, #64748b)' }}>Your full name</span>
+            <span style={{ fontSize: 12, color: 'var(--m-ink-3, var(--p-slate-ink-3))' }}>Your full name</span>
             <input
               className="m-input"
               value={signature.signerName}
@@ -141,7 +143,7 @@ export function EstimateView() {
       {signature.mode === 'declining' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>Decline this estimate</h3>
-          <p style={{ margin: 0, fontSize: 13, color: 'var(--m-ink-3, #64748b)' }}>
+          <p style={{ margin: 0, fontSize: 13, color: 'var(--m-ink-3, var(--p-slate-ink-3))' }}>
             Optionally tell us why so we can follow up with adjustments.
           </p>
           <MTextarea
@@ -178,26 +180,26 @@ function ReadOnlySnapshot({ view }: { view: PortalEstimateView }) {
           flexDirection: 'column',
           gap: 4,
           padding: '12px 16px',
-          background: '#f8fafc',
-          border: '1px solid var(--m-line, #e2e8f0)',
+          background: 'var(--p-slate-soft)',
+          border: '1px solid var(--m-line, var(--p-slate-line))',
           borderRadius: 12,
         }}
       >
-        <span style={{ fontSize: 12, color: 'var(--m-ink-3, #64748b)' }}>
+        <span style={{ fontSize: 12, color: 'var(--m-ink-3, var(--p-slate-ink-3))' }}>
           Sent {formatDate(view.sent_at)} · expires {formatDate(view.expires_at)}
         </span>
         {view.recipient_name || view.recipient_email ? (
           <span style={{ fontSize: 13 }}>
             For: {view.recipient_name ? `${view.recipient_name} · ` : ''}
-            <span style={{ color: 'var(--m-ink-3, #64748b)' }}>{view.recipient_email}</span>
+            <span style={{ color: 'var(--m-ink-3, var(--p-slate-ink-3))' }}>{view.recipient_email}</span>
           </span>
         ) : null}
       </header>
 
       <section
         style={{
-          background: '#fff',
-          border: '1px solid var(--m-line, #e2e8f0)',
+          background: 'var(--p-paper)',
+          border: '1px solid var(--m-line, var(--p-slate-line))',
           borderRadius: 12,
           overflow: 'hidden',
         }}
@@ -205,14 +207,14 @@ function ReadOnlySnapshot({ view }: { view: PortalEstimateView }) {
         <div
           style={{
             padding: '12px 16px',
-            borderBottom: '1px solid var(--m-line, #e2e8f0)',
+            borderBottom: '1px solid var(--m-line, var(--p-slate-line))',
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
           }}
         >
           <span style={{ fontSize: 13, fontWeight: 600 }}>Line items</span>
-          <span style={{ fontSize: 12, color: 'var(--m-ink-3, #64748b)' }}>{lines.length} items</span>
+          <span style={{ fontSize: 12, color: 'var(--m-ink-3, var(--p-slate-ink-3))' }}>{lines.length} items</span>
         </div>
         <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
           {lines.map((line) => (
@@ -223,12 +225,12 @@ function ReadOnlySnapshot({ view }: { view: PortalEstimateView }) {
                 justifyContent: 'space-between',
                 gap: 12,
                 padding: '12px 16px',
-                borderBottom: '1px solid var(--m-line, #e2e8f0)',
+                borderBottom: '1px solid var(--m-line, var(--p-slate-line))',
               }}
             >
               <div style={{ minWidth: 0, flex: 1 }}>
                 <div style={{ fontSize: 13, fontWeight: 500 }}>{line.service_item_code}</div>
-                <div style={{ fontSize: 12, color: 'var(--m-ink-3, #64748b)' }}>
+                <div style={{ fontSize: 12, color: 'var(--m-ink-3, var(--p-slate-ink-3))' }}>
                   {line.quantity.toLocaleString()} {line.unit} × ${line.rate.toFixed(2)}
                 </div>
               </div>
@@ -243,7 +245,7 @@ function ReadOnlySnapshot({ view }: { view: PortalEstimateView }) {
             padding: '14px 16px',
             display: 'flex',
             justifyContent: 'space-between',
-            background: '#f8fafc',
+            background: 'var(--p-slate-soft)',
           }}
         >
           <span style={{ fontSize: 14, fontWeight: 600 }}>Total</span>
@@ -265,7 +267,10 @@ function Shell({ title, sub, children }: { title: string; sub?: string; children
   // mobile shell switches to dark on some screens, but customer-facing
   // surfaces stay strictly light per the spec.
   return (
-    <div data-theme="light" style={{ minHeight: '100vh', background: '#f1f5f9', color: '#0f172a' }}>
+    <div
+      data-theme="light"
+      style={{ minHeight: '100vh', background: 'var(--p-slate-bg)', color: 'var(--p-slate-ink)' }}
+    >
       <MTopBar title={title} sub={sub} />
       <MBody pad>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 18, paddingTop: 12, paddingBottom: 32 }}>

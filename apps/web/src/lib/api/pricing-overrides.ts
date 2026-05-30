@@ -17,21 +17,26 @@ export interface PricingOverride {
   updated_at: string
 }
 
-export type PricingScope = { kind: 'project' | 'customer'; id: string }
+// A pricing scope is either a per-project/per-customer rate card (keyed by id)
+// or the company-wide rate book. The company scope is the COMPANY-level rate
+// book under Owner · Settings · Pricing Book; it has no scope id (the tenant
+// root is implicit in the request's company context).
+export type PricingScope = { kind: 'project' | 'customer'; id: string } | { kind: 'company'; id?: undefined }
 
 function basePath(scope: PricingScope): string {
+  if (scope.kind === 'company') return '/api/company/pricing-overrides'
   const seg = scope.kind === 'project' ? 'projects' : 'customers'
   return `/api/${seg}/${encodeURIComponent(scope.id)}/pricing-overrides`
 }
 
 export function pricingOverrideKey(scope: PricingScope) {
-  return ['pricing-overrides', scope.kind, scope.id] as const
+  return ['pricing-overrides', scope.kind, scope.kind === 'company' ? 'company' : scope.id] as const
 }
 
 export function usePricingOverrides(scope: PricingScope, enabled = true) {
   return useQuery({
     queryKey: pricingOverrideKey(scope),
-    enabled: enabled && Boolean(scope.id),
+    enabled: enabled && (scope.kind === 'company' || Boolean(scope.id)),
     queryFn: () => request<{ overrides: PricingOverride[] }>(basePath(scope), { method: 'GET' }),
   })
 }

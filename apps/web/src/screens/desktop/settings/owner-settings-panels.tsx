@@ -694,7 +694,20 @@ export function IntegrationsSection() {
       header: '',
       render: (r) => {
         if (r.kind === 'static') {
-          return <span style={{ color: 'var(--m-ink-3)', fontSize: 13 }}>—</span>
+          // Coming-soon providers: a clearly-disabled chip (token-styled, dimmed
+          // + not-allowed cursor) so the row reads as "planned, not broken"
+          // rather than a dead em-dash or a clickable-looking CTA.
+          return (
+            <MButton
+              size="sm"
+              variant="quiet"
+              disabled
+              aria-disabled="true"
+              style={{ opacity: 0.55, cursor: 'not-allowed' }}
+            >
+              Coming soon
+            </MButton>
+          )
         }
         // QBO row. Connected → "Run sync" + "Reconnect"; otherwise "Connect".
         if (r.row.status === 'connected') {

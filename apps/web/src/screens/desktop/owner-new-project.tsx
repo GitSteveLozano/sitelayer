@@ -193,7 +193,9 @@ export function OwnerNewProject() {
               </MSelect>
             </Field>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12 }}>
+            <div
+              style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr)', gap: 12 }}
+            >
               <Field label="Bid value ($)">
                 <MInput
                   type="number"

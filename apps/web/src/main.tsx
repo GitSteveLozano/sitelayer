@@ -14,6 +14,10 @@ import './styles/globals.css'
 // without a flash of unstyled content; the rules are scoped under .m-*
 // classes so they don't bleed into v2's main routes.
 import './styles/m.css'
+// portal.css = scoped --p-* tokens for the public/unauthenticated customer
+// portal screens (apps/web/src/portal/*). Holds the legacy neutral-grey /
+// slate values verbatim so removing inline hex causes no visual change.
+import './styles/portal.css'
 // d.css = the Desktop v2 "command center" primitives (.d-* classes) for the
 // >=1024px owner/estimator surface. Scoped under .d-* so it doesn't bleed
 // into the mobile (.m-*) rules; shares the v2 tokens from tokens.css/m.css.

@@ -314,7 +314,7 @@ function PhotoGrid({ log }: { log: DailyLog }) {
   }
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 4 }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 4 }}>
       {photos.map((photo) => (
         <img
           key={photo.id}
@@ -416,7 +416,9 @@ function VoiceToLogBlock({ dailyLogId, isSubmitted, attributionCounts, onApplyPr
             </ul>
           ) : null}
           {!isSubmitted ? (
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 6 }}>
+            <div
+              style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 8, marginTop: 6 }}
+            >
               <MButton
                 variant="primary"
                 size="sm"
