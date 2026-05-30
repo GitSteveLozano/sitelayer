@@ -100,9 +100,18 @@ export function EstQuantities() {
   // fall back to the summary metric before the snapshot loads.
   const m = summary?.metrics
   const liveTotal = builder.snapshot?.scope_total ?? m?.estimateTotal ?? 0
-  const marginRatio = m?.margin.margin ?? 0
-  const marginPct = m ? `${(marginRatio * 100).toFixed(0)}%` : '—'
-  const marginProfit = m ? formatMoney(m.margin.profit) : '—'
+  // Margin/profit must reconcile with the Sell Total (the scope being sold) and
+  // a real cost basis. The summary's margin uses the project's separately-set
+  // bid_total as revenue, which showed nonsense like "100% margin · $19,268
+  // profit" on a $720 estimate with no logged cost. Derive profit from the sell
+  // total minus cost, and only show a margin when there's an actual cost basis;
+  // otherwise show "—" (no costs logged yet) rather than a fake 100%.
+  const estCost = Number(m?.margin.cost ?? 0)
+  const hasCostBasis = estCost > 0 && liveTotal > 0
+  const marginProfitNum = liveTotal - estCost
+  const marginRatio = hasCostBasis ? marginProfitNum / liveTotal : 0
+  const marginPct = hasCostBasis ? `${(marginRatio * 100).toFixed(0)}%` : '—'
+  const marginProfit = hasCostBasis ? `${formatMoney(marginProfitNum)} profit` : 'no costs logged'
   const marginTone: 'green' | 'amber' | 'red' = marginRatio > 0.18 ? 'green' : marginRatio > 0.1 ? 'amber' : 'red'
 
   const columns: Array<DColumn<QtyRow>> = [
@@ -204,8 +213,11 @@ export function EstQuantities() {
               >
                 {marginPct}
               </div>
-              <div className="d-kpi-meta" data-tone={m ? (marginTone === 'red' ? 'bad' : 'good') : undefined}>
-                {marginProfit} profit
+              <div
+                className="d-kpi-meta"
+                data-tone={hasCostBasis ? (marginTone === 'red' ? 'bad' : 'good') : undefined}
+              >
+                {marginProfit}
               </div>
             </div>
 
@@ -300,7 +312,9 @@ export function EstQuantities() {
               </div>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
                 <span style={{ fontSize: 14, fontWeight: 600 }}>Margin</span>
-                <MPill tone={marginTone}>{marginPct} hidden</MPill>
+                <MPill tone={hasCostBasis ? marginTone : 'accent'}>
+                  {hasCostBasis ? `${marginPct} hidden` : 'hidden'}
+                </MPill>
               </div>
             </div>
 
