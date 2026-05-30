@@ -206,6 +206,55 @@ export function EstQuantities() {
               </div>
             </div>
 
+            {/* SCOPE vs BID (Cavy, WhatsApp 4/10–4/11). The project bid is the
+                whole-system pool; tagging scope items at their own rates can
+                push the scope total past the bid. Surface the comparison + a
+                mismatch warning right where the estimator works. */}
+            {builder.snapshot
+              ? (() => {
+                  const snap = builder.snapshot
+                  const bid = Number(snap.bid_total) || 0
+                  const scope = Number(snap.scope_total) || 0
+                  const delta = scope - bid
+                  const status = snap.status ?? 'ok'
+                  const tone: 'green' | 'amber' | 'red' =
+                    status === 'ok' ? 'green' : status === 'warn' ? 'amber' : 'red'
+                  const msg =
+                    bid <= 0
+                      ? 'No project bid set — enter the bid to compare against the scope.'
+                      : status === 'ok'
+                        ? 'Scope is within the bid pool.'
+                        : `Scope is ${formatMoney(Math.abs(delta))} ${delta > 0 ? 'over' : 'under'} the bid pool${
+                            delta > 0 ? ' — check items aren’t tagged at full-system rates.' : '.'
+                          }`
+                  return (
+                    <div style={{ display: 'grid', gap: 8 }}>
+                      <div className="d-kpi-l">Scope vs bid</div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                        <span style={{ fontSize: 14, fontWeight: 600 }}>Bid pool</span>
+                        <span className="num" style={{ fontSize: 15, fontWeight: 700 }}>
+                          {bid > 0 ? formatMoney(bid) : '—'}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                        <span style={{ fontSize: 14, fontWeight: 600 }}>Scope total</span>
+                        <span className="num" style={{ fontSize: 15, fontWeight: 700 }}>
+                          {formatMoney(scope)}
+                        </span>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <MPill tone={tone}>
+                          {status === 'ok' ? 'Matches bid' : status === 'warn' ? 'Small drift' : 'Mismatch'}
+                        </MPill>
+                        <span style={{ fontSize: 12, color: tone === 'red' ? 'var(--m-red)' : 'var(--m-ink-3)' }}>
+                          {msg}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })()
+              : null}
+
             <div
               style={{
                 background: 'var(--m-accent)',
