@@ -33,6 +33,16 @@ export interface AssemblyComponent {
   /** Optional waste %, applied multiplicatively after quantity_per_unit. */
   waste_pct: number
   sort_order: number
+  /**
+   * Optional quantity formula (e.g. "measurement_quantity * 1.1 / coverage_rate").
+   * Evaluated by the CALLER (the explode path) via @sitelayer/formula-evaluator —
+   * domain stays dependency-light, so the resolved value is passed back in via
+   * the `resolvedQuantities` arg to {@link resolveAssembly}. NULL => static
+   * `quantity_per_unit` path.
+   */
+  quantity_formula?: string | null
+  /** Named vars bound when evaluating `quantity_formula` (e.g. {"coverage_rate": 32}). */
+  formula_vars?: Record<string, number | string> | null
 }
 
 export interface AssemblyHeader {
@@ -76,6 +86,16 @@ export function resolveAssembly(
   measurementQuantity: number,
   assembly: AssemblyHeader,
   components: readonly AssemblyComponent[],
+  /**
+   * Optional per-component resolved per-unit quantity overrides, keyed by
+   * component id. When a component id is present in the map, its value REPLACES
+   * `c.quantity_per_unit` as the per-unit-of-assembly quantity (the caller has
+   * already evaluated the component's `quantity_formula` against the concrete
+   * measurement). `waste_pct` still applies on top. When a component id is
+   * absent, the static `c.quantity_per_unit` path runs unchanged — keeping the
+   * formula-evaluator dependency out of @sitelayer/domain and this function pure.
+   */
+  resolvedQuantities?: ReadonlyMap<string, number>,
 ): AssemblyResolution {
   if (!Number.isFinite(measurementQuantity) || measurementQuantity < 0) {
     throw new Error(`resolveAssembly: invalid measurementQuantity ${measurementQuantity}`)
@@ -93,7 +113,10 @@ export function resolveAssembly(
   const sorted = [...components].sort((a, b) => a.sort_order - b.sort_order)
   for (const c of sorted) {
     if (c.assembly_id !== assembly.id) continue
-    const qty = round4(measurementQuantity * c.quantity_per_unit * (1 + c.waste_pct / 100))
+    // A caller-supplied resolved per-unit quantity (from a formula) wins over
+    // the static one; waste_pct still applies on top either way.
+    const perUnit = resolvedQuantities?.has(c.id) ? resolvedQuantities.get(c.id)! : c.quantity_per_unit
+    const qty = round4(measurementQuantity * perUnit * (1 + c.waste_pct / 100))
     const amount = round4(qty * c.unit_cost)
     byKind[c.kind] = round4(byKind[c.kind] + amount)
     total = round4(total + amount)

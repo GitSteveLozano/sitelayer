@@ -150,6 +150,38 @@ export async function handleTakeoffMeasurementRoutes(
         return true
       }
     }
+    // PlanSwift Phase 2: attach/detach an assembly to this measurement.
+    //   - assembly_id: <uuid>  → attach (validated: active assembly for this company)
+    //   - assembly_id: null/'' → detach (back to the flat-line path)
+    //   - assembly_id absent    → leave unchanged
+    // `attachAssembly` distinguishes "patch the column" from "leave alone".
+    let attachAssembly = false
+    let nextAssemblyId: string | null = null
+    if (body.assembly_id !== undefined) {
+      attachAssembly = true
+      if (body.assembly_id === null || body.assembly_id === '') {
+        nextAssemblyId = null
+      } else {
+        const candidate = String(body.assembly_id)
+        if (!isValidUuid(candidate)) {
+          ctx.sendJson(400, { error: 'assembly_id must be a valid uuid or null' })
+          return true
+        }
+        const exists = await withCompanyClient(ctx.company.id, (c) =>
+          c.query<{ id: string }>(
+            `select id from service_item_assemblies
+              where company_id = $1 and id = $2 and deleted_at is null limit 1`,
+            [ctx.company.id, candidate],
+          ),
+        )
+        if (!exists.rows[0]) {
+          ctx.sendJson(404, { error: 'assembly not found' })
+          return true
+        }
+        nextAssemblyId = candidate
+      }
+    }
+
     if (patchBlueprintDocumentId || patchPageId) {
       const measurementProjectResult = await withCompanyClient(ctx.company.id, (c) =>
         c.query<{ project_id: string; blueprint_document_id: string | null; page_id: string | null }>(
@@ -248,10 +280,11 @@ export async function handleTakeoffMeasurementRoutes(
             elevation = coalesce($10, elevation),
             page_id = coalesce($11, page_id),
             is_deduction = coalesce($12, is_deduction),
+            assembly_id = case when $13::boolean then $14::uuid else assembly_id end,
             version = version + 1,
             updated_at = now()
           where company_id = $1 and id = $2 and deleted_at is null and ($9::int is null or version = $9)
-          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, elevation, is_deduction, version, deleted_at, created_at, updated_at
+          returning id, project_id, blueprint_document_id, page_id, service_item_code, quantity, unit, notes, geometry, elevation, is_deduction, assembly_id, version, deleted_at, created_at, updated_at
           `,
           [
             ctx.company.id,
@@ -274,6 +307,8 @@ export async function handleTakeoffMeasurementRoutes(
                 })(),
             patchPageId,
             body.is_deduction === undefined ? null : body.is_deduction === true,
+            attachAssembly,
+            nextAssemblyId,
           ],
         )
         const row = result.rows[0]

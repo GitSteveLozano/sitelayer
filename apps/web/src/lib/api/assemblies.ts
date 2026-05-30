@@ -40,6 +40,105 @@ interface AssemblyDetailResponse {
 
 export type AssemblyComponentKind = 'material' | 'labor' | 'sub' | 'freight'
 
+// ---------------------------------------------------------------------------
+// Phase 2 — explode preview + measurement attach
+// ---------------------------------------------------------------------------
+
+/** One resolved component line in an explode preview (raw cost, pre-markup). */
+export interface AssemblyResolutionLine {
+  component_id: string
+  kind: AssemblyComponentKind
+  name: string
+  unit: string
+  quantity: number
+  unit_cost: number
+  amount: number
+}
+
+export interface AssemblyResolution {
+  assembly_id: string
+  service_item_code: string
+  total: number
+  by_kind: Record<AssemblyComponentKind, number>
+  lines: AssemblyResolutionLine[]
+}
+
+/** One row of the markup breakdown the explode preview returns for transparency. */
+export interface MarkupBreakdownRow {
+  label: string
+  basis: AssemblyComponentKind | 'profit'
+  multiplier: number
+  before: number
+  after: number
+}
+
+export interface MarkupBreakdown {
+  lines: MarkupBreakdownRow[]
+  subtotal_before_profit: number
+  total: number
+}
+
+/** One priced estimate line the explode preview would emit (markup baked in). */
+export interface ExplodedLine {
+  service_item_code: string
+  quantity: number
+  unit: string
+  rate: number
+  amount: number
+  division_code: string | null
+  assembly_id: string
+  assembly_component_id: string
+  kind: AssemblyComponentKind
+}
+
+export interface ExplodeResponse {
+  resolution: AssemblyResolution
+  markup: MarkupBreakdown
+  lines: ExplodedLine[]
+}
+
+export interface ExplodeInput {
+  measurement_quantity: number
+  measurement_unit?: string
+  is_deduction?: boolean
+}
+
+/**
+ * POST /api/assemblies/:id/explode — preview-only (no DB write). Runs the same
+ * formula + resolveAssembly + applyMarkup pipeline as recompute against a
+ * sample measurement, returning the resolution + markup breakdown + the priced
+ * lines. Powers the "what will this cost" affordance in the estimator flow.
+ */
+export function useExplodeAssembly() {
+  return useMutation<ExplodeResponse, Error, { id: string } & ExplodeInput>({
+    mutationFn: ({ id, ...body }) =>
+      request(`/api/assemblies/${encodeURIComponent(id)}/explode`, { method: 'POST', json: body }),
+  })
+}
+
+/**
+ * PATCH /api/takeoff/measurements/:id with `{ assembly_id }` — attach (uuid) or
+ * detach (null) an assembly to a measurement. Invalidates the takeoff +
+ * estimate caches so the estimate panel recomputes with the exploded lines.
+ */
+export function useAttachAssemblyToMeasurement() {
+  const qc = useQueryClient()
+  return useMutation<unknown, Error, { measurementId: string; assemblyId: string | null; expectedVersion?: number }>({
+    mutationFn: ({ measurementId, assemblyId, expectedVersion }) =>
+      request(`/api/takeoff/measurements/${encodeURIComponent(measurementId)}`, {
+        method: 'PATCH',
+        json: {
+          assembly_id: assemblyId,
+          ...(expectedVersion !== undefined ? { expected_version: expectedVersion } : {}),
+        },
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['takeoff'] })
+      void qc.invalidateQueries({ queryKey: ['estimate'] })
+    },
+  })
+}
+
 /**
  * Fetch the current assembly for a service-item-code in a single call.
  * Returns `null` (not an error) if no assembly is configured for the code
@@ -108,6 +207,9 @@ export function useUpdateAssemblyComponent() {
       unit?: string
       unit_cost?: number
       waste_pct?: number
+      /** Phase 2 — set/clear the quantity formula (null/'' clears back to static). */
+      quantity_formula?: string | null
+      formula_vars?: Record<string, number | string> | null
     }
   >({
     mutationFn: ({ assemblyId, componentId, ...body }) =>

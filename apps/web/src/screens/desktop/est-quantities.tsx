@@ -9,18 +9,27 @@
  * existing `createEstimatePush` action, exactly like mobile. This is just a
  * dense desktop composition over that same hook surface.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, getActiveCompanySlug, type ProjectSummary } from '@/lib/api'
 import { useEstimateBuilder } from '@/machines/estimate-builder'
 import { createEstimatePush } from '@/lib/api/estimate-pushes'
-import { estimateCsvUrl, estimatePdfUrl, estimateXlsxUrl } from '@/lib/api/estimate'
+import { estimateCsvUrl, estimatePdfUrl, estimateXlsxUrl, type EstimateLine } from '@/lib/api/estimate'
 import { DataTable, DEyebrow, DH1, type DColumn } from '@/components/d'
 import { MButton, MPill } from '@/components/m'
 import { PdfPreviewModal } from './project-drawers'
 import { ProjectRatesModal } from './est-project-rates'
 import { formatMoney } from '../mobile/format.js'
 
+/**
+ * A flat-table row that may also represent the PlanSwift Phase 2 assembly
+ * explosion grouping. `kind`:
+ *   - 'flat'   — an ordinary hand/flat estimate line (assembly_id null).
+ *   - 'parent' — a synthetic header for an assembly-attached measurement; its
+ *                amount is the sum of its component lines. Clicking it
+ *                expands/collapses the children.
+ *   - 'child'  — one exploded component line, rendered indented under a parent.
+ */
 type QtyRow = {
   id: string
   code: string
@@ -37,6 +46,15 @@ type QtyRow = {
    * (takeoff_measurements → blueprint_document/page) once the API exposes it.
    */
   sheets: number
+  group: 'flat' | 'parent' | 'child'
+  /** For a parent: its assembly_id, so the row toggles the right collapse key. */
+  assemblyId?: string
+  /** For a child: its cost kind, used for the inline pill + indentation. */
+  componentKind?: 'material' | 'labor' | 'sub' | 'freight' | null
+  /** For a parent: per-kind subtotals so the header can show the markup mix. */
+  byKind?: Partial<Record<'material' | 'labor' | 'sub' | 'freight', number>>
+  /** For a parent: how many component lines it groups. */
+  childCount?: number
 }
 
 // Deterministic 1..N sheet-count stub from a line id (presentational only).
@@ -44,6 +62,93 @@ function stubSheetCount(id: string): number {
   let h = 0
   for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) >>> 0
   return (h % 4) + 1
+}
+
+const KIND_TONE: Record<string, 'accent' | 'green' | 'amber' | undefined> = {
+  material: 'accent',
+  labor: 'green',
+  sub: 'amber',
+  freight: undefined,
+}
+
+/**
+ * Fold the flat estimate lines into the grouped row model. Lines that carry an
+ * `assembly_id` are collected under one synthetic parent (keyed by assembly_id
+ * + the parent's service_item_code, since one assembly can be attached to
+ * several measurements of the same item). Flat lines pass through untouched.
+ * Insertion order is preserved so the table reads top-to-bottom as recompute
+ * emitted them.
+ */
+function buildGroupedRows(lines: EstimateLine[], expanded: Set<string>): QtyRow[] {
+  const out: QtyRow[] = []
+  // groupKey → index of its parent row in `out` (so we can fold children in).
+  const parentIndex = new Map<string, number>()
+  // groupKey → accumulator for amount + by-kind, applied back onto the parent.
+  const acc = new Map<
+    string,
+    { amount: number; byKind: Partial<Record<string, number>>; count: number; children: QtyRow[] }
+  >()
+
+  for (const line of lines) {
+    const qty = Number(line.quantity)
+    const rate = Number(line.rate)
+    const amount = Number(line.amount) || 0
+    const base: QtyRow = {
+      id: line.id,
+      code: line.service_item_code,
+      qty: Number.isFinite(qty) ? qty : 0,
+      unit: line.unit,
+      rate: Number.isFinite(rate) ? rate : 0,
+      amount,
+      sheets: stubSheetCount(line.id),
+      group: 'flat',
+    }
+    if (!line.assembly_id) {
+      out.push(base)
+      continue
+    }
+    const groupKey = `${line.assembly_id}:${line.service_item_code}`
+    if (!parentIndex.has(groupKey)) {
+      parentIndex.set(groupKey, out.length)
+      acc.set(groupKey, { amount: 0, byKind: {}, count: 0, children: [] })
+      out.push({
+        id: `assembly:${groupKey}`,
+        code: line.service_item_code,
+        qty: 0,
+        unit: line.unit,
+        rate: 0,
+        amount: 0,
+        sheets: stubSheetCount(line.assembly_id),
+        group: 'parent',
+        assemblyId: line.assembly_id,
+        byKind: {},
+        childCount: 0,
+      })
+    }
+    const a = acc.get(groupKey)!
+    a.amount += amount
+    a.count += 1
+    if (line.kind) a.byKind[line.kind] = (a.byKind[line.kind] ?? 0) + amount
+    a.children.push({ ...base, group: 'child', componentKind: line.kind ?? null })
+  }
+
+  // Fold accumulators back onto parents + splice children after each parent
+  // (only when expanded). Build the final list in one pass keyed by group.
+  const result: QtyRow[] = []
+  for (const row of out) {
+    if (row.group !== 'parent') {
+      result.push(row)
+      continue
+    }
+    const groupKey = `${row.assemblyId}:${row.code}`
+    const a = acc.get(groupKey)
+    const parent: QtyRow = a ? { ...row, amount: a.amount, byKind: a.byKind, childCount: a.count } : row
+    result.push(parent)
+    if (a && expanded.has(groupKey)) {
+      for (const child of a.children) result.push(child)
+    }
+  }
+  return result
 }
 
 export function EstQuantities() {
@@ -82,19 +187,22 @@ export function EstQuantities() {
   }, [projectId, companySlug])
 
   const lines = builder.lines
-  const rows: QtyRow[] = lines.map((line) => {
-    const qty = Number(line.quantity)
-    const rate = Number(line.rate)
-    return {
-      id: line.id,
-      code: line.service_item_code,
-      qty: Number.isFinite(qty) ? qty : 0,
-      unit: line.unit,
-      rate: Number.isFinite(rate) ? rate : 0,
-      amount: Number(line.amount) || 0,
-      sheets: stubSheetCount(line.id),
-    }
-  })
+  // Which assembly groups are expanded (groupKey = `${assembly_id}:${code}`).
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggleGroup = (assemblyId: string | undefined, code: string) => {
+    if (!assemblyId) return
+    const key = `${assemblyId}:${code}`
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+  const rows: QtyRow[] = useMemo(() => buildGroupedRows(lines, expanded), [lines, expanded])
+  // Whether any line came from an assembly explosion — drives the "Assembly"
+  // column visibility so flat-only estimates keep their original 6-col layout.
+  const hasAssemblies = useMemo(() => lines.some((l) => Boolean(l.assembly_id)), [lines])
 
   // Live sell total: prefer the machine snapshot (updates as edits save),
   // fall back to the summary metric before the snapshot loads.
@@ -115,18 +223,99 @@ export function EstQuantities() {
   const marginTone: 'green' | 'amber' | 'red' = marginRatio > 0.18 ? 'green' : marginRatio > 0.1 ? 'amber' : 'red'
 
   const columns: Array<DColumn<QtyRow>> = [
-    { key: 'code', header: 'Scope / item', render: (r) => <span className="d-table-cell-strong">{r.code}</span> },
-    { key: 'qty', header: 'Qty', numeric: true, render: (r) => r.qty.toLocaleString('en-US') },
-    { key: 'unit', header: 'Unit', render: (r) => r.unit || '—' },
+    {
+      key: 'code',
+      header: 'Scope / item',
+      render: (r) => {
+        if (r.group === 'parent') {
+          const groupKey = `${r.assemblyId}:${r.code}`
+          const open = expanded.has(groupKey)
+          return (
+            <button
+              type="button"
+              onClick={() => toggleGroup(r.assemblyId, r.code)}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 8,
+                border: 'none',
+                background: 'transparent',
+                padding: 0,
+                cursor: 'pointer',
+                font: 'inherit',
+                color: 'inherit',
+              }}
+              aria-expanded={open}
+              aria-label={`${open ? 'Collapse' : 'Expand'} assembly ${r.code}`}
+            >
+              <span aria-hidden style={{ fontSize: 10, color: 'var(--m-ink-3)', width: 10 }}>
+                {open ? '▾' : '▸'}
+              </span>
+              <span className="d-table-cell-strong">{r.code}</span>
+              <MPill tone="accent">assembly · {r.childCount}</MPill>
+            </button>
+          )
+        }
+        if (r.group === 'child') {
+          return (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, paddingLeft: 22 }}>
+              {r.componentKind ? <MPill tone={KIND_TONE[r.componentKind]}>{r.componentKind}</MPill> : null}
+              <span style={{ color: 'var(--m-ink-2, var(--m-ink-3))' }}>{r.code}</span>
+            </span>
+          )
+        }
+        return <span className="d-table-cell-strong">{r.code}</span>
+      },
+    },
+    {
+      key: 'qty',
+      header: 'Qty',
+      numeric: true,
+      render: (r) => (r.group === 'parent' ? '' : r.qty.toLocaleString('en-US')),
+    },
+    { key: 'unit', header: 'Unit', render: (r) => (r.group === 'parent' ? '' : r.unit || '—') },
     {
       key: 'sheets',
       header: 'Sheets',
       numeric: true,
       // Per-line sheet span (presentational stub — see QtyRow.sheets TODO).
-      render: (r) => <span style={{ color: 'var(--m-ink-3)' }}>{r.sheets}</span>,
+      render: (r) => (r.group === 'parent' ? '' : <span style={{ color: 'var(--m-ink-3)' }}>{r.sheets}</span>),
     },
-    { key: 'rate', header: 'Unit price', numeric: true, render: (r) => formatMoney(r.rate) },
-    { key: 'amount', header: 'Line total', numeric: true, render: (r) => formatMoney(r.amount) },
+    ...(hasAssemblies
+      ? [
+          {
+            key: 'breakdown',
+            header: 'Cost mix',
+            render: (r: QtyRow) => {
+              if (r.group !== 'parent' || !r.byKind) return ''
+              const kinds = (['material', 'labor', 'sub', 'freight'] as const).filter((k) => (r.byKind?.[k] ?? 0) !== 0)
+              if (!kinds.length) return ''
+              return (
+                <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
+                  {kinds.map((k) => (
+                    <MPill key={k} tone={KIND_TONE[k]}>
+                      {k} {formatMoney(Math.abs(r.byKind?.[k] ?? 0))}
+                    </MPill>
+                  ))}
+                </span>
+              )
+            },
+          } satisfies DColumn<QtyRow>,
+        ]
+      : []),
+    {
+      key: 'rate',
+      header: 'Unit price',
+      numeric: true,
+      render: (r) => (r.group === 'parent' ? '' : formatMoney(r.rate)),
+    },
+    {
+      key: 'amount',
+      header: 'Line total',
+      numeric: true,
+      render: (r) =>
+        r.group === 'parent' ? <span style={{ fontWeight: 700 }}>{formatMoney(r.amount)}</span> : formatMoney(r.amount),
+    },
   ]
 
   const handleSend = async () => {

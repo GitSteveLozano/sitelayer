@@ -90,6 +90,54 @@ describe('resolveAssembly', () => {
   it('throws on negative quantity', () => {
     expect(() => resolveAssembly(-5, baseAssembly, [])).toThrow(/invalid measurementQuantity/)
   })
+
+  it('a resolvedQuantities override beats the static quantity_per_unit', () => {
+    // static qty_per_unit is 1, but the formula resolved 2 per unit.
+    const c = comp({ id: 'c-formula', kind: 'material', quantity_per_unit: 1, unit_cost: 10 })
+    const overrides = new Map<string, number>([['c-formula', 2]])
+    const result = resolveAssembly(100, baseAssembly, [c], overrides)
+    // 100 × 2 (override) × $10 = $2000 (not 100 × 1 × 10 = 1000)
+    expect(result.lines[0]!.quantity).toBe(200)
+    expect(result.total).toBe(2000)
+  })
+
+  it('waste_pct still applies on top of an overridden per-unit quantity', () => {
+    const c = comp({ id: 'c-formula', kind: 'material', quantity_per_unit: 1, unit_cost: 10, waste_pct: 10 })
+    const overrides = new Map<string, number>([['c-formula', 2]])
+    const result = resolveAssembly(100, baseAssembly, [c], overrides)
+    // 100 × 2 × (1 + 10%) = 220 qty; × $10 = $2200
+    expect(result.lines[0]!.quantity).toBe(220)
+    expect(result.total).toBe(2200)
+  })
+
+  it('components absent from the override map keep the static path', () => {
+    const formulaC = comp({ id: 'c-formula', kind: 'material', quantity_per_unit: 1, unit_cost: 10, sort_order: 1 })
+    const staticC = comp({ id: 'c-static', kind: 'labor', quantity_per_unit: 0.05, unit_cost: 60, sort_order: 2 })
+    const overrides = new Map<string, number>([['c-formula', 2]])
+    const result = resolveAssembly(100, baseAssembly, [formulaC, staticC], overrides)
+    expect(result.by_kind.material).toBe(2000) // 100 × 2 × 10
+    expect(result.by_kind.labor).toBe(300) // 100 × 0.05 × 60 (unchanged static path)
+  })
+
+  it('models a cladding assembly (EIFS Complete) at 1000 sqft → expected per-kind subtotals', () => {
+    // Static seed-style recipe (no formulas): EPS board + base coat + mesh +
+    // finish (material), install (labor), delivery (freight).
+    const result = resolveAssembly(1000, baseAssembly, [
+      comp({ kind: 'material', name: 'EPS board', quantity_per_unit: 1, unit_cost: 1.2, waste_pct: 5, sort_order: 1 }),
+      comp({ kind: 'material', name: 'base coat', quantity_per_unit: 1, unit_cost: 0.55, waste_pct: 5, sort_order: 2 }),
+      comp({ kind: 'material', name: 'mesh', quantity_per_unit: 1.1, unit_cost: 0.35, waste_pct: 0, sort_order: 3 }),
+      comp({ kind: 'labor', name: 'install', quantity_per_unit: 0.04, unit_cost: 65, waste_pct: 0, sort_order: 4 }),
+      comp({ kind: 'freight', name: 'delivery', quantity_per_unit: 1, unit_cost: 0.08, waste_pct: 0, sort_order: 5 }),
+    ])
+    // material: 1000×1×1.05×1.2 + 1000×1×1.05×0.55 + 1000×1.1×0.35
+    //         = 1260 + 577.5 + 385 = 2222.5
+    expect(result.by_kind.material).toBe(2222.5)
+    // labor: 1000×0.04×65 = 2600
+    expect(result.by_kind.labor).toBe(2600)
+    // freight: 1000×1×0.08 = 80
+    expect(result.by_kind.freight).toBe(80)
+    expect(result.total).toBe(2222.5 + 2600 + 80)
+  })
 })
 
 describe('selectActiveAssembly', () => {
