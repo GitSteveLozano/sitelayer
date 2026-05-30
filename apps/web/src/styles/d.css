@@ -276,6 +276,14 @@
   .d-topbar {
     padding: 0 16px;
   }
+  /* On a narrow desktop window the non-shrinking crumb + actions (bell, avatar,
+     New Project, ⌘K) plus the 300px search floor can't all fit on one 64px row,
+     so the actions get shoved off the right edge. Let the search shrink further
+     here; it never matters at >=1280px because the search hits its 420px max
+     well before this floor when there's room. */
+  .d-search {
+    min-width: 160px;
+  }
   .d-content {
     padding: 24px 20px 40px;
   }
