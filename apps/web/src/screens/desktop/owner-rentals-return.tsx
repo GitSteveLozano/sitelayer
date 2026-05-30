@@ -208,7 +208,14 @@ export function OwnerRentalsReturn() {
         <div className="d-split">
           <div className="d-card">
             <div style={fieldLabel}>Condition</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8, marginTop: 8 }}>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                gap: 8,
+                marginTop: 8,
+              }}
+            >
               {GRADES.map((g) => {
                 const active = grade === g.status
                 return (

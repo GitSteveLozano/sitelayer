@@ -110,7 +110,7 @@ export function ProjectRatesModal({ projectId, open, onClose, onSaved }: Project
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: '1fr 64px 110px 120px',
+            gridTemplateColumns: 'minmax(0, 1fr) 64px 110px 120px',
             gap: 10,
             padding: '6px 4px',
             fontFamily: 'var(--m-num)',
@@ -139,7 +139,7 @@ export function ProjectRatesModal({ projectId, open, onClose, onSaved }: Project
               key={item.code}
               style={{
                 display: 'grid',
-                gridTemplateColumns: '1fr 64px 110px 120px',
+                gridTemplateColumns: 'minmax(0, 1fr) 64px 110px 120px',
                 gap: 10,
                 alignItems: 'center',
                 padding: '6px 4px',

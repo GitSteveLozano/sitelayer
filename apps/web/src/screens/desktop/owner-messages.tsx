@@ -55,7 +55,7 @@ export function OwnerMessages({ bootstrap }: { bootstrap: BootstrapResponse | nu
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: '280px 1fr',
+            gridTemplateColumns: '280px minmax(0, 1fr)',
             border: '2px solid var(--m-ink)',
             background: 'var(--m-card)',
             minHeight: 480,

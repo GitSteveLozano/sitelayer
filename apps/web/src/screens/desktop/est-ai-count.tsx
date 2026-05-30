@@ -472,7 +472,7 @@ export function EstAiCountReview() {
 
   return (
     <div className="d-content-full" style={{ position: 'relative' }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 340px', height: '100%' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 340px', height: '100%' }}>
         {/* Canvas with overlaid count markers */}
         <div
           style={{
