@@ -43,7 +43,11 @@ const APPS = {
     // desktop-workspace lazy chunk: Assembly editor, company/project rate
     // editors, the Books/Invoices money tab, the New-Assignment / Brief-Edit /
     // Send-Reminders flows, and the rentals day-rate editor. ~76.3KB gzip.
-    lazyAppChunkGzipBudget: 84 * 1024,
+    // 84KB → 94KB on 2026-05-30 for PlanSwift Phase 2 (assembly explode engine):
+    // the assembly builder + live formula preview (@sitelayer/formula-evaluator
+    // / expr-eval) + apply-assembly-onto-measurement, all on the desktop-workspace
+    // lazy chunk. Measured ~88.8KB gzip.
+    lazyAppChunkGzipBudget: 94 * 1024,
     nonAppPrefixes: ['vendor-', 'web-vitals-', 'rolldown-runtime-', 'workbox-'],
     requireSentryLazy: false,
   },
