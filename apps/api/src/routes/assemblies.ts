@@ -1,8 +1,11 @@
 import type http from 'node:http'
 import type { Pool, PoolClient } from 'pg'
+import { validateFormula } from '@sitelayer/formula-evaluator'
 import type { ActiveCompany, CompanyRole } from '../auth-types.js'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidUuid } from '../http-utils.js'
+import { explodeMeasurement, type LoadedAssembly } from '../assembly-explode.js'
+import { loadDefaultPricingProfileConfig } from '../pricing-profile-config.js'
 
 export type AssemblyRouteCtx = {
   pool: Pool
@@ -20,8 +23,58 @@ const ASSEMBLY_COLUMNS = `
 
 const COMPONENT_COLUMNS = `
   id, company_id, assembly_id, kind, name, quantity_per_unit, unit, unit_cost,
-  waste_pct, sort_order, created_at, updated_at
+  waste_pct, sort_order, quantity_formula, formula_vars, created_at, updated_at
 `
+
+/**
+ * Vars a component quantity_formula is allowed to reference: the two always-bound
+ * by the explode path plus whatever keys the component's own formula_vars supply.
+ * Used to preflight a formula at write time (reject `unknown variable: x`).
+ */
+function allowedFormulaVars(formulaVars: Record<string, number | string> | null): string[] {
+  return ['measurement_quantity', 'measurement_unit', ...Object.keys(formulaVars ?? {})]
+}
+
+/**
+ * Parse + validate the optional formula fields from a component create/patch
+ * body. Returns the normalized values or throws HttpError(400) on bad input.
+ * `quantity_formula` of null/'' clears the formula (back to the static
+ * quantity_per_unit path).
+ */
+function parseFormulaFields(body: Record<string, unknown>): {
+  hasFormula: boolean
+  quantityFormula: string | null
+  hasVars: boolean
+  formulaVars: Record<string, number | string> | null
+} {
+  const hasVars = body.formula_vars !== undefined
+  let formulaVars: Record<string, number | string> | null = null
+  if (hasVars && body.formula_vars !== null) {
+    const raw = body.formula_vars
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new HttpError(400, 'formula_vars must be an object of number|string values')
+    }
+    const out: Record<string, number | string> = {}
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof v === 'number' && Number.isFinite(v)) out[k] = v
+      else if (typeof v === 'string') out[k] = v
+      else throw new HttpError(400, `formula_vars.${k} must be a finite number or string`)
+    }
+    formulaVars = out
+  }
+
+  const hasFormula = body.quantity_formula !== undefined
+  let quantityFormula: string | null = null
+  if (hasFormula && body.quantity_formula !== null && String(body.quantity_formula).trim() !== '') {
+    const formula = String(body.quantity_formula)
+    const result = validateFormula(formula, allowedFormulaVars(formulaVars))
+    if (!result.valid) {
+      throw new HttpError(400, `quantity_formula invalid: ${result.errors.join('; ')}`)
+    }
+    quantityFormula = formula
+  }
+  return { hasFormula, quantityFormula, hasVars, formulaVars }
+}
 
 interface AssemblyRow {
   id: string
@@ -49,6 +102,8 @@ interface ComponentRow {
   unit_cost: string
   waste_pct: string
   sort_order: number
+  quantity_formula: string | null
+  formula_vars: Record<string, number | string> | null
   created_at: string
   updated_at: string
 }
@@ -60,6 +115,13 @@ interface ComponentRow {
  * row so concurrent component edits don't race this recompute. Also bumps
  * the header `version` so the cached rate has the same optimistic-lock
  * provenance as a direct header edit.
+ *
+ * NOTE (Phase 2): formula-driven components are treated as "indeterminate
+ * per-unit" here — the cache keeps using the static `quantity_per_unit` so the
+ * header preview stays a cheap display hint. The real explode math runs at
+ * recompute time with a concrete `measurement_quantity` (see assembly-explode.ts),
+ * so a NULL/static quantity_per_unit on a formula component just means the
+ * header total under-counts that row in the preview; it is never authoritative.
  */
 async function recomputeAssemblyTotal(client: PoolClient, companyId: string, assemblyId: string): Promise<void> {
   const recompute = await client.query<{ total: string }>(
@@ -263,6 +325,100 @@ export async function handleAssemblyRoutes(
     return true
   }
 
+  // POST /api/assemblies/:id/explode — preview-only (no DB write). Runs the
+  // SAME formula + resolveAssembly + applyMarkup pipeline as recompute against
+  // a caller-supplied sample measurement, returning the resolution + markup
+  // breakdown. Powers the editor live-preview and the "what will this cost"
+  // affordance. Any company member may read (no requireRole gate).
+  const explodeMatch = url.pathname.match(/^\/api\/assemblies\/([^/]+)\/explode$/)
+  if (req.method === 'POST' && explodeMatch) {
+    const id = explodeMatch[1]!
+    if (!isValidUuid(id)) {
+      ctx.sendJson(400, { error: 'id must be a valid uuid' })
+      return true
+    }
+    const body = await ctx.readBody()
+    const measurementQuantity = Number(body.measurement_quantity)
+    if (!Number.isFinite(measurementQuantity) || measurementQuantity < 0) {
+      ctx.sendJson(400, { error: 'measurement_quantity must be a non-negative number' })
+      return true
+    }
+    const isDeduction = body.is_deduction === true
+
+    const header = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<AssemblyRow>(
+        `select ${ASSEMBLY_COLUMNS}
+           from service_item_assemblies
+          where company_id = $1 and id = $2 and deleted_at is null
+          limit 1`,
+        [ctx.company.id, id],
+      ),
+    )
+    const headerRow = header.rows[0]
+    if (!headerRow) {
+      ctx.sendJson(404, { error: 'assembly not found' })
+      return true
+    }
+    const measurementUnit =
+      typeof body.measurement_unit === 'string' && body.measurement_unit.trim()
+        ? body.measurement_unit.trim()
+        : headerRow.unit
+    const componentRows = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<ComponentRow>(
+        `select ${COMPONENT_COLUMNS}
+           from service_item_assembly_components
+          where company_id = $1 and assembly_id = $2
+          order by sort_order asc, created_at asc`,
+        [ctx.company.id, id],
+      ),
+    )
+    const profileConfig = await loadDefaultPricingProfileConfig(ctx.pool, ctx.company.id)
+    const loaded: LoadedAssembly = {
+      header: {
+        id: headerRow.id,
+        service_item_code: headerRow.service_item_code,
+        name: headerRow.name,
+        unit: headerRow.unit,
+      },
+      components: componentRows.rows.map((c) => ({
+        id: c.id,
+        assembly_id: c.assembly_id,
+        kind: c.kind,
+        name: c.name,
+        quantity_per_unit: Number(c.quantity_per_unit),
+        unit: c.unit,
+        unit_cost: Number(c.unit_cost),
+        waste_pct: Number(c.waste_pct),
+        sort_order: c.sort_order,
+        quantity_formula: c.quantity_formula,
+        formula_vars: c.formula_vars,
+      })),
+    }
+    try {
+      const exploded = explodeMeasurement({
+        assembly: loaded,
+        measurementQuantity,
+        measurementUnit,
+        isDeduction,
+        divisionCode: null,
+        fallbackServiceItemCode: headerRow.service_item_code,
+        profileConfig,
+      })
+      ctx.sendJson(200, {
+        resolution: exploded.resolution,
+        markup: exploded.markup,
+        lines: exploded.lines,
+      })
+    } catch (err) {
+      if (err instanceof HttpError) {
+        ctx.sendJson(err.status, { error: err.message })
+        return true
+      }
+      throw err
+    }
+    return true
+  }
+
   const componentsMatch = url.pathname.match(/^\/api\/assemblies\/([^/]+)\/components$/)
   if (req.method === 'POST' && componentsMatch) {
     if (!ctx.requireRole(['admin', 'office'])) return true
@@ -295,6 +451,20 @@ export async function handleAssemblyRoutes(
     }
     const unit = typeof body.unit === 'string' && body.unit.trim() ? body.unit.trim() : 'ea'
 
+    // Phase 2: optional quantity_formula + formula_vars. Validated at write
+    // time (400 on bad syntax / unknown var) so a bad formula never reaches
+    // explode. NULL formula => the static quantity_per_unit path.
+    let formulaFields: ReturnType<typeof parseFormulaFields>
+    try {
+      formulaFields = parseFormulaFields(body)
+    } catch (err) {
+      if (err instanceof HttpError) {
+        ctx.sendJson(err.status, { error: err.message })
+        return true
+      }
+      throw err
+    }
+
     // Recompute total_rate after insert. Lock the parent assembly so
     // two concurrent inserts can't read the same max(sort_order) and
     // collide. Same pattern as takeoff-tags.
@@ -313,10 +483,22 @@ export async function handleAssemblyRoutes(
       const sortOrder = (max.rows[0]?.max_sort ?? -1) + 1
       const insert = await client.query<ComponentRow>(
         `insert into service_item_assembly_components
-           (company_id, assembly_id, kind, name, quantity_per_unit, unit, unit_cost, waste_pct, sort_order)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           (company_id, assembly_id, kind, name, quantity_per_unit, unit, unit_cost, waste_pct, sort_order, quantity_formula, formula_vars)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb)
          returning ${COMPONENT_COLUMNS}`,
-        [ctx.company.id, assemblyId, kind, name, qty, unit, unitCost, waste, sortOrder],
+        [
+          ctx.company.id,
+          assemblyId,
+          kind,
+          name,
+          qty,
+          unit,
+          unitCost,
+          waste,
+          sortOrder,
+          formulaFields.quantityFormula,
+          formulaFields.formulaVars === null ? null : JSON.stringify(formulaFields.formulaVars),
+        ],
       )
       // Refresh the cached header rate from all components.
       await recomputeAssemblyTotal(client, ctx.company.id, assemblyId)
@@ -411,6 +593,30 @@ export async function handleAssemblyRoutes(
         }
         values.push(waste)
         sets.push(`waste_pct = $${values.length}`)
+      }
+      // Phase 2: optional formula fields. Either may be patched independently;
+      // a formula supplied without vars is validated against the always-bound
+      // vars plus any vars in the SAME patch. Setting quantity_formula to
+      // null/'' clears it (back to the static quantity_per_unit path).
+      if (body.quantity_formula !== undefined || body.formula_vars !== undefined) {
+        let formulaFields: ReturnType<typeof parseFormulaFields>
+        try {
+          formulaFields = parseFormulaFields(body)
+        } catch (err) {
+          if (err instanceof HttpError) {
+            ctx.sendJson(err.status, { error: err.message })
+            return true
+          }
+          throw err
+        }
+        if (formulaFields.hasFormula) {
+          values.push(formulaFields.quantityFormula)
+          sets.push(`quantity_formula = $${values.length}`)
+        }
+        if (formulaFields.hasVars) {
+          values.push(formulaFields.formulaVars === null ? null : JSON.stringify(formulaFields.formulaVars))
+          sets.push(`formula_vars = $${values.length}::jsonb`)
+        }
       }
       if (sets.length === 0) {
         ctx.sendJson(400, { error: 'no updatable fields supplied' })

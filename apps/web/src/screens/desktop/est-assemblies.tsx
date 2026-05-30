@@ -19,6 +19,7 @@
  * recipe so the saved component matches the real schema.
  */
 import { useEffect, useMemo, useState } from 'react'
+import { evaluateFormulaUnsafe, type FormulaContext } from '@sitelayer/formula-evaluator'
 import { useServiceItems, type ServiceItem } from '@/lib/api/service-items'
 import {
   useAddAssemblyComponent,
@@ -69,6 +70,27 @@ interface DraftRow {
   unit: string
   unit_cost: string
   waste_pct: string
+  /**
+   * Phase 2 — optional quantity formula. When non-empty, explode evaluates it
+   * (with `measurement_quantity` + the row's named vars bound) and the result
+   * replaces the static `quantity_per_unit`. Empty → static-quantity path.
+   */
+  quantity_formula: string
+  /** Editable named-var rows feeding `formula_vars` (e.g. coverage_rate=32). */
+  vars: VarRow[]
+}
+
+/** One key/value pair for a row's `formula_vars`. */
+interface VarRow {
+  key: string
+  name: string
+  value: string
+}
+
+let varSeq = 0
+function newVarKey(): string {
+  varSeq += 1
+  return `v${varSeq}`
 }
 
 let rowSeq = 0
@@ -88,7 +110,14 @@ function emptyRow(): DraftRow {
     unit: 'ea',
     unit_cost: '0',
     waste_pct: '0',
+    quantity_formula: '',
+    vars: [],
   }
+}
+
+function varsFromRecord(raw: Record<string, number | string> | null | undefined): VarRow[] {
+  if (!raw) return []
+  return Object.keys(raw).map((name) => ({ key: newVarKey(), name, value: String(raw[name]) }))
 }
 
 function rowFromComponent(c: AssemblyComponent): DraftRow {
@@ -105,15 +134,66 @@ function rowFromComponent(c: AssemblyComponent): DraftRow {
     unit: c.unit,
     unit_cost: String(Number(c.unit_cost)),
     waste_pct: String(Number(c.waste_pct)),
+    quantity_formula: c.quantity_formula ?? '',
+    vars: varsFromRecord(c.formula_vars),
   }
 }
 
-function rowLineTotal(r: DraftRow): number {
-  const qty = Number(r.quantity_per_unit)
+/** Build the `formula_vars` record a row submits — only well-formed pairs. */
+function rowFormulaVars(r: DraftRow): Record<string, number | string> | null {
+  const out: Record<string, number | string> = {}
+  for (const v of r.vars) {
+    const name = v.name.trim()
+    if (!name) continue
+    const num = Number(v.value)
+    out[name] = v.value.trim() !== '' && Number.isFinite(num) ? num : v.value
+  }
+  return Object.keys(out).length ? out : null
+}
+
+/** Whether a row uses the formula path (non-empty formula text). */
+function rowHasFormula(r: DraftRow): boolean {
+  return r.quantity_formula.trim() !== ''
+}
+
+/**
+ * Resolve a row's per-unit quantity at a sample `measurement_quantity`. Returns
+ * the static `quantity_per_unit` when no formula is set, otherwise the
+ * client-side `evaluateFormulaUnsafe` result. `error` is non-null on a bad
+ * formula so the editor can surface it inline.
+ */
+function resolveRowQuantity(r: DraftRow, sampleQty: number, sampleUnit: string): { qty: number; error: string | null } {
+  if (!rowHasFormula(r)) {
+    const qty = Number(r.quantity_per_unit)
+    return { qty: Number.isFinite(qty) ? qty : 0, error: null }
+  }
+  const ctx: FormulaContext = {
+    measurement_quantity: Number.isFinite(sampleQty) ? sampleQty : 0,
+    measurement_unit: sampleUnit,
+    ...(rowFormulaVars(r) ?? {}),
+  }
+  const result = evaluateFormulaUnsafe(r.quantity_formula, ctx)
+  if (!result.ok || result.value === undefined) {
+    return { qty: 0, error: result.error?.message ?? 'formula evaluation failed' }
+  }
+  return { qty: result.value, error: null }
+}
+
+/**
+ * Line total at a sample measurement quantity. When a formula is set the
+ * resolved (formula) quantity is the per-unit qty; static rows use the typed
+ * `quantity_per_unit`. Waste % and unit cost apply on top in both paths.
+ */
+function rowLineTotal(r: DraftRow, sampleQty = 1, sampleUnit = 'sqft'): number {
+  const { qty, error } = resolveRowQuantity(r, sampleQty, sampleUnit)
+  if (error) return 0
   const cost = Number(r.unit_cost)
   const waste = Number(r.waste_pct)
   if (!Number.isFinite(qty) || !Number.isFinite(cost) || !Number.isFinite(waste)) return 0
-  return qty * (1 + waste / 100) * cost
+  // For a static row sampleQty is ignored (qty IS the per-unit); for a formula
+  // row the evaluated qty already folds in the sample, so don't multiply twice.
+  const perUnitTimesSample = rowHasFormula(r) ? qty : qty * sampleQty
+  return perUnitTimesSample * (1 + waste / 100) * cost
 }
 
 const COMPONENT_GRID = 'minmax(0, 1.4fr) 96px minmax(0, 1fr) 78px 84px 90px 70px 32px'
@@ -276,6 +356,10 @@ function AssemblyEditor({ assemblyId, onClose, onSaved }: AssemblyEditorProps) {
   const [scopeCode, setScopeCode] = useState('')
   const [unit, setUnit] = useState('sqft')
   const [rows, setRows] = useState<DraftRow[]>([emptyRow()])
+  // Live-preview sample: a hypothetical takeoff quantity (e.g. 100 sqft) used
+  // to evaluate every row's formula client-side so the estimator sees the
+  // resolved per-line quantity + total as they type. Does not persist.
+  const [sampleQty, setSampleQty] = useState('100')
   // Persisted component ids present when the editor opened — used to compute
   // which rows were removed and need a server delete.
   const [originalComponentIds, setOriginalComponentIds] = useState<string[]>([])
@@ -307,10 +391,35 @@ function AssemblyEditor({ assemblyId, onClose, onSaved }: AssemblyEditorProps) {
     }
   }, [seeded, isEdit, detail.data])
 
-  const previewRate = useMemo(() => rows.reduce((sum, r) => sum + rowLineTotal(r), 0), [rows])
+  // Sample quantity for the live preview. NaN/blank → 0 so a row's formula
+  // still evaluates (and surfaces a divide-by-zero, etc.) deterministically.
+  const sampleQtyNum = useMemo(() => {
+    const n = Number(sampleQty)
+    return Number.isFinite(n) && n >= 0 ? n : 0
+  }, [sampleQty])
+
+  // Recipe rate at the sample: per-unit total for static rows, evaluated total
+  // for formula rows. Drives the footer "Recipe rate … at N {unit}" hint.
+  const previewRate = useMemo(
+    () => rows.reduce((sum, r) => sum + rowLineTotal(r, sampleQtyNum, unit || 'sqft'), 0),
+    [rows, sampleQtyNum, unit],
+  )
 
   const updateRow = (key: string, patch: Partial<DraftRow>) =>
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+
+  const addVar = (rowKey: string) =>
+    setRows((prev) =>
+      prev.map((r) => (r.key === rowKey ? { ...r, vars: [...r.vars, { key: newVarKey(), name: '', value: '' }] } : r)),
+    )
+  const updateVar = (rowKey: string, varKey: string, patch: Partial<VarRow>) =>
+    setRows((prev) =>
+      prev.map((r) =>
+        r.key === rowKey ? { ...r, vars: r.vars.map((v) => (v.key === varKey ? { ...v, ...patch } : v)) } : r,
+      ),
+    )
+  const removeVar = (rowKey: string, varKey: string) =>
+    setRows((prev) => prev.map((r) => (r.key === rowKey ? { ...r, vars: r.vars.filter((v) => v.key !== varKey) } : r)))
 
   // Picking a service item seeds the component's name / unit / cost from the
   // catalog (the spec's "service item + qty" shape) while keeping them editable.
@@ -338,8 +447,16 @@ function AssemblyEditor({ assemblyId, onClose, onSaved }: AssemblyEditorProps) {
     for (const r of rows) {
       const label = r.name.trim() || r.service_item_code || 'a component'
       if (!r.name.trim()) return `Every component needs a name (pick a service item or type one) — check ${label}.`
-      const qty = Number(r.quantity_per_unit)
-      if (!Number.isFinite(qty) || qty < 0) return `Quantity for "${label}" must be a non-negative number.`
+      // A formula row's static quantity is ignored at explode time, so only
+      // validate it for non-formula rows.
+      if (!rowHasFormula(r)) {
+        const qty = Number(r.quantity_per_unit)
+        if (!Number.isFinite(qty) || qty < 0) return `Quantity for "${label}" must be a non-negative number.`
+      } else {
+        // Surface a bad formula before the server 400s on save.
+        const { error } = resolveRowQuantity(r, sampleQtyNum, unit || 'sqft')
+        if (error) return `Formula for "${label}" is invalid: ${error}`
+      }
       const cost = Number(r.unit_cost)
       if (!Number.isFinite(cost) || cost < 0) return `Unit cost for "${label}" must be a non-negative number.`
       const waste = Number(r.waste_pct)
@@ -394,6 +511,9 @@ function AssemblyEditor({ assemblyId, onClose, onSaved }: AssemblyEditorProps) {
               unit: r.unit.trim() || 'ea',
               unit_cost: Number(r.unit_cost),
               waste_pct: Number(r.waste_pct),
+              // Phase 2: send the formula (null clears it back to static) + vars.
+              quantity_formula: rowHasFormula(r) ? r.quantity_formula.trim() : null,
+              formula_vars: rowHasFormula(r) ? rowFormulaVars(r) : null,
             })
           } else {
             await addComponentTo(assemblyId!, r)
@@ -411,6 +531,8 @@ function AssemblyEditor({ assemblyId, onClose, onSaved }: AssemblyEditorProps) {
   // addComponent's hook is bound to the assembly id; for a freshly-created
   // assembly we have to POST to the new id directly via the same endpoint.
   async function addComponentTo(targetId: string, r: DraftRow) {
+    const formula = rowHasFormula(r) ? r.quantity_formula.trim() : null
+    const vars = rowHasFormula(r) ? rowFormulaVars(r) : null
     if (targetId === assemblyId) {
       await addComponent.mutateAsync({
         kind: r.kind,
@@ -419,6 +541,7 @@ function AssemblyEditor({ assemblyId, onClose, onSaved }: AssemblyEditorProps) {
         unit: r.unit.trim() || 'ea',
         unit_cost: Number(r.unit_cost),
         waste_pct: Number(r.waste_pct),
+        ...(formula ? { quantity_formula: formula, formula_vars: vars } : {}),
       })
       return
     }
@@ -432,6 +555,7 @@ function AssemblyEditor({ assemblyId, onClose, onSaved }: AssemblyEditorProps) {
         unit: r.unit.trim() || 'ea',
         unit_cost: Number(r.unit_cost),
         waste_pct: Number(r.waste_pct),
+        ...(formula ? { quantity_formula: formula, formula_vars: vars } : {}),
       },
     })
   }
@@ -460,7 +584,10 @@ function AssemblyEditor({ assemblyId, onClose, onSaved }: AssemblyEditorProps) {
       footer={
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, width: '100%' }}>
           <span style={{ fontSize: 12, color: error ? 'var(--m-red)' : 'var(--m-ink-3)' }}>
-            {error ?? `Recipe rate ${formatMoney(previewRate)} / ${unit || 'unit'}`}
+            {error ??
+              (rows.some(rowHasFormula)
+                ? `Recipe cost ${formatMoney(previewRate)} at ${sampleQtyNum.toLocaleString('en-US')} ${unit || 'unit'} (formula-driven)`
+                : `Recipe rate ${formatMoney(previewRate)} / ${unit || 'unit'}`)}
           </span>
           <span style={{ display: 'flex', gap: 8 }}>
             {isEdit ? (
@@ -526,110 +653,226 @@ function AssemblyEditor({ assemblyId, onClose, onSaved }: AssemblyEditorProps) {
               <span />
             </div>
 
-            {rows.map((r) => (
-              <div
-                key={r.key}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: COMPONENT_GRID,
-                  gap: 8,
-                  alignItems: 'center',
-                  borderTop: '1px solid var(--m-ink-5, rgba(0,0,0,0.06))',
-                  paddingTop: 6,
-                }}
-              >
-                <MSelect
-                  value={r.service_item_code}
-                  onChange={(e) => pickServiceItem(r.key, e.target.value)}
-                  aria-label="Component service item"
-                >
-                  <option value="">— pick —</option>
-                  {items.map((it) => (
-                    <option key={it.code} value={it.code}>
-                      {it.code}
-                    </option>
-                  ))}
-                </MSelect>
-                <MSelect
-                  value={r.kind}
-                  onChange={(e) => updateRow(r.key, { kind: e.target.value as AssemblyComponentKind })}
-                  aria-label="Component kind"
-                >
-                  {KINDS.map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
-                </MSelect>
-                <MInput
-                  value={r.name}
-                  placeholder="Component name"
-                  onChange={(e) => updateRow(r.key, { name: e.target.value })}
-                  aria-label="Component name"
-                />
-                <MInput
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.0001"
-                  value={r.quantity_per_unit}
-                  onChange={(e) => updateRow(r.key, { quantity_per_unit: e.target.value })}
-                  style={{ textAlign: 'right' }}
-                  aria-label="Quantity per unit"
-                />
-                <MInput
-                  value={r.unit}
-                  placeholder="ea"
-                  onChange={(e) => updateRow(r.key, { unit: e.target.value })}
-                  aria-label="Component unit"
-                />
-                <MInput
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
-                  value={r.unit_cost}
-                  onChange={(e) => updateRow(r.key, { unit_cost: e.target.value })}
-                  style={{ textAlign: 'right' }}
-                  aria-label="Unit cost"
-                />
-                <MInput
-                  type="number"
-                  inputMode="decimal"
-                  min="0"
-                  step="0.01"
-                  value={r.waste_pct}
-                  onChange={(e) => updateRow(r.key, { waste_pct: e.target.value })}
-                  style={{ textAlign: 'right' }}
-                  aria-label="Waste percent"
-                />
-                <button
-                  type="button"
-                  onClick={() => removeRow(r.key)}
-                  disabled={rows.length <= 1}
-                  aria-label="Remove component"
+            {rows.map((r) => {
+              const usesFormula = rowHasFormula(r)
+              const { qty: resolvedQty, error: formulaError } = resolveRowQuantity(r, sampleQtyNum, unit || 'sqft')
+              const lineTotal = rowLineTotal(r, sampleQtyNum, unit || 'sqft')
+              return (
+                <div
+                  key={r.key}
                   style={{
-                    border: 'none',
-                    background: 'transparent',
-                    cursor: rows.length <= 1 ? 'not-allowed' : 'pointer',
-                    color: 'var(--m-ink-3)',
-                    fontSize: 16,
-                    lineHeight: 1,
-                    opacity: rows.length <= 1 ? 0.4 : 1,
+                    display: 'grid',
+                    gap: 6,
+                    borderTop: '1px solid var(--m-ink-5, rgba(0,0,0,0.06))',
+                    paddingTop: 6,
                   }}
                 >
-                  ✕
-                </button>
-              </div>
-            ))}
+                  <div style={{ display: 'grid', gridTemplateColumns: COMPONENT_GRID, gap: 8, alignItems: 'center' }}>
+                    <MSelect
+                      value={r.service_item_code}
+                      onChange={(e) => pickServiceItem(r.key, e.target.value)}
+                      aria-label="Component service item"
+                    >
+                      <option value="">— pick —</option>
+                      {items.map((it) => (
+                        <option key={it.code} value={it.code}>
+                          {it.code}
+                        </option>
+                      ))}
+                    </MSelect>
+                    <MSelect
+                      value={r.kind}
+                      onChange={(e) => updateRow(r.key, { kind: e.target.value as AssemblyComponentKind })}
+                      aria-label="Component kind"
+                    >
+                      {KINDS.map((k) => (
+                        <option key={k} value={k}>
+                          {k}
+                        </option>
+                      ))}
+                    </MSelect>
+                    <MInput
+                      value={r.name}
+                      placeholder="Component name"
+                      onChange={(e) => updateRow(r.key, { name: e.target.value })}
+                      aria-label="Component name"
+                    />
+                    <MInput
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.0001"
+                      value={r.quantity_per_unit}
+                      onChange={(e) => updateRow(r.key, { quantity_per_unit: e.target.value })}
+                      disabled={usesFormula}
+                      title={
+                        usesFormula ? 'Quantity is formula-driven; clear the formula to set a static qty' : undefined
+                      }
+                      style={{ textAlign: 'right', opacity: usesFormula ? 0.4 : 1 }}
+                      aria-label="Quantity per unit"
+                    />
+                    <MInput
+                      value={r.unit}
+                      placeholder="ea"
+                      onChange={(e) => updateRow(r.key, { unit: e.target.value })}
+                      aria-label="Component unit"
+                    />
+                    <MInput
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.01"
+                      value={r.unit_cost}
+                      onChange={(e) => updateRow(r.key, { unit_cost: e.target.value })}
+                      style={{ textAlign: 'right' }}
+                      aria-label="Unit cost"
+                    />
+                    <MInput
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="0.01"
+                      value={r.waste_pct}
+                      onChange={(e) => updateRow(r.key, { waste_pct: e.target.value })}
+                      style={{ textAlign: 'right' }}
+                      aria-label="Waste percent"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeRow(r.key)}
+                      disabled={rows.length <= 1}
+                      aria-label="Remove component"
+                      style={{
+                        border: 'none',
+                        background: 'transparent',
+                        cursor: rows.length <= 1 ? 'not-allowed' : 'pointer',
+                        color: 'var(--m-ink-3)',
+                        fontSize: 16,
+                        lineHeight: 1,
+                        opacity: rows.length <= 1 ? 0.4 : 1,
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 }}>
-              <MButton size="sm" variant="quiet" onClick={addRow}>
-                + Add component
-              </MButton>
-              <span style={{ display: 'flex', gap: 6 }}>
+                  {/* Formula sub-row: a quantity formula + its named vars. The
+                      formula evaluates client-side against the sample qty for a
+                      live preview, mirroring exactly what the explode endpoint
+                      computes server-side. */}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(0, 1.6fr) minmax(0, 2fr) auto',
+                      gap: 8,
+                      alignItems: 'center',
+                      paddingLeft: 2,
+                    }}
+                  >
+                    <MInput
+                      value={r.quantity_formula}
+                      placeholder="Formula (optional) e.g. measurement_quantity / coverage_rate"
+                      onChange={(e) => updateRow(r.key, { quantity_formula: e.target.value })}
+                      aria-label="Quantity formula"
+                      style={{ fontFamily: 'var(--m-num)', fontSize: 12 }}
+                    />
+                    {/* Named vars feeding formula_vars. */}
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+                      {r.vars.map((v) => (
+                        <span key={v.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                          <MInput
+                            value={v.name}
+                            placeholder="var"
+                            onChange={(e) => updateVar(r.key, v.key, { name: e.target.value })}
+                            aria-label="Formula variable name"
+                            style={{ width: 96, fontSize: 12 }}
+                          />
+                          <span style={{ color: 'var(--m-ink-3)' }}>=</span>
+                          <MInput
+                            value={v.value}
+                            placeholder="0"
+                            onChange={(e) => updateVar(r.key, v.key, { value: e.target.value })}
+                            aria-label="Formula variable value"
+                            style={{ width: 64, fontSize: 12, textAlign: 'right' }}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => removeVar(r.key, v.key)}
+                            aria-label="Remove variable"
+                            style={{
+                              border: 'none',
+                              background: 'transparent',
+                              cursor: 'pointer',
+                              color: 'var(--m-ink-3)',
+                              fontSize: 13,
+                              lineHeight: 1,
+                            }}
+                          >
+                            ✕
+                          </button>
+                        </span>
+                      ))}
+                      <MButton size="sm" variant="quiet" onClick={() => addVar(r.key)}>
+                        + var
+                      </MButton>
+                    </div>
+                    {/* Live resolved qty / line total at the sample. */}
+                    <span
+                      style={{
+                        fontSize: 12,
+                        whiteSpace: 'nowrap',
+                        textAlign: 'right',
+                        color: formulaError ? 'var(--m-red)' : 'var(--m-ink-3)',
+                        fontFamily: 'var(--m-num)',
+                      }}
+                    >
+                      {formulaError
+                        ? formulaError
+                        : usesFormula
+                          ? `→ ${resolvedQty.toLocaleString('en-US', { maximumFractionDigits: 2 })} ${r.unit} · ${formatMoney(lineTotal)}`
+                          : `${formatMoney(lineTotal)} @ ${sampleQtyNum.toLocaleString('en-US')} ${unit || 'unit'}`}
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 10,
+                marginTop: 4,
+                flexWrap: 'wrap',
+              }}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <MButton size="sm" variant="quiet" onClick={addRow}>
+                  + Add component
+                </MButton>
+                {/* Live-preview sample: a hypothetical takeoff quantity that
+                    every formula row evaluates against. */}
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+                  <span style={{ color: 'var(--m-ink-3)' }}>Preview at</span>
+                  <MInput
+                    type="number"
+                    inputMode="decimal"
+                    min="0"
+                    step="1"
+                    value={sampleQty}
+                    onChange={(e) => setSampleQty(e.target.value)}
+                    aria-label="Preview measurement quantity"
+                    style={{ width: 84, textAlign: 'right' }}
+                  />
+                  <span style={{ color: 'var(--m-ink-3)' }}>{unit || 'unit'}</span>
+                </label>
+              </span>
+              <span style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                 {KINDS.map((k) => {
-                  const sum = rows.filter((r) => r.kind === k).reduce((s, r) => s + rowLineTotal(r), 0)
+                  const sum = rows
+                    .filter((r) => r.kind === k)
+                    .reduce((s, r) => s + rowLineTotal(r, sampleQtyNum, unit || 'sqft'), 0)
                   if (sum <= 0) return null
                   return (
                     <MPill key={k} tone={KIND_TONE[k]}>

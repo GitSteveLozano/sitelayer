@@ -21,6 +21,7 @@
       "@sitelayer/capture-schema": ["./packages/capture-schema/src/index.ts"],
       "@sitelayer/capture-schema/*": ["./packages/capture-schema/src/*"],
       "@sitelayer/capture-catalog": ["./packages/capture-catalog/src/index.ts"],
+      "@sitelayer/formula-evaluator": ["./packages/formula-evaluator/src/index.ts"],
       "@sitelayer/pipe-blueprint": ["./packages/pipe-blueprint/src/index.ts"],
       "@sitelayer/pipe-roomplan": ["./packages/pipe-roomplan/src/index.ts"],
       "@sitelayer/pipe-photogrammetry": ["./packages/pipe-photogrammetry/src/index.ts"],

@@ -92,6 +92,12 @@ export interface TakeoffMeasurement {
   geometry: MeasurementGeometry | CaptureGeometry | Record<string, never>
   /** PlanSwift Phase 1 cutout/deduct: when true this polygon is a deduction (e.g. a window/door opening) and its area subtracts from the net for its service item. */
   is_deduction?: boolean
+  /**
+   * PlanSwift Phase 2: when set, this measurement is attached to an assembly
+   * recipe — recompute explodes it into N priced material/labor/sub/freight
+   * lines instead of one flat line. NULL = flat-line behavior (the default).
+   */
+  assembly_id?: string | null
   version: number
   created_at: string
 }
@@ -262,6 +268,13 @@ export interface PatchMeasurementInput {
   notes?: string | null
   /** Toggle cutout/deduct on an existing measurement. */
   is_deduction?: boolean
+  /**
+   * PlanSwift Phase 2 — attach/detach an assembly recipe.
+   *   uuid    → attach (validated server-side: active assembly for this company)
+   *   null/'' → detach (back to the flat-line path)
+   *   omitted → leave unchanged
+   */
+  assembly_id?: string | null
   expected_version?: number
 }
 
@@ -412,6 +425,14 @@ export interface AssemblyComponent {
   unit_cost: string
   waste_pct: string
   sort_order: number
+  /**
+   * PlanSwift Phase 2 — optional quantity formula. When set, explode evaluates
+   * it with `measurement_quantity` + `formula_vars` bound and the result
+   * replaces the static `quantity_per_unit`. NULL = static-quantity path.
+   */
+  quantity_formula?: string | null
+  /** Named vars bound when evaluating `quantity_formula` (e.g. `{ coverage_rate: 32 }`). */
+  formula_vars?: Record<string, number | string> | null
 }
 
 const assemblyListKey = ['assemblies', 'list'] as const
@@ -457,6 +478,9 @@ export function useAddAssemblyComponent(assemblyId: string) {
       unit: string
       unit_cost: number
       waste_pct?: number
+      /** Phase 2 — optional quantity formula (validated server-side). */
+      quantity_formula?: string | null
+      formula_vars?: Record<string, number | string> | null
     }
   >({
     mutationFn: (input) =>

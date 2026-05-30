@@ -223,6 +223,193 @@ export const LA_SERVICE_ITEMS: ServiceItemTemplate[] = [
   },
 ]
 
+// ---------------------------------------------------------------------------
+// Exterior-cladding starter pack (PlanSwift Phase 2, §5).
+//
+// Six per-sqft cladding assemblies seeded for new companies (onboarding,
+// apps/api/src/onboarding.ts :: seedExteriorCladdingAssemblies) and backfilled
+// into the existing LA Operations company (migration 110). Each header attaches
+// to one of the LA seed service_item_codes; its flat components explode into
+// material + labor + sub lines with per-component waste at recompute time.
+//
+// All components are STATIC (no quantity_formula needed for the seed) so the
+// pack ships even if the formula UI slips. Numbers are SME-tunable seed
+// defaults, not contract — the pilot adjusts them in the assembly editor.
+//
+// The cached header total_rate the create/recompute path stores is:
+//   sum(quantity_per_unit * (1 + waste_pct/100) * unit_cost)
+// (see recomputeAssemblyTotal in apps/api/src/routes/assemblies.ts). Onboarding
+// and migration 110 both compute the same expression so the cached rate is
+// correct without an extra recompute pass.
+// ---------------------------------------------------------------------------
+
+export type AssemblyComponentKind = 'material' | 'labor' | 'sub' | 'freight'
+
+export interface AssemblyComponentTemplate {
+  kind: AssemblyComponentKind
+  name: string
+  /** Per-unit-of-assembly quantity (e.g. 1.0 sqft of mesh per sqft of wall). */
+  quantityPerUnit: number
+  /** Component's own unit (sqft, lb, hr, ea, lf, job, ...). */
+  unit: string
+  /** Cost per unit of THIS component. */
+  unitCost: number
+  /** Optional scrap/waste %, applied multiplicatively on top of quantityPerUnit. */
+  wastePct: number
+}
+
+export interface AssemblyTemplate {
+  /** Stable seed key; the service_item_code the header attaches to. */
+  serviceItemCode: string
+  name: string
+  description: string
+  unit: 'sqft' | 'lf' | 'ea'
+  components: AssemblyComponentTemplate[]
+}
+
+export const EXTERIOR_CLADDING_PACK: AssemblyTemplate[] = [
+  {
+    serviceItemCode: 'EPS',
+    name: 'EIFS Complete (EPS + Base + Finish)',
+    description:
+      'Full exterior insulation finish system: EPS board, adhesive, base coat with mesh, and acrylic finish, installed over a prepared substrate.',
+    unit: 'sqft',
+    components: [
+      { kind: 'material', name: 'EPS board 2"', quantityPerUnit: 1, unit: 'sqft', unitCost: 0.85, wastePct: 8 },
+      { kind: 'material', name: 'EIFS adhesive', quantityPerUnit: 1, unit: 'sqft', unitCost: 0.35, wastePct: 5 },
+      {
+        kind: 'material',
+        name: 'Base coat + reinforcing mesh',
+        quantityPerUnit: 1,
+        unit: 'sqft',
+        unitCost: 0.65,
+        wastePct: 10,
+      },
+      { kind: 'material', name: 'Acrylic finish coat', quantityPerUnit: 1, unit: 'sqft', unitCost: 0.95, wastePct: 8 },
+      { kind: 'labor', name: 'EIFS installation crew', quantityPerUnit: 0.06, unit: 'hr', unitCost: 48, wastePct: 0 },
+    ],
+  },
+  {
+    serviceItemCode: 'Basecoat',
+    name: '3-Coat Stucco (Scratch / Brown / Finish)',
+    description: 'Traditional three-coat Portland-cement stucco over lath: scratch coat, brown coat, and finish coat.',
+    unit: 'sqft',
+    components: [
+      {
+        kind: 'material',
+        name: 'Cement / sand scratch + brown',
+        quantityPerUnit: 1,
+        unit: 'sqft',
+        unitCost: 0.55,
+        wastePct: 12,
+      },
+      { kind: 'material', name: 'Stucco finish coat', quantityPerUnit: 1, unit: 'sqft', unitCost: 0.7, wastePct: 10 },
+      {
+        kind: 'material',
+        name: 'Metal lath + fasteners',
+        quantityPerUnit: 1,
+        unit: 'sqft',
+        unitCost: 0.4,
+        wastePct: 8,
+      },
+      { kind: 'labor', name: 'Plasterer crew', quantityPerUnit: 0.08, unit: 'hr', unitCost: 52, wastePct: 0 },
+    ],
+  },
+  {
+    serviceItemCode: 'Cultured Stone',
+    name: 'Cultured Stone Veneer',
+    description: 'Manufactured stone veneer over scratch coat with mortar setting bed and grouted joints.',
+    unit: 'sqft',
+    components: [
+      { kind: 'material', name: 'Cultured stone units', quantityPerUnit: 1, unit: 'sqft', unitCost: 6.5, wastePct: 10 },
+      {
+        kind: 'material',
+        name: 'Type-S mortar + bonding',
+        quantityPerUnit: 1,
+        unit: 'sqft',
+        unitCost: 0.85,
+        wastePct: 12,
+      },
+      {
+        kind: 'material',
+        name: 'Lath + weather-resistive barrier',
+        quantityPerUnit: 1,
+        unit: 'sqft',
+        unitCost: 0.5,
+        wastePct: 8,
+      },
+      { kind: 'labor', name: 'Mason crew', quantityPerUnit: 0.12, unit: 'hr', unitCost: 55, wastePct: 0 },
+    ],
+  },
+  {
+    serviceItemCode: 'Cementboard',
+    name: 'Cementboard + Battens (Modern Farmhouse)',
+    description: 'Fiber-cement board-and-batten siding over weather barrier with fasteners and painted finish.',
+    unit: 'sqft',
+    components: [
+      { kind: 'material', name: 'Fiber-cement panel', quantityPerUnit: 1, unit: 'sqft', unitCost: 1.95, wastePct: 10 },
+      { kind: 'material', name: 'Battens + trim', quantityPerUnit: 1, unit: 'sqft', unitCost: 0.6, wastePct: 12 },
+      { kind: 'material', name: 'Fasteners + sealant', quantityPerUnit: 1, unit: 'sqft', unitCost: 0.25, wastePct: 5 },
+      { kind: 'labor', name: 'Siding crew', quantityPerUnit: 0.05, unit: 'hr', unitCost: 46, wastePct: 0 },
+      { kind: 'labor', name: 'Paint + caulk finish', quantityPerUnit: 0.03, unit: 'hr', unitCost: 40, wastePct: 0 },
+    ],
+  },
+  {
+    serviceItemCode: 'Finish Coat',
+    name: 'EIFS Integral-Color Finish (Recoat)',
+    description:
+      'Integral-color acrylic EIFS finish recoat over an existing prepared base coat — cosmetic refresh without re-boarding.',
+    unit: 'sqft',
+    components: [
+      { kind: 'material', name: 'Primer', quantityPerUnit: 1, unit: 'sqft', unitCost: 0.3, wastePct: 6 },
+      {
+        kind: 'material',
+        name: 'Integral-color acrylic finish',
+        quantityPerUnit: 1,
+        unit: 'sqft',
+        unitCost: 1.1,
+        wastePct: 8,
+      },
+      { kind: 'labor', name: 'Finish applicator', quantityPerUnit: 0.04, unit: 'hr', unitCost: 48, wastePct: 0 },
+    ],
+  },
+  {
+    serviceItemCode: 'Air Barrier',
+    name: 'Paper & Wire Envelope',
+    description:
+      'Weather-resistive paper and self-furring wire-lath envelope — the prep layer under stucco or stone, plus scaffolding access (subbed).',
+    unit: 'sqft',
+    components: [
+      {
+        kind: 'material',
+        name: 'Building paper (2 layers)',
+        quantityPerUnit: 2,
+        unit: 'sqft',
+        unitCost: 0.12,
+        wastePct: 15,
+      },
+      {
+        kind: 'material',
+        name: 'Self-furring wire lath',
+        quantityPerUnit: 1,
+        unit: 'sqft',
+        unitCost: 0.45,
+        wastePct: 10,
+      },
+      { kind: 'material', name: 'Lath fasteners', quantityPerUnit: 1, unit: 'sqft', unitCost: 0.15, wastePct: 8 },
+      { kind: 'labor', name: 'Lath crew', quantityPerUnit: 0.035, unit: 'hr', unitCost: 44, wastePct: 0 },
+      {
+        kind: 'sub',
+        name: 'Scaffolding access (subbed)',
+        quantityPerUnit: 1,
+        unit: 'sqft',
+        unitCost: 0.5,
+        wastePct: 0,
+      },
+    ],
+  },
+]
+
 export const DEFAULT_BONUS_RULE = {
   basis: 'margin',
   threshold: 0.15,

@@ -35,6 +35,8 @@ type ComponentRow = {
   unit_cost: number
   waste_pct: number
   sort_order: number
+  quantity_formula: string | null
+  formula_vars: Record<string, number | string> | null
 }
 
 class FakePool {
@@ -63,8 +65,13 @@ class FakePool {
       unit_cost: 5,
       waste_pct: 0,
       sort_order: 0,
+      quantity_formula: null,
+      formula_vars: null,
     },
   ]
+  // Default pricing profile config used by the explode route. null => the
+  // explode pipeline applies DEFAULT_MARKUP_CONFIG.
+  pricingConfig: unknown = { material_waste_pct: 0, labor_burden_pct: 0, profit_margin_pct: 0 }
 
   attach() {
     attachMutationTx({
@@ -112,6 +119,8 @@ class FakePool {
       unit_cost: String(row.unit_cost),
       waste_pct: String(row.waste_pct),
       sort_order: row.sort_order,
+      quantity_formula: row.quantity_formula,
+      formula_vars: row.formula_vars,
       created_at: '2026-01-01T00:00:00.000Z',
       updated_at: '2026-01-01T00:00:00.000Z',
     }
@@ -128,6 +137,59 @@ class FakePool {
       const [companyId, id] = params as [string, string]
       const row = this.assemblies.find((a) => a.id === id && a.company_id === companyId && a.deleted_at === null)
       return { rows: row ? [{ '?column?': 1 }] : [], rowCount: row ? 1 : 0 }
+    }
+
+    // Explode / GET-detail route: header detail SELECT (full columns, limit 1).
+    if (/^select[\s\S]*from\s+service_item_assemblies/i.test(sql) && /limit 1/i.test(sql)) {
+      const [companyId, id] = params as [string, string]
+      const row = this.assemblies.find((a) => a.id === id && a.company_id === companyId && a.deleted_at === null)
+      return { rows: row ? [this.headerCols(row)] : [], rowCount: row ? 1 : 0 }
+    }
+
+    // Explode route: components list SELECT for one assembly.
+    if (/^select[\s\S]*from\s+service_item_assembly_components/i.test(sql) && /order by sort_order/i.test(sql)) {
+      const [companyId, assemblyId] = params as [string, string]
+      const rows = this.components
+        .filter((c) => c.assembly_id === assemblyId && c.company_id === companyId)
+        .sort((a, b) => a.sort_order - b.sort_order)
+        .map((c) => this.componentCols(c))
+      return { rows, rowCount: rows.length }
+    }
+
+    // Explode route: default pricing profile config lookup.
+    if (/^select\s+config\s+from\s+pricing_profiles/i.test(sql)) {
+      return { rows: [{ config: this.pricingConfig }], rowCount: 1 }
+    }
+
+    // Component POST: max(sort_order) lookup for the next sort index.
+    if (/coalesce\(max\(sort_order\)/i.test(sql)) {
+      const [companyId, assemblyId] = params as [string, string]
+      const max = this.components
+        .filter((c) => c.assembly_id === assemblyId && c.company_id === companyId)
+        .reduce((m, c) => Math.max(m, c.sort_order), -1)
+      return { rows: [{ max_sort: max }], rowCount: 1 }
+    }
+
+    // Component INSERT (POST).
+    if (/^insert into service_item_assembly_components/i.test(sql)) {
+      const [companyId, assemblyId, kind, name, qty, unit, unitCost, waste, sortOrder, quantityFormula, formulaVars] =
+        params as [string, string, string, string, number, string, number, number, number, string | null, string | null]
+      const row: ComponentRow = {
+        id: `c-new-${this.components.length}`,
+        company_id: companyId,
+        assembly_id: assemblyId,
+        kind,
+        name,
+        quantity_per_unit: Number(qty),
+        unit,
+        unit_cost: Number(unitCost),
+        waste_pct: Number(waste),
+        sort_order: Number(sortOrder),
+        quantity_formula: quantityFormula ?? null,
+        formula_vars: formulaVars === null || formulaVars === undefined ? null : JSON.parse(String(formulaVars)),
+      }
+      this.components.push(row)
+      return { rows: [this.componentCols(row)], rowCount: 1 }
     }
 
     // PATCH header — dynamic set list. Distinguished from the recompute
@@ -181,9 +243,17 @@ class FakePool {
       if (/[ ,]kind = \$/.test(sql)) row.kind = next.shift() as string
       if (/[ ,]name = \$/.test(sql)) row.name = next.shift() as string
       if (/[ ,]quantity_per_unit = \$/.test(sql)) row.quantity_per_unit = Number(next.shift())
+      // `unit = $` must not match the tail of `quantity_per_unit`; anchor handled
+      // above. The formula columns are matched explicitly so they don't get
+      // swallowed by the `unit` matcher.
       if (/[ ,]unit = \$/.test(sql)) row.unit = next.shift() as string
       if (/[ ,]unit_cost = \$/.test(sql)) row.unit_cost = Number(next.shift())
       if (/[ ,]waste_pct = \$/.test(sql)) row.waste_pct = Number(next.shift())
+      if (/[ ,]quantity_formula = \$/.test(sql)) row.quantity_formula = (next.shift() as string | null) ?? null
+      if (/[ ,]formula_vars = \$/.test(sql)) {
+        const raw = next.shift() as string | null
+        row.formula_vars = raw === null || raw === undefined ? null : JSON.parse(String(raw))
+      }
       return { rows: [this.componentCols(row)], rowCount: 1 }
     }
 
@@ -303,5 +373,112 @@ describe('handleAssemblyRoutes editor endpoints', () => {
     const { ctx } = makeCtx(pool)
     const handled = await handleAssemblyRoutes({ method: 'GET' } as never, url('/api/projects/p-1/summary'), ctx)
     expect(handled).toBe(false)
+  })
+})
+
+describe('handleAssemblyRoutes formula fields', () => {
+  it('POST /:id/components with a valid formula → 201 and persists it', async () => {
+    const pool = new FakePool()
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({
+      kind: 'material',
+      name: 'finish coat',
+      unit_cost: 40,
+      quantity_formula: 'measurement_quantity / coverage_rate',
+      formula_vars: { coverage_rate: 100 },
+    })
+    const handled = await handleAssemblyRoutes(
+      { method: 'POST' } as never,
+      url(`/api/assemblies/${ASSEMBLY_ID}/components`),
+      ctx,
+    )
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(201)
+    const added = pool.components.find((c) => c.name === 'finish coat')
+    expect(added?.quantity_formula).toBe('measurement_quantity / coverage_rate')
+    expect(added?.formula_vars).toEqual({ coverage_rate: 100 })
+  })
+
+  it('POST /:id/components with a bad formula → 400', async () => {
+    const pool = new FakePool()
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({ kind: 'material', name: 'bad', quantity_formula: 'measurement_quantity * (' })
+    await handleAssemblyRoutes({ method: 'POST' } as never, url(`/api/assemblies/${ASSEMBLY_ID}/components`), ctx)
+    expect(responses[0]?.status).toBe(400)
+    expect((responses[0]?.body as { error: string }).error).toMatch(/quantity_formula invalid/)
+  })
+
+  it('POST /:id/components rejects a formula referencing an unknown var → 400', async () => {
+    const pool = new FakePool()
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({ kind: 'material', name: 'x', quantity_formula: 'measurement_quantity * nope' })
+    await handleAssemblyRoutes({ method: 'POST' } as never, url(`/api/assemblies/${ASSEMBLY_ID}/components`), ctx)
+    expect(responses[0]?.status).toBe(400)
+    expect((responses[0]?.body as { error: string }).error).toMatch(/unknown variable: nope/)
+  })
+
+  it('PATCH /:id/components/:cid sets a formula', async () => {
+    const pool = new FakePool()
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({ quantity_formula: 'measurement_quantity * 1.1' })
+    await handleAssemblyRoutes(
+      { method: 'PATCH' } as never,
+      url(`/api/assemblies/${ASSEMBLY_ID}/components/${COMPONENT_ID}`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(200)
+    expect(pool.components[0]?.quantity_formula).toBe('measurement_quantity * 1.1')
+  })
+})
+
+describe('handleAssemblyRoutes explode preview', () => {
+  it('POST /:id/explode returns the resolution + markup breakdown', async () => {
+    const pool = new FakePool()
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({ measurement_quantity: 1000 })
+    const handled = await handleAssemblyRoutes(
+      { method: 'POST' } as never,
+      url(`/api/assemblies/${ASSEMBLY_ID}/explode`),
+      ctx,
+    )
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as {
+      resolution: { total: number; by_kind: Record<string, number> }
+      markup: { total: number }
+      lines: Array<{ kind: string; amount: number; assembly_id: string }>
+    }
+    // single material component: 1000 × 1 × $5 = $5000 (waste 0, no markup config uplift)
+    expect(body.resolution.by_kind.material).toBe(5000)
+    expect(body.markup.total).toBe(5000)
+    expect(body.lines).toHaveLength(1)
+    expect(body.lines[0]!.kind).toBe('material')
+    expect(body.lines[0]!.assembly_id).toBe(ASSEMBLY_ID)
+  })
+
+  it('POST /:id/explode flips signs for a deduction', async () => {
+    const pool = new FakePool()
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({ measurement_quantity: 1000, is_deduction: true })
+    await handleAssemblyRoutes({ method: 'POST' } as never, url(`/api/assemblies/${ASSEMBLY_ID}/explode`), ctx)
+    const body = responses[0]?.body as { lines: Array<{ amount: number }> }
+    expect(body.lines[0]!.amount).toBe(-5000)
+  })
+
+  it('POST /:id/explode 404s on a missing assembly', async () => {
+    const pool = new FakePool()
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({ measurement_quantity: 1000 })
+    const missing = '99999999-9999-4999-8999-999999999999'
+    await handleAssemblyRoutes({ method: 'POST' } as never, url(`/api/assemblies/${missing}/explode`), ctx)
+    expect(responses[0]?.status).toBe(404)
+  })
+
+  it('POST /:id/explode rejects a non-numeric measurement_quantity → 400', async () => {
+    const pool = new FakePool()
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({ measurement_quantity: 'banana' })
+    await handleAssemblyRoutes({ method: 'POST' } as never, url(`/api/assemblies/${ASSEMBLY_ID}/explode`), ctx)
+    expect(responses[0]?.status).toBe(400)
   })
 })
