@@ -10,7 +10,8 @@
     "paths": {
       "@/*": ["./src/*"],
       "@sitelayer/domain": ["../../packages/domain/src/index.ts"],
-      "@sitelayer/workflows": ["../../packages/workflows/src/index.ts"]
+      "@sitelayer/workflows": ["../../packages/workflows/src/index.ts"],
+      "@sitelayer/formula-evaluator": ["../../packages/formula-evaluator/src/index.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.tsx", "vite.config.ts"]
