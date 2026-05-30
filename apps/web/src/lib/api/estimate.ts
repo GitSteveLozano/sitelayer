@@ -18,6 +18,15 @@ export interface EstimateLine {
   amount: string
   division_code: string | null
   created_at: string
+  /**
+   * PlanSwift Phase 2 provenance — when this line was produced by exploding an
+   * assembly-attached measurement, these identify the source assembly +
+   * component + cost kind so the estimate UI can group exploded lines under a
+   * collapsible parent. NULL/absent on hand/flat lines.
+   */
+  assembly_id?: string | null
+  assembly_component_id?: string | null
+  kind?: 'material' | 'labor' | 'sub' | 'freight' | null
 }
 
 export interface UpdateEstimateLineInput {

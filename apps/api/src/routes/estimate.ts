@@ -14,6 +14,8 @@ import { HttpError, isValidUuid } from '../http-utils.js'
 import { assertServiceItemCatalogStatus, rejectionMessageForCatalog } from '../catalog.js'
 import { buildEstimatePdfInputFromSummary, type EstimatePdfInput } from '../pdf.js'
 import { resolvePrices } from '../pricing.js'
+import { explodeMeasurement, loadAssembliesByMeasurement } from '../assembly-explode.js'
+import { loadDefaultPricingProfileConfig } from '../pricing-profile-config.js'
 import { summarizeProject } from './projects.js'
 import { listServiceItemProductivity } from './analytics.js'
 import { resolveDefaultDraftId, validateDraftId } from './takeoff-drafts.js'
@@ -190,10 +192,11 @@ export async function createEstimateFromMeasurements(
     notes: string | null
     division_code: string | null
     is_deduction: boolean
+    assembly_id: string | null
   }>(
     draftId
-      ? 'select service_item_code, quantity, unit, notes, division_code, is_deduction from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
-      : 'select service_item_code, quantity, unit, notes, division_code, is_deduction from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
+      ? 'select service_item_code, quantity, unit, notes, division_code, is_deduction, assembly_id from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id = $3 and deleted_at is null order by created_at asc'
+      : 'select service_item_code, quantity, unit, notes, division_code, is_deduction, assembly_id from takeoff_measurements where company_id = $1 and project_id = $2 and draft_id is null and deleted_at is null order by created_at asc',
     draftId ? [companyId, projectId, draftId] : [companyId, projectId],
   )
 
@@ -229,6 +232,19 @@ export async function createEstimateFromMeasurements(
   }
 
   const projectDivisionCode = project.division_code ?? null
+
+  // PlanSwift Phase 2: hydrate the assemblies attached to this draft's
+  // measurements (if any) + the company's markup profile, so an
+  // assembly-attached measurement explodes into N priced component lines
+  // instead of one flat line. Both loads are no-ops when nothing attaches an
+  // assembly (the common case), so the flat-line path pays ~nothing.
+  const assembliesById = await loadAssembliesByMeasurement(actualExecutor, companyId, measurementsResult.rows)
+  const profileConfig =
+    assembliesById.size > 0 ? await loadDefaultPricingProfileConfig(actualExecutor, companyId) : null
+  // Surface the per-measurement markup breakdown on the recompute response so
+  // the estimate UI can render the transparency panel without a second call.
+  const assemblyBreakdowns: Array<{ assembly_id: string; service_item_code: string; markup: unknown }> = []
+
   type EstimateLineRow = {
     service_item_code: string
     quantity: string | number
@@ -236,20 +252,67 @@ export async function createEstimateFromMeasurements(
     rate: number
     amount: number
     division_code: string | null
+    assembly_id: string | null
+    assembly_component_id: string | null
+    kind: string | null
     created_at: string
   }
   let createdLines: EstimateLineRow[] = []
   if (measurementsResult.rows.length > 0) {
     // Single multi-row INSERT replaces the previous N round-trips. unnest()
-    // turns the parallel arrays back into one row per measurement so we keep
-    // the per-measurement rate/amount semantics.
+    // turns the parallel arrays back into one row per estimate line so we keep
+    // the per-line rate/amount semantics. Phase 2 extends the parallel arrays
+    // with the assembly provenance columns (assembly_id / assembly_component_id
+    // / kind), NULL for flat (non-assembly) lines.
     const codes: string[] = []
     const quantities: string[] = []
     const units: string[] = []
     const rates: string[] = []
     const amounts: string[] = []
     const divisions: (string | null)[] = []
+    const assemblyIds: (string | null)[] = []
+    const assemblyComponentIds: (string | null)[] = []
+    const kinds: (string | null)[] = []
     for (const measurement of measurementsResult.rows) {
+      // Per WhatsApp:227-229: an estimate line inherits the measurement's
+      // division_code when the takeoff captured one, otherwise falls back to
+      // the project's division_code so existing flows keep working.
+      const effectiveDivisionCode = measurement.division_code ?? projectDivisionCode
+
+      const attached = measurement.assembly_id ? assembliesById.get(measurement.assembly_id) : undefined
+      if (attached) {
+        // EXPLODE path. Throws HttpError(400) on a bad component formula so the
+        // whole recompute transaction rolls back — no partial estimate write.
+        const exploded = explodeMeasurement({
+          assembly: attached,
+          measurementQuantity: Number(measurement.quantity),
+          measurementUnit: measurement.unit,
+          isDeduction: measurement.is_deduction,
+          divisionCode: effectiveDivisionCode,
+          fallbackServiceItemCode: measurement.service_item_code,
+          profileConfig,
+        })
+        assemblyBreakdowns.push({
+          assembly_id: attached.header.id,
+          service_item_code: attached.header.service_item_code,
+          markup: exploded.markup,
+        })
+        for (const line of exploded.lines) {
+          codes.push(line.service_item_code)
+          quantities.push(String(line.quantity))
+          units.push(line.unit)
+          rates.push(String(line.rate))
+          amounts.push(String(line.amount))
+          divisions.push(line.division_code)
+          assemblyIds.push(line.assembly_id)
+          assemblyComponentIds.push(line.assembly_component_id)
+          kinds.push(line.kind)
+        }
+        continue
+      }
+
+      // FLAT-LINE path (unchanged). Also the safe fallback when an attached
+      // assembly was soft-deleted after attach (absent from assembliesById).
       const resolved = priceIndex.get(measurement.service_item_code)
       const rate = resolved?.price ?? 0
       // PlanSwift Phase 1 cutout/deduct: a deduction measurement (e.g. a window
@@ -260,20 +323,20 @@ export async function createEstimateFromMeasurements(
       const sign = measurement.is_deduction ? -1 : 1
       const signedQuantity = Number(measurement.quantity) * sign
       const amount = signedQuantity * rate
-      // Per WhatsApp:227-229: an estimate line inherits the measurement's
-      // division_code when the takeoff captured one, otherwise falls back to
-      // the project's division_code so existing flows keep working.
-      const effectiveDivisionCode = measurement.division_code ?? projectDivisionCode
       codes.push(measurement.service_item_code)
       quantities.push(String(signedQuantity))
       units.push(resolved?.unit || measurement.unit)
       rates.push(String(rate))
       amounts.push(String(amount))
       divisions.push(effectiveDivisionCode)
+      assemblyIds.push(null)
+      assemblyComponentIds.push(null)
+      kinds.push(null)
     }
-    const insertResult = await actualExecutor.query<EstimateLineRow>(
-      `
-      insert into estimate_lines (company_id, project_id, draft_id, service_item_code, quantity, unit, rate, amount, division_code)
+    if (codes.length > 0) {
+      const insertResult = await actualExecutor.query<EstimateLineRow>(
+        `
+      insert into estimate_lines (company_id, project_id, draft_id, service_item_code, quantity, unit, rate, amount, division_code, assembly_id, assembly_component_id, kind)
       select
         $1::uuid,
         $2::uuid,
@@ -283,14 +346,33 @@ export async function createEstimateFromMeasurements(
         unit,
         rate::numeric,
         amount::numeric,
-        division_code
-      from unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[])
-        as t(code, quantity, unit, rate, amount, division_code)
-      returning service_item_code, quantity, unit, rate, amount, division_code, created_at
+        division_code,
+        nullif(assembly_id, '')::uuid,
+        nullif(assembly_component_id, '')::uuid,
+        kind
+      from unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::text[], $8::text[], $10::text[], $11::text[], $12::text[])
+        as t(code, quantity, unit, rate, amount, division_code, assembly_id, assembly_component_id, kind)
+      returning service_item_code, quantity, unit, rate, amount, division_code, assembly_id, assembly_component_id, kind, created_at
       `,
-      [companyId, projectId, codes, quantities, units, rates, amounts, divisions, draftId],
-    )
-    createdLines = insertResult.rows
+        [
+          companyId,
+          projectId,
+          codes,
+          quantities,
+          units,
+          rates,
+          amounts,
+          divisions,
+          draftId,
+          // unnest over text[] needs '' sentinels for NULL uuids; nullif(...)
+          // above turns them back into SQL NULL.
+          assemblyIds.map((v) => v ?? ''),
+          assemblyComponentIds.map((v) => v ?? ''),
+          kinds,
+        ],
+      )
+      createdLines = insertResult.rows
+    }
   }
 
   const scopeTotal = createdLines.reduce((total, line) => total + Number(line.amount), 0)
@@ -319,6 +401,9 @@ export async function createEstimateFromMeasurements(
     bidTotal,
     scopeTotal,
     lines: createdLines,
+    // PlanSwift Phase 2: per-assembly markup breakdown for the transparency
+    // panel (empty when no measurement attaches an assembly).
+    assemblyBreakdowns,
   }
 }
 
@@ -342,11 +427,13 @@ export async function getScopeVsBid(
   const linesResult = await withCompanyClient(companyId, (client) =>
     client.query(
       draftId
-        ? `select id, service_item_code, quantity, unit, rate, amount, division_code, created_at
+        ? `select id, service_item_code, quantity, unit, rate, amount, division_code,
+                  assembly_id, assembly_component_id, kind, created_at
            from estimate_lines
           where company_id = $1 and project_id = $2 and draft_id = $3
           order by created_at asc, service_item_code asc`
-        : `select id, service_item_code, quantity, unit, rate, amount, division_code, created_at
+        : `select id, service_item_code, quantity, unit, rate, amount, division_code,
+                  assembly_id, assembly_component_id, kind, created_at
            from estimate_lines
           where company_id = $1 and project_id = $2 and draft_id is null
           order by created_at asc, service_item_code asc`,

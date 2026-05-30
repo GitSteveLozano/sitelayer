@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg'
-import { LA_DIVISIONS, LA_SERVICE_ITEMS } from '@sitelayer/domain'
+import { EXTERIOR_CLADDING_PACK, LA_DIVISIONS, LA_SERVICE_ITEMS } from '@sitelayer/domain'
 
 export const COMPANY_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{1,62}[a-z0-9])?$/
 
@@ -81,5 +81,73 @@ export async function seedCompanyDefaults(
        on conflict do nothing`,
       [companyId],
     )
+  }
+
+  // Seed the exterior-cladding starter pack last — assemblies reference
+  // service_item_codes, so the service_items loop above must run first.
+  await seedExteriorCladdingAssemblies(client, companyId)
+}
+
+/**
+ * Seed the PlanSwift Phase 2 exterior-cladding starter pack
+ * (`EXTERIOR_CLADDING_PACK`) for a company: 6 per-sqft cladding assemblies, each
+ * with flat material/labor/sub components and per-component waste.
+ *
+ * Idempotent + tenant-scoped: each header is guarded by a `WHERE NOT EXISTS`
+ * on (company_id, name) so re-running onboarding never duplicates, and a
+ * company that already has a same-named assembly (e.g. hand-edited by the
+ * pilot) is left untouched (components are only inserted for headers this call
+ * actually creates). The cached header `total_rate` is computed here with the
+ * SAME expression recomputeAssemblyTotal uses
+ * (sum(quantity_per_unit * (1 + waste_pct/100) * unit_cost)) so no extra
+ * recompute pass is needed.
+ *
+ * This shares one source of truth (`EXTERIOR_CLADDING_PACK` in
+ * @sitelayer/domain) with the LA Operations backfill in migration 110.
+ */
+export async function seedExteriorCladdingAssemblies(client: PoolClient, companyId: string): Promise<void> {
+  for (const assembly of EXTERIOR_CLADDING_PACK) {
+    const totalRate = assembly.components.reduce(
+      (sum, c) => sum + c.quantityPerUnit * (1 + c.wastePct / 100) * c.unitCost,
+      0,
+    )
+
+    // Insert the header only if this company has no assembly with this name.
+    // RETURNING id is empty when the guard short-circuits (already present),
+    // so component inserts are skipped for an existing header.
+    const headerResult = await client.query<{ id: string }>(
+      `insert into service_item_assemblies
+         (company_id, service_item_code, name, description, total_rate, unit)
+       select $1, $2, $3, $4, $5, $6
+       where not exists (
+         select 1 from service_item_assemblies
+         where company_id = $1 and name = $3 and deleted_at is null
+       )
+       returning id`,
+      [companyId, assembly.serviceItemCode, assembly.name, assembly.description, totalRate, assembly.unit],
+    )
+    const assemblyId = headerResult.rows[0]?.id
+    if (!assemblyId) continue
+
+    let sortOrder = 0
+    for (const component of assembly.components) {
+      await client.query(
+        `insert into service_item_assembly_components
+           (company_id, assembly_id, kind, name, quantity_per_unit, unit, unit_cost, waste_pct, sort_order)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          companyId,
+          assemblyId,
+          component.kind,
+          component.name,
+          component.quantityPerUnit,
+          component.unit,
+          component.unitCost,
+          component.wastePct,
+          sortOrder,
+        ],
+      )
+      sortOrder += 1
+    }
   }
 }
