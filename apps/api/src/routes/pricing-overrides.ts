@@ -23,12 +23,23 @@ export type PricingOverrideRouteCtx = {
   sendJson: (status: number, body: unknown) => void
 }
 
-type Scope = {
-  kind: 'project' | 'customer'
-  table: 'project_pricing_overrides' | 'customer_pricing_overrides'
-  idColumn: 'project_id' | 'customer_id'
-  scopeId: string
-}
+// A scope is either a per-project/per-customer rate card (keyed off an id in
+// the path) or the company-wide rate book (the tenant root — no extra id
+// column, just company_id). The company table has the same shape minus the
+// scope id column, so the handlers branch on `scope.idColumn === null`.
+type Scope =
+  | {
+      kind: 'project' | 'customer'
+      table: 'project_pricing_overrides' | 'customer_pricing_overrides'
+      idColumn: 'project_id' | 'customer_id'
+      scopeId: string
+    }
+  | {
+      kind: 'company'
+      table: 'company_pricing_overrides'
+      idColumn: null
+      scopeId: null
+    }
 
 function isFiniteNonNegative(n: unknown): n is number {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0
@@ -36,13 +47,21 @@ function isFiniteNonNegative(n: unknown): n is number {
 
 async function listOverrides(ctx: PricingOverrideRouteCtx, scope: Scope): Promise<void> {
   const result = await withCompanyClient(ctx.company.id, (c) =>
-    c.query(
-      `select id, service_item_code, rate, unit, version, updated_at
-       from ${scope.table}
-       where company_id = $1 and ${scope.idColumn} = $2 and deleted_at is null
-       order by service_item_code asc`,
-      [ctx.company.id, scope.scopeId],
-    ),
+    scope.idColumn === null
+      ? c.query(
+          `select id, service_item_code, rate, unit, version, updated_at
+           from ${scope.table}
+           where company_id = $1 and deleted_at is null
+           order by service_item_code asc`,
+          [ctx.company.id],
+        )
+      : c.query(
+          `select id, service_item_code, rate, unit, version, updated_at
+           from ${scope.table}
+           where company_id = $1 and ${scope.idColumn} = $2 and deleted_at is null
+           order by service_item_code asc`,
+          [ctx.company.id, scope.scopeId],
+        ),
   )
   ctx.sendJson(200, { overrides: result.rows })
 }
@@ -66,8 +85,28 @@ async function upsertOverride(ctx: PricingOverrideRouteCtx, scope: Scope): Promi
     body.unit === undefined || body.unit === null || String(body.unit).trim() === '' ? null : String(body.unit).trim()
 
   const row = await withMutationTx(async (client: PoolClient) => {
-    const result = await client.query(
-      `
+    const result =
+      scope.idColumn === null
+        ? await client.query(
+            `
+      insert into ${scope.table} (company_id, service_item_code, rate, unit, version)
+      values (
+        $1, $2, $3,
+        coalesce($4, (select unit from service_items where company_id = $1 and code = $2 and deleted_at is null limit 1), 'ea'),
+        1
+      )
+      on conflict (company_id, service_item_code) do update
+        set rate = excluded.rate,
+            unit = coalesce($4, ${scope.table}.unit),
+            deleted_at = null,
+            version = ${scope.table}.version + 1,
+            updated_at = now()
+      returning id, service_item_code, rate, unit, version, updated_at
+      `,
+            [ctx.company.id, serviceItemCode, rate, explicitUnit],
+          )
+        : await client.query(
+            `
       insert into ${scope.table} (company_id, ${scope.idColumn}, service_item_code, rate, unit, version)
       values (
         $1, $2, $3, $4,
@@ -82,8 +121,8 @@ async function upsertOverride(ctx: PricingOverrideRouteCtx, scope: Scope): Promi
             updated_at = now()
       returning id, service_item_code, rate, unit, version, updated_at
       `,
-      [ctx.company.id, scope.scopeId, serviceItemCode, rate, explicitUnit],
-    )
+            [ctx.company.id, scope.scopeId, serviceItemCode, rate, explicitUnit],
+          )
     const saved = result.rows[0]
     await recordMutationLedger(client, {
       companyId: ctx.company.id,
@@ -107,13 +146,22 @@ async function deleteOverride(ctx: PricingOverrideRouteCtx, scope: Scope): Promi
     return
   }
   const row = await withMutationTx(async (client: PoolClient) => {
-    const result = await client.query(
-      `update ${scope.table}
+    const result =
+      scope.idColumn === null
+        ? await client.query(
+            `update ${scope.table}
+       set deleted_at = now(), version = version + 1, updated_at = now()
+       where company_id = $1 and service_item_code = $2 and deleted_at is null
+       returning id, service_item_code`,
+            [ctx.company.id, serviceItemCode],
+          )
+        : await client.query(
+            `update ${scope.table}
        set deleted_at = now(), version = version + 1, updated_at = now()
        where company_id = $1 and ${scope.idColumn} = $2 and service_item_code = $3 and deleted_at is null
        returning id, service_item_code`,
-      [ctx.company.id, scope.scopeId, serviceItemCode],
-    )
+            [ctx.company.id, scope.scopeId, serviceItemCode],
+          )
     const removed = result.rows[0]
     if (!removed) return null
     await recordMutationLedger(client, {
@@ -134,8 +182,10 @@ async function deleteOverride(ctx: PricingOverrideRouteCtx, scope: Scope): Promi
 }
 
 /**
- * Handle /api/projects/:id/pricing-overrides and
- * /api/customers/:id/pricing-overrides (GET list, PUT upsert, DELETE clear).
+ * Handle the pricing-override routes (GET list, PUT upsert, DELETE clear):
+ *   /api/projects/:id/pricing-overrides   — per-project rate card
+ *   /api/customers/:id/pricing-overrides  — per-customer rate card
+ *   /api/company/pricing-overrides        — company-wide rate book
  * The service item code travels in the body (not the path) so codes with
  * spaces — "Air Barrier", "Finish Coat" — never need URL escaping.
  */
@@ -144,21 +194,31 @@ export async function handlePricingOverrideRoutes(
   url: URL,
   ctx: PricingOverrideRouteCtx,
 ): Promise<boolean> {
+  const companyMatch = url.pathname === '/api/company/pricing-overrides'
   const projectMatch = url.pathname.match(/^\/api\/projects\/([^/]+)\/pricing-overrides$/)
   const customerMatch = url.pathname.match(/^\/api\/customers\/([^/]+)\/pricing-overrides$/)
-  const match = projectMatch ?? customerMatch
-  if (!match) return false
+  if (!companyMatch && !projectMatch && !customerMatch) return false
 
-  const scope: Scope = projectMatch
-    ? { kind: 'project', table: 'project_pricing_overrides', idColumn: 'project_id', scopeId: projectMatch[1] ?? '' }
-    : {
-        kind: 'customer',
-        table: 'customer_pricing_overrides',
-        idColumn: 'customer_id',
-        scopeId: customerMatch![1] ?? '',
-      }
+  let scope: Scope
+  if (companyMatch) {
+    scope = { kind: 'company', table: 'company_pricing_overrides', idColumn: null, scopeId: null }
+  } else if (projectMatch) {
+    scope = {
+      kind: 'project',
+      table: 'project_pricing_overrides',
+      idColumn: 'project_id',
+      scopeId: projectMatch[1] ?? '',
+    }
+  } else {
+    scope = {
+      kind: 'customer',
+      table: 'customer_pricing_overrides',
+      idColumn: 'customer_id',
+      scopeId: customerMatch![1] ?? '',
+    }
+  }
 
-  if (!scope.scopeId) {
+  if (scope.idColumn !== null && !scope.scopeId) {
     ctx.sendJson(400, { error: `${scope.kind} id is required` })
     return true
   }

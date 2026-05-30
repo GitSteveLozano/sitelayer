@@ -561,10 +561,15 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
         )}
       </div>
 
-      {/* NEW ASSIGNMENT modal (Desktop v2 · DNewAssignmentModal) — the
-          imported presentational port; its footer SAVE button is a no-op
-          stub today (no onSubmit prop on the shared modal). */}
-      <NewAssignmentModal open={assignmentOpen} onClose={() => setAssignmentOpen(false)} />
+      {/* NEW ASSIGNMENT modal (Desktop v2 · DNewAssignmentModal) — a real
+          schedule-create form. Projects come from the bootstrap list; on
+          save it POSTs /api/schedules and the create hook invalidates the
+          bootstrap cache so the new draft assignment lands on the grid. */}
+      <NewAssignmentModal
+        open={assignmentOpen}
+        onClose={() => setAssignmentOpen(false)}
+        projects={projects}
+      />
     </div>
   )
 }

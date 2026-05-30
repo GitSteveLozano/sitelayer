@@ -16,8 +16,8 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
 import type { ProjectRow } from '@/lib/api'
-import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, DTabBar, type DColumn } from '@/components/d'
-import { MButton, MPill } from '@/components/m'
+import { DataTable, DDrawer, DEyebrow, DH1, DKpi, DKpiStrip, DTabBar, type DColumn } from '@/components/d'
+import { MBanner, MButton, MInput, MPill, MTextarea } from '@/components/m'
 import { useProjects } from '@/lib/api/projects'
 import { useProjectTimeline, type ProjectTimelineEvent } from '@/lib/api/projects'
 import { useProjectLaborVariance, type LaborVarianceRow } from '@/lib/api/labor-variance'
@@ -25,10 +25,12 @@ import { useProjectCloseoutSummary } from '@/lib/api/closeout-summary'
 import { useDailyLogs, type DailyLog } from '@/lib/api/daily-logs'
 import { useProjectBlueprints, type BlueprintDocument } from '@/lib/api/takeoff'
 import { useProjectChangeOrders, type ChangeOrder } from '@/lib/api/change-orders'
+import { useCreateProjectBrief, type ProjectBriefStep } from '@/lib/api/project-briefs'
+import { useSendPaymentReminders } from '@/lib/api/payment-reminders'
 import { ChangeOrderDrawer, InvoiceModal, PostMortemDrawer, RecoveryDrawer } from './project-drawers'
-import { formatMoney, formatStatusLabel, shortDate } from '../mobile/format.js'
+import { formatMoney, formatStatusLabel, shortDate, todayIso } from '../mobile/format.js'
 
-type ProjectOverlay = 'recovery' | 'change-order' | 'post-mortem' | 'invoice' | null
+type ProjectOverlay = 'recovery' | 'change-order' | 'post-mortem' | 'invoice' | 'brief' | 'reminders' | null
 
 type TabKey = 'overview' | 'budget' | 'crew' | 'logs' | 'files' | 'activity'
 
@@ -134,6 +136,9 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
             <MButton variant="primary" onClick={() => navigate(`/desktop/canvas/${projectId}`)}>
               Takeoff →
             </MButton>
+            <MButton variant="ghost" onClick={() => setOverlay('brief')}>
+              Edit brief
+            </MButton>
             {!onTrack ? (
               <MButton variant="ghost" onClick={() => setOverlay('recovery')}>
                 Recovery plan
@@ -146,6 +151,9 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
                 </MButton>
                 <MButton variant="ghost" onClick={() => setOverlay('invoice')}>
                   Invoice
+                </MButton>
+                <MButton variant="ghost" onClick={() => setOverlay('reminders')}>
+                  Send reminders
                 </MButton>
               </>
             ) : null}
@@ -224,7 +232,281 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
         customerName={customer}
         contractValue={bidTotal}
       />
+      <BriefEditDrawer
+        open={overlay === 'brief'}
+        onClose={() => setOverlay(null)}
+        projectId={projectId}
+        projectName={name}
+      />
+      <SendRemindersDrawer
+        open={overlay === 'reminders'}
+        onClose={() => setOverlay(null)}
+        projectId={projectId}
+        projectName={name}
+        customerName={customer}
+      />
     </div>
+  )
+}
+
+// ============================================================
+// Brief Edit drawer (Desktop v2 · DBriefEdit, reachable from project detail).
+// Reuses the same hook surface as fm-brief.tsx — goal + numbered steps over
+// local state, submitted through useCreateProjectBrief (POST /briefs).
+// ============================================================
+
+const DRAWER_LABEL: React.CSSProperties = {
+  fontFamily: 'var(--m-num)',
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--m-ink-3)',
+}
+
+function BriefEditDrawer({
+  open,
+  onClose,
+  projectId,
+  projectName,
+}: {
+  open: boolean
+  onClose: () => void
+  projectId: string
+  projectName: string | null
+}) {
+  const createBrief = useCreateProjectBrief(projectId)
+  const [goal, setGoal] = useState('')
+  const [steps, setSteps] = useState<ProjectBriefStep[]>([])
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  const addStep = () => setSteps((cur) => [...cur, { id: `local-${Date.now()}`, title: '' }])
+  const removeStep = (idx: number) => setSteps((cur) => cur.filter((_, i) => i !== idx))
+  const updateStep = (idx: number, title: string) =>
+    setSteps((cur) => cur.map((s, i) => (i === idx ? { ...s, title } : s)))
+
+  const trimmedGoal = goal.trim()
+  const canSave = Boolean(projectId) && trimmedGoal.length > 0 && !createBrief.isPending
+
+  function save() {
+    if (!canSave) return
+    setError(null)
+    setSaved(false)
+    createBrief.mutate(
+      {
+        effective_date: todayIso(),
+        goal: trimmedGoal,
+        steps: steps.filter((s) => s.title.trim().length > 0),
+      },
+      {
+        onSuccess: () => {
+          setSaved(true)
+          window.setTimeout(onClose, 700)
+        },
+        onError: (e) => setError(e instanceof Error ? e.message : 'Could not save the brief.'),
+      },
+    )
+  }
+
+  return (
+    <DDrawer open={open} onClose={onClose} title={`✎ BRIEF · ${(projectName ?? 'PROJECT').toUpperCase()}`}>
+      {error ? (
+        <div style={{ marginBottom: 14 }}>
+          <MBanner tone="error" title="Couldn't push the brief" body={error} />
+        </div>
+      ) : null}
+      {saved ? (
+        <div
+          style={{
+            marginBottom: 14,
+            fontFamily: 'var(--m-num)',
+            fontSize: 12,
+            fontWeight: 700,
+            color: 'var(--m-green)',
+          }}
+        >
+          ✓ Brief pushed to the crew.
+        </div>
+      ) : null}
+
+      <div style={DRAWER_LABEL}>TODAY&apos;S GOAL</div>
+      <MTextarea
+        value={goal}
+        onChange={(e) => setGoal(e.currentTarget.value)}
+        placeholder="What's the crew building today, in plain words?"
+        maxLength={280}
+        style={{ width: '100%', minHeight: 96, marginTop: 8 }}
+      />
+      <div style={{ ...DRAWER_LABEL, marginTop: 6, textAlign: 'right' }}>{goal.length} / 280</div>
+
+      <div
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, marginBottom: 8 }}
+      >
+        <div style={DRAWER_LABEL}>STEP PLAN · {steps.length}</div>
+        <MButton size="sm" variant="ghost" onClick={addStep}>
+          + Add step
+        </MButton>
+      </div>
+
+      <div style={{ border: '2px solid var(--m-ink)' }}>
+        {steps.length === 0 ? (
+          <div style={{ padding: '14px 16px', color: 'var(--m-ink-3)', fontSize: 13 }}>
+            No steps yet. Add the first step to build the plan.
+          </div>
+        ) : (
+          steps.map((step, idx) => (
+            <div
+              key={step.id ?? idx}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 10,
+                padding: '10px 14px',
+                borderBottom: idx === steps.length - 1 ? 'none' : '1px solid var(--m-line-2)',
+              }}
+            >
+              <div
+                aria-hidden
+                style={{
+                  width: 28,
+                  height: 28,
+                  flexShrink: 0,
+                  border: '2px solid var(--m-ink)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontFamily: 'var(--m-font-display)',
+                  fontWeight: 800,
+                  fontSize: 13,
+                }}
+              >
+                {idx + 1}
+              </div>
+              <MInput
+                value={step.title}
+                onChange={(e) => updateStep(idx, e.currentTarget.value)}
+                placeholder={`Step ${idx + 1}`}
+                style={{ flex: 1 }}
+              />
+              <button
+                type="button"
+                aria-label="Remove step"
+                onClick={() => removeStep(idx)}
+                style={{
+                  width: 36,
+                  height: 36,
+                  flexShrink: 0,
+                  border: 'none',
+                  background: 'transparent',
+                  color: 'var(--m-red)',
+                  cursor: 'pointer',
+                  fontSize: 18,
+                  lineHeight: 1,
+                  padding: 0,
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      <MButton variant="primary" style={{ width: '100%', marginTop: 20 }} onClick={save} disabled={!canSave}>
+        {createBrief.isPending ? 'Pushing…' : 'Save + push to crew'}
+      </MButton>
+    </DDrawer>
+  )
+}
+
+// ============================================================
+// Send Reminders drawer — POSTs /api/payment-reminders for THIS project
+// (useSendPaymentReminders). A focused single-project adaptation of the
+// bulk reminders modal in owner-money.tsx.
+// ============================================================
+
+function SendRemindersDrawer({
+  open,
+  onClose,
+  projectId,
+  projectName,
+  customerName,
+}: {
+  open: boolean
+  onClose: () => void
+  projectId: string
+  projectName: string | null
+  customerName: string
+}) {
+  const sendReminders = useSendPaymentReminders()
+  const [error, setError] = useState<string | null>(null)
+  const [sentCount, setSentCount] = useState<number | null>(null)
+
+  function send() {
+    if (!projectId || sendReminders.isPending) return
+    setError(null)
+    setSentCount(null)
+    sendReminders.mutate(
+      { project_ids: [projectId] },
+      {
+        onSuccess: (res) => {
+          setSentCount(res.reminders_sent)
+          window.setTimeout(onClose, 900)
+        },
+        onError: (e) => setError(e instanceof Error ? e.message : 'Could not send the reminder.'),
+      },
+    )
+  }
+
+  return (
+    <DDrawer open={open} onClose={onClose} title={`● SEND REMINDER · ${(projectName ?? 'PROJECT').toUpperCase()}`}>
+      {error ? (
+        <div style={{ marginBottom: 14 }}>
+          <MBanner tone="error" title="Couldn't send reminder" body={error} />
+        </div>
+      ) : null}
+      {sentCount != null ? (
+        <div
+          style={{
+            marginBottom: 14,
+            fontFamily: 'var(--m-num)',
+            fontSize: 12,
+            fontWeight: 700,
+            color: 'var(--m-green)',
+          }}
+        >
+          ✓ {sentCount} reminder{sentCount === 1 ? '' : 's'} queued.
+        </div>
+      ) : null}
+
+      <div style={DRAWER_LABEL}>RECIPIENT</div>
+      <div
+        style={{
+          marginTop: 8,
+          padding: '14px 16px',
+          border: '2px solid var(--m-ink)',
+          background: 'var(--m-card-soft)',
+        }}
+      >
+        <div style={{ fontSize: 15, fontWeight: 700 }}>{projectName ?? 'This project'}</div>
+        <div style={{ ...DRAWER_LABEL, marginTop: 4 }}>{customerName}</div>
+      </div>
+
+      <div style={{ ...DRAWER_LABEL, marginTop: 16, lineHeight: 1.6 }}>
+        Queues a payment follow-up notification for this project to you. The worker drains it through the notification
+        pipeline.
+      </div>
+
+      <MButton
+        variant="primary"
+        style={{ width: '100%', marginTop: 20 }}
+        onClick={send}
+        disabled={!projectId || sendReminders.isPending}
+      >
+        {sendReminders.isPending ? 'Sending…' : 'Send reminder'}
+      </MButton>
+    </DDrawer>
   )
 }
 

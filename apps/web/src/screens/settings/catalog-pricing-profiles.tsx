@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Card, MobileButton, Pill, Sheet, useConfirmSheet } from '@/components/mobile'
+import { Sheet, useConfirmSheet } from '@/components/mobile'
+import { MButton, MInput, MListInset, MListRow, MPill, MSectionH, MTextarea } from '@/components/m'
 import {
   useCreatePricingProfile,
   useDeletePricingProfile,
@@ -14,50 +15,89 @@ import {
  *   { divisions: { [code]: { rate_standard: number; rate_overtime: number } } }
  * but the editor uses a raw JSON textarea until a typed editor lands.
  * Validates on blur — invalid JSON blocks save.
+ *
+ * Restyled onto the m-* design system (MListRow / MPill / MButton / MInput /
+ * MTextarea + var(--m-*) tokens) — the visual language the rest of the v3.3.0
+ * mobile shell uses. Data wiring (usePricingProfiles etc.) is unchanged.
  */
+const LABEL_STYLE: React.CSSProperties = {
+  fontFamily: 'var(--m-num)',
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: '0.06em',
+  textTransform: 'uppercase',
+  color: 'var(--m-ink-3)',
+}
+
 export function CatalogPricingProfilesScreen() {
   const profiles = usePricingProfiles()
   const create = useCreatePricingProfile()
   const [editing, setEditing] = useState<PricingProfile | 'new' | null>(null)
 
+  const list = profiles.data?.pricingProfiles ?? []
+
   return (
-    <div className="px-5 pt-6 pb-12 max-w-2xl">
-      <Link to="/more/catalog" className="text-[12px] text-ink-3">
+    <div style={{ padding: '24px 20px 48px', maxWidth: 672, margin: '0 auto' }}>
+      <Link to="/more/catalog" style={{ fontSize: 12, color: 'var(--m-ink-3)', textDecoration: 'none' }}>
         ← Catalog
       </Link>
-      <div className="mt-2 flex items-center justify-between gap-3">
+      <div
+        style={{
+          marginTop: 8,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+        }}
+      >
         <div>
-          <h1 className="font-display text-[24px] font-bold tracking-tight leading-tight">Pricing profiles</h1>
-          <p className="text-[12px] text-ink-3 mt-1">{profiles.data?.pricingProfiles.length ?? 0} profiles</p>
+          <h1
+            style={{
+              fontFamily: 'var(--m-font)',
+              fontSize: 24,
+              fontWeight: 700,
+              letterSpacing: '-0.01em',
+              lineHeight: 1.1,
+              color: 'var(--m-ink)',
+              margin: 0,
+            }}
+          >
+            Pricing profiles
+          </h1>
+          <p style={{ fontSize: 12, color: 'var(--m-ink-3)', marginTop: 4 }}>{list.length} profiles</p>
         </div>
-        <MobileButton variant="primary" onClick={() => setEditing('new')}>
+        <MButton size="sm" variant="primary" onClick={() => setEditing('new')}>
           + New
-        </MobileButton>
+        </MButton>
       </div>
 
-      <div className="mt-6 space-y-2">
+      <div style={{ marginTop: 24 }}>
+        <MSectionH>Profiles</MSectionH>
         {profiles.isPending ? (
-          <Card tight>
-            <div className="text-[12px] text-ink-3">Loading…</div>
-          </Card>
-        ) : (profiles.data?.pricingProfiles ?? []).length === 0 ? (
-          <Card tight>
-            <div className="text-[12px] text-ink-3">No pricing profiles yet.</div>
-          </Card>
+          <div style={{ padding: '14px 16px', fontSize: 12, color: 'var(--m-ink-3)' }}>Loading…</div>
+        ) : list.length === 0 ? (
+          <div style={{ padding: '14px 16px', fontSize: 12, color: 'var(--m-ink-3)' }}>No pricing profiles yet.</div>
         ) : (
-          profiles.data?.pricingProfiles.map((p) => (
-            <button key={p.id} type="button" onClick={() => setEditing(p)} className="block w-full text-left">
-              <Card tight>
-                <div className="flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="text-[13px] font-semibold truncate">{p.name}</div>
-                    <div className="text-[11px] text-ink-3 mt-0.5">v{p.version}</div>
-                  </div>
-                  {p.is_default ? <Pill tone="good">default</Pill> : <Pill tone="default">profile</Pill>}
-                </div>
-              </Card>
-            </button>
-          ))
+          <MListInset>
+            {list.map((p) => (
+              <MListRow
+                key={p.id}
+                headline={p.name}
+                supporting={`v${p.version}`}
+                trailing={
+                  p.is_default ? (
+                    <MPill tone="green" dot>
+                      default
+                    </MPill>
+                  ) : (
+                    <MPill>profile</MPill>
+                  )
+                }
+                chev
+                onTap={() => setEditing(p)}
+              />
+            ))}
+          </MListInset>
         )}
       </div>
 
@@ -140,43 +180,35 @@ function PricingProfileForm({
 
   return (
     <Sheet open onClose={onClose} title={profile ? 'Edit pricing profile' : 'New pricing profile'}>
-      <div className="space-y-3">
-        <label className="block">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Name</div>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="mt-1 w-full text-[15px] py-2 border-b border-line bg-transparent focus:outline-none focus:border-accent"
-          />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={LABEL_STYLE}>Name</span>
+          <MInput type="text" value={name} onChange={(e) => setName(e.target.value)} />
         </label>
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={isDefault}
-            onChange={(e) => setIsDefault(e.target.checked)}
-            className="rounded"
-          />
-          <span className="text-[13px]">Default for new projects</span>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" checked={isDefault} onChange={(e) => setIsDefault(e.target.checked)} />
+          <span style={{ fontSize: 13, color: 'var(--m-ink)' }}>Default for new projects</span>
         </label>
-        <label className="block">
-          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3">Config (JSON)</div>
-          <textarea
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <span style={LABEL_STYLE}>Config (JSON)</span>
+          <MTextarea
             value={configText}
             onChange={(e) => setConfigText(e.target.value)}
             rows={10}
-            className="mt-1 w-full font-mono text-[12px] p-2 rounded border border-line bg-card focus:outline-none focus:border-accent resize-y"
+            style={{ fontFamily: 'var(--m-num)', fontSize: 12, resize: 'vertical' }}
           />
         </label>
-        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
-        <div className={profile ? 'grid grid-cols-2 gap-2' : ''}>
-          <MobileButton variant="primary" onClick={submit} disabled={!name.trim() || patch.isPending}>
+        {error ? <div style={{ fontSize: 12, color: 'var(--m-red)' }}>{error}</div> : null}
+        <div
+          style={{ display: profile ? 'grid' : 'block', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 8 }}
+        >
+          <MButton variant="primary" onClick={submit} disabled={!name.trim() || patch.isPending}>
             {profile ? 'Save' : 'Create'}
-          </MobileButton>
+          </MButton>
           {profile ? (
-            <MobileButton variant="ghost" onClick={remove} disabled={del.isPending}>
+            <MButton variant="ghost" onClick={remove} disabled={del.isPending}>
               Delete
-            </MobileButton>
+            </MButton>
           ) : null}
         </div>
       </div>

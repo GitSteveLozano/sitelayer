@@ -20,7 +20,8 @@
 import type { CSSProperties, ReactNode } from 'react'
 import { useState } from 'react'
 import { DDrawer, DModal } from '@/components/d'
-import { MBanner, MButton, MInput, MTextarea } from '@/components/m'
+import { MBanner, MButton, MInput, MSelect, MTextarea } from '@/components/m'
+import { useCreateSchedule } from '@/lib/api/schedules'
 import {
   useChangeOrderEvent,
   useCreateChangeOrder,
@@ -957,109 +958,186 @@ export function NewProjectModal({ open, onClose }: OverlayProps) {
   )
 }
 
-const ASSIGNMENT_CREW: Array<{ label: string; on?: boolean }> = [
-  { label: 'Ana C.', on: true },
-  { label: 'Marcus L.', on: true },
-  { label: 'Tomás R.', on: true },
-  { label: '+ ADD' },
-]
+/** Minimal project shape the assignment composer needs — the bootstrap
+ * `projects` rows satisfy this structurally (id + name). */
+export interface AssignmentProjectOption {
+  id: string
+  name: string
+}
 
-/** C3 · New-assignment modal — project, dates, multi-select crew, scope, weather flag. */
-export function NewAssignmentModal({ open, onClose }: OverlayProps) {
+/** YYYY-MM-DD for today (local), the default `scheduled_for`. */
+function assignmentDefaultDate(): string {
+  const d = new Date()
+  const off = d.getTimezoneOffset()
+  return new Date(d.getTime() - off * 60_000).toISOString().slice(0, 10)
+}
+
+/**
+ * C3 · New-assignment composer — a real schedule-create form. Picks a
+ * project + a working date and an optional crew note/size, then POSTs
+ * /api/schedules (via `useCreateSchedule`) to drop a draft crew assignment
+ * onto the week. Mirrors the schedule-create pattern in fm-confirm-day.tsx
+ * (ensure a schedule row exists for project + date). The crew note is
+ * carried as a single descriptive crew entry so the size shows on the grid.
+ */
+export function NewAssignmentModal({
+  open,
+  onClose,
+  projects = [],
+  onSaved,
+}: OverlayProps & { projects?: AssignmentProjectOption[]; onSaved?: () => void }) {
+  const createSchedule = useCreateSchedule()
+
+  const [projectId, setProjectId] = useState('')
+  const [scheduledFor, setScheduledFor] = useState(assignmentDefaultDate)
+  const [crewNote, setCrewNote] = useState('')
+  const [crewSize, setCrewSize] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  const [saved, setSaved] = useState(false)
+
+  // Default the project to the first available once the list arrives / opens.
+  if (open && !projectId && projects.length > 0) {
+    setProjectId(projects[0]!.id)
+  }
+
+  function reset() {
+    setCrewNote('')
+    setCrewSize('')
+    setError(null)
+    setSaved(false)
+  }
+
+  function close() {
+    reset()
+    onClose()
+  }
+
+  function save() {
+    if (createSchedule.isPending) return
+    if (!projectId) {
+      setError('Pick a project first.')
+      return
+    }
+    if (!scheduledFor) {
+      setError('Pick a date for the assignment.')
+      return
+    }
+    setError(null)
+    // Build a crew jsonb array: one descriptive entry per the typed crew
+    // size (default 1), tagged with the optional note so the grid's crew
+    // count reflects the booking. The API stores `crew` opaquely.
+    const size = Math.max(1, Math.min(99, Math.round(Number(crewSize) || 1)))
+    const note = crewNote.trim()
+    const crew = Array.from({ length: size }, (_, i) => ({
+      slot: i + 1,
+      ...(note ? { note } : {}),
+    }))
+    createSchedule.mutate(
+      { project_id: projectId, scheduled_for: scheduledFor, crew },
+      {
+        onSuccess: () => {
+          setSaved(true)
+          onSaved?.()
+          // Brief success flash, then close + reset.
+          window.setTimeout(close, 600)
+        },
+        onError: (e) => setError(e instanceof Error ? e.message : 'Could not create the assignment.'),
+      },
+    )
+  }
+
+  const noProjects = projects.length === 0
+  const inputStyle: CSSProperties = {
+    marginTop: 8,
+    width: '100%',
+    padding: '12px 14px',
+    border: '2px solid var(--m-ink)',
+    background: 'var(--m-card-soft)',
+    fontFamily: 'var(--m-num)',
+    fontSize: 15,
+    fontWeight: 700,
+    color: 'var(--m-ink)',
+  }
+
   return (
     <DModal
       open={open}
-      onClose={onClose}
-      title={<FloatHead>NEW ASSIGNMENT · DRAGGED MAY 7–9</FloatHead>}
+      onClose={close}
+      title={<FloatHead>NEW ASSIGNMENT</FloatHead>}
       footer={
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <MButton variant="ghost" onClick={onClose}>
+          <MButton variant="ghost" onClick={close} disabled={createSchedule.isPending}>
             CANCEL
           </MButton>
-          <MButton variant="primary">SAVE · NOTIFY CREW</MButton>
+          <MButton variant="primary" onClick={save} disabled={createSchedule.isPending || noProjects || !projectId}>
+            {createSchedule.isPending ? 'SAVING…' : 'SAVE · NOTIFY CREW'}
+          </MButton>
         </div>
       }
     >
+      {error ? (
+        <div style={{ marginBottom: 12 }}>
+          <MBanner tone="error" title="Couldn't book the crew" body={error} />
+        </div>
+      ) : null}
+      {saved ? (
+        <div style={mono({ fontSize: 12, color: 'var(--m-green)', fontWeight: 700, marginBottom: 12 })}>
+          ✓ Assignment booked.
+        </div>
+      ) : null}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 14 }}>
         <div>
           <div style={sectionLabel}>PROJECT</div>
-          <div
-            style={{
-              marginTop: 8,
-              padding: '12px 14px',
-              border: '2px solid var(--m-ink)',
-              background: 'var(--m-card-soft)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}
+          <MSelect
+            value={projectId}
+            onChange={(e) => setProjectId(e.currentTarget.value)}
+            disabled={noProjects}
+            style={{ marginTop: 8, width: '100%' }}
           >
-            <span style={{ fontSize: 14, fontWeight: 700 }}>Hillcrest Ph 4</span>
-            <span style={display({ fontWeight: 800 })}>▾</span>
-          </div>
+            {noProjects ? <option value="">No projects available</option> : null}
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </MSelect>
         </div>
         <div>
-          <div style={sectionLabel}>DATES</div>
-          <div
-            style={display({
-              marginTop: 8,
-              padding: '12px 14px',
-              border: '2px solid var(--m-ink)',
-              background: 'var(--m-card-soft)',
-              fontWeight: 800,
-              fontSize: 15,
-            })}
-          >
-            MAY 7–9
-          </div>
+          <div style={sectionLabel}>DATE</div>
+          <input
+            type="date"
+            value={scheduledFor}
+            onChange={(e) => setScheduledFor(e.currentTarget.value)}
+            style={inputStyle}
+          />
         </div>
       </div>
 
-      <div style={{ ...sectionLabel, marginTop: 16 }}>CREW · MULTI-SELECT</div>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-        {ASSIGNMENT_CREW.map((p) => (
-          <span
-            key={p.label}
-            style={mono({
-              padding: '10px 14px',
-              background: p.on ? 'var(--m-ink)' : 'transparent',
-              color: p.on ? 'var(--m-card)' : 'var(--m-ink-3)',
-              border: '2px solid var(--m-ink)',
-              fontSize: 11,
-              fontWeight: 700,
-              letterSpacing: '0.04em',
-            })}
-          >
-            {p.label}
-          </span>
-        ))}
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 14, marginTop: 16 }}>
+        <div>
+          <div style={sectionLabel}>CREW NOTE · OPTIONAL</div>
+          <MInput
+            value={crewNote}
+            onChange={(e) => setCrewNote(e.currentTarget.value)}
+            placeholder="e.g. EPS East — anchor + plate"
+            style={{ marginTop: 8, width: '100%' }}
+          />
+        </div>
+        <div>
+          <div style={sectionLabel}>CREW SIZE</div>
+          <MInput
+            value={crewSize}
+            onChange={(e) => setCrewSize(e.currentTarget.value)}
+            inputMode="numeric"
+            placeholder="3"
+            style={{ marginTop: 8, width: '100%' }}
+          />
+        </div>
       </div>
 
-      <div style={{ ...sectionLabel, marginTop: 16 }}>SCOPE</div>
-      <div
-        style={{
-          marginTop: 8,
-          padding: '12px 14px',
-          border: '2px solid var(--m-ink)',
-          background: 'var(--m-card-soft)',
-          fontSize: 14,
-        }}
-      >
-        EPS East — anchor + plate
-      </div>
-
-      <div
-        style={mono({
-          padding: '12px 14px',
-          background: 'var(--m-red)',
-          color: '#fff',
-          marginTop: 16,
-          fontSize: 10,
-          fontWeight: 700,
-          letterSpacing: '0.04em',
-        })}
-      >
-        ● WED MAY 7 RAIN FORECAST — CONSIDER SHIFTING
+      <div style={mono({ fontSize: 10, color: 'var(--m-ink-3)', marginTop: 14, fontWeight: 600, lineHeight: 1.5 })}>
+        Books a draft assignment on the week. The foreman confirms crew + hours from the field.
       </div>
     </DModal>
   )
