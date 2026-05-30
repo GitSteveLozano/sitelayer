@@ -299,6 +299,10 @@
 .d-table-wrap {
   border: 2px solid var(--m-ink);
   background: var(--m-card);
+  /* A wide table scrolls inside its own column instead of expanding the grid
+     track and pushing the rest of the page off-screen. */
+  overflow-x: auto;
+  max-width: 100%;
 }
 .d-table-head {
   display: flex;
@@ -381,9 +385,20 @@
 /* ---- Split (main + aside) ---- */
 .d-split {
   display: grid;
-  grid-template-columns: 1fr 340px;
+  /* minmax(0, 1fr) — NOT plain 1fr — so the main column can shrink below the
+     intrinsic width of a wide table. With plain 1fr (min-width: auto) the
+     column refuses to shrink and shoves the 340px aside (margin / scope-vs-bid
+     / sell total) off the right edge of the screen. */
+  grid-template-columns: minmax(0, 1fr) 340px;
   gap: 24px;
   align-items: start;
+}
+/* Below the desktop breakpoint, stack the aside under the table so neither is
+   clipped on narrow windows. */
+@media (max-width: 980px) {
+  .d-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* ---- Card / section ---- */
