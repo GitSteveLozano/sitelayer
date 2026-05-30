@@ -54,6 +54,39 @@ export function fetchSchedules(params: ScheduleListParams = {}): Promise<Schedul
   return request<ScheduleListResponse>(`/api/schedules${qs ? `?${qs}` : ''}`)
 }
 
+/**
+ * Request body for POST /api/schedules. Mirrors the wire-format the API
+ * validates (apps/api/src/routes/schedules.ts): `project_id` is a UUID,
+ * `scheduled_for` is YYYY-MM-DD, and `crew` is an optional jsonb array
+ * (defaults to `[]` server-side when omitted).
+ */
+export interface CreateScheduleRequest {
+  project_id: string
+  scheduled_for: string
+  crew?: unknown[]
+}
+
+export function createSchedule(input: CreateScheduleRequest): Promise<CrewScheduleRow> {
+  return request<CrewScheduleRow>('/api/schedules', { method: 'POST', json: input })
+}
+
+/**
+ * Creates a single crew assignment (draft schedule row). On success we
+ * invalidate every schedule list query AND any bootstrap query — the owner
+ * schedule grid derives its week from the bootstrap `schedules` ledger, so
+ * both caches need refreshing for the new assignment to appear.
+ */
+export function useCreateSchedule() {
+  const qc = useQueryClient()
+  return useMutation<CrewScheduleRow, Error, CreateScheduleRequest>({
+    mutationFn: createSchedule,
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: KEYS.all() })
+      void qc.invalidateQueries({ queryKey: ['bootstrap'] })
+    },
+  })
+}
+
 export function useSchedules(
   params: ScheduleListParams = {},
   options?: Partial<UseQueryOptions<ScheduleListResponse>>,
