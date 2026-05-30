@@ -497,7 +497,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         <Routes>
           <Route index element={<OwnerDashboard bootstrap={bootstrap} />} />
           <Route path="projects" element={<OwnerProjects bootstrap={bootstrap} />} />
-          <Route path="projects/new" element={<OwnerNewProject />} />
+          <Route path="projects/new" element={<OwnerNewProject bootstrap={bootstrap} />} />
           <Route path="projects/:projectId" element={<OwnerProjectDetail bootstrap={bootstrap} />} />
           <Route path="rentals/utilization" element={<OwnerRentalsUtilization />} />
           <Route path="rentals/:itemId" element={<OwnerRentalsAsset />} />
