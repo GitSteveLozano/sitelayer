@@ -22,14 +22,15 @@
 import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
-  calculateLinealLength,
-  calculatePolygonArea,
+  calculateLinealLengthScaled,
+  calculatePolygonAreaScaled,
   calculatePolygonCentroid,
   type TakeoffPoint,
 } from '@sitelayer/domain'
 import {
   ApiError,
   useBlueprintPages,
+  useCalibratePage,
   useCreateMeasurement,
   useDeleteMeasurement,
   usePatchMeasurement,
@@ -51,6 +52,7 @@ import { EstAiTakeoffSetupPanel } from './est-ai-takeoff'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
 import { arcPolyline } from '@/lib/takeoff/arc'
 import { detectSheetScale, type DetectedScale } from '@/lib/takeoff/sheet-scale'
+import { solveWorldScale, type WorldScale } from '@/lib/takeoff/world-scale'
 import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
 import { useRole } from '@/lib/role'
 import { MButton, MPill, MSelect } from '@/components/m'
@@ -176,6 +178,72 @@ export function EstCanvas() {
     }
   }, [pdfDocState.doc, activePageNumber])
 
+  // Page size in PDF points (isotropic) — needed to turn the anisotropic 0–100
+  // board space + the page's two-point calibration into a real-world per-axis
+  // scale, so saved measurements carry true sqft/lf instead of board area.
+  const [pageSize, setPageSize] = useState<{ width: number; height: number } | null>(null)
+  useEffect(() => {
+    const doc = pdfDocState.doc
+    if (!doc?.getPageSize) {
+      setPageSize(null)
+      return
+    }
+    let cancelled = false
+    setPageSize(null)
+    void doc
+      .getPageSize(activePageNumber)
+      .then((size) => {
+        if (!cancelled && size) setPageSize({ width: size.width, height: size.height })
+      })
+      .catch(() => {
+        if (!cancelled) setPageSize(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [pdfDocState.doc, activePageNumber])
+
+  // Per-axis real-world scale for the active page (null when uncalibrated or the
+  // page size is unknown → measurements stay in board space, as before).
+  const worldScale: WorldScale | null = useMemo(
+    () => solveWorldScale(activePage, pageSize?.width, pageSize?.height),
+    [activePage, pageSize],
+  )
+
+  // Auto-Bookmark (Phase 0): read the PDF's embedded bookmarks/page labels so the
+  // estimator can jump straight to a sheet (Plans, Elevations, …) instead of
+  // paging through a 20–80 page set.
+  const [bookmarks, setBookmarks] = useState<Array<{ title: string; pageNumber: number }>>([])
+  useEffect(() => {
+    const doc = pdfDocState.doc
+    if (!doc?.getBookmarks) {
+      setBookmarks([])
+      return
+    }
+    let cancelled = false
+    setBookmarks([])
+    void doc
+      .getBookmarks()
+      .then((nodes) => {
+        if (cancelled) return
+        const flat: Array<{ title: string; pageNumber: number }> = []
+        const walk = (list: typeof nodes) => {
+          for (const n of list) {
+            if (typeof n.pageNumber === 'number') flat.push({ title: n.title, pageNumber: n.pageNumber })
+            if (n.children) walk(n.children)
+          }
+        }
+        walk(nodes)
+        setBookmarks(flat)
+      })
+      .catch(() => {
+        if (!cancelled) setBookmarks([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [pdfDocState.doc])
+
   // --- Measurements ---------------------------------------------------------
   const measurements = useProjectMeasurements(projectId, { draftId: activeDraftId })
   const create = useCreateMeasurement(projectId)
@@ -210,6 +278,10 @@ export function EstCanvas() {
   // Scale-calibration overlay (DCanvasScale): the real-world length the user
   // types for the reference line they drew. Provisional until applied.
   const [scaleLength, setScaleLength] = useState('24')
+  // The two board-space points of the reference line clicked in SCALE mode.
+  const [scalePoints, setScalePoints] = useState<TakeoffPoint[]>([])
+  const [scaleError, setScaleError] = useState<string | null>(null)
+  const calibratePage = useCalibratePage()
   // Item command-palette (DCanvasItemPalette): "/"-triggered scope-item picker.
   const [itemPaletteOpen, setItemPaletteOpen] = useState(false)
   const [itemQuery, setItemQuery] = useState('')
@@ -264,11 +336,15 @@ export function EstCanvas() {
 
   // --- Geometry (unchanged from mobile) ------------------------------------
   const draftQuantity = useMemo(() => {
-    if (tool === 'polygon' || tool === 'rect') return round2(calculatePolygonArea(draftPoints))
-    if (tool === 'lineal') return round2(calculateLinealLength(draftPoints))
-    if (tool === 'arc') return arcCurve ? round2(calculateLinealLength(arcCurve)) : 0
+    // Mirror the server's quantity math: when the page is calibrated, the live
+    // running quantity reads in real sqft/lf, not board-space units.
+    const wx = worldScale?.wx ?? 1
+    const wy = worldScale?.wy ?? 1
+    if (tool === 'polygon' || tool === 'rect') return round2(calculatePolygonAreaScaled(draftPoints, wx, wy))
+    if (tool === 'lineal') return round2(calculateLinealLengthScaled(draftPoints, wx, wy))
+    if (tool === 'arc') return arcCurve ? round2(calculateLinealLengthScaled(arcCurve, wx, wy)) : 0
     return draftPoints.length
-  }, [tool, draftPoints, arcCurve])
+  }, [tool, draftPoints, arcCurve, worldScale])
 
   // EXACT same CTM math as takeoff-mobile.tsx — do not change.
   const onCanvasTap = (e: ReactPointerEvent<SVGSVGElement>) => {
@@ -279,6 +355,20 @@ export function EstCanvas() {
       if (mode === 'select') {
         setBulkSelected(new Set())
         setSelectedMeasurementId(null)
+      } else if (mode === 'scale') {
+        // SCALE mode: click two points of a known dimension to define the
+        // reference line. A third click restarts the pair.
+        const svg = svgRef.current
+        if (!svg) return
+        const ctm = svg.getScreenCTM()
+        if (!ctm) return
+        const pt = svg.createSVGPoint()
+        pt.x = e.clientX
+        pt.y = e.clientY
+        const local = pt.matrixTransform(ctm.inverse())
+        const p = { x: round2(clamp(local.x, 0, 100)), y: round2(clamp(local.y, 0, 100)) }
+        setScaleError(null)
+        setScalePoints((prev) => (prev.length >= 2 ? [p] : [...prev, p]))
       }
       return
     }
@@ -295,6 +385,47 @@ export function EstCanvas() {
     const snapped = snapPoint({ x: clamp(local.x, 0, 100), y: clamp(local.y, 0, 100) })
     setRedoStack([])
     setDraftPoints((prev) => [...prev, { x: round2(snapped.x), y: round2(snapped.y) }])
+  }
+
+  // Persist the drawn reference line as the page calibration. The two board
+  // points + the typed real-world length flow through the same calibrate API
+  // the mobile overlay uses; once saved, `worldScale` recomputes and new
+  // measurements carry true sqft/lf.
+  const applyScale = async () => {
+    setScaleError(null)
+    if (!activePage) {
+      setScaleError('Open a sheet page first.')
+      return
+    }
+    if (scalePoints.length < 2) {
+      setScaleError('Click two points of a known dimension on the sheet.')
+      return
+    }
+    const [a, b] = scalePoints as [TakeoffPoint, TakeoffPoint]
+    if (a.x === b.x && a.y === b.y) {
+      setScaleError('The two points must be distinct.')
+      return
+    }
+    const dist = Number(scaleLength)
+    if (!Number.isFinite(dist) || dist <= 0) {
+      setScaleError('Enter the line’s real-world length (ft).')
+      return
+    }
+    try {
+      await calibratePage.mutateAsync({
+        pageId: activePage.id,
+        world_distance: dist,
+        world_unit: 'ft',
+        x1: a.x,
+        y1: a.y,
+        x2: b.x,
+        y2: b.y,
+      })
+      setScalePoints([])
+      setMode('draw')
+    } catch (err) {
+      setScaleError(err instanceof Error ? err.message : 'Could not save the scale.')
+    }
   }
 
   // --- Zoom + pan (PlanSwift-style canvas navigation) ----------------------
@@ -475,11 +606,17 @@ export function EstCanvas() {
     setSavedToast(null)
     try {
       let geometry: MeasurementGeometry
+      // When the page is calibrated, stamp the per-axis world scale so the
+      // server computes true sqft/lf (board-space stays the fallback).
+      const scale =
+        worldScale && (tool === 'polygon' || tool === 'rect' || tool === 'arc' || tool === 'lineal')
+          ? { world_per_board_x: worldScale.wx, world_per_board_y: worldScale.wy }
+          : {}
       // RECT produces a polygon; ARC tessellates its 3 control points into a
       // lineal polyline. Both reuse the existing geometry kinds — no new model.
-      if (tool === 'polygon' || tool === 'rect') geometry = { kind: 'polygon', points: draftPoints }
-      else if (tool === 'arc') geometry = { kind: 'lineal', points: arcCurve ?? draftPoints }
-      else if (tool === 'lineal') geometry = { kind: 'lineal', points: draftPoints }
+      if (tool === 'polygon' || tool === 'rect') geometry = { kind: 'polygon', points: draftPoints, ...scale }
+      else if (tool === 'arc') geometry = { kind: 'lineal', points: arcCurve ?? draftPoints, ...scale }
+      else if (tool === 'lineal') geometry = { kind: 'lineal', points: draftPoints, ...scale }
       else geometry = { kind: 'count', points: draftPoints }
       const res = await create.mutateAsync({
         blueprint_document_id: activeBlueprint?.id ?? null,
@@ -978,6 +1115,32 @@ export function EstCanvas() {
             {draftPoints.map((p, i) => (
               <circle key={i} cx={p.x} cy={p.y} r={tool === 'count' ? 1 : 0.8} fill="var(--m-amber)" />
             ))}
+            {/* SCALE-mode reference line: the two known-dimension points. */}
+            {mode === 'scale' && scalePoints.length >= 1 ? (
+              <g pointerEvents="none">
+                {scalePoints.length === 2 ? (
+                  <line
+                    x1={scalePoints[0]!.x}
+                    y1={scalePoints[0]!.y}
+                    x2={scalePoints[1]!.x}
+                    y2={scalePoints[1]!.y}
+                    stroke="var(--m-ink)"
+                    strokeWidth={0.6}
+                  />
+                ) : null}
+                {scalePoints.map((p, i) => (
+                  <circle
+                    key={`s${i}`}
+                    cx={p.x}
+                    cy={p.y}
+                    r={1}
+                    fill="var(--m-ink)"
+                    stroke="var(--m-paper)"
+                    strokeWidth={0.3}
+                  />
+                ))}
+              </g>
+            ) : null}
             {/* Live on-canvas dimension label — the running quantity rendered on
                 the shape as you draw, same style as committed measurements. */}
             {isAreaTool && draftPoints.length >= 3
@@ -1371,6 +1534,25 @@ export function EstCanvas() {
               ))}
             </MSelect>
           ) : null}
+          {/* Auto-Bookmark: jump to a sheet by its embedded PDF bookmark. */}
+          {bookmarks.length > 0 ? (
+            <MSelect
+              value=""
+              onChange={(e) => {
+                const pn = Number(e.target.value)
+                if (!Number.isFinite(pn)) return
+                const pg = pages.find((p) => p.page_number === pn)
+                if (pg) setPageId(pg.id)
+              }}
+            >
+              <option value="">Bookmarks…</option>
+              {bookmarks.map((b, i) => (
+                <option key={i} value={b.pageNumber}>
+                  {b.title} · pg {b.pageNumber}
+                </option>
+              ))}
+            </MSelect>
+          ) : null}
 
           {/* Scope item selector */}
           <MSelect value={serviceItemCode} onChange={(e) => setServiceItemCode(e.target.value)}>
@@ -1684,7 +1866,9 @@ export function EstCanvas() {
                 lineHeight: 1.5,
               }}
             >
-              YOU DREW A LINE. ENTER ITS REAL-WORLD LENGTH:
+              {scalePoints.length < 2
+                ? `CLICK TWO POINTS OF A KNOWN DIMENSION ON THE SHEET (${scalePoints.length}/2), THEN ENTER ITS LENGTH:`
+                : 'ENTER THE REAL-WORLD LENGTH OF THE LINE YOU DREW:'}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 14 }}>
               <div
@@ -1718,21 +1902,24 @@ export function EstCanvas() {
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontFamily: 'var(--m-num)', fontSize: 10, color: 'var(--m-ink-3)', fontWeight: 600 }}>
-                  = 1:48
+                  {scalePoints.length}/2 PTS
                 </div>
                 <div
                   style={{
                     fontFamily: 'var(--m-num)',
                     fontSize: 10,
-                    color: 'var(--m-accent-ink)',
+                    color: scalePoints.length >= 2 ? 'var(--m-green)' : 'var(--m-ink-3)',
                     fontWeight: 700,
                     marginTop: 3,
                   }}
                 >
-                  ● PROVISIONAL
+                  {scalePoints.length >= 2 ? '● READY' : '○ DRAW LINE'}
                 </div>
               </div>
             </div>
+            {scaleError ? (
+              <div style={{ color: 'var(--m-red)', fontSize: 12, fontWeight: 600, marginTop: 10 }}>{scaleError}</div>
+            ) : null}
             <div
               style={{
                 padding: '12px 14px',
@@ -1748,8 +1935,12 @@ export function EstCanvas() {
               AI can detect + verify scale on all sheets at once.
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
-              <MButton variant="ghost" onClick={() => setMode('draw')}>
-                Apply to sheet
+              <MButton
+                variant="ghost"
+                onClick={applyScale}
+                disabled={scalePoints.length < 2 || calibratePage.isPending}
+              >
+                {calibratePage.isPending ? 'Saving…' : 'Apply to sheet'}
               </MButton>
               <MButton variant="primary" onClick={() => navigate(`/desktop/scale/${projectId}`)}>
                 AI verify all

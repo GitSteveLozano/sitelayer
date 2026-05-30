@@ -18,6 +18,8 @@ import {
   calculateLinealLength,
   calculateLinealQuantity,
   calculateVolumeQuantity,
+  calculatePolygonAreaScaled,
+  calculateLinealLengthScaled,
   calculateGeometryQuantity,
   computeProductivity,
   calculateJobRentalBillingRun,
@@ -414,6 +416,24 @@ describe('domain functions', () => {
       })
     })
 
+    it('passes per-axis world scale through normalize (the API write path)', () => {
+      const g = normalizePolygonGeometry({
+        kind: 'polygon',
+        points: [
+          { x: 0, y: 0 },
+          { x: 100, y: 0 },
+          { x: 100, y: 100 },
+          { x: 0, y: 100 },
+        ],
+        world_per_board_x: 0.4,
+        world_per_board_y: 0.2,
+      })
+      expect(g?.world_per_board_x).toBe(0.4)
+      expect(g?.world_per_board_y).toBe(0.2)
+      // normalize → calculateGeometryQuantity is exactly the server write path
+      expect(calculateGeometryQuantity(g!)).toBeCloseTo(800, 2)
+    })
+
     it('rejects malformed polygon geometry', () => {
       expect(normalizePolygonGeometry({ kind: 'line', points: square })).toBeNull()
       expect(normalizePolygonGeometry({ kind: 'polygon', points: square.slice(0, 2) })).toBeNull()
@@ -586,6 +606,42 @@ describe('domain functions', () => {
           ],
         }),
       ).toBe(10)
+    })
+
+    it('applies per-axis world scale (anisotropic): area = boardArea·wx·wy', () => {
+      const square = [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+        { x: 100, y: 100 },
+        { x: 0, y: 100 },
+      ]
+      // board area 10000; wx=0.4, wy=0.2 → 40ft × 20ft = 800 sqft
+      expect(calculatePolygonAreaScaled(square, 0.4, 0.2)).toBeCloseTo(800, 4)
+      expect(
+        calculateGeometryQuantity({ kind: 'polygon', points: square, world_per_board_x: 0.4, world_per_board_y: 0.2 }),
+      ).toBeCloseTo(800, 2)
+      // a horizontal 50-unit lineal at wx=0.4 → 20 lf; a vertical at wy=0.2 → 10 lf
+      expect(
+        calculateLinealLengthScaled(
+          [
+            { x: 0, y: 0 },
+            { x: 50, y: 0 },
+          ],
+          0.4,
+          0.2,
+        ),
+      ).toBeCloseTo(20, 6)
+      expect(
+        calculateGeometryQuantity({
+          kind: 'lineal',
+          points: [
+            { x: 0, y: 0 },
+            { x: 0, y: 50 },
+          ],
+          world_per_board_x: 0.4,
+          world_per_board_y: 0.2,
+        }),
+      ).toBeCloseTo(10, 2)
     })
   })
 

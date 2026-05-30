@@ -42,6 +42,14 @@ export interface MeasurementGeometry {
   length?: number
   width?: number
   height?: number
+  /**
+   * Per-axis real-world distance per board unit, written at save time from the
+   * page calibration + page aspect so the server computes true sqft/lf instead
+   * of board-space area. Absent ⇒ uncalibrated ⇒ board-space (legacy). See
+   * `lib/takeoff/world-scale.ts` and `@sitelayer/domain` calculateGeometryQuantity.
+   */
+  world_per_board_x?: number
+  world_per_board_y?: number
 }
 
 /**

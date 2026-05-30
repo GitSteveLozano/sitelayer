@@ -58,6 +58,15 @@ export interface PolygonGeometry {
   sheet_scale?: number | null
   calibration_length?: number | null
   calibration_unit?: string | null
+  /**
+   * Real-world distance per board-space unit, PER AXIS. The drawing surface is
+   * a 0–100 board space stretched to the page's aspect ratio (anisotropic), so
+   * x and y board units cover different real distances. Storing both lets the
+   * quantity math produce true sqft/lf: area = boardArea·wx·wy, length =
+   * Σ hypot(Δx·wx, Δy·wy). Absent = uncalibrated → board-space quantity (legacy).
+   */
+  world_per_board_x?: number | null
+  world_per_board_y?: number | null
 }
 
 export interface LinealGeometry {
@@ -66,6 +75,9 @@ export interface LinealGeometry {
   sheet_scale?: number | null
   calibration_length?: number | null
   calibration_unit?: string | null
+  /** See PolygonGeometry.world_per_board_x — per-axis real-world scale. */
+  world_per_board_x?: number | null
+  world_per_board_y?: number | null
 }
 
 export interface VolumeGeometry {
@@ -503,6 +515,11 @@ export function normalizePolygonGeometry(input: unknown): PolygonGeometry | null
   if (calibrationLength !== null) geometry.calibration_length = calibrationLength
   if (calibrationUnit) geometry.calibration_unit = calibrationUnit.slice(0, 32)
 
+  const worldX = positiveNumberOrNull(input.world_per_board_x)
+  const worldY = positiveNumberOrNull(input.world_per_board_y)
+  if (worldX !== null) geometry.world_per_board_x = worldX
+  if (worldY !== null) geometry.world_per_board_y = worldY
+
   return geometry
 }
 
@@ -546,6 +563,11 @@ export function normalizeLinealGeometry(input: unknown): LinealGeometry | null {
   if (sheetScale !== null) geometry.sheet_scale = sheetScale
   if (calibrationLength !== null) geometry.calibration_length = calibrationLength
   if (calibrationUnit) geometry.calibration_unit = calibrationUnit.slice(0, 32)
+
+  const worldX = positiveNumberOrNull(input.world_per_board_x)
+  const worldY = positiveNumberOrNull(input.world_per_board_y)
+  if (worldX !== null) geometry.world_per_board_x = worldX
+  if (worldY !== null) geometry.world_per_board_y = worldY
 
   return geometry
 }
@@ -607,12 +629,53 @@ export function calculateVolumeQuantity(input: { length: number; width: number; 
   return roundMeasurement(length * width * height)
 }
 
+/**
+ * Resolve the per-axis real-world scale from a geometry. Prefers the explicit
+ * per-axis `world_per_board_x/y` (set at save time from page calibration +
+ * page aspect). Falls back to a legacy isotropic `sheet_scale`, then to 1
+ * (board space — what uncalibrated pages produce today).
+ */
+function resolveWorldScale(geometry: PolygonGeometry | LinealGeometry): { wx: number; wy: number } {
+  const wx = positiveNumberOrNull(geometry.world_per_board_x)
+  const wy = positiveNumberOrNull(geometry.world_per_board_y)
+  if (wx !== null && wy !== null) return { wx, wy }
+  const scale = positiveNumberOrNull(geometry.sheet_scale)
+  if (scale !== null) return { wx: scale, wy: scale }
+  return { wx: 1, wy: 1 }
+}
+
+/**
+ * Polygon area under an anisotropic linear map (x·wx, y·wy). The shoelace area
+ * scales by exactly wx·wy under independent per-axis scaling, so we can scale
+ * the board-space area directly.
+ */
+export function calculatePolygonAreaScaled(points: readonly TakeoffPoint[], wx: number, wy: number): number {
+  return calculatePolygonArea(points) * wx * wy
+}
+
+/** Polyline length under an anisotropic linear map (x·wx, y·wy). */
+export function calculateLinealLengthScaled(points: readonly TakeoffPoint[], wx: number, wy: number): number {
+  if (points.length < 2) return 0
+  let total = 0
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const current = points[index]
+    const next = points[index + 1]
+    if (!current || !next) continue
+    const dx = (next.x - current.x) * wx
+    const dy = (next.y - current.y) * wy
+    total += Math.sqrt(dx * dx + dy * dy)
+  }
+  return total
+}
+
 export function calculateGeometryQuantity(geometry: TakeoffGeometry): number {
   if (geometry.kind === 'polygon') {
-    return calculateTakeoffQuantity(geometry.points, geometry.sheet_scale ?? 1)
+    const { wx, wy } = resolveWorldScale(geometry)
+    return roundMeasurement(calculatePolygonAreaScaled(geometry.points, wx, wy))
   }
   if (geometry.kind === 'lineal') {
-    return calculateLinealQuantity(geometry.points, geometry.sheet_scale ?? 1)
+    const { wx, wy } = resolveWorldScale(geometry)
+    return roundMeasurement(calculateLinealLengthScaled(geometry.points, wx, wy))
   }
   return calculateVolumeQuantity(geometry)
 }
