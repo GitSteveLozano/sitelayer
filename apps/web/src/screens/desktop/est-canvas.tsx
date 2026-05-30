@@ -59,7 +59,7 @@ import { DEmptyState } from '@/components/d'
  * personas), matching the API role gate on POST /api/projects/:id/blueprints. */
 const BLUEPRINT_UPLOAD_ACCEPT = 'application/pdf,image/*'
 
-type Tool = 'polygon' | 'lineal' | 'count'
+type Tool = 'polygon' | 'rect' | 'lineal' | 'count'
 
 // Canvas interaction modes layered over the drawing surface (ported from
 // Steve's Desktop v2 mockup `DCanvasScale` / `DCanvasItemPalette` /
@@ -208,11 +208,14 @@ export function EstCanvas() {
   }, [serviceItemCode, items])
 
   const selectedItem = items.find((i) => i.code === serviceItemCode) ?? null
-  const unitForItem = selectedItem?.unit ?? (tool === 'polygon' ? 'sqft' : tool === 'lineal' ? 'lf' : 'ea')
+  // Area tools (freeform polygon + drag rectangle) share the same square-foot
+  // geometry/semantics; lineal = length, count = each.
+  const isAreaTool = tool === 'polygon' || tool === 'rect'
+  const unitForItem = selectedItem?.unit ?? (isAreaTool ? 'sqft' : tool === 'lineal' ? 'lf' : 'ea')
 
   // --- Geometry (unchanged from mobile) ------------------------------------
   const draftQuantity = useMemo(() => {
-    if (tool === 'polygon') return round2(calculatePolygonArea(draftPoints))
+    if (tool === 'polygon' || tool === 'rect') return round2(calculatePolygonArea(draftPoints))
     if (tool === 'lineal') return round2(calculateLinealLength(draftPoints))
     return draftPoints.length
   }, [tool, draftPoints])
@@ -327,7 +330,26 @@ export function EstCanvas() {
     return () => window.removeEventListener('keydown', onKey)
   }, [mode])
 
+  // Map a screen point to 0–100 board space (same CTM the tap path uses).
+  const clientToBoard = (clientX: number, clientY: number): TakeoffPoint | null => {
+    const svg = svgRef.current
+    if (!svg) return null
+    const ctm = svg.getScreenCTM()
+    if (!ctm) return null
+    const pt = svg.createSVGPoint()
+    pt.x = clientX
+    pt.y = clientY
+    const local = pt.matrixTransform(ctm.inverse())
+    return { x: clamp(local.x, 0, 100), y: clamp(local.y, 0, 100) }
+  }
+
   const panStartRef = useRef<{ x: number; y: number; panX: number; panY: number } | null>(null)
+  // Box/marquee (RECT tool): drag a rectangle in draw mode. The start corner is
+  // held in a ref; boxRect drives the live preview and becomes a 4-point draft
+  // polygon on pointer-up (so the normal area save / quantity / deduct flow
+  // applies unchanged).
+  const boxStartRef = useRef<TakeoffPoint | null>(null)
+  const [boxRect, setBoxRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const onPointerDownCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
     // Middle-button, Space-hold, or the Hand tool pans instead of drawing.
     if (e.button === 1 || spaceHeld || handMode) {
@@ -337,14 +359,53 @@ export function EstCanvas() {
       setPanning(true)
       return
     }
+    if (mode === 'draw' && tool === 'rect') {
+      const p = clientToBoard(e.clientX, e.clientY)
+      if (p) {
+        e.currentTarget.setPointerCapture?.(e.pointerId)
+        boxStartRef.current = p
+        setBoxRect({ x0: p.x, y0: p.y, x1: p.x, y1: p.y })
+        setDraftPoints([])
+        setRedoStack([])
+      }
+      return
+    }
     onCanvasTap(e)
   }
   const onPointerMoveCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
+    const boxStart = boxStartRef.current
+    if (boxStart) {
+      const p = clientToBoard(e.clientX, e.clientY)
+      if (p) setBoxRect({ x0: boxStart.x, y0: boxStart.y, x1: p.x, y1: p.y })
+      return
+    }
     const start = panStartRef.current
     if (!start) return
     setPan({ x: start.panX + (e.clientX - start.x), y: start.panY + (e.clientY - start.y) })
   }
   const onPointerUpCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
+    if (boxStartRef.current) {
+      boxStartRef.current = null
+      e.currentTarget.releasePointerCapture?.(e.pointerId)
+      const r = boxRect
+      if (r) {
+        const x0 = Math.min(r.x0, r.x1)
+        const y0 = Math.min(r.y0, r.y1)
+        const x1 = Math.max(r.x0, r.x1)
+        const y1 = Math.max(r.y0, r.y1)
+        // Ignore an accidental click / sliver — needs real area to be a takeoff.
+        if (x1 - x0 > 0.5 && y1 - y0 > 0.5) {
+          setDraftPoints([
+            { x: round2(x0), y: round2(y0) },
+            { x: round2(x1), y: round2(y0) },
+            { x: round2(x1), y: round2(y1) },
+            { x: round2(x0), y: round2(y1) },
+          ])
+        }
+      }
+      setBoxRect(null)
+      return
+    }
     if (panStartRef.current) {
       panStartRef.current = null
       setPanning(false)
@@ -352,7 +413,7 @@ export function EstCanvas() {
     }
   }
 
-  const minPoints = tool === 'polygon' ? 3 : tool === 'lineal' ? 2 : 1
+  const minPoints = tool === 'polygon' || tool === 'rect' ? 3 : tool === 'lineal' ? 2 : 1
   const canSave = !create.isPending && Boolean(serviceItemCode) && draftQuantity > 0 && draftPoints.length >= minPoints
 
   const onSave = async () => {
@@ -361,7 +422,8 @@ export function EstCanvas() {
     setSavedToast(null)
     try {
       let geometry: MeasurementGeometry
-      if (tool === 'polygon') geometry = { kind: 'polygon', points: draftPoints }
+      // RECT is an input method that produces a polygon; it saves as one.
+      if (tool === 'polygon' || tool === 'rect') geometry = { kind: 'polygon', points: draftPoints }
       else if (tool === 'lineal') geometry = { kind: 'lineal', points: draftPoints }
       else geometry = { kind: 'count', points: draftPoints }
       const res = await create.mutateAsync({
@@ -374,8 +436,8 @@ export function EstCanvas() {
         division_code: selectedItem?.divisions?.[0] ?? null,
         unit: unitForItem,
         geometry,
-        // Cutout/deduct only applies to area (polygon) takeoff.
-        is_deduction: tool === 'polygon' && deduct,
+        // Cutout/deduct only applies to area (polygon / rect) takeoff.
+        is_deduction: isAreaTool && deduct,
         draft_id: activeDraftId,
       })
       setDraftPoints([])
@@ -804,9 +866,31 @@ export function EstCanvas() {
               return null
             })}
 
+            {/* Live box/marquee preview while dragging the RECT tool. */}
+            {boxRect
+              ? (() => {
+                  const x0 = Math.min(boxRect.x0, boxRect.x1)
+                  const y0 = Math.min(boxRect.y0, boxRect.y1)
+                  const w = Math.abs(boxRect.x1 - boxRect.x0)
+                  const h = Math.abs(boxRect.y1 - boxRect.y0)
+                  return (
+                    <rect
+                      x={x0}
+                      y={y0}
+                      width={w}
+                      height={h}
+                      fill={deduct ? 'rgba(214,69,69,0.18)' : 'rgba(201,138,46,0.2)'}
+                      stroke={deduct ? 'var(--m-red)' : 'var(--m-amber)'}
+                      strokeWidth={0.4}
+                      strokeDasharray="0.8 0.8"
+                      pointerEvents="none"
+                    />
+                  )
+                })()
+              : null}
             {/* Draft-in-progress (same render as mobile). In cutout/deduct mode
                 the polygon draws in red to signal it will subtract. */}
-            {tool === 'polygon' && draftPoints.length >= 3 ? (
+            {isAreaTool && draftPoints.length >= 3 ? (
               <polygon
                 points={draftPoints.map((p) => `${p.x},${p.y}`).join(' ')}
                 fill={deduct ? 'rgba(214,69,69,0.18)' : 'rgba(201,138,46,0.2)'}
@@ -829,7 +913,7 @@ export function EstCanvas() {
             ))}
             {/* Live on-canvas dimension label — the running quantity rendered on
                 the shape as you draw, same style as committed measurements. */}
-            {tool === 'polygon' && draftPoints.length >= 3
+            {isAreaTool && draftPoints.length >= 3
               ? (() => {
                   const c = calculatePolygonCentroid(draftPoints)
                   return c ? (
@@ -963,22 +1047,17 @@ export function EstCanvas() {
             ] as const
           ).map((t, i, arr) => {
             const isDraw = t.kind === 'draw'
-            // RECT/TAP are aliases that drive the same underlying tool values as
-            // the mobile surface (polygon / count); no new geometry is introduced.
-            const value: Tool = isDraw
-              ? t.tool === 'rect'
-                ? 'polygon'
-                : t.tool === 'tap'
-                  ? 'count'
-                  : (t.tool as Tool)
-              : 'polygon'
+            // RECT is a real drag-rectangle area tool; TAP is an alias for the
+            // count tool (mobile-surface naming). All other draw buttons map
+            // 1:1 to their geometry tool.
+            const value: Tool = isDraw ? (t.tool === 'tap' ? 'count' : (t.tool as Tool)) : 'polygon'
             const on = isDraw
               ? mode === 'draw' &&
                 ((t.tool === 'polygon' && tool === 'polygon') ||
+                  (t.tool === 'rect' && tool === 'rect') ||
                   (t.tool === 'lineal' && tool === 'lineal') ||
                   (t.tool === 'count' && tool === 'count') ||
-                  // RECT/TAP highlight when their alias tool is active.
-                  (t.tool === 'rect' && tool === 'polygon') ||
+                  // TAP highlights when the count tool is active.
                   (t.tool === 'tap' && tool === 'count'))
               : mode === t.mode
             return (
@@ -1218,9 +1297,11 @@ export function EstCanvas() {
             >
               {tool === 'polygon'
                 ? `POLY · ${draftPoints.length} PTS`
-                : tool === 'lineal'
-                  ? `LIN · ${draftPoints.length} PTS`
-                  : `PT · ${draftPoints.length}`}
+                : tool === 'rect'
+                  ? `RECT · ${draftPoints.length ? 'DRAWN' : 'DRAG'}`
+                  : tool === 'lineal'
+                    ? `LIN · ${draftPoints.length} PTS`
+                    : `PT · ${draftPoints.length}`}
             </div>
             <div
               style={{
@@ -1296,7 +1377,7 @@ export function EstCanvas() {
             >
               SNAP {snapEnabled ? 'ON' : 'OFF'}
             </button>
-            {tool === 'polygon' ? (
+            {isAreaTool ? (
               <button
                 type="button"
                 onClick={() => setDeduct((on) => !on)}
