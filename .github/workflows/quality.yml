@@ -220,6 +220,7 @@ jobs:
           npm run build --workspace @sitelayer/workflows
           npm run build --workspace @sitelayer/capture-schema
           npm run build --workspace @sitelayer/capture-catalog
+          npm run build --workspace @sitelayer/formula-evaluator
           npm run build --workspace @sitelayer/pipe-blueprint
           npm run build --workspace @sitelayer/pipe-roomplan
           npm run build --workspace @sitelayer/pipe-photogrammetry
@@ -351,6 +352,7 @@ jobs:
           npm run build --workspace @sitelayer/workflows
           npm run build --workspace @sitelayer/capture-schema
           npm run build --workspace @sitelayer/capture-catalog
+          npm run build --workspace @sitelayer/formula-evaluator
           npm run build --workspace @sitelayer/pipe-blueprint
           npm run build --workspace @sitelayer/pipe-roomplan
           npm run build --workspace @sitelayer/pipe-photogrammetry
