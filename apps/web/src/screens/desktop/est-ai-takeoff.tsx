@@ -101,11 +101,15 @@ const SETUP_TARGETS: TakeoffTarget[] = [
   { sym: 'JOINT LINE', item: 'Sealant', param: 'LINEAR · PERIM', on: false },
 ]
 
-export function EstAiTakeoffSetup() {
-  const params = useParams<{ projectId: string }>()
-  const navigate = useNavigate()
-  const projectId = params.projectId ?? ''
-
+export function EstAiTakeoffSetupPanel({
+  projectId,
+  onClose,
+  onReviewDraft,
+}: {
+  projectId: string
+  onClose: () => void
+  onReviewDraft: (draftId: string) => void
+}) {
   // Target toggles stay presentational (the capture endpoint takes no
   // per-target selection — GAP). They still gate RUN (≥1 target).
   const [targets, setTargets] = useState<TakeoffTarget[]>(SETUP_TARGETS)
@@ -118,44 +122,50 @@ export function EstAiTakeoffSetup() {
   const enabledCount = targets.filter((t) => t.on).length
 
   const runTakeoff = () => {
-    if (!projectId || capture.isPending) {
-      if (!projectId) navigate('/desktop/ai-queue')
-      return
-    }
+    if (!projectId || capture.isPending) return
     // Dry-run-safe capture (JSON body → deterministic stub on the API; no live
     // Anthropic spend). Carries the real draft id into the review lane.
     capture.mutate(
       { kind: 'blueprint_vision', name: 'AI auto-takeoff', payload: { dryRun: true } },
       {
-        onSuccess: (res) => navigate(`/desktop/ai-takeoff/${projectId}/review`, { state: { draftId: res.draft.id } }),
+        onSuccess: (res) => onReviewDraft(res.draft.id),
       },
     )
   }
 
   return (
-    <div className="d-content-full" style={{ position: 'relative' }}>
-      <TakeoffBackdrop>
-        <polygon
-          points="320,220 600,222 602,400 318,398"
-          fill="rgba(255,212,0,0.30)"
-          stroke="var(--m-ink)"
-          strokeWidth="2"
-        />
-      </TakeoffBackdrop>
-
-      <div
-        style={{
-          position: 'absolute',
-          top: 24,
-          right: 24,
-          width: 340,
-          background: 'var(--m-card)',
-          border: '2px solid var(--m-ink)',
-          boxShadow: '6px 6px 0 var(--m-ink)',
-        }}
-      >
-        <div style={floatHead}>● AI · Draft the whole takeoff</div>
-        <div style={{ padding: 18 }}>
+    <div
+      style={{
+        position: 'absolute',
+        top: 24,
+        right: 24,
+        width: 340,
+        background: 'var(--m-card)',
+        border: '2px solid var(--m-ink)',
+        boxShadow: '6px 6px 0 var(--m-ink)',
+        zIndex: 20,
+      }}
+    >
+      <div style={{ ...floatHead, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span>● AI · Draft the whole takeoff</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          style={{
+            background: 'none',
+            border: 'none',
+            color: 'var(--m-accent)',
+            cursor: 'pointer',
+            fontSize: 13,
+            fontWeight: 800,
+            lineHeight: 1,
+          }}
+        >
+          ✕
+        </button>
+      </div>
+      <div style={{ padding: 18 }}>
           <div style={label}>Targets · symbol → item</div>
           <div style={{ marginTop: 10, border: '2px solid var(--m-ink)' }}>
             {targets.map((t, i) => (
@@ -280,6 +290,31 @@ export function EstAiTakeoffSetup() {
           ) : null}
         </div>
       </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// EstAiTakeoffSetup — full-page route shim (faint backdrop + the panel).
+// ---------------------------------------------------------------------------
+export function EstAiTakeoffSetup() {
+  const params = useParams<{ projectId: string }>()
+  const navigate = useNavigate()
+  const projectId = params.projectId ?? ''
+  return (
+    <div className="d-content-full" style={{ position: 'relative' }}>
+      <TakeoffBackdrop>
+        <polygon
+          points="320,220 600,222 602,400 318,398"
+          fill="rgba(255,212,0,0.30)"
+          stroke="var(--m-ink)"
+          strokeWidth="2"
+        />
+      </TakeoffBackdrop>
+      <EstAiTakeoffSetupPanel
+        projectId={projectId}
+        onClose={() => navigate(projectId ? `/desktop/canvas/${projectId}` : '/desktop/ai-queue')}
+        onReviewDraft={(id) => navigate(`/desktop/ai-takeoff/${projectId}/review`, { state: { draftId: id } })}
+      />
     </div>
   )
 }

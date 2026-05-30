@@ -81,13 +81,19 @@ function CountBackdrop({ children }: { children?: React.ReactNode }) {
 }
 
 // ---------------------------------------------------------------------------
-// EstAiCountSetup — symbol + sensitivity + sheet scope + RUN.
+// EstAiCountSetupPanel — the float palette only (symbol + sensitivity + sheet
+// scope + RUN). Mounted as an overlay INSIDE the takeoff canvas (canvas
+// visible behind), or wrapped by the full-page EstAiCountSetup route shim.
 // ---------------------------------------------------------------------------
-export function EstAiCountSetup() {
-  const params = useParams<{ projectId: string }>()
-  const navigate = useNavigate()
-  const projectId = params.projectId ?? ''
-
+export function EstAiCountSetupPanel({
+  projectId,
+  onClose,
+  onReviewDraft,
+}: {
+  projectId: string
+  onClose: () => void
+  onReviewDraft: (draftId: string) => void
+}) {
   const sheets = ['M-101', 'M-102', 'M-103', 'M-104']
   const [sensitivity, setSensitivity] = useState<Sensitivity>('NORMAL')
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
@@ -101,39 +107,50 @@ export function EstAiCountSetup() {
   const selectedCount = sheets.filter((s) => selected[s]).length
 
   const runCount = () => {
-    if (!projectId || capture.isPending) {
-      if (!projectId) navigate('/desktop/ai-queue')
-      return
-    }
+    if (!projectId || capture.isPending) return
     // Dry-run-safe capture (JSON body → deterministic stub on the API; no live
     // Anthropic spend). Carries the real draft id into the review lane.
     capture.mutate(
       { kind: 'blueprint_vision', name: 'AI auto-count', payload: { dryRun: true } },
       {
-        onSuccess: (res) => navigate(`/desktop/ai-count/${projectId}/review`, { state: { draftId: res.draft.id } }),
+        onSuccess: (res) => onReviewDraft(res.draft.id),
       },
     )
   }
 
   return (
-    <div className="d-content-full" style={{ position: 'relative' }}>
-      <CountBackdrop>
-        <circle cx="500" cy="400" r="16" fill="var(--m-accent)" stroke="var(--m-ink)" strokeWidth="3" />
-      </CountBackdrop>
-
-      <div
-        style={{
-          position: 'absolute',
-          top: 24,
-          right: 24,
-          width: 300,
-          background: 'var(--m-card)',
-          border: '2px solid var(--m-ink)',
-          boxShadow: '6px 6px 0 var(--m-ink)',
-        }}
-      >
-        <div style={floatHead}>● AI · Count a symbol</div>
-        <div style={{ padding: 18 }}>
+    <div
+      style={{
+        position: 'absolute',
+        top: 24,
+        right: 24,
+        width: 300,
+        background: 'var(--m-card)',
+        border: '2px solid var(--m-ink)',
+        boxShadow: '6px 6px 0 var(--m-ink)',
+        zIndex: 20,
+      }}
+    >
+      <div style={{ ...floatHead, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <span>● AI · Count a symbol</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          style={{
+            background: 'none',
+            border: 'none',
+            color: 'var(--m-accent)',
+            cursor: 'pointer',
+            fontSize: 13,
+            fontWeight: 800,
+            lineHeight: 1,
+          }}
+        >
+          ✕
+        </button>
+      </div>
+      <div style={{ padding: 18 }}>
           <div style={{ ...label, fontWeight: 600 }}>Clicked · A-104 sheet</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 10 }}>
             <span
@@ -241,6 +258,26 @@ export function EstAiCountSetup() {
           </div>
         </div>
       </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// EstAiCountSetup — full-page route shim (faint backdrop + the panel).
+// ---------------------------------------------------------------------------
+export function EstAiCountSetup() {
+  const params = useParams<{ projectId: string }>()
+  const navigate = useNavigate()
+  const projectId = params.projectId ?? ''
+  return (
+    <div className="d-content-full" style={{ position: 'relative' }}>
+      <CountBackdrop>
+        <circle cx="500" cy="400" r="16" fill="var(--m-accent)" stroke="var(--m-ink)" strokeWidth="3" />
+      </CountBackdrop>
+      <EstAiCountSetupPanel
+        projectId={projectId}
+        onClose={() => navigate(projectId ? `/desktop/canvas/${projectId}` : '/desktop/ai-queue')}
+        onReviewDraft={(id) => navigate(`/desktop/ai-count/${projectId}/review`, { state: { draftId: id } })}
+      />
     </div>
   )
 }

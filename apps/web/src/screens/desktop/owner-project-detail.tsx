@@ -57,6 +57,10 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
 
   const name = fromBootstrap?.name ?? fromList?.name ?? null
   const status = fromBootstrap?.status ?? fromList?.status ?? null
+  // Change Order + Invoice only make sense once a project is actually being
+  // worked/billed — never on a LEAD (pre-contract) project. Allow-list of
+  // billable statuses (robust against the loose `ProjectStatus` string union).
+  const showBilling = ['active', 'in_progress', 'accepted', 'completed', 'done'].includes(status ?? '')
   const customer = fromBootstrap?.customer_name ?? fromList?.customer_name ?? '—'
   const bidTotal = Number(fromBootstrap?.bid_total ?? fromList?.bid_total ?? 0)
   const laborRate = Number(fromBootstrap?.labor_rate ?? 0)
@@ -135,12 +139,16 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
                 Recovery plan
               </MButton>
             ) : null}
-            <MButton variant="ghost" onClick={() => setOverlay('change-order')}>
-              + Change order
-            </MButton>
-            <MButton variant="ghost" onClick={() => setOverlay('invoice')}>
-              Invoice
-            </MButton>
+            {showBilling ? (
+              <>
+                <MButton variant="ghost" onClick={() => setOverlay('change-order')}>
+                  + Change order
+                </MButton>
+                <MButton variant="ghost" onClick={() => setOverlay('invoice')}>
+                  Invoice
+                </MButton>
+              </>
+            ) : null}
             {status === 'done' || status === 'archived' ? (
               <MButton variant="ghost" onClick={() => setOverlay('post-mortem')}>
                 Post-mortem
@@ -197,10 +205,25 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
           />
         </div>
       </div>
-      <RecoveryDrawer open={overlay === 'recovery'} onClose={() => setOverlay(null)} />
-      <ChangeOrderDrawer open={overlay === 'change-order'} onClose={() => setOverlay(null)} />
-      <PostMortemDrawer open={overlay === 'post-mortem'} onClose={() => setOverlay(null)} />
-      <InvoiceModal open={overlay === 'invoice'} onClose={() => setOverlay(null)} />
+      <RecoveryDrawer
+          open={overlay === 'recovery'}
+          onClose={() => setOverlay(null)}
+          projectId={projectId}
+          daysLeft={daysLeft}
+          bidTotal={bidTotal}
+          laborRate={laborRate}
+          spent={spent}
+        />
+      <ChangeOrderDrawer open={overlay === 'change-order'} projectId={projectId} onClose={() => setOverlay(null)} />
+      <PostMortemDrawer open={overlay === 'post-mortem'} onClose={() => setOverlay(null)} projectId={projectId} />
+      <InvoiceModal
+          open={overlay === 'invoice'}
+          onClose={() => setOverlay(null)}
+          projectId={projectId}
+          projectName={name}
+          customerName={customer}
+          contractValue={bidTotal}
+        />
     </div>
   )
 }

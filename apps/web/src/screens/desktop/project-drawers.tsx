@@ -18,8 +18,20 @@
  * mounts each wrapper alongside its trigger.
  */
 import type { CSSProperties, ReactNode } from 'react'
+import { useState } from 'react'
 import { DDrawer, DModal } from '@/components/d'
-import { MButton } from '@/components/m'
+import { MBanner, MButton, MInput, MTextarea } from '@/components/m'
+import {
+  useChangeOrderEvent,
+  useCreateChangeOrder,
+  useProjectChangeOrders,
+  type ChangeOrder,
+} from '@/lib/api/change-orders'
+import { ApiError, useCreateEstimatePush } from '@/lib/api'
+import { useBillingMilestones, useCreateBillingMilestones, type BillingMilestone } from '@/lib/api/billing-milestones'
+import { useProjectLaborVariance } from '@/lib/api/labor-variance'
+import { useProjectCloseoutSummary } from '@/lib/api/closeout-summary'
+import { formatMoney } from '../mobile/format.js'
 
 interface OverlayProps {
   open: boolean
@@ -55,182 +67,451 @@ function FloatHead({ children }: { children: ReactNode }) {
 // DPostMortemDrawer)
 // ============================================================
 
-interface RecoveryAction {
-  n: number
-  label: string
-  sub: string
-  margin: string
-}
+/** F1a · Recovery actions ranked from the project's real labor-variance,
+ * opened off an at-risk margin guardrail. Deterministic heuristic over the
+ * worst over-budget cost codes — honest, demoable, zero AI spend. */
+export function RecoveryDrawer({
+  open,
+  onClose,
+  projectId,
+  daysLeft,
+  bidTotal,
+  laborRate,
+  spent,
+}: OverlayProps & { projectId: string; daysLeft: number; bidTotal: number; laborRate: number; spent: number }) {
+  const variance = useProjectLaborVariance(open ? projectId : undefined)
+  const rows = variance.data?.variance ?? []
+  const marginPct = bidTotal > 0 ? Math.round(((bidTotal - spent) / bidTotal) * 100) : null
 
-const RECOVERY_ACTIONS: RecoveryAction[] = [
-  { n: 1, label: 'Cap OT this week', sub: 'Save $1,840', margin: '+7%' },
-  { n: 2, label: 'Reassign Carlos to Hillcrest', sub: 'Overstaffed', margin: '+3%' },
-  { n: 3, label: 'Renegotiate stone w/ Calvera', sub: 'CO-003 opportunity', margin: '+8%' },
-]
+  const actions = rows
+    .filter((r) => r.hours_variance_pct > 10 && r.actual_hours > r.estimated_hours)
+    .sort((a, b) => b.hours_variance_pct - a.hours_variance_pct)
+    .slice(0, 3)
+    .map((r, i) => {
+      const overrunHours = Math.max(0, r.actual_hours - r.estimated_hours)
+      const overrunDollars = overrunHours * laborRate
+      const marginGain = Math.min(12, Math.max(1, Math.round(bidTotal > 0 ? (overrunDollars / bidTotal) * 100 : 1)))
+      return {
+        n: i + 1,
+        label: `Cap labor on ${r.service_item_code}${r.division_code ? ` · ${r.division_code}` : ''}`,
+        sub: `${Math.round(r.hours_variance_pct)}% over est · trim ${formatMoney(overrunDollars)} labor`,
+        margin: `+${marginGain}%`,
+      }
+    })
 
-/** F1a · AI-ranked recovery actions, opened off an at-risk margin guardrail. */
-export function RecoveryDrawer({ open, onClose }: OverlayProps) {
   return (
-    <DDrawer open={open} onClose={onClose} tone="bad" title="● RECOVERY PLAN · LABOR -18%">
-      <div style={display({ fontWeight: 800, fontSize: 24, lineHeight: 1, letterSpacing: '-0.02em' })}>
-        AI ranked 3 actions.
-      </div>
-      <div style={mono({ fontSize: 11, color: 'var(--m-ink-3)', marginTop: 8, fontWeight: 600 })}>
-        23 DAYS LEFT · MARGIN RECOVERABLE
-      </div>
-      <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
-        {RECOVERY_ACTIONS.map((a) => (
-          <div
-            key={a.n}
-            style={{
-              padding: 14,
-              border: '2px solid var(--m-ink)',
-              display: 'flex',
-              gap: 12,
-              alignItems: 'flex-start',
-            }}
-          >
-            <div
-              style={display({
-                width: 32,
-                height: 32,
-                background: 'var(--m-accent)',
-                color: 'var(--m-accent-ink)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: 800,
-                fontSize: 14,
-                flexShrink: 0,
-              })}
-            >
-              {a.n}
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 14, fontWeight: 700 }}>{a.label}</div>
-              <div style={mono({ fontSize: 10, color: 'var(--m-ink-3)', marginTop: 3, fontWeight: 600 })}>{a.sub}</div>
-              <div style={mono({ fontSize: 11, color: 'var(--m-green)', marginTop: 5, fontWeight: 800 })}>
-                MARGIN {a.margin}
-              </div>
-            </div>
+    <DDrawer open={open} onClose={onClose} tone="bad" title="● RECOVERY PLAN · LABOR OVER">
+      {variance.isPending && open ? (
+        <div style={mono({ fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 })}>Analyzing margin…</div>
+      ) : variance.isError ? (
+        <div style={mono({ fontSize: 12, color: 'var(--m-red)', fontWeight: 600 })}>
+          Could not build a recovery plan.
+        </div>
+      ) : actions.length === 0 ? (
+        <>
+          <div style={display({ fontWeight: 800, fontSize: 24, lineHeight: 1, letterSpacing: '-0.02em' })}>
+            No corrective actions needed.
           </div>
-        ))}
-      </div>
-      <MButton variant="primary" style={{ width: '100%', marginTop: 20 }}>
-        ACCEPT PLAN · TRACK
-      </MButton>
+          <div style={mono({ fontSize: 11, color: 'var(--m-ink-3)', marginTop: 8, fontWeight: 600 })}>
+            {daysLeft} DAYS LEFT · MARGIN {marginPct != null ? `${marginPct}%` : '—'} · HOLDING PACE
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={display({ fontWeight: 800, fontSize: 24, lineHeight: 1, letterSpacing: '-0.02em' })}>
+            {actions.length} ranked action{actions.length === 1 ? '' : 's'}.
+          </div>
+          <div style={mono({ fontSize: 11, color: 'var(--m-ink-3)', marginTop: 8, fontWeight: 600 })}>
+            {daysLeft} DAYS LEFT · MARGIN {marginPct != null ? `${marginPct}%` : '—'} · RECOVERABLE
+          </div>
+          <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {actions.map((a) => (
+              <div
+                key={a.n}
+                style={{
+                  padding: 14,
+                  border: '2px solid var(--m-ink)',
+                  display: 'flex',
+                  gap: 12,
+                  alignItems: 'flex-start',
+                }}
+              >
+                <div
+                  style={display({
+                    width: 32,
+                    height: 32,
+                    background: 'var(--m-accent)',
+                    color: 'var(--m-accent-ink)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    fontWeight: 800,
+                    fontSize: 14,
+                    flexShrink: 0,
+                  })}
+                >
+                  {a.n}
+                </div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{a.label}</div>
+                  <div style={mono({ fontSize: 10, color: 'var(--m-ink-3)', marginTop: 3, fontWeight: 600 })}>
+                    {a.sub}
+                  </div>
+                  <div style={mono({ fontSize: 11, color: 'var(--m-green)', marginTop: 5, fontWeight: 800 })}>
+                    MARGIN {a.margin}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {/* TODO(recovery-accept): optionally snooze the project's margin guardrail on accept. */}
+          <MButton variant="primary" style={{ width: '100%', marginTop: 20 }} onClick={onClose}>
+            ACCEPT PLAN · TRACK
+          </MButton>
+        </>
+      )}
     </DDrawer>
   )
 }
 
 const CHANGE_ORDER_STATES = ['DRAFT', 'SENT', 'ACCEPTED', 'REJECTED'] as const
 
-/** F1b · Change-order value delta + DRAFT/SENT/ACCEPTED/REJECTED state strip. */
-export function ChangeOrderDrawer({ open, onClose }: OverlayProps) {
+/** F1b · Change-order value delta + DRAFT/SENT/ACCEPTED/REJECTED state strip,
+ * bound to the project's real change orders (latest CO + author-new composer). */
+export function ChangeOrderDrawer({ open, projectId, onClose }: OverlayProps & { projectId: string }) {
+  const query = useProjectChangeOrders(projectId, { enabled: open && Boolean(projectId) })
+  const createMutation = useCreateChangeOrder(projectId)
+  const eventMutation = useChangeOrderEvent(projectId)
+
+  const cos = query.data?.change_orders ?? []
+  const latest = cos[0] ?? null
+  const deltaNum = latest ? Number(latest.value_delta) : 0
+  const scheduleImpact = latest && latest.schedule_impact_days != null ? Number(latest.schedule_impact_days) : null
+
+  const [composing, setComposing] = useState(false)
+  const [description, setDescription] = useState('')
+  const [valueDelta, setValueDelta] = useState('')
+  const [scheduleDays, setScheduleDays] = useState('')
+
+  const errorMessage =
+    createMutation.error instanceof Error
+      ? createMutation.error.message
+      : eventMutation.error instanceof Error
+        ? eventMutation.error.message
+        : null
+
+  function resetComposer() {
+    setComposing(false)
+    setDescription('')
+    setValueDelta('')
+    setScheduleDays('')
+  }
+
+  function submitCreate() {
+    const desc = description.trim()
+    if (!desc) return
+    const delta = Number(valueDelta)
+    if (!Number.isFinite(delta)) return
+    const days = scheduleDays.trim() === '' ? undefined : Number(scheduleDays)
+    createMutation.mutate(
+      {
+        description: desc,
+        value_delta: delta,
+        ...(days !== undefined && Number.isFinite(days) ? { schedule_impact_days: days } : {}),
+      },
+      { onSuccess: resetComposer },
+    )
+  }
+
+  function dispatch(co: ChangeOrder, event: 'SEND' | 'ACCEPT' | 'REJECT' | 'VOID') {
+    let reason: string | undefined
+    if (event === 'REJECT') {
+      const entered = window.prompt('Rejection reason (optional):') ?? ''
+      reason = entered.trim() === '' ? undefined : entered.trim()
+    }
+    eventMutation.mutate({ id: co.id, event, stateVersion: co.state_version, ...(reason ? { reason } : {}) })
+  }
+
+  const showComposer = composing || cos.length === 0
+  const title = showComposer
+    ? '+ CHANGE ORDER · NEW'
+    : latest
+      ? `+ CHANGE ORDER · CO-${String(latest.number).padStart(3, '0')}`
+      : '+ CHANGE ORDER'
+
   return (
-    <DDrawer open={open} onClose={onClose} title="+ CHANGE ORDER · CO-003">
-      <div style={sectionLabel}>WHAT CHANGED</div>
-      <div
-        style={{
-          marginTop: 8,
-          padding: 14,
-          border: '2px solid var(--m-ink)',
-          background: 'var(--m-card-soft)',
-          minHeight: 70,
-          fontSize: 14,
-          lineHeight: 1.5,
-        }}
-      >
-        Added stone veneer on south wall — 320 SF · client request.
-      </div>
+    <DDrawer open={open} onClose={onClose} title={title}>
+      {errorMessage ? (
+        <div style={{ marginBottom: 14 }}>
+          <MBanner tone="error" title="Couldn't save that change" body={errorMessage} />
+        </div>
+      ) : null}
 
-      <div style={{ ...sectionLabel, marginTop: 18 }}>VALUE DELTA</div>
-      <div style={display({ fontWeight: 800, fontSize: 44, marginTop: 6, color: 'var(--m-green)' })}>+$5,280</div>
-      <div style={mono({ fontSize: 10, color: 'var(--m-ink-3)', marginTop: 4, fontWeight: 600 })}>
-        320 SF × $16.50 · INCL 34% MARGIN
-      </div>
-
-      {/* state machine strip — first state (DRAFT) is current */}
-      <div style={{ display: 'flex', border: '2px solid var(--m-ink)', marginTop: 20 }}>
-        {CHANGE_ORDER_STATES.map((s, i, arr) => {
-          const current = i === 0
-          return (
-            <div
-              key={s}
-              style={mono({
-                flex: 1,
-                padding: '8px 0',
-                textAlign: 'center',
-                background: current ? 'var(--m-accent)' : 'transparent',
-                color: current ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
-                borderRight: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
-                fontSize: 8,
-                fontWeight: 800,
-              })}
-            >
-              {s}
+      {query.isPending && open ? (
+        <div style={mono({ fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 })}>Loading change orders…</div>
+      ) : query.isError ? (
+        <div style={mono({ fontSize: 12, color: 'var(--m-red)', fontWeight: 600 })}>Could not load change orders.</div>
+      ) : showComposer ? (
+        <>
+          <div style={sectionLabel}>WHAT CHANGED</div>
+          <MTextarea
+            value={description}
+            onChange={(e) => setDescription(e.currentTarget.value)}
+            placeholder="e.g. Added stone veneer on south wall — 320 SF, client request."
+            rows={3}
+            style={{ marginTop: 8, width: '100%' }}
+          />
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 14 }}>
+            <div>
+              <div style={sectionLabel}>VALUE DELTA ($)</div>
+              <MInput
+                value={valueDelta}
+                onChange={(e) => setValueDelta(e.currentTarget.value)}
+                inputMode="numeric"
+                placeholder="5280"
+                style={{ marginTop: 6, width: '100%' }}
+              />
             </div>
-          )
-        })}
-      </div>
-      <MButton variant="primary" style={{ width: '100%', marginTop: 20 }}>
-        SEND TO JOHN
-      </MButton>
+            <div>
+              <div style={sectionLabel}>SCHEDULE (DAYS)</div>
+              <MInput
+                value={scheduleDays}
+                onChange={(e) => setScheduleDays(e.currentTarget.value)}
+                inputMode="numeric"
+                placeholder="0"
+                style={{ marginTop: 6, width: '100%' }}
+              />
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
+            <MButton
+              variant="primary"
+              style={{ flex: 1 }}
+              onClick={submitCreate}
+              disabled={createMutation.isPending || description.trim() === ''}
+            >
+              {createMutation.isPending ? 'Saving…' : 'Save draft'}
+            </MButton>
+            {cos.length > 0 ? (
+              <MButton variant="ghost" onClick={resetComposer}>
+                Cancel
+              </MButton>
+            ) : null}
+          </div>
+        </>
+      ) : latest ? (
+        <>
+          <div style={sectionLabel}>WHAT CHANGED</div>
+          <div
+            style={{
+              marginTop: 8,
+              padding: 14,
+              border: '2px solid var(--m-ink)',
+              background: 'var(--m-card-soft)',
+              minHeight: 70,
+              fontSize: 14,
+              lineHeight: 1.5,
+            }}
+          >
+            {latest.description}
+          </div>
+
+          <div style={{ ...sectionLabel, marginTop: 18 }}>VALUE DELTA</div>
+          <div
+            style={display({
+              fontWeight: 800,
+              fontSize: 44,
+              marginTop: 6,
+              color: deltaNum >= 0 ? 'var(--m-green)' : 'var(--m-red)',
+            })}
+          >
+            {deltaNum >= 0 ? '+' : ''}
+            {formatMoney(deltaNum)}
+          </div>
+          <div style={mono({ fontSize: 10, color: 'var(--m-ink-3)', marginTop: 4, fontWeight: 600 })}>
+            {scheduleImpact != null && scheduleImpact !== 0
+              ? `${scheduleImpact > 0 ? '+' : ''}${scheduleImpact}d SCHEDULE IMPACT`
+              : 'NO SCHEDULE IMPACT'}
+          </div>
+
+          {/* state machine strip — the CO's real current state is highlighted */}
+          <div style={{ display: 'flex', border: '2px solid var(--m-ink)', marginTop: 20 }}>
+            {CHANGE_ORDER_STATES.map((s, i, arr) => {
+              const current = s === latest.status.toUpperCase()
+              return (
+                <div
+                  key={s}
+                  style={mono({
+                    flex: 1,
+                    padding: '8px 0',
+                    textAlign: 'center',
+                    background: current ? 'var(--m-accent)' : 'transparent',
+                    color: current ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
+                    borderRight: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
+                    fontSize: 8,
+                    fontWeight: 800,
+                  })}
+                >
+                  {s}
+                </div>
+              )
+            })}
+          </div>
+
+          {/* actions driven by the CO's real state */}
+          <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
+            {latest.status === 'draft' ? (
+              <MButton
+                variant="primary"
+                style={{ flex: 1 }}
+                onClick={() => dispatch(latest, 'SEND')}
+                disabled={eventMutation.isPending}
+              >
+                Send to client
+              </MButton>
+            ) : null}
+            {latest.status === 'sent' ? (
+              <>
+                <MButton
+                  variant="primary"
+                  style={{ flex: 1 }}
+                  onClick={() => dispatch(latest, 'ACCEPT')}
+                  disabled={eventMutation.isPending}
+                >
+                  Mark accepted
+                </MButton>
+                <MButton variant="ghost" onClick={() => dispatch(latest, 'REJECT')} disabled={eventMutation.isPending}>
+                  Reject
+                </MButton>
+              </>
+            ) : null}
+            {latest.status === 'draft' || latest.status === 'sent' ? (
+              <MButton variant="ghost" onClick={() => dispatch(latest, 'VOID')} disabled={eventMutation.isPending}>
+                Void
+              </MButton>
+            ) : (
+              <div
+                style={mono({ flex: 1, fontSize: 11, color: 'var(--m-ink-3)', fontWeight: 600, alignSelf: 'center' })}
+              >
+                No further actions · {latest.status.toUpperCase()}
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginTop: 14 }}>
+            <MButton variant="ghost" onClick={() => setComposing(true)}>
+              + New change order
+            </MButton>
+          </div>
+        </>
+      ) : null}
     </DDrawer>
   )
 }
 
-interface PostMortemLine {
-  label: string
-  pct: string
-  bad?: boolean
-}
+/** F1c · Final-margin + per-division variance lines + "next time" callout,
+ * derived from the project's real closeout summary + labor variance. */
+export function PostMortemDrawer({ open, onClose, projectId }: OverlayProps & { projectId: string }) {
+  const closeout = useProjectCloseoutSummary(open ? projectId : undefined)
+  const variance = useProjectLaborVariance(open ? projectId : undefined)
 
-const POST_MORTEM_LINES: PostMortemLine[] = [
-  { label: 'Labor', pct: '+15%', bad: true },
-  { label: 'EPS board', pct: '+4%', bad: true },
-  { label: 'Basecoat', pct: '-6%' },
-  { label: 'Stone', pct: '+3%' },
-  { label: 'Rentals', pct: '-20%' },
-]
+  const rawMargin = closeout.data?.margin_pct ?? null
+  // margin_pct may arrive as a fraction (0.34) or a percent (34) — normalize.
+  const marginPct = rawMargin == null ? null : Math.round(Math.abs(rawMargin) <= 1 ? rawMargin * 100 : rawMargin)
+  const bid = closeout.data?.bid ?? null
+  const totalActual = closeout.data?.total_actual ?? null
 
-/** F1c · Final-margin + per-division variance lines + AI "next time" callout. */
-export function PostMortemDrawer({ open, onClose }: OverlayProps) {
+  // Per-division labor variance (real rows grouped by division).
+  const byDivision = new Map<string, { est: number; act: number }>()
+  for (const r of variance.data?.variance ?? []) {
+    const key = r.division_code ?? 'Other'
+    const d = byDivision.get(key) ?? { est: 0, act: 0 }
+    d.est += r.estimated_hours
+    d.act += r.actual_hours
+    byDivision.set(key, d)
+  }
+  const lines = [...byDivision.entries()]
+    .map(([label, d]) => {
+      const pct = d.est > 0 ? Math.round(((d.act - d.est) / d.est) * 100) : 0
+      return { label, pct, bad: pct > 0 }
+    })
+    .sort((a, b) => b.pct - a.pct)
+  const worst = lines.find((l) => l.bad) ?? null
+
+  const loading = (closeout.isPending || variance.isPending) && open
+  const errored = closeout.isError || variance.isError
+
   return (
     <DDrawer open={open} onClose={onClose} title="● POST-MORTEM · CLOSED">
-      <div style={sectionLabel}>FINAL MARGIN</div>
-      <div style={display({ fontWeight: 800, fontSize: 52, marginTop: 6, color: 'var(--m-green)', lineHeight: 1 })}>
-        34%
-      </div>
-      <div style={mono({ fontSize: 11, color: 'var(--m-ink-2)', marginTop: 8, fontWeight: 600 })}>
-        BID 34% · DELIVERED 34% · DEAD ON
-      </div>
-      <div style={{ marginTop: 20 }}>
-        {POST_MORTEM_LINES.map((l) => (
-          <div
-            key={l.label}
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              padding: '10px 0',
-              borderBottom: '1px solid var(--m-line-2)',
-            }}
-          >
-            <span style={{ fontSize: 14, fontWeight: 700 }}>{l.label}</span>
-            <span className="num" style={{ fontSize: 14, color: l.bad ? 'var(--m-red)' : 'var(--m-green)' }}>
-              {l.pct}
-            </span>
-          </div>
-        ))}
-      </div>
-      <div style={{ padding: 14, background: 'var(--m-accent)', marginTop: 18 }}>
-        <div style={mono({ fontSize: 10, fontWeight: 700, color: 'var(--m-accent-ink)' })}>● AI · NEXT TIME</div>
-        <div
-          style={mono({ fontSize: 11, color: 'var(--m-accent-ink)', marginTop: 8, fontWeight: 600, lineHeight: 1.5 })}
-        >
-          EPS LABOR RAN 15% OVER. ADD +12% BUFFER ON SIMILAR HILLCREST JOBS.
+      {loading ? (
+        <div style={mono({ fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 })}>Loading closeout…</div>
+      ) : errored ? (
+        <div style={mono({ fontSize: 12, color: 'var(--m-red)', fontWeight: 600 })}>
+          Could not load the post-mortem.
         </div>
-      </div>
+      ) : (
+        <>
+          <div style={sectionLabel}>FINAL MARGIN</div>
+          <div
+            style={display({
+              fontWeight: 800,
+              fontSize: 52,
+              marginTop: 6,
+              color: marginPct != null && marginPct < 0 ? 'var(--m-red)' : 'var(--m-green)',
+              lineHeight: 1,
+            })}
+          >
+            {marginPct != null ? `${marginPct}%` : '—'}
+          </div>
+          <div style={mono({ fontSize: 11, color: 'var(--m-ink-2)', marginTop: 8, fontWeight: 600 })}>
+            {bid != null ? `BID ${formatMoney(bid)}` : 'BID —'} ·{' '}
+            {totalActual != null ? `ACTUAL ${formatMoney(totalActual)}` : 'ACTUAL —'}
+          </div>
+
+          {lines.length > 0 ? (
+            <div style={{ marginTop: 20 }}>
+              {lines.map((l) => (
+                <div
+                  key={l.label}
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    padding: '10px 0',
+                    borderBottom: '1px solid var(--m-line-2)',
+                  }}
+                >
+                  <span style={{ fontSize: 14, fontWeight: 700 }}>{l.label}</span>
+                  <span className="num" style={{ fontSize: 14, color: l.bad ? 'var(--m-red)' : 'var(--m-green)' }}>
+                    {l.pct > 0 ? '+' : ''}
+                    {l.pct}%
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div style={mono({ fontSize: 11, color: 'var(--m-ink-3)', marginTop: 16, fontWeight: 600 })}>
+              No labor-variance data for this job.
+            </div>
+          )}
+
+          {worst ? (
+            <div style={{ padding: 14, background: 'var(--m-accent)', marginTop: 18 }}>
+              <div style={mono({ fontSize: 10, fontWeight: 700, color: 'var(--m-accent-ink)' })}>● NEXT TIME</div>
+              <div
+                style={mono({
+                  fontSize: 11,
+                  color: 'var(--m-accent-ink)',
+                  marginTop: 8,
+                  fontWeight: 600,
+                  lineHeight: 1.5,
+                })}
+              >
+                {worst.label.toUpperCase()} LABOR RAN {worst.pct}% OVER ESTIMATE. ADD A BUFFER ON SIMILAR JOBS.
+              </div>
+            </div>
+          ) : null}
+        </>
+      )}
     </DDrawer>
   )
 }
@@ -239,65 +520,153 @@ export function PostMortemDrawer({ open, onClose }: OverlayProps) {
 // Invoice modal (12_app.js · DInvoiceModal)
 // ============================================================
 
-interface Milestone {
-  label: string
-  value: string
-  paid?: boolean
-  billing?: boolean
+interface InvoiceModalProps {
+  open: boolean
+  onClose: () => void
+  projectId: string
+  projectName: string | null
+  customerName: string | null
+  contractValue: number
 }
 
-const INVOICE_MILESTONES: Milestone[] = [
-  { label: 'Deposit · 30%', value: '$43,827', paid: true },
-  { label: 'Progress · 50% @ EPS done', value: '$73,045', billing: true },
-  { label: 'Final · 20% at close', value: '$29,218' },
-]
+function milestoneStatusLabel(status: BillingMilestone['status']): string {
+  if (status === 'paid') return '✓ PAID'
+  if (status === 'invoiced') return '● INVOICED · NOT PAID'
+  return '○ NOT YET'
+}
 
-/** G5 · Milestone billing list + NET 30 + send button. */
-export function InvoiceModal({ open, onClose }: OverlayProps) {
+/** G5 · Milestone billing list + NET 30 + send button, bound to the project's
+ * real billing milestones (seed-on-empty + estimate_push send). */
+export function InvoiceModal({ open, onClose, projectId, projectName, customerName, contractValue }: InvoiceModalProps) {
+  const milestonesQuery = useBillingMilestones(open ? projectId : null)
+  const createMilestones = useCreateBillingMilestones(projectId)
+  const createPush = useCreateEstimatePush()
+
+  const milestones = milestonesQuery.data?.billing_milestones ?? []
+  const activeId = milestones.find((m) => m.status !== 'paid')?.id ?? null
+  const active = milestones.find((m) => m.id === activeId) ?? null
+  const total =
+    active?.amount != null
+      ? Number(active.amount)
+      : active?.pct != null
+        ? (Number(active.pct) / 100) * contractValue
+        : contractValue
+
+  const [error, setError] = useState<string | null>(null)
+  const [sent, setSent] = useState(false)
+
+  function seedLadder() {
+    if (createMilestones.isPending) return
+    setError(null)
+    createMilestones.mutate(
+      { contract_value: contractValue },
+      { onError: (e) => setError(e instanceof Error ? e.message : 'Failed to seed milestones.') },
+    )
+  }
+
+  function send() {
+    if (createPush.isPending) return
+    setError(null)
+    // Seed a real schedule first if none exists (best-effort; a seed failure
+    // must not block the load-bearing QBO push), mirroring invoice-quick.tsx.
+    if (milestones.length === 0 && !createMilestones.isPending) {
+      createMilestones.mutate({ contract_value: contractValue })
+    }
+    createPush.mutate(
+      { projectId },
+      {
+        onSuccess: () => setSent(true),
+        onError: (e) => {
+          if (e instanceof ApiError && e.status === 400) {
+            setError('This project has no estimate lines yet. Build/recompute the estimate before invoicing.')
+            return
+          }
+          setError(e instanceof Error ? e.message : 'Failed to create the invoice.')
+        },
+      },
+    )
+  }
+
+  const titleText = `INVOICE · ${(projectName ?? 'PROJECT').toUpperCase()}${
+    customerName ? ` · ${customerName.toUpperCase()}` : ''
+  }`
+
   return (
     <DModal
       open={open}
       onClose={onClose}
-      title={<FloatHead>INVOICE #113 · HILLCREST PH 4</FloatHead>}
+      title={<FloatHead>{titleText}</FloatHead>}
       footer={
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-          <MButton variant="ghost" onClick={onClose}>
+          <MButton variant="ghost" disabled title="Invoice PDF preview coming soon">
             PREVIEW
           </MButton>
-          <MButton variant="primary">SEND · $73,045</MButton>
+          <MButton variant="primary" onClick={send} disabled={createPush.isPending || milestones.length === 0}>
+            {createPush.isPending ? 'SENDING…' : `SEND · ${formatMoney(total)}`}
+          </MButton>
         </div>
       }
     >
+      {error ? (
+        <div style={{ marginBottom: 12 }}>
+          <MBanner tone="error" title="Couldn't send invoice" body={error} />
+        </div>
+      ) : null}
+      {sent ? (
+        <div style={mono({ fontSize: 12, color: 'var(--m-green)', fontWeight: 700, marginBottom: 12 })}>
+          ✓ Invoice push created.
+        </div>
+      ) : null}
+
       <div style={sectionLabel}>MILESTONE</div>
-      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {INVOICE_MILESTONES.map((m) => {
-          const onMilestone = Boolean(m.billing)
-          return (
-            <div
-              key={m.label}
-              style={{
-                padding: '12px 14px',
-                border: '2px solid var(--m-ink)',
-                background: onMilestone ? 'var(--m-accent)' : 'transparent',
-                color: onMilestone ? 'var(--m-accent-ink)' : 'var(--m-ink)',
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-              }}
-            >
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 700 }}>{m.label}</div>
-                <div style={mono({ fontSize: 9, marginTop: 3, fontWeight: 700, opacity: 0.7 })}>
-                  {m.paid ? '✓ PAID' : m.billing ? '● BILLING NOW' : '○ NOT YET'}
+      {milestonesQuery.isPending && open ? (
+        <div style={mono({ fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600, marginTop: 8 })}>
+          Loading billing schedule…
+        </div>
+      ) : milestonesQuery.isError ? (
+        <div style={mono({ fontSize: 12, color: 'var(--m-red)', fontWeight: 600, marginTop: 8 })}>
+          Could not load billing schedule.
+        </div>
+      ) : milestones.length === 0 ? (
+        <div style={{ marginTop: 8 }}>
+          <div style={mono({ fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600, marginBottom: 10 })}>
+            No billing schedule yet.
+          </div>
+          <MButton variant="ghost" onClick={seedLadder} disabled={createMilestones.isPending}>
+            {createMilestones.isPending ? 'Seeding…' : 'Seed deposit / progress / final'}
+          </MButton>
+        </div>
+      ) : (
+        <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {milestones.map((m) => {
+            const onMilestone = m.id === activeId
+            return (
+              <div
+                key={m.id}
+                style={{
+                  padding: '12px 14px',
+                  border: '2px solid var(--m-ink)',
+                  background: onMilestone ? 'var(--m-accent)' : 'transparent',
+                  color: onMilestone ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                }}
+              >
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700 }}>{m.label}</div>
+                  <div style={mono({ fontSize: 9, marginTop: 3, fontWeight: 700, opacity: 0.7 })}>
+                    {onMilestone && m.status !== 'paid' ? '● BILLING NOW' : milestoneStatusLabel(m.status)}
+                  </div>
                 </div>
+                <span className="num" style={{ fontSize: 15, fontWeight: 700 }}>
+                  {m.amount != null ? formatMoney(Number(m.amount)) : m.pct != null ? `${m.pct}%` : '—'}
+                </span>
               </div>
-              <span className="num" style={{ fontSize: 15, fontWeight: 700 }}>
-                {m.value}
-              </span>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 16 }}>
         <div style={{ width: 18, height: 18, background: 'var(--m-accent)', border: '2px solid var(--m-ink)' }} />
         <span style={mono({ fontSize: 11, fontWeight: 600 })}>NET 30 · STRIPE LINK INCLUDED</span>
