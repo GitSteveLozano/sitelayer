@@ -40,7 +40,7 @@ jobs:
           path: |
             **/dist
             **/.tsbuildinfo
-          key: ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json', '**/tsconfig*.json', '**/src/**/*.ts', '**/src/**/*.tsx') }}
+          key: ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json', '**/tsconfig*.json', '**/vite.config.ts', '**/src/**/*.ts', '**/src/**/*.tsx') }}
           restore-keys: |
             ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json') }}-
             ${{ runner.os }}-build-
@@ -112,7 +112,7 @@ jobs:
           path: |
             **/dist
             **/.tsbuildinfo
-          key: ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json', '**/tsconfig*.json', '**/src/**/*.ts', '**/src/**/*.tsx') }}
+          key: ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json', '**/tsconfig*.json', '**/vite.config.ts', '**/src/**/*.ts', '**/src/**/*.tsx') }}
           restore-keys: |
             ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json') }}-
             ${{ runner.os }}-build-
@@ -144,7 +144,7 @@ jobs:
           path: |
             **/dist
             **/.tsbuildinfo
-          key: ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json', '**/tsconfig*.json', '**/src/**/*.ts', '**/src/**/*.tsx') }}
+          key: ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json', '**/tsconfig*.json', '**/vite.config.ts', '**/src/**/*.ts', '**/src/**/*.tsx') }}
           restore-keys: |
             ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json') }}-
             ${{ runner.os }}-build-
@@ -203,7 +203,7 @@ jobs:
           path: |
             **/dist
             **/.tsbuildinfo
-          key: ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json', '**/tsconfig*.json', '**/src/**/*.ts', '**/src/**/*.tsx') }}
+          key: ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json', '**/tsconfig*.json', '**/vite.config.ts', '**/src/**/*.ts', '**/src/**/*.tsx') }}
           restore-keys: |
             ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json') }}-
             ${{ runner.os }}-build-
@@ -327,7 +327,7 @@ jobs:
           path: |
             **/dist
             **/.tsbuildinfo
-          key: ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json', '**/tsconfig*.json', '**/src/**/*.ts', '**/src/**/*.tsx') }}
+          key: ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json', '**/tsconfig*.json', '**/vite.config.ts', '**/src/**/*.ts', '**/src/**/*.tsx') }}
           restore-keys: |
             ${{ runner.os }}-build-${{ hashFiles('**/package-lock.json') }}-
             ${{ runner.os }}-build-

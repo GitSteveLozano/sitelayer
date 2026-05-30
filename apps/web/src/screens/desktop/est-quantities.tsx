@@ -196,7 +196,22 @@ export function EstQuantities() {
           />
 
           {/* ASIDE — price & send, sticky. */}
-          <aside className="d-card" style={{ position: 'sticky', top: 28, display: 'grid', gap: 20 }}>
+          <aside
+            className="d-card"
+            style={{
+              position: 'sticky',
+              top: 28,
+              display: 'grid',
+              // minmax(0, 1fr) — NOT the implicit `auto` track. A plain grid
+              // column sizes to its max-content (the 48px sell-total number,
+              // the scope-vs-bid copy), which is wider than the 340px aside and
+              // shoves the rail off the right edge / forces a horizontal
+              // scrollbar. Capping the track at the aside width lets content
+              // wrap/shrink instead.
+              gridTemplateColumns: 'minmax(0, 1fr)',
+              gap: 20,
+            }}
+          >
             <div>
               <div className="d-kpi-l">Margin</div>
               <div
@@ -331,7 +346,7 @@ export function EstQuantities() {
                 variant="ghost"
                 onClick={() => setPdfPreviewOpen(true)}
                 disabled={pdfDisabled}
-                style={{ flex: 1 }}
+                style={{ flex: 1, minWidth: 0 }}
               >
                 Preview PDF
               </MButton>
@@ -339,11 +354,16 @@ export function EstQuantities() {
                 variant="ghost"
                 onClick={handleGeneratePdf}
                 disabled={pdfDisabled || generating}
-                style={{ flex: 1 }}
+                style={{ flex: 1, minWidth: 0 }}
               >
                 {generating ? 'Generating…' : 'Generate PDF'}
               </MButton>
-              <MButton variant="ghost" onClick={handleExportCsv} disabled={pdfDisabled} style={{ flex: 1 }}>
+              <MButton
+                variant="ghost"
+                onClick={handleExportCsv}
+                disabled={pdfDisabled}
+                style={{ flex: 1, minWidth: 0 }}
+              >
                 Export CSV
               </MButton>
             </div>
