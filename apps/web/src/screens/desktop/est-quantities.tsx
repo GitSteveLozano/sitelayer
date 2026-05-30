@@ -14,7 +14,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, getActiveCompanySlug, type ProjectSummary } from '@/lib/api'
 import { useEstimateBuilder } from '@/machines/estimate-builder'
 import { createEstimatePush } from '@/lib/api/estimate-pushes'
-import { estimateCsvUrl, estimatePdfUrl } from '@/lib/api/estimate'
+import { estimateCsvUrl, estimatePdfUrl, estimateXlsxUrl } from '@/lib/api/estimate'
 import { DataTable, DEyebrow, DH1, type DColumn } from '@/components/d'
 import { MButton, MPill } from '@/components/m'
 import { PdfPreviewModal } from './project-drawers'
@@ -162,6 +162,13 @@ export function EstQuantities() {
   const handleExportCsv = () => {
     if (!projectId) return
     const url = estimateCsvUrl(projectId)
+    if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
+  // EXPORT XLSX — download a formatted Excel workbook (GET .../estimate.xlsx).
+  const handleExportXlsx = () => {
+    if (!projectId) return
+    const url = estimateXlsxUrl(projectId)
     if (typeof window !== 'undefined') window.open(url, '_blank', 'noopener,noreferrer')
   }
 
@@ -340,13 +347,15 @@ export function EstQuantities() {
               Project rates
             </MButton>
 
-            {/* PDF actions (design DEstQuantities · PREVIEW PDF / GENERATE PDF). */}
-            <div style={{ display: 'flex', gap: 8 }}>
+            {/* PDF + export actions (design DEstQuantities · PREVIEW PDF /
+                GENERATE PDF + CSV/XLSX). A 2-up minmax(0,1fr) grid so four
+                actions fit the 340px rail without spilling off the right. */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: 8 }}>
               <MButton
                 variant="ghost"
                 onClick={() => setPdfPreviewOpen(true)}
                 disabled={pdfDisabled}
-                style={{ flex: 1, minWidth: 0 }}
+                style={{ minWidth: 0 }}
               >
                 Preview PDF
               </MButton>
@@ -354,17 +363,15 @@ export function EstQuantities() {
                 variant="ghost"
                 onClick={handleGeneratePdf}
                 disabled={pdfDisabled || generating}
-                style={{ flex: 1, minWidth: 0 }}
+                style={{ minWidth: 0 }}
               >
                 {generating ? 'Generating…' : 'Generate PDF'}
               </MButton>
-              <MButton
-                variant="ghost"
-                onClick={handleExportCsv}
-                disabled={pdfDisabled}
-                style={{ flex: 1, minWidth: 0 }}
-              >
+              <MButton variant="ghost" onClick={handleExportCsv} disabled={pdfDisabled} style={{ minWidth: 0 }}>
                 Export CSV
+              </MButton>
+              <MButton variant="ghost" onClick={handleExportXlsx} disabled={pdfDisabled} style={{ minWidth: 0 }}>
+                Export XLSX
               </MButton>
             </div>
 
