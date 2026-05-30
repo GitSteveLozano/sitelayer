@@ -49,6 +49,7 @@ import { useAuthenticatedObjectUrl } from '@/lib/api/blob-url'
 import { EstAiCountSetupPanel } from './est-ai-count'
 import { EstAiTakeoffSetupPanel } from './est-ai-takeoff'
 import { buildBlueprintReference } from '@/lib/takeoff/blueprint-reference'
+import { PdfPageCanvas, usePdfDocument } from '@/lib/pdf/pdf-page-canvas'
 import { useRole } from '@/lib/role'
 import { MButton, MPill, MSelect } from '@/components/m'
 import { DEmptyState } from '@/components/d'
@@ -130,6 +131,19 @@ export function EstCanvas() {
     [activeBlueprint, activePage],
   )
   const sourceImage = useAuthenticatedObjectUrl(blueprintReference?.texturePath)
+
+  // Phase 1b (flag-gated): render the ORIGINAL PDF via PDFium for crisp vector
+  // zoom instead of the server-rasterized page PNG. Off by default; opt in with
+  // localStorage['sitelayer.pdf_engine'] = 'pdfium'. Falls back to the image
+  // path for non-PDF blueprints or while the PDF document is still loading.
+  const pdfEngineOn = typeof window !== 'undefined' && window.localStorage?.getItem('sitelayer.pdf_engine') === 'pdfium'
+  const blueprintIsPdf = (activeBlueprint?.file_name ?? '').toLowerCase().endsWith('.pdf')
+  const pdfDocUrl = useAuthenticatedObjectUrl(
+    pdfEngineOn && blueprintIsPdf && activeBlueprint
+      ? `/api/blueprints/${encodeURIComponent(activeBlueprint.id)}/file`
+      : null,
+  )
+  const pdfDocState = usePdfDocument(pdfDocUrl.url ?? null)
 
   // --- Measurements ---------------------------------------------------------
   const measurements = useProjectMeasurements(projectId, { draftId: activeDraftId })
@@ -549,7 +563,26 @@ export function EstCanvas() {
             willChange: 'transform',
           }}
         >
-          {sourceImage.url ? (
+          {pdfEngineOn && blueprintIsPdf ? (
+            pdfDocState.doc ? (
+              <PdfPageCanvas
+                doc={pdfDocState.doc}
+                pageNumber={activePage?.page_number ?? 1}
+                // Render resolution tracks the canvas zoom so the page stays crisp
+                // as you zoom in (vs a fixed raster). Quantized to integer steps to
+                // avoid re-rendering on every wheel tick, and capped to bound memory.
+                scale={Math.min(6, Math.max(2, Math.ceil(zoom) * 2))}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  width: '100%',
+                  height: '100%',
+                  objectFit: 'contain',
+                  opacity: 0.7,
+                }}
+              />
+            ) : null
+          ) : sourceImage.url ? (
             <img
               src={sourceImage.url}
               alt=""
