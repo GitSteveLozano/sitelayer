@@ -24,6 +24,12 @@ function manualChunks(id: string): string | undefined {
     return 'vendor-react'
   }
   if (normalized.includes('/three/')) return 'vendor-three'
+  // The PDFium (EmbedPDF) engine + WASM glue is heavy third-party code that is
+  // lazy-loaded only when a plan-set PDF is opened on the takeoff surface. Keep
+  // it in its own `vendor-pdf` chunk — like `vendor-three`, it's vendor code,
+  // so it's exempt from the lazy *app*-chunk budget and stays off the PWA
+  // precache (see the workbox config below).
+  if (normalized.includes('/@embedpdf/')) return 'vendor-pdf'
   if (normalized.includes('/lucide-react/')) return 'vendor-icons'
   return undefined
 }
@@ -96,7 +102,7 @@ export default defineConfig({
         // the 3D preview to download it on first install. Exclude it here and
         // serve it via the `runtimeCaching` rule below so it's fetched (and
         // cached for offline) only when a user actually opens the preview.
-        globIgnores: ['**/vendor-three*.js'],
+        globIgnores: ['**/vendor-three*.js', '**/vendor-pdf*.js'],
         // 2026-05-10: a redirect response got baked into the precache during
         // a deploy cutover. The SW served it on navigations, and Chrome
         // rejected it ("a redirected response was used for a request whose
@@ -120,6 +126,19 @@ export default defineConfig({
             handler: 'CacheFirst',
             options: {
               cacheName: 'vendor-three',
+              expiration: { maxEntries: 4, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
+          {
+            // The excluded `vendor-pdf` chunk (PDFium/EmbedPDF engine) is
+            // fetched on demand the first time a plan PDF is opened on the
+            // takeoff surface, then kept offline. Content-hashed filename →
+            // cache key rotates every rebuild, so there's no stale-bundle risk.
+            urlPattern: /\/assets\/vendor-pdf[^/]*\.js$/,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'vendor-pdf',
               expiration: { maxEntries: 4, maxAgeSeconds: 60 * 60 * 24 * 30 },
               cacheableResponse: { statuses: [0, 200] },
             },
