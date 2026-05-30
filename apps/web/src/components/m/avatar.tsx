@@ -31,7 +31,7 @@ export function MAvatarGroup({ avatars, max = 4, size = 'md' }: MAvatarGroupProp
   const shown = avatars.slice(0, max)
   const overflow = Math.max(0, avatars.length - max)
   return (
-    <div style={{ display: 'inline-flex' }}>
+    <div className="inline-flex">
       {shown.map((a, i) => (
         <span key={i} style={{ marginLeft: i === 0 ? 0 : -8 }}>
           <MAvatar initials={a.initials} tone={a.tone} size={size} />

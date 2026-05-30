@@ -50,7 +50,7 @@ export function RentalsPortal() {
   }
   if (portal.error) {
     return (
-      <div style={{ padding: 32, color: '#a44' }}>
+      <div style={{ padding: 32, color: 'var(--m-red)' }}>
         Catalog unavailable: {portal.error}
         <p style={{ fontSize: 12, marginTop: 8 }}>
           The link may have expired. Contact the company that sent it for a fresh share link.
@@ -64,7 +64,7 @@ export function RentalsPortal() {
       <header
         style={{
           padding: '16px 24px',
-          borderBottom: '1px solid #e5e5e5',
+          borderBottom: '1px solid var(--p-line-2)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
@@ -72,25 +72,25 @@ export function RentalsPortal() {
       >
         <div>
           <strong style={{ fontSize: 18 }}>Rental catalog</strong>
-          <p style={{ fontSize: 12, margin: 0, color: '#666' }}>
+          <p style={{ fontSize: 12, margin: 0, color: 'var(--p-text-3)' }}>
             {portal.items.length} item{portal.items.length === 1 ? '' : 's'} available
           </p>
         </div>
         <Link
           to={`/portal/rentals/${encodeURIComponent(shareToken)}/cart`}
-          style={{ textDecoration: 'none', padding: '8px 16px', border: '1px solid #ddd', borderRadius: 6 }}
+          style={{ textDecoration: 'none', padding: '8px 16px', border: '1px solid var(--p-line)', borderRadius: 6 }}
         >
           Cart ({portal.cart.length})
         </Link>
       </header>
 
-      <div style={{ display: 'flex', gap: 12, padding: '16px 24px', borderBottom: '1px solid #f1f1f1' }}>
+      <div style={{ display: 'flex', gap: 12, padding: '16px 24px', borderBottom: '1px solid var(--p-line-3)' }}>
         <input
           type="text"
           placeholder="Search…"
           value={portal.query}
           onChange={(e) => portal.setQuery(e.target.value)}
-          style={{ flex: 1, padding: 8, border: '1px solid #ddd', borderRadius: 4 }}
+          style={{ flex: 1, padding: 8, border: '1px solid var(--p-line)', borderRadius: 4 }}
         />
         <select value={portal.category} onChange={(e) => portal.setCategory(e.target.value)} style={{ padding: 8 }}>
           {portal.categories.map((c) => (
@@ -132,13 +132,15 @@ function CatalogCard({ item, onAdd }: { item: PortalCatalogItem; onAdd: (line: P
   const today = new Date().toISOString().slice(0, 10)
   const inOneWeek = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
   return (
-    <div style={{ border: '1px solid #e5e5e5', borderRadius: 8, padding: 16 }}>
-      <div style={{ fontSize: 11, color: '#888', textTransform: 'uppercase', letterSpacing: 1 }}>{item.category}</div>
+    <div style={{ border: '1px solid var(--p-line-2)', borderRadius: 8, padding: 16 }}>
+      <div style={{ fontSize: 11, color: 'var(--p-text-4)', textTransform: 'uppercase', letterSpacing: 1 }}>
+        {item.category}
+      </div>
       <div style={{ fontSize: 14, fontWeight: 600, marginTop: 4 }}>{item.code}</div>
-      <p style={{ fontSize: 13, color: '#444', margin: '4px 0 8px' }}>{item.description}</p>
+      <p style={{ fontSize: 13, color: 'var(--p-text-2)', margin: '4px 0 8px' }}>{item.description}</p>
       <div style={{ fontSize: 14, fontWeight: 600 }}>
         ${Number(item.default_rental_rate).toFixed(2)}
-        <span style={{ fontSize: 11, color: '#888' }}>/{item.unit}</span>
+        <span style={{ fontSize: 11, color: 'var(--p-text-4)' }}>/{item.unit}</span>
       </div>
       <button
         type="button"
@@ -155,8 +157,8 @@ function CatalogCard({ item, onAdd }: { item: PortalCatalogItem; onAdd: (line: P
           marginTop: 12,
           width: '100%',
           padding: '8px 12px',
-          background: '#222',
-          color: 'white',
+          background: 'var(--p-ink)',
+          color: 'var(--p-paper)',
           border: 'none',
           borderRadius: 4,
           cursor: 'pointer',

@@ -185,7 +185,7 @@ export function MobileScaffoldInspectionScreen() {
                       borderTop: '1px solid var(--m-line-2)',
                     }}
                   >
-                    <span style={{ flex: 1, fontSize: 14, fontWeight: 600 }}>{c.label}</span>
+                    <span style={{ flex: 1, minWidth: 0, fontSize: 14, fontWeight: 600 }}>{c.label}</span>
                     <div style={{ display: 'flex', gap: 8 }}>
                       <button
                         type="button"

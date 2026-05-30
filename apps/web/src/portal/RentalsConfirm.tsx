@@ -16,14 +16,14 @@ export function RentalsConfirm() {
 
   return (
     <div className="p-app" style={{ maxWidth: 720, margin: '0 auto', padding: 32, textAlign: 'center' }}>
-      <div style={{ fontSize: 48, color: '#5b8' }}>✓</div>
+      <div style={{ fontSize: 48, color: 'var(--m-green)' }}>✓</div>
       <h1 style={{ fontSize: 24, margin: '8px 0' }}>Reservation submitted</h1>
-      <p style={{ color: '#666', maxWidth: 520, margin: '8px auto 0' }}>
+      <p style={{ color: 'var(--p-text-3)', maxWidth: 520, margin: '8px auto 0' }}>
         Your reservation request has been submitted. The company will review and confirm by email or phone within their
         normal business hours.
       </p>
       {requestId ? (
-        <p style={{ marginTop: 16, fontSize: 13, color: '#444' }}>
+        <p style={{ marginTop: 16, fontSize: 13, color: 'var(--p-text-2)' }}>
           Reference: <strong>{requestId}</strong>
         </p>
       ) : null}
@@ -33,10 +33,10 @@ export function RentalsConfirm() {
           to={`/portal/rentals/${encodeURIComponent(shareToken)}`}
           style={{
             padding: '10px 20px',
-            border: '1px solid #ddd',
+            border: '1px solid var(--p-line)',
             borderRadius: 6,
             textDecoration: 'none',
-            color: '#222',
+            color: 'var(--p-ink)',
           }}
         >
           Browse more equipment
