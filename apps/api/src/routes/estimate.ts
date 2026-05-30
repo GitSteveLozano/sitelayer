@@ -67,7 +67,7 @@ function buildEstimateCsv(
     total += Number(line.amount) || 0
   }
   rows.push(['', '', '', 'Total', total.toFixed(2)].map(csvCell).join(','))
-  return `﻿${rows.join('\r\n')}\r\n`
+  return `\ufeff${rows.join('\r\n')}\r\n`
 }
 
 type ForecastMeasurementInput = {
