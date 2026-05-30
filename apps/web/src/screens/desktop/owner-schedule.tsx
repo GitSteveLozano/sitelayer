@@ -565,11 +565,7 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
           schedule-create form. Projects come from the bootstrap list; on
           save it POSTs /api/schedules and the create hook invalidates the
           bootstrap cache so the new draft assignment lands on the grid. */}
-      <NewAssignmentModal
-        open={assignmentOpen}
-        onClose={() => setAssignmentOpen(false)}
-        projects={projects}
-      />
+      <NewAssignmentModal open={assignmentOpen} onClose={() => setAssignmentOpen(false)} projects={projects} />
     </div>
   )
 }

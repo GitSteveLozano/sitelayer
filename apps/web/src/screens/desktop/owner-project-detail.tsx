@@ -341,7 +341,13 @@ function BriefEditDrawer({
       <div style={{ ...DRAWER_LABEL, marginTop: 6, textAlign: 'right' }}>{goal.length} / 280</div>
 
       <div
-        style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, marginBottom: 8 }}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginTop: 18,
+          marginBottom: 8,
+        }}
       >
         <div style={DRAWER_LABEL}>STEP PLAN · {steps.length}</div>
         <MButton size="sm" variant="ghost" onClick={addStep}>

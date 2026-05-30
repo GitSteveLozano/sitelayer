@@ -405,13 +405,21 @@ export function OwnerRentalsAsset() {
         }
       >
         <div style={{ fontSize: 14, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>
-          The catalog day rate for <strong>{item.description}</strong>. New dispatches and idle-revenue figures use
-          this rate.
+          The catalog day rate for <strong>{item.description}</strong>. New dispatches and idle-revenue figures use this
+          rate.
         </div>
         <div className="d-eyebrow" style={{ marginTop: 18 }}>
           Day rate (per {item.unit || 'day'})
         </div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', alignItems: 'center', gap: 8, marginTop: 8 }}>
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'auto minmax(0, 1fr)',
+            alignItems: 'center',
+            gap: 8,
+            marginTop: 8,
+          }}
+        >
           <span style={{ fontSize: 18, fontWeight: 700, color: 'var(--m-ink-3)' }}>$</span>
           <MInput
             type="number"
