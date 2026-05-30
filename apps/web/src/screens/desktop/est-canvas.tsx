@@ -187,6 +187,11 @@ export function EstCanvas() {
   // --- Entry state (identical semantics to mobile draw mode) ----------------
   const [tool, setTool] = useState<Tool>('polygon')
   const [serviceItemCode, setServiceItemCode] = useState('')
+  // Which division performs this scope item (Cavy, WhatsApp:227-229). An item
+  // can be curated to several divisions (e.g. EPS under EIFS, or under a
+  // different division on a non-EIFS job); the picker below lets the estimator
+  // choose. Defaults to the item's first curated division.
+  const [divisionCode, setDivisionCode] = useState('')
   const [draftPoints, setDraftPoints] = useState<TakeoffPoint[]>([])
   const [error, setError] = useState<string | null>(null)
   const [savedToast, setSavedToast] = useState<string | null>(null)
@@ -237,6 +242,12 @@ export function EstCanvas() {
   }, [serviceItemCode, items])
 
   const selectedItem = items.find((i) => i.code === serviceItemCode) ?? null
+  // Keep the chosen division valid for the selected item — reset to its first
+  // curated division whenever the current choice isn't one of the item's.
+  useEffect(() => {
+    const divs = selectedItem?.divisions ?? []
+    setDivisionCode((cur) => (divs.includes(cur) ? cur : (divs[0] ?? '')))
+  }, [selectedItem])
   // Area tools (freeform polygon + drag rectangle) share square-foot semantics;
   // lineal-like tools (freeform lineal + 3-point arc) share linear-foot length.
   const isAreaTool = tool === 'polygon' || tool === 'rect'
@@ -391,8 +402,10 @@ export function EstCanvas() {
   const boxStartRef = useRef<TakeoffPoint | null>(null)
   const [boxRect, setBoxRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const onPointerDownCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
-    // Middle-button, Space-hold, or the Hand tool pans instead of drawing.
-    if (e.button === 1 || spaceHeld || handMode) {
+    // Middle-button, RIGHT-button (PlanSwift-style drag-to-move the plan, per
+    // Cavy's request), Space-hold, or the Hand tool pans instead of drawing.
+    // A matching onContextMenu suppresses the browser menu so a right-drag pans.
+    if (e.button === 1 || e.button === 2 || spaceHeld || handMode) {
       e.preventDefault()
       e.currentTarget.setPointerCapture?.(e.pointerId)
       panStartRef.current = { x: e.clientX, y: e.clientY, panX: panRef.current.x, panY: panRef.current.y }
@@ -475,7 +488,7 @@ export function EstCanvas() {
         // Carry the item's own curated division (e.g. Air Barrier → D5) so the
         // measurement passes the catalog guard instead of falling back to the
         // project division and 422ing. Supports multi-division projects too.
-        division_code: selectedItem?.divisions?.[0] ?? null,
+        division_code: divisionCode || selectedItem?.divisions?.[0] || null,
         unit: unitForItem,
         geometry,
         // Cutout/deduct only applies to area (polygon / rect) takeoff.
@@ -795,6 +808,7 @@ export function EstCanvas() {
             onPointerMove={onPointerMoveCanvas}
             onPointerUp={onPointerUpCanvas}
             onPointerCancel={onPointerUpCanvas}
+            onContextMenu={(e) => e.preventDefault()}
             style={{
               position: 'absolute',
               inset: 0,
@@ -1368,6 +1382,36 @@ export function EstCanvas() {
               </option>
             ))}
           </MSelect>
+
+          {/* Division for this scope item (Cavy, WhatsApp:227-229) — choose
+              which division performs it when the item spans more than one. */}
+          {(selectedItem?.divisions?.length ?? 0) > 0 ? (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span
+                style={{
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  letterSpacing: '0.08em',
+                  textTransform: 'uppercase',
+                  color: 'var(--m-ink-3)',
+                }}
+              >
+                Division
+              </span>
+              <MSelect
+                value={divisionCode}
+                onChange={(e) => setDivisionCode(e.target.value)}
+                disabled={(selectedItem?.divisions?.length ?? 0) < 2}
+              >
+                {(selectedItem?.divisions ?? []).map((d) => (
+                  <option key={d} value={d}>
+                    {d}
+                  </option>
+                ))}
+              </MSelect>
+            </label>
+          ) : null}
 
           {/* Live measurement readout (big-number) */}
           <div
