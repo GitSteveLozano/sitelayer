@@ -1,39 +1,61 @@
 /**
- * Owner desktop new-project kickoff (Desktop v2 · Owner · New project).
- * Mirrors the template's "OWNER · NEW PROJECT · KICKOFF" frame (#m-onp) as a
- * centered form card on the command-center shell.
+ * Owner desktop new-project kickoff (Desktop v2 · Owner · New project — the
+ * design's "Start a job." DOwnerNewProject).
  *
- * This reuses the EXACT create logic from the mobile project-create form
- * (`screens/mobile/project-new.tsx`): the same `apiPost('/api/projects', ...)`
- * body shape, the same `CustomerDedupPicker` linkage, and the same field set
- * the mobile flow collects — name, client, division, bid value, labor rate,
- * and target sf/hr. Labor rate + target sf/hr feed the spent/margin/forecast
- * math, so the desktop flow must capture them too (they were missing, which
- * left desktop-created projects with labor_rate=0). No new endpoints. On
- * success we navigate to the desktop project detail route. See
- * owner-dashboard.tsx for the d-content / d-stack / DEyebrow / DH1 pattern.
+ * STEP 1 (how to start): three entry paths — From a Takeoff / Clone Past
+ * Project / Blank Project — plus a "Recent projects · ready to convert" list.
+ * Picking a path runs the workflow Steve asked for: it auto-fills what it can
+ * for the project details from the chosen content (an existing project /
+ * takeoff), the owner confirms, and on create we drop straight into the
+ * takeoff/canvas editor.
+ *
+ * STEP 2 (details): the create form. Reuses the EXACT create logic from the
+ * mobile project-create flow (`apiPost('/api/projects', ...)` + the
+ * CustomerDedupPicker linkage + name/client/division/bid/labor-rate/target sf-hr).
+ * No new endpoints. On success → `/desktop/canvas/:id` (the takeoff surface).
  */
 import { useId, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { apiPost, getActiveCompanySlug } from '@/lib/api'
+import { apiPost, getActiveCompanySlug, type BootstrapResponse, type ProjectRow } from '@/lib/api'
 import { DEyebrow, DH1 } from '@/components/d'
 import { MButton, MInput, MPill, MSelect, MTextarea } from '@/components/m'
 import { CustomerDedupPicker, type CustomerMatch } from '../mobile/customer-dedup-picker.js'
 
 const DIVISIONS = ['D1', 'D2', 'D3', 'D4', 'D5'] as const
+type StartKind = 'takeoff' | 'clone' | 'blank'
 
-export function OwnerNewProject() {
+const START_OPTIONS: Array<{ kind: StartKind; label: string; sub: string; tag: string | null }> = [
+  {
+    kind: 'takeoff',
+    label: 'From a takeoff',
+    sub: 'Pull quantities + price straight from an estimator deliverable',
+    tag: 'AI',
+  },
+  { kind: 'clone', label: 'Clone past project', sub: 'Same client or scope — copy the structure', tag: null },
+  { kind: 'blank', label: 'Blank project', sub: 'Start from scratch, add scope as you go', tag: null },
+]
+
+function fmtValue(v: string | number | null | undefined): string {
+  const n = Number(v ?? 0)
+  if (!Number.isFinite(n) || n === 0) return '—'
+  return `$${Math.round(n).toLocaleString('en-US')}`
+}
+
+export function OwnerNewProject({ bootstrap = null }: { bootstrap?: BootstrapResponse | null }) {
   const navigate = useNavigate()
   const companySlug = getActiveCompanySlug()
 
+  // STEP 1 = the "how to start" chooser; STEP 2 = the (auto-filled) details form.
+  const [step, setStep] = useState<'choose' | 'details'>('choose')
+  const [kind, setKind] = useState<StartKind>('blank')
+  const [sourceProjectId, setSourceProjectId] = useState<string>('')
+
   const [name, setName] = useState('')
   const [customerName, setCustomerName] = useState('')
-  // Dedup linkage: when the owner adopts an existing customer (via the
-  // QuickBooks-style dedup picker) we link the project to that record's id
-  // instead of minting a duplicate.
   const [linkedCustomer, setLinkedCustomer] = useState<CustomerMatch | null>(null)
-  // The user explicitly chose "create new" for the current typed name —
-  // remember it so the prompt doesn't immediately re-appear for that name.
+  // When cloning/converting we carry the source project's customer id so the
+  // new project attaches to the same customer record rather than duplicating it.
+  const [sourceCustomerId, setSourceCustomerId] = useState<string | null>(null)
   const [dismissedFor, setDismissedFor] = useState<string | null>(null)
   const [address, setAddress] = useState('')
   const [divisionCode, setDivisionCode] = useState<(typeof DIVISIONS)[number]>('D4')
@@ -42,15 +64,71 @@ export function OwnerNewProject() {
   const [targetSqftPerHr, setTargetSqftPerHr] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Only surface inline validation after a submit attempt.
   const [touched, setTouched] = useState(false)
+
+  const projects = bootstrap?.projects ?? []
+  const recent = [...projects].sort((a, b) => (b.created_at < a.created_at ? -1 : 1)).slice(0, 6)
 
   const nameId = useId()
   const customerId = useId()
   const nameError = touched && name.trim().length === 0 ? 'Project name is required.' : null
   const customerError = touched && customerName.trim().length === 0 ? 'Client name is required.' : null
-
   const canSubmit = name.trim().length > 0 && customerName.trim().length > 0 && !busy
+
+  const resetForm = () => {
+    setName('')
+    setCustomerName('')
+    setLinkedCustomer(null)
+    setSourceCustomerId(null)
+    setDismissedFor(null)
+    setAddress('')
+    setDivisionCode('D4')
+    setBidTotal('')
+    setLaborRate('')
+    setTargetSqftPerHr('')
+    setTouched(false)
+    setError(null)
+    setSourceProjectId('')
+  }
+
+  // The auto-fill: copy what we can from an existing project into the form.
+  const prefillFrom = (p: ProjectRow, copyLabel: boolean) => {
+    setName(copyLabel ? `${p.name} (copy)` : p.name)
+    setCustomerName(p.customer_name)
+    setSourceCustomerId(p.customer_id ?? null)
+    setLinkedCustomer(null)
+    // Don't nag the dedup picker about the carried-over customer name.
+    setDismissedFor(p.customer_name.trim())
+    setDivisionCode(
+      (DIVISIONS as readonly string[]).includes(p.division_code)
+        ? (p.division_code as (typeof DIVISIONS)[number])
+        : 'D4',
+    )
+    setBidTotal(Number(p.bid_total) ? String(Number(p.bid_total)) : '')
+    setLaborRate(Number(p.labor_rate) ? String(Number(p.labor_rate)) : '')
+    setTargetSqftPerHr(p.target_sqft_per_hr && Number(p.target_sqft_per_hr) ? String(Number(p.target_sqft_per_hr)) : '')
+  }
+
+  const chooseStart = (k: StartKind) => {
+    resetForm()
+    setKind(k)
+    setStep('details')
+  }
+
+  // "Convert" a recent project/takeoff → pre-fill from it and jump to details.
+  const convertFrom = (p: ProjectRow) => {
+    resetForm()
+    setKind('takeoff')
+    setSourceProjectId(p.id)
+    prefillFrom(p, false)
+    setStep('details')
+  }
+
+  const onSourceChange = (id: string) => {
+    setSourceProjectId(id)
+    const p = projects.find((x) => x.id === id)
+    if (p) prefillFrom(p, kind === 'clone')
+  }
 
   const handleSubmit = async () => {
     setTouched(true)
@@ -58,18 +136,13 @@ export function OwnerNewProject() {
     setBusy(true)
     setError(null)
     try {
+      const customerLink = linkedCustomer?.customer.id ?? sourceCustomerId ?? null
       const created = await apiPost<{ id: string }>(
         '/api/projects',
         {
           name: name.trim(),
           customer_name: customerName.trim(),
-          // When the owner linked to an existing customer through the dedup
-          // picker, carry that customer's id so the server attaches the
-          // project to the real record instead of creating a duplicate.
-          ...(linkedCustomer ? { customer_id: linkedCustomer.customer.id } : {}),
-          // Address isn't a create-time column on /api/projects; the server
-          // doesn't accept it. Keep it captured for the operator but don't
-          // send a field the route would reject.
+          ...(customerLink ? { customer_id: customerLink } : {}),
           division_code: divisionCode,
           bid_total: bidTotal ? Number(bidTotal) : 0,
           labor_rate: laborRate ? Number(laborRate) : 0,
@@ -79,7 +152,8 @@ export function OwnerNewProject() {
         companySlug,
       )
       void address
-      navigate(`/desktop/projects/${created.id}`)
+      // Steve's workflow: land in the takeoff/canvas editor, not the detail page.
+      navigate(`/desktop/canvas/${created.id}`)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -87,32 +161,189 @@ export function OwnerNewProject() {
     }
   }
 
-  // Adopt an existing customer from the dedup picker: snap the name to the
-  // canonical (QBO label when present, else roster name) and record the link.
   const handleLinkCustomer = (match: CustomerMatch) => {
     setLinkedCustomer(match)
     setCustomerName(match.qboLabel ?? match.customer.name)
+    setSourceCustomerId(null)
     setDismissedFor(null)
   }
 
-  // User edited the client field — drop any existing link (the typed name no
-  // longer necessarily refers to the linked record) and re-arm matching.
   const handleCustomerChange = (value: string) => {
     setCustomerName(value)
     if (linkedCustomer) setLinkedCustomer(null)
+    if (sourceCustomerId) setSourceCustomerId(null)
     if (dismissedFor !== null) setDismissedFor(null)
   }
+
+  // ---- STEP 1 — how to start ------------------------------------------------
+  if (step === 'choose') {
+    return (
+      <div className="d-content">
+        <div className="d-stack">
+          <div>
+            <DEyebrow>Step 1 of 2 · How to start</DEyebrow>
+            <DH1>Start a job.</DH1>
+          </div>
+
+          {/* Three entry paths (design: FROM A TAKEOFF · CLONE · BLANK). */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+              border: '2px solid var(--m-ink)',
+            }}
+          >
+            {START_OPTIONS.map((o, i) => (
+              <button
+                key={o.kind}
+                type="button"
+                onClick={() => chooseStart(o.kind)}
+                style={{
+                  padding: '28px 24px',
+                  minHeight: 196,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'flex-start',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  background: o.tag ? 'var(--m-accent)' : 'var(--m-sand)',
+                  color: o.tag ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+                  border: 'none',
+                  borderRight: i < START_OPTIONS.length - 1 ? '2px solid var(--m-ink)' : 'none',
+                }}
+              >
+                {o.tag ? (
+                  <span
+                    style={{
+                      fontFamily: 'var(--m-num)',
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: '0.08em',
+                      background: 'var(--m-ink)',
+                      color: 'var(--m-accent)',
+                      padding: '3px 8px',
+                      marginBottom: 14,
+                    }}
+                  >
+                    {o.tag}
+                  </span>
+                ) : null}
+                <div
+                  style={{
+                    fontFamily: 'var(--m-font-display)',
+                    fontWeight: 800,
+                    fontSize: 24,
+                    letterSpacing: '-0.02em',
+                    lineHeight: 1.05,
+                  }}
+                >
+                  {o.label}
+                </div>
+                <div style={{ fontSize: 14, marginTop: 12, lineHeight: 1.5, fontWeight: 500, opacity: 0.82 }}>
+                  {o.sub}
+                </div>
+                <div style={{ marginTop: 'auto', fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 26 }}>
+                  →
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* Recent projects/takeoffs ready to convert into a fresh job. */}
+          {recent.length > 0 ? (
+            <div className="d-table-wrap">
+              <div className="d-table-head">
+                <div className="d-table-head-title">Recent projects · ready to convert</div>
+              </div>
+              <table className="d-table">
+                <thead>
+                  <tr>
+                    <th>Project</th>
+                    <th>Client</th>
+                    <th>Division</th>
+                    <th data-num="true">Value</th>
+                    <th data-num="true"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recent.map((p) => (
+                    <tr key={p.id} data-tap="true" onClick={() => convertFrom(p)}>
+                      <td className="d-table-cell-strong">{p.name}</td>
+                      <td>{p.customer_name || '—'}</td>
+                      <td>{p.division_code || '—'}</td>
+                      <td data-num="true">{fmtValue(p.bid_total)}</td>
+                      <td data-num="true">
+                        <MButton
+                          size="sm"
+                          variant="primary"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            convertFrom(p)
+                          }}
+                        >
+                          Convert →
+                        </MButton>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : null}
+        </div>
+      </div>
+    )
+  }
+
+  // ---- STEP 2 — details (auto-filled per path) ------------------------------
+  const stepTitle = kind === 'takeoff' ? 'From a takeoff' : kind === 'clone' ? 'Clone past project' : 'Blank project'
 
   return (
     <div className="d-content">
       <div className="d-stack" style={{ maxWidth: 640, margin: '0 auto', width: '100%' }}>
         <div>
-          <DEyebrow>Owner · New project</DEyebrow>
-          <DH1>Start a job.</DH1>
+          <button
+            type="button"
+            onClick={() => setStep('choose')}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              fontFamily: 'var(--m-num)',
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+            }}
+          >
+            ← How to start
+          </button>
+          <DEyebrow>Step 2 of 2 · {stepTitle}</DEyebrow>
+          <DH1>Project details.</DH1>
         </div>
 
         <div className="d-card">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            {/* Clone / takeoff: pick the source to auto-fill from. */}
+            {kind !== 'blank' && projects.length > 0 ? (
+              <Field label={kind === 'clone' ? 'Clone from' : 'Start from takeoff'}>
+                <MSelect
+                  value={sourceProjectId}
+                  onChange={(e) => onSourceChange(e.currentTarget.value)}
+                  style={{ width: '100%' }}
+                >
+                  <option value="">Choose a {kind === 'clone' ? 'past project' : 'takeoff'}…</option>
+                  {recent.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} · {p.customer_name || 'no client'}
+                    </option>
+                  ))}
+                </MSelect>
+              </Field>
+            ) : null}
+
             <Field label="Project name *" htmlFor={nameId} error={nameError}>
               <MInput
                 id={nameId}
@@ -137,14 +368,17 @@ export function OwnerNewProject() {
                 aria-required="true"
                 style={{ width: '100%' }}
               />
-              {linkedCustomer ? (
+              {linkedCustomer || sourceCustomerId ? (
                 <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <MPill tone="green" dot>
                     Linked to existing customer
                   </MPill>
                   <button
                     type="button"
-                    onClick={() => setLinkedCustomer(null)}
+                    onClick={() => {
+                      setLinkedCustomer(null)
+                      setSourceCustomerId(null)
+                    }}
                     style={{
                       background: 'none',
                       border: 'none',
@@ -161,10 +395,10 @@ export function OwnerNewProject() {
               ) : null}
             </Field>
 
-            {dismissedFor !== customerName.trim() ? (
+            {!linkedCustomer && !sourceCustomerId && dismissedFor !== customerName.trim() ? (
               <CustomerDedupPicker
                 typedName={customerName}
-                linkedCustomerId={linkedCustomer?.customer.id ?? null}
+                linkedCustomerId={null}
                 onLink={handleLinkCustomer}
                 onCreateNew={() => setDismissedFor(customerName.trim())}
               />
@@ -231,11 +465,11 @@ export function OwnerNewProject() {
             {error ? <div style={{ color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
 
             <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
-              <MButton variant="ghost" onClick={() => navigate('/desktop/projects')}>
-                Cancel
+              <MButton variant="ghost" onClick={() => setStep('choose')}>
+                Back
               </MButton>
               <MButton variant="primary" onClick={handleSubmit} disabled={!canSubmit}>
-                {busy ? 'Creating…' : 'Create project'}
+                {busy ? 'Creating…' : 'Create + open takeoff'}
               </MButton>
             </div>
           </div>
