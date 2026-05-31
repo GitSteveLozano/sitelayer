@@ -26,6 +26,7 @@ export type SupportPacketRow = {
   actor_user_id: string
   request_id: string | null
   route: string | null
+  capture_session_id?: string | null
   build_sha: string | null
   problem: string | null
   client: JsonRecord
@@ -167,6 +168,7 @@ export type InsertSupportPacketInput = {
   actorUserId: string
   requestId: string | null
   route: string | null
+  captureSessionId?: string | null
   buildSha: string | null
   problem: string | null
   client: JsonRecord
@@ -181,14 +183,15 @@ export async function insertSupportPacket(
 ): Promise<{ id: string; created_at: string; expires_at: string | null }> {
   const result = await executor.query<{ id: string; created_at: string; expires_at: string | null }>(
     `insert into support_debug_packets (
-       company_id, actor_user_id, request_id, route, build_sha, problem, client, server_context, expires_at, redaction_version
-     ) values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::timestamptz, $10)
+       company_id, actor_user_id, request_id, route, capture_session_id, build_sha, problem, client, server_context, expires_at, redaction_version
+     ) values ($1, $2, $3, $4, $5::uuid, $6, $7, $8::jsonb, $9::jsonb, $10::timestamptz, $11)
      returning id, created_at, expires_at`,
     [
       input.companyId,
       input.actorUserId,
       input.requestId,
       input.route,
+      input.captureSessionId ?? null,
       input.buildSha,
       input.problem,
       JSON.stringify(input.client),
@@ -535,6 +538,7 @@ export async function buildSupportServerContext({
   client: JsonRecord
 }) {
   const requestIds = collectRequestIds(client, getRequestContext()?.requestId)
+  const captureSessionId = getRequestContext()?.captureSessionId ?? null
   const projectIds = collectProjectIds(client)
   const entityRefs = collectEntityRefs(client)
   const [auditEvents, queue, queueDepth, domainSnapshot, workflowEvents, workItemContext] = await Promise.all([
@@ -560,6 +564,7 @@ export async function buildSupportServerContext({
       source: identity.source,
     },
     request_ids: requestIds,
+    capture_session_id: captureSessionId,
     trace_ids: traceIds,
     entity_refs: entityRefs,
     queue_depth: queueDepth,
@@ -585,6 +590,7 @@ function buildAgentPrompt(row: SupportPacketRow): string {
     `Route: ${row.route || 'unknown'}`,
     `Actor: ${row.actor_user_id}`,
     `Build: ${row.build_sha || 'unknown'}`,
+    `Capture session: ${row.capture_session_id || 'none captured'}`,
     `Request IDs: ${requestIds.join(', ') || 'none captured'}`,
     `Trace IDs: ${traceIds.join(', ') || 'none captured'}`,
     'Use the attached support_packet JSON as the source of truth. Correlate the client timeline, API requests, audit events, queue rows, and domain snapshot before suggesting a cause.',
@@ -635,6 +641,7 @@ async function createSupportPacket(ctx: SupportPacketRouteCtx) {
     client,
   })
   const requestId = getRequestContext()?.requestId ?? null
+  const captureSessionId = getRequestContext()?.captureSessionId ?? null
   const route = readClientRoute(client)
   const retentionDays = Math.max(1, Math.min(90, Number(process.env.SUPPORT_PACKET_RETENTION_DAYS ?? 30)))
   const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString()
@@ -644,6 +651,7 @@ async function createSupportPacket(ctx: SupportPacketRouteCtx) {
       actorUserId: ctx.identity.userId,
       requestId,
       route,
+      captureSessionId,
       buildSha: ctx.buildSha,
       problem,
       client,
@@ -668,7 +676,7 @@ async function getSupportPacket(ctx: SupportPacketRouteCtx, id: string) {
   }
   const result = await withCompanyClient(ctx.company.id, (c) =>
     c.query<SupportPacketRow>(
-      `select id, company_id, actor_user_id, request_id, route, build_sha, problem,
+      `select id, company_id, actor_user_id, request_id, route, capture_session_id, build_sha, problem,
             client, server_context, created_at, expires_at, redaction_version
        from support_debug_packets
       where id = $1 and company_id = $2 and (expires_at is null or expires_at > now())
@@ -719,7 +727,7 @@ async function listSupportPackets(ctx: SupportPacketRouteCtx, url: URL) {
   const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit') ?? 25)))
   const result = await withCompanyClient(ctx.company.id, (c) =>
     c.query(
-      `select id, actor_user_id, request_id, route, build_sha, problem, created_at, expires_at, redaction_version
+      `select id, actor_user_id, request_id, route, capture_session_id, build_sha, problem, created_at, expires_at, redaction_version
        from support_debug_packets
       where company_id = $1 and (expires_at is null or expires_at > now())
       order by created_at desc

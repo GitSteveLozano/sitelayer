@@ -337,6 +337,7 @@ function workItemResponse(row: ContextWorkItemRow) {
     lane: row.lane,
     severity: row.severity,
     route: row.route,
+    capture_session_id: row.capture_session_id,
     entity_type: row.entity_type,
     entity_id: row.entity_id,
     assignee_user_id: row.assignee_user_id,
@@ -905,6 +906,7 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
     client,
   })
   const requestId = getRequestContext()?.requestId ?? null
+  const captureSessionId = getRequestContext()?.captureSessionId ?? null
   const route = optionalText(body.route, 500) ?? readClientRoute(client)
   const entity = firstEntityRef(client)
   const retentionDays = Math.max(1, Math.min(90, Number(process.env.SUPPORT_PACKET_RETENTION_DAYS ?? 30)))
@@ -931,6 +933,7 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
         actorUserId: ctx.identity.userId,
         requestId,
         route,
+        captureSessionId,
         buildSha: ctx.buildSha,
         problem: summary ?? title.value,
         client,
@@ -947,12 +950,14 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
         lane,
         severity,
         route,
+        captureSessionId,
         entityType: entity.entityType,
         entityId: entity.entityId,
         createdByUserId: ctx.identity.userId,
         metadata: {
           category,
           source: 'work_request',
+          capture_session_id: captureSessionId,
           client_request_id: clientIdempotency,
           support_packet_expires_at: packet.expires_at ?? expiresAt,
         },
@@ -972,10 +977,16 @@ async function createWorkRequest(req: http.IncomingMessage, ctx: WorkRequestRout
           route: item.route,
           entity_type: item.entity_type,
           entity_id: item.entity_id,
+          capture_session_id: item.capture_session_id,
           support_packet_id: packet.id,
         },
-        metadata: { category, evidence_refs: [{ type: 'support_debug_packet', id: packet.id }] },
+        metadata: {
+          category,
+          capture_session_id: captureSessionId,
+          evidence_refs: [{ type: 'support_debug_packet', id: packet.id }],
+        },
         idempotencyKey: `work_item:create:${packet.id}`,
+        captureSessionId,
         buildSha: ctx.buildSha,
       })
       return { packet, item, event }

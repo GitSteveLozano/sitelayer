@@ -43,6 +43,7 @@ import { handleRentalRoutes } from './rentals.js'
 import { handleScheduleRoutes } from './schedules.js'
 import { handleCrewScheduleEventRoutes } from './crew-schedule-events.js'
 import { handleServiceItemRoutes } from './service-items.js'
+import { handleCaptureSessionRoutes } from './capture-sessions.js'
 import { handleSupportPacketRoutes } from './support-packets.js'
 import { handleWorkRequestRoutes } from './work-requests.js'
 import { handleObstructionsRoutes } from './obstructions.js'
@@ -321,6 +322,18 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         company,
         currentUserId,
         requireRole: requireRoleStr,
+        readBody,
+        sendJson,
+      }),
+
+    // Capture sessions — correlation spine for product trace, feedback, and artifacts.
+    () =>
+      handleCaptureSessionRoutes(req, url, {
+        pool,
+        company,
+        identity,
+        buildSha: getBuildSha(),
+        requireRole,
         readBody,
         sendJson,
       }),

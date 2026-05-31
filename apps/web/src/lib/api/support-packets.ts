@@ -17,6 +17,7 @@ export interface SupportPacketDetail {
   actor_user_id: string
   request_id: string | null
   route: string | null
+  capture_session_id: string | null
   build_sha: string | null
   problem: string | null
   client: Record<string, unknown>

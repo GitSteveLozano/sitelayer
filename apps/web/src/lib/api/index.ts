@@ -45,6 +45,18 @@ export {
 } from './project-lifecycle'
 
 export {
+  appendCaptureArtifacts,
+  appendCaptureSessionEvents,
+  discardCaptureSession,
+  ensureCaptureSession,
+  startCaptureSession,
+  stopCaptureSession,
+  type CaptureArtifactInput,
+  type CaptureSessionEventInput,
+  type CaptureSessionResponse,
+} from './capture-sessions'
+
+export {
   createSupportPacket,
   fetchSupportPacketAccessLog,
   fetchSupportPacket,
@@ -126,9 +138,11 @@ export {
   createDailyLog,
   dailyLogPhotoUrl,
   deleteDailyLogPhoto,
+  dispatchDailyLogEvent,
   fetchDailyLog,
   fetchDailyLogPhotos,
   fetchDailyLogs,
+  fetchDailyLogSnapshot,
   patchDailyLog,
   submitDailyLog,
   uploadDailyLogPhoto,
@@ -143,6 +157,7 @@ export {
   type DailyLog,
   type DailyLogCreateRequest,
   type DailyLogDetailResponse,
+  type DailyLogHumanEvent,
   type DailyLogListParams,
   type DailyLogListResponse,
   type DailyLogPatchRequest,
@@ -150,6 +165,8 @@ export {
   type DailyLogPhotoMetadata,
   type DailyLogPhotoUploadOptions,
   type DailyLogPhotoUploadResponse,
+  type DailyLogSnapshot,
+  type DailyLogSnapshotContext,
   type DailyLogStatus,
   type DailyLogSubmitRequest,
   type UseUploadDailyLogPhotoInput,
@@ -337,7 +354,6 @@ export {
   fetchLaborPayrollRuns,
   laborPayrollRunQueryKeys,
   previewLaborPayrollCoverage,
-  useDispatchLaborPayrollRunEvent,
   useLaborPayrollRun,
   useLaborPayrollRuns,
   type LaborPayrollHumanEvent,
@@ -687,6 +703,10 @@ export {
   useApproveRentalRequest,
   useDeclineRentalRequest,
   useRentalRequests,
+  useRentalRequestSnapshot,
+  useDispatchRentalRequestEvent,
+  fetchRentalRequestSnapshot,
+  dispatchRentalRequestEvent,
   type ApproveRentalRequestInput,
   type ApproveRentalRequestResponse,
   type DeclineRentalRequestInput,
@@ -695,6 +715,9 @@ export {
   type RentalRequestItem,
   type RentalRequestListResponse,
   type RentalRequestStatus,
+  type RentalRequestSnapshot,
+  type RentalRequestApprovalState,
+  type RentalRequestApprovalEvent,
 } from './rental-requests'
 
 // Phase 3.1 — admin notification queue (isolated block; see notifications-queue.ts)

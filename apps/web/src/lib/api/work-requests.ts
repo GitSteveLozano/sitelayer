@@ -52,6 +52,7 @@ export interface ContextWorkItem {
   lane: WorkItemLane
   severity: WorkItemSeverity | null
   route: string | null
+  capture_session_id?: string | null
   entity_type: string | null
   entity_id: string | null
   assignee_user_id: string | null
@@ -102,6 +103,7 @@ export interface ContextHandoffEvent {
 export interface WorkRequestSupportPacketSummary {
   id: string
   route: string | null
+  capture_session_id?: string | null
   problem: string | null
   request_id: string | null
   build_sha: string | null

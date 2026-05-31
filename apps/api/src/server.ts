@@ -534,12 +534,22 @@ const server = http.createServer(async (req, res) => {
     typeof req.headers['x-sitelayer-company-slug'] === 'string' ? req.headers['x-sitelayer-company-slug'] : undefined
   const userIdHeader =
     typeof req.headers['x-sitelayer-user-id'] === 'string' ? req.headers['x-sitelayer-user-id'] : undefined
+  const captureSessionHeader =
+    typeof req.headers['x-sitelayer-capture-session-id'] === 'string'
+      ? req.headers['x-sitelayer-capture-session-id'].trim()
+      : ''
+  const captureSessionId = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+    captureSessionHeader,
+  )
+    ? captureSessionHeader
+    : undefined
   const requestContext: RequestContext = {
     requestId,
     route: initialRoute,
     method,
     ...(companySlugHeader ? { companySlug: companySlugHeader } : {}),
     ...(userIdHeader ? { userId: userIdHeader } : {}),
+    ...(captureSessionId ? { captureSessionId } : {}),
   }
   res.on('finish', () => {
     observeRequest(method, requestContext.route ?? initialRoute, res.statusCode || 0, Date.now() - requestStartedAt)
@@ -562,6 +572,7 @@ const server = http.createServer(async (req, res) => {
         scope.setTag('route', initialRoute)
         scope.setTag('method', method)
         if (companySlugHeader) scope.setTag('company_slug', companySlugHeader)
+        if (captureSessionId) scope.setTag('capture_session_id', captureSessionId)
         if (userIdHeader) scope.setUser({ id: userIdHeader })
         return Sentry.startSpan(
           {

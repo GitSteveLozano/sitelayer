@@ -8,6 +8,7 @@ export interface RequestContext {
   userId?: string
   actorUserId?: string
   actorRole?: string
+  captureSessionId?: string
   route?: string
   method?: string
 }

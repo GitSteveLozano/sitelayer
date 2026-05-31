@@ -17,6 +17,8 @@
 // construction: route is location.pathname (no query); the gateway templates +
 // redacts further.
 
+import { getActiveCaptureSessionId } from './capture-session'
+
 export const TRACE_CONSENT_VERSION = '2026-05-29'
 const CONSENT_KEY = 'sitelayer.trace-consent'
 const SESSION_KEY = 'sitelayer.trace-session'
@@ -31,6 +33,7 @@ type BeaconInput = {
 
 type BeaconEvent = {
   session_id: string
+  capture_session_id?: string
   seq: number
   event_class: string
   route_path: string
@@ -149,10 +152,13 @@ export function beaconTraceEvent(input: BeaconInput): void {
   if (!beaconEnabled()) return
   try {
     const p = input.payload ?? {}
+    const captureSessionId = getActiveCaptureSessionId()
     const stateAfter = String((p.user_state as Record<string, unknown> | undefined)?.state ?? p.state ?? '')
     const errLike =
       FAILURE_EVENT_HINTS.some((h) => input.event_type.toLowerCase().includes(h)) || input.severity === 'error'
-    buffer.push({
+    const payload: Record<string, unknown> = { event_name: input.event_type }
+    if (captureSessionId) payload.capture_session_id = captureSessionId
+    const event: BeaconEvent = {
       session_id: sessionId(),
       seq: seq++,
       event_class: input.event_class || 'user_action',
@@ -162,8 +168,10 @@ export function beaconTraceEvent(input: BeaconInput): void {
       outcome: errLike ? 'failed' : '',
       error_code: errLike ? input.event_type : '',
       occurred_at: new Date().toISOString(),
-      payload: { event_name: input.event_type },
-    })
+      payload,
+    }
+    if (captureSessionId) event.capture_session_id = captureSessionId
+    buffer.push(event)
     if (buffer.length >= 25) flush()
     else scheduleFlush()
   } catch {

@@ -93,6 +93,7 @@ export type ContextWorkItemRow = {
   lane: WorkItemLane
   severity: WorkItemSeverity | null
   route: string | null
+  capture_session_id: string | null
   entity_type: string | null
   entity_id: string | null
   assignee_user_id: string | null
@@ -121,6 +122,7 @@ export type ContextHandoffEventRow = {
   causation_event_id: string | null
   correlation_id: string | null
   request_id: string | null
+  capture_session_id: string | null
   sentry_trace: string | null
   sentry_baggage: string | null
   build_sha: string | null
@@ -136,6 +138,7 @@ export type ContextWorkItemDetail = {
       route: string | null
       problem: string | null
       request_id: string | null
+      capture_session_id: string | null
       build_sha: string | null
       created_at: string
       expires_at: string | null
@@ -159,6 +162,7 @@ const WORK_ITEM_COLUMN_NAMES = [
   'lane',
   'severity',
   'route',
+  'capture_session_id',
   'entity_type',
   'entity_id',
   'assignee_user_id',
@@ -194,6 +198,7 @@ const HANDOFF_EVENT_COLUMN_NAMES = [
   'causation_event_id',
   'correlation_id',
   'request_id',
+  'capture_session_id',
   'sentry_trace',
   'sentry_baggage',
   'build_sha',
@@ -245,6 +250,7 @@ export async function createContextWorkItemTx(
     route?: string | null
     entityType?: string | null
     entityId?: string | null
+    captureSessionId?: string | null
     assigneeUserId?: string | null
     createdByUserId?: string | null
     metadata?: unknown
@@ -267,9 +273,9 @@ export async function createContextWorkItemTx(
   const result = await executor.query<ContextWorkItemRow>(
     `insert into context_work_items (
        company_id, support_packet_id, title, summary, status, lane, severity,
-       route, entity_type, entity_id, assignee_user_id, created_by_user_id, metadata,
+       route, capture_session_id, entity_type, entity_id, assignee_user_id, created_by_user_id, metadata,
        reversibility_window_seconds
-     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14)
+     ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9::uuid, $10, $11, $12, $13, $14::jsonb, $15)
      returning ${WORK_ITEM_COLUMNS}`,
     [
       args.companyId,
@@ -280,6 +286,7 @@ export async function createContextWorkItemTx(
       lane,
       args.severity ?? null,
       optionalText(args.route),
+      optionalText(args.captureSessionId),
       optionalText(args.entityType),
       optionalText(args.entityId),
       optionalText(args.assigneeUserId),
@@ -309,6 +316,7 @@ export async function appendContextHandoffEventTx(
     causationEventId?: string | null
     correlationId?: string | null
     requestId?: string | null
+    captureSessionId?: string | null
     sentryTrace?: string | null
     sentryBaggage?: string | null
     buildSha?: string | null
@@ -320,6 +328,7 @@ export async function appendContextHandoffEventTx(
   assertIn(HANDOFF_ACTOR_KINDS, args.actorKind, 'actor_kind')
   const trace = currentTraceHeaders()
   const requestId = args.requestId ?? getRequestContext()?.requestId ?? null
+  const captureSessionId = args.captureSessionId ?? getRequestContext()?.captureSessionId ?? null
   const sentryTrace = args.sentryTrace ?? trace.sentryTrace
   const sentryBaggage = args.sentryBaggage ?? trace.baggage
   const idempotencyKey = optionalText(args.idempotencyKey)
@@ -337,6 +346,7 @@ export async function appendContextHandoffEventTx(
     optionalText(args.causationEventId),
     optionalText(args.correlationId),
     requestId,
+    optionalText(captureSessionId),
     sentryTrace,
     sentryBaggage,
     optionalText(args.buildSha),
@@ -347,13 +357,13 @@ export async function appendContextHandoffEventTx(
     `insert into context_handoff_events (
        company_id, work_item_id, event_type, actor_kind, actor_user_id,
        actor_ref, source_system, payload, metadata, idempotency_key,
-       causation_event_id, correlation_id, request_id, sentry_trace,
-       sentry_baggage, build_sha, redaction_version, occurred_at
+       causation_event_id, correlation_id, request_id, capture_session_id,
+       sentry_trace, sentry_baggage, build_sha, redaction_version, occurred_at
      ) values (
        $1, $2, $3, $4, $5,
        $6, $7, $8::jsonb, $9::jsonb, $10,
-       $11::uuid, $12::uuid, $13, $14,
-       $15, $16, $17, coalesce($18::timestamptz, now())
+       $11::uuid, $12::uuid, $13, $14::uuid,
+       $15, $16, $17, $18, coalesce($19::timestamptz, now())
      )
      on conflict (company_id, idempotency_key) where idempotency_key is not null do nothing
      returning ${HANDOFF_EVENT_COLUMNS}`,
@@ -516,6 +526,7 @@ export async function getContextWorkItemWithEvents(
                 'route', s.route,
                 'problem', s.problem,
                 'request_id', s.request_id,
+                'capture_session_id', s.capture_session_id,
                 'build_sha', s.build_sha,
                 'created_at', s.created_at,
                 'expires_at', s.expires_at,
