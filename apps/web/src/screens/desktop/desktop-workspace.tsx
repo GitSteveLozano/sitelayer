@@ -79,6 +79,7 @@ import { EstAssemblies } from './est-assemblies'
 import { EstClientProfile } from './est-client-profile'
 import { EstQuantities } from './est-quantities'
 import { EstScaleVerify } from './est-scale-verify'
+import { EstPlanIngest } from './est-plan-ingest'
 import { FmToday } from './fm-today'
 import { FmCrew } from './fm-crew'
 import { EstCanvas } from './est-canvas'
@@ -195,6 +196,43 @@ function resolveRentalsCrumb(pathname: string, assetCode: string | null): string
   return `Rentals · ${asset} · ${actionLabel}`
 }
 
+// Project-/client-anchored dynamic routes (projects/:id, estimate/:id,
+// scale/:id, canvas/:id, ai-takeoff/:id[/review], ai-count/:id[/review],
+// fm/brief/:id, clients/:id) otherwise fall through to the static CRUMB map
+// and land on the bare 'Sitelayer' fallback. Resolve a section label + the
+// entity's display name (project or client name from the warm bootstrap cache)
+// so deep desktop routes show a proper contextual crumb. Falls back to a
+// generic 'Project'/'Client' label while bootstrap is still in flight or the
+// entity isn't in the cached payload (e.g. a freshly created row).
+const DYNAMIC_ROUTE_PATTERNS: Array<{ re: RegExp; section: string; entity: 'project' | 'client' }> = [
+  { re: /^\/desktop\/projects\/([^/]+)\/?$/, section: 'Projects', entity: 'project' },
+  { re: /^\/desktop\/estimate\/([^/]+)\/?$/, section: 'Takeoff · Quantities', entity: 'project' },
+  { re: /^\/desktop\/scale\/([^/]+)\/?$/, section: 'Takeoff · Verify scale', entity: 'project' },
+  { re: /^\/desktop\/canvas\/([^/]+)\/?$/, section: 'Takeoff · Canvas', entity: 'project' },
+  { re: /^\/desktop\/ai-takeoff\/([^/]+)\/review\/?$/, section: 'AI Takeoff · Review', entity: 'project' },
+  { re: /^\/desktop\/ai-takeoff\/([^/]+)\/?$/, section: 'AI Takeoff', entity: 'project' },
+  { re: /^\/desktop\/ai-count\/([^/]+)\/review\/?$/, section: 'AI Count · Review', entity: 'project' },
+  { re: /^\/desktop\/ai-count\/([^/]+)\/?$/, section: 'AI Count', entity: 'project' },
+  { re: /^\/desktop\/fm\/brief\/([^/]+)\/?$/, section: 'Foreman · Brief', entity: 'project' },
+  { re: /^\/desktop\/clients\/([^/]+)\/?$/, section: 'Clients', entity: 'client' },
+]
+
+function resolveEntityCrumb(
+  pathname: string,
+  projectName: Map<string, string>,
+  clientName: Map<string, string>,
+): string | null {
+  for (const { re, section, entity } of DYNAMIC_ROUTE_PATTERNS) {
+    const match = re.exec(pathname)
+    if (!match) continue
+    const id = match[1] ?? ''
+    const lookup = entity === 'project' ? projectName : clientName
+    const name = lookup.get(id) ?? (entity === 'project' ? 'Project' : 'Client')
+    return `${section} · ${name}`
+  }
+  return null
+}
+
 function DComingSoon({ name }: { name: string }) {
   return (
     <div className="d-content">
@@ -229,8 +267,9 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
     ? ((inventoryItemsQuery.data?.inventoryItems ?? []).find((i) => i.id === rentalsItemId)?.code ?? null)
     : null
   const dynamicRentalsCrumb = resolveRentalsCrumb(location.pathname, rentalsAssetCode)
-  const sectionCrumb = dynamicRentalsCrumb ?? CRUMB[location.pathname] ?? 'Sitelayer'
-  const crumb = location.pathname === '/desktop' ? `${dateCrumb} · ${sectionCrumb}` : sectionCrumb
+  // Plan-ingest is a dynamic /desktop/ingest/:projectId route (not in the
+  // static CRUMB map). It reads as the "New takeoff" entry step (dsg__44/45).
+  const ingestCrumb = /^\/desktop\/ingest\/[^/]+\/?$/.test(location.pathname) ? 'New takeoff · Reading plan set' : null
   const [wearingOpen, setWearingOpen] = useState(false)
   const [cmdkOpen, setCmdkOpen] = useState(false)
   const [cmdkQuery, setCmdkQuery] = useState('')
@@ -249,7 +288,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
   // the switch menu can show a selected indicator (design: TOPBAR ROLE SWITCHER).
   const activeHat = location.pathname.startsWith('/desktop/fm')
     ? 'foreman'
-    : /\/desktop\/(takeoff|ai-queue|item-library|assemblies|estimate|scale)/.test(location.pathname)
+    : /\/desktop\/(takeoff|ai-queue|item-library|assemblies|estimate|scale|ingest|canvas)/.test(location.pathname)
       ? 'estimator'
       : 'owner'
   const goHat = (to: string) => {
@@ -294,6 +333,20 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
     () => new Map((bootstrap?.projects ?? []).map((p) => [p.id, p.name])),
     [bootstrap?.projects],
   )
+  // Customer roster → contextual crumb on the dynamic /desktop/clients/:id
+  // route (and any other client-anchored deep route). Warm bootstrap cache,
+  // same payload the ⌘K palette + clients screen read.
+  const clientName = useMemo(
+    () => new Map((bootstrap?.customers ?? []).map((c) => [c.id, c.name])),
+    [bootstrap?.customers],
+  )
+  // Contextual breadcrumb for project-/client-anchored dynamic routes
+  // (projects/:id, estimate/:id, scale/:id, canvas/:id, ai-takeoff/:id,
+  // ai-count/:id, fm/brief/:id, clients/:id). Resolves the entity name from
+  // the warm bootstrap maps; rentals + ingest keep their bespoke resolvers.
+  const entityCrumb = resolveEntityCrumb(location.pathname, projectName, clientName)
+  const sectionCrumb = ingestCrumb ?? dynamicRentalsCrumb ?? entityCrumb ?? CRUMB[location.pathname] ?? 'Sitelayer'
+  const crumb = location.pathname === '/desktop' ? `${dateCrumb} · ${sectionCrumb}` : sectionCrumb
   const pendingApprovals = usePendingApprovalsSummary(projectName)
   const navSections = useMemo<DNavSection[]>(
     () =>
@@ -732,6 +785,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
           <Route path="assemblies" element={<EstAssemblies />} />
           <Route path="clients/:clientId" element={<EstClientProfile />} />
           <Route path="estimate/:projectId" element={<EstQuantities />} />
+          <Route path="ingest/:projectId" element={<EstPlanIngest />} />
           <Route path="scale/:projectId" element={<EstScaleVerify />} />
           <Route path="canvas/:projectId" element={<EstCanvas />} />
           <Route path="fm/today" element={<FmToday bootstrap={bootstrap} companySlug={companySlug ?? ''} />} />

@@ -78,12 +78,7 @@ export function RentalRequestsQueueScreen() {
         ) : null}
 
         {requests.map((req) => (
-          <RentalRequestCard
-            key={req.id}
-            request={req}
-            onError={setErrorBanner}
-            onActed={() => pending.refetch()}
-          />
+          <RentalRequestCard key={req.id} request={req} onError={setErrorBanner} onActed={() => pending.refetch()} />
         ))}
       </MBody>
     </>

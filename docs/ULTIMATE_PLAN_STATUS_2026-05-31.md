@@ -16,7 +16,8 @@ plan.
 The important distinction is this:
 
 - The statechart/headless-workflow layer is now becoming real code.
-- The end-user capture/session layer is still mostly documented, not implemented.
+- The end-user capture/session layer is now partially coded in the dirty tree,
+  but it is not yet verified as an end-to-end learning loop.
 - The Mesh/product-trace/belief loop is prepared, but not live end to end.
 
 So the repo is in a useful middle state: strong substrate, weak integration
@@ -78,23 +79,46 @@ snapshots and `next_events` rather than inventing allowed actions locally.
 
 ## What is still not real
 
-End-user capture is still pre-R0/C0. The docs describe the desired capture
-spine, but the code does not yet have:
+End-user capture is no longer pre-R0/C0 in the current dirty tree. The following
+pieces now exist and should be treated as implementation work that needs review,
+not as aspirational docs:
 
-- `capture_sessions`;
-- `capture_artifacts`;
-- `capture_session_id` threaded through nav/workflow/support events;
-- rrweb replay;
-- an invite-gated `Record feedback` control;
-- native Capacitor capture with ReplayKit/MediaProjection.
+- `docker/postgres/init/120_capture_sessions.sql` creates `capture_sessions`,
+  `capture_session_events`, `capture_artifacts`, and adds
+  `capture_session_id` to support packets, context work items, worker issues,
+  workflow events, outbox rows, and sync events.
+- `apps/web/src/lib/capture-session.ts` creates the local session id and
+  applies `x-sitelayer-capture-session-id` to API calls.
+- `apps/web/src/lib/product-trace-beacon.ts` adds `capture_session_id` to
+  browser product-trace payloads when a local session is active.
+- `apps/api/src/server.ts` reads and validates the capture-session header into
+  request context.
+- `packages/workflows/src/event-log-insert.ts`,
+  `apps/api/src/mutation-tx.ts`, `packages/queue/src/index.ts`, and the
+  dedicated estimate/rental pushers carry `capture_session_id` into
+  `workflow_event_log`.
+- `apps/api/src/routes/support-packets.ts`, `apps/api/src/context-handoff.ts`,
+  and `apps/api/src/routes/work-requests.ts` now propagate the session id into
+  support/context work.
+- `apps/worker/src/runners/mesh-trace-forward.ts` selects
+  `workflow_event_log.capture_session_id`, emits a stable producer `event_ref`,
+  and forwards both to Mesh product trace.
 
-The existing repo pieces are reusable: mobile mic recording, camera access,
-support packets, context work dispatch, PWA shell, `workflow_event_log`, and the
-Mesh trace forwarder. They are not yet joined into a user-session object.
+What is still missing is the closed user-facing capture loop:
 
-Domain 1 is also not closed. Sitelayer can emit workflow traces and Mesh can
-ingest `product_trace_events`, but the live pipe still needs activation and the
-return path `product_trace -> belief_evidence` is still missing.
+- no invite-gated `Record feedback` control yet;
+- no rrweb DOM replay yet;
+- no mic+rrweb+support-packet stop/upload path yet;
+- no takeoff-canvas geometry/snapshot capture joined to the session yet;
+- no native Capacitor path with ReplayKit/MediaProjection yet;
+- no aggregate smoke proving one real phone/tablet session creates a session
+  row, event rows, support packet, context work item, Mesh trace event, and
+  reviewable task/evidence.
+
+Domain 1 is also not fully closed. Sitelayer can emit workflow traces and Mesh
+can ingest `product_trace_events`. The current Control Plane dirty tree adds the
+first `product_trace -> belief_evidence` review route, but it still needs
+aggregate validation, migration review, and a live trace-to-review smoke.
 
 ## Pilot-readiness blockers that remain
 
@@ -117,7 +141,7 @@ has real pilot walls:
 Do not merge the dirty tree as one blob without stabilizing these first:
 
 - Worker event-log inserts may still target `ON CONFLICT (entity_id,
-  state_version)` even though migration 106 widens the unique key to
+state_version)` even though migration 106 widens the unique key to
   `(entity_id, workflow_name, state_version)`.
 - Dedicated crew outbox mutation types can be consumed by the generic queue
   drain unless they are excluded from the generic path.
@@ -137,8 +161,11 @@ Do not merge the dirty tree as one blob without stabilizing these first:
    `next_events`, event log, replay, and one smoke test.
 4. Burn down pilot blockers separately: real invite/accept, assignment active
    visibility, QBO sandbox smoke, AI takeoff live repro.
-5. Then build C0/R0 usage capture: `capture_sessions`, `capture_session_id`,
-   nav events, support-packet join, and one `Record feedback` path.
+5. Finish and prove C0/R0 usage capture: session start/stop API, nav/session
+   events, support-packet join, stable Mesh trace ingest, and one verified
+   `capture_session_id` manifest.
+6. Then build R1 user feedback capture: invite-gated `Record feedback`, mic,
+   rrweb, transcript, support packet, and one context work item.
 
 ## Where this sits in the ultimate plan
 
@@ -146,9 +173,9 @@ The current repo is strong on representation and weak on closure.
 
 - Representation: increasingly real. Workflows, statecharts, design conformance,
   and replayable transitions exist and are being connected.
-- Capture: partially reusable pieces exist, but the user-session capture object
-  does not.
-- Learning: not closed. Product traces do not yet move beliefs.
+- Capture: the user-session object now exists in dirty code, but the user-facing
+  recorder and end-to-end smoke are missing.
+- Learning: partially wired in dirty Control Plane code; not yet proven live.
 - Pilot: close enough to justify a stabilization push, not safe enough to treat
   as ready.
 

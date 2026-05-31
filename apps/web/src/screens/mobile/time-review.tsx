@@ -487,9 +487,7 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
 
               return (
                 <>
-                  <MSectionH>
-                    {listFilter === 'flagged' ? 'Crew week · flagged' : 'Crew week · pending'}
-                  </MSectionH>
+                  <MSectionH>{listFilter === 'flagged' ? 'Crew week · flagged' : 'Crew week · pending'}</MSectionH>
                   <MListInset>{filteredPending.map(renderRow)}</MListInset>
                 </>
               )

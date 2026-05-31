@@ -523,11 +523,7 @@ describe('handleRentalRequestRoutes — POST /:id/events (versioned dispatch)', 
     seedRequest(pool, { id: UUID })
     const { ctx, responses, reads } = makeCtx(pool)
     reads.push({ event: 'APPROVE', state_version: 1 })
-    await handleRentalRequestRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/rental-requests/${UUID}/events`),
-      ctx,
-    )
+    await handleRentalRequestRoutes({ method: 'POST' } as never, buildUrl(`/api/rental-requests/${UUID}/events`), ctx)
     expect(responses[0]?.status).toBe(200)
     expect(pool.rentals).toHaveLength(1)
     // The create_rental_from_request audit-anchor outbox row was enqueued.
@@ -547,11 +543,7 @@ describe('handleRentalRequestRoutes — POST /:id/events (versioned dispatch)', 
     seedRequest(pool, { id: UUID })
     const { ctx, responses, reads } = makeCtx(pool)
     reads.push({ event: 'DECLINE', state_version: 1, decline_reason: 'no stock' })
-    await handleRentalRequestRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/rental-requests/${UUID}/events`),
-      ctx,
-    )
+    await handleRentalRequestRoutes({ method: 'POST' } as never, buildUrl(`/api/rental-requests/${UUID}/events`), ctx)
     expect(responses[0]?.status).toBe(200)
     const updated = pool.rentalRequests[0]!
     expect(updated.status).toBe('declined')
@@ -564,11 +556,7 @@ describe('handleRentalRequestRoutes — POST /:id/events (versioned dispatch)', 
     seedRequest(pool, { id: UUID, state_version: 3 })
     const { ctx, responses, reads } = makeCtx(pool)
     reads.push({ event: 'APPROVE', state_version: 1 })
-    await handleRentalRequestRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/rental-requests/${UUID}/events`),
-      ctx,
-    )
+    await handleRentalRequestRoutes({ method: 'POST' } as never, buildUrl(`/api/rental-requests/${UUID}/events`), ctx)
     expect(responses[0]?.status).toBe(409)
     const body = responses[0]?.body as { error: string; snapshot: { state_version: number } }
     expect(body.snapshot.state_version).toBe(3)
@@ -580,11 +568,7 @@ describe('handleRentalRequestRoutes — POST /:id/events (versioned dispatch)', 
     seedRequest(pool, { id: UUID, status: 'declined', state_version: 2 })
     const { ctx, responses, reads } = makeCtx(pool)
     reads.push({ event: 'APPROVE', state_version: 2 })
-    await handleRentalRequestRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/rental-requests/${UUID}/events`),
-      ctx,
-    )
+    await handleRentalRequestRoutes({ method: 'POST' } as never, buildUrl(`/api/rental-requests/${UUID}/events`), ctx)
     expect(responses[0]?.status).toBe(409)
     expect(pool.rentals).toHaveLength(0)
   })
@@ -594,11 +578,7 @@ describe('handleRentalRequestRoutes — POST /:id/events (versioned dispatch)', 
     seedRequest(pool, { id: UUID })
     const { ctx, responses, reads } = makeCtx(pool)
     reads.push({ event: 'BOGUS', state_version: 1 })
-    await handleRentalRequestRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/rental-requests/${UUID}/events`),
-      ctx,
-    )
+    await handleRentalRequestRoutes({ method: 'POST' } as never, buildUrl(`/api/rental-requests/${UUID}/events`), ctx)
     expect(responses[0]?.status).toBe(400)
   })
 })

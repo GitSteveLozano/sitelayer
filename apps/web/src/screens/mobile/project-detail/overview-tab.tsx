@@ -35,7 +35,8 @@ export function Overview({
   const lifecycle = useProjectLifecycle(project.id, getActiveCompanySlug())
   const lifecycleState: ProjectLifecycleState =
     (lifecycle.snapshot?.state as ProjectLifecycleState | undefined) ??
-    ((project.lifecycle_state as ProjectLifecycleState | undefined) ?? 'draft')
+    (project.lifecycle_state as ProjectLifecycleState | undefined) ??
+    'draft'
 
   return (
     <div style={{ paddingTop: 8 }}>

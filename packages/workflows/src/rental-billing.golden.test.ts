@@ -121,7 +121,11 @@ describe('rental-billing — replay harness against synthetic event log', () => 
     const approveEvent = { type: 'APPROVE', approved_at: '2026-04-29T10:00:00.000Z', approved_by: 'office-user' }
     const approved = transitionRentalBillingWorkflow(initial, approveEvent as never)
     const posting = transitionRentalBillingWorkflow(approved, { type: 'POST_REQUESTED' })
-    const cancelEvent = { type: 'CANCEL_POST', failed_at: '2026-04-29T10:05:00.000Z', error: 'Push canceled by office-user' }
+    const cancelEvent = {
+      type: 'CANCEL_POST',
+      failed_at: '2026-04-29T10:05:00.000Z',
+      error: 'Push canceled by office-user',
+    }
     const failed = transitionRentalBillingWorkflow(posting, cancelEvent as never)
     const reapproved = transitionRentalBillingWorkflow(failed, { type: 'RETRY_POST' })
     const reposting = transitionRentalBillingWorkflow(reapproved, { type: 'POST_REQUESTED' })
@@ -155,7 +159,11 @@ describe('rental-billing — replay harness against synthetic event log', () => 
     expect(result.ok).toBe(true)
     expect(result.issues).toEqual([])
     expect(result.finalSnapshot).toEqual(posted)
-    expect(failed).toMatchObject({ state: 'failed', failed_at: '2026-04-29T10:05:00.000Z', error: 'Push canceled by office-user' })
+    expect(failed).toMatchObject({
+      state: 'failed',
+      failed_at: '2026-04-29T10:05:00.000Z',
+      error: 'Push canceled by office-user',
+    })
   })
 
   it('detects a forged snapshot_after as snapshot_divergence', () => {

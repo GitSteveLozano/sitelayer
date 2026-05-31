@@ -25,6 +25,12 @@ type IssueRow = {
   /** Typed urgency band. Present on the list DTO since worker-issues.ts
    *  ISSUE_COLUMNS selects it; the message-tag fallback covers legacy rows. */
   severity?: 'question' | 'slowing' | 'stopped' | null
+  /** Structured material-request fields (migration 126). Present on the list
+   *  DTO since ISSUE_COLUMNS selects them; NULL for non-materials / legacy
+   *  rows. Surfaced as a compact "12 SHEETS" stripe on the row. */
+  material_label?: string | null
+  material_quantity?: string | number | null
+  material_unit?: string | null
   resolved_at: string | null
   resolved_by_clerk_user_id: string | null
   created_at: string
@@ -189,6 +195,21 @@ export function ForemanField({ bootstrap, companySlug }: { bootstrap: BootstrapR
                     <MPill tone={tone}>{pillLabel}</MPill>
                   </div>
                   <div style={{ fontSize: 15, lineHeight: 1.45, color: 'var(--m-ink)' }}>{body}</div>
+                  {materialSummary(i) ? (
+                    <div
+                      style={{
+                        fontFamily: 'var(--m-num)',
+                        fontWeight: 800,
+                        fontSize: 12,
+                        letterSpacing: '0.06em',
+                        textTransform: 'uppercase',
+                        color: 'var(--m-ink-3)',
+                        marginTop: 6,
+                      }}
+                    >
+                      {materialSummary(i)}
+                    </div>
+                  ) : null}
                   {photo ? (
                     <div style={{ display: 'flex', gap: 6, marginTop: 10 }}>
                       {Array.from({ length: 4 }).map((_, j) => (
@@ -271,6 +292,22 @@ function ClusterStripe({ issues, bootstrap }: { issues: readonly IssueRow[]; boo
 
 function isPhotoLog(i: IssueRow): boolean {
   return /^\[photo_log\]/.test(i.message)
+}
+
+/**
+ * Compact typed material stripe for the list row, e.g. "12 SHEETS · EPS
+ * INSULATION". Built from the structured columns (migration 126) when present;
+ * returns null for non-materials / legacy rows so the row just shows its body.
+ */
+function materialSummary(i: IssueRow): string | null {
+  const qty = i.material_quantity === null || i.material_quantity === undefined ? null : Number(i.material_quantity)
+  const hasQty = qty !== null && Number.isFinite(qty)
+  const unit = i.material_unit?.trim() || ''
+  const label = i.material_label?.trim() || ''
+  if (!hasQty && !label) return null
+  const head = hasQty ? `${qty}${unit ? ` ${unit}` : ''}`.trim() : ''
+  if (head && label) return `${head} · ${label}`
+  return head || label
 }
 
 /** Reads the typed `severity` column off the list DTO, falling back to the

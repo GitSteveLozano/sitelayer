@@ -15,8 +15,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { apiGet, getActiveCompanySlug, type ProjectSummary } from '@/lib/api'
 import { useCustomers } from '@/lib/api/customers'
 import { useEstimateBuilder } from '@/machines/estimate-builder'
-import type { EstimateLine } from '../../lib/api/estimate.js'
-import { createEstimatePush } from '../../lib/api/estimate-pushes.js'
+import { repriceEstimateMargin, type EstimateLine } from '../../lib/api/estimate.js'
+import { createEstimateShare } from '../../lib/api/estimate-shares.js'
 import {
   MBanner,
   MBody,
@@ -42,15 +42,18 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   const [error, setError] = useState<string | null>(null)
   const [creatingPush, setCreatingPush] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
+  // Share link created by the send sheet (the private signable portal link).
+  const [shareUrl, setShareUrl] = useState<string | null>(null)
   // Margin control (the design's slider + −/+ stepper). Drives a live sell-total
-  // preview off the internal cost basis. Margin isn't a persisted field, so this
-  // is a presentation control: it never writes back, it lets the operator see
-  // what the sell total would be at a chosen margin before sending.
+  // preview off the internal cost basis. On release the chosen margin is
+  // committed via SET_MARGIN, which reprices the project bid off the cost basis.
   const [marginOverride, setMarginOverride] = useState<number | null>(null)
+  const [marginSaving, setMarginSaving] = useState(false)
   // Send-to-client confirmation sheet (the design's full-screen SEND TO CLIENT
   // sheet). The send no longer fires immediately on tap — it opens this sheet.
   const [showSendSheet, setShowSendSheet] = useState(false)
   const [sendNote, setSendNote] = useState('')
+  const [sendEmail, setSendEmail] = useState('')
 
   // Editable line list + totals. The machine owns the scope-vs-bid
   // snapshot (whose lines carry `id`), staged edits, and save/conflict UI
@@ -79,19 +82,24 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   const handleSendToClient = () => {
     if (!projectId) return
     setCreateError(null)
+    setShareUrl(null)
     setShowSendSheet(true)
   }
 
-  // Step 2: from inside the sheet, snapshot the estimate into a push and hop
-  // to the estimate-push review (which drives the QBO workflow).
-  const confirmSend = async () => {
+  // Step 2: from inside the sheet, create an estimate SHARE — a private
+  // signable portal link the client opens to view/accept the bid (the
+  // send-to-client loop, distinct from the QBO estimate-push).
+  const confirmSend = async (recipientEmail: string) => {
     if (!projectId) return
     setCreatingPush(true)
     setCreateError(null)
     try {
-      const result = await createEstimatePush(projectId)
-      const pushId = result.kind === 'created' ? result.pushId : result.openId
-      navigate(`/projects/${projectId}/estimate-push/${pushId}`)
+      const trimmedNote = sendNote.trim()
+      const result = await createEstimateShare(projectId, {
+        recipient_email: recipientEmail,
+        ...(trimmedNote ? { message: trimmedNote } : {}),
+      })
+      setShareUrl(result.share_url)
     } catch (err) {
       setCreateError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -168,10 +176,28 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
   const clientLabel = client?.name ?? summary.project.customer_name ?? ''
   const clientFirstName = clientLabel.trim().split(/\s+/)[0] ?? ''
 
+  // Commit the chosen margin: reprice the project bid off the cost basis
+  // (SET_MARGIN). Fired on slider release / after a stepper tap, not on every
+  // drag tick. No-op without a cost basis (nothing to mark up).
+  const commitMargin = async (nextMargin: number) => {
+    if (!projectId || costBasis <= 0) return
+    setMarginSaving(true)
+    try {
+      const result = await repriceEstimateMargin(projectId, Math.min(0.95, Math.max(0, nextMargin)))
+      setMarginOverride(result.target_margin_pct)
+      builder.refresh()
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setMarginSaving(false)
+    }
+  }
+
   const stepMargin = (delta: number) => {
     const base = marginOverride ?? computedMargin
     const next = Math.min(0.5, Math.max(0, Math.round((base + delta) * 100) / 100))
     setMarginOverride(next)
+    void commitMargin(next)
   }
 
   return (
@@ -221,12 +247,15 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
           </div>
         </div>
 
-        {/* MARGIN — interactive 0–50% slider + −/+ stepper driving the preview. */}
+        {/* MARGIN — interactive 0–50% slider + −/+ stepper. Dragging previews
+            the % live; on release it reprices the project bid (SET_MARGIN). */}
         <MarginControl
           marginPct={marginPct}
           value={marginClamped}
           tone={marginTone}
+          saving={marginSaving}
           onSlide={(v) => setMarginOverride(v)}
+          onCommit={(v) => void commitMargin(v)}
           onStep={stepMargin}
         />
 
@@ -384,9 +413,12 @@ export function MobileEstimateReview({ companySlug }: { companySlug: string }) {
           lineCount={editableLines.length}
           note={sendNote}
           onNoteChange={setSendNote}
+          email={sendEmail}
+          onEmailChange={setSendEmail}
           sending={creatingPush}
           error={createError}
-          onSend={confirmSend}
+          shareUrl={shareUrl}
+          onSend={() => void confirmSend(sendEmail.trim())}
           onClose={() => {
             if (!creatingPush) setShowSendSheet(false)
           }}
@@ -409,20 +441,25 @@ function slugifyFile(name: string): string {
 
 /**
  * MARGIN control — the design's big-% readout, −/+ stepper pair, and a 0–50%
- * slider track. Pure presentation over the cost basis: sliding previews the
- * sell total upstream; it never persists (margin isn't a stored field).
+ * slider track. Dragging previews the sell total upstream (onSlide); on release
+ * (onCommit) the chosen margin reprices the project bid off the cost basis
+ * (SET_MARGIN). The stepper commits per tap.
  */
 function MarginControl({
   marginPct,
   value,
   tone,
+  saving = false,
   onSlide,
+  onCommit,
   onStep,
 }: {
   marginPct: string
   value: number
   tone: 'green' | 'amber' | 'red'
+  saving?: boolean
   onSlide: (v: number) => void
+  onCommit: (v: number) => void
   onStep: (delta: number) => void
 }) {
   return (
@@ -437,7 +474,7 @@ function MarginControl({
           color: 'var(--m-ink-3)',
         }}
       >
-        Margin
+        Margin{saving ? ' · saving…' : ''}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginTop: 8 }}>
         <div
@@ -470,7 +507,11 @@ function MarginControl({
         step={1}
         value={Math.round(value * 100)}
         aria-label="margin percent"
+        disabled={saving}
         onChange={(e) => onSlide(Number(e.target.value) / 100)}
+        onMouseUp={(e) => onCommit(Number(e.currentTarget.value) / 100)}
+        onTouchEnd={(e) => onCommit(Number(e.currentTarget.value) / 100)}
+        onKeyUp={(e) => onCommit(Number(e.currentTarget.value) / 100)}
         style={{ width: '100%', marginTop: 14, accentColor: 'var(--m-accent)' }}
       />
       <div
@@ -495,9 +536,10 @@ function MarginControl({
 
 /**
  * SEND TO CLIENT sheet — the design's full-screen confirmation: client
- * identity card, an attaching row (filename + size + line-item count), an
- * optional note, the private-share-link explainer, and a SEND · NOTIFY
- * <name> commit. The actual estimate-push create happens on send.
+ * identity card, a recipient email, an attaching row (filename + size +
+ * line-item count), an optional note, the private-share-link explainer, and a
+ * SEND · NOTIFY <name> commit. On send it creates an estimate SHARE (a private
+ * signable portal link); on success the generated link is surfaced here.
  */
 function SendToClientSheet({
   clientName,
@@ -507,8 +549,11 @@ function SendToClientSheet({
   lineCount,
   note,
   onNoteChange,
+  email,
+  onEmailChange,
   sending,
   error,
+  shareUrl,
   onSend,
   onClose,
 }: {
@@ -519,8 +564,11 @@ function SendToClientSheet({
   lineCount: number
   note: string
   onNoteChange: (v: string) => void
+  email: string
+  onEmailChange: (v: string) => void
   sending: boolean
   error: string | null
+  shareUrl: string | null
   onSend: () => void
   onClose: () => void
 }) {
@@ -531,6 +579,7 @@ function SendToClientSheet({
     .slice(0, 2)
     .map((w) => w[0]?.toUpperCase() ?? '')
     .join('')
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
   return (
     <div
       role="dialog"
@@ -596,6 +645,20 @@ function SendToClientSheet({
               </div>
             ) : null}
           </div>
+        </div>
+
+        {/* Recipient email — required to mint the share link. */}
+        <MSectionH>Send to email</MSectionH>
+        <div style={{ padding: '0 16px 4px' }}>
+          <MInput
+            type="email"
+            inputMode="email"
+            placeholder="client@email.com"
+            value={email}
+            onChange={(e) => onEmailChange(e.target.value)}
+            aria-label="recipient email"
+            disabled={sending || Boolean(shareUrl)}
+          />
         </div>
 
         {/* Attaching row — the deliverable PDF + size + line-item count */}
@@ -668,16 +731,45 @@ function SendToClientSheet({
           PROFILE.
         </div>
 
+        {shareUrl ? (
+          <>
+            <MSectionH>Share link created ✓</MSectionH>
+            <div style={{ padding: '0 16px 4px' }}>
+              <div
+                style={{
+                  border: '2px solid var(--m-ink)',
+                  padding: '12px 14px',
+                  fontFamily: 'var(--m-num)',
+                  fontSize: 11,
+                  fontWeight: 600,
+                  wordBreak: 'break-all',
+                  color: 'var(--m-ink-2)',
+                }}
+              >
+                {shareUrl}
+              </div>
+            </div>
+          </>
+        ) : null}
+
         {error ? <div style={{ padding: '8px 16px 0', color: 'var(--m-red)', fontSize: 13 }}>{error}</div> : null}
 
         <div style={{ padding: 16 }}>
           <MButtonStack>
-            <MButton variant="primary" onClick={onSend} disabled={sending}>
-              {sending ? 'Sending…' : `Send · notify ${clientFirstName}`}
-            </MButton>
-            <MButton variant="ghost" onClick={onClose} disabled={sending}>
-              Cancel
-            </MButton>
+            {shareUrl ? (
+              <MButton variant="primary" onClick={onClose}>
+                Done
+              </MButton>
+            ) : (
+              <>
+                <MButton variant="primary" onClick={onSend} disabled={sending || !emailValid}>
+                  {sending ? 'Sending…' : `Send · notify ${clientFirstName}`}
+                </MButton>
+                <MButton variant="ghost" onClick={onClose} disabled={sending}>
+                  Cancel
+                </MButton>
+              </>
+            )}
           </MButtonStack>
         </div>
       </MBody>

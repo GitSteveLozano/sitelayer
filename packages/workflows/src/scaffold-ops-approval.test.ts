@@ -192,7 +192,12 @@ describe('scaffoldOpsApproval registry + helpers', () => {
   it('SUPERSEDE: draft → superseded and approved → superseded; superseded is terminal', () => {
     const fromDraft = transitionScaffoldOpsApprovalWorkflow(
       { state: 'draft', state_version: 1 },
-      { type: 'SUPERSEDE', superseded_at: '2026-05-02T07:00:00.000Z', superseded_by: 'admin', superseded_by_bom_id: 'b2' },
+      {
+        type: 'SUPERSEDE',
+        superseded_at: '2026-05-02T07:00:00.000Z',
+        superseded_by: 'admin',
+        superseded_by_bom_id: 'b2',
+      },
     )
     expect(fromDraft).toMatchObject({ state: 'superseded', state_version: 2, superseded_by_bom_id: 'b2' })
 

@@ -225,7 +225,10 @@ class FakePool {
       }
       // optional status filter: list route pushes the state before limit
       const statusParam = params.find(
-        (p, idx) => idx > 0 && typeof p === 'string' && ['pending', 'syncing', 'succeeded', 'failed', 'retrying'].includes(p as string),
+        (p, idx) =>
+          idx > 0 &&
+          typeof p === 'string' &&
+          ['pending', 'syncing', 'succeeded', 'failed', 'retrying'].includes(p as string),
       )
       if (/and status = \$/i.test(sql) && typeof statusParam === 'string') {
         rows = rows.filter((r) => r.status === statusParam)
@@ -529,11 +532,7 @@ describe('handleQboRoutes — GET /api/integrations/qbo/sync-runs/:id (snapshot)
     const pool = new FakePool()
     seedSyncRun(pool, { id: 'run-1', status: 'syncing', state_version: 2 })
     const { ctx, responses } = makeCtx(pool)
-    await handleQboRoutes(
-      { method: 'GET' } as never,
-      buildUrl('/api/integrations/qbo/sync-runs/run-1'),
-      ctx,
-    )
+    await handleQboRoutes({ method: 'GET' } as never, buildUrl('/api/integrations/qbo/sync-runs/run-1'), ctx)
     expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
     const body = responses[0]?.body as {
       state: string
@@ -552,11 +551,7 @@ describe('handleQboRoutes — GET /api/integrations/qbo/sync-runs/:id (snapshot)
     const pool = new FakePool()
     seedSyncRun(pool, { id: 'run-f', status: 'failed', state_version: 3, error: 'boom' })
     const { ctx, responses } = makeCtx(pool)
-    await handleQboRoutes(
-      { method: 'GET' } as never,
-      buildUrl('/api/integrations/qbo/sync-runs/run-f'),
-      ctx,
-    )
+    await handleQboRoutes({ method: 'GET' } as never, buildUrl('/api/integrations/qbo/sync-runs/run-f'), ctx)
     const body = responses[0]?.body as { state: string; next_events: Array<{ type: string }> }
     expect(body.state).toBe('failed')
     expect(body.next_events.map((e) => e.type)).toEqual(['RETRY'])
@@ -565,11 +560,7 @@ describe('handleQboRoutes — GET /api/integrations/qbo/sync-runs/:id (snapshot)
   it('404 on unknown id', async () => {
     const pool = new FakePool()
     const { ctx, responses } = makeCtx(pool)
-    await handleQboRoutes(
-      { method: 'GET' } as never,
-      buildUrl('/api/integrations/qbo/sync-runs/nope'),
-      ctx,
-    )
+    await handleQboRoutes({ method: 'GET' } as never, buildUrl('/api/integrations/qbo/sync-runs/nope'), ctx)
     expect(responses[0]?.status).toBe(404)
   })
 
@@ -577,11 +568,7 @@ describe('handleQboRoutes — GET /api/integrations/qbo/sync-runs/:id (snapshot)
     const pool = new FakePool()
     seedSyncRun(pool, { id: 'run-x', company_id: 'other-co' })
     const { ctx, responses } = makeCtx(pool)
-    await handleQboRoutes(
-      { method: 'GET' } as never,
-      buildUrl('/api/integrations/qbo/sync-runs/run-x'),
-      ctx,
-    )
+    await handleQboRoutes({ method: 'GET' } as never, buildUrl('/api/integrations/qbo/sync-runs/run-x'), ctx)
     expect(responses[0]?.status).toBe(404)
   })
 
@@ -589,11 +576,7 @@ describe('handleQboRoutes — GET /api/integrations/qbo/sync-runs/:id (snapshot)
     const pool = new FakePool()
     seedSyncRun(pool, { id: 'run-1' })
     const { ctx, responses } = makeCtx(pool, {}, 'member')
-    await handleQboRoutes(
-      { method: 'GET' } as never,
-      buildUrl('/api/integrations/qbo/sync-runs/run-1'),
-      ctx,
-    )
+    await handleQboRoutes({ method: 'GET' } as never, buildUrl('/api/integrations/qbo/sync-runs/run-1'), ctx)
     expect(responses[0]?.status).toBe(403)
   })
 })
@@ -616,11 +599,7 @@ describe('handleQboRoutes — POST /api/integrations/qbo/sync-runs/:id/events', 
     const pool = new FakePool()
     seedSyncRun(pool, { id: 'run-1', status: 'failed', state_version: 3, error: 'boom' })
     const { ctx, responses } = makeCtx(pool, { event: 'RETRY', state_version: 3 })
-    await handleQboRoutes(
-      { method: 'POST' } as never,
-      buildUrl('/api/integrations/qbo/sync-runs/run-1/events'),
-      ctx,
-    )
+    await handleQboRoutes({ method: 'POST' } as never, buildUrl('/api/integrations/qbo/sync-runs/run-1/events'), ctx)
     expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
     const body = responses[0]?.body as { state: string; state_version: number }
     expect(body.state).toBe('retrying')
@@ -637,11 +616,7 @@ describe('handleQboRoutes — POST /api/integrations/qbo/sync-runs/:id/events', 
     const pool = new FakePool()
     seedSyncRun(pool, { id: 'run-1', status: 'failed', state_version: 5 })
     const { ctx, responses } = makeCtx(pool, { event: 'RETRY', state_version: 3 })
-    await handleQboRoutes(
-      { method: 'POST' } as never,
-      buildUrl('/api/integrations/qbo/sync-runs/run-1/events'),
-      ctx,
-    )
+    await handleQboRoutes({ method: 'POST' } as never, buildUrl('/api/integrations/qbo/sync-runs/run-1/events'), ctx)
     expect(responses[0]?.status).toBe(409)
   })
 
@@ -649,11 +624,7 @@ describe('handleQboRoutes — POST /api/integrations/qbo/sync-runs/:id/events', 
     const pool = new FakePool()
     seedSyncRun(pool, { id: 'run-1', status: 'syncing', state_version: 2 })
     const { ctx, responses } = makeCtx(pool, { event: 'RETRY', state_version: 2 })
-    await handleQboRoutes(
-      { method: 'POST' } as never,
-      buildUrl('/api/integrations/qbo/sync-runs/run-1/events'),
-      ctx,
-    )
+    await handleQboRoutes({ method: 'POST' } as never, buildUrl('/api/integrations/qbo/sync-runs/run-1/events'), ctx)
     expect(responses[0]?.status).toBe(409)
   })
 
@@ -661,11 +632,7 @@ describe('handleQboRoutes — POST /api/integrations/qbo/sync-runs/:id/events', 
     const pool = new FakePool()
     seedSyncRun(pool, { id: 'run-1', status: 'syncing', state_version: 2 })
     const { ctx, responses } = makeCtx(pool, { event: 'SYNC_SUCCEEDED', state_version: 2 })
-    await handleQboRoutes(
-      { method: 'POST' } as never,
-      buildUrl('/api/integrations/qbo/sync-runs/run-1/events'),
-      ctx,
-    )
+    await handleQboRoutes({ method: 'POST' } as never, buildUrl('/api/integrations/qbo/sync-runs/run-1/events'), ctx)
     expect(responses[0]?.status).toBe(400)
   })
 
@@ -673,11 +640,7 @@ describe('handleQboRoutes — POST /api/integrations/qbo/sync-runs/:id/events', 
     const pool = new FakePool()
     seedSyncRun(pool, { id: 'run-1', status: 'retrying', state_version: 4 })
     const { ctx, responses } = makeCtx(pool, { event: 'START_SYNC', state_version: 4 })
-    await handleQboRoutes(
-      { method: 'POST' } as never,
-      buildUrl('/api/integrations/qbo/sync-runs/run-1/events'),
-      ctx,
-    )
+    await handleQboRoutes({ method: 'POST' } as never, buildUrl('/api/integrations/qbo/sync-runs/run-1/events'), ctx)
     expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
     const body = responses[0]?.body as { state: string }
     expect(body.state).toBe('syncing')

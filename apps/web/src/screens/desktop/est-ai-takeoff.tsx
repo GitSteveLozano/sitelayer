@@ -126,7 +126,11 @@ export function EstAiTakeoffSetupPanel({
     // Dry-run-safe capture (JSON body → deterministic stub on the API; no live
     // Anthropic spend). Carries the real draft id into the review lane.
     capture.mutate(
-      { kind: 'blueprint_vision', name: 'AI auto-takeoff', payload: { dryRun: true } },
+      // draft_kind='takeoff' tags the draft so the company AI queue routes its
+      // "Review draft →" back to this takeoff reviewer (migration 122). It is
+      // also the API default, but we send it explicitly to keep the two AI
+      // flows symmetric with est-ai-count.tsx.
+      { kind: 'blueprint_vision', draft_kind: 'takeoff', name: 'AI auto-takeoff', payload: { dryRun: true } },
       {
         onSuccess: (res) => onReviewDraft(res.draft.id),
       },

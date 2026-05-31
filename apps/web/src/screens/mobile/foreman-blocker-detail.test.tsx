@@ -3,11 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import type { ReactNode } from 'react'
 import type { BootstrapResponse } from '@/lib/api'
-import type {
-  FieldEventHookValue,
-  FieldEventSnapshotResponse,
-  FieldEventState,
-} from '../../machines/field-event.js'
+import type { FieldEventHookValue, FieldEventSnapshotResponse, FieldEventState } from '../../machines/field-event.js'
 
 /**
  * Gap-1 coverage for the foreman blocker detail: the screen is a thin renderer
@@ -41,7 +37,10 @@ afterEach(() => {
   dispatchMock.mockReset()
 })
 
-function snapshot(state: FieldEventState, nextEvents: Array<{ type: string; label: string }>): FieldEventSnapshotResponse {
+function snapshot(
+  state: FieldEventState,
+  nextEvents: Array<{ type: string; label: string }>,
+): FieldEventSnapshotResponse {
   return {
     state,
     state_version: 3,
@@ -63,6 +62,9 @@ function snapshot(state: FieldEventState, nextEvents: Array<{ type: string; labe
       escalation_reason: null,
       dismissed_at: null,
       dismissed_by_clerk_user_id: null,
+      material_label: null,
+      material_quantity: null,
+      material_unit: null,
       created_at: '2026-05-09T15:00:00.000Z',
     },
     next_events: nextEvents as FieldEventSnapshotResponse['next_events'],
@@ -156,5 +158,28 @@ describe('ForemanBlockerDetail — next_events drives the affordances (Gap 1)', 
     expect(screen.getByText('Reopen')).toBeTruthy()
     // The resolve picker must not render in a closed state.
     expect(screen.queryByText('Resolve · pick one')).toBeNull()
+  })
+
+  it('renders the material hero from the typed columns (migration 126), not a message parse', () => {
+    apiGetMock.mockResolvedValue({ attachments: [] })
+    const snap = snapshot('open', [
+      { type: 'RESOLVE', label: 'Resolve and reply to worker' },
+      { type: 'ESCALATE', label: 'Escalate to estimator' },
+      { type: 'DISMISS', label: 'Dismiss' },
+    ])
+    // Prose says nothing parseable; the typed columns carry the real values.
+    snap.context.message = 'Out of EPS sheets'
+    snap.context.material_quantity = 12
+    snap.context.material_unit = 'sheets'
+    snap.context.material_label = `EPS insulation · 1.5" · 4'x8'`
+    hookValue = makeHook(snap)
+    wrap(<ForemanBlockerDetail bootstrap={bootstrap()} companySlug="acme" />)
+    // Typed quantity + unit drive the hero.
+    expect(screen.getByText('12')).toBeTruthy()
+    expect(screen.getByText('SHEETS')).toBeTruthy()
+    // Material spec is the typed label, uppercased per the design.
+    expect(screen.getByText(/EPS INSULATION/)).toBeTruthy()
+    // Materials picker swaps to the fulfillment copy.
+    expect(screen.getByText('How to fulfill · pick one')).toBeTruthy()
   })
 })

@@ -583,9 +583,7 @@ describe('notification reducer — property invariants', () => {
 
 describe('notificationStateToLegacyStatus collapse map', () => {
   it('collapses all eight canonical states to the legacy five-value vocabulary', () => {
-    const collapsed = Object.fromEntries(
-      NOTIFICATION_ALL_STATES.map((s) => [s, notificationStateToLegacyStatus(s)]),
-    )
+    const collapsed = Object.fromEntries(NOTIFICATION_ALL_STATES.map((s) => [s, notificationStateToLegacyStatus(s)]))
     expect(collapsed).toEqual({
       pending: 'pending',
       hydrating: 'pending',

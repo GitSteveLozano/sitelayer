@@ -44,11 +44,13 @@ export type CaptureArtifactInput = {
   retention_expires_at?: string
 }
 
-export async function startCaptureSession(args: {
-  mode?: CaptureSessionMode
-  consent_version?: string
-  metadata?: Record<string, unknown>
-} = {}): Promise<CaptureSessionResponse> {
+export async function startCaptureSession(
+  args: {
+    mode?: CaptureSessionMode
+    consent_version?: string
+    metadata?: Record<string, unknown>
+  } = {},
+): Promise<CaptureSessionResponse> {
   const local = startLocalCaptureSession(args)
   return request<CaptureSessionResponse>('/api/capture-sessions', {
     method: 'POST',
@@ -62,11 +64,13 @@ export async function startCaptureSession(args: {
   })
 }
 
-export async function ensureCaptureSession(args: {
-  mode?: CaptureSessionMode
-  consent_version?: string
-  metadata?: Record<string, unknown>
-} = {}): Promise<CaptureSessionResponse> {
+export async function ensureCaptureSession(
+  args: {
+    mode?: CaptureSessionMode
+    consent_version?: string
+    metadata?: Record<string, unknown>
+  } = {},
+): Promise<CaptureSessionResponse> {
   const local = ensureLocalCaptureSession(args)
   return request<CaptureSessionResponse>('/api/capture-sessions', {
     method: 'POST',
@@ -101,23 +105,19 @@ export async function appendCaptureArtifacts(
 }
 
 export async function stopCaptureSession(captureSessionId: string): Promise<CaptureSessionResponse> {
-  try {
-    return await request<CaptureSessionResponse>(`/api/capture-sessions/${captureSessionId}`, {
-      method: 'PATCH',
-      json: { status: 'stopped', route_path: currentCaptureRoutePath() },
-    })
-  } finally {
-    clearLocalCaptureSession()
-  }
+  const response = await request<CaptureSessionResponse>(`/api/capture-sessions/${captureSessionId}`, {
+    method: 'PATCH',
+    json: { status: 'stopped', route_path: currentCaptureRoutePath() },
+  })
+  clearLocalCaptureSession()
+  return response
 }
 
 export async function discardCaptureSession(captureSessionId: string): Promise<CaptureSessionResponse> {
-  try {
-    return await request<CaptureSessionResponse>(`/api/capture-sessions/${captureSessionId}`, {
-      method: 'PATCH',
-      json: { status: 'discarded', route_path: currentCaptureRoutePath() },
-    })
-  } finally {
-    clearLocalCaptureSession()
-  }
+  const response = await request<CaptureSessionResponse>(`/api/capture-sessions/${captureSessionId}`, {
+    method: 'PATCH',
+    json: { status: 'discarded', route_path: currentCaptureRoutePath() },
+  })
+  clearLocalCaptureSession()
+  return response
 }

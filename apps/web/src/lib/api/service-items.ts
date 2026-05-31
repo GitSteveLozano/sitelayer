@@ -9,6 +9,13 @@
 
 import { createCrudHooks } from './crud-factory'
 
+/** One entry in an item's cost-change trail (most-recent first). */
+export interface ServiceItemRateHistoryEntry {
+  rate: string | null
+  unit: string
+  recorded_at: string
+}
+
 export interface ServiceItem {
   code: string
   name: string
@@ -17,8 +24,14 @@ export interface ServiceItem {
   default_rate: string | null
   source: string
   version: number
+  /** Productivity factor on top of the catalog rate (e.g. 1.25× std install). */
+  labor_multiplier?: string | null
+  /** Lifecycle marker, distinct from soft-delete. */
+  status?: 'active' | 'seasonal' | 'retired'
   /** Curated service_item_divisions codes this item is valid for (may be empty). */
   divisions?: string[]
+  /** Recent rate changes, most-recent first (capped server-side). */
+  rate_history?: ServiceItemRateHistoryEntry[]
 }
 
 export interface ServiceItemListResponse {
@@ -31,6 +44,8 @@ export interface ServiceItemCreateRequest {
   category?: string
   unit?: string
   default_rate?: number | string | null
+  labor_multiplier?: number | string | null
+  status?: 'active' | 'seasonal' | 'retired'
   source?: string
 }
 
@@ -39,6 +54,8 @@ export interface ServiceItemPatchRequest {
   category?: string
   unit?: string
   default_rate?: number | string | null
+  labor_multiplier?: number | string | null
+  status?: 'active' | 'seasonal' | 'retired'
   expected_version?: number
 }
 

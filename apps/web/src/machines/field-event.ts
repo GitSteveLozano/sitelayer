@@ -61,6 +61,13 @@ export interface FieldEventSnapshotContext {
   escalation_reason: string | null
   dismissed_at: string | null
   dismissed_by_clerk_user_id: string | null
+  /** Structured material-request fulfillment fields (migration 126). Populated
+   *  for a `materials_out` blocker captured through the new create flow; NULL
+   *  for legacy rows and non-materials kinds (the blocker detail falls back to
+   *  parsing `message`). These are issue content, not workflow state. */
+  material_label: string | null
+  material_quantity: number | null
+  material_unit: string | null
   created_at: string
 }
 

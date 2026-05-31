@@ -37,6 +37,9 @@ class FakeSupportPacketPool {
   syncEventRows: JsonRecord[] = []
   workItemRows: JsonRecord[] = []
   workItemEventRows: JsonRecord[] = []
+  captureSessionRows: JsonRecord[] = []
+  captureEventRows: JsonRecord[] = []
+  captureArtifactRows: JsonRecord[] = []
   supportPacket: SupportPacketRow = {
     id: '00000000-0000-4000-8000-000000000101',
     company_id: COMPANY_ID,
@@ -127,6 +130,31 @@ class FakeSupportPacketPool {
     }
     if (normalized.includes('from context_handoff_events')) {
       return { rows: this.workItemEventRows, rowCount: this.workItemEventRows.length }
+    }
+    if (normalized.includes('from capture_sessions')) {
+      const [, captureSessionId] = params as [string, string]
+      const rows = this.captureSessionRows.filter((row) => row.id === captureSessionId)
+      return { rows: rows.slice(0, 1), rowCount: rows.length ? 1 : 0 }
+    }
+    if (normalized.includes('from capture_session_events')) {
+      const [, captureSessionId] = params as [string, string]
+      const rows = this.captureEventRows.filter((row) => row.capture_session_id === captureSessionId)
+      return { rows, rowCount: rows.length }
+    }
+    if (normalized.includes('from capture_artifacts')) {
+      const [, captureSessionId] = params as [string, string]
+      const rows = this.captureArtifactRows
+        .filter((row) => row.capture_session_id === captureSessionId && !row.deleted_at)
+        .map(
+          ({
+            storage_key: _storageKey,
+            uri: _uri,
+            capture_session_id: _captureSessionId,
+            deleted_at: _deletedAt,
+            ...row
+          }) => row,
+        )
+      return { rows, rowCount: rows.length }
     }
     throw new Error(`unexpected SQL: ${normalized.slice(0, 240)}`)
   }
@@ -251,6 +279,7 @@ describe('support packet sanitization', () => {
 
   it('includes related work-request context and handoff traces in server context', async () => {
     const pool = new FakeSupportPacketPool()
+    const captureSessionId = '55555555-5555-4555-8555-555555555555'
     pool.attach()
     pool.workItemRows = [
       {
@@ -291,6 +320,63 @@ describe('support packet sanitization', () => {
         recorded_at: '2026-05-21T12:01:00.000Z',
       },
     ]
+    pool.captureSessionRows = [
+      {
+        id: captureSessionId,
+        mode: 'feedback',
+        status: 'stopped',
+        route_path: '/financial/estimate-pushes/33333333-3333-4333-8333-333333333333',
+        device_kind: 'desktop',
+        platform: 'web',
+        viewport: '1440x900',
+        app_build_sha: 'test-build',
+        consent_version: 'pilot-v1',
+        redaction_version: 'capture-session-v1',
+        started_at: '2026-05-21T12:00:00.000Z',
+        last_seen_at: '2026-05-21T12:02:00.000Z',
+        stopped_at: '2026-05-21T12:02:00.000Z',
+        discarded_at: null,
+        retention_expires_at: '2026-06-20T12:00:00.000Z',
+      },
+    ]
+    pool.captureEventRows = [
+      {
+        id: 'capture-event-1',
+        capture_session_id: captureSessionId,
+        seq: '1',
+        event_type: 'ui.click',
+        event_class: 'dead_control',
+        route_path: '/financial/estimate-pushes/33333333-3333-4333-8333-333333333333',
+        workflow_id: 'estimate_push',
+        entity_type: 'estimate_push',
+        entity_id: '33333333-3333-4333-8333-333333333333',
+        request_id: 'request-1',
+        payload: { control: 'send_to_client' },
+        redaction_version: 'capture-session-v1',
+        occurred_at: '2026-05-21T12:01:30.000Z',
+        received_at: '2026-05-21T12:01:31.000Z',
+      },
+    ]
+    pool.captureArtifactRows = [
+      {
+        id: 'capture-artifact-1',
+        capture_session_id: captureSessionId,
+        kind: 'transcript',
+        storage_key: 'co/capture/raw-transcript.txt',
+        uri: 's3://private/raw-transcript.txt',
+        content_type: 'text/plain',
+        byte_size: '120',
+        content_hash: 'sha256:test',
+        duration_ms: 30000,
+        pii_level: 'private',
+        access_policy: 'support_only',
+        redaction_version: 'capture-session-v1',
+        metadata: { analyzer: 'voice-to-log' },
+        created_at: '2026-05-21T12:02:00.000Z',
+        retention_expires_at: '2026-06-20T12:00:00.000Z',
+        deleted_at: null,
+      },
+    ]
 
     const context = await buildSupportServerContext({
       pool: pool as unknown as Pool,
@@ -300,6 +386,7 @@ describe('support packet sanitization', () => {
       buildSha: 'test-build',
       client: {
         request_id: 'request-1',
+        capture_session_id: captureSessionId,
         path: {
           route: '/financial/estimate-pushes/33333333-3333-4333-8333-333333333333',
           entity_type: 'estimate_push',
@@ -322,5 +409,13 @@ describe('support packet sanitization', () => {
       },
     ])
     expect(context.trace_ids).toContain('0123456789abcdef0123456789abcdef')
+    expect(context.capture_session_id).toBe(captureSessionId)
+    expect(context.capture_session).toMatchObject({
+      summary: { id: captureSessionId, mode: 'feedback', status: 'stopped' },
+      recent_events: [{ event_type: 'ui.click', event_class: 'dead_control' }],
+      artifacts: [{ kind: 'transcript', content_type: 'text/plain', redaction_version: 'capture-session-v1' }],
+    })
+    expect(JSON.stringify(context.capture_session)).not.toContain('storage_key')
+    expect(JSON.stringify(context.capture_session)).not.toContain('s3://private')
   })
 })

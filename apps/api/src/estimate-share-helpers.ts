@@ -47,6 +47,12 @@ export type EstimateShareRow = {
   signature_data_url: string | null
   signer_name: string | null
   signer_ip: string | null
+  // estimate_share workflow columns (migration 115).
+  status: string | null
+  state_version: number
+  message: string | null
+  include_signed_link: boolean | null
+  revoked_at: string | null
   created_at: string
   updated_at: string
 }
@@ -56,6 +62,7 @@ export const SHARE_COLUMNS = `
   recipient_email, recipient_name, sent_at, expires_at,
   accepted_at, declined_at, decline_reason, viewed_at, view_count,
   signature_data_url, signer_name, host(signer_ip) as signer_ip,
+  status, state_version, message, include_signed_link, revoked_at,
   created_at, updated_at
 `
 
@@ -266,9 +273,10 @@ export async function fanOutFirstViewNotification(
   }
 }
 
-export function shareStatus(row: EstimateShareRow): 'accepted' | 'declined' | 'expired' | 'pending' {
+export function shareStatus(row: EstimateShareRow): 'accepted' | 'declined' | 'expired' | 'revoked' | 'pending' {
   if (row.accepted_at) return 'accepted'
   if (row.declined_at) return 'declined'
+  if (row.revoked_at || row.status === 'revoked') return 'revoked'
   if (new Date(row.expires_at).getTime() <= Date.now()) return 'expired'
   return 'pending'
 }
@@ -280,16 +288,19 @@ export function shareStatus(row: EstimateShareRow): 'accepted' | 'declined' | 'e
  * portal payload collapses that into `pending` (the customer doesn't
  * need to know about their own view bump).
  */
-export type TimelineStatus = 'accepted' | 'declined' | 'expired' | 'viewed' | 'sent'
+export type TimelineStatus = 'accepted' | 'declined' | 'expired' | 'revoked' | 'viewed' | 'sent'
 
 export function computeTimelineStatus(row: {
   accepted_at: string | null
   declined_at: string | null
   expires_at: string
   viewed_at: string | null
+  revoked_at?: string | null
+  status?: string | null
 }): TimelineStatus {
   if (row.accepted_at) return 'accepted'
   if (row.declined_at) return 'declined'
+  if (row.revoked_at || row.status === 'revoked') return 'revoked'
   if (new Date(row.expires_at).getTime() <= Date.now()) return 'expired'
   if (row.viewed_at) return 'viewed'
   return 'sent'

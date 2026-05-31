@@ -213,7 +213,6 @@ async function applyTransition(
   return next
 }
 
-
 async function markSent(
   client: NotificationDbClient,
   row: PendingNotificationRow,

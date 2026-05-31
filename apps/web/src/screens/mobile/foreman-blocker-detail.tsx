@@ -330,8 +330,13 @@ export function ForemanBlockerDetail({
              *  content presentation, not a new transition. */}
             {isMaterials ? (
               <>
-                <MaterialHero label={cleanedMessage} />
-                <YardStockCard materialLabel={cleanedMessage} />
+                <MaterialHero
+                  fallbackLabel={cleanedMessage}
+                  materialLabel={ctx?.material_label ?? null}
+                  quantity={ctx?.material_quantity ?? null}
+                  unit={ctx?.material_unit ?? null}
+                />
+                <YardStockCard materialLabel={ctx?.material_label ?? cleanedMessage} />
               </>
             ) : null}
             {!escalateMode && !dismissMode ? (
@@ -482,11 +487,7 @@ function FieldEventClosedStrip({
   const tone = state === 'resolved' ? 'var(--m-green)' : state === 'escalated' ? 'var(--m-amber)' : 'var(--m-ink-3)'
   const label = state === 'resolved' ? 'RESOLVED' : state === 'escalated' ? 'ESCALATED TO ESTIMATOR' : 'DISMISSED'
   const when =
-    state === 'resolved'
-      ? ctx?.resolved_at
-      : state === 'escalated'
-        ? ctx?.escalated_to_estimator_at
-        : ctx?.dismissed_at
+    state === 'resolved' ? ctx?.resolved_at : state === 'escalated' ? ctx?.escalated_to_estimator_at : ctx?.dismissed_at
   return (
     <div style={{ marginTop: 8 }}>
       <div className="m-topbar-eyebrow" style={{ padding: '16px', color: tone, textAlign: 'center', fontWeight: 800 }}>
@@ -518,6 +519,12 @@ function FieldEventClosedStrip({
  * parse of the worker's own words — when no leading quantity is present we fall
  * back to showing the whole label as the headline.
  */
+/** Render a typed numeric quantity for the hero. `String` already drops a
+ *  spurious `.0` (12 → "12") while keeping real fractions (12.5 → "12.5"). */
+function formatQuantity(n: number): string {
+  return String(n)
+}
+
 function parseMaterialNeed(label: string): { amount: string | null; unit: string | null; spec: string } {
   const trimmed = label.trim()
   // Leading "<number> <word>" → quantity + unit (e.g. "12 sheets", "620 fasteners").
@@ -531,12 +538,31 @@ function parseMaterialNeed(label: string): { amount: string | null; unit: string
 /**
  * Material-fulfillment hero — surfaces the worker's material/quantity request
  * prominently for a materials_out blocker, mirroring the design's quantity hero
- * (big amount + unit, with the material spec beneath). There's no structured
- * material column today, so the worker's own words are parsed for content.
+ * (big amount + unit, with the material spec beneath).
+ *
+ * Prefers the typed structured columns captured at create (migration 126:
+ * material_quantity / material_unit / material_label). Falls back to parsing
+ * the worker's free-text message for legacy rows (and rows where the worker
+ * skipped the structured fields), so the design affordance renders regardless
+ * of which path produced the row.
  */
-function MaterialHero({ label }: { label: string }) {
-  if (!label) return null
-  const { amount, unit, spec } = parseMaterialNeed(label)
+function MaterialHero({
+  fallbackLabel,
+  materialLabel,
+  quantity,
+  unit,
+}: {
+  fallbackLabel: string
+  materialLabel: string | null
+  quantity: number | null
+  unit: string | null
+}) {
+  // Typed columns win when present; otherwise best-effort parse the prose.
+  const parsed = parseMaterialNeed(fallbackLabel)
+  const amount = quantity !== null ? formatQuantity(quantity) : parsed.amount
+  const heroUnit = unit ? unit.toUpperCase() : parsed.unit
+  const spec = materialLabel ?? parsed.spec
+  if (!amount && !spec) return null
   return (
     <div className="m-card" style={{ marginTop: 12, background: 'var(--m-accent)', color: 'var(--m-accent-ink)' }}>
       <div className="m-topbar-eyebrow" style={{ fontWeight: 800 }}>
@@ -548,9 +574,9 @@ function MaterialHero({ label }: { label: string }) {
             <span style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 48, lineHeight: 1 }}>
               {amount}
             </span>
-            {unit ? (
+            {heroUnit ? (
               <span style={{ fontFamily: 'var(--m-num)', fontWeight: 700, fontSize: 18, letterSpacing: '0.04em' }}>
-                {unit}
+                {heroUnit}
               </span>
             ) : null}
           </div>

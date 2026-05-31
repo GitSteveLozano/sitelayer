@@ -117,9 +117,7 @@ describe('MobileRentalBillingDetail', () => {
   })
 
   it('renders a terminal-state message and no action buttons when next_events is empty', () => {
-    mocks.useBillingReview.mockReturnValue(
-      machine({ snapshot: snapshot({ state: 'posted', next_events: [] }) }),
-    )
+    mocks.useBillingReview.mockReturnValue(machine({ snapshot: snapshot({ state: 'posted', next_events: [] }) }))
     wrap(<MobileRentalBillingDetail companySlug="acme" companyRole="admin" />)
     expect(screen.getByText(/Terminal state — no further actions/i)).toBeTruthy()
     expect(screen.queryByText('Approve billing run')).toBeNull()

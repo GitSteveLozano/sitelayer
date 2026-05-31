@@ -10,15 +10,16 @@
  * dense desktop composition over that same hook surface.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
 import { apiGet, getActiveCompanySlug, type ProjectSummary } from '@/lib/api'
 import { useEstimateBuilder } from '@/machines/estimate-builder'
-import { createEstimatePush } from '@/lib/api/estimate-pushes'
+import { createEstimateShare } from '@/lib/api/estimate-shares'
 import {
   estimateCsvUrl,
   estimatePdfUrl,
   estimateReportUrl,
   estimateXlsxUrl,
+  repriceEstimateMargin,
   ESTIMATE_REPORTS,
   type EstimateLine,
   type EstimateReportKind,
@@ -161,7 +162,6 @@ function buildGroupedRows(lines: EstimateLine[], expanded: Set<string>): QtyRow[
 
 export function EstQuantities() {
   const params = useParams<{ projectId: string }>()
-  const navigate = useNavigate()
   const projectId = params.projectId ?? ''
   const companySlug = getActiveCompanySlug()
 
@@ -172,11 +172,17 @@ export function EstQuantities() {
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
-  // Send-to-client composer modal (design dsg__56 · SEND TO CLIENT MODAL).
-  // The estimator composes recipient/message/signed-link here, then SEND
-  // snapshots the estimate into an estimate_push and hops to the lifecycle
-  // screen (the same createEstimatePush flow the button used directly).
+  // The private share link, populated once the composer's SEND creates a share.
+  const [shareUrl, setShareUrl] = useState<string | null>(null)
+  // Send-to-client composer modal (design dsg__56 · SEND TO CLIENT MODAL). The
+  // estimator composes recipient/message/signed-link here, then SEND creates an
+  // estimate SHARE (a private signable portal link), not the QBO push.
   const [sendOpen, setSendOpen] = useState(false)
+  // Interactive margin override (D10 · MARGIN slider). null = show the derived
+  // margin; once the operator drags, reprice the contract bid off the cost basis.
+  const [marginOverride, setMarginOverride] = useState<number | null>(null)
+  const [marginSaving, setMarginSaving] = useState(false)
+  const [marginError, setMarginError] = useState<string | null>(null)
   // PDF preview/generate (design DEstQuantities · PREVIEW PDF / GENERATE PDF).
   // Reuses the existing presentational PdfPreviewModal from project-drawers.
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
@@ -244,10 +250,16 @@ export function EstQuantities() {
   const estCost = Number(m?.margin.cost ?? 0)
   const hasCostBasis = estCost > 0 && liveTotal > 0
   const marginProfitNum = liveTotal - estCost
-  const marginRatio = hasCostBasis ? marginProfitNum / liveTotal : 0
+  const derivedMarginRatio = hasCostBasis ? marginProfitNum / liveTotal : 0
+  // Interactive margin (D10 slider): once the operator drags, show their chosen
+  // target; otherwise show the derived margin from sell − cost. The slider
+  // drives SET_MARGIN, which reprices the project bid off the cost basis.
+  const marginRatio = marginOverride ?? derivedMarginRatio
   const marginPct = hasCostBasis ? `${(marginRatio * 100).toFixed(0)}%` : '—'
   const marginProfit = hasCostBasis ? `${formatMoney(marginProfitNum)} profit` : 'no costs logged'
   const marginTone: 'green' | 'amber' | 'red' = marginRatio > 0.18 ? 'green' : marginRatio > 0.1 ? 'amber' : 'red'
+  // Slider value is clamped to a 0–60% track for display.
+  const marginSliderValue = Math.min(0.6, Math.max(0, marginRatio))
 
   const columns: Array<DColumn<QtyRow>> = [
     {
@@ -345,18 +357,21 @@ export function EstQuantities() {
     },
   ]
 
-  // Confirm from the SEND TO CLIENT composer: snapshot the estimate into an
-  // estimate_push and hop to the lifecycle screen. (The recipient/message/
-  // signed-link the estimator composed are the human-facing send intent; the
-  // estimate-push API does not yet accept them as a payload — see SendModal.)
-  const runSend = async () => {
+  // Confirm from the SEND TO CLIENT composer: create an estimate SHARE — a
+  // private signable portal link the client opens to view/accept the bid. This
+  // is the share/send-to-client loop, distinct from the QBO estimate-push.
+  const runSend = async (payload: { recipientEmail: string; message: string; includeSignedLink: boolean }) => {
     if (!projectId) return
     setSending(true)
     setSendError(null)
     try {
-      const result = await createEstimatePush(projectId)
-      const pushId = result.kind === 'created' ? result.pushId : result.openId
-      navigate(`/projects/${projectId}/estimate-push/${pushId}`)
+      const result = await createEstimateShare(projectId, {
+        recipient_email: payload.recipientEmail,
+        ...(clientName && clientName !== 'Client' ? { recipient_name: clientName } : {}),
+        message: payload.message,
+        include_signed_link: payload.includeSignedLink,
+      })
+      setShareUrl(result.share_url)
     } catch (err) {
       setSendError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -367,7 +382,26 @@ export function EstQuantities() {
   // The aside / PDF-modal "Send to client" buttons open the composer first.
   const openSend = () => {
     setSendError(null)
+    setShareUrl(null)
     setSendOpen(true)
+  }
+
+  // Commit the chosen margin: reprice the project bid off the cost basis
+  // (SET_MARGIN). Fires on slider release / stepper, not on every drag tick.
+  const commitMargin = async (nextMargin: number) => {
+    if (!projectId || !hasCostBasis) return
+    setMarginSaving(true)
+    setMarginError(null)
+    try {
+      const result = await repriceEstimateMargin(projectId, nextMargin)
+      setMarginOverride(result.target_margin_pct)
+      // Repaint the scope-vs-bid aside off the fresh bid.
+      builder.refresh()
+    } catch (err) {
+      setMarginError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setMarginSaving(false)
+    }
   }
 
   // GENERATE PDF — open the real estimate PDF (GET /api/projects/:id/estimate.pdf)
@@ -466,7 +500,7 @@ export function EstQuantities() {
             }}
           >
             <div>
-              <div className="d-kpi-l">Margin</div>
+              <div className="d-kpi-l">Margin{marginSaving ? ' · saving…' : ''}</div>
               <div
                 className="num"
                 style={{
@@ -477,6 +511,7 @@ export function EstQuantities() {
                   lineHeight: 0.9,
                   marginTop: 6,
                   fontVariantNumeric: 'tabular-nums',
+                  color: hasCostBasis && marginTone === 'red' ? 'var(--m-red)' : undefined,
                 }}
               >
                 {marginPct}
@@ -487,6 +522,46 @@ export function EstQuantities() {
               >
                 {marginProfit}
               </div>
+              {/* Interactive margin slider (D10) — drags preview the % live; on
+                  release it reprices the project bid off the cost basis
+                  (SET_MARGIN). Disabled until there's a real cost basis to mark
+                  up (no fake control over a missing cost). */}
+              {hasCostBasis ? (
+                <>
+                  <input
+                    type="range"
+                    min={0}
+                    max={60}
+                    step={1}
+                    value={Math.round(marginSliderValue * 100)}
+                    aria-label="Target margin percent"
+                    disabled={marginSaving}
+                    onChange={(e) => setMarginOverride(Number(e.currentTarget.value) / 100)}
+                    onMouseUp={(e) => void commitMargin(Number(e.currentTarget.value) / 100)}
+                    onTouchEnd={(e) => void commitMargin(Number(e.currentTarget.value) / 100)}
+                    onKeyUp={(e) => void commitMargin(Number(e.currentTarget.value) / 100)}
+                    style={{ width: '100%', marginTop: 12, accentColor: 'var(--m-accent)' }}
+                  />
+                  <div
+                    className="num"
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      fontSize: 10,
+                      fontWeight: 600,
+                      color: 'var(--m-ink-3)',
+                      marginTop: 2,
+                    }}
+                  >
+                    <span>0%</span>
+                    <span>30%</span>
+                    <span>60%</span>
+                  </div>
+                  {marginError ? (
+                    <div style={{ color: 'var(--m-red)', fontSize: 12, marginTop: 6 }}>{marginError}</div>
+                  ) : null}
+                </>
+              ) : null}
             </div>
 
             {/* SCOPE vs BID (Cavy, WhatsApp 4/10–4/11). The project bid is the
@@ -661,7 +736,8 @@ export function EstQuantities() {
         }}
       />
 
-      {/* SEND TO CLIENT composer (design dsg__56). Confirm runs the push. */}
+      {/* SEND TO CLIENT composer (design dsg__56). Confirm creates a share
+          link the client opens to view/accept the bid. */}
       <SendModal
         open={sendOpen}
         onClose={() => {
@@ -673,6 +749,7 @@ export function EstQuantities() {
         projectLabel={summary?.project.name}
         sending={sending}
         error={sendError}
+        shareUrl={shareUrl}
         onSend={runSend}
       />
 

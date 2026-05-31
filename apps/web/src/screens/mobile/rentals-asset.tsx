@@ -151,7 +151,11 @@ export function MobileRentalsAsset() {
             <MKpi
               label="Revenue to date"
               value={formatMoney(revenueToDate)}
-              meta={daysOut ? `${daysOut} days × ${formatMoney(dayRate)}` : `${formatMoney(dayRate)} per ${item.unit || 'day'}`}
+              meta={
+                daysOut
+                  ? `${daysOut} days × ${formatMoney(dayRate)}`
+                  : `${formatMoney(dayRate)} per ${item.unit || 'day'}`
+              }
             />
             <MKpi
               label="Utilization"
@@ -167,7 +171,10 @@ export function MobileRentalsAsset() {
         <MSectionH>Quick actions</MSectionH>
         <div style={{ padding: '0 16px' }}>
           <MButtonStack>
-            <MButton variant="primary" onClick={() => navigate(`/rentals/dispatch?asset=${encodeURIComponent(item.id)}`)}>
+            <MButton
+              variant="primary"
+              onClick={() => navigate(`/rentals/dispatch?asset=${encodeURIComponent(item.id)}`)}
+            >
               DISPATCH ELSEWHERE
             </MButton>
             <MButton variant="ghost" onClick={() => navigate('/rentals/return')}>

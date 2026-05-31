@@ -81,6 +81,27 @@ const MAX_POLYGON_POINTS = 64
 const MIN_ZOOM = 0.4
 const MAX_ZOOM = 12
 
+// Cross-sheet callout (dsg__50 "EST CANVAS · CROSS-SHEET REF JUMP"). A detail
+// callout (e.g. "B3") drawn on one sheet references a detail on another. The
+// extraction pipeline that would emit { page_id, tag, target_page_idx, x, y }
+// rows does not exist yet, so the callout POSITIONS + targets are
+// presentational — but the sheet list they jump BETWEEN is the REAL page list,
+// so clicking one genuinely opens the referenced page (same honest GAP as the
+// shipped mobile cross-link `takeoff-cross-link.tsx`).
+type SheetCallout = {
+  tag: string
+  /** board-space (0–100) position of the callout circle on the source sheet */
+  x: number
+  y: number
+  detail: string
+  /** index into the real page list this callout jumps to (clamped at render) */
+  targetPageIdx: number
+}
+const SHEET_CALLOUTS: SheetCallout[] = [
+  { tag: 'A1', x: 22, y: 30, detail: 'Wall section A1', targetPageIdx: 1 },
+  { tag: 'B3', x: 58, y: 48, detail: 'Detail B3 · parapet flashing', targetPageIdx: 2 },
+]
+
 export function EstCanvas() {
   const params = useParams<{ projectId: string }>()
   const navigate = useNavigate()
@@ -296,6 +317,15 @@ export function EstCanvas() {
   // Bulk-select toolbar (DCanvasBulkSelect): the set of measurements picked
   // while in marquee/select mode.
   const [bulkSelected, setBulkSelected] = useState<Set<string>>(() => new Set())
+  // Interactive vertex-drag edit (dsg__48 "EDIT MEASUREMENT"). When EDIT GEOM
+  // is engaged on a single selected measurement, its committed vertices become
+  // draggable handles. `editGeomId` is the measurement under edit; `editPoints`
+  // is the working (unsaved) point set; `editDragIdx` is the vertex currently
+  // being dragged. Dropping a vertex PATCHes the new geometry (server recomputes
+  // the quantity) — no redraw-from-scratch round trip.
+  const [editGeomId, setEditGeomId] = useState<string | null>(null)
+  const [editPoints, setEditPoints] = useState<TakeoffPoint[]>([])
+  const editDragIdxRef = useRef<number | null>(null)
   // Redo stack for draft points (PlanSwift-style undo/redo): UNDO pushes the
   // popped vertex here, REDO pops it back. Any new vertex / tool change / save
   // clears it (you can't redo into a diverged draft).
@@ -310,6 +340,13 @@ export function EstCanvas() {
   // deduction (window/door opening) whose area subtracts from the net for its
   // service item. Sticky so several openings can be cut in a row.
   const [deduct, setDeduct] = useState(false)
+
+  // Cross-sheet callout jump (dsg__50). `showCallouts` toggles the callout
+  // markers over the sheet; `jumpedFrom` remembers the sheet we jumped FROM so
+  // the "JUMPED FROM …" panel can offer a one-click RETURN. The callouts are
+  // only meaningful in draw mode (they overlay the takeoff surface).
+  const [showCallouts, setShowCallouts] = useState(false)
+  const [jumpedFrom, setJumpedFrom] = useState<{ pageId: string; label: string } | null>(null)
 
   useEffect(() => {
     if (!serviceItemCode && items[0]) setServiceItemCode(items[0].code)
@@ -561,6 +598,12 @@ export function EstCanvas() {
       }
       return
     }
+    if (mode === 'select' && editGeomId) {
+      // While editing a measurement's geometry, a background pointer-down must
+      // not start a marquee (that would wipe the edit). The vertex handles own
+      // their own pointer-down; the background is inert here.
+      return
+    }
     if (mode === 'select') {
       // Begin a marquee. A real drag lassos enclosed measurements on pointer-up;
       // a zero-drag falls through to onCanvasTap (clears the selection).
@@ -575,6 +618,14 @@ export function EstCanvas() {
     onCanvasTap(e)
   }
   const onPointerMoveCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
+    // Vertex drag (EDIT GEOM): move the active handle to the cursor in board
+    // space. Takes priority over every other gesture while a handle is held.
+    const dragIdx = editDragIdxRef.current
+    if (dragIdx !== null) {
+      const p = clientToBoard(e.clientX, e.clientY)
+      if (p) setEditPoints((prev) => prev.map((pt, i) => (i === dragIdx ? { x: p.x, y: p.y } : pt)))
+      return
+    }
     const boxStart = boxStartRef.current
     if (boxStart) {
       const p = clientToBoard(e.clientX, e.clientY)
@@ -592,6 +643,13 @@ export function EstCanvas() {
     setPan({ x: start.panX + (e.clientX - start.x), y: start.panY + (e.clientY - start.y) })
   }
   const onPointerUpCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
+    // End a vertex drag: release the handle but keep the working point set so
+    // the user can drag more vertices before committing via the action bar.
+    if (editDragIdxRef.current !== null) {
+      editDragIdxRef.current = null
+      e.currentTarget.releasePointerCapture?.(e.pointerId)
+      return
+    }
     if (marqueeStartRef.current) {
       marqueeStartRef.current = null
       e.currentTarget.releasePointerCapture?.(e.pointerId)
@@ -816,6 +874,32 @@ export function EstCanvas() {
     return p.calibration_set_at ? { label: '✓ VERIFIED', tone: 'green' } : { label: 'UNCAL', tone: 'ink' }
   }
 
+  // --- Cross-sheet callout jump (dsg__50) ----------------------------------
+  // Resolve a callout against the REAL page list (clamped) so a jump opens an
+  // actual sheet even though the callout coordinates are presentational.
+  const calloutTargetPage = (c: SheetCallout): BlueprintPage | null => {
+    if (pages.length === 0) return null
+    return pages[Math.min(c.targetPageIdx, pages.length - 1)] ?? null
+  }
+  const calloutTargetLabel = (c: SheetCallout): string => {
+    const tp = calloutTargetPage(c)
+    return tp ? `pg ${tp.page_number}` : `A-50${c.targetPageIdx}`
+  }
+  const currentSheetLabel = (): string =>
+    activePage ? `pg ${activePage.page_number}` : (activeBlueprint?.file_name ?? 'sheet')
+  // Jump to the referenced sheet, remembering where we came from for RETURN.
+  const jumpToCallout = (c: SheetCallout) => {
+    const tp = calloutTargetPage(c)
+    if (!tp || tp.id === activePage?.id) return
+    if (activePage) setJumpedFrom({ pageId: activePage.id, label: currentSheetLabel() })
+    setPageId(tp.id)
+  }
+  const returnFromJump = () => {
+    if (!jumpedFrom) return
+    setPageId(jumpedFrom.pageId)
+    setJumpedFrom(null)
+  }
+
   // Item command-palette: filter the scope items by the typed query.
   const paletteItems = useMemo(() => {
     const q = itemQuery.trim().toLowerCase()
@@ -848,6 +932,9 @@ export function EstCanvas() {
   const clearSelection = () => {
     setSelectedMeasurementId(null)
     setBulkSelected(new Set())
+    setEditGeomId(null)
+    setEditPoints([])
+    editDragIdxRef.current = null
   }
 
   // Real delete (was a no-op that only cleared the highlight).
@@ -879,20 +966,49 @@ export function EstCanvas() {
     clearSelection()
   }
 
-  // Real "edit geometry" (was a no-op): pick the shape back up into the draft
-  // (tool + item + points), remove the original, and drop into draw mode so the
-  // user can adjust the points and re-save.
+  // Interactive "edit geometry" (dsg__48): engage in-place vertex drag on the
+  // selected measurement. Its existing vertices become draggable handles; the
+  // shape is edited live and re-priced on drop (see commitEditGeom). Stays in
+  // SELECT mode so the contextual bar remains anchored to this measurement.
   const onEditGeom = () => {
     if (!selectedMeasurement) return
     const geo = selectedMeasurement.geometry as MeasurementGeometry
-    if (geo.points) {
-      setTool(geo.kind === 'lineal' ? 'lineal' : geo.kind === 'count' ? 'count' : 'polygon')
-      setServiceItemCode(selectedMeasurement.service_item_code)
-      setDraftPoints(geo.points.map((p) => ({ x: p.x, y: p.y })))
+    const pts = geo.points
+    if (!pts || pts.length === 0) return
+    setEditGeomId(selectedMeasurement.id)
+    setEditPoints(pts.map((p) => ({ x: p.x, y: p.y })))
+  }
+
+  const cancelEditGeom = () => {
+    setEditGeomId(null)
+    setEditPoints([])
+    editDragIdxRef.current = null
+  }
+
+  // Persist the dragged geometry. The PATCH route re-normalizes the points and
+  // recomputes the quantity server-side, so the running total + price update
+  // off the new shape. Carries the row's optimistic version (409 → bounce).
+  const commitEditGeom = async () => {
+    const target = editGeomId ? blueprintMeasurements.find((m) => m.id === editGeomId) : null
+    if (!target || editPoints.length === 0) {
+      cancelEditGeom()
+      return
     }
-    removeMeasurement.mutate({ id: selectedMeasurement.id })
-    clearSelection()
-    setMode('draw')
+    const geo = target.geometry as MeasurementGeometry
+    const nextPoints = editPoints.map((p) => ({ x: round2(p.x), y: round2(p.y) }))
+    setError(null)
+    try {
+      await patchMeasurement.mutateAsync({
+        id: target.id,
+        geometry: { ...geo, points: nextPoints },
+        expected_version: target.version,
+      })
+      setSavedToast('Geometry updated — quantity re-priced.')
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message_for_user() : e instanceof Error ? e.message : 'Edit failed')
+    } finally {
+      cancelEditGeom()
+    }
   }
 
   // Item-palette pick: if a REASSIGN is pending, re-tag those committed
@@ -1080,6 +1196,9 @@ export function EstCanvas() {
 
             {/* Saved measurements on this blueprint (same render as mobile) */}
             {blueprintMeasurements.map((m) => {
+              // The measurement under EDIT GEOM is replaced by the draggable
+              // overlay below — skip its static render so the two don't fight.
+              if (m.id === editGeomId) return null
               const geo = m.geometry as MeasurementGeometry
               // Selection state drives the highlight (edit popover = single,
               // bulk-select = many). Ported from DCanvasEditMeasure /
@@ -1160,6 +1279,79 @@ export function EstCanvas() {
               return null
             })}
 
+            {/* EDIT GEOM (dsg__48): live edited shape + draggable vertex handles
+                for the measurement under edit. Drag a square handle to move that
+                vertex; the dashed outline + live quantity track the drag, and the
+                action bar's APPLY persists the new geometry (server re-prices). */}
+            {editGeomId && editPoints.length > 0
+              ? (() => {
+                  const target = blueprintMeasurements.find((m) => m.id === editGeomId)
+                  const geo = target?.geometry as MeasurementGeometry | undefined
+                  const isLineal = geo?.kind === 'lineal'
+                  const c = !isLineal && editPoints.length >= 3 ? calculatePolygonCentroid(editPoints) : null
+                  const liveQty = isLineal
+                    ? round2(calculateLinealLengthScaled(editPoints, worldScale?.wx ?? 1, worldScale?.wy ?? 1))
+                    : round2(calculatePolygonAreaScaled(editPoints, worldScale?.wx ?? 1, worldScale?.wy ?? 1))
+                  return (
+                    <g>
+                      {isLineal ? (
+                        <polyline
+                          points={editPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+                          fill="none"
+                          stroke="var(--m-accent)"
+                          strokeWidth={0.6}
+                          strokeDasharray="1.2 0.8"
+                          pointerEvents="none"
+                        />
+                      ) : editPoints.length >= 3 ? (
+                        <polygon
+                          points={editPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+                          fill="rgba(255,212,0,0.22)"
+                          stroke="var(--m-ink)"
+                          strokeWidth={0.6}
+                          strokeDasharray="1.2 0.8"
+                          pointerEvents="none"
+                        />
+                      ) : null}
+                      {editPoints.map((p, i) => (
+                        <rect
+                          key={`eh${i}`}
+                          x={p.x - 1.3}
+                          y={p.y - 1.3}
+                          width={2.6}
+                          height={2.6}
+                          fill="var(--m-accent)"
+                          stroke="var(--m-ink)"
+                          strokeWidth={0.4}
+                          style={{ cursor: 'grab' }}
+                          onPointerDown={(ev) => {
+                            ev.stopPropagation()
+                            editDragIdxRef.current = i
+                            ev.currentTarget.ownerSVGElement?.setPointerCapture?.(ev.pointerId)
+                            // Pointer capture must be on the element receiving the
+                            // move events (the SVG root handles move/up), so capture
+                            // there via the svg ref.
+                            svgRef.current?.setPointerCapture?.(ev.pointerId)
+                          }}
+                        />
+                      ))}
+                      {c ? (
+                        <text
+                          x={c.x}
+                          y={c.y}
+                          fontSize={3}
+                          textAnchor="middle"
+                          fill="var(--m-ink)"
+                          fontWeight={700}
+                          pointerEvents="none"
+                        >
+                          {formatQty(liveQty)}
+                        </text>
+                      ) : null}
+                    </g>
+                  )
+                })()
+              : null}
             {/* Live box/marquee preview while dragging the RECT tool. */}
             {boxRect
               ? (() => {
@@ -1239,6 +1431,35 @@ export function EstCanvas() {
             {draftPoints.map((p, i) => (
               <circle key={i} cx={p.x} cy={p.y} r={tool === 'count' ? 1 : 0.8} fill="var(--m-amber)" />
             ))}
+            {/* Cross-sheet callout markers (dsg__50): tappable detail-reference
+                circles overlaid on the sheet. Only in draw mode, only when
+                toggled on, only for a multi-page set (single sheets have no
+                cross-references). Clicking jumps to the referenced page. */}
+            {showCallouts && mode === 'draw' && pages.length > 1
+              ? SHEET_CALLOUTS.map((c) => (
+                  <g
+                    key={`callout-${c.tag}`}
+                    onClick={() => jumpToCallout(c)}
+                    onPointerDown={(e) => e.stopPropagation()}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <title>{`Jump to ${calloutTargetLabel(c)} · ${c.detail}`}</title>
+                    <circle cx={c.x} cy={c.y} r={2.6} fill="var(--m-accent)" stroke="var(--m-ink)" strokeWidth={0.5} />
+                    <text
+                      x={c.x}
+                      y={c.y + 0.9}
+                      textAnchor="middle"
+                      fontFamily="var(--m-num)"
+                      fontSize={2.2}
+                      fontWeight={800}
+                      fill="var(--m-accent-ink)"
+                      pointerEvents="none"
+                    >
+                      {c.tag}
+                    </text>
+                  </g>
+                ))
+              : null}
             {/* SCALE-mode reference line: the two known-dimension points. */}
             {mode === 'scale' && scalePoints.length >= 1 ? (
               <g pointerEvents="none">
@@ -1421,6 +1642,25 @@ export function EstCanvas() {
         </span>
       </div>
 
+      {/* ---- DCanvasCrossRef · "JUMPED FROM …" panel (dsg__50) ----
+          Shown after a cross-sheet callout jump: explains which callout was
+          clicked and offers a one-click RETURN to the source sheet. Floats
+          top-right under the strip, clear of the AI/Item palettes. */}
+      {jumpedFrom ? (
+        <div style={floatBox({ top: 232, right: 312, width: 240 })}>
+          <div style={floatHead}>● Jumped from {jumpedFrom.label}</div>
+          <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontSize: 12, color: 'var(--m-ink)', lineHeight: 1.5 }}>
+              You followed a detail callout. This is the referenced sheet
+              {activePage ? ` (pg ${activePage.page_number})` : ''}.
+            </div>
+            <MButton variant="primary" onClick={returnFromJump}>
+              ← Return to {jumpedFrom.label}
+            </MButton>
+          </div>
+        </div>
+      ) : null}
+
       {/* ---- TOOL palette (top-left, below the strip) ---- */}
       <div style={floatBox({ top: 92, left: 16, width: 56 })}>
         <div style={{ ...floatHead, padding: '8px 0', textAlign: 'center' }}>TOOL</div>
@@ -1474,6 +1714,7 @@ export function EstCanvas() {
                   setRedoStack([])
                   setSelectedMeasurementId(null)
                   setBulkSelected(new Set())
+                  cancelEditGeom()
                 }}
                 style={{
                   width: 56,
@@ -1514,18 +1755,27 @@ export function EstCanvas() {
                 label: '✋',
                 title: 'Pan (or hold Space / middle-drag)',
                 onClick: () => setHandMode((h) => !h),
-                toggle: true,
+                toggle: 'hand' as const,
+              },
+              {
+                // Cross-sheet callout overlay (dsg__50): show the detail-reference
+                // circles so a click jumps to the referenced sheet.
+                label: 'REF',
+                title: 'Cross-sheet detail callouts — click a circle to jump',
+                onClick: () => setShowCallouts((s) => !s),
+                toggle: 'refs' as const,
               },
             ] as const
           ).map((b, i, arr) => {
-            const active = 'toggle' in b && b.toggle && handMode
+            const active =
+              'toggle' in b ? (b.toggle === 'hand' ? handMode : b.toggle === 'refs' ? showCallouts : false) : false
             return (
               <button
                 key={b.title}
                 type="button"
                 title={b.title}
                 aria-label={b.title}
-                aria-pressed={'toggle' in b && b.toggle ? handMode : undefined}
+                aria-pressed={'toggle' in b ? active : undefined}
                 onClick={b.onClick}
                 style={{
                   width: 56,
@@ -2220,7 +2470,7 @@ export function EstCanvas() {
       {/* ---- PlanSwift Phase 2 · attach an assembly recipe to the selected
            measurement. Floats just above the single-selection action bar so
            the estimator can "apply assembly" then see the exploded preview. -- */}
-      {mode === 'select' && selectedMeasurement && bulkSelected.size === 1 ? (
+      {mode === 'select' && selectedMeasurement && bulkSelected.size === 1 && editGeomId !== selectedMeasurement.id ? (
         <div
           style={floatBox({
             bottom: 92,
@@ -2257,31 +2507,38 @@ export function EstCanvas() {
                 padding: '2px 6px',
               }}
             >
-              SELECTED · {selectedIndex >= 0 ? selectedIndex + 1 : '—'} OF {blueprintMeasurements.length}
+              {editGeomId === selectedMeasurement.id
+                ? 'EDIT GEOM · DRAG A HANDLE'
+                : `SELECTED · ${selectedIndex >= 0 ? selectedIndex + 1 : '—'} OF ${blueprintMeasurements.length}`}
             </span>
             <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 800, fontSize: 24, marginTop: 6 }}>
               {formatQty(Number(selectedMeasurement.quantity))} {selectedMeasurement.unit} ·{' '}
               {selectedMeasurement.service_item_code}
             </div>
           </div>
-          {(
-            [
-              {
-                l: 'REASSIGN',
-                action: () => {
-                  if (selectedMeasurement) setReassignIds([selectedMeasurement.id])
-                  setItemPaletteOpen(true)
+          {(editGeomId === selectedMeasurement.id
+            ? ([
+                { l: patchMeasurement.isPending ? 'SAVING…' : 'APPLY', action: () => void commitEditGeom() },
+                { l: 'CANCEL', action: cancelEditGeom },
+              ] as const)
+            : ([
+                {
+                  l: 'REASSIGN',
+                  action: () => {
+                    if (selectedMeasurement) setReassignIds([selectedMeasurement.id])
+                    setItemPaletteOpen(true)
+                  },
                 },
-              },
-              { l: 'EDIT GEOM', action: onEditGeom },
-              { l: 'DUPLICATE', action: () => void onDuplicateSelected() },
-              { l: 'DELETE', danger: true, action: onDeleteSelected },
-            ] as const
+                { l: 'EDIT GEOM', action: onEditGeom },
+                { l: 'DUPLICATE', action: () => void onDuplicateSelected() },
+                { l: 'DELETE', danger: true, action: onDeleteSelected },
+              ] as const)
           ).map((b, i, arr) => (
             <button
               key={b.l}
               type="button"
               onClick={b.action}
+              disabled={patchMeasurement.isPending && editGeomId === selectedMeasurement.id}
               style={{
                 padding: '0 22px',
                 background: 'var(--m-card)',

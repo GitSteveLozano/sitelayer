@@ -536,11 +536,7 @@ describe('handleProjectRoutes — POST /api/projects/:id/closeout/events (canoni
     seedProject(pool)
     const { ctx, responses } = makeCtx(pool, { event: 'CLOSEOUT', state_version: 1 })
 
-    await handleProjectRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`),
-      ctx,
-    )
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
     expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
     const snap = responses[0]?.body as {
       state: string
@@ -565,11 +561,7 @@ describe('handleProjectRoutes — POST /api/projects/:id/closeout/events (canoni
     seedProject(pool, { state_version: 3 })
     const { ctx, responses } = makeCtx(pool, { event: 'CLOSEOUT', state_version: 1 })
 
-    await handleProjectRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`),
-      ctx,
-    )
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
     expect(responses[0]?.status).toBe(409)
     const body = responses[0]?.body as { error: string; snapshot: { state_version: number } }
     expect(body.snapshot.state_version).toBe(3)
@@ -587,11 +579,7 @@ describe('handleProjectRoutes — POST /api/projects/:id/closeout/events (canoni
     })
     const { ctx, responses } = makeCtx(pool, { event: 'CLOSEOUT', state_version: 2 })
 
-    await handleProjectRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`),
-      ctx,
-    )
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
     expect(responses[0]?.status).toBe(409)
     expect(pool.workflowEvents).toHaveLength(0)
   })
@@ -601,11 +589,7 @@ describe('handleProjectRoutes — POST /api/projects/:id/closeout/events (canoni
     seedProject(pool, { lifecycle_state: 'draft' })
     const { ctx, responses } = makeCtx(pool, { event: 'CLOSEOUT', state_version: 1 })
 
-    await handleProjectRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`),
-      ctx,
-    )
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
     expect(responses[0]?.status).toBe(409)
     const body = responses[0]?.body as { error: string }
     expect(body.error).toMatch(/lifecycle/i)
@@ -638,11 +622,7 @@ describe('handleProjectRoutes — POST /api/projects/:id/closeout/events (canoni
     })
     const { ctx, responses } = makeCtx(pool, { event: 'ACKNOWLEDGE_POST_MORTEM', state_version: 2 })
 
-    await handleProjectRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`),
-      ctx,
-    )
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
     expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
     const snap = responses[0]?.body as {
       state: string
@@ -663,11 +643,7 @@ describe('handleProjectRoutes — POST /api/projects/:id/closeout/events (canoni
     seedProject(pool)
     const { ctx, responses } = makeCtx(pool, { event: 'ACKNOWLEDGE_POST_MORTEM', state_version: 1 })
 
-    await handleProjectRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`),
-      ctx,
-    )
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
     expect(responses[0]?.status).toBe(409)
     expect(pool.workflowEvents).toHaveLength(0)
   })
@@ -677,11 +653,7 @@ describe('handleProjectRoutes — POST /api/projects/:id/closeout/events (canoni
     seedProject(pool)
     const { ctx, responses } = makeCtx(pool, { event: 'NOPE', state_version: 1 })
 
-    await handleProjectRoutes(
-      { method: 'POST' } as never,
-      buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`),
-      ctx,
-    )
+    await handleProjectRoutes({ method: 'POST' } as never, buildUrl(`/api/projects/${PROJECT_ID}/closeout/events`), ctx)
     expect(responses[0]?.status).toBe(400)
   })
 })

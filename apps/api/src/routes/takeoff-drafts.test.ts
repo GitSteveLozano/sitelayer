@@ -125,6 +125,7 @@ class FakePool {
             project_name: proj?.name ?? null,
             name: d.name,
             source: d.source,
+            kind: d.kind ?? 'takeoff',
             review_required: d.review_required,
             quantities_count: quantities,
             created_at: d.created_at,
@@ -591,6 +592,7 @@ type FeedRow = {
   project_name: string
   name: string
   source: string
+  kind: string
   review_required: boolean
   quantities_count: number
   created_at: string
@@ -605,6 +607,7 @@ function seedFeedDraft(pool: FakePool, overrides: Partial<Row> = {}) {
     project_id: PROJECT_ID,
     name: `Capture #${pool.drafts.length + 1}`,
     type: 'measurement',
+    kind: 'takeoff',
     status: 'active',
     source: 'blueprint_vision',
     review_required: true,
@@ -634,6 +637,20 @@ describe('handleTakeoffDraftRoutes — GET /api/takeoff-drafts (company feed)', 
     expect(body.drafts[0]?.source).toBe('blueprint_vision')
     expect(body.drafts[0]?.quantities_count).toBe(2)
     expect(body.drafts[0]?.review_required).toBe(true)
+  })
+
+  it('surfaces the draft kind (count vs takeoff) so the queue can route review', async () => {
+    const pool = new FakePool()
+    pool.setProject(COMPANY_ID, PROJECT_ID, 'P')
+    seedFeedDraft(pool, { id: 'takeoff-draft', kind: 'takeoff', created_at: '2026-05-20T00:00:00.000Z' })
+    seedFeedDraft(pool, { id: 'count-draft', kind: 'count', created_at: '2026-05-10T00:00:00.000Z' })
+    const { ctx, responses } = makeCtx(pool)
+
+    await handleTakeoffDraftRoutes({ method: 'GET' } as never, buildUrl(FEED_PATH), ctx)
+    const body = responses[0]?.body as { drafts: FeedRow[] }
+    const byId = new Map(body.drafts.map((d) => [d.id, d.kind]))
+    expect(byId.get('takeoff-draft')).toBe('takeoff')
+    expect(byId.get('count-draft')).toBe('count')
   })
 
   it('orders newest-first by created_at', async () => {

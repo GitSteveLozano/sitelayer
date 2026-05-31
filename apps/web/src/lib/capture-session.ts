@@ -50,11 +50,13 @@ export function getActiveCaptureSessionId(): string | null {
   return readState()?.id ?? null
 }
 
-export function startLocalCaptureSession(args: {
-  id?: string
-  mode?: CaptureSessionMode
-  consent_version?: string
-} = {}): CaptureSessionState {
+export function startLocalCaptureSession(
+  args: {
+    id?: string
+    mode?: CaptureSessionMode
+    consent_version?: string
+  } = {},
+): CaptureSessionState {
   const state: CaptureSessionState = {
     id: args.id ?? uuid(),
     mode: args.mode ?? 'trace',
@@ -65,10 +67,12 @@ export function startLocalCaptureSession(args: {
   return state
 }
 
-export function ensureLocalCaptureSession(args: {
-  mode?: CaptureSessionMode
-  consent_version?: string
-} = {}): CaptureSessionState {
+export function ensureLocalCaptureSession(
+  args: {
+    mode?: CaptureSessionMode
+    consent_version?: string
+  } = {},
+): CaptureSessionState {
   const existing = readState()
   if (existing) return existing
   return startLocalCaptureSession(args)

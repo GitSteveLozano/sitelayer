@@ -26,9 +26,7 @@ export function RentalsPortalProvider({ children }: { children?: ReactNode }) {
     return <div style={{ padding: 32 }}>Missing share token.</div>
   }
 
-  return (
-    <RentalsPortalContext.Provider value={portal}>{children ?? <Outlet />}</RentalsPortalContext.Provider>
-  )
+  return <RentalsPortalContext.Provider value={portal}>{children ?? <Outlet />}</RentalsPortalContext.Provider>
 }
 
 export function useRentalsPortalContext(): RentalsPortalHookResult {

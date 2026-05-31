@@ -186,15 +186,17 @@ export async function recordSyncEvent(
 ): Promise<void> {
   const executor: LedgerExecutor = opts.executor ?? requirePool()
   const { sentryTrace, baggage } = currentTraceHeaders()
-  const requestId = getRequestContext()?.requestId ?? null
+  const requestContext = getRequestContext()
+  const requestId = requestContext?.requestId ?? null
+  const captureSessionId = requestContext?.captureSessionId ?? null
   const status = opts.status ?? 'pending'
   await executor.query(
     `
     insert into sync_events (
       company_id, integration_connection_id, direction, entity_type, entity_id, payload, status,
-      sentry_trace, sentry_baggage, request_id, error
+      sentry_trace, sentry_baggage, request_id, capture_session_id, error
     )
-    values ($1, $2, 'local', $3, $4, $5::jsonb, $6, $7, $8, $9, $10)
+    values ($1, $2, 'local', $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11)
     `,
     [
       companyId,
@@ -206,6 +208,7 @@ export async function recordSyncEvent(
       sentryTrace,
       baggage,
       requestId,
+      captureSessionId,
       opts.error ?? null,
     ],
   )
@@ -257,14 +260,16 @@ export async function recordMutationOutbox(
   executor: LedgerExecutor = requirePool(),
 ): Promise<void> {
   const { sentryTrace, baggage } = currentTraceHeaders()
-  const requestId = getRequestContext()?.requestId ?? null
+  const requestContext = getRequestContext()
+  const requestId = requestContext?.requestId ?? null
+  const captureSessionId = requestContext?.captureSessionId ?? null
   await executor.query(
     `
     insert into mutation_outbox (
       company_id, device_id, actor_user_id, entity_type, entity_id, mutation_type, payload, idempotency_key, status,
-      sentry_trace, sentry_baggage, request_id
+      sentry_trace, sentry_baggage, request_id, capture_session_id
     )
-    values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, 'pending', $9, $10, $11)
+    values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, 'pending', $9, $10, $11, $12)
     on conflict (company_id, idempotency_key) do update
       set payload = excluded.payload,
           status = 'pending',
@@ -272,7 +277,8 @@ export async function recordMutationOutbox(
           next_attempt_at = now(),
           sentry_trace = excluded.sentry_trace,
           sentry_baggage = excluded.sentry_baggage,
-          request_id = excluded.request_id
+          request_id = excluded.request_id,
+          capture_session_id = excluded.capture_session_id
     `,
     [
       companyId,
@@ -286,6 +292,7 @@ export async function recordMutationOutbox(
       sentryTrace,
       baggage,
       requestId,
+      captureSessionId,
     ],
   )
 }
@@ -380,7 +387,9 @@ export async function recordWorkflowEvent(
   // sentry-trace + baggage context every other ledger table already
   // persists.
   const { sentryTrace, baggage } = currentTraceHeaders()
-  const requestId = getRequestContext()?.requestId ?? null
+  const requestContext = getRequestContext()
+  const requestId = requestContext?.requestId ?? null
+  const captureSessionId = requestContext?.captureSessionId ?? null
   // Shared INSERT builder — single source of truth for the column list so
   // the API path and the worker path (queue/index.ts appendWorkflowEvent)
   // can't desync. This path sources trace context from ambient request
@@ -401,6 +410,7 @@ export async function recordWorkflowEvent(
       requestId,
       sentryTrace,
       sentryBaggage: baggage,
+      captureSessionId,
     },
     { onConflict: 'throw' },
   )

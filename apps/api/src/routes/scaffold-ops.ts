@@ -1010,7 +1010,7 @@ export async function handleScaffoldOpsRoutes(
       bomId: id,
       eventType: parsed.value.event,
       expectedStateVersion: parsed.value.state_version,
-      supersededByBomId: parsed.value.event === 'SUPERSEDE' ? parsed.value.superseded_by_bom_id ?? null : null,
+      supersededByBomId: parsed.value.event === 'SUPERSEDE' ? (parsed.value.superseded_by_bom_id ?? null) : null,
     })
     if (outcome.kind === 'not_found') {
       ctx.sendJson(404, { error: 'bom not found' })

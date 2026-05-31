@@ -182,6 +182,13 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
   // (instead of drawing), exposing SELECT ALL + a bulk reassign/delete footer.
   const [bulkMode, setBulkMode] = useState(false)
   const [bulkIds, setBulkIds] = useState<Set<string>>(() => new Set())
+  // EDIT GEOM (msg22 vertex drag). When a saved polygon/lineal is selected, the
+  // EDIT GEOM action turns its committed vertices into draggable handles; the
+  // working point set lives here until APPLY PATCHes the new geometry (server
+  // recomputes the quantity). `editId` mirrors `selectedId` while editing.
+  const [editId, setEditId] = useState<string | null>(null)
+  const [editPoints, setEditPoints] = useState<TakeoffPoint[]>([])
+  const editDragIdxRef = useRef<number | null>(null)
   const svgRef = useRef<SVGSVGElement | null>(null)
 
   // Default the scope item once the catalog loads.
@@ -210,6 +217,9 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
     if (!svg) return
     // In bulk-select mode an empty-grid tap does nothing (taps land on polys).
     if (bulkMode) return
+    // While editing geometry, a background tap is inert — the vertex handles
+    // own the gestures, and a stray tap must not deselect or drop a point.
+    if (editId) return
     // A tap on the empty grid deselects any committed measurement and starts
     // a fresh draft point.
     if (selectedId) setSelectedId(null)
@@ -345,6 +355,42 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
       setSavedToast('Measurement deleted.')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Delete failed')
+    }
+  }
+
+  // --- Edit geometry (msg22 vertex drag) ------------------------------------
+  const startEditGeom = () => {
+    if (!selected) return
+    const geo = selected.geometry as MeasurementGeometry
+    const pts = geo.points
+    if (!pts || pts.length === 0) return
+    setEditId(selected.id)
+    setEditPoints(pts.map((p) => ({ x: p.x, y: p.y })))
+  }
+  const cancelEditGeom = () => {
+    setEditId(null)
+    setEditPoints([])
+    editDragIdxRef.current = null
+  }
+  const commitEditGeom = async () => {
+    const target = editId ? draftMeasurements.find((m) => m.id === editId) : null
+    if (!target || editPoints.length === 0) {
+      cancelEditGeom()
+      return
+    }
+    const geo = target.geometry as MeasurementGeometry
+    setError(null)
+    try {
+      await patchMeasurement.mutateAsync({
+        id: target.id,
+        geometry: { ...geo, points: editPoints.map((p) => ({ x: round2(p.x), y: round2(p.y) })) },
+        expected_version: target.version,
+      })
+      setSavedToast('Geometry updated — quantity re-priced.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Edit failed')
+    } finally {
+      cancelEditGeom()
     }
   }
 
@@ -624,6 +670,7 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                               setToolLabel(t.label)
                               setDraftPoints([])
                               setWallHeight(0)
+                              cancelEditGeom()
                             }}
                             style={{
                               flex: 1,
@@ -685,6 +732,7 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                           setSelectedId(null)
                           clearBulk()
                           setDraftPoints([])
+                          cancelEditGeom()
                         }}
                         aria-pressed={bulkMode}
                         style={{
@@ -739,10 +787,17 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                       selectedId={bulkMode ? null : selectedId}
                       bulkIds={bulkMode ? bulkIds : null}
                       onSelectMeasurement={(id) => {
+                        if (editId) return // handles own the gestures while editing
                         if (bulkMode) toggleBulk(id)
                         else setSelectedId((cur) => (cur === id ? null : id))
                       }}
                       sourceImageUrl={sourceImage.url}
+                      editId={editId}
+                      editPoints={editPoints}
+                      editDragIdxRef={editDragIdxRef}
+                      onEditPoint={(idx, p) =>
+                        setEditPoints((prev) => prev.map((pt, i) => (i === idx ? { x: p.x, y: p.y } : pt)))
+                      }
                     />
                     {/* Bulk selection footer (msg23). */}
                     {bulkMode && bulkSelected.length > 0 ? (
@@ -833,8 +888,9 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                               color: 'var(--m-accent)',
                             }}
                           >
-                            SELECTED · POLY {selectedIndex >= 0 ? selectedIndex + 1 : 1} OF {canvasPolyCount} ·{' '}
-                            {selected.service_item_code}
+                            {editId === selected.id
+                              ? 'EDIT GEOM · DRAG A HANDLE'
+                              : `SELECTED · POLY ${selectedIndex >= 0 ? selectedIndex + 1 : 1} OF ${canvasPolyCount} · ${selected.service_item_code}`}
                           </div>
                           <div
                             style={{
@@ -854,22 +910,37 @@ export function TakeoffMobileScreen({ companySlug }: { companySlug: string }) {
                           </div>
                         </div>
                         <div style={{ display: 'flex' }}>
-                          {(
-                            [
-                              {
-                                label: 'REASSIGN',
-                                sub: 'CHANGE ITEM',
-                                on: () => void reassignSelected(),
-                                danger: false,
-                              },
-                              {
-                                label: 'DUPLICATE',
-                                sub: 'NEW POLY',
-                                on: () => void duplicateSelected(),
-                                danger: false,
-                              },
-                              { label: 'DELETE', sub: 'REMOVE', on: () => void deleteSelected(), danger: true },
-                            ] as const
+                          {(editId === selected.id
+                            ? ([
+                                {
+                                  label: patchMeasurement.isPending ? 'SAVING…' : 'APPLY',
+                                  sub: 'SAVE SHAPE',
+                                  on: () => void commitEditGeom(),
+                                  danger: false,
+                                },
+                                { label: 'CANCEL', sub: 'DISCARD', on: cancelEditGeom, danger: false },
+                              ] as const)
+                            : ([
+                                {
+                                  label: 'EDIT GEOM',
+                                  sub: 'DRAG PTS',
+                                  on: startEditGeom,
+                                  danger: false,
+                                },
+                                {
+                                  label: 'REASSIGN',
+                                  sub: 'CHANGE ITEM',
+                                  on: () => void reassignSelected(),
+                                  danger: false,
+                                },
+                                {
+                                  label: 'DUPLICATE',
+                                  sub: 'NEW POLY',
+                                  on: () => void duplicateSelected(),
+                                  danger: false,
+                                },
+                                { label: 'DELETE', sub: 'REMOVE', on: () => void deleteSelected(), danger: true },
+                              ] as const)
                           ).map((a, i, arr) => (
                             <button
                               key={a.label}
@@ -1393,6 +1464,12 @@ interface CanvasSurfaceProps {
   bulkIds: Set<string> | null
   onSelectMeasurement: (id: string) => void
   sourceImageUrl?: string | null
+  /** EDIT GEOM (msg22): the measurement currently in vertex-drag edit, its live
+   *  working points, the index of the handle being dragged, and the move sink. */
+  editId: string | null
+  editPoints: TakeoffPoint[]
+  editDragIdxRef: React.MutableRefObject<number | null>
+  onEditPoint: (idx: number, p: TakeoffPoint) => void
 }
 
 function CanvasSurface({
@@ -1406,7 +1483,35 @@ function CanvasSurface({
   bulkIds,
   onSelectMeasurement,
   sourceImageUrl,
+  editId,
+  editPoints,
+  editDragIdxRef,
+  onEditPoint,
 }: CanvasSurfaceProps) {
+  // Map a touch/pointer position to 0–100 board space (same CTM the tap path
+  // uses). Used by the vertex-drag handles.
+  const toBoard = (clientX: number, clientY: number): TakeoffPoint | null => {
+    const svg = svgRef.current
+    if (!svg) return null
+    const ctm = svg.getScreenCTM()
+    if (!ctm) return null
+    const pt = svg.createSVGPoint()
+    pt.x = clientX
+    pt.y = clientY
+    const local = pt.matrixTransform(ctm.inverse())
+    return { x: clamp(local.x, 0, 100), y: clamp(local.y, 0, 100) }
+  }
+  const onSvgPointerMove = (e: ReactPointerEvent<SVGSVGElement>) => {
+    const idx = editDragIdxRef.current
+    if (idx === null) return
+    const p = toBoard(e.clientX, e.clientY)
+    if (p) onEditPoint(idx, p)
+  }
+  const onSvgPointerUp = (e: ReactPointerEvent<SVGSVGElement>) => {
+    if (editDragIdxRef.current === null) return
+    editDragIdxRef.current = null
+    e.currentTarget.releasePointerCapture?.(e.pointerId)
+  }
   return (
     <div
       style={{
@@ -1431,6 +1536,9 @@ function CanvasSurface({
         ref={svgRef}
         viewBox="0 0 100 100"
         onPointerDown={onTap}
+        onPointerMove={onSvgPointerMove}
+        onPointerUp={onSvgPointerUp}
+        onPointerCancel={onSvgPointerUp}
         style={{
           position: 'absolute',
           inset: 0,
@@ -1459,6 +1567,9 @@ function CanvasSurface({
 
         {/* Saved measurements on this blueprint */}
         {measurements.map((m) => {
+          // The measurement under EDIT GEOM is replaced by the draggable overlay
+          // below — skip its static render so the two don't fight.
+          if (m.id === editId) return null
           const geo = m.geometry as MeasurementGeometry
           const isSel = m.id === selectedId || (bulkIds?.has(m.id) ?? false)
           const selectGeo = (e: ReactPointerEvent<SVGGElement>) => {
@@ -1561,6 +1672,56 @@ function CanvasSurface({
             fill={deduct && tool === 'polygon' ? 'var(--m-red)' : 'var(--m-amber)'}
           />
         ))}
+        {/* EDIT GEOM (msg22): live dashed shape + draggable vertex handles for
+            the measurement under edit. Touch-sized handles; drag a handle to
+            move that vertex, then APPLY in the action bar to persist + re-price. */}
+        {editId && editPoints.length > 0
+          ? (() => {
+              const target = measurements.find((m) => m.id === editId)
+              const isLineal = (target?.geometry as MeasurementGeometry | undefined)?.kind === 'lineal'
+              return (
+                <g>
+                  {isLineal ? (
+                    <polyline
+                      points={editPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+                      fill="none"
+                      stroke="var(--m-accent)"
+                      strokeWidth={0.6}
+                      strokeDasharray="1.2 0.8"
+                      pointerEvents="none"
+                    />
+                  ) : editPoints.length >= 3 ? (
+                    <polygon
+                      points={editPoints.map((p) => `${p.x},${p.y}`).join(' ')}
+                      fill="rgba(255,212,0,0.24)"
+                      stroke="var(--m-ink)"
+                      strokeWidth={0.6}
+                      strokeDasharray="1.2 0.8"
+                      pointerEvents="none"
+                    />
+                  ) : null}
+                  {editPoints.map((p, i) => (
+                    <rect
+                      key={`eh${i}`}
+                      x={p.x - 2}
+                      y={p.y - 2}
+                      width={4}
+                      height={4}
+                      fill="var(--m-accent)"
+                      stroke="var(--m-ink)"
+                      strokeWidth={0.5}
+                      style={{ cursor: 'grab' }}
+                      onPointerDown={(ev) => {
+                        ev.stopPropagation()
+                        editDragIdxRef.current = i
+                        svgRef.current?.setPointerCapture?.(ev.pointerId)
+                      }}
+                    />
+                  ))}
+                </g>
+              )
+            })()
+          : null}
         {/* Loupe / magnifier crosshair over the most-recent draft vertex (msg19). */}
         {draftPoints.length > 0
           ? (() => {

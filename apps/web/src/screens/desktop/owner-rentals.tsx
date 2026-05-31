@@ -80,8 +80,7 @@ export function OwnerRentals() {
 
   const parsedAddRate = Number(draftRate)
   const addRateValid = draftRate.trim() === '' || (Number.isFinite(parsedAddRate) && parsedAddRate >= 0)
-  const canCreate =
-    draftCode.trim() !== '' && draftDescription.trim() !== '' && addRateValid && !createItem.isPending
+  const canCreate = draftCode.trim() !== '' && draftDescription.trim() !== '' && addRateValid && !createItem.isPending
 
   const handleCreateAsset = () => {
     if (!canCreate) return

@@ -2,19 +2,32 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Card, MobileButton, Pill } from '@/components/mobile'
 import { Attribution } from '@/components/ai'
+import { ApiError } from '@/lib/api/client'
 import {
   countFailedOutbox,
   fetchQboAuthUrl,
   useActiveCompanyId,
   useCompanySettings,
+  useDispatchQboSyncRunEvent,
   usePatchCompanySettings,
   useQboConnection,
   useQboSyncOutbox,
+  useQboSyncRun,
+  useQboSyncRuns,
   useQboSyncStatus,
   useServiceItems,
   useTriggerQboSync,
-  type QboLatestSyncEvent,
+  type QboSyncRunSnapshot,
 } from '@/lib/api'
+
+/** Pull a qbo_sync_run id out of a POST /sync response or its error body. */
+function extractRunId(value: unknown): string | null {
+  if (value && typeof value === 'object' && 'qbo_sync_run_id' in value) {
+    const id = (value as { qbo_sync_run_id?: unknown }).qbo_sync_run_id
+    if (typeof id === 'string' && id.length > 0) return id
+  }
+  return null
+}
 
 export function QboConnectionScreen() {
   const qbo = useQboConnection()
@@ -22,12 +35,30 @@ export function QboConnectionScreen() {
   const [error, setError] = useState<string | null>(null)
   const [authPending, setAuthPending] = useState(false)
 
-  // Poll the sync queue while a sync is in-flight (button pressed or the
-  // connection cache still says 'syncing') so the monitor reflects the
-  // syncing → succeeded|failed transition without a manual refresh.
+  // The run id is learned from the POST /sync response (success OR the
+  // 500 error body both carry `qbo_sync_run_id`). From there the monitor
+  // reads the authoritative workflow snapshot — it no longer reconstructs
+  // the run state from the connection's cached `status` flag.
+  const [activeRunId, setActiveRunId] = useState<string | null>(null)
+  // Recover the most-recent run on mount so a `failed` run's RETRY action
+  // survives a page reload (the run id is otherwise only learned from the
+  // POST /sync response within the same session).
+  const recentRuns = useQboSyncRuns({ limit: 1 })
+  const latestRunId = recentRuns.data?.syncRuns[0]?.context.id ?? null
+  useEffect(() => {
+    if (!activeRunId && latestRunId) setActiveRunId(latestRunId)
+  }, [activeRunId, latestRunId])
+  const run = useQboSyncRun(activeRunId)
+  const runSnapshot = run.data ?? null
+
   const conn = qbo.data?.connection
   const status = conn?.status ?? 'disconnected'
-  const inFlight = sync.isPending || status === 'syncing'
+  // Still in motion while the trigger request is open OR the workflow
+  // snapshot reports a non-terminal run state.
+  const runInFlight = runSnapshot
+    ? runSnapshot.state === 'pending' || runSnapshot.state === 'syncing' || runSnapshot.state === 'retrying'
+    : false
+  const inFlight = sync.isPending || run.isFetching || runInFlight
   const syncStatus = useQboSyncStatus({ refetchInterval: inFlight ? 3_000 : false })
   const outbox = useQboSyncOutbox(50, { refetchInterval: inFlight ? 3_000 : false })
 
@@ -46,10 +77,18 @@ export function QboConnectionScreen() {
   const onSync = async () => {
     setError(null)
     try {
-      await sync.mutateAsync()
+      const result = await sync.mutateAsync()
+      const runId = extractRunId(result)
+      if (runId) setActiveRunId(runId)
       // Pull fresh queue + event state right after the trigger returns.
       await Promise.all([syncStatus.refetch(), outbox.refetch()])
     } catch (e) {
+      // The 500 body still carries the run id so the monitor can show the
+      // failed run + its RETRY action instead of dead-ending on an error.
+      if (e instanceof ApiError) {
+        const runId = extractRunId(e.body)
+        if (runId) setActiveRunId(runId)
+      }
       setError(e instanceof Error ? e.message : 'Sync failed')
     }
   }
@@ -93,12 +132,12 @@ export function QboConnectionScreen() {
         </Card>
 
         <QboSyncMonitorCard
-          connectionStatus={status}
           hasConnection={Boolean(conn)}
+          runId={activeRunId}
+          runSnapshot={runSnapshot}
           pendingOutbox={syncStatus.data?.pendingOutboxCount ?? 0}
           pendingEvents={syncStatus.data?.pendingSyncEventCount ?? 0}
           failedCount={countFailedOutbox(outbox.data)}
-          lastEvent={syncStatus.data?.latestSyncEvent ?? null}
           loading={syncStatus.isPending || outbox.isPending}
           inFlight={inFlight}
           triggering={sync.isPending}
@@ -147,77 +186,95 @@ export function QboConnectionScreen() {
 }
 
 /**
- * Map a sync row status + the connection's cached status flag into the
- * monitor's last-run state. The qbo_sync_runs workflow
- * (pending → syncing → succeeded | failed) has no GET surface yet, so
- * we derive the run state from the in-flight signal, the connection's
- * own cached `status` flag (the route flips it to syncing / connected /
- * error), and the latest sync_events row.
+ * Map the authoritative qbo_sync_run workflow snapshot
+ * (pending → syncing → succeeded | failed → retrying → syncing) into the
+ * monitor's last-run presentation. The state and the available actions
+ * both come straight from the reducer snapshot — the UI never invents a
+ * transition the machine doesn't allow. Falls back to a connection-flag
+ * hint only when no run has been observed this session.
  */
-function deriveRunState(args: { inFlight: boolean; connectionStatus: string; lastEvent: QboLatestSyncEvent | null }): {
+function presentRun(args: { snapshot: QboSyncRunSnapshot | null; triggering: boolean }): {
   label: string
   tone: 'good' | 'warn' | 'default'
   detail: string
 } {
-  if (args.inFlight || args.connectionStatus === 'syncing') {
-    return { label: 'Syncing', tone: 'default', detail: 'Sync in progress…' }
+  if (args.triggering && !args.snapshot) {
+    return { label: 'Syncing', tone: 'default', detail: 'Starting sync…' }
   }
-  if (args.connectionStatus === 'error') {
-    return {
-      label: 'Failed',
-      tone: 'warn',
-      detail: args.lastEvent?.error ?? 'Last sync attempt failed. Run again to retry.',
-    }
+  const snap = args.snapshot
+  if (!snap) {
+    return { label: 'Idle', tone: 'default', detail: 'No sync has run yet — run one to backfill from QBO.' }
   }
-  const ev = args.lastEvent
-  if (!ev) {
-    return { label: 'Idle', tone: 'default', detail: 'No sync has run yet.' }
-  }
-  if (ev.status === 'failed') {
-    return { label: 'Failed', tone: 'warn', detail: ev.error ?? 'Last event failed.' }
-  }
-  if (ev.status === 'pending' || ev.status === 'processing') {
-    return { label: 'Queued', tone: 'default', detail: 'Work queued, not yet applied.' }
-  }
-  return {
-    label: 'Succeeded',
-    tone: 'good',
-    detail: `Last event applied ${ev.applied_at ? new Date(ev.applied_at).toLocaleString() : new Date(ev.created_at).toLocaleString()}.`,
+  const ctx = snap.context
+  switch (snap.state) {
+    case 'pending':
+    case 'syncing':
+      return { label: 'Syncing', tone: 'default', detail: 'Sync in progress…' }
+    case 'retrying':
+      return { label: 'Retrying', tone: 'default', detail: 'Retry queued — starting again…' }
+    case 'failed':
+      return {
+        label: 'Failed',
+        tone: 'warn',
+        detail: ctx.error ?? 'Last sync attempt failed. Retry to run it again.',
+      }
+    case 'succeeded':
+      return {
+        label: 'Succeeded',
+        tone: 'good',
+        detail: ctx.succeeded_at
+          ? `Last synced ${new Date(ctx.succeeded_at).toLocaleString()}.`
+          : 'Last sync succeeded.',
+      }
   }
 }
 
 /**
- * Sync monitor + manual trigger. Reads the live queue depths from
- * GET /api/sync/status and the failed count from GET /api/sync/outbox,
- * shows the derived last-run state, and exposes a "Run sync now" button
- * that POSTs /api/integrations/qbo/sync. The button disables and the
- * KPIs poll while a sync is in-flight.
+ * Sync monitor + manual trigger. Renders the qbo_sync_run workflow
+ * snapshot (`state` + `next_events`) returned by
+ * GET /api/integrations/qbo/sync-runs/:id, the live queue depths from
+ * GET /api/sync/status, and the failed count from GET /api/sync/outbox.
+ *
+ * The primary action is "Run sync now" (POST /sync, mints a new run).
+ * When the latest run is `failed`, the reducer's RETRY next_event
+ * surfaces as a Retry button that dispatches
+ * POST /sync-runs/:id/events {event:'RETRY'} — moving the SAME run
+ * failed → retrying and re-emitting its `run_qbo_sync` outbox anchor.
  */
 function QboSyncMonitorCard({
-  connectionStatus,
   hasConnection,
+  runId,
+  runSnapshot,
   pendingOutbox,
   pendingEvents,
   failedCount,
-  lastEvent,
   loading,
   inFlight,
   triggering,
   onSync,
 }: {
-  connectionStatus: string
   hasConnection: boolean
+  runId: string | null
+  runSnapshot: QboSyncRunSnapshot | null
   pendingOutbox: number
   pendingEvents: number
   failedCount: number
-  lastEvent: QboLatestSyncEvent | null
   loading: boolean
   inFlight: boolean
   triggering: boolean
   onSync: () => void
 }) {
-  const run = deriveRunState({ inFlight, connectionStatus, lastEvent })
+  const run = presentRun({ snapshot: runSnapshot, triggering })
   const hasFailures = failedCount > 0
+  const retryEvent = runSnapshot?.next_events.find((e) => e.type === 'RETRY') ?? null
+
+  const dispatchEvent = useDispatchQboSyncRunEvent(runId ?? '')
+  const onRetry = () => {
+    if (!runId || !runSnapshot) return
+    dispatchEvent.mutate({ event: 'RETRY', state_version: runSnapshot.state_version })
+  }
+  const dispatchError =
+    dispatchEvent.error instanceof Error ? dispatchEvent.error.message : dispatchEvent.error ? 'Retry failed' : null
 
   return (
     <Card>
@@ -226,7 +283,7 @@ function QboSyncMonitorCard({
         <Pill tone={run.tone}>{run.label}</Pill>
       </div>
 
-      <div className="text-[12px] text-ink-2 mt-1">{loading ? 'Loading sync state…' : run.detail}</div>
+      <div className="text-[12px] text-ink-2 mt-1">{loading && !runSnapshot ? 'Loading sync state…' : run.detail}</div>
 
       <div className="grid grid-cols-3 gap-2 mt-3 text-[12px] text-ink-2">
         <div>
@@ -249,11 +306,22 @@ function QboSyncMonitorCard({
         </div>
       ) : null}
 
-      <div className="mt-3">
-        <MobileButton variant="primary" onClick={onSync} disabled={triggering || inFlight}>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <MobileButton variant="primary" fullWidth={false} onClick={onSync} disabled={triggering || inFlight}>
           {triggering ? 'Starting…' : inFlight ? 'Syncing…' : 'Run sync now'}
         </MobileButton>
+        {retryEvent ? (
+          <MobileButton
+            variant="ghost"
+            fullWidth={false}
+            onClick={onRetry}
+            disabled={dispatchEvent.isPending || inFlight}
+          >
+            {dispatchEvent.isPending ? 'Retrying…' : retryEvent.label}
+          </MobileButton>
+        ) : null}
       </div>
+      {dispatchError ? <div className="text-[12px] text-warn mt-2">{dispatchError}</div> : null}
       {!hasConnection ? (
         <div className="text-[11px] text-ink-3 mt-2">
           No QBO credentials yet — sync runs in simulated mode and backfills mappings from local data.

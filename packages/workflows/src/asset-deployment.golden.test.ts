@@ -50,7 +50,12 @@ describe('asset_deployment — applyEventLog replay', () => {
     walk({ type: 'MARK_OVERDUE', overdue_since: '2026-05-18T00:00:00.000Z' })
     walk({ type: 'EXTEND', estimated_return_on: '2026-05-31', extension_reason: 'job ran long' })
     walk({ type: 'BEGIN_RETURN', return_started_at: '2026-05-30T16:00:00.000Z' })
-    walk({ type: 'COMPLETE_RETURN', returned_at: '2026-05-31T09:00:00.000Z', returned_by: 'yard-user', condition_grade: 'good' })
+    walk({
+      type: 'COMPLETE_RETURN',
+      returned_at: '2026-05-31T09:00:00.000Z',
+      returned_by: 'yard-user',
+      condition_grade: 'good',
+    })
 
     const initial: AssetDeploymentWorkflowSnapshot = { state: 'staged', state_version: 1 }
     const result = applyEventLog<AssetDeploymentWorkflowSnapshot>(initial, log)
@@ -77,7 +82,12 @@ describe('asset_deployment — applyEventLog replay', () => {
       entry(1, { type: 'DISPATCH', dispatched_at: '2026-04-15T08:00:00.000Z', project_id: 'proj-1' }, out),
       entry(
         2,
-        { type: 'WRITE_OFF', written_off_at: '2026-05-01T00:00:00.000Z', written_off_by: 'admin', write_off_reason: 'destroyed on site' },
+        {
+          type: 'WRITE_OFF',
+          written_off_at: '2026-05-01T00:00:00.000Z',
+          written_off_by: 'admin',
+          write_off_reason: 'destroyed on site',
+        },
         writtenOff,
       ),
     ]

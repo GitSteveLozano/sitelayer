@@ -8,7 +8,7 @@
  *   - worker path (`appendWorkflowEvent`, packages/queue/src/index.ts):
  *     a unique violation is an idempotent retry → `on conflict do nothing`.
  *
- * Both used to hand-maintain the same 13-column INSERT, so adding a column
+ * Both used to hand-maintain the same INSERT, so adding a column
  * to one and not the other silently desynced the log (and the replay corpus
  * that depends on it). This helper builds the parameterized SQL + values in
  * one place; the two writers differ ONLY in (a) where they source the trace
@@ -17,7 +17,7 @@
  * workflows package that both apps/api and packages/queue already depend on.
  */
 
-/** The 13 logical columns of a workflow_event_log row, in INSERT order. */
+/** The logical columns of a workflow_event_log row, in INSERT order. */
 export interface WorkflowEventLogInsertArgs {
   companyId: string
   workflowName: string
@@ -35,6 +35,7 @@ export interface WorkflowEventLogInsertArgs {
   requestId?: string | null
   sentryTrace?: string | null
   sentryBaggage?: string | null
+  captureSessionId?: string | null
 }
 
 export interface WorkflowEventLogInsertOptions {
@@ -62,6 +63,7 @@ export const WORKFLOW_EVENT_LOG_COLUMNS = [
   'request_id',
   'sentry_trace',
   'sentry_baggage',
+  'capture_session_id',
 ] as const
 
 /**
@@ -74,12 +76,13 @@ export function buildWorkflowEventLogInsert(
   args: WorkflowEventLogInsertArgs,
   opts: WorkflowEventLogInsertOptions,
 ): { text: string; values: unknown[] } {
-  const conflictClause = opts.onConflict === 'do_nothing' ? '\n    on conflict (entity_id, state_version) do nothing' : ''
+  const conflictClause =
+    opts.onConflict === 'do_nothing' ? '\n    on conflict (entity_id, state_version) do nothing' : ''
   const text = `
     insert into workflow_event_log (
       ${WORKFLOW_EVENT_LOG_COLUMNS.join(', ')}
     )
-    values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)${conflictClause}
+    values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14)${conflictClause}
   `
   const values: unknown[] = [
     args.companyId,
@@ -95,6 +98,7 @@ export function buildWorkflowEventLogInsert(
     args.requestId ?? null,
     args.sentryTrace ?? null,
     args.sentryBaggage ?? null,
+    args.captureSessionId ?? null,
   ]
   return { text, values }
 }

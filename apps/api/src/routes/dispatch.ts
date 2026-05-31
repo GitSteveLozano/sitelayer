@@ -606,6 +606,11 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         readBody,
         sendJson,
         checkVersion,
+        storage: ctx.storage,
+        maxMovementPhotoBytes: Number(process.env.MAX_MOVEMENT_PHOTO_BYTES ?? 25 * 1024 * 1024),
+        movementPhotoDownloadPresigned: ctx.blueprintDownloadPresigned,
+        sendFileContent: ctx.sendFileContent,
+        sendFileRedirect: ctx.sendFileRedirect,
       }),
 
     // Branches, cross-hire, scaffold catalog + BOM bridge
@@ -920,13 +925,8 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
     // Inventory demand forecast — GET /api/inventory-items/:id/forecast
     () =>
       handleInventoryForecastRoutes(req, url, {
-        pool,
         company,
-        currentUserId,
-        requireRole: requireRoleStr,
-        readBody,
         sendJson,
-        checkVersion,
       }),
 
     // Web Push subscription registration (read VAPID key, upsert/delete subs)

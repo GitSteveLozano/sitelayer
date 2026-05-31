@@ -76,7 +76,9 @@ export function EstItemLibrary() {
     {
       key: 'code',
       header: 'CSI',
-      render: (r) => <span style={{ fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)' }}>{r.code}</span>,
+      render: (r) => (
+        <span style={{ fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)' }}>{r.code}</span>
+      ),
     },
     { key: 'name', header: 'Item', render: (r) => <span className="d-table-cell-strong">{r.name}</span> },
     {
@@ -128,12 +130,7 @@ export function EstItemLibrary() {
               {cat}
             </MChip>
           ))}
-          <MChip
-            active={filter === ASSEMBLIES}
-            outline
-            onClick={() => setFilter(ASSEMBLIES)}
-            count={assemblyCount}
-          >
+          <MChip active={filter === ASSEMBLIES} outline onClick={() => setFilter(ASSEMBLIES)} count={assemblyCount}>
             Assemblies
           </MChip>
         </MChipRow>
@@ -248,7 +245,7 @@ function NewItemModal({ onClose, onCreated }: NewItemModalProps) {
           </label>
           <label style={{ display: 'grid', gap: 4 }}>
             <span style={labelStyle}>Item name</span>
-            <MInput value={name} placeholder="EPS Board · 2&quot;" onChange={(e) => setName(e.target.value)} />
+            <MInput value={name} placeholder='EPS Board · 2"' onChange={(e) => setName(e.target.value)} />
           </label>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) 96px minmax(0, 1fr)', gap: 10 }}>

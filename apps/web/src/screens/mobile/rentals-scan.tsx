@@ -15,6 +15,7 @@ import {
   type InventoryItem,
   type InventoryLocation,
 } from '@/lib/api'
+import { uploadMovementPhoto } from '@/lib/api/rentals'
 import {
   MBody,
   MButton,
@@ -66,7 +67,9 @@ export function MobileRentalScan({
   const [quantity, setQuantity] = useState('1')
   const [condition, setCondition] = useState<ConditionStatus | null>(null)
   const [note, setNote] = useState('')
-  const [photos, setPhotos] = useState<readonly string[]>([])
+  // Real condition photos (migration 125): captured as File objects, then
+  // uploaded to the movement after it's created.
+  const [photos, setPhotos] = useState<readonly File[]>([])
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -123,9 +126,9 @@ export function MobileRentalScan({
         assetCode: assetCode.trim(),
         source: 'mobile-shell',
         condition: mode === 'return' ? condition : undefined,
-        photos: mode === 'return' && photos.length ? photos : undefined,
+        photo_count: mode === 'return' && photos.length ? photos.length : undefined,
       })
-      await apiPost(
+      const movement = await apiPost<{ id: string }>(
         '/api/inventory/movements',
         {
           inventory_item_id: item.id,
@@ -143,6 +146,13 @@ export function MobileRentalScan({
         },
         companySlug,
       )
+      // Upload real condition photos to the new movement (return mode only).
+      // Best-effort: a failed photo never rolls back the movement.
+      if (mode === 'return' && movement?.id && photos.length > 0) {
+        for (const file of photos) {
+          await uploadMovementPhoto(movement.id, file)
+        }
+      }
       navigate('/rentals')
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -416,17 +426,21 @@ function ConditionPanel({
 }: {
   grade: ConditionStatus | null
   onGrade: (next: ConditionStatus) => void
-  photos: readonly string[]
-  onPhotos: (next: readonly string[]) => void
+  photos: readonly File[]
+  onPhotos: (next: readonly File[]) => void
   note: string
   onNote: (next: string) => void
 }) {
-  // Three optional photo tiles. A real object-storage upload is a follow-up;
-  // for now each "+" stamps a placeholder capture reference so the row +
-  // payload exercise the structure (mirrors scaffold-inspection's stub).
-  const stampPhoto = (slot: number) => {
+  // Three optional photo tiles. Each captures a real image File (camera on
+  // mobile via capture="environment") that's uploaded to the movement after
+  // it's created (migration 125 — POST /api/inventory/movements/:id/photos).
+  const setPhotoAt = (slot: number, file: File | null) => {
     const next = [...photos]
-    next[slot] = `capture://return/${Date.now()}-${slot}`
+    if (file) {
+      next[slot] = file
+    } else {
+      next.splice(slot, 1)
+    }
     onPhotos(next.filter(Boolean))
   }
 
@@ -476,17 +490,17 @@ function ConditionPanel({
         </div>
       </div>
 
-      {/* PHOTOS · OPTIONAL — three dashed capture tiles (msg__73). */}
+      {/* PHOTOS · OPTIONAL — three dashed capture tiles (msg__73). Each opens
+          the camera (capture="environment") / file picker and holds a real
+          File until the movement upload. */}
       <MSectionH>Photos · optional</MSectionH>
       <div style={{ padding: '0 16px', display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 10 }}>
         {[0, 1, 2].map((slot) => {
           const filled = Boolean(photos[slot])
           return (
-            <button
+            <label
               key={slot}
-              type="button"
               aria-label={filled ? `Photo ${slot + 1} captured` : `Add photo ${slot + 1}`}
-              onClick={() => stampPhoto(slot)}
               style={{
                 aspectRatio: '1',
                 border: filled ? '2px solid var(--m-accent)' : '2px dashed var(--m-line)',
@@ -499,7 +513,18 @@ function ConditionPanel({
               }}
             >
               {filled ? <MI.Check size={22} /> : <MI.Plus size={22} />}
-            </button>
+              <input
+                type="file"
+                accept="image/*"
+                capture="environment"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.currentTarget.files?.[0] ?? null
+                  setPhotoAt(slot, file)
+                  e.currentTarget.value = ''
+                }}
+              />
+            </label>
           )
         })}
       </div>

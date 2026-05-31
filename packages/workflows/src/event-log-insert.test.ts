@@ -19,11 +19,12 @@ const ARGS: WorkflowEventLogInsertArgs = {
   requestId: 'req-1',
   sentryTrace: 'trace-1',
   sentryBaggage: 'baggage-1',
+  captureSessionId: '6f4a4c6e-7fd0-4a1c-befe-d1a8ddf9272a',
 }
 
 describe('buildWorkflowEventLogInsert', () => {
-  it('emits the 13 documented columns in order', () => {
-    expect(WORKFLOW_EVENT_LOG_COLUMNS).toHaveLength(13)
+  it('emits the documented columns in order', () => {
+    expect(WORKFLOW_EVENT_LOG_COLUMNS).toHaveLength(14)
     const { text } = buildWorkflowEventLogInsert(ARGS, { onConflict: 'throw' })
     for (const col of WORKFLOW_EVENT_LOG_COLUMNS) {
       expect(text).toContain(col)
@@ -32,10 +33,10 @@ describe('buildWorkflowEventLogInsert', () => {
     expect(text).toContain(WORKFLOW_EVENT_LOG_COLUMNS.join(', '))
   })
 
-  it('produces 13 values with placeholders $1..$13', () => {
+  it('produces 14 values with placeholders $1..$14', () => {
     const { text, values } = buildWorkflowEventLogInsert(ARGS, { onConflict: 'throw' })
-    expect(values).toHaveLength(13)
-    expect(text).toContain('values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)')
+    expect(values).toHaveLength(14)
+    expect(text).toContain('values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13, $14)')
   })
 
   it('serializes the two jsonb columns to strings', () => {
@@ -69,10 +70,11 @@ describe('buildWorkflowEventLogInsert', () => {
       },
       { onConflict: 'throw' },
     )
-    // actor_user_id, request_id, sentry_trace, sentry_baggage → null.
+    // actor_user_id, request_id, sentry_trace, sentry_baggage, capture_session_id → null.
     expect(values[9]).toBeNull()
     expect(values[10]).toBeNull()
     expect(values[11]).toBeNull()
     expect(values[12]).toBeNull()
+    expect(values[13]).toBeNull()
   })
 })

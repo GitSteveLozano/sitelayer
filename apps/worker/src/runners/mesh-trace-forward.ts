@@ -73,17 +73,28 @@ const FAILURE_EVENTS = new Set(['POST_FAILED', 'SYNC_FAILED', 'FAILED'])
 type Row = {
   workflow_name: string
   entity_id: string
+  capture_session_id: string | null
   state_version: number
   event_type: string
   state_after: string | null
   applied_at: string
 }
 
+function workflowEventRef(r: Row): string {
+  const digest = createHash('sha256')
+    .update(`${r.workflow_name}:${r.entity_id}:${r.state_version}`)
+    .digest('hex')
+    .slice(0, 16)
+  return `workflow_event:${r.workflow_name}:${digest}:${r.state_version}`
+}
+
 function toTraceEvent(r: Row) {
   const stateAfter = (r.state_after ?? '').toString()
   const failed = FAILURE_STATES.has(stateAfter) || FAILURE_EVENTS.has(r.event_type)
   return {
-    session_id: r.entity_id,
+    event_ref: workflowEventRef(r),
+    session_id: r.capture_session_id ?? r.entity_id,
+    capture_session_id: r.capture_session_id ?? undefined,
     seq: r.state_version,
     event_class: 'workflow_event',
     // route_path is a coarse, PII-free flow handle (mesh templates further).
@@ -111,7 +122,7 @@ function signedHeaders(cfg: ForwarderConfig, path: string, body: string): Record
 
 async function forwardOnce(pool: Pool, cfg: ForwarderConfig, log: (m: string) => void): Promise<void> {
   const { rows } = await pool.query<Row>(
-    `SELECT workflow_name, entity_id::text AS entity_id, state_version, event_type,
+    `SELECT workflow_name, entity_id::text AS entity_id, capture_session_id::text AS capture_session_id, state_version, event_type,
             snapshot_after->>'state' AS state_after, applied_at
        FROM workflow_event_log
       WHERE applied_at > now() - ($1 || ' minutes')::interval
@@ -173,4 +184,9 @@ export function startMeshTraceForwarder(deps: {
   }, cfg.intervalMs)
   if (typeof timer.unref === 'function') timer.unref()
   return { stop: () => clearInterval(timer) }
+}
+
+export const __meshTraceForwardTestHooks = {
+  toTraceEvent,
+  workflowEventRef,
 }

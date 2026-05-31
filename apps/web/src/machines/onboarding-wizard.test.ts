@@ -283,7 +283,15 @@ describe('onboardingWizardMachine', () => {
   // that silently stops advancing the wizard shows up as a diff.
   describe('affordance golden map (transition events)', () => {
     it('exposes a stable accepted transition-event set per state', () => {
-      const TRANSITIONS = ['NEXT', 'BACK', 'SUBMIT', 'RETRY', 'MARK_SUBMITTED', 'MARK_FAILED', 'SLUG_SUGGESTION'] as const
+      const TRANSITIONS = [
+        'NEXT',
+        'BACK',
+        'SUBMIT',
+        'RETRY',
+        'MARK_SUBMITTED',
+        'MARK_FAILED',
+        'SLUG_SUGGESTION',
+      ] as const
       // Reach each state and probe `can()`. company_step needs a valid
       // form for NEXT/SUBMIT to be acceptable, so fill it first.
       function accepted(actor: ReturnType<typeof newActor>): string[] {

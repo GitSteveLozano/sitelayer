@@ -109,9 +109,49 @@ function parseSeverity(value: unknown): IssueSeverity {
   return 'slowing'
 }
 
+/**
+ * Structured material-request fulfillment fields (migration 126). These are
+ * issue CONTENT, not workflow state — the field_event reducer never sees them
+ * and they ride untouched across every transition. The materials_out create
+ * flow captures `material_label` / `material_quantity` / `material_unit` so the
+ * foreman blocker detail can render the design's typed quantity hero
+ * ("12 SHEETS" over "EPS INSULATION") instead of re-parsing the worker's prose,
+ * and so a future yard-stock read-model can match on typed values. All three
+ * are optional: a non-materials ping (or a worker who only typed free text)
+ * leaves them NULL and the read side falls back to the message parse.
+ */
+function parseMaterialLabel(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return null
+  return trimmed.slice(0, 200)
+}
+
+function parseMaterialUnit(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  if (trimmed.length === 0) return null
+  return trimmed.slice(0, 32)
+}
+
+function parseMaterialQuantity(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n) || n < 0) return null
+  return n
+}
+
+/** pg returns `numeric` as a string; normalize the read side to a number. */
+function materialQuantityToNumber(value: string | number | null): number | null {
+  if (value === null || value === undefined) return null
+  const n = typeof value === 'number' ? value : Number(value)
+  return Number.isFinite(n) ? n : null
+}
+
 const ISSUE_COLUMNS = `
   id, company_id, project_id, worker_id, reporter_clerk_user_id,
-  kind, message, severity, state, resolved_at, resolved_by_clerk_user_id, created_at
+  kind, message, severity, state, resolved_at, resolved_by_clerk_user_id,
+  material_label, material_quantity, material_unit, created_at
 `
 
 const WORKFLOW_ISSUE_COLUMNS = `
@@ -119,7 +159,8 @@ const WORKFLOW_ISSUE_COLUMNS = `
   kind, message, severity, state, resolved_at, resolved_by_clerk_user_id,
   resolved_action, resolution_message, state_version,
   escalated_to_estimator_at, escalation_reason,
-  dismissed_at, dismissed_by_clerk_user_id, created_at
+  dismissed_at, dismissed_by_clerk_user_id,
+  material_label, material_quantity, material_unit, created_at
 `
 
 type WorkflowIssueRow = {
@@ -141,6 +182,9 @@ type WorkflowIssueRow = {
   escalation_reason: string | null
   dismissed_at: string | null
   dismissed_by_clerk_user_id: string | null
+  material_label: string | null
+  material_quantity: string | number | null
+  material_unit: string | null
   created_at: string
 }
 
@@ -178,6 +222,13 @@ function buildWorkflowResponse(row: WorkflowIssueRow) {
       escalation_reason: row.escalation_reason,
       dismissed_at: row.dismissed_at,
       dismissed_by_clerk_user_id: row.dismissed_by_clerk_user_id,
+      // Structured material-request fields (migration 126). Surfaced on the
+      // snapshot context so the foreman blocker detail's quantity hero reads
+      // typed values; numeric quantity is normalized to a number (pg returns
+      // `numeric` as a string).
+      material_label: row.material_label,
+      material_quantity: materialQuantityToNumber(row.material_quantity),
+      material_unit: row.material_unit,
       created_at: row.created_at,
     },
     next_events: nextFieldEventEvents(snapshot.state),
@@ -207,6 +258,12 @@ export async function handleWorkerIssueRoutes(
     }
     const projectId = typeof body.project_id === 'string' && body.project_id.length > 0 ? body.project_id : null
     const severity = parseSeverity(body.severity)
+    // Structured material-request fields are only meaningful for an
+    // out-of-materials ping; ignore them on other kinds so a stray field can't
+    // attach phantom material content to a safety/crew/other issue.
+    const materialLabel = kind === 'materials_out' ? parseMaterialLabel(body.material_label) : null
+    const materialQuantity = kind === 'materials_out' ? parseMaterialQuantity(body.material_quantity) : null
+    const materialUnit = kind === 'materials_out' ? parseMaterialUnit(body.material_unit) : null
 
     // Resolve worker_id from the active membership when it exists. A row
     // without a worker mapping is fine — we still want to capture the
@@ -225,10 +282,22 @@ export async function handleWorkerIssueRoutes(
     const insertedRow = await withMutationTx(async (client: PoolClient) => {
       const result = await client.query(
         `insert into worker_issues
-           (company_id, project_id, worker_id, reporter_clerk_user_id, kind, message, severity)
-         values ($1, $2, $3, $4, $5, $6, $7)
+           (company_id, project_id, worker_id, reporter_clerk_user_id, kind, message, severity,
+            material_label, material_quantity, material_unit)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          returning ${ISSUE_COLUMNS}`,
-        [ctx.company.id, projectId, workerId, ctx.currentUserId, kind, message, severity],
+        [
+          ctx.company.id,
+          projectId,
+          workerId,
+          ctx.currentUserId,
+          kind,
+          message,
+          severity,
+          materialLabel,
+          materialQuantity,
+          materialUnit,
+        ],
       )
       const row = result.rows[0]
       if (!row) throw new Error('worker_issues insert returned no row')

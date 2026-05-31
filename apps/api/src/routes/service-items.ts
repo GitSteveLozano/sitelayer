@@ -10,6 +10,8 @@ import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update
 // 400). default_rate is numeric (DB column is numeric); accept
 // string-or-number to match the historical loose binding without
 // silently coercing arbitrary garbage to NaN.
+const ServiceItemStatusSchema = z.enum(['active', 'seasonal', 'retired'])
+
 const ServiceItemCreateBodySchema = z
   .object({
     code: z.string().optional(),
@@ -17,6 +19,8 @@ const ServiceItemCreateBodySchema = z
     category: z.string().optional(),
     unit: z.string().optional(),
     default_rate: z.union([z.number(), z.string()]).nullish(),
+    labor_multiplier: z.union([z.number(), z.string()]).nullish(),
+    status: ServiceItemStatusSchema.nullish(),
     source: z.string().optional(),
   })
   .loose()
@@ -27,10 +31,16 @@ const ServiceItemPatchBodySchema = z
     category: z.string().nullish(),
     unit: z.string().nullish(),
     default_rate: z.union([z.number(), z.string()]).nullish(),
+    labor_multiplier: z.union([z.number(), z.string()]).nullish(),
+    status: ServiceItemStatusSchema.nullish(),
     expected_version: z.union([z.number(), z.string()]).nullish(),
     version: z.union([z.number(), z.string()]).nullish(),
   })
   .loose()
+
+// How many recent rate-change rows the detail screen renders in its
+// "WAS $X (MON) · $Y (MON)" cost trail. Bounded so the list query stays cheap.
+const RATE_HISTORY_LIMIT = 6
 
 export type ServiceItemRouteCtx = {
   pool: Pool
@@ -42,9 +52,29 @@ export type ServiceItemRouteCtx = {
 }
 
 /**
+ * Append one row to the per-item cost-history trail. Called inside the same
+ * mutation tx as the service_items write so the rate change and its audit row
+ * land atomically. Unit defaults to 'ea' to match the column default when the
+ * caller doesn't carry one.
+ */
+async function recordServiceItemRate(
+  client: PoolClient,
+  companyId: string,
+  code: string,
+  rate: unknown,
+  unit: unknown,
+): Promise<void> {
+  await client.query(
+    `insert into service_item_rate_history (company_id, service_item_code, rate, unit)
+     values ($1, $2, $3, coalesce($4, 'ea'))`,
+    [companyId, code, rate ?? null, typeof unit === 'string' && unit ? unit : null],
+  )
+}
+
+/**
  * Handle /api/service-items mutations. service_items rows are
  * code-keyed (not uuid-keyed); the path segment after `/service-items/`
- * is the code. There's no GET — the list is delivered via /api/bootstrap.
+ * is the code. The GET list is delivered here (and via /api/bootstrap).
  */
 export async function handleServiceItemRoutes(
   req: http.IncomingMessage,
@@ -56,9 +86,10 @@ export async function handleServiceItemRoutes(
     // each item. The takeoff canvas needs it so it can save a measurement with
     // the item's own division_code (e.g. "Air Barrier" → D5) instead of falling
     // back to the project division and tripping the 422 catalog guard.
-    const result = await withCompanyClient(ctx.company.id, (c) =>
-      c.query(
+    const { items, history } = await withCompanyClient(ctx.company.id, async (c) => {
+      const itemsResult = await c.query(
         `select si.code, si.name, si.category, si.unit, si.default_rate, si.source, si.version,
+                si.labor_multiplier, si.status,
                 coalesce(
                   array_agg(sid.division_code order by sid.division_code)
                     filter (where sid.division_code is not null),
@@ -68,12 +99,41 @@ export async function handleServiceItemRoutes(
        left join service_item_divisions sid
          on sid.company_id = si.company_id and sid.service_item_code = si.code
        where si.company_id = $1 and si.deleted_at is null
-       group by si.code, si.name, si.category, si.unit, si.default_rate, si.source, si.version
+       group by si.code, si.name, si.category, si.unit, si.default_rate, si.source, si.version,
+                si.labor_multiplier, si.status
        order by si.name asc`,
         [ctx.company.id],
-      ),
-    )
-    ctx.sendJson(200, { serviceItems: result.rows })
+      )
+      // Recent rate-change trail per item, capped at RATE_HISTORY_LIMIT rows
+      // each. The detail screen renders "WAS $X (MON)" + YTD delta from this.
+      const historyResult = await c.query(
+        `select code, rate, unit, recorded_at
+         from (
+           select service_item_code as code, rate, unit, recorded_at,
+                  row_number() over (
+                    partition by service_item_code order by recorded_at desc
+                  ) as rn
+           from service_item_rate_history
+           where company_id = $1
+         ) ranked
+         where rn <= $2
+         order by code asc, recorded_at desc`,
+        [ctx.company.id, RATE_HISTORY_LIMIT],
+      )
+      return { items: itemsResult.rows, history: historyResult.rows }
+    })
+    const historyByCode = new Map<string, Array<Record<string, unknown>>>()
+    for (const row of history as Array<{ code: string }>) {
+      const list = historyByCode.get(row.code) ?? []
+      const { code: _code, ...entry } = row as Record<string, unknown>
+      list.push(entry)
+      historyByCode.set(row.code, list)
+    }
+    const serviceItems = (items as Array<{ code: string }>).map((item) => ({
+      ...item,
+      rate_history: historyByCode.get(item.code) ?? [],
+    }))
+    ctx.sendJson(200, { serviceItems })
     return true
   }
 
@@ -105,21 +165,33 @@ export async function handleServiceItemRoutes(
     const result = await withMutationTx(async (client: PoolClient) => {
       const inserted = await client.query(
         `
-        insert into service_items (company_id, code, name, category, unit, default_rate, source, version, created_at)
-        values ($1, $2, $3, $4, $5, $6, coalesce($7, 'manual'), 1, now())
+        insert into service_items (company_id, code, name, category, unit, default_rate, source, labor_multiplier, status, version, created_at)
+        values ($1, $2, $3, $4, $5, $6, coalesce($7, 'manual'), coalesce($8, 1.0), coalesce($9, 'active'), 1, now())
         on conflict (company_id, code) do update set
           name = excluded.name,
           category = excluded.category,
           unit = excluded.unit,
           default_rate = excluded.default_rate,
           source = excluded.source,
+          labor_multiplier = excluded.labor_multiplier,
+          status = excluded.status,
           deleted_at = null,
           version = service_items.version + 1,
           updated_at = now()
         where service_items.deleted_at is not null
-        returning code, name, category, unit, default_rate, source, version, created_at, (xmax = 0) as inserted
+        returning code, name, category, unit, default_rate, source, labor_multiplier, status, version, created_at, (xmax = 0) as inserted
         `,
-        [ctx.company.id, code, name, category, unit, body.default_rate ?? null, body.source ?? 'manual'],
+        [
+          ctx.company.id,
+          code,
+          name,
+          category,
+          unit,
+          body.default_rate ?? null,
+          body.source ?? 'manual',
+          body.labor_multiplier ?? null,
+          body.status ?? null,
+        ],
       )
       const row = inserted.rows[0]
       // No row → the conflict target was a live (not soft-deleted) row, so
@@ -136,6 +208,11 @@ export async function handleServiceItemRoutes(
         action: wasInsert ? 'create' : 'restore',
         row: item,
       })
+      // Seed the cost-history trail with the item's opening rate so the detail
+      // screen has a baseline to compare future changes against.
+      if (item.default_rate != null) {
+        await recordServiceItemRate(client, ctx.company.id, code, item.default_rate, item.unit)
+      }
       // Auto-curate the new item against every division this company has so it
       // is immediately measurable on any project (the takeoff catalog guard in
       // takeoff-write.ts rejects items with no service_item_divisions row).
@@ -179,6 +256,14 @@ export async function handleServiceItemRoutes(
       id: code,
       checkVersionWhere: 'company_id = $1 and code = $2',
       update: async (client, expectedVersion) => {
+        // Snapshot the prior rate so we only append a history row when the
+        // cost actually moved (a name/category-only PATCH shouldn't log a
+        // spurious "rate change").
+        const prior = await client.query(`select default_rate from service_items where company_id = $1 and code = $2`, [
+          ctx.company.id,
+          code,
+        ])
+        const priorRate = prior.rows[0]?.default_rate ?? null
         const result = await client.query(
           `
           update service_items
@@ -187,9 +272,11 @@ export async function handleServiceItemRoutes(
             category = coalesce($4, category),
             unit = coalesce($5, unit),
             default_rate = coalesce($6, default_rate),
+            labor_multiplier = coalesce($7, labor_multiplier),
+            status = coalesce($8, status),
             version = version + 1
-          where company_id = $1 and code = $2 and ($7::int is null or version = $7)
-          returning code, name, category, unit, default_rate, source, version, created_at
+          where company_id = $1 and code = $2 and ($9::int is null or version = $9)
+          returning code, name, category, unit, default_rate, source, labor_multiplier, status, version, created_at
           `,
           [
             ctx.company.id,
@@ -198,6 +285,8 @@ export async function handleServiceItemRoutes(
             body.category ?? null,
             body.unit ?? null,
             body.default_rate ?? null,
+            body.labor_multiplier ?? null,
+            body.status ?? null,
             expectedVersion,
           ],
         )
@@ -210,6 +299,12 @@ export async function handleServiceItemRoutes(
           action: 'update',
           row,
         })
+        // Append to the cost-history trail when the rate changed. Compare as
+        // numbers so '3.20' vs 3.2 (numeric vs string from pg) don't false-trip.
+        const newRate = (row as Record<string, unknown>).default_rate ?? null
+        if (newRate != null && Number(newRate) !== Number(priorRate)) {
+          await recordServiceItemRate(client, ctx.company.id, code, newRate, (row as Record<string, unknown>).unit)
+        }
         return row
       },
     })

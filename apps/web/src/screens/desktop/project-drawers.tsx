@@ -761,13 +761,12 @@ function clientInitials(name: string): string {
 /**
  * C1b · Send the bid to the client, with recipient + message + tracked link.
  *
- * Wired (D10): the modal composes recipient / message / signed-link, then
- * `onSend` snapshots the estimate into an estimate_push and hops to the
- * lifecycle screen (the existing createEstimatePush flow). Recipient + sell
- * total come from the live project summary; the message is pre-filled from the
- * bid note and editable. The signed-link toggle is captured locally — the
- * estimate-push API does not yet accept a recipient/message/link payload, so
- * these compose the human-facing send intent ahead of that API surface.
+ * Wired (U01/D10): the composer collects a recipient email + name, an editable
+ * message, and the INCLUDE SIGNED LINK · TRACK OPEN toggle, then `onSend`
+ * creates an estimate SHARE (POST /api/projects/:id/estimate/share) — a private
+ * signable portal link — NOT the QBO estimate-push. On success the parent
+ * surfaces the generated `shareUrl`. Recipient + sell total are seeded from the
+ * live project summary; the message pre-fills from the bid note and is editable.
  */
 export function SendModal({
   open,
@@ -779,6 +778,7 @@ export function SendModal({
   projectLabel,
   sending = false,
   error = null,
+  shareUrl = null,
   onSend,
 }: OverlayProps & {
   clientName?: string | undefined
@@ -788,7 +788,9 @@ export function SendModal({
   projectLabel?: string | undefined
   sending?: boolean | undefined
   error?: string | null | undefined
-  onSend?: ((payload: { message: string; includeSignedLink: boolean }) => void) | undefined
+  /** Populated once the share has been created — the private portal link. */
+  shareUrl?: string | null | undefined
+  onSend?: ((payload: { recipientEmail: string; message: string; includeSignedLink: boolean }) => void) | undefined
 }) {
   const defaultMessage = `${clientName.split(' ')[0] || clientName} — bid attached${
     projectLabel ? ` for ${projectLabel}` : ''
@@ -797,15 +799,18 @@ export function SendModal({
   } Happy to walk through.`
   const [message, setMessage] = useState(defaultMessage)
   const [includeSignedLink, setIncludeSignedLink] = useState(true)
-  // Re-seed the editable message whenever the modal (re)opens against a
-  // different project/total so it never shows stale composed copy.
+  const [recipientEmail, setRecipientEmail] = useState(clientEmail ?? '')
+  // Re-seed the editable fields whenever the modal (re)opens against a
+  // different project/total/recipient so it never shows stale composed copy.
   const [seededFor, setSeededFor] = useState<string | null>(null)
-  const seedKey = `${open}:${defaultMessage}`
+  const seedKey = `${open}:${defaultMessage}:${clientEmail ?? ''}`
   if (open && seededFor !== seedKey) {
     setSeededFor(seedKey)
     setMessage(defaultMessage)
+    setRecipientEmail(clientEmail ?? '')
   }
 
+  const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipientEmail.trim())
   const firstName = clientName.split(' ')[0] || clientName
   const sendLabel = sending ? 'Sending…' : `SEND · NOTIFY ${firstName.toUpperCase()}`
 
@@ -818,15 +823,17 @@ export function SendModal({
       footer={
         <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
           <MButton variant="ghost" onClick={onClose} disabled={sending}>
-            CANCEL
+            {shareUrl ? 'DONE' : 'CANCEL'}
           </MButton>
-          <MButton
-            variant="primary"
-            disabled={sending || !onSend}
-            onClick={() => onSend?.({ message, includeSignedLink })}
-          >
-            {sendLabel}
-          </MButton>
+          {shareUrl ? null : (
+            <MButton
+              variant="primary"
+              disabled={sending || !onSend || !emailValid}
+              onClick={() => onSend?.({ recipientEmail: recipientEmail.trim(), message, includeSignedLink })}
+            >
+              {sendLabel}
+            </MButton>
+          )}
         </div>
       }
     >
@@ -853,44 +860,72 @@ export function SendModal({
             justifyContent: 'center',
             fontWeight: 800,
             fontSize: 13,
+            flexShrink: 0,
           })}
         >
           {clientInitials(clientName)}
         </div>
-        <div>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 14, fontWeight: 700 }}>{clientName}</div>
-          {clientEmail ? (
-            <div style={mono({ fontSize: 10, color: 'var(--m-ink-3)', marginTop: 2, fontWeight: 600 })}>
-              {clientEmail}
-            </div>
-          ) : null}
+          <MInput
+            type="email"
+            inputMode="email"
+            value={recipientEmail}
+            onChange={(e) => setRecipientEmail(e.currentTarget.value)}
+            placeholder="client@email.com"
+            aria-label="Recipient email"
+            disabled={sending || Boolean(shareUrl)}
+            style={{ marginTop: 6, width: '100%' }}
+          />
         </div>
       </div>
 
-      <div style={{ ...sectionLabel, marginTop: 18 }}>MESSAGE</div>
-      <MTextarea
-        value={message}
-        onChange={(e) => setMessage(e.target.value)}
-        rows={3}
-        style={{ marginTop: 8, minHeight: 80, lineHeight: 1.5 }}
-      />
+      {shareUrl ? (
+        <>
+          <div style={{ ...sectionLabel, marginTop: 18, color: 'var(--m-green)' }}>✓ SHARE LINK CREATED</div>
+          <div
+            style={mono({
+              marginTop: 8,
+              padding: '12px 14px',
+              border: '2px solid var(--m-ink)',
+              background: 'var(--m-card-soft)',
+              fontSize: 11,
+              fontWeight: 600,
+              wordBreak: 'break-all',
+              color: 'var(--m-ink-2)',
+            })}
+          >
+            {shareUrl}
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ ...sectionLabel, marginTop: 18 }}>MESSAGE</div>
+          <MTextarea
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            rows={3}
+            style={{ marginTop: 8, minHeight: 80, lineHeight: 1.5 }}
+          />
 
-      <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, cursor: 'pointer' }}>
-        <input
-          type="checkbox"
-          checked={includeSignedLink}
-          onChange={(e) => setIncludeSignedLink(e.target.checked)}
-          aria-label="Include signed link and track open"
-          style={{
-            width: 18,
-            height: 18,
-            accentColor: 'var(--m-accent)',
-            border: '2px solid var(--m-ink)',
-            margin: 0,
-          }}
-        />
-        <span style={mono({ fontSize: 11, fontWeight: 600 })}>INCLUDE SIGNED LINK · TRACK OPEN</span>
-      </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={includeSignedLink}
+              onChange={(e) => setIncludeSignedLink(e.target.checked)}
+              aria-label="Include signed link and track open"
+              style={{
+                width: 18,
+                height: 18,
+                accentColor: 'var(--m-accent)',
+                border: '2px solid var(--m-ink)',
+                margin: 0,
+              }}
+            />
+            <span style={mono({ fontSize: 11, fontWeight: 600 })}>INCLUDE SIGNED LINK · TRACK OPEN</span>
+          </label>
+        </>
+      )}
 
       {error ? (
         <div style={mono({ fontSize: 12, color: 'var(--m-red)', fontWeight: 600, marginTop: 12 })}>{error}</div>

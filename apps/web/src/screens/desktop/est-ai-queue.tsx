@@ -45,8 +45,11 @@ function DraftCard({ row, onReview }: { row: CompanyTakeoffDraft; onReview: () =
   const ago = relativeAgo(row.created_at)
   // Stat sub-line mirrors the design's "<n> items · <conf>" breadcrumb. We have
   // the detected-item count + a coarse review flag; sheet/per-confidence splits
-  // aren't in the company feed yet, so we surface what the API exposes.
-  const stat = `${row.quantities_count} ITEMS · ${row.source.toUpperCase().replace('_', ' ')} · ${
+  // aren't in the company feed yet, so we surface what the API exposes. The
+  // kind tag (AUTO-COUNT vs AUTO-TAKEOFF, migration 122) tells the estimator
+  // which reviewer the "Review draft →" button opens.
+  const kindLabel = row.kind === 'count' ? 'AUTO-COUNT' : 'AUTO-TAKEOFF'
+  const stat = `${row.quantities_count} ITEMS · ${kindLabel} · ${
     row.review_required ? 'REVIEW REQUIRED' : 'HIGH CONFIDENCE'
   }`
   return (
@@ -156,11 +159,17 @@ export function EstAiQueue({ bootstrap }: { bootstrap: BootstrapResponse | null 
   const draftsQuery = useCompanyTakeoffDrafts()
   const rows = useMemo<CompanyTakeoffDraft[]>(() => draftsQuery.data?.drafts ?? [], [draftsQuery.data])
 
-  // Deep-link into the per-draft review/promote flow (est-ai-takeoff.tsx).
-  // That screen reads the target draft from navigation state, falling back to
-  // the project's latest capture draft, so we hand it the row's draft id.
-  const openReview = (row: CompanyTakeoffDraft) =>
-    navigate(`/desktop/ai-takeoff/${row.project_id}/review`, { state: { draftId: row.id } })
+  // Deep-link into the per-draft review/promote flow. Route by the draft's
+  // `kind` (migration 122): count drafts open the keyboard-driven count
+  // reviewer (est-ai-count.tsx), everything else (auto-takeoff + legacy rows
+  // the migration defaulted to 'takeoff', and any API build predating the
+  // field) opens the takeoff reviewer (est-ai-takeoff.tsx). Both reviewers read
+  // the target draft from navigation state — falling back to the project's
+  // latest capture draft — so we hand over the row's draft id either way.
+  const openReview = (row: CompanyTakeoffDraft) => {
+    const path = row.kind === 'count' ? 'ai-count' : 'ai-takeoff'
+    navigate(`/desktop/${path}/${row.project_id}/review`, { state: { draftId: row.id } })
+  }
 
   const loading = bootstrap === null || draftsQuery.isLoading
   const emptyMessage = draftsQuery.isError

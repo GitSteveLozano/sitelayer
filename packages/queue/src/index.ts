@@ -166,6 +166,7 @@ export interface TraceContext {
   sentry_trace: string | null
   sentry_baggage: string | null
   request_id: string | null
+  capture_session_id?: string | null
 }
 
 export type ProcessedOutboxRow = {
@@ -252,6 +253,7 @@ export async function appendWorkflowEvent(
   const sentryTrace = args.trace?.sentry_trace ?? null
   const sentryBaggage = args.trace?.sentry_baggage ?? null
   const requestId = args.trace?.request_id ?? null
+  const captureSessionId = args.trace?.capture_session_id ?? null
   // Shared INSERT builder — same column list as the API path
   // (recordWorkflowEvent). The worker path differs only in: trace context
   // comes off the claimed outbox row (args.trace), and conflict handling is
@@ -271,6 +273,7 @@ export async function appendWorkflowEvent(
       requestId,
       sentryTrace,
       sentryBaggage,
+      captureSessionId,
     },
     { onConflict: 'do_nothing' },
   )
@@ -317,7 +320,7 @@ export async function processOutboxBatch(
     set status = 'applied', applied_at = now(), error = null
     where company_id = $1 and id = any($2::uuid[])
     returning id, entity_type, entity_id, mutation_type, attempt_count, created_at,
-      sentry_trace, sentry_baggage, request_id
+      sentry_trace, sentry_baggage, request_id, capture_session_id
     `,
     [companyId, ids],
   )
@@ -363,7 +366,7 @@ export async function processSyncEventBatch(
     set status = 'applied', applied_at = now(), error = null
     where company_id = $1 and id = any($2::uuid[])
     returning id, entity_type, entity_id, direction, attempt_count, created_at,
-      sentry_trace, sentry_baggage, request_id
+      sentry_trace, sentry_baggage, request_id, capture_session_id
     `,
     [companyId, ids],
   )

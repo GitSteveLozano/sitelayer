@@ -88,7 +88,9 @@ describe('replay — applyEventLog issue branches', () => {
 
   it('unknown_workflow: an unregistered workflow_name yields one issue and null final', () => {
     const initial: FixtureSnapshot = { state: 'open', state_version: 1 }
-    const log = [entry(1, { type: 'CLOSE' }, { state: 'closed', state_version: 2 }, { workflow_name: 'does_not_exist' })]
+    const log = [
+      entry(1, { type: 'CLOSE' }, { state: 'closed', state_version: 2 }, { workflow_name: 'does_not_exist' }),
+    ]
     const result = applyEventLog<FixtureSnapshot>(initial, log)
     expect(result.ok).toBe(false)
     expect(result.finalSnapshot).toBeNull()

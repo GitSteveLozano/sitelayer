@@ -62,7 +62,9 @@ export function MobilePostMortem() {
       <MTopBar back title="Post-mortem" onBack={() => navigate(`/projects/${projectId}`)} />
       <MBody>
         {loading ? (
-          <div style={{ padding: 16, fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 }}>Loading post-mortem…</div>
+          <div style={{ padding: 16, fontSize: 12, color: 'var(--m-ink-3)', fontWeight: 600 }}>
+            Loading post-mortem…
+          </div>
         ) : errored ? (
           <div style={{ padding: 16, fontSize: 12, color: 'var(--m-red)', fontWeight: 600 }}>
             Could not load the post-mortem.

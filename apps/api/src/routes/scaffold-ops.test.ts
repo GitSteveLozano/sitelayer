@@ -87,8 +87,27 @@ class FakePool {
     }
     // boms update (dispatchBomEvent persist)
     if (/^update boms/i.test(sql)) {
-      const [companyId, id, status, stateVersion, approvedAt, approvedBy, supersededBy, supersededAt, supersededByUser] =
-        params as [string, string, string, number, string | null, string | null, string | null, string | null, string | null]
+      const [
+        companyId,
+        id,
+        status,
+        stateVersion,
+        approvedAt,
+        approvedBy,
+        supersededBy,
+        supersededAt,
+        supersededByUser,
+      ] = params as [
+        string,
+        string,
+        string,
+        number,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+      ]
       const row = this.boms.find((b) => b.company_id === companyId && b.id === id && b.deleted_at === null)
       if (!row) return { rows: [], rowCount: 0 }
       row.status = status

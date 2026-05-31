@@ -3,6 +3,11 @@ import type { PoolClient } from 'pg'
 import { recordMutationLedger, withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { HttpError, isValidDateInput } from '../http-utils.js'
 import { deleteVersionedEntity, patchVersionedEntity } from '../versioned-update.js'
+import { assertKeyInCompany } from '../storage.js'
+import {
+  parseInventoryMovementPhotoMultipart,
+  InventoryMovementPhotoUploadError,
+} from '../inventory-movement-photo-upload.js'
 import {
   INVENTORY_ITEM_COLUMNS,
   INVENTORY_LOCATION_COLUMNS,
@@ -42,7 +47,26 @@ import {
  * The CSV bulk-upsert endpoint (`/api/inventory/items/import`) lives in
  * `rental-inventory-csv.ts`, and the materialized availability view lives in
  * `inventory-availability.ts`.
+ *
+ * Condition-photo routes for the dispatch/return flows also live here:
+ * - POST /api/inventory/movements/:id/photos            — upload one photo
+ * - GET  /api/inventory/movements/:id/photos            — list photos
+ * - GET  /api/inventory/movements/:id/photos/:key/file  — stream bytes
  */
+export type InventoryMovementPhotoRow = {
+  id: string
+  company_id: string
+  inventory_movement_id: string
+  storage_key: string
+  mime_type: string
+  size_bytes: string | number
+  created_at: string
+}
+
+const MOVEMENT_PHOTO_COLUMNS = `
+  id, company_id, inventory_movement_id, storage_key, mime_type, size_bytes, created_at
+`
+
 export async function handleRentalInventoryCrudRoutes(
   req: http.IncomingMessage,
   url: URL,
@@ -531,6 +555,139 @@ export async function handleRentalInventoryCrudRoutes(
       return row
     })
     ctx.sendJson(201, movement)
+    return true
+  }
+
+  // -------------------------------------------------------------------
+  // Condition photos for dispatch / return movements.
+  //
+  // The desktop owner-rentals-dispatch / owner-rentals-return screens and
+  // the mobile rentals-scan flow capture condition photos. The movement is
+  // created first (POST /api/inventory/movements above returns the row id);
+  // the screen then uploads each photo to this movement. One file per
+  // request keeps a single failed photo retryable without re-creating the
+  // movement. Mirrors the worker-issue attachment routes.
+  // -------------------------------------------------------------------
+  const photosMatch = url.pathname.match(/^\/api\/inventory\/movements\/([^/]+)\/photos$/)
+  if (req.method === 'POST' && photosMatch) {
+    // Same role gate as creating a movement — workers can scan-dispatch /
+    // scan-return from the field, so they must be able to attach the
+    // condition photo their flow captured.
+    if (!ctx.requireRole(['admin', 'foreman', 'office', 'worker'])) return true
+    const movementId = photosMatch[1]!
+    // Confirm the movement exists + is owned by this company before we
+    // accept upload bytes.
+    const existing = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<{ id: string }>(`select id from inventory_movements where company_id = $1 and id = $2 limit 1`, [
+        ctx.company.id,
+        movementId,
+      ]),
+    )
+    if (!existing.rows[0]) {
+      ctx.sendJson(404, { error: 'inventory_movement not found' })
+      return true
+    }
+
+    let upload
+    try {
+      upload = await parseInventoryMovementPhotoMultipart(req, ctx.storage, ctx.company.id, movementId, {
+        maxFileBytes: ctx.maxMovementPhotoBytes,
+      })
+    } catch (err) {
+      if (err instanceof InventoryMovementPhotoUploadError) {
+        ctx.sendJson(err.status, { error: err.message })
+        return true
+      }
+      throw err
+    }
+
+    const inserted = await withMutationTx(async (client: PoolClient) => {
+      const result = await client.query<InventoryMovementPhotoRow>(
+        `insert into inventory_movement_photos
+           (company_id, inventory_movement_id, storage_key, mime_type, size_bytes)
+         values ($1, $2, $3, $4, $5)
+         returning ${MOVEMENT_PHOTO_COLUMNS}`,
+        [ctx.company.id, movementId, upload.storagePath, upload.mimeType, upload.bytes],
+      )
+      const row = result.rows[0]
+      if (!row) throw new HttpError(500, 'inventory movement photo insert returned no row')
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'inventory_movement_photo',
+        entityId: row.id,
+        action: 'create',
+        row,
+        actorUserId: ctx.currentUserId,
+      })
+      return row
+    })
+
+    const photos = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<InventoryMovementPhotoRow>(
+        `select ${MOVEMENT_PHOTO_COLUMNS} from inventory_movement_photos
+         where company_id = $1 and inventory_movement_id = $2
+         order by created_at asc`,
+        [ctx.company.id, movementId],
+      ),
+    )
+
+    ctx.sendJson(201, { photo: inserted, photos: photos.rows })
+    return true
+  }
+
+  if (req.method === 'GET' && photosMatch) {
+    const movementId = photosMatch[1]!
+    const result = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<InventoryMovementPhotoRow>(
+        `select ${MOVEMENT_PHOTO_COLUMNS} from inventory_movement_photos
+         where company_id = $1 and inventory_movement_id = $2
+         order by created_at asc`,
+        [ctx.company.id, movementId],
+      ),
+    )
+    ctx.sendJson(200, { photos: result.rows })
+    return true
+  }
+
+  // GET /api/inventory/movements/:id/photos/:key/file — stream bytes (or 302
+  // to a presigned URL). The storage key is URL-encoded in the path because
+  // keys contain `/`.
+  const photoFileMatch = url.pathname.match(/^\/api\/inventory\/movements\/([^/]+)\/photos\/([^/]+)\/file$/)
+  if (req.method === 'GET' && photoFileMatch) {
+    const movementId = photoFileMatch[1]!
+    const rawKey = photoFileMatch[2]!
+    const key = decodeURIComponent(rawKey)
+    try {
+      assertKeyInCompany(ctx.company.id, key)
+    } catch (err) {
+      ctx.sendJson(400, { error: err instanceof Error ? err.message : 'invalid key' })
+      return true
+    }
+    // Defense-in-depth: assertKeyInCompany proves company scope; the row
+    // check proves the key actually belongs to this movement.
+    const lookup = await withCompanyClient(ctx.company.id, (c) =>
+      c.query<InventoryMovementPhotoRow>(
+        `select ${MOVEMENT_PHOTO_COLUMNS} from inventory_movement_photos
+         where company_id = $1 and inventory_movement_id = $2 and storage_key = $3
+         limit 1`,
+        [ctx.company.id, movementId, key],
+      ),
+    )
+    const row = lookup.rows[0]
+    if (!row) {
+      ctx.sendJson(404, { error: 'photo not found on this movement' })
+      return true
+    }
+    if (ctx.movementPhotoDownloadPresigned) {
+      const presigned = await ctx.storage.getDownloadUrl(key)
+      if (presigned) {
+        ctx.sendFileRedirect(presigned)
+        return true
+      }
+    }
+    const buf = await ctx.storage.get(key)
+    const fileName = key.split('/').pop() || 'photo.jpg'
+    ctx.sendFileContent(row.mime_type || 'application/octet-stream', fileName, buf)
     return true
   }
 

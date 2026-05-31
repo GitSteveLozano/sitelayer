@@ -198,11 +198,7 @@ export function OwnerOnboardingScreen() {
       <MShell>
         {/* Titled back-arrow top bar per step (msg__01/02/03). Back on the
             first step exits the flow; later steps step back through it. */}
-        <MTopBar
-          back
-          title={STEP_TITLES[step]}
-          onBack={() => (stepIndex > 0 ? goBack() : navigate(-1))}
-        />
+        <MTopBar back title={STEP_TITLES[step]} onBack={() => (stepIndex > 0 ? goBack() : navigate(-1))} />
         <MBody>
           <div style={s.frame}>
             <div>
@@ -436,12 +432,10 @@ function ConnectStep({ connected, error }: { connected: boolean; error: string |
                   <span style={s.connectTitle}>{it.name}</span>
                   {it.ai ? <span style={s.aiBadge}>AI</span> : null}
                 </div>
-                <div style={s.connectSub}>
-                  {selected && connected ? 'CONNECTED · PRICEBOOK PULLED' : it.sub}
-                </div>
+                <div style={s.connectSub}>{selected && connected ? 'CONNECTED · PRICEBOOK PULLED' : it.sub}</div>
               </div>
               <span style={s.connectMark} aria-hidden>
-                {selected ? (connected ? <MI.Check size={18} /> : '✓') : '+'}
+                {selected ? connected ? <MI.Check size={18} /> : '✓' : '+'}
               </span>
             </div>
           )

@@ -86,6 +86,28 @@ export function fetchScopeVsBid(projectId: string, draftId: string | null = null
   return request<ScopeVsBidResponse>(`/api/projects/${encodeURIComponent(projectId)}/estimate/scope-vs-bid${qs}`)
 }
 
+export interface RepriceMarginResponse {
+  project_id: string
+  target_margin_pct: number
+  bid_total: number
+  cost: number
+  scope_vs_bid: ScopeVsBidResponse | null
+}
+
+/**
+ * POST /api/projects/:id/estimate/margin — interactive margin re-pricing
+ * (D10 · MARGIN slider). Sends a SET_MARGIN intent with the operator's chosen
+ * target margin (a fraction in [0, 1)); the server reprices the project's
+ * contract bid off the internal cost basis (bid = cost / (1 - margin)) and
+ * persists both. Returns the new bid + the refreshed scope-vs-bid snapshot.
+ */
+export function repriceEstimateMargin(projectId: string, targetMarginPct: number): Promise<RepriceMarginResponse> {
+  return request<RepriceMarginResponse>(`/api/projects/${encodeURIComponent(projectId)}/estimate/margin`, {
+    method: 'POST',
+    json: { event: 'SET_MARGIN', target_margin_pct: targetMarginPct },
+  })
+}
+
 export function useScopeVsBid(
   projectId: string | null | undefined,
   options: { draftId?: string | null } & Partial<UseQueryOptions<ScopeVsBidResponse>> = {},

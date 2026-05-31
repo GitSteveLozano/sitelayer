@@ -14,9 +14,12 @@ End-user strategy lives in the control-plane repo:
 Current Sitelayer status note:
 `docs/ULTIMATE_PLAN_STATUS_2026-05-31.md`. That document reconciles the current
 dirty Steve-handoff/headless-workflow sweep with this capture plan. Short
-version: the deterministic workflow substrate is moving into code, but
-`capture_sessions`, `capture_session_id`, rrweb, and `Record feedback` are still
-net-new.
+version: the deterministic workflow substrate is moving into code, and C0/R0 is
+now partially present in dirty code. `capture_sessions`, `capture_artifacts`,
+the local session helper, API header propagation, support/context-work joins,
+workflow-event joins, and Mesh trace-forwarding are present. The missing pieces
+are proof and user-facing capture: session start/stop smoke, rrweb, mic+replay
+upload, takeoff-canvas join, and `Record feedback`.
 
 ## What already exists in this repo (reuse, do not rebuild)
 
@@ -40,19 +43,34 @@ net-new.
   `apps/web/dist/sw.js`, `apps/web/src/pwa/register.ts`.
 - Context handoff event ledger: `docker/postgres/init/088_context_handoff.sql`.
 
-## What is net-new in this repo
+## What is now partially present in the dirty tree
 
-- `capture_sessions` table plus `capture_session_id` threaded onto outbound
-  events + a lightweight `nav` event so a session is a first-class object.
-  Likely a small client helper in `apps/web/src/lib/` plus new migrations (next
-  sequential prefix - migrations are immutable, add new files). Minimum fields:
-  `company_id`, `actor_user_id`, `role`, `started_at`, `ended_at`, `route_start`,
-  `device_class`, `platform`, `build_sha`, `mode`, `consent_version`,
-  `retention_expires_at`, `redaction_version`.
-- `capture_artifacts` table for high-PII refs: audio, transcript, rrweb replay,
-  native video, screenshots, uploaded OS recordings, canvas snapshots. Raw bytes
-  stay in object storage; the table stores refs, hashes, sizes, mime types,
-  retention, and access policy.
+- `capture_sessions`, `capture_session_events`, `capture_artifacts`, and the
+  `capture_session_id` columns/indexes live in
+  `docker/postgres/init/120_capture_sessions.sql`.
+- The web app can hold a local session id in
+  `apps/web/src/lib/capture-session.ts`, attach it to API calls, and include it
+  in product-trace beacon events.
+- The API request context reads `x-sitelayer-capture-session-id`, and support
+  packets / context work / work requests can carry it.
+- `workflow_event_log` inserts from both API and worker paths now include
+  `capture_session_id`.
+- The Mesh trace forwarder now includes `capture_session_id` and a stable
+  producer `event_ref` when forwarding workflow rows to product trace, so
+  overlapping forward windows can dedupe in Mesh.
+
+These need review as one C0/R0 stack. Do not assume they are live until a smoke
+proves one real browser/mobile session produces joined rows across the database,
+support packet, context work item, and Mesh trace ingest.
+
+## What is still net-new in this repo
+
+- A verified browser/device session lifecycle smoke: start, emit nav/session
+  events, stop, discard, and retention fields. Route-unit coverage exists, but
+  the proof still needs a real browser/mobile run.
+- Storage-backed `capture_artifacts` upload plumbing for browser feedback
+  artifacts. The table exists; the upload path and object-storage policy still
+  need to be proven.
 - rrweb DOM replay. Today `apps/web/src/portal/IssueReporter.tsx` captures NO
   DOM/rrweb/input by design. Add an opt-in rrweb recorder, gated by consent,
   high-PII (blueprint screens), session-keyed.
@@ -105,12 +123,12 @@ events unless a `capture_session_id` or pairing code is active.
 
 ## Build order (Sitelayer side)
 
-1. R0/C0: `capture_sessions`, `capture_session_id`, `nav` events, and product
-   trace forwarding. Acceptance: one phone session produces joined events with
-   no audio/video/DOM capture.
+1. R0/C0: `capture_sessions`, `capture_session_id`, `nav` events, stable
+   `event_ref`, and product trace forwarding. Acceptance: one phone session
+   produces joined events with no audio/video/DOM capture.
 2. R1/C1: invite-gated web `Record feedback` = mic (existing) + rrweb (net-new)
-   + spine + canvas geometry, consent-gated; transcribe via existing
-   voice-to-log agent.
+   - spine + canvas geometry, consent-gated; transcribe via existing
+     voice-to-log agent.
 3. R2/C2: on stop, create support_debug_packet + one context_work_item -> Mesh
    via the existing dispatch path (flip `MESH_WORK_REQUEST_DISPATCH_URL` + the
    trace-forward env only after sandbox validation).

@@ -96,9 +96,7 @@ function ProjectCloseoutCard({ projectId }: { projectId: string }) {
   // Hidden for roles without permission — never render anything.
   if (!canCloseout) return null
 
-  return (
-    <CloseoutCard closeout={closeout} onOpenPostMortem={() => navigate(`/projects/${projectId}/post-mortem`)} />
-  )
+  return <CloseoutCard closeout={closeout} onOpenPostMortem={() => navigate(`/projects/${projectId}/post-mortem`)} />
 }
 
 /**

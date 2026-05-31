@@ -50,9 +50,9 @@ describe('transitionCrewScheduleWorkflow — happy path', () => {
     expect(() =>
       transitionCrewScheduleWorkflow({ state: 'draft', state_version: 2 }, { type: 'CREATE', created_by: 'x' }),
     ).toThrow(/seed snapshot/)
-    expect(() =>
-      transitionCrewScheduleWorkflow({ state: 'confirmed', state_version: 2 }, { type: 'CREATE' }),
-    ).toThrow(/seed snapshot/)
+    expect(() => transitionCrewScheduleWorkflow({ state: 'confirmed', state_version: 2 }, { type: 'CREATE' })).toThrow(
+      /seed snapshot/,
+    )
   })
 
   it('draft → declined via DECLINE (stamps decline audit fields)', () => {

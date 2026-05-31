@@ -218,7 +218,7 @@ export async function processEstimatePush(
         limit $2
         for update skip locked
       )
-      returning id, entity_id, payload, attempt_count, sentry_trace, sentry_baggage, request_id
+      returning id, entity_id, payload, attempt_count, sentry_trace, sentry_baggage, request_id, capture_session_id
       `,
       [companyId, limit],
     )
@@ -243,6 +243,7 @@ export async function processEstimatePush(
       sentry_trace: row.sentry_trace,
       sentry_baggage: row.sentry_baggage,
       request_id: row.request_id,
+      capture_session_id: row.capture_session_id ?? null,
     }
     await client.query('begin')
     try {

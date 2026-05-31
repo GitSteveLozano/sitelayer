@@ -14,11 +14,7 @@ import {
   type Company,
 } from '@/lib/api'
 import { useOnboardingWizard, type TeamForm, type SeedOptions } from '@/machines/onboarding-wizard'
-import {
-  DESIGN_ROLE_TO_COMPANY_ROLE,
-  INVITE_DESIGN_ROLES,
-  type InviteDesignRole,
-} from '@/machines/invite-teammate'
+import { DESIGN_ROLE_TO_COMPANY_ROLE, INVITE_DESIGN_ROLES, type InviteDesignRole } from '@/machines/invite-teammate'
 
 const TEAM_ROLE_LABELS: Record<InviteDesignRole, string> = {
   estimator: 'ESTIMATOR',

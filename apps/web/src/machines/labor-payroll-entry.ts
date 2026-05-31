@@ -204,8 +204,7 @@ export const laborPayrollEntryMachine = setup({
             target: 'created',
             guard: ({ event }) => event.output.kind === 'ok',
             actions: assign({
-              createdRunId: ({ event }) =>
-                event.output.kind === 'ok' ? event.output.snapshot.context.id : null,
+              createdRunId: ({ event }) => (event.output.kind === 'ok' ? event.output.snapshot.context.id : null),
               error: () => null,
             }),
           },

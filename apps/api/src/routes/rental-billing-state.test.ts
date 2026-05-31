@@ -205,6 +205,13 @@ function makeCtx(
         responses.push({ status, body: response })
       },
       checkVersion: async () => true,
+      // Storage/photo plumbing is unused by the billing-state routes under
+      // test; stubbed so the shared ctx type is satisfied.
+      storage: {} as RentalInventoryRouteCtx['storage'],
+      maxMovementPhotoBytes: 25 * 1024 * 1024,
+      movementPhotoDownloadPresigned: false,
+      sendFileContent: () => {},
+      sendFileRedirect: () => {},
     },
   }
 }

@@ -1,14 +1,7 @@
 import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Card, MobileButton, Banner } from '@/components/mobile'
-import {
-  useProjectBoms,
-  useBom,
-  useApproveBom,
-  useSupersedeBom,
-  type Bom,
-  type BomLine,
-} from '@/lib/api/scaffold-ops'
+import { useProjectBoms, useBom, useApproveBom, useSupersedeBom, type Bom, type BomLine } from '@/lib/api/scaffold-ops'
 
 const MM_PER_FOOT = 304.8
 

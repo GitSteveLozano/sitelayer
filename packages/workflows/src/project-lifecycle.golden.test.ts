@@ -145,9 +145,9 @@ describe('project-lifecycle — REOPEN nulls in-row terminal timestamps, history
     //     completed_at — history is recoverable even though the row nulls it.
     const completeEntry = log.find((l) => (l.event_payload as { type: string }).type === 'COMPLETE')
     expect(completeEntry).toBeDefined()
-    expect(
-      (completeEntry?.snapshot_after as unknown as ProjectLifecycleWorkflowSnapshot).completed_at,
-    ).toBe('2026-04-29T14:00:00.000Z')
+    expect((completeEntry?.snapshot_after as unknown as ProjectLifecycleWorkflowSnapshot).completed_at).toBe(
+      '2026-04-29T14:00:00.000Z',
+    )
 
     // (c) the replay harness agrees the log is internally consistent.
     const initial: ProjectLifecycleWorkflowSnapshot = { state: 'draft', state_version: 1 }

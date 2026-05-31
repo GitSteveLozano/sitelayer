@@ -16,7 +16,13 @@ type FakeRow = QueryResultRow
 type Responder = (sql: string, params: ReadonlyArray<unknown>) => Partial<QueryResult<FakeRow>> | Error | undefined
 
 function buildResponse(r: Partial<QueryResult<FakeRow>>): QueryResult<FakeRow> {
-  return { rows: r.rows ?? [], rowCount: r.rowCount ?? r.rows?.length ?? 0, command: r.command ?? '', oid: r.oid ?? 0, fields: r.fields ?? [] }
+  return {
+    rows: r.rows ?? [],
+    rowCount: r.rowCount ?? r.rows?.length ?? 0,
+    command: r.command ?? '',
+    oid: r.oid ?? 0,
+    fields: r.fields ?? [],
+  }
 }
 
 interface FakeCall {
@@ -74,7 +80,20 @@ function makeResponder(status: 'active' | 'returned', stateVersion = 1): Respond
       return { rows: [dueRow(status)] }
     }
     if (s.includes('insert into material_bills')) {
-      return { rows: [{ id: 'bill-1', project_id: 'p', vendor_name: 'v', amount: '70.00', bill_type: 'rental', description: 'd', occurred_on: '2026-01-08', created_at: 'now' }] }
+      return {
+        rows: [
+          {
+            id: 'bill-1',
+            project_id: 'p',
+            vendor_name: 'v',
+            amount: '70.00',
+            bill_type: 'rental',
+            description: 'd',
+            occurred_on: '2026-01-08',
+            created_at: 'now',
+          },
+        ],
+      }
     }
     if (s.startsWith('update rentals') || s.includes('update\n      rentals') || s.includes('update rentals')) {
       // processRentalInvoice's clock-advance update and our state_version bump.

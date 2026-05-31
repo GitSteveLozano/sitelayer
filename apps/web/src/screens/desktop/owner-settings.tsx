@@ -413,8 +413,7 @@ function LoadedLaborSection() {
 
   // The real fully-loaded hourly cost. Falls back to a representative figure when
   // no time is logged today so the hero never renders $0.00.
-  const loadedHourly =
-    summary.blended_loaded_hourly_cents > 0 ? summary.blended_loaded_hourly_cents / 100 : 54.2
+  const loadedHourly = summary.blended_loaded_hourly_cents > 0 ? summary.blended_loaded_hourly_cents / 100 : 54.2
 
   // Derive the breakdown so the subtotal reconciles exactly to the loaded hourly.
   const rawRows: BurdenRow[] = BURDEN_SPLIT.map((b) => ({
@@ -467,7 +466,9 @@ function LoadedLaborSection() {
           Your real hourly cost
         </div>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 6 }}>
-          <span style={{ fontSize: 56, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1, color: 'var(--m-ink)' }}>
+          <span
+            style={{ fontSize: 56, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1, color: 'var(--m-ink)' }}
+          >
             {formatMoney(loadedHourly)}
           </span>
           <span style={{ fontSize: 22, fontWeight: 600, color: 'var(--m-ink)' }}>/h</span>
@@ -569,15 +570,7 @@ function LoadedLaborSection() {
 }
 
 // Yellow-fill checkbox cell matching the design's hard-cornered checkboxes.
-function PermCheckbox({
-  checked,
-  onToggle,
-  label,
-}: {
-  checked: boolean
-  onToggle: () => void
-  label: string
-}) {
+function PermCheckbox({ checked, onToggle, label }: { checked: boolean; onToggle: () => void; label: string }) {
   return (
     <button
       type="button"
@@ -611,7 +604,9 @@ function RolesSection() {
   // Local edit state seeded from the canonical matrix. There is no RBAC-write
   // endpoint, so toggles stay local (the design's editable grid) and server-side
   // RBAC remains authoritative.
-  const [matrix, setMatrix] = useState<ActionRow[]>(() => ACTION_MATRIX.map((r) => ({ ...r, allowed: { ...r.allowed } })))
+  const [matrix, setMatrix] = useState<ActionRow[]>(() =>
+    ACTION_MATRIX.map((r) => ({ ...r, allowed: { ...r.allowed } })),
+  )
 
   const toggle = (rowIdx: number, role: RoleKey) => {
     setMatrix((prev) =>
@@ -669,8 +664,7 @@ function RolesSection() {
             gap: 12,
             alignItems: 'center',
             padding: '14px 18px',
-            borderBottom:
-              rowIdx < matrix.length - 1 ? '1px solid var(--m-line, rgba(0,0,0,0.08))' : 'none',
+            borderBottom: rowIdx < matrix.length - 1 ? '1px solid var(--m-line, rgba(0,0,0,0.08))' : 'none',
           }}
         >
           <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--m-ink)' }}>{row.action}</span>

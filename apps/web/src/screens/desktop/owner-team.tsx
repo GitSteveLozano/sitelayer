@@ -87,7 +87,11 @@ export function OwnerTeam({ bootstrap }: { bootstrap: BootstrapResponse | null }
       // A zero-hour entry dated today reads as a no-show / blocked signal.
       if (l.occurred_on === today && hrs === 0) blockedToday.add(l.worker_id)
       const prev = latestEntry.get(l.worker_id)
-      if (!prev || l.occurred_on > prev.occurred_on || (l.occurred_on === prev.occurred_on && l.created_at > prev.created_at)) {
+      if (
+        !prev ||
+        l.occurred_on > prev.occurred_on ||
+        (l.occurred_on === prev.occurred_on && l.created_at > prev.created_at)
+      ) {
         latestEntry.set(l.worker_id, l)
       }
     }

@@ -6,10 +6,7 @@
  * file is read-only list + approve/decline mutations for admins/office.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type {
-  RentalRequestApprovalHumanEventType,
-  RentalRequestApprovalWorkflowState,
-} from '@sitelayer/workflows'
+import type { RentalRequestApprovalHumanEventType, RentalRequestApprovalWorkflowState } from '@sitelayer/workflows'
 import { request } from './client'
 
 export type RentalRequestStatus = 'pending' | 'approved' | 'declined' | 'all'

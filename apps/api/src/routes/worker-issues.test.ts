@@ -87,6 +87,9 @@ type IssueRow = {
   escalation_reason?: string | null
   dismissed_at?: string | null
   dismissed_by_clerk_user_id?: string | null
+  material_label?: string | null
+  material_quantity?: string | number | null
+  material_unit?: string | null
   created_at?: string
 }
 type AttachmentRow = {
@@ -177,6 +180,9 @@ class FakePool {
         escalation_reason: row.escalation_reason ?? null,
         dismissed_at: row.dismissed_at ?? null,
         dismissed_by_clerk_user_id: row.dismissed_by_clerk_user_id ?? null,
+        material_label: row.material_label ?? null,
+        material_quantity: row.material_quantity ?? null,
+        material_unit: row.material_unit ?? null,
         created_at: row.created_at ?? 'now',
       }
       return { rows: [full], rowCount: 1 }
@@ -207,8 +213,12 @@ class FakePool {
     }
 
     // Create-path INSERT — returns the freshly-created row (ISSUE_COLUMNS).
+    // Positional binding from the route:
+    //   company_id=$1, project_id=$2, worker_id=$3, reporter=$4, kind=$5,
+    //   message=$6, severity=$7, material_label=$8, material_quantity=$9,
+    //   material_unit=$10
     if (/^insert\s+into\s+worker_issues/i.test(sql)) {
-      const [companyId, projectId, workerId, reporter, kind, message, severity] = params as [
+      const [companyId, projectId, workerId, reporter, kind, message, severity, matLabel, matQty, matUnit] = params as [
         string,
         string | null,
         string | null,
@@ -216,6 +226,9 @@ class FakePool {
         string,
         string,
         string,
+        string | null,
+        number | null,
+        string | null,
       ]
       this.idCounter += 1
       const row: IssueRow = {
@@ -231,6 +244,9 @@ class FakePool {
         resolved_at: null,
         resolved_by_clerk_user_id: null,
         state_version: 1,
+        material_label: matLabel ?? null,
+        material_quantity: matQty ?? null,
+        material_unit: matUnit ?? null,
         created_at: 'now',
       }
       this.issues.push(row)
@@ -248,6 +264,9 @@ class FakePool {
             state: row.state,
             resolved_at: null,
             resolved_by_clerk_user_id: null,
+            material_label: row.material_label ?? null,
+            material_quantity: row.material_quantity ?? null,
+            material_unit: row.material_unit ?? null,
             created_at: row.created_at,
           },
         ],
@@ -973,5 +992,62 @@ describe('POST /api/worker-issues (severity column)', () => {
     const res = await postJson({ kind: 'other', message: 'no severity given' })
     expect(res.status, JSON.stringify(res.body)).toBe(201)
     expect(pool.issues[0]!.severity).toBe('slowing')
+  })
+
+  // -------------------------------------------------------------------------
+  // Structured material-request fulfillment fields (migration 126). A
+  // materials_out ping carries material_label / material_quantity /
+  // material_unit as typed columns so the foreman blocker detail's quantity
+  // hero reads typed values instead of re-parsing the worker's prose. The
+  // fields are ignored on non-materials kinds.
+  // -------------------------------------------------------------------------
+
+  it('persists the typed material fields on a materials_out ping', async () => {
+    const res = await postJson({
+      kind: 'materials_out',
+      message: 'Short on EPS',
+      severity: 'stopped',
+      material_label: `EPS insulation · 1.5" · 4'x8'`,
+      material_quantity: 12,
+      material_unit: 'sheets',
+    })
+    expect(res.status, JSON.stringify(res.body)).toBe(201)
+    const row = pool.issues[0]!
+    expect(row.material_label).toBe(`EPS insulation · 1.5" · 4'x8'`)
+    expect(row.material_quantity).toBe(12)
+    expect(row.material_unit).toBe('sheets')
+    // Echoed back on the create response too.
+    const body = res.body as { worker_issue: { material_quantity: number | string | null; material_unit: string } }
+    expect(Number(body.worker_issue.material_quantity)).toBe(12)
+    expect(body.worker_issue.material_unit).toBe('sheets')
+  })
+
+  it('ignores material fields on a non-materials kind', async () => {
+    const res = await postJson({
+      kind: 'safety',
+      message: 'guardrail down',
+      severity: 'stopped',
+      material_label: 'should be dropped',
+      material_quantity: 4,
+      material_unit: 'bags',
+    })
+    expect(res.status, JSON.stringify(res.body)).toBe(201)
+    const row = pool.issues[0]!
+    expect(row.material_label).toBeNull()
+    expect(row.material_quantity).toBeNull()
+    expect(row.material_unit).toBeNull()
+  })
+
+  it('rejects a negative material_quantity by storing NULL (no phantom shortage)', async () => {
+    const res = await postJson({
+      kind: 'materials_out',
+      message: 'odd qty',
+      material_quantity: -5,
+      material_unit: 'sheets',
+    })
+    expect(res.status, JSON.stringify(res.body)).toBe(201)
+    expect(pool.issues[0]!.material_quantity).toBeNull()
+    // The unit still rides through.
+    expect(pool.issues[0]!.material_unit).toBe('sheets')
   })
 })

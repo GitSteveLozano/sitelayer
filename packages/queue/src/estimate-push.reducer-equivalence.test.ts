@@ -100,7 +100,10 @@ describe('processEstimatePush — worker write equals reducer output (Gap 1)', (
       { rows: [{ qbo_estimate_id: null, status: 'posting' }], rowCount: 1 }, // existence check
       { rows: [POSTING_ROW], rowCount: 1 }, // lock (FOR UPDATE)
       // update → posted (returning row reflecting reducer output)
-      { rows: [{ ...POSTING_ROW, status: 'posted', state_version: 5, qbo_estimate_id: 'qbo-EST-777', posted_at: 'X' }], rowCount: 1 },
+      {
+        rows: [{ ...POSTING_ROW, status: 'posted', state_version: 5, qbo_estimate_id: 'qbo-EST-777', posted_at: 'X' }],
+        rowCount: 1,
+      },
       { rows: [], rowCount: 1 }, // workflow_event_log insert
       { rows: [], rowCount: 1 }, // sync_events insert
       { rows: [], rowCount: 1 }, // mutation_outbox applied
@@ -149,7 +152,10 @@ describe('processEstimatePush — worker write equals reducer output (Gap 1)', (
       TX, // begin (recovery)
       { rows: [POSTING_ROW], rowCount: 1 }, // lock (FOR UPDATE) in recovery
       // update → failed
-      { rows: [{ ...POSTING_ROW, status: 'failed', state_version: 5, error: 'qbo exploded', failed_at: 'X' }], rowCount: 1 },
+      {
+        rows: [{ ...POSTING_ROW, status: 'failed', state_version: 5, error: 'qbo exploded', failed_at: 'X' }],
+        rowCount: 1,
+      },
       { rows: [], rowCount: 1 }, // workflow_event_log
       { rows: [], rowCount: 1 }, // sync_events
       TX, // commit (recovery)

@@ -83,8 +83,8 @@ export function createInviteTeammateMachine() {
       events: {} as Event,
     },
     actors: {
-      run: fromPromise<unknown, { payload: InviteSubmitPayload; submitter: Context['submitter'] }>(
-        async ({ input }) => input.submitter(input.payload),
+      run: fromPromise<unknown, { payload: InviteSubmitPayload; submitter: Context['submitter'] }>(async ({ input }) =>
+        input.submitter(input.payload),
       ),
     },
     guards: {

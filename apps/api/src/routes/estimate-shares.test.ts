@@ -77,6 +77,16 @@ class FakePool {
       const row = this.shares.find((s) => s.share_token === token) ?? null
       return { rows: row ? [this.serializeShare(row)] : [], rowCount: row ? 1 : 0 }
     }
+    // Revoke locks the row by company_id + id (for update) before dispatching.
+    if (
+      /select[\s\S]+from estimate_share_links/i.test(sql) &&
+      /company_id = \$1 and id = \$2/.test(sql) &&
+      /for update/i.test(sql)
+    ) {
+      const [companyId, id] = params as [string, string]
+      const row = this.shares.find((s) => s.company_id === companyId && s.id === id) ?? null
+      return { rows: row ? [this.serializeShare(row)] : [], rowCount: row ? 1 : 0 }
+    }
     if (/select[\s\S]+from estimate_share_links/i.test(sql) && /project_id = \$2/.test(sql)) {
       const [companyId, projectId] = params as [string, string]
       const rows = this.shares
@@ -117,20 +127,25 @@ class FakePool {
             viewed_at: share.viewed_at,
             view_count: share.view_count,
             signer_name: share.signer_name,
+            revoked_at: share.revoked_at,
+            status: share.status,
           }
         })
       return { rows, rowCount: rows.length }
     }
     if (/insert into estimate_share_links/i.test(sql)) {
-      const [companyId, projectId, snapshot, token, email, name, expiresInDays] = params as [
-        string,
-        string,
-        string,
-        string,
-        string | null,
-        string | null,
-        string,
-      ]
+      const [companyId, projectId, snapshot, token, email, name, expiresInDays, message, includeSignedLink] =
+        params as [
+          string,
+          string,
+          string,
+          string,
+          string | null,
+          string | null,
+          string,
+          string | null,
+          boolean | undefined,
+        ]
       const now = new Date().toISOString()
       const expires = new Date(Date.now() + Number(expiresInDays) * 86_400_000).toISOString()
       const row: EstimateShareRow = {
@@ -151,16 +166,26 @@ class FakePool {
         signature_data_url: null,
         signer_name: null,
         signer_ip: null,
+        status: 'sent',
+        state_version: 1,
+        message: message ?? null,
+        include_signed_link: includeSignedLink ?? true,
+        revoked_at: null,
         created_at: now,
         updated_at: now,
       }
       this.shares.push(row)
       return { rows: [this.serializeShare(row)], rowCount: 1 }
     }
-    if (/update estimate_share_links/i.test(sql) && /set expires_at = now\(\)/.test(sql)) {
-      const [companyId, id] = params as [string, string]
+    // Revoke dispatch — select ... for update, then set status/state_version/
+    // revoked_at + expires_at = now().
+    if (/update estimate_share_links/i.test(sql) && /set status = \$3/.test(sql)) {
+      const [companyId, id, status, stateVersion, revokedAt] = params as [string, string, string, number, string]
       const row = this.shares.find((s) => s.company_id === companyId && s.id === id)
       if (!row) return { rows: [], rowCount: 0 }
+      row.status = status
+      row.state_version = stateVersion
+      row.revoked_at = revokedAt
       row.expires_at = new Date().toISOString()
       row.updated_at = row.expires_at
       return { rows: [this.serializeShare(row)], rowCount: 1 }
@@ -460,9 +485,57 @@ describe('handleEstimateShareRoutes — POST /api/projects/:id/estimate/share', 
     expect(project.lifecycle_state).toBe('sent')
     expect(project.lifecycle_state_version).toBe(3)
 
-    const sendEvent = pool.workflowEvents.find((e) => e.event_type === 'SEND')
-    expect(sendEvent).toBeDefined()
-    expect(sendEvent?.entity_id).toBe('p-1')
+    // Two SEND events: the project_lifecycle SEND (estimating → sent) on the
+    // project, AND the estimate_share SEND (the row-creation seed) on the share
+    // link. Disambiguate by entity_type.
+    const lifecycleSend = pool.workflowEvents.find((e) => e.event_type === 'SEND' && e.entity_type === 'project')
+    expect(lifecycleSend).toBeDefined()
+    expect(lifecycleSend?.entity_id).toBe('p-1')
+
+    const shareSend = pool.workflowEvents.find(
+      (e) => e.event_type === 'SEND' && e.entity_type === 'estimate_share_link',
+    )
+    expect(shareSend).toBeDefined()
+    expect(shareSend?.workflow_name).toBe('estimate_share')
+    expect(shareSend?.state_version).toBe(0)
+  })
+
+  it('persists message + include_signed_link and enqueues a send_estimate_share outbox row', async () => {
+    const pool = new FakePool()
+    seedProject(pool)
+    const { ctx, responses, reads } = makeAuthCtx(pool)
+    reads.push({
+      recipient_email: 'client@example.com',
+      message: 'John — bid attached. Happy to walk through.',
+      include_signed_link: false,
+    })
+    await handleEstimateShareRoutes({ method: 'POST' } as never, buildUrl('/api/projects/p-1/estimate/share'), ctx)
+    expect(responses[0]?.status).toBe(201)
+
+    const row = pool.shares[0]!
+    expect(row.status).toBe('sent')
+    expect(row.state_version).toBe(1)
+    expect(row.message).toBe('John — bid attached. Happy to walk through.')
+    expect(row.include_signed_link).toBe(false)
+
+    // The registered side-effect type is enqueued to the outbox.
+    expect(pool.outbox).toHaveLength(1)
+    const outboxParams = (pool.outbox[0] as { params: unknown[] }).params
+    // mutation_outbox insert params:
+    // [companyId, deviceId, actorUserId, entityType, entityId, mutationType, payload, idempotencyKey, ...]
+    expect(outboxParams[5]).toBe('send_estimate_share')
+    expect(outboxParams[7]).toBe(`estimate_share:send:${row.id}`)
+  })
+
+  it('defaults include_signed_link to true when omitted', async () => {
+    const pool = new FakePool()
+    seedProject(pool)
+    const { ctx, responses, reads } = makeAuthCtx(pool)
+    reads.push({ recipient_email: 'client@example.com' })
+    await handleEstimateShareRoutes({ method: 'POST' } as never, buildUrl('/api/projects/p-1/estimate/share'), ctx)
+    expect(responses[0]?.status).toBe(201)
+    expect(pool.shares[0]?.include_signed_link).toBe(true)
+    expect(pool.shares[0]?.message).toBeNull()
   })
 
   it('rejects when recipient_email is missing or malformed', async () => {
@@ -501,8 +574,13 @@ describe('handleEstimateShareRoutes — POST /api/projects/:id/estimate/share', 
     expect(responses[0]?.status).toBe(201)
     const project = pool.projects[0]!
     expect(project.lifecycle_state).toBe('sent')
-    // No SEND workflow event written this run because the helper short-circuited.
-    expect(pool.workflowEvents.find((e) => e.event_type === 'SEND')).toBeUndefined()
+    // No lifecycle SEND written this run because the helper short-circuited
+    // (the project was already past 'estimating'). The estimate_share SEND
+    // (the row-creation seed) is still recorded — it is unconditional.
+    expect(pool.workflowEvents.find((e) => e.event_type === 'SEND' && e.entity_type === 'project')).toBeUndefined()
+    expect(
+      pool.workflowEvents.find((e) => e.event_type === 'SEND' && e.entity_type === 'estimate_share_link'),
+    ).toBeDefined()
   })
 })
 
@@ -642,6 +720,42 @@ describe('handleEstimateShareRoutes — POST /api/estimate-shares/:id/revoke', (
     const after = new Date(pool.shares[0]!.expires_at).getTime()
     expect(after).toBeLessThanOrEqual(Date.now() + 5)
     expect(after).toBeLessThan(before)
+
+    // Dispatched through the reducer: status + state_version advance and a
+    // REVOKE workflow event is recorded on the share link.
+    expect(pool.shares[0]?.status).toBe('revoked')
+    expect(pool.shares[0]?.state_version).toBe(2)
+    expect(pool.shares[0]?.revoked_at).not.toBeNull()
+    const revokeEvent = pool.workflowEvents.find(
+      (e) => e.event_type === 'REVOKE' && e.entity_type === 'estimate_share_link',
+    )
+    expect(revokeEvent).toBeDefined()
+    expect(revokeEvent?.workflow_name).toBe('estimate_share')
+    expect(revokeEvent?.state_version).toBe(1)
+  })
+
+  it('returns 409 when revoking an already-terminal (accepted) share', async () => {
+    const pool = new FakePool()
+    seedProject(pool)
+    const { ctx: createCtx, reads: createReads } = makeAuthCtx(pool)
+    createReads.push({ recipient_email: 'a@b.co' })
+    await handleEstimateShareRoutes(
+      { method: 'POST' } as never,
+      buildUrl('/api/projects/p-1/estimate/share'),
+      createCtx,
+    )
+    const share = pool.shares[0]!
+    // Simulate a prior accept: terminal state the reducer must refuse REVOKE from.
+    share.status = 'accepted'
+    share.accepted_at = new Date().toISOString()
+
+    const { ctx, responses } = makeAuthCtx(pool)
+    await handleEstimateShareRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/estimate-shares/${share.id}/revoke`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(409)
   })
 })
 

@@ -69,7 +69,12 @@ describe('transitionAssetDeploymentWorkflow — happy path', () => {
     for (const state of ['out', 'overdue', 'returning'] as const) {
       const off = transitionAssetDeploymentWorkflow(
         { state, state_version: 2 },
-        { type: 'WRITE_OFF', written_off_at: '2026-05-01T00:00:00.000Z', written_off_by: 'admin', write_off_reason: 'lost' },
+        {
+          type: 'WRITE_OFF',
+          written_off_at: '2026-05-01T00:00:00.000Z',
+          written_off_by: 'admin',
+          write_off_reason: 'lost',
+        },
       )
       expect(off.state).toBe('written_off')
       expect(off.write_off_reason).toBe('lost')
@@ -78,7 +83,10 @@ describe('transitionAssetDeploymentWorkflow — happy path', () => {
 
   it('rejects illegal transitions', () => {
     expect(() =>
-      transitionAssetDeploymentWorkflow({ state: 'staged', state_version: 1 }, { type: 'BEGIN_RETURN', return_started_at: 'x' }),
+      transitionAssetDeploymentWorkflow(
+        { state: 'staged', state_version: 1 },
+        { type: 'BEGIN_RETURN', return_started_at: 'x' },
+      ),
     ).toThrow(/illegal transition/)
     expect(() =>
       transitionAssetDeploymentWorkflow(
@@ -88,7 +96,10 @@ describe('transitionAssetDeploymentWorkflow — happy path', () => {
     ).toThrow(/illegal transition/)
     // MARK_OVERDUE only from out (not overdue, not returning).
     expect(() =>
-      transitionAssetDeploymentWorkflow({ state: 'overdue', state_version: 3 }, { type: 'MARK_OVERDUE', overdue_since: 'x' }),
+      transitionAssetDeploymentWorkflow(
+        { state: 'overdue', state_version: 3 },
+        { type: 'MARK_OVERDUE', overdue_since: 'x' },
+      ),
     ).toThrow(/illegal transition/)
   })
 })

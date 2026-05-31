@@ -227,9 +227,7 @@ export function nextAssetDeploymentEvents(
 }
 
 export function isHumanAssetDeploymentEvent(eventType: string): eventType is AssetDeploymentHumanEventType {
-  return (
-    (ASSET_DEPLOYMENT_EVENT_TYPES as readonly string[]).includes(eventType) && eventType !== 'MARK_OVERDUE'
-  )
+  return (ASSET_DEPLOYMENT_EVENT_TYPES as readonly string[]).includes(eventType) && eventType !== 'MARK_OVERDUE'
 }
 
 export const assetDeploymentWorkflow = registerWorkflow<
@@ -261,7 +259,9 @@ const ASSET_DEPLOYMENT_HUMAN_EVENT_TYPES = ASSET_DEPLOYMENT_EVENT_TYPES.filter(
 )
 
 export const AssetDeploymentEventRequestSchema = z.object({
-  event: z.enum(ASSET_DEPLOYMENT_HUMAN_EVENT_TYPES as [AssetDeploymentHumanEventType, ...AssetDeploymentHumanEventType[]]),
+  event: z.enum(
+    ASSET_DEPLOYMENT_HUMAN_EVENT_TYPES as [AssetDeploymentHumanEventType, ...AssetDeploymentHumanEventType[]],
+  ),
   state_version: z.number().int().positive(),
   estimated_return_on: z.string().optional().nullable(),
   extension_reason: z.string().max(2000).optional().nullable(),

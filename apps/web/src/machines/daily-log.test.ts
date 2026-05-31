@@ -72,7 +72,12 @@ describe('dailyLogMachine', () => {
       state: 'submitted',
       state_version: 2,
       next_events: [],
-      context: { ...draftSnapshot.context, status: 'submitted', state_version: 2, submitted_at: '2026-05-09T17:00:00Z' },
+      context: {
+        ...draftSnapshot.context,
+        status: 'submitted',
+        state_version: 2,
+        submitted_at: '2026-05-09T17:00:00Z',
+      },
     }
     dispatchDailyLogEventMock.mockResolvedValueOnce(submitted)
     const actor = createActor(dailyLogMachine, { input: { entityId: 'log-1', companySlug: 'acme' } })

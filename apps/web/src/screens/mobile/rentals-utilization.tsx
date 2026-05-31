@@ -222,7 +222,13 @@ function UtilizationTab({
             ) : (
               <div
                 className="num"
-                style={{ fontSize: 10, color: 'var(--m-ink-4)', marginTop: 3, fontWeight: 600, letterSpacing: '0.04em' }}
+                style={{
+                  fontSize: 10,
+                  color: 'var(--m-ink-4)',
+                  marginTop: 3,
+                  fontWeight: 600,
+                  letterSpacing: '0.04em',
+                }}
               >
                 {r.code}
               </div>

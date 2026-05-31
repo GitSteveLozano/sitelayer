@@ -29,6 +29,8 @@ const calibratedPage = {
   calibration_x2: '40',
   calibration_y2: '10',
   calibration_set_at: '2026-05-20T00:00:00Z',
+  scale_verified_at: null,
+  scale_verified_by: null,
   measurement_count: 1,
 } satisfies BlueprintPage
 

@@ -298,12 +298,7 @@ function DailyLogEditor({ log, bootstrap, onDone }: DailyLogEditorProps) {
       <div style={{ padding: 16 }}>
         {!isSubmitted ? (
           <div className="m-btn-row">
-            <MButton
-              variant="ghost"
-              onClick={onSaveDraft}
-              disabled={patch.isPending}
-              style={{ flex: 1 }}
-            >
+            <MButton variant="ghost" onClick={onSaveDraft} disabled={patch.isPending} style={{ flex: 1 }}>
               {patch.isPending ? 'Saving…' : savedAt ? 'Saved ✓' : 'Save draft'}
             </MButton>
             <MButton variant="primary" onClick={onSubmit} disabled={submit.isPending} style={{ flex: 2 }}>

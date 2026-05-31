@@ -23,6 +23,7 @@ const PAGE_COLUMNS = `
   calibration_world_distance, calibration_world_unit,
   calibration_x1, calibration_y1, calibration_x2, calibration_y2,
   calibration_set_at, calibration_set_by,
+  scale_verified_at, scale_verified_by,
   measurement_count, origin, created_at, updated_at
 `
 
@@ -40,6 +41,8 @@ interface PageRow {
   calibration_y2: string | null
   calibration_set_at: string | null
   calibration_set_by: string | null
+  scale_verified_at: string | null
+  scale_verified_by: string | null
   measurement_count: number
   origin: string | null
   created_at: string
@@ -55,6 +58,12 @@ interface PageRow {
  *                                                  selected page asset
  *   POST /api/blueprint-pages/:id/calibrate        store the two-point
  *                                                  scale calibration
+ *   POST /api/blueprint-pages/:id/verify           confirm / un-confirm the
+ *                                                  sheet's scale (persists the
+ *                                                  per-sheet VERIFIED state the
+ *                                                  EST · SCALE VERIFY screen
+ *                                                  surfaces). Body { verified }
+ *                                                  defaults to true.
  *
  * The legacy single-page world is preserved by the migration's
  * backfill — every existing document has a page_number=1 row.
@@ -252,6 +261,53 @@ export async function handleBlueprintPageRoutes(
         entityType: 'blueprint_page',
         entityId: row.id,
         action: 'calibrate',
+        row: row,
+        actorUserId: ctx.currentUserId,
+      })
+      return row
+    })
+    if (!updated) {
+      ctx.sendJson(404, { error: 'page not found' })
+      return true
+    }
+    ctx.sendJson(200, { page: updated })
+    return true
+  }
+
+  // POST /api/blueprint-pages/:id/verify — persist the per-sheet scale
+  // VERIFIED state. `{ verified: false }` clears it (re-review). This is a
+  // human sign-off, distinct from calibration: AI-autoscale can set a
+  // calibration without anyone having confirmed the sheet, and an estimator
+  // may want to eyeball a calibrated sheet before trusting its quantities.
+  const verifyMatch = url.pathname.match(/^\/api\/blueprint-pages\/([^/]+)\/verify$/)
+  if (req.method === 'POST' && verifyMatch) {
+    if (!ctx.requireRole(['admin', 'foreman', 'office'])) return true
+    const pageId = verifyMatch[1]!
+    if (!isValidUuid(pageId)) {
+      ctx.sendJson(400, { error: 'page id must be a valid uuid' })
+      return true
+    }
+    const body = await ctx.readBody()
+    // Default to verifying; only an explicit `false` un-verifies.
+    const verified = body.verified === undefined ? true : body.verified === true
+
+    const updated = await withMutationTx(async (client: PoolClient) => {
+      const result = await client.query<PageRow>(
+        `update blueprint_pages
+           set scale_verified_at = case when $3 then now() else null end,
+               scale_verified_by = case when $3 then $4 else null end,
+               updated_at = now()
+         where company_id = $1 and id = $2
+         returning ${PAGE_COLUMNS}`,
+        [ctx.company.id, pageId, verified, ctx.currentUserId],
+      )
+      const row = result.rows[0]
+      if (!row) return null
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'blueprint_page',
+        entityId: row.id,
+        action: verified ? 'verify_scale' : 'unverify_scale',
         row: row,
         actorUserId: ctx.currentUserId,
       })

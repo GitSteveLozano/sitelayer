@@ -108,10 +108,9 @@ export function WorkerClockoutSuccess({
   const stepsTotal = briefSteps.length
 
   // PHOTOS — today's daily-log photo count for the project.
-  const dailyLogs = useDailyLogs(
-    projectId ? { projectId, from: today, to: today } : { from: today, to: today },
-    { enabled: Boolean(projectId) },
-  )
+  const dailyLogs = useDailyLogs(projectId ? { projectId, from: today, to: today } : { from: today, to: today }, {
+    enabled: Boolean(projectId),
+  })
   const photoCount = useMemo(
     () => (dailyLogs.data?.dailyLogs ?? []).reduce((n, l) => n + (l.photo_keys?.length ?? 0), 0),
     [dailyLogs.data?.dailyLogs],
@@ -132,9 +131,7 @@ export function WorkerClockoutSuccess({
         if (s.deleted_at) return false
         if (s.status !== 'confirmed') return false
         if (s.scheduled_for.slice(0, 10) <= today) return false
-        const ids = Array.isArray(s.crew)
-          ? (s.crew as unknown[]).filter((x): x is string => typeof x === 'string')
-          : []
+        const ids = Array.isArray(s.crew) ? (s.crew as unknown[]).filter((x): x is string => typeof x === 'string') : []
         return ids.includes(meWorkerId)
       })
       .sort((a, b) => (a.scheduled_for < b.scheduled_for ? -1 : 1))[0]

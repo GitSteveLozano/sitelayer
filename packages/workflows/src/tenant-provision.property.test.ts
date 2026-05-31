@@ -28,7 +28,10 @@ const ANY_EVENT: fc.Arbitrary<TenantProvisionWorkflowEvent> = fc.oneof(
     clerk_user_id: fc.string({ minLength: 1, maxLength: 16 }),
     role: fc.constantFrom('admin', 'foreman', 'office', 'member'),
   }),
-  fc.record({ type: fc.constant('MEMBER_INVITED' as const), clerk_user_id: fc.string({ minLength: 1, maxLength: 16 }) }),
+  fc.record({
+    type: fc.constant('MEMBER_INVITED' as const),
+    clerk_user_id: fc.string({ minLength: 1, maxLength: 16 }),
+  }),
   fc.record({ type: fc.constant('SEED_REQUESTED' as const), seed_request: fc.constant({ yard_name: 'Main' }) }),
   fc.record({ type: fc.constant('SEED_PARTIAL' as const), failed_seeds: fc.array(fc.string(), { maxLength: 4 }) }),
   fc.constant({ type: 'SEED_COMPLETED' as const }),

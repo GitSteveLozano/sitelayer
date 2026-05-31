@@ -236,9 +236,7 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
       .filter((s) => {
         if (s.scheduled_for.slice(0, 10) !== today) return false
         if (s.deleted_at) return false
-        const ids = Array.isArray(s.crew)
-          ? (s.crew as unknown[]).filter((x): x is string => typeof x === 'string')
-          : []
+        const ids = Array.isArray(s.crew) ? (s.crew as unknown[]).filter((x): x is string => typeof x === 'string') : []
         return ids.includes(meWorkerId)
       })
       .sort((a, b) => (a.scheduled_for < b.scheduled_for ? -1 : 1))[0]

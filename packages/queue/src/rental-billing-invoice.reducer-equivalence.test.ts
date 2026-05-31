@@ -5,10 +5,7 @@ import {
   transitionRentalBillingWorkflow,
   type RentalBillingWorkflowSnapshot,
 } from '@sitelayer/workflows'
-import {
-  processRentalBillingInvoicePush,
-  type RentalBillingInvoicePushFn,
-} from './pushers/rental-billing-invoice.js'
+import { processRentalBillingInvoicePush, type RentalBillingInvoicePushFn } from './pushers/rental-billing-invoice.js'
 import type { ReleasableQueueClient } from './index.js'
 
 /**

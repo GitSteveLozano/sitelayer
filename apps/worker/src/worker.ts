@@ -293,6 +293,27 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     undefined,
   )
 
+  // Weekly AUTO post cadence — runs BEFORE drainPushes on the same lane so a
+  // just-auto-approved run's POST_REQUESTED outbox row is claimed in the same
+  // heartbeat. No-op unless a company opted in (policy gated OFF by default,
+  // migration 116) AND the configured clock window is open.
+  await runIfLaneActive(
+    pool,
+    logger,
+    'labor_payroll_push',
+    () =>
+      laborPayrollRunner.drainAutoPost(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] labor payroll auto-post drain failed')
+        captureWithEntityContext(error, {
+          scope: 'labor_payroll_auto_post',
+          entity_type: 'labor_payroll_run',
+          company_id: companyId,
+          workflow_name: 'labor_payroll_run',
+        })
+      }),
+    undefined,
+  )
+
   await runIfLaneActive(
     pool,
     logger,

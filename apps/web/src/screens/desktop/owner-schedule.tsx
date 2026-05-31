@@ -6,10 +6,19 @@
  * otherwise renders empty cells. Reuses the same bootstrap payload as the
  * owner dashboard. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import type { BootstrapResponse } from '@/lib/api'
 import { DEyebrow, DH1 } from '@/components/d'
 import { MButton } from '@/components/m'
+import { patchCrewSchedule } from '@/lib/api/crew-schedules'
+import {
+  TIMELINE_DAYS,
+  clampShift,
+  computeRescheduleOps,
+  pxToDayShift,
+  type TimelineBlock,
+} from '@/lib/schedule-timeline'
 import { NewAssignmentModal } from './project-drawers'
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] as const
@@ -18,12 +27,6 @@ type ScheduleRow = BootstrapResponse['schedules'][number]
 
 type ScheduleView = 'day' | 'week' | '4wk'
 
-/** A positioned bar on the 4-week (20 working-day) timeline. */
-interface TimelineBlock {
-  start: number // 0..19 — working-day offset from the Monday of week 1
-  span: number // working-day width
-  label: string
-}
 interface TimelineProject {
   id: string
   name: string
@@ -31,23 +34,21 @@ interface TimelineProject {
   blocks: TimelineBlock[]
 }
 
-// 4 weeks × 5 working days. The timeline grid is laid out by week, so each
-// week is a fifth-of-a-fifth — positions are computed in working-day units.
-const TIMELINE_DAYS = 20
-
 // Distinct row accents (square, 2px-bordered) matching the v2 palette.
 const ROW_COLORS = ['var(--m-accent)', 'var(--m-red)', 'var(--m-green)', 'var(--m-ink)'] as const
 
 // Presentational demo rows — used ONLY when the bootstrap ledger has no
-// live schedules to render. Clearly flagged in the UI as a sample.
+// live schedules to render. Clearly flagged in the UI as a sample. Demo
+// blocks carry no real schedule ids (`days: []`) so drag-to-reschedule is
+// inert on them — there is nothing to PATCH.
 const DEMO_TIMELINE: TimelineProject[] = [
   {
     id: 'demo-hillcrest',
     name: 'Hillcrest',
     color: 'var(--m-accent)',
     blocks: [
-      { start: 0, span: 8, label: 'EPS · 3' },
-      { start: 9, span: 5, label: 'BASE · 3' },
+      { start: 0, span: 8, label: 'EPS · 3', days: [] },
+      { start: 9, span: 5, label: 'BASE · 3', days: [] },
     ],
   },
   {
@@ -55,15 +56,15 @@ const DEMO_TIMELINE: TimelineProject[] = [
     name: 'Aspen Ridge',
     color: 'var(--m-red)',
     blocks: [
-      { start: 3, span: 7, label: 'BASE · 4' },
-      { start: 14, span: 4, label: 'FINISH · 4' },
+      { start: 3, span: 7, label: 'BASE · 4', days: [] },
+      { start: 14, span: 4, label: 'FINISH · 4', days: [] },
     ],
   },
   {
     id: 'demo-greenwillow',
     name: 'Greenwillow',
     color: 'var(--m-green)',
-    blocks: [{ start: 6, span: 12, label: 'STONE · 11' }],
+    blocks: [{ start: 6, span: 12, label: 'STONE · 11', days: [] }],
   },
 ]
 
@@ -116,20 +117,31 @@ function weekdayIndex(iso: string): number | null {
  * colored assignment blocks positioned across a 20-working-day (4×5) grid, a
  * week-header (MAY 5 / 12 / 19 / 26), and a rain-forecast flag line.
  *
- * Drag-to-move / resize is VISUAL only — blocks show `cursor:grab` and a
- * resize-handle affordance on the right edge; no real drag is wired.
+ * Drag-to-MOVE is wired (Gap 4): pointer-drag a block horizontally, it snaps
+ * to whole working-day columns, and on release each underlying crew_schedules
+ * row is PATCHed to its shifted date via `onReschedule`. Edge-RESIZE remains a
+ * visual affordance only. Demo blocks (no real ids) are not draggable.
  */
 function FourWeekTimeline({
   anchorMonday,
   timeline,
   isDemo,
   line,
+  onReschedule,
+  busy,
 }: {
   anchorMonday: Date
   timeline: TimelineProject[]
   isDemo: boolean
   line: string
+  onReschedule: (block: TimelineBlock, shift: number) => void
+  busy: boolean
 }) {
+  // Live pointer-drag state for the block currently under the pointer. `dx` is
+  // the pixel delta from drag start; `trackWidth` is the row track's px width
+  // (for px→working-day snapping). Null when no drag is in progress.
+  const [drag, setDrag] = useState<{ key: string; dx: number; trackWidth: number } | null>(null)
+  const dragRef = useRef<{ key: string; startX: number; trackWidth: number; block: TimelineBlock } | null>(null)
   // Wednesday of week 1 — a presentational rain-forecast flag, matching the
   // mockup's "WED MAY 7" callout.
   const rainDay = new Date(anchorMonday)
@@ -146,9 +158,50 @@ function FourWeekTimeline({
     color: 'var(--m-ink-2)',
   }
 
+  // Begin a drag on a real (non-demo) block with at least one underlying row.
+  const onBlockPointerDown = (e: React.PointerEvent<HTMLDivElement>, key: string, block: TimelineBlock) => {
+    if (isDemo || busy || block.days.length === 0) return
+    // Measure the row track (the positioned parent of the block) for snapping.
+    const track = (e.currentTarget.parentElement as HTMLElement | null) ?? null
+    const trackWidth = track ? track.getBoundingClientRect().width : 0
+    if (!(trackWidth > 0)) return
+    dragRef.current = { key, startX: e.clientX, trackWidth, block }
+    setDrag({ key, dx: 0, trackWidth })
+    e.currentTarget.setPointerCapture(e.pointerId)
+    e.preventDefault()
+  }
+
+  const onBlockPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current
+    if (!d) return
+    setDrag({ key: d.key, dx: e.clientX - d.startX, trackWidth: d.trackWidth })
+  }
+
+  const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current
+    dragRef.current = null
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    }
+    if (!d) {
+      setDrag(null)
+      return
+    }
+    const rawShift = pxToDayShift(e.clientX - d.startX, d.trackWidth)
+    const shift = clampShift(d.block.start, d.block.span, rawShift)
+    setDrag(null)
+    if (shift !== 0) onReschedule(d.block, shift)
+  }
+
   return (
     <div className="d-stack" style={{ gap: 12 }}>
-      <div className="d-eyebrow">Drag to move · drag edge to resize</div>
+      <div className="d-eyebrow">
+        {busy
+          ? 'Rescheduling…'
+          : isDemo
+            ? 'Sample timeline — book crews to drag real assignments'
+            : 'Drag to reschedule · drag edge to resize'}
+      </div>
 
       {isDemo ? (
         <div className="d-card" style={{ color: 'var(--m-ink-3)', fontSize: 13, padding: '12px 14px' }}>
@@ -213,14 +266,27 @@ function FourWeekTimeline({
               >
                 {proj.blocks.map((b, bi) => {
                   const onAccent = proj.color === 'var(--m-accent)'
+                  const key = `${proj.id}:${bi}`
+                  const isDragging = drag?.key === key
+                  // Whole-day snap preview during a drag so the bar tracks the
+                  // grid columns rather than sliding by raw pixels.
+                  const previewShift = isDragging
+                    ? clampShift(b.start, b.span, pxToDayShift(drag!.dx, drag!.trackWidth))
+                    : 0
+                  const draggable = !isDemo && b.days.length > 0
                   return (
                     <div
                       key={bi}
-                      title={`${b.label} — drag to move (visual)`}
+                      role={draggable ? 'button' : undefined}
+                      title={draggable ? `${b.label} — drag to reschedule` : `${b.label} — sample (not draggable)`}
+                      onPointerDown={(e) => onBlockPointerDown(e, key, b)}
+                      onPointerMove={onBlockPointerMove}
+                      onPointerUp={endDrag}
+                      onPointerCancel={endDrag}
                       style={{
                         position: 'absolute',
                         top: 14,
-                        left: `${(b.start / TIMELINE_DAYS) * 100}%`,
+                        left: `${((b.start + previewShift) / TIMELINE_DAYS) * 100}%`,
                         width: `${(b.span / TIMELINE_DAYS) * 100}%`,
                         height: 44,
                         background: proj.color,
@@ -233,7 +299,10 @@ function FourWeekTimeline({
                         fontSize: 10,
                         fontWeight: 700,
                         letterSpacing: '0.04em',
-                        cursor: 'grab',
+                        cursor: draggable ? (isDragging ? 'grabbing' : 'grab') : 'default',
+                        opacity: busy ? 0.6 : 1,
+                        touchAction: draggable ? 'none' : undefined,
+                        boxShadow: isDragging ? '0 0 0 2px var(--m-accent)' : 'none',
                         overflow: 'hidden',
                         whiteSpace: 'nowrap',
                       }}
@@ -285,56 +354,96 @@ function FourWeekTimeline({
 export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const [view, setView] = useState<ScheduleView>('week')
   const [assignmentOpen, setAssignmentOpen] = useState(false)
+  const [rescheduling, setRescheduling] = useState(false)
+  const qc = useQueryClient()
 
   const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
   const schedules = useMemo(() => bootstrap?.schedules ?? [], [bootstrap?.schedules])
 
-  const active = useMemo(() => projects.filter((p) => /progress|active/i.test(p.status)), [projects])
-
-  // Monday of the current week anchors the 4-week timeline window.
+  // Monday of the current week anchors the 4-week timeline window. Stable for
+  // the component's lifetime ([] deps), so it's safe to capture in callbacks.
   const anchorMonday = useMemo(() => mondayOf(new Date()), [])
+
+  // Drag-to-reschedule drop handler (Gap 4). Each underlying crew_schedules
+  // row is PATCHed to its shifted YYYY-MM-DD via the ready server endpoint
+  // (PATCH /api/schedules/:id). The block label/position is derived from the
+  // bootstrap ledger, so after the PATCHes land we invalidate the schedule +
+  // bootstrap caches and let the grid re-derive — no local business state.
+  const handleReschedule = useCallback(
+    async (block: TimelineBlock, shift: number) => {
+      const ops = computeRescheduleOps(block, shift, anchorMonday)
+      if (ops.length === 0) return
+      setRescheduling(true)
+      try {
+        await Promise.all(ops.map((op) => patchCrewSchedule(op.id, { scheduled_for: op.scheduled_for })))
+      } catch {
+        // The block snaps back on the next re-derive; the invalidate below
+        // (in `finally`) refreshes from server-truth either way.
+      } finally {
+        void qc.invalidateQueries({ queryKey: ['schedules'] })
+        void qc.invalidateQueries({ queryKey: ['bootstrap'] })
+        setRescheduling(false)
+      }
+    },
+    [qc, anchorMonday],
+  )
+
+  const active = useMemo(() => projects.filter((p) => /progress|active/i.test(p.status)), [projects])
 
   // Derive real per-project assignment blocks across the 20 working-day grid
   // from the live schedules ledger. Consecutive scheduled days for a project
   // collapse into one contiguous block; the block label is its peak crew size.
   const liveTimeline = useMemo<TimelineProject[]>(() => {
-    const byProject = new Map<string, Map<number, number>>()
+    // Per project: offset → peak crew count, and offset → schedule row ids
+    // landing on that working day. The ids ride into each block's `days` so
+    // drag-to-reschedule (Gap 4) can PATCH the exact rows on drop.
+    const countByProject = new Map<string, Map<number, number>>()
+    const idsByProject = new Map<string, Map<number, string[]>>()
     for (const s of schedules) {
       if (s.deleted_at || !s.project_id) continue
       const off = workingDayOffset(s.scheduled_for, anchorMonday)
       if (off === null) continue
-      const days = byProject.get(s.project_id) ?? new Map<number, number>()
+      const counts = countByProject.get(s.project_id) ?? new Map<number, number>()
       const crewCount = Array.isArray(s.crew) ? s.crew.length : 0
-      days.set(off, (days.get(off) ?? 0) + Math.max(crewCount, 1))
-      byProject.set(s.project_id, days)
+      counts.set(off, (counts.get(off) ?? 0) + Math.max(crewCount, 1))
+      countByProject.set(s.project_id, counts)
+      const ids = idsByProject.get(s.project_id) ?? new Map<number, string[]>()
+      const dayIds = ids.get(off) ?? []
+      dayIds.push(s.id)
+      ids.set(off, dayIds)
+      idsByProject.set(s.project_id, ids)
     }
 
     const out: TimelineProject[] = []
     let colorIdx = 0
     for (const p of active) {
-      const days = byProject.get(p.id)
-      if (!days || days.size === 0) continue
+      const counts = countByProject.get(p.id)
+      const ids = idsByProject.get(p.id)
+      if (!counts || counts.size === 0) continue
       const color = ROW_COLORS[colorIdx % ROW_COLORS.length]!
       colorIdx += 1
       const code = p.division_code || p.name.slice(0, 3).toUpperCase()
 
-      // Collapse contiguous offsets into blocks.
-      const offsets = [...days.keys()].sort((a, b) => a - b)
+      // Collapse contiguous offsets into blocks, carrying the per-day ids.
+      const offsets = [...counts.keys()].sort((a, b) => a - b)
       const blocks: TimelineBlock[] = []
       let runStart = offsets[0]!
       let prev = offsets[0]!
-      let peak = days.get(prev) ?? 0
+      let peak = counts.get(prev) ?? 0
+      let runDays: Array<{ offset: number; ids: string[] }> = [{ offset: prev, ids: ids?.get(prev) ?? [] }]
       const flush = (end: number) => {
-        blocks.push({ start: runStart, span: end - runStart + 1, label: `${code} · ${peak}` })
+        blocks.push({ start: runStart, span: end - runStart + 1, label: `${code} · ${peak}`, days: runDays })
       }
       for (let i = 1; i < offsets.length; i += 1) {
         const cur = offsets[i]!
         if (cur === prev + 1) {
-          peak = Math.max(peak, days.get(cur) ?? 0)
+          peak = Math.max(peak, counts.get(cur) ?? 0)
+          runDays.push({ offset: cur, ids: ids?.get(cur) ?? [] })
         } else {
           flush(prev)
           runStart = cur
-          peak = days.get(cur) ?? 0
+          peak = counts.get(cur) ?? 0
+          runDays = [{ offset: cur, ids: ids?.get(cur) ?? [] }]
         }
         prev = cur
       }
@@ -442,7 +551,14 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
             <DEyebrow>
               <span
                 aria-hidden
-                style={{ display: 'inline-block', width: 12, height: 12, background: 'var(--m-accent)', marginRight: 8, verticalAlign: 'middle' }}
+                style={{
+                  display: 'inline-block',
+                  width: 12,
+                  height: 12,
+                  background: 'var(--m-accent)',
+                  marginRight: 8,
+                  verticalAlign: 'middle',
+                }}
               />
               {`${active.length} ${active.length === 1 ? 'PROJECT' : 'PROJECTS'} · ${crewRoster.length} CREW · ${utilization}% UTILIZED`}
             </DEyebrow>
@@ -457,7 +573,14 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
         </div>
 
         {view === '4wk' ? (
-          <FourWeekTimeline anchorMonday={anchorMonday} timeline={timeline} isDemo={usingDemoTimeline} line={line} />
+          <FourWeekTimeline
+            anchorMonday={anchorMonday}
+            timeline={timeline}
+            isDemo={usingDemoTimeline}
+            line={line}
+            onReschedule={handleReschedule}
+            busy={rescheduling}
+          />
         ) : active.length === 0 ? (
           <div className="d-card">No active jobs this week. Crews land here once a project kicks off.</div>
         ) : (

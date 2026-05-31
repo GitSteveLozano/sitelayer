@@ -48,7 +48,13 @@ export const ESTIMATE_SHARE_EVENT_TYPES = ['VIEW', 'ACCEPT', 'DECLINE', 'EXPIRE'
 
 export type EstimateShareWorkflowEvent =
   | { type: 'VIEW'; viewed_at: string }
-  | { type: 'ACCEPT'; accepted_at: string; signer_name: string; signature_data_url?: string | null; signer_ip?: string | null }
+  | {
+      type: 'ACCEPT'
+      accepted_at: string
+      signer_name: string
+      signature_data_url?: string | null
+      signer_ip?: string | null
+    }
   | { type: 'DECLINE'; declined_at: string; decline_reason?: string | null }
   | { type: 'EXPIRE'; expired_at: string }
   | { type: 'REVOKE'; revoked_at: string; revoked_by: string }

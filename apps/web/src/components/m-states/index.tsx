@@ -475,11 +475,7 @@ export function MUpdateState({
   onSecondary?: () => void
 }) {
   return (
-    <div
-      role="status"
-      aria-live="polite"
-      style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}
-    >
+    <div role="status" aria-live="polite" style={{ display: 'flex', flexDirection: 'column', minHeight: '100%' }}>
       {/* Full-fill accent hero — eyebrow + headline + body. */}
       <div
         style={{

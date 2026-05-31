@@ -57,6 +57,12 @@ export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null 
   const [remindersOpen, setRemindersOpen] = useState(false)
   const [tab, setTab] = useState<MoneyTab>('cashflow')
 
+  // THIS WEEK PAYROLL · AUTO — when the company opted into the weekly
+  // auto-post policy (migration 116) the tile reads "AUTO <next date>"
+  // instead of the manual "Labor due this week" sub-label. Read-only off the
+  // bootstrap policy block; no extra API call.
+  const autoPostMeta = useMemo(() => deriveAutoPostMeta(bootstrap?.laborPayrollAutoPost ?? null), [bootstrap])
+
   // OUTSTANDING AR ≈ open (sent-but-unsettled) invoice value across the two
   // real billing surfaces. Reuses the same composite list the Books tab reads;
   // React Query dedups the underlying estimate-push / billing-run queries.
@@ -119,6 +125,7 @@ export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null 
             outstandingAr={outstandingAr}
             openInvoiceCount={openInvoiceCount}
             columns={columns}
+            autoPostMeta={autoPostMeta}
             onSendReminders={() => setRemindersOpen(true)}
           />
         )}
@@ -138,6 +145,7 @@ function CashFlowPanel({
   outstandingAr,
   openInvoiceCount,
   columns,
+  autoPostMeta,
   onSendReminders,
 }: {
   model: MoneyModel
@@ -147,6 +155,8 @@ function CashFlowPanel({
   outstandingAr: number
   openInvoiceCount: number
   columns: Array<DColumn<PendingRow>>
+  /** "AUTO MAY 7" when auto-post is on; "Labor due this week" otherwise. */
+  autoPostMeta: string
   onSendReminders: () => void
 }) {
   // Design KPI strip: NET THIS MONTH · OUTSTANDING AR · THIS WEEK PAYROLL ·
@@ -180,7 +190,7 @@ function CashFlowPanel({
           meta={`${openInvoiceCount} ${openInvoiceCount === 1 ? 'invoice' : 'invoices'}`}
           metaTone={openInvoiceCount > 0 ? 'bad' : 'good'}
         />
-        <DKpi label="This week payroll" value={payrollC.value} unit={payrollC.unit} meta="Labor due this week" />
+        <DKpi label="This week payroll" value={payrollC.value} unit={payrollC.unit} meta={autoPostMeta} />
         <DKpi
           label="YTD profit"
           value={ytdC.value}
@@ -610,6 +620,36 @@ function deriveMoney(bootstrap: BootstrapResponse | null): MoneyModel {
     }))
 
   return { net, inflow, outflow, margin, weekPayroll, ytdProfit, trend, pending }
+}
+
+/**
+ * THIS WEEK PAYROLL tile sub-label. When the company opted into the weekly
+ * auto-post policy (migration 116, surfaced on bootstrap.laborPayrollAutoPost),
+ * reads "AUTO <next post date>" (design dsg__03 "AUTO MAY 7"). Otherwise the
+ * manual default "Labor due this week". Pure + presentational.
+ */
+export function deriveAutoPostMeta(
+  policy: { enabled: boolean; weekday: number | null; after: string | null } | null,
+  now: Date = new Date(),
+): string {
+  if (!policy || !policy.enabled || policy.weekday == null) return 'Labor due this week'
+  const next = nextWeekdayDate(policy.weekday, now)
+  if (!next) return 'Auto'
+  const label = next.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }).toUpperCase()
+  return `AUTO ${label}`
+}
+
+/**
+ * Next calendar date (today-or-later) whose ISO weekday (1=Mon..7=Sun)
+ * matches `isoWeekday`. Returns the same day when today already matches.
+ */
+function nextWeekdayDate(isoWeekday: number, now: Date): Date | null {
+  if (isoWeekday < 1 || isoWeekday > 7) return null
+  const todayIso = now.getDay() === 0 ? 7 : now.getDay()
+  const delta = (isoWeekday - todayIso + 7) % 7
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  d.setDate(d.getDate() + delta)
+  return d
 }
 
 /** Current Monday-anchored week [start, end] as Date objects (local). */

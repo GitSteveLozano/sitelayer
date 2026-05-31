@@ -245,7 +245,9 @@ describe('BudgetTab render-smoke', () => {
       }),
     )
 
-    renderTab(<BudgetTab project={project({ status: 'completed' })} totalHours={100} spent={6200} bid={10000} pctSpent={62} />)
+    renderTab(
+      <BudgetTab project={project({ status: 'completed' })} totalHours={100} spent={6200} bid={10000} pctSpent={62} />,
+    )
     // The "Closed out" pill + the "Closed out on …" body both match.
     expect(screen.getAllByText(/Closed out/).length).toBeGreaterThanOrEqual(1)
     const openButton = screen.getByText('Open post-mortem')

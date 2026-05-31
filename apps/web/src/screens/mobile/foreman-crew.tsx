@@ -61,13 +61,7 @@ const STATUS_LABEL: Record<WorkerStatus, string> = {
 
 type OpenIssueRow = { worker_id: string | null; resolved_at: string | null }
 
-export function ForemanCrew({
-  bootstrap,
-  companySlug,
-}: {
-  bootstrap: BootstrapResponse | null
-  companySlug?: string
-}) {
+export function ForemanCrew({ bootstrap, companySlug }: { bootstrap: BootstrapResponse | null; companySlug?: string }) {
   const navigate = useNavigate()
   const [grp, setGrp] = useState<GroupBy>('site')
   const [filter, setFilter] = useState<StatusFilter>('all')

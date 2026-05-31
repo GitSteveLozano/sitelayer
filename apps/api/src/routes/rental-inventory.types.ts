@@ -8,11 +8,17 @@ import type {
 import type { JobRentalContractForBilling, JobRentalLineForBilling } from '@sitelayer/domain'
 import { nextRentalBillingEvents, rentalBillingRowToSnapshot } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
+import type { BlueprintStorage } from '../storage.js'
 
 /**
  * Route context shared across the rental-inventory split modules. This is the
  * exact shape the original `handleRentalInventoryRoutes` consumed, so the
  * split modules stay drop-in compatible with `apps/api/src/server.ts`.
+ *
+ * The `storage` + `maxMovementPhotoBytes` + download plumbing are only
+ * consumed by the dispatch/return condition-photo endpoints in
+ * rental-inventory-crud.ts; they mirror the WorkerIssueRouteCtx fields so
+ * the upload pattern stays identical across surfaces.
  */
 export type RentalInventoryRouteCtx = {
   pool: Pool
@@ -22,6 +28,16 @@ export type RentalInventoryRouteCtx = {
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
   checkVersion: (table: string, where: string, params: unknown[], expectedVersion: number | null) => Promise<boolean>
+  /** Storage backend (DO Spaces or local FS) — same instance the blueprint
+   *  / worker-issue / daily-log routes use. */
+  storage: BlueprintStorage
+  /** Per-photo cap (bytes) for dispatch/return condition photos. */
+  maxMovementPhotoBytes: number
+  /** Whether the photo download path returns presigned URLs. */
+  movementPhotoDownloadPresigned: boolean
+  /** Stream-back response shaping for photo downloads. */
+  sendFileContent: (mimeType: string, fileName: string, content: Buffer | string) => void
+  sendFileRedirect: (location: string) => void
 }
 
 export type DbExecutor = Pick<Pool | PoolClient, 'query'>

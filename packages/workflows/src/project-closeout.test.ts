@@ -184,7 +184,9 @@ describe('project-closeout reducer — property invariants', () => {
   })
 
   it('completed offers ACKNOWLEDGE_POST_MORTEM', () => {
-    expect(nextProjectCloseoutEvents('completed')).toEqual([{ type: 'ACKNOWLEDGE_POST_MORTEM', label: 'Open post-mortem' }])
+    expect(nextProjectCloseoutEvents('completed')).toEqual([
+      { type: 'ACKNOWLEDGE_POST_MORTEM', label: 'Open post-mortem' },
+    ])
   })
 })
 

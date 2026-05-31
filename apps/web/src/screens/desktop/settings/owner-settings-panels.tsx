@@ -284,7 +284,12 @@ export function CompanySection() {
             readOnly
             hint="License / business registration."
           />
-          <Field label="Workspace URL" value={company?.slug ?? ''} hint="Used in links + the customer portal." readOnly />
+          <Field
+            label="Workspace URL"
+            value={company?.slug ?? ''}
+            hint="Used in links + the customer portal."
+            readOnly
+          />
         </FieldGrid>
       </SettingsCard>
 
@@ -957,8 +962,8 @@ export function NotificationsSection() {
       <div className="d-card" style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
         <MPill tone="blue">Delivery</MPill>
         <div style={{ fontSize: 13, lineHeight: 1.5, color: 'var(--m-ink-2)' }}>
-          Pick how each event reaches you — push, SMS, or email. SMS and email need a contact below. (Each event delivers
-          on one channel today; tap the lit box to turn it off.)
+          Pick how each event reaches you — push, SMS, or email. SMS and email need a contact below. (Each event
+          delivers on one channel today; tap the lit box to turn it off.)
         </div>
       </div>
 

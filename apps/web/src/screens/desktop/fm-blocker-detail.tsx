@@ -38,7 +38,10 @@ export function FmBlockerDetail({
   const ctx = fe.snapshot?.context
   const state = fe.snapshot?.state ?? 'open'
   const actions = new Set((fe.snapshot?.next_events ?? []).map((e) => e.type))
-  const message = (ctx?.message ?? '').replace(/^\[[^\]]+\]\s*/g, '').replace(/\[severity:[^\]]+\]/g, '').trim()
+  const message = (ctx?.message ?? '')
+    .replace(/^\[[^\]]+\]\s*/g, '')
+    .replace(/\[severity:[^\]]+\]/g, '')
+    .trim()
   const worker = bootstrap?.workers.find((w) => w.id === ctx?.worker_id)
   const project = bootstrap?.projects.find((p) => p.id === ctx?.project_id)
 
@@ -182,9 +185,7 @@ export function FmBlockerDetail({
           <div>
             <MBanner
               tone={state === 'resolved' ? 'ok' : state === 'escalated' ? 'attention' : 'info'}
-              title={
-                state === 'resolved' ? 'RESOLVED' : state === 'escalated' ? 'ESCALATED TO ESTIMATOR' : 'DISMISSED'
-              }
+              title={state === 'resolved' ? 'RESOLVED' : state === 'escalated' ? 'ESCALATED TO ESTIMATOR' : 'DISMISSED'}
               body={state === 'escalated' && ctx?.escalation_reason ? `“${ctx.escalation_reason}”` : undefined}
             />
             {actions.has('REOPEN') ? (

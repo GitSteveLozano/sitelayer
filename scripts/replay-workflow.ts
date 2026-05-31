@@ -30,12 +30,7 @@
  */
 
 import { Pool } from 'pg'
-import {
-  applyEventLog,
-  getWorkflow,
-  listWorkflows,
-  type WorkflowEventLogEntry,
-} from '@sitelayer/workflows'
+import { applyEventLog, getWorkflow, listWorkflows, type WorkflowEventLogEntry } from '@sitelayer/workflows'
 // Side-effect import: pulling the whole package runs every workflow
 // module's top-level registerWorkflow(), so getWorkflow() / listWorkflows()
 // see ALL registered reducers — not just the handful named below. This is
@@ -167,12 +162,7 @@ const ENTITY_TABLE: Record<string, EntityMapping> = {
     table: 'rentals',
     stateColumn: 'status',
     stateVersionColumn: 'state_version',
-    columns: [
-      { column: 'returned_at' },
-      { column: 'returned_by' },
-      { column: 'closed_at' },
-      { column: 'closed_by' },
-    ],
+    columns: [{ column: 'returned_at' }, { column: 'returned_by' }, { column: 'closed_at' }, { column: 'closed_by' }],
   },
   daily_log: {
     table: 'daily_logs',
@@ -291,7 +281,9 @@ function printConformanceWarnings(): void {
     )
   }
   if (orphaned.length > 0) {
-    console.error(`[warn] ${orphaned.length} ENTITY_TABLE entr(ies) reference an unregistered workflow: ${orphaned.join(', ')}`)
+    console.error(
+      `[warn] ${orphaned.length} ENTITY_TABLE entr(ies) reference an unregistered workflow: ${orphaned.join(', ')}`,
+    )
   }
 }
 

@@ -169,6 +169,15 @@ export type BootstrapResponse = {
   // Caller's own active project assignments. Drives the contextual
   // mobile shell — see apps/web/src/lib/active-context.ts.
   projectAssignments?: Array<ProjectAssignmentRow>
+  // Per-company labor-payroll auto-post policy (migration 116). Drives the
+  // "THIS WEEK PAYROLL · AUTO" sub-label on the owner Money tiles. `enabled`
+  // is false for every company by default; weekday is ISO (1=Mon..7=Sun);
+  // after is 'HH:MM' local. Optional so an older API build still type-checks.
+  laborPayrollAutoPost?: {
+    enabled: boolean
+    weekday: number | null
+    after: string | null
+  }
 }
 
 export type SessionResponse = {

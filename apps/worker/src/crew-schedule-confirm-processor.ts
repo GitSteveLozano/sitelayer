@@ -192,15 +192,7 @@ export async function processCrewScheduleConfirm(
               `insert into labor_entries
                  (company_id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on)
                values ($1, $2, $3, $4, $5, coalesce($6, 0), 'confirmed', $7)`,
-              [
-                companyId,
-                projectId,
-                asString(entry.worker_id),
-                code,
-                hours,
-                asNumber(entry.sqft_done) ?? 0,
-                on,
-              ],
+              [companyId, projectId, asString(entry.worker_id), code, hours, asNumber(entry.sqft_done) ?? 0, on],
             )
           }
           // Bump the parent project version so derived estimate/analytics

@@ -250,6 +250,8 @@ function page(
     calibration_world_distance: distance,
     calibration_world_unit: 'ft',
     calibration_set_at: CREATED_AT,
+    scale_verified_at: null,
+    scale_verified_by: null,
     measurement_count: 0,
   }
 }

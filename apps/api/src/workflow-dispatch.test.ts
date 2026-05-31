@@ -36,9 +36,13 @@ const baseOpts = (overrides: Record<string, unknown> = {}) => ({
   entityId: 'e-1',
   expectedStateVersion: 0,
   actorUserId: 'u-1',
-  loadSnapshot: async () => ({ row: { id: 'e-1', state: 'start', state_version: 0 } as Row, snapshot: { state: 'start', state_version: 0 } as Snap }),
+  loadSnapshot: async () => ({
+    row: { id: 'e-1', state: 'start', state_version: 0 } as Row,
+    snapshot: { state: 'start', state_version: 0 } as Snap,
+  }),
   buildEvent: (): Ev => ({ type: 'GO' }),
-  persist: async (_c: PoolClient, next: Snap) => ({ id: 'e-1', state: next.state, state_version: next.state_version } as Row),
+  persist: async (_c: PoolClient, next: Snap) =>
+    ({ id: 'e-1', state: next.state, state_version: next.state_version }) as Row,
   ...overrides,
 })
 
@@ -57,7 +61,10 @@ describe('dispatchWorkflowEvent', () => {
 
   it('not_found: loadSnapshot returns null', async () => {
     const client = fakeClient()
-    const result = await dispatchWorkflowEvent<Row, Snap, Ev>(client, baseOpts({ loadSnapshot: async () => null }) as never)
+    const result = await dispatchWorkflowEvent<Row, Snap, Ev>(
+      client,
+      baseOpts({ loadSnapshot: async () => null }) as never,
+    )
     expect(result.kind).toBe('not_found')
     // no event logged on a miss
     expect(client.calls.find((c) => /workflow_event_log/i.test(c.text))).toBeUndefined()
@@ -72,7 +79,10 @@ describe('dispatchWorkflowEvent', () => {
 
   it('illegal_transition: reducer throws → no write, no event', async () => {
     const client = fakeClient()
-    const result = await dispatchWorkflowEvent<Row, Snap, Ev>(client, baseOpts({ buildEvent: () => ({ type: 'BAD' }) }) as never)
+    const result = await dispatchWorkflowEvent<Row, Snap, Ev>(
+      client,
+      baseOpts({ buildEvent: () => ({ type: 'BAD' }) }) as never,
+    )
     expect(result.kind).toBe('illegal_transition')
     if (result.kind !== 'illegal_transition') return
     expect(result.message).toMatch(/illegal transition/)
@@ -84,7 +94,11 @@ describe('dispatchWorkflowEvent', () => {
     let ran = false
     const result = await dispatchWorkflowEvent<Row, Snap, Ev>(
       client,
-      baseOpts({ sideEffects: async () => { ran = true } }) as never,
+      baseOpts({
+        sideEffects: async () => {
+          ran = true
+        },
+      }) as never,
     )
     expect(result.kind).toBe('ok')
     expect(ran).toBe(true)

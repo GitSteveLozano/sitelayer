@@ -405,7 +405,12 @@ export async function handleRentalRequestRoutes(
           actorUserId: ctx.currentUserId,
           idempotencyKey: `rental_request:approve:${requestId}`,
         })
-        return { kind: 'ok' as const, row: shapeRow(updatedRow), created: createdRentals, eventType: 'APPROVE' as const }
+        return {
+          kind: 'ok' as const,
+          row: shapeRow(updatedRow),
+          created: createdRentals,
+          eventType: 'APPROVE' as const,
+        }
       }
 
       // DECLINE
@@ -456,7 +461,12 @@ export async function handleRentalRequestRoutes(
         actorUserId: ctx.currentUserId,
         idempotencyKey: `rental_request:decline:${requestId}`,
       })
-      return { kind: 'ok' as const, row: shapeRow(updatedRow), created: [] as RentalRow[], eventType: 'DECLINE' as const }
+      return {
+        kind: 'ok' as const,
+        row: shapeRow(updatedRow),
+        created: [] as RentalRow[],
+        eventType: 'DECLINE' as const,
+      }
     })
 
     if (result.kind === 'not_found') {

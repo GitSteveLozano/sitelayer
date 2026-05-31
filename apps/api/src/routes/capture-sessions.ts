@@ -19,9 +19,10 @@ export type CaptureSessionRouteCtx = {
 const CREATE_ROLES: readonly CompanyRole[] = ['admin', 'foreman', 'office', 'member', 'bookkeeper']
 const READ_ROLES: readonly CompanyRole[] = ['admin', 'foreman', 'office', 'bookkeeper']
 const MODES = ['trace', 'feedback', 'desktop', 'native', 'manual_upload'] as const
-const STATUSES = ['open', 'stopped', 'discarded', 'failed'] as const
+const STATUSES = ['open', 'stopped', 'discarded', 'failed', 'redacted'] as const
 const MAX_EVENTS = 100
 const MAX_ARTIFACTS = 25
+const CAPTURE_REDACTION_VERSION = 'capture-session-v1'
 
 type CaptureSessionRow = {
   id: string
@@ -35,6 +36,11 @@ type CaptureSessionRow = {
   viewport: string | null
   app_build_sha: string | null
   consent_version: string
+  consent_actor_kind?: string | null
+  consent_actor_ref?: string | null
+  consent_authority?: string | null
+  consent_scope?: Record<string, unknown>
+  consented_at?: string | null
   redaction_version: string
   metadata: Record<string, unknown>
   started_at: string
@@ -55,19 +61,53 @@ function optionalText(value: unknown, maxLength: number): string | null {
   return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed
 }
 
+function optionalTimestampText(value: unknown): string | null {
+  const trimmed = optionalText(value, 80)
+  if (!trimmed) return null
+  const parsed = Date.parse(trimmed)
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null
+}
+
+function optionalInteger(value: unknown, fallback: number | null = null): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.trunc(value)
+}
+
+function optionalNonNegativeInteger(value: unknown): number | null {
+  const parsed = optionalInteger(value)
+  return parsed === null ? null : Math.max(0, parsed)
+}
+
 function enumValue<T extends readonly string[]>(value: unknown, allowed: T, fallback: T[number]): T[number] {
   if (typeof value !== 'string') return fallback
   return allowed.includes(value as T[number]) ? (value as T[number]) : fallback
+}
+
+function parsedEnumValue<T extends readonly string[]>(value: unknown, allowed: T): T[number] | null {
+  if (typeof value !== 'string') return null
+  return allowed.includes(value as T[number]) ? (value as T[number]) : null
 }
 
 function jsonRecord(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {}
 }
 
+function captureConsentScope(body: Record<string, unknown>, mode: (typeof MODES)[number]): Record<string, unknown> {
+  return {
+    ...jsonRecord(body.consent_scope),
+    mode,
+    route_path: optionalText(body.route_path, 500) ?? getRequestContext()?.route ?? null,
+  }
+}
+
 function captureSessionIdFromPath(pathname: string): string | null {
   const match = pathname.match(/^\/api\/capture-sessions\/([^/]+)(?:\/.*)?$/)
   const id = match?.[1]
   return id && isValidUuid(id) ? id : null
+}
+
+function requiresExplicitCaptureConsent(mode: (typeof MODES)[number]): boolean {
+  return mode !== 'trace'
 }
 
 function responseRow(row: CaptureSessionRow): CaptureSessionRow {
@@ -85,16 +125,34 @@ async function upsertCaptureSession(ctx: CaptureSessionRouteCtx) {
   const rawRetentionDays = Number(body.retention_days ?? 30)
   const retentionDays = Number.isFinite(rawRetentionDays) ? Math.max(1, Math.min(90, rawRetentionDays)) : 30
   const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString()
-  const mode = enumValue(body.mode, MODES, 'trace')
+  const mode = body.mode === undefined ? 'trace' : parsedEnumValue(body.mode, MODES)
+  if (!mode) {
+    ctx.sendJson(400, { error: 'invalid capture session mode' })
+    return
+  }
+  const consentVersion = optionalText(body.consent_version, 80) ?? ''
+  if (requiresExplicitCaptureConsent(mode) && !consentVersion) {
+    ctx.sendJson(400, { error: 'consent_version is required for recorded capture sessions' })
+    return
+  }
+  const consentActorKind = consentVersion ? 'user' : null
+  const consentActorRef = consentVersion ? ctx.identity.userId : null
+  const consentAuthority = consentVersion ? 'authenticated_company_user' : null
+  const consentedAt = consentVersion ? new Date().toISOString() : null
+  const consentScope = captureConsentScope(body, mode)
   const metadata = jsonRecord(body.metadata)
   const row = await withMutationTx(ctx.company.id, async (c) => {
     const result = await c.query<CaptureSessionRow>(
       `insert into capture_sessions (
          id, company_id, actor_user_id, mode, status, route_path, device_kind,
-         platform, viewport, app_build_sha, consent_version, metadata,
+         platform, viewport, app_build_sha, consent_version,
+         consent_actor_kind, consent_actor_ref, consent_authority, consent_scope,
+         consented_at, metadata,
          retention_expires_at
        ) values (
-         $1, $2, $3, $4, 'open', $5, $6, $7, $8, $9, $10, $11::jsonb, $12::timestamptz
+         $1, $2, $3, $4, 'open', $5, $6, $7, $8, $9, $10,
+         $11, $12, $13, $14::jsonb, $15::timestamptz, $16::jsonb,
+         $17::timestamptz
        )
        on conflict (id) do update set
          last_seen_at = now(),
@@ -104,6 +162,14 @@ async function upsertCaptureSession(ctx: CaptureSessionRouteCtx) {
          viewport = coalesce(excluded.viewport, capture_sessions.viewport),
          app_build_sha = coalesce(excluded.app_build_sha, capture_sessions.app_build_sha),
          consent_version = coalesce(nullif(excluded.consent_version, ''), capture_sessions.consent_version),
+         consent_actor_kind = coalesce(excluded.consent_actor_kind, capture_sessions.consent_actor_kind),
+         consent_actor_ref = coalesce(excluded.consent_actor_ref, capture_sessions.consent_actor_ref),
+         consent_authority = coalesce(excluded.consent_authority, capture_sessions.consent_authority),
+         consent_scope = case
+           when excluded.consent_scope = '{}'::jsonb then capture_sessions.consent_scope
+           else capture_sessions.consent_scope || excluded.consent_scope
+         end,
+         consented_at = coalesce(excluded.consented_at, capture_sessions.consented_at),
          metadata = capture_sessions.metadata || excluded.metadata
        where capture_sessions.company_id = excluded.company_id
        returning *`,
@@ -117,7 +183,12 @@ async function upsertCaptureSession(ctx: CaptureSessionRouteCtx) {
         optionalText(body.platform, 80),
         optionalText(body.viewport, 80),
         optionalText(body.app_build_sha, 120) ?? ctx.buildSha,
-        optionalText(body.consent_version, 80) ?? '',
+        consentVersion,
+        consentActorKind,
+        consentActorRef,
+        consentAuthority,
+        JSON.stringify(consentScope),
+        consentedAt,
         JSON.stringify(metadata),
         expiresAt,
       ],
@@ -134,10 +205,14 @@ async function upsertCaptureSession(ctx: CaptureSessionRouteCtx) {
 async function patchCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
   if (!ctx.requireRole(CREATE_ROLES)) return
   const body = await ctx.readBody()
-  const status = body.status === undefined ? null : enumValue(body.status, STATUSES, 'open')
+  const status = body.status === undefined ? null : parsedEnumValue(body.status, STATUSES)
+  if (body.status !== undefined && !status) {
+    ctx.sendJson(400, { error: 'invalid capture session status' })
+    return
+  }
   const metadata = jsonRecord(body.metadata)
-  const result = await withMutationTx(ctx.company.id, (c) =>
-    c.query<CaptureSessionRow>(
+  const row = await withMutationTx(ctx.company.id, async (c) => {
+    const result = await c.query<CaptureSessionRow>(
       `update capture_sessions
           set status = coalesce($3, status),
               route_path = coalesce($4, route_path),
@@ -148,9 +223,20 @@ async function patchCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
         where id = $1 and company_id = $2
         returning *`,
       [id, ctx.company.id, status, optionalText(body.route_path, 500), JSON.stringify(metadata)],
-    ),
-  )
-  const row = result.rows[0]
+    )
+    const updated = result.rows[0] ?? null
+    if (updated && (status === 'discarded' || status === 'redacted')) {
+      await c.query(
+        `update capture_artifacts
+            set deleted_at = coalesce(deleted_at, now())
+          where capture_session_id = $1
+            and company_id = $2
+            and deleted_at is null`,
+        [id, ctx.company.id],
+      )
+    }
+    return updated
+  })
   if (!row) {
     ctx.sendJson(404, { error: 'capture session not found' })
     return
@@ -168,12 +254,20 @@ async function appendCaptureSessionEvents(ctx: CaptureSessionRouteCtx, id: strin
   }
   const requestId = getRequestContext()?.requestId ?? null
   let inserted = 0
+  let foundSession = false
+  let blockedStatus: string | null = null
   await withMutationTx(ctx.company.id, async (c) => {
-    const exists = await c.query<{ id: string }>(
-      `select id from capture_sessions where id = $1 and company_id = $2 limit 1`,
+    const exists = await c.query<{ id: string; status: string }>(
+      `select id, status from capture_sessions where id = $1 and company_id = $2 limit 1`,
       [id, ctx.company.id],
     )
-    if (!exists.rows[0]) return
+    const session = exists.rows[0]
+    if (!session) return
+    foundSession = true
+    if (session.status !== 'open') {
+      blockedStatus = session.status
+      return
+    }
     for (const [index, raw] of rawEvents.entries()) {
       if (!isRecord(raw)) continue
       const eventType = optionalText(raw.event_type, 160)
@@ -193,7 +287,7 @@ async function appendCaptureSessionEvents(ctx: CaptureSessionRouteCtx, id: strin
         [
           ctx.company.id,
           id,
-          typeof raw.seq === 'number' ? Math.trunc(raw.seq) : index,
+          optionalInteger(raw.seq, index) ?? index,
           optionalText(raw.client_event_id, 160),
           eventType,
           optionalText(raw.event_class, 120) ?? '',
@@ -203,7 +297,7 @@ async function appendCaptureSessionEvents(ctx: CaptureSessionRouteCtx, id: strin
           optionalText(raw.entity_id, 160),
           requestId,
           JSON.stringify(jsonRecord(raw.payload)),
-          optionalText(raw.occurred_at, 80),
+          optionalTimestampText(raw.occurred_at),
         ],
       )
       if (result.rows[0]) inserted++
@@ -213,6 +307,14 @@ async function appendCaptureSessionEvents(ctx: CaptureSessionRouteCtx, id: strin
       ctx.company.id,
     ])
   })
+  if (!foundSession) {
+    ctx.sendJson(404, { error: 'capture session not found' })
+    return
+  }
+  if (blockedStatus) {
+    ctx.sendJson(409, { error: `capture session is ${blockedStatus}` })
+    return
+  }
   ctx.sendJson(202, { accepted: inserted })
 }
 
@@ -225,41 +327,52 @@ async function appendCaptureArtifacts(ctx: CaptureSessionRouteCtx, id: string) {
     return
   }
   let inserted = 0
+  let foundSession = false
+  let blockedStatus: string | null = null
   await withMutationTx(ctx.company.id, async (c) => {
-    const exists = await c.query<{ id: string }>(
-      `select id from capture_sessions where id = $1 and company_id = $2 limit 1`,
+    const exists = await c.query<{ id: string; status: string }>(
+      `select id, status from capture_sessions where id = $1 and company_id = $2 limit 1`,
       [id, ctx.company.id],
     )
-    if (!exists.rows[0]) return
+    const session = exists.rows[0]
+    if (!session) return
+    foundSession = true
+    if (session.status !== 'open' && session.status !== 'stopped') {
+      blockedStatus = session.status
+      return
+    }
     for (const raw of rawArtifacts) {
       if (!isRecord(raw)) continue
       const kind = optionalText(raw.kind, 80)
-      if (!kind) continue
+      const storageKey = optionalText(raw.storage_key, 500)
+      const uri = optionalText(raw.uri, 1000)
+      if (!kind || (!storageKey && !uri)) continue
       const result = await c.query<{ id: string }>(
         `insert into capture_artifacts (
            company_id, capture_session_id, kind, storage_key, uri, content_type,
            byte_size, content_hash, duration_ms, pii_level, access_policy,
-           metadata, retention_expires_at
+           metadata, retention_expires_at, redaction_version
          ) values (
            $1, $2, $3, $4, $5, $6,
            $7, $8, $9, $10, $11,
-           $12::jsonb, $13::timestamptz
+           $12::jsonb, $13::timestamptz, $14
          )
          returning id`,
         [
           ctx.company.id,
           id,
           kind,
-          optionalText(raw.storage_key, 500),
-          optionalText(raw.uri, 1000),
+          storageKey,
+          uri,
           optionalText(raw.content_type, 160),
-          typeof raw.byte_size === 'number' ? Math.max(0, Math.trunc(raw.byte_size)) : null,
+          optionalNonNegativeInteger(raw.byte_size),
           optionalText(raw.content_hash, 160),
-          typeof raw.duration_ms === 'number' ? Math.max(0, Math.trunc(raw.duration_ms)) : null,
+          optionalNonNegativeInteger(raw.duration_ms),
           enumValue(raw.pii_level, ['low', 'internal', 'private', 'restricted'] as const, 'internal'),
           enumValue(raw.access_policy, ['support_only', 'operator_only', 'tenant_visible'] as const, 'support_only'),
           JSON.stringify(jsonRecord(raw.metadata)),
-          optionalText(raw.retention_expires_at, 80),
+          optionalTimestampText(raw.retention_expires_at),
+          CAPTURE_REDACTION_VERSION,
         ],
       )
       if (result.rows[0]) inserted++
@@ -269,6 +382,14 @@ async function appendCaptureArtifacts(ctx: CaptureSessionRouteCtx, id: string) {
       ctx.company.id,
     ])
   })
+  if (!foundSession) {
+    ctx.sendJson(404, { error: 'capture session not found' })
+    return
+  }
+  if (blockedStatus) {
+    ctx.sendJson(409, { error: `capture session is ${blockedStatus}` })
+    return
+  }
   ctx.sendJson(202, { accepted: inserted })
 }
 

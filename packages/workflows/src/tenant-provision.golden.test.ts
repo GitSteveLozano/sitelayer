@@ -72,7 +72,12 @@ describe('tenant-provision — nextEvents golden', () => {
 
 describe('tenant-provision — applyEventLog replay', () => {
   it('happy path: pending → created → seeding → provisioned', () => {
-    const s0: TenantProvisionWorkflowSnapshot = { state: 'company_pending', state_version: 1, slug: 'acme', name: 'ACME' }
+    const s0: TenantProvisionWorkflowSnapshot = {
+      state: 'company_pending',
+      state_version: 1,
+      slug: 'acme',
+      name: 'ACME',
+    }
     const created = { type: 'COMPANY_CREATED' as const, company_id: 'co-1' }
     const s1 = transitionTenantProvisionWorkflow(s0, created)
     const seedReq = { type: 'SEED_REQUESTED' as const, seed_request: { customer_name: 'Bob' } }
@@ -107,7 +112,12 @@ describe('tenant-provision — applyEventLog replay', () => {
   })
 
   it('company rejected with suggested slug → failed', () => {
-    const s0: TenantProvisionWorkflowSnapshot = { state: 'company_pending', state_version: 1, slug: 'acme', name: 'ACME' }
+    const s0: TenantProvisionWorkflowSnapshot = {
+      state: 'company_pending',
+      state_version: 1,
+      slug: 'acme',
+      name: 'ACME',
+    }
     const rejected = { type: 'COMPANY_REJECTED' as const, error: 'slug taken', suggested_slug: 'acme-2' }
     const s1 = transitionTenantProvisionWorkflow(s0, rejected)
     const result = applyEventLog<TenantProvisionWorkflowSnapshot>(s0, [logEntry(1, rejected, s1)])

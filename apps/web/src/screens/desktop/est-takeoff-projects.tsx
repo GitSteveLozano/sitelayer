@@ -1,7 +1,8 @@
 /**
  * Estimator desktop takeoff projects — the bidding-focused project list (Desktop v2 · EST 01).
  * Same bootstrap data as the owner projects table, but sorted/filtered for the estimator's
- * pipeline (estimating + sent + draft first) and clicking through to the takeoff canvas.
+ * pipeline (estimating + sent + draft first) and clicking through to the plan-ingest
+ * step (dsg__44/45), which leads on to scale-verify and the takeoff canvas.
  * Layout reference: "EST 01 · TAKEOFF PROJECTS" in the desktop template.
  */
 import { useMemo, useState } from 'react'
@@ -164,7 +165,7 @@ export function EstTakeoffProjects({ bootstrap }: { bootstrap: BootstrapResponse
           columns={columns}
           rows={rows}
           rowKey={(r) => r.id}
-          onRowClick={(r) => navigate(`/desktop/canvas/${r.id}`)}
+          onRowClick={(r) => navigate(`/desktop/ingest/${r.id}`)}
           empty={
             allRows.length === 0
               ? 'No projects yet. New jobs land here once they kick off.'

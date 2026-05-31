@@ -37,6 +37,7 @@ import {
   MChip,
   MChipRow,
   MI,
+  MInput,
   MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
@@ -126,6 +127,13 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
   const [picked, setPicked] = useState<IssueCategory | null>(null)
   const [message, setMessage] = useState('')
   const [severity, setSeverity] = useState<Severity>('question')
+  // Structured material-request capture — only shown for an out-of-materials
+  // ping. These ride as typed fields (migration 126) so the foreman blocker
+  // detail can render the design's "12 SHEETS / EPS INSULATION" quantity hero
+  // off typed values instead of re-parsing the worker's prose.
+  const [materialLabel, setMaterialLabel] = useState('')
+  const [materialQty, setMaterialQty] = useState('')
+  const [materialUnit, setMaterialUnit] = useState('')
   const [voice, setVoice] = useState<{ blob: Blob; url: string; durationMs: number } | null>(null)
   const [photo, setPhoto] = useState<{ file: File; url: string } | null>(null)
   const submission = useWorkerIssueSubmit()
@@ -153,11 +161,24 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
     // on the column). Only the designKind stays as a message tag until the
     // `kind` CHECK is widened to carry it directly.
     const tags = `[${category.designKind}]`
+    // Structured material fields only attach to an out-of-materials ping. A
+    // trimmed quantity that parses to a finite non-negative number rides as the
+    // typed `material_quantity`; blanks are simply omitted (the server treats
+    // absent fields as NULL).
+    const isMaterials = category.kind === 'materials_out'
+    const qtyNum = Number(materialQty.trim())
+    const labelTrimmed = materialLabel.trim()
+    const unitTrimmed = materialUnit.trim()
     const body: WorkerIssueCreateBody = {
       kind: category.kind,
       message: `${tags} ${trimmed}`.trim(),
       severity,
       ...(projectId ? { project_id: projectId } : {}),
+      ...(isMaterials && labelTrimmed ? { material_label: labelTrimmed } : {}),
+      ...(isMaterials && materialQty.trim() && Number.isFinite(qtyNum) && qtyNum >= 0
+        ? { material_quantity: qtyNum }
+        : {}),
+      ...(isMaterials && unitTrimmed ? { material_unit: unitTrimmed } : {}),
     }
     const attachments: PendingAttachment[] = []
     if (voice) attachments.push({ kind: 'voice', payload: voice.blob, fileName: fileNameForVoice(voice.blob) })
@@ -171,6 +192,16 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
         <MTopBar back title="Flag a problem" sub={category.label} onBack={() => setCategory(null)} />
         <MBody pad>
           <SeveritySegmented value={severity} onChange={setSeverity} />
+          {category.kind === 'materials_out' ? (
+            <MaterialFields
+              label={materialLabel}
+              quantity={materialQty}
+              unit={materialUnit}
+              onLabel={setMaterialLabel}
+              onQuantity={setMaterialQty}
+              onUnit={setMaterialUnit}
+            />
+          ) : null}
           <div
             style={{
               padding: '12px 0 8px',
@@ -310,6 +341,63 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
         </div>
       </MBody>
     </>
+  )
+}
+
+/**
+ * Structured material-request capture — shown only for an out-of-materials
+ * ping. The quantity + unit + spec ride as typed fields (migration 126) so the
+ * foreman blocker detail's "12 SHEETS / EPS INSULATION" hero reads typed values
+ * rather than re-parsing the worker's prose. Every field is optional; a worker
+ * in a hurry can still just type the free-text message below and skip these.
+ */
+function MaterialFields({
+  label,
+  quantity,
+  unit,
+  onLabel,
+  onQuantity,
+  onUnit,
+}: {
+  label: string
+  quantity: string
+  unit: string
+  onLabel: (v: string) => void
+  onQuantity: (v: string) => void
+  onUnit: (v: string) => void
+}) {
+  return (
+    <div style={{ marginTop: 16 }}>
+      <div className="m-topbar-eyebrow" style={{ marginBottom: 8 }}>
+        WHAT'S SHORT · OPTIONAL
+      </div>
+      <div style={{ display: 'flex', gap: 10 }}>
+        <MInput
+          type="number"
+          inputMode="decimal"
+          min={0}
+          value={quantity}
+          onChange={(e) => onQuantity(e.currentTarget.value)}
+          placeholder="12"
+          aria-label="Quantity short"
+          style={{ width: 96 }}
+        />
+        <MInput
+          value={unit}
+          onChange={(e) => onUnit(e.currentTarget.value)}
+          placeholder="sheets"
+          aria-label="Unit"
+          style={{ flex: 1, minWidth: 0 }}
+        />
+      </div>
+      <MInput
+        value={label}
+        onChange={(e) => onLabel(e.currentTarget.value)}
+        placeholder={`EPS insulation · 1.5" · 4'x8'`}
+        aria-label="Material spec"
+        style={{ width: '100%', marginTop: 10 }}
+      />
+    </div>
   )
 }
 

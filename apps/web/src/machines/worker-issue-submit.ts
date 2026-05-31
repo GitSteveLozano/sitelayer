@@ -48,6 +48,13 @@ export interface WorkerIssueCreateBody {
    *  >15min escalates). Carried as a field, NOT smuggled into `message`. */
   severity: 'question' | 'slowing' | 'stopped'
   project_id?: string
+  /** Structured material-request fulfillment fields (migration 126). Only
+   *  meaningful when `kind === 'materials_out'`; the server ignores them on
+   *  other kinds. The foreman blocker detail renders its quantity hero off
+   *  these typed values instead of re-parsing `message`. */
+  material_label?: string
+  material_quantity?: number
+  material_unit?: string
 }
 
 export interface WorkerIssueSubmitPayload {

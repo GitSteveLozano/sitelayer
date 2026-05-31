@@ -163,6 +163,32 @@ export function readClientRoute(client: JsonRecord): string | null {
   return getRequestContext()?.route ?? null
 }
 
+function readCaptureSessionId(client: unknown): string | null {
+  const current = getRequestContext()?.captureSessionId
+  if (current && UUID_RE.test(current)) return current
+  let found: string | null = null
+
+  function walk(value: unknown): void {
+    if (found) return
+    if (Array.isArray(value)) {
+      for (const entry of value.slice(0, MAX_ARRAY_LENGTH)) walk(entry)
+      return
+    }
+    if (!isRecord(value)) return
+    for (const [key, entry] of Object.entries(value).slice(0, MAX_OBJECT_KEYS)) {
+      const normalizedKey = key.replace(/[-_]/g, '').toLowerCase()
+      if (normalizedKey === 'capturesessionid' && typeof entry === 'string' && UUID_RE.test(entry)) {
+        found = entry
+        return
+      }
+      walk(entry)
+    }
+  }
+
+  walk(client)
+  return found
+}
+
 export type InsertSupportPacketInput = {
   companyId: string
   actorUserId: string
@@ -428,6 +454,57 @@ async function fetchQueueDepth(_pool: Pool, companyId: string) {
   }
 }
 
+async function fetchCaptureSessionContext(_pool: Pool, companyId: string, captureSessionId: string | null) {
+  if (!captureSessionId) return null
+  const [session, events, artifacts] = await Promise.all([
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        `select id::text, mode, status, route_path, device_kind, platform, viewport,
+                app_build_sha, consent_version, consent_actor_kind,
+                consent_actor_ref, consent_authority, consent_scope,
+                consented_at, redaction_version, started_at,
+                last_seen_at, stopped_at, discarded_at, retention_expires_at
+           from capture_sessions
+          where company_id = $1 and id = $2::uuid
+          limit 1`,
+        [companyId, captureSessionId],
+      ),
+    ),
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        `select id::text, seq::text, client_event_id, event_type, event_class,
+                route_path, workflow_id, entity_type, entity_id, request_id,
+                payload, redaction_version, occurred_at, received_at
+           from capture_session_events
+          where company_id = $1 and capture_session_id = $2::uuid
+          order by occurred_at desc, received_at desc
+          limit 100`,
+        [companyId, captureSessionId],
+      ),
+    ),
+    withCompanyClient(companyId, (c) =>
+      c.query(
+        `select id::text, kind, content_type, byte_size::text as byte_size,
+                content_hash, duration_ms, pii_level, access_policy, metadata,
+                redaction_version, created_at, retention_expires_at
+           from capture_artifacts
+          where company_id = $1
+            and capture_session_id = $2::uuid
+            and deleted_at is null
+          order by created_at desc
+          limit 25`,
+        [companyId, captureSessionId],
+      ),
+    ),
+  ])
+  if (!session.rows[0]) return null
+  return {
+    summary: sanitizeSupportJson(session.rows[0]),
+    recent_events: sanitizeSupportJson(events.rows),
+    artifacts: sanitizeSupportJson(artifacts.rows),
+  }
+}
+
 function countMap(rows: Array<{ project_id: string; count: string }>): Record<string, number> {
   const output: Record<string, number> = {}
   for (const row of rows) output[row.project_id] = Number(row.count)
@@ -538,17 +615,19 @@ export async function buildSupportServerContext({
   client: JsonRecord
 }) {
   const requestIds = collectRequestIds(client, getRequestContext()?.requestId)
-  const captureSessionId = getRequestContext()?.captureSessionId ?? null
+  const captureSessionId = readCaptureSessionId(client)
   const projectIds = collectProjectIds(client)
   const entityRefs = collectEntityRefs(client)
-  const [auditEvents, queue, queueDepth, domainSnapshot, workflowEvents, workItemContext] = await Promise.all([
-    fetchAuditContext(pool, company.id, identity.userId, requestIds, entityRefs),
-    fetchQueueContext(pool, company.id, requestIds),
-    fetchQueueDepth(pool, company.id),
-    fetchDomainSnapshot(pool, company.id, projectIds),
-    fetchWorkflowContext(pool, company.id, entityRefs),
-    fetchWorkItemContext(pool, company.id, requestIds, entityRefs),
-  ])
+  const [auditEvents, queue, queueDepth, domainSnapshot, workflowEvents, workItemContext, captureSession] =
+    await Promise.all([
+      fetchAuditContext(pool, company.id, identity.userId, requestIds, entityRefs),
+      fetchQueueContext(pool, company.id, requestIds),
+      fetchQueueDepth(pool, company.id),
+      fetchDomainSnapshot(pool, company.id, projectIds),
+      fetchWorkflowContext(pool, company.id, entityRefs),
+      fetchWorkItemContext(pool, company.id, requestIds, entityRefs),
+      fetchCaptureSessionContext(pool, company.id, captureSessionId),
+    ])
   const traceIds = collectTraceIds({ client, auditEvents, queue, workflowEvents, workItemContext })
   return {
     captured_at: new Date().toISOString(),
@@ -565,6 +644,7 @@ export async function buildSupportServerContext({
     },
     request_ids: requestIds,
     capture_session_id: captureSessionId,
+    capture_session: captureSession,
     trace_ids: traceIds,
     entity_refs: entityRefs,
     queue_depth: queueDepth,

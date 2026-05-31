@@ -70,11 +70,7 @@ export function DailyLogSubmittedBanner({ submittedAt, reviewerName, weekLogs }:
       <MBanner
         tone="ok"
         title={`Submitted ${formatHhMm(submittedAt)}`}
-        body={
-          <>
-            {reviewer} will review. Usually within 2 hours.
-          </>
-        }
+        body={<>{reviewer} will review. Usually within 2 hours.</>}
       />
       {weekLogs && weekLogs.length > 0 ? (
         <div>

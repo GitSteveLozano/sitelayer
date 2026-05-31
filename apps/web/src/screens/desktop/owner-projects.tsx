@@ -292,15 +292,7 @@ export function OwnerProjects({ bootstrap }: { bootstrap: BootstrapResponse | nu
  * division, starting state, bid value). On success it navigates to the
  * desktop project detail route. No new endpoints.
  */
-function NewProjectFormModal({
-  open,
-  onClose,
-  recent,
-}: {
-  open: boolean
-  onClose: () => void
-  recent: ProjectRow[]
-}) {
+function NewProjectFormModal({ open, onClose, recent }: { open: boolean; onClose: () => void; recent: ProjectRow[] }) {
   const navigate = useNavigate()
   const companySlug = getActiveCompanySlug()
 
@@ -568,7 +560,9 @@ function NewProjectFormModal({
             <div>
               <div style={{ fontSize: 14, fontWeight: 700 }}>
                 {candidate.name}
-                {Number(candidate.target_sqft_per_hr) ? ` · ${Number(candidate.target_sqft_per_hr).toLocaleString('en-US')} SF` : ''}
+                {Number(candidate.target_sqft_per_hr)
+                  ? ` · ${Number(candidate.target_sqft_per_hr).toLocaleString('en-US')} SF`
+                  : ''}
               </div>
               <div style={{ fontFamily: 'var(--m-num)', fontSize: 9, marginTop: 2, fontWeight: 600 }}>
                 {(candidate.customer_name || 'NO CLIENT').toUpperCase()}

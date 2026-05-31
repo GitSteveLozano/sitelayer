@@ -411,11 +411,7 @@ export function MobileProjectNew({ companySlug }: { companySlug: string }) {
         <div style={{ padding: 16 }}>
           <MButtonStack>
             <MButton variant="primary" onClick={handleSubmit} disabled={!canSubmit}>
-              {busy
-                ? 'Creating…'
-                : route === 'blueprint'
-                  ? 'Create · upload blueprint →'
-                  : 'Create project'}
+              {busy ? 'Creating…' : route === 'blueprint' ? 'Create · upload blueprint →' : 'Create project'}
             </MButton>
             <MButton variant="ghost" onClick={() => setStep(1)}>
               Back

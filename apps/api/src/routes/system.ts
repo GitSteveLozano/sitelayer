@@ -153,6 +153,7 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
     schedules,
     laborEntries,
     projectAssignments,
+    autoPostPolicy,
   ] = await withCompanyClient(companyId, (c) =>
     Promise.all([
       c.query('select code, name, sort_order from divisions where company_id = $1 order by sort_order asc', [
@@ -223,6 +224,17 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
         order by created_at asc`,
         [companyId, callerUserId],
       ),
+      // Per-company labor-payroll auto-post policy (migration 116). Drives the
+      // "THIS WEEK PAYROLL · AUTO" sub-label on the owner Money tile. OFF by
+      // default for every company → the tile reads as a manual payroll figure
+      // until a company opts in.
+      c.query(
+        `select labor_payroll_auto_post_enabled,
+                labor_payroll_auto_post_weekday,
+                to_char(labor_payroll_auto_post_after, 'HH24:MI') as labor_payroll_auto_post_after
+         from companies where id = $1 limit 1`,
+        [companyId],
+      ),
     ]),
   )
 
@@ -241,6 +253,24 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
     schedules: schedules.rows,
     laborEntries: laborEntries.rows,
     projectAssignments: projectAssignments.rows,
+    laborPayrollAutoPost: ((): {
+      enabled: boolean
+      weekday: number | null
+      after: string | null
+    } => {
+      const row = autoPostPolicy.rows[0] as
+        | {
+            labor_payroll_auto_post_enabled?: boolean
+            labor_payroll_auto_post_weekday?: number | null
+            labor_payroll_auto_post_after?: string | null
+          }
+        | undefined
+      return {
+        enabled: row?.labor_payroll_auto_post_enabled === true,
+        weekday: row?.labor_payroll_auto_post_weekday ?? null,
+        after: row?.labor_payroll_auto_post_after ?? null,
+      }
+    })(),
   }
 }
 
