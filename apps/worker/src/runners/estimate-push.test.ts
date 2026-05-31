@@ -99,7 +99,7 @@ describe('createEstimatePushRunner', () => {
     it('claims one row, runs stub push, emits POST_SUCCEEDED, marks outbox applied', async () => {
       // Sequence: BEGIN, claim (1 row), COMMIT, BEGIN, existence-check
       // (qbo_estimate_id NULL), [stub push, no SQL], lock-for-update (status=posting),
-      // update to posted, workflow_event_log insert, sync_events insert,
+      // reducer snapshot update, workflow_event_log insert, sync_events insert,
       // mutation_outbox set 'applied', COMMIT.
       const claimedRow = {
         id: 'outbox-1',
@@ -134,7 +134,7 @@ describe('createEstimatePushRunner', () => {
         if (sql.includes('for update') && sql.includes('estimate_pushes')) {
           return { rows: [lockedRow], rowCount: 1 }
         }
-        if (sql.includes('update estimate_pushes') && sql.includes("'posted'")) {
+        if (sql.includes('update estimate_pushes') && sql.includes('qbo_estimate_id = $12')) {
           return { rows: [postedRow], rowCount: 1 }
         }
         return { rows: [], rowCount: 1 }
@@ -225,7 +225,7 @@ describe('createEstimatePushRunner', () => {
         if (sql.includes('for update') && sql.includes('estimate_pushes')) {
           return { rows: [existingPushed], rowCount: 1 }
         }
-        if (sql.includes('update estimate_pushes') && sql.includes("'posted'")) {
+        if (sql.includes('update estimate_pushes') && sql.includes('qbo_estimate_id = $12')) {
           return { rows: [postedRow], rowCount: 1 }
         }
         return { rows: [], rowCount: 1 }

@@ -22,6 +22,8 @@ import { createCompanyCamPollRunner } from './runners/companycam-poll.js'
 import { createWelcomeEmailRunner } from './runners/welcome-email.js'
 import { createStuckWorkflowAlertsRunner } from './runners/stuck-workflow-alerts.js'
 import { createBlueprintStorageGcClient, createBlueprintStorageGcRunner } from './runners/blueprint-storage-gc.js'
+import { createCaptureArtifactAnalysisRunner } from './runners/capture-artifact-analysis.js'
+import { createCaptureArtifactRetentionGcRunner } from './runners/capture-artifact-retention-gc.js'
 import { createQueuePruneRunner } from './runners/queue-prune.js'
 import { createContextWorkDispatchRunner } from './runners/context-work-dispatch.js'
 import { createWorkRequestStaleRunner } from './runners/work-request-stale.js'
@@ -106,9 +108,18 @@ startMeshTraceForwarder({ pool, logger: { info: (m: string) => logger.info(m) } 
 // unbounded mutation_outbox / sync_events growth). The GC runner needs
 // a storage client; we await the dynamic-import build at boot so the
 // SDK lazy-load happens once, not on every heartbeat.
+const objectGcStorage = await createBlueprintStorageGcClient()
 const blueprintStorageGc = createBlueprintStorageGcRunner({
   pool,
-  storage: await createBlueprintStorageGcClient(),
+  storage: objectGcStorage,
+})
+const captureArtifactRetentionGc = createCaptureArtifactRetentionGcRunner({
+  pool,
+  storage: objectGcStorage,
+})
+const captureArtifactAnalysis = createCaptureArtifactAnalysisRunner({
+  pool,
+  storage: objectGcStorage,
 })
 const queuePruneRunner = createQueuePruneRunner({ pool, logger })
 const contextWorkDispatchRunner = createContextWorkDispatchRunner({ pool })
@@ -471,6 +482,38 @@ async function heartbeat(): Promise<{ idle: boolean }> {
       }),
     { processed: 0, insightsCreated: 0, failed: 0 } as AgentDrainSummary,
   )
+  const captureArtifactRetentionGcSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'capture_artifact_retention_gc',
+    () =>
+      captureArtifactRetentionGc.maybeSweep(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] capture_artifact_retention_gc sweep failed')
+        captureWithEntityContext(error, {
+          scope: 'capture_artifact_retention_gc',
+          entity_type: 'capture_artifact',
+          company_id: companyId,
+        })
+        return { ran: true, deleted: 0, failed: 1 }
+      }),
+    { ran: false, deleted: 0, failed: 0 },
+  )
+  const captureArtifactAnalysisSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'capture_artifact_analysis',
+    () =>
+      captureArtifactAnalysis.maybeAnalyze(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] capture_artifact_analysis failed')
+        captureWithEntityContext(error, {
+          scope: 'capture_artifact_analysis',
+          entity_type: 'capture_artifact',
+          company_id: companyId,
+        })
+        return { ran: true, analyzed: 0, skipped: 0, failed: 1 }
+      }),
+    { ran: false, analyzed: 0, skipped: 0, failed: 0 },
+  )
 
   const contextWorkDispatchSummary = await runIfLaneActive(
     pool,
@@ -623,6 +666,13 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     welcome_email_failed: welcomeEmailSummary.failed,
     blueprint_storage_gc_processed: blueprintStorageGcSummary.processed,
     blueprint_storage_gc_failed: blueprintStorageGcSummary.failed,
+    capture_artifact_retention_gc_ran: captureArtifactRetentionGcSummary.ran,
+    capture_artifact_retention_gc_deleted: captureArtifactRetentionGcSummary.deleted,
+    capture_artifact_retention_gc_failed: captureArtifactRetentionGcSummary.failed,
+    capture_artifact_analysis_ran: captureArtifactAnalysisSummary.ran,
+    capture_artifact_analysis_analyzed: captureArtifactAnalysisSummary.analyzed,
+    capture_artifact_analysis_skipped: captureArtifactAnalysisSummary.skipped,
+    capture_artifact_analysis_failed: captureArtifactAnalysisSummary.failed,
     context_work_dispatch_processed: contextWorkDispatchSummary.processed,
     context_work_dispatch_failed: contextWorkDispatchSummary.failed,
     work_request_stale_sweep_ran: workRequestStaleSummary.ran,
@@ -669,6 +719,8 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     companyCamSummary.processed > 0 ||
     welcomeEmailSummary.processed > 0 ||
     blueprintStorageGcSummary.processed > 0 ||
+    captureArtifactRetentionGcSummary.deleted > 0 ||
+    captureArtifactAnalysisSummary.analyzed > 0 ||
     contextWorkDispatchSummary.processed > 0 ||
     workRequestStaleSummary.ran ||
     queuePruneSummary.ran ||

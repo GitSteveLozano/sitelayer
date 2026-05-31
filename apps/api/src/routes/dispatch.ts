@@ -332,10 +332,16 @@ export async function dispatch(ctx: DispatchContext): Promise<boolean> {
         pool,
         company,
         identity,
+        tier: ctx.tier,
         buildSha: getBuildSha(),
+        storage: ctx.storage,
+        maxArtifactBytes: Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
+        artifactDownloadPresigned: ctx.blueprintDownloadPresigned,
         requireRole,
         readBody,
         sendJson,
+        sendFileContent: ctx.sendFileContent,
+        sendFileRedirect: ctx.sendFileRedirect,
       }),
 
     // Support / debug packets — bounded redacted client timeline + audit/queue join.

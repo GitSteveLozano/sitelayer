@@ -163,6 +163,8 @@ describe('lane-health-keeper', () => {
       lanes: new Map([
         ['estimate_push', { state: 'active', pause_reason: '' }],
         ['notifications', { state: 'active', pause_reason: '' }],
+        ['capture_artifact_analysis', { state: 'active', pause_reason: '' }],
+        ['capture_artifact_retention_gc', { state: 'active', pause_reason: '' }],
       ]),
     }
     const { pool, transitions } = makeFakePool(fx)
@@ -173,6 +175,8 @@ describe('lane-health-keeper', () => {
     const degraded = transitions.filter((t) => t.to === 'degraded').map((t) => t.name)
     expect(degraded).toContain('estimate_push')
     expect(degraded).toContain('notifications')
+    expect(degraded).toContain('capture_artifact_analysis')
+    expect(degraded).toContain('capture_artifact_retention_gc')
   })
 
   it('forceRun clears qbo_circuit_open pauses when the circuit closes', async () => {

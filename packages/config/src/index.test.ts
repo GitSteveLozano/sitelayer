@@ -9,6 +9,7 @@ const prodDatabaseUrl = 'postgres://sitelayer_prod_app:secret@db.example.com:250
 const devDatabaseUrl = 'postgres://sitelayer_dev_app:secret@db.example.com:25060/sitelayer_dev?sslmode=require'
 const previewDatabaseUrl =
   'postgres://sitelayer_preview_app:secret@db.example.com:25060/sitelayer_preview?sslmode=require'
+const demoDatabaseUrl = 'postgres://sitelayer_demo_app:secret@db.example.com:25060/sitelayer_demo?sslmode=require'
 const prodReadOnlyUrl = 'postgres://sitelayer_prod_ro:secret@db.example.com:25060/sitelayer_prod?sslmode=require'
 
 describe('loadAppConfig', () => {
@@ -34,6 +35,35 @@ describe('loadAppConfig', () => {
     const config = loadAppConfig({ APP_TIER: 'preview', DATABASE_URL: previewDatabaseUrl })
     expect(config.tier).toBe('preview')
     expect(config.ribbon?.label).toContain('PREVIEW')
+  })
+
+  it('accepts demo tier with demo database and shows a distinct ribbon', () => {
+    const config = loadAppConfig({ APP_TIER: 'demo', DATABASE_URL: demoDatabaseUrl })
+    expect(config.tier).toBe('demo')
+    expect(config.ribbon?.label).toContain('DEMO')
+    expect(config.ribbon?.tone).toBe('demo')
+  })
+
+  it('requires the demo tier to use the demo database when not on a local host', () => {
+    expect(() => loadAppConfig({ APP_TIER: 'demo', DATABASE_URL: devDatabaseUrl })).toThrow(TierConfigError)
+  })
+
+  it('refuses prod database access from the demo tier', () => {
+    expect(() => loadAppConfig({ APP_TIER: 'demo', DATABASE_URL: prodDatabaseUrl })).toThrow(TierConfigError)
+  })
+
+  it('accepts the demo tier with the demo spaces bucket', () => {
+    const config = loadAppConfig({
+      APP_TIER: 'demo',
+      DATABASE_URL: demoDatabaseUrl,
+      DO_SPACES_BUCKET: 'sitelayer-blueprints-demo',
+    })
+    expect(config.spacesBucket).toBe('sitelayer-blueprints-demo')
+  })
+
+  it('accepts the demo tier with the local-storage fallback (no spaces bucket)', () => {
+    const config = loadAppConfig({ APP_TIER: 'demo', DATABASE_URL: demoDatabaseUrl })
+    expect(config.spacesBucket).toBeNull()
   })
 
   it('requires a read-only prod user for read-prod-ro', () => {

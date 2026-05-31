@@ -14,6 +14,7 @@ import { handlePublicRoutes } from './routes/public.js'
 import { handlePublicEstimateShareRoutes } from './routes/estimate-shares-portal.js'
 import { handlePortalRentalRoutes } from './routes/portal-rentals.js'
 import { handlePublicPortalRoutes } from './routes/portal-public.js'
+import { createClerkSignInTokenMinter, handleDemoRoutes, type SignInTokenMinter } from './routes/demo.js'
 import {
   CORS_ALLOW_HEADERS,
   HttpError,
@@ -152,6 +153,22 @@ if (appConfig.tier === 'prod' && !process.env.ESTIMATE_SHARE_SECRET?.trim()) {
   logger.warn('[estimate-share] ESTIMATE_SHARE_SECRET not set; falling back to QBO_STATE_SECRET')
 }
 const portalBaseUrl = process.env.APP_PUBLIC_URL?.trim() || 'https://sitelayer.sandolab.xyz'
+// Demo-tier magic-link config. Only meaningful when APP_TIER=demo (the route
+// module hard-gates on tier). The shared access code + the Clerk sign-in-token
+// minter are resolved here so the handler stays pure. The minter reuses
+// CLERK_SECRET_KEY (the same Clerk TEST instance secret already used by the
+// worker's welcome-email runner). When the secret is missing the minter is a
+// no-op that returns null, surfacing as a clear "not configured" error.
+const demoAccessCode = process.env.DEMO_ACCESS_CODE?.trim() || null
+const demoAppOrigin = process.env.DEMO_APP_ORIGIN?.trim() || portalBaseUrl
+const demoSignInTokenMinter: SignInTokenMinter = (() => {
+  const clerkSecretKey = process.env.CLERK_SECRET_KEY?.trim()
+  if (appConfig.tier === 'demo' && clerkSecretKey) {
+    return createClerkSignInTokenMinter({ secretKey: clerkSecretKey })
+  }
+  // Not configured (or not the demo tier): never mints, always "unseeded".
+  return async () => null
+})()
 const clerkWebhookSecret = process.env.CLERK_WEBHOOK_SECRET?.trim() || null
 const qboWebhookVerifier = process.env.QBO_WEBHOOK_VERIFIER?.trim() || null
 const maxJsonBodyBytes = Number(process.env.MAX_JSON_BODY_BYTES ?? 20 * 1024 * 1024)
@@ -624,6 +641,8 @@ const server = http.createServer(async (req, res) => {
               const portalEstimateHandled = await handlePublicEstimateShareRoutes(req, url, {
                 pool,
                 shareSecret: estimateShareSecret,
+                storage,
+                maxArtifactBytes: Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
                 resolveClientIp: () => {
                   const xff = req.headers['x-forwarded-for']
                   if (typeof xff === 'string' && xff.length > 0) return xff.split(',')[0]!.trim()
@@ -639,6 +658,8 @@ const server = http.createServer(async (req, res) => {
                 pool,
                 sendJson: (status, body) => sendJson(res, status, body, req),
                 readBody: () => readBody(req),
+                storage,
+                maxArtifactBytes: Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
               })
               if (portalRentalHandled) return
 
@@ -647,6 +668,21 @@ const server = http.createServer(async (req, res) => {
                 sendJson: (status, body) => sendJson(res, status, body, req),
               })
               if (publicPortalHandled) return
+
+              // Demo-tier magic-link sign-in. Structurally inert (returns
+              // false → keeps walking → 404) unless APP_TIER=demo. Handled
+              // pre-auth because the caller is signed-out and is asking for a
+              // Clerk sign-in ticket. See routes/demo.ts.
+              const demoHandled = await handleDemoRoutes(req, url, {
+                tier: appConfig.tier,
+                accessCode: demoAccessCode,
+                appOrigin: demoAppOrigin,
+                mintSignInToken: demoSignInTokenMinter,
+                sendJson: (status, body) => sendJson(res, status, body, req),
+                readBody: () => readBody(req),
+                setNoIndexHeader: () => res.setHeader('x-robots-tag', 'noindex, nofollow'),
+              })
+              if (demoHandled) return
 
               const PUBLIC_PATHS = new Set([
                 '/api/integrations/qbo/callback',

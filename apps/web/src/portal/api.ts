@@ -12,7 +12,8 @@
  * render distinct copy for invalid token (401), expired (410), and
  * already-accepted/declined (409).
  */
-import { API_URL } from '@/lib/api/client'
+import { API_URL, applyTraceHeaders, nextRequestId } from '@/lib/api/client'
+import { applyCaptureSessionHeader } from '@/lib/capture-session'
 
 export class PortalApiError extends Error {
   readonly status: number
@@ -69,11 +70,19 @@ export type PortalEstimateView = {
   signer_name: string | null
 }
 
-async function portalRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const headers = new Headers(init.headers)
-  if (!headers.has('content-type') && init.body) {
+export function buildPortalRequestHeaders(initHeaders?: HeadersInit, hasBody = false): Headers {
+  const headers = new Headers(initHeaders)
+  if (!headers.has('x-request-id')) headers.set('x-request-id', nextRequestId())
+  applyTraceHeaders(headers)
+  applyCaptureSessionHeader(headers)
+  if (!headers.has('content-type') && hasBody) {
     headers.set('content-type', 'application/json; charset=utf-8')
   }
+  return headers
+}
+
+async function portalRequest<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = buildPortalRequestHeaders(init.headers, Boolean(init.body))
   const response = await fetch(`${API_URL}${path}`, { ...init, headers })
   const contentType = response.headers.get('content-type') ?? ''
   let body: unknown
@@ -95,6 +104,99 @@ async function portalRequest<T>(path: string, init: RequestInit = {}): Promise<T
     throw new PortalApiError({ status: response.status, path, body })
   }
   return body as T
+}
+
+export type PortalCaptureSessionResponse = {
+  capture_session: {
+    id: string
+    mode: string
+    status: string
+    started_at: string
+    last_seen_at: string
+  }
+}
+
+export type PortalCaptureSessionInput = {
+  capture_session_id: string
+  mode?: 'trace' | 'feedback' | 'desktop' | 'native' | 'manual_upload'
+  consent_version?: string
+  route_path?: string
+  device_kind?: string
+  platform?: string
+  viewport?: string
+  app_build_sha?: string
+  metadata?: Record<string, unknown>
+  consent_scope?: Record<string, unknown>
+  retention_days?: number
+}
+
+export type PortalCaptureEventInput = {
+  client_event_id?: string
+  seq?: number
+  event_type: string
+  event_class?: string
+  route_path?: string
+  workflow_id?: string
+  entity_type?: string
+  entity_id?: string
+  occurred_at?: string
+  payload?: Record<string, unknown>
+}
+
+export function startPortalEstimateCaptureSession(
+  shareToken: string,
+  payload: PortalCaptureSessionInput,
+): Promise<PortalCaptureSessionResponse> {
+  return portalRequest<PortalCaptureSessionResponse>(
+    `/api/portal/estimates/${encodeURIComponent(shareToken)}/capture-sessions`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function appendPortalEstimateCaptureEvents(
+  shareToken: string,
+  captureSessionId: string,
+  events: PortalCaptureEventInput[],
+): Promise<{ accepted: number }> {
+  return portalRequest<{ accepted: number }>(
+    `/api/portal/estimates/${encodeURIComponent(shareToken)}/capture-sessions/${encodeURIComponent(
+      captureSessionId,
+    )}/events`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ events }),
+    },
+  )
+}
+
+export function startPortalRentalCaptureSession(
+  shareToken: string,
+  payload: PortalCaptureSessionInput,
+): Promise<PortalCaptureSessionResponse> {
+  return portalRequest<PortalCaptureSessionResponse>(
+    `/api/portal/rentals/${encodeURIComponent(shareToken)}/capture-sessions`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+  )
+}
+
+export function appendPortalRentalCaptureEvents(
+  shareToken: string,
+  captureSessionId: string,
+  events: PortalCaptureEventInput[],
+): Promise<{ accepted: number }> {
+  return portalRequest<{ accepted: number }>(
+    `/api/portal/rentals/${encodeURIComponent(shareToken)}/capture-sessions/${encodeURIComponent(captureSessionId)}/events`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ events }),
+    },
+  )
 }
 
 export function fetchPortalEstimate(shareToken: string): Promise<PortalEstimateView> {

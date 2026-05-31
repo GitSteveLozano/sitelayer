@@ -121,6 +121,11 @@ const PortalRentalsConfirm = lazy(() => import('@/portal/RentalsConfirm').then((
 const TakeoffPreviewDemo = lazy(() =>
   import('@/screens/projects/takeoff-preview-demo').then((m) => ({ default: m.TakeoffPreviewDemo })),
 )
+// Demo-tier landing + Clerk magic-link role picker (C3). Public (signed-out)
+// route. The screen self-gates on the running tier via /api/features and
+// renders a bare 404 anywhere but the demo deployment, so it's structurally
+// inert off the demo tier.
+const DemoLandingRoute = lazy(() => import('@/screens/demo/demo-landing').then((m) => ({ default: m.DemoLanding })))
 const EstimateBuilderScreen = lazy(() =>
   import('@/screens/projects/estimate-builder').then((m) => ({ default: m.EstimateBuilderScreen })),
 )
@@ -267,6 +272,10 @@ export default function App() {
                 <Route path="confirm" element={<PortalRentalsConfirm />} />
               </Route>
               <Route path="/demo/takeoff-preview-3d" element={<TakeoffPreviewDemo />} />
+              {/* Demo-tier landing + magic-link role picker. Public, above the
+                  Clerk-gated app shell so signed-out visitors can reach it.
+                  Self-gates on tier (404 off the demo deployment). */}
+              <Route path="/demo" element={<DemoLandingRoute />} />
 
               {/* Authenticated app -- Clerk-gated. */}
               <Route

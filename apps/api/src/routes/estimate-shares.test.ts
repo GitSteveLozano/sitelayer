@@ -34,6 +34,8 @@ class FakePool {
     body_text: string
     payload: Record<string, unknown>
   }> = []
+  captureSessions: Row[] = []
+  captureEvents: Row[] = []
   expiredOverride: { token: string; expiresAt: string } | null = null
 
   /** Register this fake pool with the mutation-tx module for the
@@ -320,6 +322,155 @@ class FakePool {
     if (/^\s*insert into mutation_outbox/i.test(sql)) {
       this.outbox.push({ params })
       return { rows: [], rowCount: 1 }
+    }
+    if (/^\s*insert into capture_sessions/i.test(sql)) {
+      const [
+        id,
+        companyId,
+        mode,
+        routePath,
+        deviceKind,
+        platform,
+        viewport,
+        appBuildSha,
+        consentVersion,
+        actorRef,
+        authority,
+        consentScope,
+        consentedAt,
+        metadata,
+        retentionExpiresAt,
+      ] = params as [
+        string,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string,
+        string,
+        string,
+        string,
+        string | null,
+        string,
+        string,
+      ]
+      const existing = this.captureSessions.find((s) => s.id === id)
+      if (existing) {
+        if (
+          existing.company_id !== companyId ||
+          existing.consent_actor_kind !== 'portal_guest' ||
+          existing.consent_actor_ref !== actorRef
+        ) {
+          return { rows: [], rowCount: 0 }
+        }
+        existing.last_seen_at = new Date().toISOString()
+        existing.route_path = routePath ?? existing.route_path
+        existing.metadata = { ...(existing.metadata as Row), ...JSON.parse(metadata) }
+        existing.consent_scope = { ...(existing.consent_scope as Row), ...JSON.parse(consentScope) }
+        return { rows: [existing], rowCount: 1 }
+      }
+      const now = new Date().toISOString()
+      const row = {
+        id,
+        company_id: companyId,
+        actor_user_id: null,
+        mode,
+        status: 'open',
+        route_path: routePath,
+        device_kind: deviceKind,
+        platform,
+        viewport,
+        app_build_sha: appBuildSha,
+        consent_version: consentVersion,
+        consent_actor_kind: 'portal_guest',
+        consent_actor_ref: actorRef,
+        consent_authority: authority,
+        consent_scope: JSON.parse(consentScope),
+        consented_at: consentedAt,
+        redaction_version: 'capture-session-v1',
+        metadata: JSON.parse(metadata),
+        started_at: now,
+        last_seen_at: now,
+        stopped_at: null,
+        discarded_at: null,
+        retention_expires_at: retentionExpiresAt,
+      }
+      this.captureSessions.push(row)
+      return { rows: [row], rowCount: 1 }
+    }
+    if (/select id, status\s+from capture_sessions/i.test(sql)) {
+      const [id, companyId, actorRef] = params as [string, string, string]
+      const row = this.captureSessions.find(
+        (s) => s.id === id && s.company_id === companyId && s.consent_actor_ref === actorRef,
+      )
+      return { rows: row ? [{ id: row.id, status: row.status }] : [], rowCount: row ? 1 : 0 }
+    }
+    if (/^\s*insert into capture_session_events/i.test(sql)) {
+      const [
+        companyId,
+        captureSessionId,
+        seq,
+        clientEventId,
+        eventType,
+        eventClass,
+        routePath,
+        workflowId,
+        entityType,
+        entityId,
+        requestId,
+        payload,
+        occurredAt,
+      ] = params as [
+        string,
+        string,
+        number,
+        string | null,
+        string,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string | null,
+        string,
+        string | null,
+      ]
+      const duplicate =
+        clientEventId &&
+        this.captureEvents.some(
+          (e) =>
+            e.company_id === companyId &&
+            e.capture_session_id === captureSessionId &&
+            e.client_event_id === clientEventId,
+        )
+      if (duplicate) return { rows: [], rowCount: 0 }
+      const row = {
+        id: `capture-event-${this.captureEvents.length + 1}`,
+        company_id: companyId,
+        capture_session_id: captureSessionId,
+        seq,
+        client_event_id: clientEventId,
+        event_type: eventType,
+        event_class: eventClass,
+        route_path: routePath,
+        workflow_id: workflowId,
+        entity_type: entityType,
+        entity_id: entityId,
+        request_id: requestId,
+        payload: JSON.parse(payload),
+        occurred_at: occurredAt,
+      }
+      this.captureEvents.push(row)
+      return { rows: [{ id: row.id }], rowCount: 1 }
+    }
+    if (/update capture_sessions\s+set last_seen_at = now\(\)/i.test(sql)) {
+      const [id, companyId] = params as [string, string]
+      const row = this.captureSessions.find((s) => s.id === id && s.company_id === companyId)
+      if (row) row.last_seen_at = new Date().toISOString()
+      return { rows: [], rowCount: row ? 1 : 0 }
     }
     // Project meta read used by the inline lifecycle helper to construct
     // the notify_foreman_assignment outbox payload.
@@ -879,6 +1030,88 @@ describe('handlePublicEstimateShareRoutes — portal flows', () => {
     const { ctx, responses } = makePublicCtx(pool)
     await handlePublicEstimateShareRoutes({ method: 'GET' } as never, buildUrl(`/api/portal/estimates/${token}`), ctx)
     expect(responses[0]?.status).toBe(410)
+  })
+
+  it('POST /capture-sessions starts a token-bound portal_guest capture session', async () => {
+    const pool = new FakePool()
+    const { token, id: shareId } = await seedShare(pool)
+    const { ctx, responses, reads } = makePublicCtx(pool)
+    reads.push({
+      capture_session_id: '00000000-0000-4000-8000-000000000123',
+      mode: 'feedback',
+      consent_version: 'portal-feedback-v1',
+      route_path: '/portal/estimates/share-token',
+      metadata: { trigger: 'record_feedback' },
+    })
+
+    await handlePublicEstimateShareRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/portal/estimates/${token}/capture-sessions`),
+      ctx,
+    )
+
+    expect(responses[0]?.status).toBe(200)
+    expect(pool.captureSessions).toHaveLength(1)
+    expect(pool.captureSessions[0]).toMatchObject({
+      id: '00000000-0000-4000-8000-000000000123',
+      company_id: 'co-1',
+      actor_user_id: null,
+      mode: 'feedback',
+      consent_actor_kind: 'portal_guest',
+      consent_actor_ref: shareId,
+      consent_authority: 'signed_estimate_share_token',
+      metadata: {
+        trigger: 'record_feedback',
+        portal_surface: 'estimate_portal',
+        estimate_share_link_id: shareId,
+        project_id: 'p-1',
+      },
+    })
+  })
+
+  it('POST /capture-sessions/:id/events appends low-friction portal events for that share link only', async () => {
+    const pool = new FakePool()
+    const { token } = await seedShare(pool)
+    const start = makePublicCtx(pool)
+    start.reads.push({
+      capture_session_id: '00000000-0000-4000-8000-000000000123',
+      mode: 'trace',
+      route_path: '/portal/estimates/share-token',
+    })
+    await handlePublicEstimateShareRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/portal/estimates/${token}/capture-sessions`),
+      start.ctx,
+    )
+
+    const events = makePublicCtx(pool)
+    events.reads.push({
+      events: [
+        {
+          client_event_id: 'portal-1',
+          seq: 0,
+          event_type: 'portal.view',
+          event_class: 'navigation',
+          route_path: '/portal/estimates/share-token?secret=query',
+          payload: { state: 'loaded' },
+        },
+      ],
+    })
+    await handlePublicEstimateShareRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/portal/estimates/${token}/capture-sessions/00000000-0000-4000-8000-000000000123/events`),
+      events.ctx,
+    )
+
+    expect(events.responses[0]?.status).toBe(202)
+    expect(events.responses[0]?.body).toEqual({ accepted: 1 })
+    expect(pool.captureEvents).toHaveLength(1)
+    expect(pool.captureEvents[0]).toMatchObject({
+      capture_session_id: '00000000-0000-4000-8000-000000000123',
+      event_type: 'portal.view',
+      event_class: 'navigation',
+      payload: { state: 'loaded' },
+    })
   })
 
   it('POST /accept marks accepted_at and dispatches lifecycle ACCEPT (sent → accepted)', async () => {

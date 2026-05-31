@@ -7,7 +7,9 @@ import type { Pool } from 'pg'
  * (workflow_event_log) to the mesh product-trace ingest, where the
  * flow-conformance keeper types them against sitelayer's statechart-ologs and
  * clusters failures into deduped issues — finding bugs for users who recorded
- * nothing.
+ * nothing. Capture-session events are forwarded as the same low-PII product
+ * trace shape so public-link/mobile/browser behavior reaches the learning
+ * pipeline even when no deterministic workflow row fired.
  *
  * Design constraints (deliberate):
  *  - ISOLATED: a standalone interval loop, NOT wired into the lifecycle/queue
@@ -80,6 +82,19 @@ type Row = {
   applied_at: string
 }
 
+type CaptureEventRow = {
+  id: string
+  capture_session_id: string
+  seq: number
+  event_type: string
+  event_class: string
+  route_path: string | null
+  workflow_id: string | null
+  entity_type: string | null
+  entity_id: string | null
+  occurred_at: string
+}
+
 function workflowEventRef(r: Row): string {
   const digest = createHash('sha256')
     .update(`${r.workflow_name}:${r.entity_id}:${r.state_version}`)
@@ -107,6 +122,40 @@ function toTraceEvent(r: Row) {
   }
 }
 
+function captureEventRef(r: CaptureEventRow): string {
+  return `capture_session_event:${r.id}`
+}
+
+function normalizedRoutePath(routePath: string | null): string {
+  const trimmed = routePath?.trim()
+  if (!trimmed) return '/capture/session'
+  const [pathOnly] = trimmed.split(/[?#]/, 1)
+  return pathOnly || '/capture/session'
+}
+
+function toCaptureTraceEvent(r: CaptureEventRow) {
+  const eventType = r.event_type.toString()
+  const failed = /\b(error|fail|exception|crash|blocked)\b/i.test(eventType)
+  return {
+    event_ref: captureEventRef(r),
+    session_id: r.capture_session_id,
+    capture_session_id: r.capture_session_id,
+    seq: Number(r.seq),
+    event_class: r.event_class || 'capture_session_event',
+    route_path: normalizedRoutePath(r.route_path),
+    state_after: '',
+    outcome: failed ? 'failed' : 'succeeded',
+    error_code: failed ? eventType : '',
+    occurred_at: new Date(r.occurred_at).toISOString(),
+    payload: {
+      event_name: eventType,
+      workflow_id: r.workflow_id ?? undefined,
+      entity_type: r.entity_type ?? undefined,
+      entity_id: r.entity_id ?? undefined,
+    },
+  }
+}
+
 function signedHeaders(cfg: ForwarderConfig, path: string, body: string): Record<string, string> {
   const ts = Math.floor(Date.now() / 1000).toString()
   const bodySha = createHash('sha256').update(body).digest('hex')
@@ -121,17 +170,36 @@ function signedHeaders(cfg: ForwarderConfig, path: string, body: string): Record
 }
 
 async function forwardOnce(pool: Pool, cfg: ForwarderConfig, log: (m: string) => void): Promise<void> {
-  const { rows } = await pool.query<Row>(
-    `SELECT workflow_name, entity_id::text AS entity_id, capture_session_id::text AS capture_session_id, state_version, event_type,
-            snapshot_after->>'state' AS state_after, applied_at
-       FROM workflow_event_log
-      WHERE applied_at > now() - ($1 || ' minutes')::interval
-      ORDER BY applied_at
-      LIMIT 500`,
-    [cfg.windowMinutes],
-  )
-  if (rows.length === 0) return
-  const events = rows.map(toTraceEvent)
+  const [workflowRows, captureRows] = await Promise.all([
+    pool.query<Row>(
+      `SELECT workflow_name, entity_id::text AS entity_id, capture_session_id::text AS capture_session_id, state_version, event_type,
+              snapshot_after->>'state' AS state_after, applied_at
+         FROM workflow_event_log
+        WHERE applied_at > now() - ($1 || ' minutes')::interval
+        ORDER BY applied_at
+        LIMIT 500`,
+      [cfg.windowMinutes],
+    ),
+    pool.query<CaptureEventRow>(
+      `SELECT id::text AS id,
+              capture_session_id::text AS capture_session_id,
+              seq::int AS seq,
+              event_type,
+              event_class,
+              route_path,
+              workflow_id,
+              entity_type,
+              entity_id,
+              occurred_at
+         FROM capture_session_events
+        WHERE occurred_at > now() - ($1 || ' minutes')::interval
+        ORDER BY occurred_at
+        LIMIT 500`,
+      [cfg.windowMinutes],
+    ),
+  ])
+  if (workflowRows.rows.length === 0 && captureRows.rows.length === 0) return
+  const events = [...workflowRows.rows.map(toTraceEvent), ...captureRows.rows.map(toCaptureTraceEvent)]
   const path = '/api/product-trace/ingest'
   const body = JSON.stringify({ project_key: cfg.projectKey, tier: 3, events })
   const base = cfg.url.replace(/\/$/, '')
@@ -146,7 +214,7 @@ async function forwardOnce(pool: Pool, cfg: ForwarderConfig, log: (m: string) =>
     log(`mesh-trace-forward: ingest HTTP ${res.status}`)
     return
   }
-  log(`mesh-trace-forward: forwarded ${events.length} workflow event(s)`)
+  log(`mesh-trace-forward: forwarded ${events.length} trace event(s)`)
 }
 
 /**
@@ -187,6 +255,7 @@ export function startMeshTraceForwarder(deps: {
 }
 
 export const __meshTraceForwardTestHooks = {
+  toCaptureTraceEvent,
   toTraceEvent,
   workflowEventRef,
 }

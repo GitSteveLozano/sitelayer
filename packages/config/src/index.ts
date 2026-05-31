@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 
-export type AppTier = 'local' | 'dev' | 'preview' | 'prod'
+export type AppTier = 'local' | 'dev' | 'preview' | 'demo' | 'prod'
 
 export const KNOWN_FEATURE_FLAGS = ['read-prod-ro', 'qbo-live', 'pdf-ocr-experimental'] as const
 
@@ -15,7 +15,7 @@ export type AppConfig = {
   databaseUrl: string
   databaseUrlProdRo: string | null
   spacesBucket: string | null
-  ribbon: { label: string; tone: 'info' | 'warn' | 'danger' } | null
+  ribbon: { label: string; tone: 'info' | 'warn' | 'danger' | 'demo' } | null
 }
 
 export class TierConfigError extends Error {
@@ -81,16 +81,24 @@ export function loadLocalEnv(startDir = process.cwd(), env: NodeJS.ProcessEnv = 
 function parseTier(raw: string | undefined, nodeEnv = process.env.NODE_ENV): AppTier {
   if (!raw || raw.trim() === '') {
     if (nodeEnv === 'production') {
-      throw new TierConfigError('APP_TIER must be set explicitly when NODE_ENV=production (local|dev|preview|prod)')
+      throw new TierConfigError(
+        'APP_TIER must be set explicitly when NODE_ENV=production (local|dev|preview|demo|prod)',
+      )
     }
     console.warn('[tier] APP_TIER not set, defaulting to "local"')
     return 'local'
   }
   const normalized = raw.trim().toLowerCase()
-  if (normalized === 'local' || normalized === 'dev' || normalized === 'preview' || normalized === 'prod') {
+  if (
+    normalized === 'local' ||
+    normalized === 'dev' ||
+    normalized === 'preview' ||
+    normalized === 'demo' ||
+    normalized === 'prod'
+  ) {
     return normalized
   }
-  throw new TierConfigError(`APP_TIER must be one of local|dev|preview|prod (got "${raw}")`)
+  throw new TierConfigError(`APP_TIER must be one of local|dev|preview|demo|prod (got "${raw}")`)
 }
 
 function parseFlags(raw: string | undefined): Set<string> {
@@ -157,6 +165,12 @@ function assertDatabaseMatchesTier(tier: AppTier, databaseUrl: string) {
   if (tier === 'dev' && !/sitelayer_dev\b/.test(dbName) && !isLocalHost) {
     throw new TierConfigError(`APP_TIER=dev but DATABASE_URL database name is "${dbName}" (expected "sitelayer_dev")`)
   }
+
+  if (tier === 'demo' && !/sitelayer_demo\b/.test(dbName) && !isLocalHost) {
+    throw new TierConfigError(
+      `APP_TIER=demo but DATABASE_URL database name is "${dbName}" (expected "sitelayer_demo")`,
+    )
+  }
 }
 
 function assertSpacesMatchesTier(tier: AppTier, bucket: string | null) {
@@ -182,6 +196,8 @@ function ribbonForTier(tier: AppTier): AppConfig['ribbon'] {
       return null
     case 'preview':
       return { label: 'PREVIEW - isolated data', tone: 'info' }
+    case 'demo':
+      return { label: 'DEMO - sample data, public showcase', tone: 'demo' }
     case 'dev':
       return { label: 'DEV DATA - not real customers', tone: 'warn' }
     case 'local':

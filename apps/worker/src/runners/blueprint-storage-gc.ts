@@ -1,4 +1,4 @@
-import { unlink as fsUnlink } from 'node:fs/promises'
+import { mkdir, readFile as fsReadFile, unlink as fsUnlink, writeFile as fsWriteFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { Pool } from 'pg'
 import { drainAgentMutations, type AgentDrainSummary } from '../runner-utils.js'
@@ -26,15 +26,41 @@ export interface ObjectGcStorage {
   deleteObject(storagePath: string): Promise<void>
 }
 
-type S3DeleteCommandCtor = new (input: { Bucket: string; Key: string }) => unknown
-type S3DeleteClientLike = { send: (cmd: unknown) => Promise<unknown> }
+export interface ObjectStorageClient extends ObjectGcStorage {
+  put(storagePath: string, contents: Buffer, contentType?: string): Promise<void>
+  get(storagePath: string): Promise<Buffer>
+}
 
-class WorkerS3GcStorage implements ObjectGcStorage {
+type S3CommandCtor = new (input: Record<string, unknown>) => unknown
+type S3ClientLike = { send: (cmd: unknown) => Promise<unknown> }
+
+class WorkerS3GcStorage implements ObjectStorageClient {
   constructor(
-    private readonly client: S3DeleteClientLike,
-    private readonly DeleteObjectCommand: S3DeleteCommandCtor,
+    private readonly client: S3ClientLike,
+    private readonly PutObjectCommand: S3CommandCtor,
+    private readonly DeleteObjectCommand: S3CommandCtor,
+    private readonly GetObjectCommand: S3CommandCtor,
     private readonly bucket: string,
   ) {}
+
+  async put(storagePath: string, contents: Buffer, contentType?: string): Promise<void> {
+    await this.client.send(
+      new this.PutObjectCommand({
+        Bucket: this.bucket,
+        Key: storagePath,
+        Body: contents,
+        ContentType: contentType ?? 'application/octet-stream',
+      }),
+    )
+  }
+
+  async get(storagePath: string): Promise<Buffer> {
+    const res = (await this.client.send(new this.GetObjectCommand({ Bucket: this.bucket, Key: storagePath }))) as {
+      Body?: { transformToByteArray(): Promise<Uint8Array> }
+    }
+    if (!res.Body) throw new Error(`storage object not found: ${storagePath}`)
+    return Buffer.from(await res.Body.transformToByteArray())
+  }
 
   async deleteObject(storagePath: string): Promise<void> {
     // S3 DeleteObject returns 204 whether or not the key existed, so
@@ -43,8 +69,27 @@ class WorkerS3GcStorage implements ObjectGcStorage {
   }
 }
 
-class WorkerLocalFsGcStorage implements ObjectGcStorage {
+class WorkerLocalFsGcStorage implements ObjectStorageClient {
   constructor(private readonly root: string) {}
+
+  private abs(storagePath: string): string {
+    const resolvedRoot = path.resolve(this.root)
+    const resolvedAbs = path.resolve(this.root, storagePath)
+    if (!resolvedAbs.startsWith(resolvedRoot + path.sep) && resolvedAbs !== resolvedRoot) {
+      throw new Error(`blueprint storage_path resolved outside storage root: ${storagePath}`)
+    }
+    return resolvedAbs
+  }
+
+  async get(storagePath: string): Promise<Buffer> {
+    return fsReadFile(this.abs(storagePath))
+  }
+
+  async put(storagePath: string, contents: Buffer): Promise<void> {
+    const resolvedAbs = this.abs(storagePath)
+    await mkdir(path.dirname(resolvedAbs), { recursive: true })
+    await fsWriteFile(resolvedAbs, contents)
+  }
 
   async deleteObject(storagePath: string): Promise<void> {
     // Re-validate the resolved absolute path is rooted under the
@@ -52,11 +97,7 @@ class WorkerLocalFsGcStorage implements ObjectGcStorage {
     // LocalFsStorage.abs() — a malformed historical storage_path
     // (even one that slipped past the API's assertKeyInCompany guard)
     // can never unlink anything outside the storage tree.
-    const resolvedRoot = path.resolve(this.root)
-    const resolvedAbs = path.resolve(this.root, storagePath)
-    if (!resolvedAbs.startsWith(resolvedRoot + path.sep) && resolvedAbs !== resolvedRoot) {
-      throw new Error(`blueprint storage_path resolved outside storage root: ${storagePath}`)
-    }
+    const resolvedAbs = this.abs(storagePath)
     try {
       // Only unlink the file itself — never rmdir the parent. A stale
       // empty company/blueprint directory is harmless and will be
@@ -77,7 +118,7 @@ class WorkerLocalFsGcStorage implements ObjectGcStorage {
  */
 export async function createBlueprintStorageGcClient(
   env: NodeJS.ProcessEnv = process.env,
-): Promise<ObjectGcStorage | null> {
+): Promise<ObjectStorageClient | null> {
   const bucket = env.DO_SPACES_BUCKET?.trim()
   const key = env.DO_SPACES_KEY?.trim()
   const secret = env.DO_SPACES_SECRET?.trim()
@@ -85,8 +126,10 @@ export async function createBlueprintStorageGcClient(
     const region = env.DO_SPACES_REGION?.trim() || 'tor1'
     const endpoint = env.DO_SPACES_ENDPOINT?.trim() || `https://${region}.digitaloceanspaces.com`
     const sdk = (await import('@aws-sdk/client-s3')) as unknown as {
-      S3Client: new (config: unknown) => S3DeleteClientLike
-      DeleteObjectCommand: S3DeleteCommandCtor
+      S3Client: new (config: unknown) => S3ClientLike
+      PutObjectCommand: S3CommandCtor
+      DeleteObjectCommand: S3CommandCtor
+      GetObjectCommand: S3CommandCtor
     }
     const client = new sdk.S3Client({
       region,
@@ -94,7 +137,7 @@ export async function createBlueprintStorageGcClient(
       forcePathStyle: Boolean(endpoint && !endpoint.includes('digitaloceanspaces')),
       credentials: { accessKeyId: key, secretAccessKey: secret },
     })
-    return new WorkerS3GcStorage(client, sdk.DeleteObjectCommand, bucket)
+    return new WorkerS3GcStorage(client, sdk.PutObjectCommand, sdk.DeleteObjectCommand, sdk.GetObjectCommand, bucket)
   }
   const root = env.BLUEPRINT_STORAGE_ROOT
   if (root) return new WorkerLocalFsGcStorage(path.resolve(root))

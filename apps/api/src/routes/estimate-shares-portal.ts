@@ -3,6 +3,11 @@ import type { Pool } from 'pg'
 import { HttpError } from '../http-utils.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
 import {
+  appendPortalCaptureEvents,
+  startPortalCaptureSession,
+  uploadPortalCaptureArtifact,
+} from './portal-capture-sessions.js'
+import {
   API_PORTAL_ESTIMATES_PATH_PREFIX,
   SHARE_COLUMNS,
   buildPortalView,
@@ -22,6 +27,8 @@ import {
 export type PublicEstimateShareCtx = {
   pool: Pool
   shareSecret: string
+  storage?: Parameters<typeof uploadPortalCaptureArtifact>[1]['storage']
+  maxArtifactBytes?: number
   /** Resolve the inbound IP for audit (X-Forwarded-For first hop). */
   resolveClientIp: () => string | null
   /** Same JSON body parser used by authenticated routes. */
@@ -89,6 +96,97 @@ export async function handlePublicEstimateShareRoutes(
       await fanOutFirstViewNotification(ctx.pool, row, meta).catch(() => undefined)
     }
     ctx.sendJson(200, buildPortalView(row, meta))
+    return true
+  }
+
+  // POST /api/portal/estimates/:token/capture-sessions
+  const captureStartMatch = url.pathname.match(/^\/api\/portal\/estimates\/([^/]+)\/capture-sessions$/)
+  if (req.method === 'POST' && captureStartMatch) {
+    const token = decodeURIComponent(captureStartMatch[1] ?? '')
+    const lookup = await loadShareByToken(ctx.pool, ctx.shareSecret, token)
+    if (!lookup.ok) {
+      ctx.sendJson(lookup.status, { error: lookup.error })
+      return true
+    }
+    await startPortalCaptureSession(ctx, {
+      companyId: lookup.row.company_id,
+      actorRef: lookup.row.id,
+      authority: 'signed_estimate_share_token',
+      surface: 'estimate_portal',
+      metadata: {
+        estimate_share_link_id: lookup.row.id,
+        project_id: lookup.row.project_id,
+      },
+      consentScope: {
+        estimate_share_link_id: lookup.row.id,
+        project_id: lookup.row.project_id,
+      },
+    })
+    return true
+  }
+
+  // POST /api/portal/estimates/:token/capture-sessions/:id/events
+  const captureEventsMatch = url.pathname.match(/^\/api\/portal\/estimates\/([^/]+)\/capture-sessions\/([^/]+)\/events$/)
+  if (req.method === 'POST' && captureEventsMatch) {
+    const token = decodeURIComponent(captureEventsMatch[1] ?? '')
+    const captureSessionId = decodeURIComponent(captureEventsMatch[2] ?? '')
+    const lookup = await loadShareByToken(ctx.pool, ctx.shareSecret, token)
+    if (!lookup.ok) {
+      ctx.sendJson(lookup.status, { error: lookup.error })
+      return true
+    }
+    await appendPortalCaptureEvents(
+      ctx,
+      {
+        companyId: lookup.row.company_id,
+        actorRef: lookup.row.id,
+        authority: 'signed_estimate_share_token',
+        surface: 'estimate_portal',
+        metadata: {
+          estimate_share_link_id: lookup.row.id,
+          project_id: lookup.row.project_id,
+        },
+        consentScope: {
+          estimate_share_link_id: lookup.row.id,
+          project_id: lookup.row.project_id,
+        },
+      },
+      captureSessionId,
+    )
+    return true
+  }
+
+  // POST /api/portal/estimates/:token/capture-sessions/:id/artifacts/upload
+  const captureUploadMatch = url.pathname.match(
+    /^\/api\/portal\/estimates\/([^/]+)\/capture-sessions\/([^/]+)\/artifacts\/upload$/,
+  )
+  if (req.method === 'POST' && captureUploadMatch) {
+    const token = decodeURIComponent(captureUploadMatch[1] ?? '')
+    const captureSessionId = decodeURIComponent(captureUploadMatch[2] ?? '')
+    const lookup = await loadShareByToken(ctx.pool, ctx.shareSecret, token)
+    if (!lookup.ok) {
+      ctx.sendJson(lookup.status, { error: lookup.error })
+      return true
+    }
+    await uploadPortalCaptureArtifact(
+      req,
+      ctx,
+      {
+        companyId: lookup.row.company_id,
+        actorRef: lookup.row.id,
+        authority: 'signed_estimate_share_token',
+        surface: 'estimate_portal',
+        metadata: {
+          estimate_share_link_id: lookup.row.id,
+          project_id: lookup.row.project_id,
+        },
+        consentScope: {
+          estimate_share_link_id: lookup.row.id,
+          project_id: lookup.row.project_id,
+        },
+      },
+      captureSessionId,
+    )
     return true
   }
 

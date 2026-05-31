@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo } from 'react'
 import { useMachine } from '@xstate/react'
 import { assign, fromPromise, setup } from 'xstate'
 import { API_URL } from '@/lib/api'
+import { buildPortalRequestHeaders } from '@/portal/api'
 
 /**
  * UI machine for the customer-facing rentals portal — the WHOLE
@@ -107,7 +108,7 @@ const EMPTY_CONTACT: PortalContact = { name: '', email: '', phone: '', notes: ''
 
 async function fetchCatalog(shareToken: string): Promise<{ items: PortalCatalogItem[] }> {
   const url = `${API_URL}/api/portal/rentals/${encodeURIComponent(shareToken)}/catalog`
-  const response = await fetch(url, { method: 'GET' })
+  const response = await fetch(url, { method: 'GET', headers: buildPortalRequestHeaders() })
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { error?: string } | null
     throw new Error(body?.error ?? `Catalog request failed (${response.status})`)
@@ -132,7 +133,7 @@ async function postReserve(
   const url = `${API_URL}/api/portal/rentals/${encodeURIComponent(shareToken)}/reserve`
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json; charset=utf-8' },
+    headers: buildPortalRequestHeaders(undefined, true),
     body: JSON.stringify({
       items: cart,
       requested_start: range.start,

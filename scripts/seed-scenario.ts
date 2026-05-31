@@ -185,6 +185,7 @@ import {
   rentalRequestApprovalWorkflow as _rentalRequestApproval,
   qboSyncRunWorkflow as _qboSyncRun,
   scaffoldOpsApprovalWorkflow as _scaffoldOpsApproval,
+  changeOrderWorkflow as _changeOrder,
   type RentalBillingWorkflowEvent,
   type RentalBillingWorkflowSnapshot,
   type EstimatePushWorkflowEvent,
@@ -199,6 +200,8 @@ import {
   type QboSyncRunWorkflowSnapshot,
   type ScaffoldOpsApprovalWorkflowEvent,
   type ScaffoldOpsApprovalWorkflowSnapshot,
+  type ChangeOrderWorkflowEvent,
+  type ChangeOrderWorkflowSnapshot,
 } from '@sitelayer/workflows'
 import { loadAppConfig, TierConfigError, type AppTier } from '../apps/api/src/tier.js'
 import { COMPANY_SLUG_PATTERN, seedCompanyDefaults } from '../apps/api/src/onboarding.js'
@@ -213,6 +216,7 @@ void _damageChargeSettlement
 void _rentalRequestApproval
 void _qboSyncRun
 void _scaffoldOpsApproval
+void _changeOrder
 
 // ---------- YAML schema (TypeScript-side) ----------
 
@@ -287,7 +291,11 @@ interface ScenarioYaml {
     project_ref?: string
     clerk_user_id?: string
     event_type: string
-    occurred_at: string
+    // Supply either a literal ISO timestamp or a relative offset in minutes
+    // from now (negative = in the past). The offset keeps a "clocked-in right
+    // now" demo row live no matter when it is seeded.
+    occurred_at?: string
+    occurred_at_offset_minutes?: number
     inside_geofence?: boolean
   }>
   takeoff_measurements?: {
@@ -335,6 +343,75 @@ interface ScenarioYaml {
     total_weight_kg?: number
     total_lines?: number
     approval_event_log?: Array<Record<string, unknown>>
+  }>
+  // ---- Demo-oriented sections (steve-demo.yaml) ----
+  estimate_lines?: Array<{
+    project_ref: string
+    service_item_code: string
+    quantity: number
+    unit?: string
+    rate?: number
+    amount?: number
+  }>
+  material_bills?: Array<{
+    project_ref: string
+    vendor_name: string
+    amount: number
+    bill_type?: string
+    description?: string
+    occurred_on?: string
+    occurred_on_offset_days?: number
+  }>
+  labor_entries?: Array<{
+    project_ref: string
+    worker_ref?: string
+    service_item_code: string
+    hours?: number
+    sqft_done?: number
+    status?: string
+    occurred_on?: string
+    occurred_on_offset_days?: number
+  }>
+  change_orders?: Array<{
+    ref: string
+    project_ref: string
+    number: number
+    description?: string
+    value_delta: number
+    schedule_impact_days?: number
+    created_by?: string
+    co_event_log?: Array<Record<string, unknown>>
+  }>
+  crew_schedules?: Array<{
+    ref: string
+    project_ref: string
+    scheduled_for?: string
+    scheduled_for_offset_days?: number
+    crew?: Array<{ worker_ref?: string; clerk_user_id?: string; name?: string }>
+    status?: string
+    confirmed_by?: string
+  }>
+  daily_logs?: Array<{
+    ref?: string
+    project_ref: string
+    foreman_user_id: string
+    occurred_on?: string
+    occurred_on_offset_days?: number
+    status?: string
+    notes?: string
+    scope_progress?: unknown[]
+  }>
+  takeoff_drafts?: Array<{
+    ref: string
+    project_ref: string
+    name: string
+    type?: string
+    source?: string
+    kind?: string
+    status?: string
+    review_required?: boolean
+    result_json?: Record<string, unknown>
+    measurements?: Array<{ service_item_code: string; quantity: number; unit?: string }>
   }>
 }
 
@@ -426,6 +503,9 @@ interface RefMaps {
   rentalRequests: Map<string, string>
   qboSyncRuns: Map<string, string>
   boms: Map<string, string>
+  changeOrders: Map<string, string>
+  crewSchedules: Map<string, string>
+  takeoffDrafts: Map<string, string>
 }
 
 function newRefMaps(): RefMaps {
@@ -442,6 +522,9 @@ function newRefMaps(): RefMaps {
     rentalRequests: new Map(),
     qboSyncRuns: new Map(),
     boms: new Map(),
+    changeOrders: new Map(),
+    crewSchedules: new Map(),
+    takeoffDrafts: new Map(),
   }
 }
 
@@ -851,12 +934,18 @@ async function ensureClockEvents(
     const ev = clockEvents[i]!
     const workerId = ev.worker_ref ? (refs.workers.get(ev.worker_ref) ?? null) : null
     const projectId = ev.project_ref ? (refs.projects.get(ev.project_ref) ?? null) : null
-    // Deterministic id per (worker, project, occurred_at, event_type) so
-    // re-runs collapse to the same row.
-    const id = refUuid(
-      'clock_event',
-      `${ev.worker_ref ?? '-'}|${ev.project_ref ?? '-'}|${ev.occurred_at}|${ev.event_type}|${i}`,
-    )
+    // Resolve the timestamp from a literal ISO or a relative minute offset.
+    let occurredAt = ev.occurred_at
+    if (!occurredAt) {
+      const d = new Date()
+      d.setUTCMinutes(d.getUTCMinutes() + (ev.occurred_at_offset_minutes ?? 0))
+      occurredAt = d.toISOString()
+    }
+    // Deterministic id. For literal timestamps key on the full instant; for
+    // offset rows key on the calendar day so a "clocked-in now" event mints a
+    // fresh row each day while same-day re-seeds collapse to one row.
+    const idKey = ev.occurred_at ? occurredAt : occurredAt.slice(0, 10)
+    const id = refUuid('clock_event', `${ev.worker_ref ?? '-'}|${ev.project_ref ?? '-'}|${idKey}|${ev.event_type}|${i}`)
     await client.query(
       `insert into clock_events
          (id, company_id, worker_id, project_id, clerk_user_id, event_type, occurred_at, inside_geofence)
@@ -869,7 +958,7 @@ async function ensureClockEvents(
         projectId,
         ev.clerk_user_id ?? null,
         ev.event_type,
-        ev.occurred_at,
+        occurredAt,
         ev.inside_geofence ?? true,
       ],
     )
@@ -1213,6 +1302,349 @@ async function ensureBoms(
   }
 }
 
+// ---------- Demo sections: estimate lines, money, crew, logs, AI-queue ----------
+
+/**
+ * Resolve a date column value either from a literal ISO date or a relative
+ * offset in days from today. Offset rows keep a demo looking "live" no matter
+ * when it is seeded; literal dates pin historical rows. The returned value is a
+ * `YYYY-MM-DD` string bound as a normal parameter and cast `::date` in SQL.
+ */
+function resolveDate(literal: string | undefined, offsetDays: number | undefined): string {
+  if (literal) return literal
+  const offset = offsetDays ?? 0
+  // Compute deterministically in JS so the resulting row id (which keys on the
+  // resolved date) is stable for a given calendar day — re-seeding the same day
+  // is a no-op, a new day mints a fresh "today" row.
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() + offset)
+  return d.toISOString().slice(0, 10)
+}
+
+/**
+ * Ensure a single active default takeoff draft exists for a project and return
+ * its id. estimate_lines.draft_id is NOT NULL (migration 068), so every line we
+ * stamp needs a draft to hang off. Mirrors migration 066's 'Default' draft.
+ */
+async function ensureProjectDefaultDraft(
+  client: PoolClient,
+  companyId: string,
+  projectRef: string,
+  projectId: string,
+): Promise<string> {
+  const draftId = refUuid('takeoff_draft', `${projectRef}:default`)
+  await client.query(
+    `insert into takeoff_drafts (id, company_id, project_id, name, type, status, source, kind)
+     values ($1, $2, $3, 'Default', 'measurement', 'active', 'manual', 'takeoff')
+     on conflict (id) do nothing`,
+    [draftId, companyId, projectId],
+  )
+  return draftId
+}
+
+async function ensureEstimateLines(
+  client: PoolClient,
+  companyId: string,
+  lines: ScenarioYaml['estimate_lines'],
+  refs: RefMaps,
+): Promise<void> {
+  if (!lines) return
+  // estimate_lines.draft_id is NOT NULL — share one default draft per project.
+  const draftCache = new Map<string, string>()
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i]!
+    const projectId = mustResolve('project', l.project_ref, refs.projects)
+    let draftId = draftCache.get(l.project_ref)
+    if (!draftId) {
+      draftId = await ensureProjectDefaultDraft(client, companyId, l.project_ref, projectId)
+      draftCache.set(l.project_ref, draftId)
+    }
+    const id = refUuid('estimate_line', `${l.project_ref}:${i}`)
+    const quantity = l.quantity ?? 0
+    const rate = l.rate ?? 0
+    const amount = l.amount ?? quantity * rate
+    await client.query(
+      `insert into estimate_lines
+         (id, company_id, project_id, draft_id, service_item_code, quantity, unit, rate, amount)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       on conflict (id) do nothing`,
+      [id, companyId, projectId, draftId, l.service_item_code, quantity, l.unit ?? 'sqft', rate, amount],
+    )
+  }
+}
+
+async function ensureMaterialBills(
+  client: PoolClient,
+  companyId: string,
+  bills: ScenarioYaml['material_bills'],
+  refs: RefMaps,
+): Promise<void> {
+  if (!bills) return
+  for (let i = 0; i < bills.length; i++) {
+    const b = bills[i]!
+    const projectId = mustResolve('project', b.project_ref, refs.projects)
+    const id = refUuid('material_bill', `${b.project_ref}:${i}`)
+    const occurredOn = resolveDate(b.occurred_on, b.occurred_on_offset_days)
+    await client.query(
+      `insert into material_bills
+         (id, company_id, project_id, vendor_name, amount, bill_type, description, occurred_on)
+       values ($1, $2, $3, $4, $5, $6, $7, $8::date)
+       on conflict (id) do nothing`,
+      [id, companyId, projectId, b.vendor_name, b.amount, b.bill_type ?? 'material', b.description ?? null, occurredOn],
+    )
+  }
+}
+
+async function ensureLaborEntries(
+  client: PoolClient,
+  companyId: string,
+  entries: ScenarioYaml['labor_entries'],
+  refs: RefMaps,
+): Promise<void> {
+  if (!entries) return
+  for (let i = 0; i < entries.length; i++) {
+    const e = entries[i]!
+    const projectId = mustResolve('project', e.project_ref, refs.projects)
+    const workerId = e.worker_ref ? (refs.workers.get(e.worker_ref) ?? null) : null
+    const occurredOn = resolveDate(e.occurred_on, e.occurred_on_offset_days)
+    // Deterministic id keyed on the resolved date so a date-relative entry
+    // mints a fresh row each calendar day and re-seeding the same day is a
+    // no-op.
+    const id = refUuid(
+      'labor_entry',
+      `${e.project_ref}:${e.worker_ref ?? '-'}:${e.service_item_code}:${occurredOn}:${i}`,
+    )
+    await client.query(
+      `insert into labor_entries
+         (id, company_id, project_id, worker_id, service_item_code, hours, sqft_done, status, occurred_on)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9::date)
+       on conflict (id) do nothing`,
+      [
+        id,
+        companyId,
+        projectId,
+        workerId,
+        e.service_item_code,
+        e.hours ?? 0,
+        e.sqft_done ?? 0,
+        e.status ?? 'locked',
+        occurredOn,
+      ],
+    )
+  }
+}
+
+async function ensureChangeOrders(
+  client: PoolClient,
+  companyId: string,
+  orders: ScenarioYaml['change_orders'],
+  refs: RefMaps,
+): Promise<void> {
+  if (!orders) return
+  for (const co of orders) {
+    const id = refUuid('change_order', co.ref)
+    refs.changeOrders.set(co.ref, id)
+    const projectId = mustResolve('project', co.project_ref, refs.projects)
+    await client.query(
+      `insert into change_orders
+         (id, company_id, project_id, number, description, value_delta, schedule_impact_days,
+          status, state_version, created_by)
+       values ($1, $2, $3, $4, $5, $6, $7, 'draft', 1, $8)
+       on conflict (id) do nothing`,
+      [
+        id,
+        companyId,
+        projectId,
+        co.number,
+        co.description ?? '',
+        co.value_delta,
+        co.schedule_impact_days ?? 0,
+        co.created_by ?? null,
+      ],
+    )
+
+    if (co.co_event_log && co.co_event_log.length > 0) {
+      const events = co.co_event_log as ChangeOrderWorkflowEvent[]
+      const initial: ChangeOrderWorkflowSnapshot = { state: 'draft', state_version: 1 }
+      const result = await applyEventSequence<ChangeOrderWorkflowSnapshot, ChangeOrderWorkflowEvent>(client, {
+        workflowName: 'change_order',
+        entityType: 'change_order',
+        entityId: id,
+        companyId,
+        initialSnapshot: initial as unknown as Record<string, unknown> & {
+          state: string
+          state_version: number
+        },
+        events,
+      })
+      const final = result.finalSnapshot
+      await client.query(
+        `update change_orders
+           set status = $1,
+               state_version = $2,
+               sent_at = $3,
+               accepted_at = $4,
+               rejected_at = $5,
+               voided_at = $6,
+               reject_reason = $7,
+               approved_by = coalesce($8, approved_by),
+               updated_at = now()
+         where id = $9 and company_id = $10`,
+        [
+          final.state,
+          final.state_version,
+          final.sent_at ?? null,
+          final.accepted_at ?? null,
+          final.rejected_at ?? null,
+          final.voided_at ?? null,
+          final.reject_reason ?? null,
+          final.approved_by ?? null,
+          id,
+          companyId,
+        ],
+      )
+    }
+  }
+}
+
+async function ensureCrewSchedules(
+  client: PoolClient,
+  companyId: string,
+  schedules: ScenarioYaml['crew_schedules'],
+  refs: RefMaps,
+): Promise<void> {
+  if (!schedules) return
+  for (const s of schedules) {
+    const projectId = mustResolve('project', s.project_ref, refs.projects)
+    const scheduledFor = resolveDate(s.scheduled_for, s.scheduled_for_offset_days)
+    // Key the id on the resolved date so an offset 'today' schedule mints a
+    // fresh row each day (and re-seeding the same day is a no-op).
+    const id = refUuid('crew_schedule', `${s.ref}:${scheduledFor}`)
+    refs.crewSchedules.set(s.ref, id)
+    const crew = (s.crew ?? []).map((c) => ({
+      worker_id: c.worker_ref ? (refs.workers.get(c.worker_ref) ?? null) : null,
+      name: c.name ?? c.worker_ref ?? null,
+      clerk_user_id: c.clerk_user_id ?? null,
+    }))
+    const status = s.status ?? 'confirmed'
+    // The crew_schedule reducer only has draft/confirmed; a confirmed row lands
+    // at state_version=2 with confirmed_at/by (migration 022 backfill shape).
+    const isConfirmed = status === 'confirmed'
+    await client.query(
+      `insert into crew_schedules
+         (id, company_id, project_id, scheduled_for, crew, status, version, state_version,
+          confirmed_at, confirmed_by, created_by)
+       values ($1, $2, $3, $4::date, $5::jsonb, $6, 1, $7, $8, $9, $10)
+       on conflict (id) do nothing`,
+      [
+        id,
+        companyId,
+        projectId,
+        scheduledFor,
+        JSON.stringify(crew),
+        status,
+        isConfirmed ? 2 : 1,
+        isConfirmed ? new Date().toISOString() : null,
+        isConfirmed ? (s.confirmed_by ?? null) : null,
+        s.confirmed_by ?? null,
+      ],
+    )
+  }
+}
+
+async function ensureDailyLogs(
+  client: PoolClient,
+  companyId: string,
+  logs: ScenarioYaml['daily_logs'],
+  refs: RefMaps,
+): Promise<void> {
+  if (!logs) return
+  for (const log of logs) {
+    const projectId = mustResolve('project', log.project_ref, refs.projects)
+    const occurredOn = resolveDate(log.occurred_on, log.occurred_on_offset_days)
+    // daily_logs is UNIQUE (company, project, occurred_on, foreman_user_id);
+    // key the id on the same tuple so re-seeding collapses to one row and an
+    // offset 'today' draft log refreshes per calendar day.
+    const id = refUuid('daily_log', log.ref ?? `${log.project_ref}:${log.foreman_user_id}:${occurredOn}`)
+    const status = log.status ?? 'draft'
+    // Check constraint (082): submitted ⇒ submitted_at set + state_version=2;
+    // draft ⇒ submitted_at null + state_version=1.
+    const isSubmitted = status === 'submitted'
+    await client.query(
+      `insert into daily_logs
+         (id, company_id, project_id, occurred_on, foreman_user_id, scope_progress, notes,
+          status, submitted_at, state_version)
+       values ($1, $2, $3, $4::date, $5, $6::jsonb, $7, $8, $9, $10)
+       on conflict (id) do nothing`,
+      [
+        id,
+        companyId,
+        projectId,
+        occurredOn,
+        log.foreman_user_id,
+        JSON.stringify(log.scope_progress ?? []),
+        log.notes ?? null,
+        status,
+        isSubmitted ? new Date().toISOString() : null,
+        isSubmitted ? 2 : 1,
+      ],
+    )
+  }
+}
+
+/**
+ * Rich takeoff drafts (distinct from the bulk `takeoff_measurements` perf
+ * helper). Each draft can declare a capture `source` and `kind` so an
+ * AI-queue item (source<>'manual' + review_required=true) surfaces in
+ * GET /api/takeoff-drafts, and an optional `measurements[]` gives the draft
+ * real geometry to review.
+ */
+async function ensureTakeoffDraftsRich(
+  client: PoolClient,
+  companyId: string,
+  drafts: ScenarioYaml['takeoff_drafts'],
+  refs: RefMaps,
+): Promise<void> {
+  if (!drafts) return
+  for (const d of drafts) {
+    const projectId = mustResolve('project', d.project_ref, refs.projects)
+    const draftId = refUuid('takeoff_draft', d.ref)
+    refs.takeoffDrafts.set(d.ref, draftId)
+    await client.query(
+      `insert into takeoff_drafts
+         (id, company_id, project_id, name, type, status, source, kind, review_required, takeoff_result_json)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
+       on conflict (id) do nothing`,
+      [
+        draftId,
+        companyId,
+        projectId,
+        d.name,
+        d.type ?? 'measurement',
+        d.status ?? 'active',
+        d.source ?? 'manual',
+        d.kind ?? 'takeoff',
+        d.review_required ?? false,
+        d.result_json ? JSON.stringify(d.result_json) : null,
+      ],
+    )
+
+    if (d.measurements && d.measurements.length > 0) {
+      for (let i = 0; i < d.measurements.length; i++) {
+        const m = d.measurements[i]!
+        const id = refUuid('takeoff_measurement', `${d.ref}:${i}`)
+        await client.query(
+          `insert into takeoff_measurements
+             (id, company_id, project_id, draft_id, service_item_code, quantity, unit)
+           values ($1, $2, $3, $4, $5, $6, $7)
+           on conflict (id) do nothing`,
+          [id, companyId, projectId, draftId, m.service_item_code, m.quantity, m.unit ?? 'sqft'],
+        )
+      }
+    }
+  }
+}
+
 // ---------- Helpers ----------
 
 function mustResolve(scope: string, ref: string, map: Map<string, string>): string {
@@ -1237,6 +1669,9 @@ interface SeedSummary {
   rental_requests: Array<{ ref: string; id: string }>
   qbo_sync_runs: Array<{ ref: string; id: string }>
   boms: Array<{ ref: string; id: string }>
+  change_orders: Array<{ ref: string; id: string }>
+  crew_schedules: Array<{ ref: string; id: string }>
+  takeoff_drafts: Array<{ ref: string; id: string }>
 }
 
 function summarize(scenario: ScenarioYaml, companyId: string, refs: RefMaps): SeedSummary {
@@ -1258,6 +1693,9 @@ function summarize(scenario: ScenarioYaml, companyId: string, refs: RefMaps): Se
     rental_requests: Array.from(refs.rentalRequests.entries()).map(([ref, id]) => ({ ref, id })),
     qbo_sync_runs: Array.from(refs.qboSyncRuns.entries()).map(([ref, id]) => ({ ref, id })),
     boms: Array.from(refs.boms.entries()).map(([ref, id]) => ({ ref, id })),
+    change_orders: Array.from(refs.changeOrders.entries()).map(([ref, id]) => ({ ref, id })),
+    crew_schedules: Array.from(refs.crewSchedules.entries()).map(([ref, id]) => ({ ref, id })),
+    takeoff_drafts: Array.from(refs.takeoffDrafts.entries()).map(([ref, id]) => ({ ref, id })),
   }
 }
 
@@ -1300,6 +1738,15 @@ export async function seedScenario(scenarioPath: string): Promise<SeedSummary> {
       await ensureRentalRequests(client, companyId, scenario.rental_requests, refs)
       await ensureQboSyncRuns(client, companyId, scenario.qbo_sync_runs, refs)
       await ensureBoms(client, companyId, scenario.boms, refs)
+      // Demo-oriented sections (steve-demo.yaml). All additive + idempotent;
+      // run after projects/workers so their refs resolve.
+      await ensureTakeoffDraftsRich(client, companyId, scenario.takeoff_drafts, refs)
+      await ensureEstimateLines(client, companyId, scenario.estimate_lines, refs)
+      await ensureMaterialBills(client, companyId, scenario.material_bills, refs)
+      await ensureLaborEntries(client, companyId, scenario.labor_entries, refs)
+      await ensureChangeOrders(client, companyId, scenario.change_orders, refs)
+      await ensureCrewSchedules(client, companyId, scenario.crew_schedules, refs)
+      await ensureDailyLogs(client, companyId, scenario.daily_logs, refs)
       await client.query('commit')
       return summarize(scenario, companyId, refs)
     } catch (err) {

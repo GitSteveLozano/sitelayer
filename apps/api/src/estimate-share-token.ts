@@ -1,4 +1,5 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import type { AppTier } from './tier.js'
 
 /**
  * HMAC-signed share token derivation for estimate portal links.
@@ -59,7 +60,7 @@ export type ShareSecretConfig =
  * shared QBO_STATE_SECRET). Non-prod tiers may fall back silently.
  */
 export function resolveShareSecretConfig(input: {
-  tier: 'local' | 'dev' | 'preview' | 'prod'
+  tier: AppTier
   env?: NodeJS.ProcessEnv
 }): ShareSecretConfig {
   const env = input.env ?? process.env
