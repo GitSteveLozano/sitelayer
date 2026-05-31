@@ -66,7 +66,11 @@ export class AuthConfigError extends Error {
 
 export function loadAuthConfig(env: NodeJS.ProcessEnv = process.env): AuthConfig {
   const tier = env.APP_TIER ?? 'local'
-  const clerkJwtKey = env.CLERK_JWT_KEY?.trim() || null
+  // Accept a single-line PEM with literal `\n` escapes — required so the key
+  // survives env-file transports that can't carry multi-line values (the
+  // preview/demo deploy passes envs via `docker compose --env-file`). A
+  // real-newline PEM has no `\n` literals, so this is a no-op for it (prod-safe).
+  const clerkJwtKey = env.CLERK_JWT_KEY?.trim().replace(/\\n/g, '\n') || null
   const internalAuthToken = env.INTERNAL_AUTH_TOKEN?.trim() || null
   const authConfigured = Boolean(clerkJwtKey || internalAuthToken)
   const allowHeaderFallback = env.AUTH_ALLOW_HEADER_FALLBACK
