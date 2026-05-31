@@ -35,6 +35,10 @@ import {
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import { getActiveCompanySlug, queryKeys, request, type BootstrapResponse, type SessionResponse } from '@/lib/api'
+import { useNotificationFeed, useMarkNotificationRead, type NotificationRow } from '@/lib/api/notifications'
+import { usePendingApprovalsSummary } from '@/lib/api/approvals'
+import { useInventoryItems } from '@/lib/api/rentals'
+import { useUserInitials, useUserFullName } from '@/lib/user'
 import { normalizeMobileShellRole } from '@/lib/active-context'
 import { membershipRoleToPersona, RoleContext, type Role } from '@/lib/role'
 import {
@@ -48,6 +52,7 @@ import {
   type DCommandGroup,
   type DNavSection,
   type DNotifGroup,
+  type DNotifItem,
 } from '@/components/d'
 import { MButton } from '@/components/m'
 import { EstAiTakeoffSetup, EstAiTakeoffReview } from './est-ai-takeoff'
@@ -80,6 +85,7 @@ import { EstCanvas } from './est-canvas'
 import { FmSchedule } from './fm-schedule'
 import { FmTime } from './fm-time'
 import { FmBrief } from './fm-brief'
+import { FmBlockerDetail } from './fm-blocker-detail'
 import { FmLog } from './fm-log'
 import { OwnerRentalsUtilization } from './owner-rentals-utilization'
 import { OwnerNewProject } from './owner-new-project'
@@ -172,6 +178,23 @@ const CRUMB: Record<string, string> = {
   '/desktop/activity': 'Comms · Activity',
 }
 
+// Dynamic rentals sub-routes (asset detail / dispatch / return) want a
+// screen-specific contextual breadcrumb ('RENTALS · SCAFFOLD A · DISPATCH')
+// rather than the static exact-pathname CRUMB fallback ('Sitelayer'). Resolve
+// the asset segment + action label from the pathname; the asset code is looked
+// up from the inventory catalog when loaded (falls back to the bare 'Rentals ·
+// Asset' shape while items are still in flight).
+function resolveRentalsCrumb(pathname: string, assetCode: string | null): string | null {
+  const match = /^\/desktop\/rentals\/([^/]+)(?:\/([^/]+))?\/?$/.exec(pathname)
+  if (!match) return null
+  const [, segment, action] = match
+  // /desktop/rentals/utilization is a static (non-dynamic) route handled by CRUMB.
+  if (segment === 'utilization') return null
+  const asset = assetCode ?? 'Asset'
+  const actionLabel = action === 'dispatch' ? 'Dispatch' : action === 'return' ? 'Return' : 'Detail'
+  return `Rentals · ${asset} · ${actionLabel}`
+}
+
 function DComingSoon({ name }: { name: string }) {
   return (
     <div className="d-content">
@@ -190,7 +213,24 @@ function DComingSoon({ name }: { name: string }) {
 export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstrap?: BootstrapResponse | null }) {
   const location = useLocation()
   const navigate = useNavigate()
-  const crumb = CRUMB[location.pathname] ?? 'Sitelayer'
+  // Dashboard breadcrumb carries a today's day/date prefix per the design
+  // ("MON · MAY 4 · DASHBOARD"); other sections keep the bare section label.
+  const now = new Date()
+  const dateCrumb = `${['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][now.getDay()]} · ${
+    ['JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN', 'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC'][now.getMonth()]
+  } ${now.getDate()}`
+  // Inventory catalog backs the contextual rentals breadcrumb (asset code on
+  // the dynamic /desktop/rentals/:itemId[/...] routes). Cached query, shared
+  // with the rentals screens; only its `description`/`code` are read here.
+  const inventoryItemsQuery = useInventoryItems()
+  const rentalsItemMatch = /^\/desktop\/rentals\/([^/]+)/.exec(location.pathname)
+  const rentalsItemId = rentalsItemMatch && rentalsItemMatch[1] !== 'utilization' ? rentalsItemMatch[1] : null
+  const rentalsAssetCode = rentalsItemId
+    ? ((inventoryItemsQuery.data?.inventoryItems ?? []).find((i) => i.id === rentalsItemId)?.code ?? null)
+    : null
+  const dynamicRentalsCrumb = resolveRentalsCrumb(location.pathname, rentalsAssetCode)
+  const sectionCrumb = dynamicRentalsCrumb ?? CRUMB[location.pathname] ?? 'Sitelayer'
+  const crumb = location.pathname === '/desktop' ? `${dateCrumb} · ${sectionCrumb}` : sectionCrumb
   const [wearingOpen, setWearingOpen] = useState(false)
   const [cmdkOpen, setCmdkOpen] = useState(false)
   const [cmdkQuery, setCmdkQuery] = useState('')
@@ -200,11 +240,18 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
 
   // WEARING ▾ — solo operators switch which hat they're in. On the desktop
   // command center each hat routes to its home surface.
-  const HATS: Array<{ label: string; to: string }> = [
-    { label: 'Owner', to: '/desktop' },
-    { label: 'Estimator', to: '/desktop/takeoff' },
-    { label: 'Foreman', to: '/desktop/fm/today' },
+  const HATS: Array<{ key: string; label: string; letter: string; desc: string; to: string }> = [
+    { key: 'owner', label: 'Owner', letter: 'O', desc: 'Business · money · approvals', to: '/desktop' },
+    { key: 'estimator', label: 'Estimator', letter: 'E', desc: 'Takeoff · bids · clients', to: '/desktop/takeoff' },
+    { key: 'foreman', label: 'Foreman', letter: 'F', desc: 'Crew · briefs · logs', to: '/desktop/fm/today' },
   ]
+  // Which hat the operator is currently wearing, inferred from the route, so
+  // the switch menu can show a selected indicator (design: TOPBAR ROLE SWITCHER).
+  const activeHat = location.pathname.startsWith('/desktop/fm')
+    ? 'foreman'
+    : /\/desktop\/(takeoff|ai-queue|item-library|assemblies|estimate|scale)/.test(location.pathname)
+      ? 'estimator'
+      : 'owner'
   const goHat = (to: string) => {
     setWearingOpen(false)
     navigate(to)
@@ -220,6 +267,46 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
     enabled: bootstrapProp === null && Boolean(companySlug),
   })
   const bootstrap = bootstrapProp ?? bootstrapQuery.data ?? null
+  // Avatar initials: the signed-in user's name first (design shows 'MD' for
+  // Mike Davis), then the active company mark, then the 'SL' fallback. The
+  // user-name source is Clerk (`useUserInitials`); in local dev / before a
+  // name is set it returns null and we fall through to the company initials.
+  const userInitials = useUserInitials()
+  // Identity-header display name for the avatar dropdown (design shows the
+  // person's name "Mike Davis", not the company). Falls back to the company
+  // name, then a generic mark, the same precedence as the avatar initials.
+  const userFullName = useUserFullName()
+  const avatarInitials =
+    userInitials ||
+    (bootstrap?.company?.name ?? '')
+      .split(/[^A-Za-z0-9]+/)
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((w) => w[0])
+      .join('')
+      .toUpperCase() ||
+    'SL'
+
+  // Pending-approvals count → sidebar "Approvals" nav badge (design shows '3').
+  // Same cheap rails (guardrails + open field requests) the dashboard KPI uses;
+  // TanStack Query shares the cache so this adds no extra fetch.
+  const projectName = useMemo(
+    () => new Map((bootstrap?.projects ?? []).map((p) => [p.id, p.name])),
+    [bootstrap?.projects],
+  )
+  const pendingApprovals = usePendingApprovalsSummary(projectName)
+  const navSections = useMemo<DNavSection[]>(
+    () =>
+      OWNER_NAV.map((section) => ({
+        ...section,
+        items: section.items.map((item) =>
+          item.to === '/desktop/approvals'
+            ? { ...item, badge: pendingApprovals.count > 0 ? pendingApprovals.count : undefined }
+            : item,
+        ),
+      })),
+    [pendingApprovals.count],
+  )
 
   // RoleContext for the desktop command-center tree. App.tsx mounts this
   // surface directly at `/desktop/*` (NOT through routes/workspace.tsx), so
@@ -301,12 +388,57 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         .map((i) => ({ id: i.id, label: i.label, onSelect: () => closeCmdk(i.to) })),
     },
   ]
-  const notifGroups: DNotifGroup[] = [
-    {
-      label: 'Today',
-      items: [{ id: 'welcome', title: 'Welcome to the command center', meta: 'Desktop v2', tone: null }],
-    },
-  ]
+  // Real recipient feed for the topbar bell (replaces the hardcoded
+  // placeholder). Grouped URGENT / TODAY / THIS WEEK per the design
+  // (dsg__66), with a colored left bar tone (red for action-needed /
+  // failures, green for cleared/synced wins) and an unread-count badge.
+  const notifFeed = useNotificationFeed({ limit: 20 })
+  const notifRows: NotificationRow[] = notifFeed.data?.notifications ?? []
+  const unreadRows = useMemo(() => notifRows.filter((n) => !n.read_at), [notifRows])
+  const unreadCount = unreadRows.length
+  const markAllRead = useMarkNotificationRead()
+  const notifGroups: DNotifGroup[] = useMemo(() => {
+    const startOfDay = new Date()
+    startOfDay.setHours(0, 0, 0, 0)
+    const startOfDayMs = startOfDay.getTime()
+    // Design buckets: URGENT (unread + action-needed), TODAY (since
+    // midnight), THIS WEEK (older, last ~7d). An unread row that signals an
+    // action/failure goes to URGENT; everything else falls into the recency
+    // bucket so the panel mirrors dsg__66's three-section shape.
+    const buckets: Record<'URGENT' | 'TODAY' | 'THIS WEEK', DNotifItem[]> = {
+      URGENT: [],
+      TODAY: [],
+      'THIS WEEK': [],
+    }
+    const toneFor = (n: NotificationRow): 'good' | 'bad' | null => {
+      const text = `${n.kind} ${n.subject}`.toLowerCase()
+      if ((n.state && n.state.startsWith('failed')) || n.failure_kind) return 'bad'
+      if (/guardrail|over|auth|approval|blocker|lost|risk|escalat/.test(text)) return 'bad'
+      if (/cleared|synced|paid|deposit|posted|approved|complete/.test(text)) return 'good'
+      return null
+    }
+    for (const n of notifRows) {
+      const tone = toneFor(n)
+      const ts = new Date(n.created_at).getTime()
+      const item: DNotifItem = {
+        id: n.id,
+        title: n.subject,
+        meta: n.state && n.state.startsWith('failed') ? 'Delivery failed' : n.body_text || undefined,
+        tone,
+      }
+      const urgent = !n.read_at && tone === 'bad'
+      if (urgent) buckets.URGENT.push(item)
+      else if (ts >= startOfDayMs) buckets.TODAY.push(item)
+      else buckets['THIS WEEK'].push(item)
+    }
+    return (['URGENT', 'TODAY', 'THIS WEEK'] as const)
+      .map((label) => ({ label, items: buckets[label] }))
+      .filter((g) => g.items.length > 0)
+  }, [notifRows])
+  const handleMarkAll = () => {
+    for (const n of unreadRows) markAllRead.mutate(n.id)
+    setNotifOpen(false)
+  }
   const signOut = () => {
     setAvatarOpen(false)
     const clerk = (window as unknown as { Clerk?: { signOut: (cb?: () => void) => void } }).Clerk
@@ -316,7 +448,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
 
   return (
     <DShell
-      sidebar={<DSidebar sections={OWNER_NAV} wearing="Owner" onWearingClick={() => setWearingOpen((v) => !v)} />}
+      sidebar={<DSidebar sections={navSections} wearing="Owner" onWearingClick={() => setWearingOpen((v) => !v)} />}
     >
       {wearingOpen ? (
         <div
@@ -340,35 +472,83 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
               letterSpacing: '0.1em',
               textTransform: 'uppercase',
               color: 'var(--m-ink-3)',
-              padding: '10px 12px 4px',
+              padding: '10px 12px 6px',
             }}
           >
-            Switch hat
+            Switch hat · {HATS.length} on desktop
           </div>
-          {HATS.map((h) => (
-            <button
-              key={h.to}
-              type="button"
-              role="menuitem"
-              onClick={() => goHat(h.to)}
-              style={{
-                display: 'block',
-                width: '100%',
-                textAlign: 'left',
-                padding: '10px 12px',
-                background: 'transparent',
-                border: 'none',
-                borderTop: '1px solid var(--m-line-2)',
-                fontFamily: 'var(--m-font-display)',
-                fontWeight: 700,
-                fontSize: 15,
-                color: 'var(--m-ink)',
-                cursor: 'pointer',
-              }}
-            >
-              {h.label}
-            </button>
-          ))}
+          {HATS.map((h) => {
+            const selected = h.key === activeHat
+            return (
+              <button
+                key={h.to}
+                type="button"
+                role="menuitem"
+                aria-current={selected || undefined}
+                onClick={() => goHat(h.to)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 10,
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '10px 12px',
+                  background: selected ? 'var(--m-card-soft)' : 'transparent',
+                  border: 'none',
+                  borderTop: '1px solid var(--m-line-2)',
+                  color: 'var(--m-ink)',
+                  cursor: 'pointer',
+                }}
+              >
+                <span
+                  aria-hidden
+                  style={{
+                    flex: '0 0 auto',
+                    width: 26,
+                    height: 26,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: selected ? 'var(--m-accent)' : 'var(--m-ink)',
+                    color: selected ? 'var(--m-ink)' : 'var(--m-sand)',
+                    fontFamily: 'var(--m-font-display)',
+                    fontWeight: 800,
+                    fontSize: 13,
+                  }}
+                >
+                  {h.letter}
+                </span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span
+                    style={{ display: 'block', fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 15 }}
+                  >
+                    {h.label}
+                  </span>
+                  <span style={{ display: 'block', fontSize: 11, color: 'var(--m-ink-3)' }}>{h.desc}</span>
+                </span>
+                {selected ? (
+                  <span aria-hidden style={{ color: 'var(--m-ink)', fontSize: 13 }}>
+                    ●
+                  </span>
+                ) : null}
+              </button>
+            )
+          })}
+          {/* Footer: crew (jobsite) role lives only on the phone app, so it's
+              not switchable here on desktop (design dsg__67). */}
+          <div
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 9,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink-3)',
+              padding: '10px 12px',
+              borderTop: '1px solid var(--m-line-2)',
+            }}
+          >
+            ● Crew (jobsite) lives on the phone app.
+          </div>
         </div>
       ) : null}
       <DTopbar
@@ -386,6 +566,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
               aria-label="Notifications"
               onClick={() => setNotifOpen(true)}
               style={{
+                position: 'relative',
                 background: 'transparent',
                 border: 'none',
                 cursor: 'pointer',
@@ -394,6 +575,19 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
               }}
             >
               <Bell aria-hidden width={20} height={20} />
+              {unreadCount > 0 ? (
+                <span
+                  aria-hidden
+                  style={{
+                    position: 'absolute',
+                    top: -2,
+                    right: -2,
+                    width: 8,
+                    height: 8,
+                    background: 'var(--m-red)',
+                  }}
+                />
+              ) : null}
             </button>
             <button
               type="button"
@@ -402,7 +596,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
               style={{ background: 'transparent', border: 'none', cursor: 'pointer', padding: 0 }}
             >
               <span className="m-avatar" data-size="sm" aria-hidden>
-                SL
+                {avatarInitials}
               </span>
             </button>
           </>
@@ -419,7 +613,7 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         open={notifOpen}
         onClose={() => setNotifOpen(false)}
         groups={notifGroups}
-        onMarkAll={() => setNotifOpen(false)}
+        onMarkAll={handleMarkAll}
       />
       <DMenu
         open={avatarOpen}
@@ -438,21 +632,21 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
           }}
         >
           <span className="m-avatar" data-size="sm" aria-hidden>
-            SL
+            {avatarInitials}
           </span>
           <div>
             <div style={{ fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 14 }}>
-              {bootstrap?.company?.name ?? 'Sitelayer'}
+              {userFullName ?? bootstrap?.company?.name ?? 'Sitelayer'}
             </div>
             <div style={{ fontFamily: 'var(--m-num)', fontSize: 9, color: 'var(--m-ink-3)', marginTop: 2 }}>
-              OWNER · ALL HATS
+              {activeHat.toUpperCase()} · ALL HATS
             </div>
           </div>
         </div>
         {[
-          { label: 'Profile', onClick: () => goHat('/desktop'), danger: false },
           {
-            label: 'Settings',
+            label: 'Profile',
+            sub: 'Settings · Profile',
             onClick: () => {
               setAvatarOpen(false)
               navigate('/desktop/settings')
@@ -461,13 +655,14 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
           },
           {
             label: 'Switch role',
+            sub: `${HATS.length} hats on desktop`,
             onClick: () => {
               setAvatarOpen(false)
               setWearingOpen(true)
             },
             danger: false,
           },
-          { label: 'Sign out', onClick: signOut, danger: true },
+          { label: 'Sign out', sub: undefined, onClick: signOut, danger: true },
         ].map((it) => (
           <button
             key={it.label}
@@ -490,6 +685,22 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
             }}
           >
             {it.label}
+            {it.sub ? (
+              <span
+                style={{
+                  display: 'block',
+                  fontFamily: 'var(--m-num)',
+                  fontWeight: 600,
+                  fontSize: 9,
+                  letterSpacing: '0.06em',
+                  textTransform: 'uppercase',
+                  color: 'var(--m-ink-3)',
+                  marginTop: 2,
+                }}
+              >
+                {it.sub}
+              </span>
+            ) : null}
           </button>
         ))}
       </DMenu>
@@ -523,12 +734,16 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
           <Route path="estimate/:projectId" element={<EstQuantities />} />
           <Route path="scale/:projectId" element={<EstScaleVerify />} />
           <Route path="canvas/:projectId" element={<EstCanvas />} />
-          <Route path="fm/today" element={<FmToday bootstrap={bootstrap} />} />
+          <Route path="fm/today" element={<FmToday bootstrap={bootstrap} companySlug={companySlug ?? ''} />} />
           <Route path="fm/crew" element={<FmCrew bootstrap={bootstrap} />} />
           <Route path="fm/schedule" element={<FmSchedule bootstrap={bootstrap} />} />
           <Route path="fm/time" element={<FmTime bootstrap={bootstrap} />} />
           <Route path="fm/confirm" element={<FmConfirmDay bootstrap={bootstrap} />} />
           <Route path="fm/brief/:projectId" element={<FmBrief />} />
+          <Route
+            path="fm/blocker/:issueId"
+            element={<FmBlockerDetail bootstrap={bootstrap} companySlug={companySlug ?? ''} />}
+          />
           <Route path="ai-takeoff/:projectId" element={<EstAiTakeoffSetup />} />
           <Route path="ai-takeoff/:projectId/review" element={<EstAiTakeoffReview />} />
           <Route path="ai-count/:projectId" element={<EstAiCountSetup />} />

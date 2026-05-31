@@ -312,8 +312,9 @@ export async function handleChangeOrderRoutes(
           eventPayload: { event: eventType, reason: reason ?? null },
           // snapshot_after must carry a `state` key (the read endpoint
           // projects snapshot_after->>'state' as to_state / from_state).
-          // The reducer's nextSnapshot is already that shape; rowToContext
-          // keys on `status` instead, leaving to_state blank for every CO.
+          // nextSnapshot is the reducer shape (keyed on `state`), so the
+          // projection is correct — do not pass the rowToContext shape here
+          // (that one keys on `status`).
           snapshotAfter: nextSnapshot,
           actorUserId: ctx.currentUserId,
         })

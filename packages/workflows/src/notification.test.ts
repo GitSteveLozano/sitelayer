@@ -5,6 +5,7 @@ import {
   nextNotificationEvents,
   NOTIFICATION_ALL_STATES,
   NOTIFICATION_TERMINAL_STATES,
+  notificationStateToLegacyStatus,
   notificationWorkflow,
   parseNotificationEventRequest,
   transitionNotificationWorkflow,
@@ -577,5 +578,30 @@ describe('notification reducer — property invariants', () => {
     expect(a.ok).toBe(true)
     expect(b.ok).toBe(true)
     expect(a.finalSnapshot).toEqual(b.finalSnapshot)
+  })
+})
+
+describe('notificationStateToLegacyStatus collapse map', () => {
+  it('collapses all eight canonical states to the legacy five-value vocabulary', () => {
+    const collapsed = Object.fromEntries(
+      NOTIFICATION_ALL_STATES.map((s) => [s, notificationStateToLegacyStatus(s)]),
+    )
+    expect(collapsed).toEqual({
+      pending: 'pending',
+      hydrating: 'pending',
+      sending: 'sending',
+      sent: 'sent',
+      failed_clerk_not_found: 'failed',
+      failed_clerk_unreachable: 'failed',
+      failed_provider: 'failed',
+      voided: 'voided',
+    })
+  })
+
+  it('only ever produces a value from the legacy five-value vocabulary', () => {
+    const legacyVocab = new Set(['pending', 'sending', 'sent', 'failed', 'voided'])
+    for (const state of NOTIFICATION_ALL_STATES) {
+      expect(legacyVocab.has(notificationStateToLegacyStatus(state))).toBe(true)
+    }
   })
 })

@@ -6,10 +6,10 @@ import {
   estimatePushLineRate,
   estimatePushLineUnit,
   createSupportPacket,
-  useDispatchEstimatePushEvent,
-  useEstimatePush,
+  getActiveCompanySlug,
   type EstimatePushHumanEvent,
 } from '@/lib/api'
+import { useEstimatePush } from '@/machines/estimate-push'
 import {
   isEstimatePushProbeDiagnosticsEnabled,
   registerEstimatePushProbeDiagnostics,
@@ -28,15 +28,19 @@ const TONE_BY_STATE: Record<string, 'good' | 'warn' | 'default'> = {
 
 export function EstimatePushDetailScreen() {
   const { id } = useParams<{ id: string }>()
-  const snapshot = useEstimatePush(id)
-  const dispatch = useDispatchEstimatePushEvent(id ?? '')
-  const [error, setError] = useState<string | null>(null)
+  // Re-pointed onto the canonical headless XState machine (the same hook
+  // mobile/estimate-push.tsx uses). The machine owns loading/submitting +
+  // the outOfSync 409-reload orchestration this screen previously lacked.
+  const { snapshot, error, outOfSync, isLoading, isSubmitting, dispatch, dismissError } = useEstimatePush(
+    id ?? '',
+    getActiveCompanySlug(),
+  )
   const [supportPacketStatus, setSupportPacketStatus] = useState<string | null>(null)
   const [supportPacketBusy, setSupportPacketBusy] = useState(false)
   // ADR-0019 page-context Probe. Mounted unconditionally so hook order
   // stays stable across the early-return branches below. The hook is
   // a no-op when `id` is empty and tolerates a null snapshot.
-  const capture = useEstimatePushProbe(id ?? '', snapshot.data ?? null)
+  const capture = useEstimatePushProbe(id ?? '', snapshot ?? null)
 
   useEffect(() => {
     if (!id || !isEstimatePushProbeDiagnosticsEnabled()) return
@@ -53,13 +57,14 @@ export function EstimatePushDetailScreen() {
     )
   }
 
-  if (snapshot.isPending) {
+  if (isLoading && !snapshot) {
     return <div className="px-5 pt-8 text-[13px] text-ink-3">Loading push…</div>
   }
-  if (!snapshot.data) {
+  if (!snapshot) {
     return (
       <div className="px-5 pt-8">
         <h1 className="font-display text-[22px] font-bold tracking-tight">Push not found</h1>
+        {error ? <div className="text-[12px] text-warn mt-2">{error}</div> : null}
         <Link to="/financial/estimate-pushes" className="text-accent text-[13px] font-medium">
           ← back
         </Link>
@@ -67,16 +72,14 @@ export function EstimatePushDetailScreen() {
     )
   }
 
-  const ctx = snapshot.data.context
+  const ctx = snapshot.context
   const lines = ctx.lines ?? []
 
-  const onEvent = async (event: EstimatePushHumanEvent) => {
-    setError(null)
-    try {
-      await dispatch.mutateAsync({ event, state_version: snapshot.data.state_version })
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Event failed')
-    }
+  const onEvent = (event: EstimatePushHumanEvent) => {
+    // The machine reads state_version off the stored snapshot itself and
+    // flips outOfSync on a 409 (reloading the fresh snapshot), so the
+    // screen no longer threads the version or try/catches.
+    dispatch(event)
   }
 
   const onCreateSupportPacket = async () => {
@@ -110,12 +113,24 @@ export function EstimatePushDetailScreen() {
             ${Number(ctx.subtotal).toLocaleString()}
           </h1>
           <div className="text-[11px] text-ink-3 mt-1">
-            v{snapshot.data.state_version} · {lines.length} line{lines.length === 1 ? '' : 's'}
+            v{snapshot.state_version} · {lines.length} line{lines.length === 1 ? '' : 's'}
             {ctx.qbo_estimate_id ? ` · QBO #${ctx.qbo_estimate_id}` : ''}
           </div>
         </div>
-        <Pill tone={TONE_BY_STATE[snapshot.data.state] ?? 'default'}>{snapshot.data.state}</Pill>
+        <Pill tone={TONE_BY_STATE[snapshot.state] ?? 'default'}>{snapshot.state}</Pill>
       </div>
+
+      {outOfSync ? (
+        <Card tight className="mt-4">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-warn">Out of sync</div>
+          <div className="text-[12px] text-ink-2 mt-1">
+            Your action was against a stale state — this is the current state. Review and retry.
+          </div>
+          <MobileButton variant="ghost" className="mt-2" onClick={dismissError}>
+            Dismiss
+          </MobileButton>
+        </Card>
+      ) : null}
 
       {ctx.error ? (
         <Card tight className="mt-4">
@@ -165,17 +180,17 @@ export function EstimatePushDetailScreen() {
 
       <div className="mt-4 space-y-2">
         <div className="text-[10px] font-semibold uppercase tracking-[0.06em] text-ink-3 px-1">Actions</div>
-        {snapshot.data.next_events.length === 0 ? (
+        {snapshot.next_events.length === 0 ? (
           <Card tight>
             <div className="text-[12px] text-ink-3">Terminal state — no further actions.</div>
           </Card>
         ) : (
           <div className="grid grid-cols-2 gap-2">
-            {snapshot.data.next_events.map((ev) => (
+            {snapshot.next_events.map((ev) => (
               <MobileButton
                 key={ev.type}
                 variant={ev.type === 'VOID' ? 'ghost' : 'primary'}
-                disabled={dispatch.isPending}
+                disabled={isSubmitting}
                 onClick={() => onEvent(ev.type)}
               >
                 {ev.label}
@@ -183,7 +198,7 @@ export function EstimatePushDetailScreen() {
             ))}
           </div>
         )}
-        {error ? <div className="text-[12px] text-warn">{error}</div> : null}
+        {error && !outOfSync ? <div className="text-[12px] text-warn">{error}</div> : null}
       </div>
 
       <div className="mt-4">

@@ -275,4 +275,87 @@ describe('onboardingWizardMachine', () => {
       expect(actor.getSnapshot().context.seedOptions.customerName).toBe('BigCo')
     })
   })
+
+  // Golden affordance map over the FSM-transition events only (the
+  // navigation/lifecycle subset — the always-on form-mutate events like
+  // SET_* / ADD_INVITE are accepted in every state by design and are
+  // excluded here to keep the snapshot a stable regression net). A button
+  // that silently stops advancing the wizard shows up as a diff.
+  describe('affordance golden map (transition events)', () => {
+    it('exposes a stable accepted transition-event set per state', () => {
+      const TRANSITIONS = ['NEXT', 'BACK', 'SUBMIT', 'RETRY', 'MARK_SUBMITTED', 'MARK_FAILED', 'SLUG_SUGGESTION'] as const
+      // Reach each state and probe `can()`. company_step needs a valid
+      // form for NEXT/SUBMIT to be acceptable, so fill it first.
+      function accepted(actor: ReturnType<typeof newActor>): string[] {
+        const s = actor.getSnapshot()
+        return TRANSITIONS.filter((type) => {
+          switch (type) {
+            case 'MARK_FAILED':
+              return s.can({ type, error: 'e' })
+            case 'SLUG_SUGGESTION':
+              return s.can({ type, suggestion: 's' })
+            default:
+              return s.can({ type })
+          }
+        })
+          .slice()
+          .sort()
+      }
+
+      const map: Record<string, string[]> = {}
+
+      const company = newActor()
+      company.send({ type: 'SET_COMPANY_FIELD', field: 'slug', value: 'acme' })
+      company.send({ type: 'SET_COMPANY_FIELD', field: 'name', value: 'ACME' })
+      map.company_step = accepted(company)
+
+      company.send({ type: 'NEXT' }) // → submitting
+      map.submitting = accepted(company)
+
+      const errActor = newActor()
+      errActor.send({ type: 'SET_COMPANY_FIELD', field: 'slug', value: 'acme' })
+      errActor.send({ type: 'SET_COMPANY_FIELD', field: 'name', value: 'ACME' })
+      errActor.send({ type: 'NEXT' })
+      errActor.send({ type: 'MARK_FAILED', error: 'boom' })
+      map.error = accepted(errActor)
+
+      const team = newActor()
+      team.send({ type: 'SET_COMPANY_FIELD', field: 'slug', value: 'acme' })
+      team.send({ type: 'SET_COMPANY_FIELD', field: 'name', value: 'ACME' })
+      team.send({ type: 'NEXT' })
+      team.send({ type: 'MARK_SUBMITTED' }) // → team_step
+      map.team_step = accepted(team)
+
+      team.send({ type: 'NEXT' }) // → seed_step
+      map.seed_step = accepted(team)
+
+      expect(map).toMatchInlineSnapshot(`
+        {
+          "company_step": [
+            "NEXT",
+            "SUBMIT",
+          ],
+          "error": [
+            "BACK",
+            "RETRY",
+            "SLUG_SUGGESTION",
+          ],
+          "seed_step": [
+            "BACK",
+            "NEXT",
+            "SUBMIT",
+          ],
+          "submitting": [
+            "MARK_FAILED",
+            "MARK_SUBMITTED",
+            "SLUG_SUGGESTION",
+          ],
+          "team_step": [
+            "BACK",
+            "NEXT",
+          ],
+        }
+      `)
+    })
+  })
 })

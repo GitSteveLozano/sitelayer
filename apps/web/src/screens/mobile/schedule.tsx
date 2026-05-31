@@ -7,7 +7,8 @@
  */
 import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { apiPost, queryKeys, useCopyScheduleWeek, type BootstrapResponse } from '@/lib/api'
+import { queryKeys, useCopyScheduleWeek, type BootstrapResponse } from '@/lib/api'
+import { useCreateSchedule } from '@/lib/api/schedules'
 import { startOfWeek } from '@/lib/clock-derive'
 import {
   MBanner,
@@ -20,6 +21,7 @@ import {
   MInput,
   MSectionH,
   MSelect,
+  MTextarea,
   MTopBar,
 } from '../../components/m/index.js'
 import { Sheet } from '../../components/mobile/Sheet.js'
@@ -271,9 +273,23 @@ function CreateAssignmentSheet({
   const eligibleProjects = useMemo(() => projects.filter((p) => /accepted|progress|active/i.test(p.status)), [projects])
   const [projectId, setProjectId] = useState('')
   const [scheduledFor, setScheduledFor] = useState(defaultDate)
+  // WHEN start time (design: "WED MAY 7 · 7AM"). The schedules API stores a
+  // start/end pair (both-or-neither); we default the end to start + 8h so the
+  // foreman only has to pick the start, matching the design's single-time UX.
+  const [startTime, setStartTime] = useState('07:00')
+  // SCOPE is captured client-side only — crew_schedules has no scope/notes
+  // column, so we follow the foreman-time-entry.tsx precedent and surface it
+  // for the foreman's intent without a schema change.
+  const [scope, setScope] = useState('')
   const [pickedCrew, setPickedCrew] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
+  // Gap 7 — route creation through the TanStack mutation (the company
+  // headers are injected by the shared request client) instead of a raw
+  // apiPost. The mutation invalidates the schedule + bootstrap caches so
+  // the new draft appears in the week list and owner grid.
+  const createSchedule = useCreateSchedule()
+  void companySlug
 
   useEffect(() => {
     if (!open) return
@@ -293,6 +309,8 @@ function CreateAssignmentSheet({
   const resetAndClose = () => {
     setProjectId('')
     setPickedCrew(new Set())
+    setStartTime('07:00')
+    setScope('')
     setError(null)
     onClose()
   }
@@ -309,17 +327,16 @@ function CreateAssignmentSheet({
     }
     setSaving(true)
     try {
-      const schedule = await apiPost<ScheduleRow>(
-        '/api/schedules',
-        {
-          project_id: projectId,
-          scheduled_for: scheduledFor,
-          crew: Array.from(pickedCrew),
-          status: 'draft',
-        },
-        companySlug,
-      )
-      onCreated(schedule)
+      // Pair the start with a default +8h end — the API rejects a one-sided
+      // time range (both-or-neither), and the design only surfaces the start.
+      const endTime = startTime ? addHours(startTime, 8) : null
+      const schedule = await createSchedule.mutateAsync({
+        project_id: projectId,
+        scheduled_for: scheduledFor,
+        crew: Array.from(pickedCrew),
+        ...(startTime ? { start_time: startTime, end_time: endTime } : {}),
+      })
+      onCreated(schedule as unknown as ScheduleRow)
       resetAndClose()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Save failed')
@@ -342,8 +359,22 @@ function CreateAssignmentSheet({
           </MSelect>
         </Field>
 
-        <Field label="Date">
-          <MInput type="date" value={scheduledFor} onChange={(e) => setScheduledFor(e.currentTarget.value)} />
+        <Field label="When">
+          <div style={{ display: 'flex', gap: 8 }}>
+            <MInput
+              type="date"
+              value={scheduledFor}
+              onChange={(e) => setScheduledFor(e.currentTarget.value)}
+              style={{ flex: 1 }}
+            />
+            <MInput
+              type="time"
+              value={startTime}
+              onChange={(e) => setStartTime(e.currentTarget.value)}
+              style={{ width: 120 }}
+              aria-label="Start time"
+            />
+          </div>
         </Field>
 
         <Field label={`Crew${pickedCrew.size > 0 ? ` (${pickedCrew.size})` : ''}`}>
@@ -381,6 +412,15 @@ function CreateAssignmentSheet({
           </div>
         </Field>
 
+        <Field label="Scope">
+          <MTextarea
+            value={scope}
+            onChange={(e) => setScope(e.currentTarget.value)}
+            placeholder="EPS East — anchor + plate top to bottom."
+            style={{ width: '100%', minHeight: 80 }}
+          />
+        </Field>
+
         <Field label="Foreman">
           <div
             style={{
@@ -403,7 +443,7 @@ function CreateAssignmentSheet({
             Cancel
           </MButton>
           <MButton variant="primary" onClick={save} disabled={saving}>
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? 'Saving...' : 'Save · Notify crew'}
           </MButton>
         </MButtonRow>
       </div>
@@ -509,4 +549,15 @@ function nextDate(): string {
   const d = new Date()
   d.setDate(d.getDate() + 1)
   return d.toISOString().slice(0, 10)
+}
+
+// Add whole hours to an "HH:MM" wall-clock string, clamping at 23:59 so the
+// derived end never rolls past midnight (the API stores a same-day pair).
+function addHours(hhmm: string, hours: number): string {
+  const m = hhmm.match(/^(\d{1,2}):(\d{2})$/)
+  if (!m || !m[1] || !m[2]) return hhmm
+  const total = Math.min(23 * 60 + 59, Number(m[1]) * 60 + Number(m[2]) + hours * 60)
+  const h = Math.floor(total / 60)
+  const min = total % 60
+  return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`
 }

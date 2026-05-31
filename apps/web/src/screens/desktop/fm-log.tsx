@@ -24,6 +24,7 @@ import {
   useDailyLogs,
   useDismissInsight,
   usePatchDailyLog,
+  useProjectBriefs,
   useSubmitDailyLog,
   useTriggerVoiceToLog,
   type DailyLog,
@@ -31,9 +32,10 @@ import {
   type VoiceToLogProposal,
 } from '@/lib/api'
 import { DEyebrow, DH1, DKpi, DKpiStrip } from '@/components/d'
-import { MButton, MSelect, MTextarea } from '@/components/m'
+import { DailyLogSubmittedBanner, MButton, MPill, MSelect, MTextarea } from '@/components/m'
 import { MAiAgent, MAttribution } from '@/components/m/ai'
-import { formatDecimalHours, todayIso } from '../mobile/format.js'
+import { assembleDailyLogDefaults, isEmptyDailyLogDraft } from '@/lib/daily-log-assembly'
+import { endOfWeek, formatDecimalHours, startOfWeek, todayIso } from '../mobile/format.js'
 
 const MONO_LABEL: React.CSSProperties = {
   fontFamily: 'var(--m-num)',
@@ -42,6 +44,33 @@ const MONO_LABEL: React.CSSProperties = {
   letterSpacing: '0.06em',
   textTransform: 'uppercase',
   color: 'var(--m-ink-3)',
+}
+
+/**
+ * The daily-log `weather` column is free-form JSON. The voice-to-log agent
+ * writes `{ summary }`; richer rows may carry `{ temp_f, condition, wind_mph }`.
+ * Normalize whatever's there into a KPI value + meta line for the Weather tile
+ * (design dsg__42: "62°" / "CLEAR · WIND 8MPH"). Returns null when empty.
+ */
+function parseWeather(raw: unknown): { value: string; meta: string | null } | null {
+  if (!raw) return null
+  if (typeof raw === 'string') {
+    const s = raw.trim()
+    return s ? { value: s, meta: null } : null
+  }
+  if (typeof raw === 'object') {
+    const w = raw as Record<string, unknown>
+    const tempRaw = w.temp_f ?? w.temp ?? w.temperature
+    const temp = typeof tempRaw === 'number' ? `${Math.round(tempRaw)}°` : null
+    const condition = typeof w.condition === 'string' ? w.condition : typeof w.summary === 'string' ? w.summary : null
+    const windRaw = w.wind_mph ?? w.wind
+    const wind = typeof windRaw === 'number' ? `WIND ${Math.round(windRaw)}MPH` : null
+    const metaParts = [condition?.toUpperCase(), wind].filter(Boolean) as string[]
+    const value = temp ?? condition ?? null
+    if (!value) return null
+    return { value, meta: metaParts.filter((p) => p !== value.toUpperCase()).join(' · ') || null }
+  }
+  return null
 }
 
 export function FmLog({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
@@ -143,6 +172,17 @@ function DailyLogEditor({ log, bootstrap }: DailyLogEditorProps) {
   const isSubmitted = log.status === 'submitted'
   const today = log.occurred_on
 
+  // Weekly strip for the submitted confirmation surface (design msg__41).
+  // Only fetched when submitted so the draft path pays nothing.
+  const weekLogs = useDailyLogs(
+    { from: startOfWeek(today), to: endOfWeek(today), projectId: log.project_id },
+    { enabled: isSubmitted },
+  )
+  const weekEntries = useMemo(
+    () => (weekLogs.data?.dailyLogs ?? []).map((d) => ({ occurred_on: d.occurred_on, status: d.status })),
+    [weekLogs.data],
+  )
+
   // Today's labor on this project — feeds the Hours stat + agent attribution.
   const todayLabor = useMemo(
     () =>
@@ -153,6 +193,13 @@ function DailyLogEditor({ log, bootstrap }: DailyLogEditorProps) {
   )
   const totalHours = todayLabor.reduce((sum, l) => sum + Number(l.hours ?? 0), 0)
 
+  // One-shot auto-assembly prefill — ported from the mobile composer to
+  // close the drift the audit flagged (desktop previously omitted this).
+  // Same pure `assembleDailyLogDefaults` / `isEmptyDailyLogDraft` path.
+  const briefs = useProjectBriefs(log.project_id, today)
+  const [prefilled, setPrefilled] = useState(false)
+  const prefillAttempted = useRef(false)
+
   // Notes editor with debounced auto-save (same shape as the mobile composer).
   const [notes, setNotes] = useState(log.notes ?? '')
   const dirtyRef = useRef(false)
@@ -161,6 +208,41 @@ function DailyLogEditor({ log, bootstrap }: DailyLogEditorProps) {
     if (!dirtyRef.current) setNotes(log.notes ?? '')
     versionRef.current = log.version
   }, [log.notes, log.version])
+
+  // Prefill scope_progress (from briefs) + crew_summary (from labor) once,
+  // only on a still-empty draft. Mirrors foreman-log.tsx exactly.
+  useEffect(() => {
+    if (prefillAttempted.current) return
+    if (isSubmitted) return
+    if (briefs.isPending) return
+    if (!isEmptyDailyLogDraft(log)) {
+      prefillAttempted.current = true
+      return
+    }
+    prefillAttempted.current = true
+    const defaults = assembleDailyLogDefaults({
+      briefs: briefs.data?.briefs ?? [],
+      laborEntries: todayLabor.map((l) => ({
+        worker_id: l.worker_id,
+        hours: l.hours,
+        occurred_on: l.occurred_on,
+        deleted_at: l.deleted_at,
+      })),
+      workers: bootstrap?.workers.map((w) => ({ id: w.id, name: w.name })) ?? [],
+      photos: [],
+      occurredOn: today,
+    })
+    if (!defaults.scope_progress && !defaults.crew_summary) return
+    setPrefilled(true)
+    void patch
+      .mutateAsync({
+        scope_progress: defaults.scope_progress || undefined,
+        crew_summary: defaults.crew_summary || undefined,
+        expected_version: log.version,
+      })
+      .catch(() => {})
+  }, [briefs.isPending, briefs.data, todayLabor, isSubmitted])
+
   useEffect(() => {
     if (isSubmitted) return
     if (notes === (log.notes ?? '')) return
@@ -178,6 +260,7 @@ function DailyLogEditor({ log, bootstrap }: DailyLogEditorProps) {
 
   const photoCount = log.photo_keys.length
   const issuesCount = Array.isArray(log.schedule_deviations) ? log.schedule_deviations.length : 0
+  const weather = parseWeather(log.weather)
 
   const onSubmit = async () => {
     if (isSubmitted) return
@@ -189,20 +272,31 @@ function DailyLogEditor({ log, bootstrap }: DailyLogEditorProps) {
 
   return (
     <>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+        <span style={MONO_LABEL}>
+          {today} · {isSubmitted ? 'Submitted' : 'Draft'} · AI-assembled
+        </span>
+        <MPill tone={isSubmitted ? 'green' : 'amber'} dot>
+          {isSubmitted ? 'SUBMITTED' : 'DRAFT · NOT SENT'}
+        </MPill>
+      </div>
+
       <DKpiStrip>
         <DKpi label="Photos" value={String(photoCount)} meta={photoCount > 0 ? 'On record' : 'None yet'} />
         <DKpi
-          label="Hours"
+          label="Crew hours"
           value={formatDecimalHours(totalHours, 1).replace('h', '')}
           unit="h"
           meta={totalHours > 0 ? `${todayLabor.length} entries` : 'No clock-ins'}
           metaTone={totalHours > 0 ? 'good' : undefined}
         />
+        <DKpi label="Weather" value={weather?.value ?? '—'} meta={weather?.meta ?? (weather ? null : 'Not logged')} />
         <DKpi
           label="Issues"
           value={String(issuesCount)}
           tone={issuesCount > 0 ? 'accent' : undefined}
           meta={issuesCount > 0 ? 'Deviations flagged' : 'On plan'}
+          metaTone={issuesCount > 0 ? 'bad' : undefined}
         />
       </DKpiStrip>
 
@@ -240,7 +334,10 @@ function DailyLogEditor({ log, bootstrap }: DailyLogEditorProps) {
           </div>
 
           <div>
-            <div style={MONO_LABEL}>Notes</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={MONO_LABEL}>Notes</div>
+              {prefilled ? <MPill tone="accent">Pre-filled from today's data</MPill> : null}
+            </div>
             <MTextarea
               value={notes}
               onChange={(e) => setNotes(e.currentTarget.value)}
@@ -276,7 +373,9 @@ function DailyLogEditor({ log, bootstrap }: DailyLogEditorProps) {
               {isSubmitted ? 'Submitted to PM' : submit.isPending ? 'Submitting…' : 'Submit to PM'}
             </MButton>
             {isSubmitted ? (
-              <div style={{ ...MONO_LABEL, marginTop: 8, textAlign: 'center', color: 'var(--m-green)' }}>On record</div>
+              <div style={{ marginTop: 12 }}>
+                <DailyLogSubmittedBanner submittedAt={log.submitted_at} weekLogs={weekEntries} />
+              </div>
             ) : null}
           </div>
         </div>

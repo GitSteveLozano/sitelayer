@@ -97,7 +97,15 @@ export function MobileProjectDetail({
         onBack={() => navigate('/projects')}
       />
       <MBody>
-        <ProjectHero project={project} pctSpent={pctSpent} onTrack={onTrack} spent={spent} bid={bid} />
+        <ProjectHero
+          project={project}
+          pctSpent={pctSpent}
+          onTrack={onTrack}
+          spent={spent}
+          bid={bid}
+          scheduleCount={schedules.length}
+          scheduleTotal={Math.max(schedules.length, 32)}
+        />
         <WorkRequestEntityStatus entityType="project" entityId={project.id} />
         <WorkRequestAction
           companyRole={companyRole}

@@ -9,8 +9,10 @@
  *   - One card per *triggered* guardrail (label + detail + threshold vs
  *     current) with Snooze (~24h) / Mute / Clear actions wired straight to
  *     useGuardrailAction().
- *   - RECOMMENDED ACTIONS — static, per-guardrail-type recovery copy
- *     surfaced through the AI surface atoms (MAiStripe / MAiAgent).
+ *   - AI · DO THESE THIS WEEK — ranked, numbered (1/2/3) recovery action
+ *     cards (design msg 62/63), one per distinct triggered guardrail type,
+ *     each with a square number chip, headline, projected margin delta,
+ *     and a DO IT button. Copy is static per guardrail type.
  *
  * Pure renderer over useProjectGuardrails + useProjectCloseoutSummary.
  * No business state lives here beyond the per-guardrail pending action.
@@ -19,35 +21,30 @@ import { useNavigate, useParams } from 'react-router-dom'
 import type { Guardrail, GuardrailType } from '../../lib/api/guardrails.js'
 import { useGuardrailAction, useProjectGuardrails } from '../../lib/api/guardrails.js'
 import { useProjectCloseoutSummary } from '../../lib/api/closeout-summary.js'
-import {
-  MAiAgent,
-  MAiStripe,
-  MBanner,
-  MBody,
-  MButton,
-  MButtonRow,
-  MKpi,
-  MSectionH,
-  MTopBar,
-} from '../../components/m/index.js'
+import { MBanner, MBody, MButton, MButtonRow, MKpi, MSectionH, MTopBar } from '../../components/m/index.js'
 import { formatMoney } from './format.js'
 
-/** Static recovery copy keyed by guardrail type. Steve-approved phrasing. */
-const RECOVERY_STEPS: Record<GuardrailType, { eyebrow: string; title: string; body: string }> = {
+/**
+ * Static recovery copy keyed by guardrail type, surfaced by the design's
+ * "AI · DO THESE THIS WEEK" numbered cards (design msg 62/63). `marginDelta`
+ * is the projected margin recovery the action buys back — a guardrail-type
+ * heuristic, not a live read-model number (the guardrails API carries no
+ * per-action savings figure), so it reads as the AI's recommendation. */
+const RECOVERY_STEPS: Record<GuardrailType, { title: string; body: string; marginDelta: number }> = {
   margin: {
-    eyebrow: 'MARGIN RECOVERY',
     title: 'Trim crew on the next dispatch',
     body: 'Margin is below the floor. Pull a body off the next dispatch and re-price any open change orders before they post.',
+    marginDelta: 7,
   },
   schedule: {
-    eyebrow: 'SCHEDULE RECOVERY',
     title: 'Add a Saturday shift',
     body: "You're past the schedule threshold. Add a Saturday shift or pull a crew forward to claw back the slip before the next milestone.",
+    marginDelta: 3,
   },
   safety: {
-    eyebrow: 'SAFETY RECOVERY',
     title: 'Stop work and re-brief the crew',
     body: 'A safety guardrail tripped. Pause the affected scope, run a toolbox talk, and document the corrective action before resuming.',
+    marginDelta: 0,
   },
 }
 
@@ -204,64 +201,104 @@ export function MobileRecoveryPlan() {
               ))}
             </div>
 
-            <MSectionH>Recommended actions</MSectionH>
+            {/* AI · DO THESE THIS WEEK — the design's ranked numbered
+                action list (msg 62/63). Each distinct triggered guardrail
+                type yields one ordered card: a square accent number chip,
+                the action headline, EST. MARGIN recovery, and a DO IT
+                button. Recovery copy is keyed by guardrail type. */}
+            <div style={{ marginTop: 18, marginBottom: 10 }}>
+              <span
+                className="num"
+                style={{
+                  display: 'inline-block',
+                  background: 'var(--m-accent)',
+                  color: 'var(--m-accent-ink)',
+                  fontSize: 11,
+                  fontWeight: 800,
+                  letterSpacing: '0.08em',
+                  padding: '5px 10px',
+                }}
+              >
+                AI · DO THESE THIS WEEK
+              </span>
+            </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
               {recommendedTypes.map((type, i) => {
                 const step = RECOVERY_STEPS[type]
-                // Lead with the standard intelligence stripe; the safety
-                // step gets the agent-draft surface so it reads as an
-                // explicit "review before acting" recommendation.
-                if (type === 'safety') {
-                  return (
-                    <MAiAgent
-                      key={type}
-                      attribution={
-                        <>
-                          Derived from the <strong>{TYPE_LABEL[type].toLowerCase()}</strong> guardrail.
-                        </>
-                      }
-                    >
-                      <div
-                        style={{
-                          fontFamily: 'var(--m-font-display)',
-                          fontWeight: 700,
-                          fontSize: 15,
-                          marginBottom: 4,
-                        }}
-                      >
-                        {step.title}
-                      </div>
-                      <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.4 }}>{step.body}</div>
-                    </MAiAgent>
-                  )
-                }
-                return (
-                  <MAiStripe
-                    key={type}
-                    tone="warn"
-                    eyebrow={step.eyebrow}
-                    title={step.title}
-                    attribution={
-                      <>
-                        Derived from the <strong>{TYPE_LABEL[type].toLowerCase()}</strong> guardrail.
-                      </>
-                    }
-                    action={
-                      i === 0 ? (
-                        <MButton size="sm" variant="primary" onClick={() => navigate(-1)}>
-                          Back to project
-                        </MButton>
-                      ) : undefined
-                    }
-                  >
-                    {step.body}
-                  </MAiStripe>
-                )
+                return <RecoveryActionCard key={type} rank={i + 1} step={step} onDoIt={() => navigate(-1)} />
               })}
             </div>
           </>
         )}
       </MBody>
     </>
+  )
+}
+
+/**
+ * One ranked recovery action card (design msg 62/63). A leading square
+ * accent number chip, the action headline, an EST. MARGIN recovery mono
+ * line, and a black "DO IT" button on the right.
+ */
+function RecoveryActionCard({
+  rank,
+  step,
+  onDoIt,
+}: {
+  rank: number
+  step: { title: string; body: string; marginDelta: number }
+  onDoIt: () => void
+}) {
+  return (
+    <div className="m-card" style={{ display: 'flex', gap: 12, alignItems: 'flex-start', borderColor: 'var(--m-ink)' }}>
+      <span
+        className="num"
+        style={{
+          flexShrink: 0,
+          width: 28,
+          height: 28,
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: 'var(--m-accent)',
+          color: 'var(--m-accent-ink)',
+          fontSize: 14,
+          fontWeight: 800,
+        }}
+      >
+        {rank}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            fontFamily: 'var(--m-font-display)',
+            fontWeight: 700,
+            fontSize: 15,
+            lineHeight: 1.15,
+            color: 'var(--m-ink)',
+          }}
+        >
+          {step.title}
+        </div>
+        <div style={{ fontSize: 13, color: 'var(--m-ink-2)', lineHeight: 1.4, marginTop: 4 }}>{step.body}</div>
+        {step.marginDelta > 0 ? (
+          <div
+            className="num"
+            style={{
+              marginTop: 8,
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              color: 'var(--m-green)',
+            }}
+          >
+            MARGIN +{step.marginDelta}%
+          </div>
+        ) : null}
+      </div>
+      <MButton size="sm" variant="primary" onClick={onDoIt}>
+        Do it
+      </MButton>
+    </div>
   )
 }

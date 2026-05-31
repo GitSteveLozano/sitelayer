@@ -1,4 +1,5 @@
 import type { QueryResult, QueryResultRow } from 'pg'
+import { buildWorkflowEventLogInsert } from '@sitelayer/workflows'
 
 export {
   fetchDueRentals,
@@ -251,32 +252,29 @@ export async function appendWorkflowEvent(
   const sentryTrace = args.trace?.sentry_trace ?? null
   const sentryBaggage = args.trace?.sentry_baggage ?? null
   const requestId = args.trace?.request_id ?? null
-  await client.query(
-    `
-    insert into workflow_event_log (
-      company_id, workflow_name, schema_version, entity_type, entity_id,
-      state_version, event_type, event_payload, snapshot_after, actor_user_id,
-      request_id, sentry_trace, sentry_baggage
-    )
-    values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
-    on conflict (entity_id, state_version) do nothing
-    `,
-    [
-      args.companyId,
-      args.workflowName,
-      args.schemaVersion,
-      args.entityType,
-      args.entityId,
-      args.stateVersion,
-      args.eventType,
-      JSON.stringify(args.eventPayload),
-      JSON.stringify(args.snapshotAfter),
-      args.actorUserId ?? null,
+  // Shared INSERT builder — same column list as the API path
+  // (recordWorkflowEvent). The worker path differs only in: trace context
+  // comes off the claimed outbox row (args.trace), and conflict handling is
+  // idempotent `do nothing` so a retried drain is a safe no-op.
+  const { text, values } = buildWorkflowEventLogInsert(
+    {
+      companyId: args.companyId,
+      workflowName: args.workflowName,
+      schemaVersion: args.schemaVersion,
+      entityType: args.entityType,
+      entityId: args.entityId,
+      stateVersion: args.stateVersion,
+      eventType: args.eventType,
+      eventPayload: args.eventPayload,
+      snapshotAfter: args.snapshotAfter,
+      actorUserId: args.actorUserId ?? null,
       requestId,
       sentryTrace,
       sentryBaggage,
-    ],
+    },
+    { onConflict: 'do_nothing' },
   )
+  await client.query(text, values)
 }
 
 export async function processOutboxBatch(

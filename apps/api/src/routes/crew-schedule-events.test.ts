@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Pool } from 'pg'
 import type pino from 'pino'
+import { nextCrewScheduleEvents } from '@sitelayer/workflows'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleCrewScheduleEventRoutes, type CrewScheduleEventRouteCtx } from './crew-schedule-events.js'
 
@@ -19,11 +20,15 @@ type ScheduleRow = {
   project_id: string
   scheduled_for: string
   crew: unknown
-  status: 'draft' | 'confirmed'
+  status: 'draft' | 'confirmed' | 'declined'
   version: number
   state_version: number
   confirmed_at: string | null
   confirmed_by: string | null
+  created_by: string | null
+  declined_at: string | null
+  declined_by: string | null
+  decline_reason: string | null
   start_time: string | null
   end_time: string | null
   takeoff_measurement_id: string | null
@@ -83,20 +88,27 @@ class FakePool {
     }
 
     if (/^update crew_schedules/i.test(sql) && /status = \$3/i.test(sql)) {
-      const [companyId, id, status, stateVersion, confirmedAt, confirmedBy] = params as [
-        string,
-        string,
-        'draft' | 'confirmed',
-        number,
-        string | null,
-        string | null,
-      ]
+      const [companyId, id, status, stateVersion, confirmedAt, confirmedBy, declinedAt, declinedBy, declineReason] =
+        params as [
+          string,
+          string,
+          'draft' | 'confirmed' | 'declined',
+          number,
+          string | null,
+          string | null,
+          string | null,
+          string | null,
+          string | null,
+        ]
       const row = this.schedules.find((s) => s.company_id === companyId && s.id === id && !s.deleted_at)
       if (!row) return { rows: [], rowCount: 0 }
       row.status = status
       row.state_version = stateVersion
       row.confirmed_at = confirmedAt
       row.confirmed_by = confirmedBy
+      row.declined_at = declinedAt
+      row.declined_by = declinedBy
+      row.decline_reason = declineReason
       row.version += 1
       return { rows: [row], rowCount: 1 }
     }
@@ -142,6 +154,10 @@ function seedSchedule(pool: FakePool, overrides: Partial<ScheduleRow> = {}): Sch
     state_version: 1,
     confirmed_at: null,
     confirmed_by: null,
+    created_by: null,
+    declined_at: null,
+    declined_by: null,
+    decline_reason: null,
     start_time: null,
     end_time: null,
     takeoff_measurement_id: null,
@@ -197,7 +213,7 @@ describe('handleCrewScheduleEventRoutes — GET /api/schedules/:id', () => {
       next_events: Array<{ type: string }>
     }
     expect(body.state).toBe('draft')
-    expect(body.next_events.map((e) => e.type)).toEqual(['CONFIRM'])
+    expect(body.next_events.map((e) => e.type)).toEqual(['CONFIRM', 'DECLINE'])
   })
 
   it('returns 404 for an unknown schedule', async () => {
@@ -212,6 +228,19 @@ describe('handleCrewScheduleEventRoutes — GET /api/schedules/:id', () => {
     const { ctx, responses } = makeCtx(pool)
     await handleCrewScheduleEventRoutes({ method: 'GET' } as never, buildUrl('/api/schedules/not-a-uuid'), ctx)
     expect(responses[0]?.status).toBe(400)
+  })
+
+  it('next_events is sourced from the registered reducer selector (Gap 3/6)', async () => {
+    // The route must not hand-duplicate the transition table — its
+    // next_events deep-equals nextCrewScheduleEvents(state) for every state.
+    for (const state of ['draft', 'confirmed', 'declined'] as const) {
+      const pool = new FakePool()
+      seedSchedule(pool, { status: state, state_version: state === 'draft' ? 1 : 2 })
+      const { ctx, responses } = makeCtx(pool)
+      await handleCrewScheduleEventRoutes({ method: 'GET' } as never, buildUrl(`/api/schedules/${SCHEDULE_ID}`), ctx)
+      const body = responses[0]?.body as { next_events: Array<{ type: string; label: string }> }
+      expect(body.next_events, `state=${state}`).toEqual(nextCrewScheduleEvents(state))
+    }
   })
 })
 
@@ -228,10 +257,14 @@ describe('handleCrewScheduleEventRoutes — POST /api/schedules/:id/events', () 
     expect(responses[0]?.status).toBe(403)
   })
 
-  it('CONFIRM: draft → confirmed + workflow_event_log row', async () => {
+  it('CONFIRM: draft → confirmed + workflow_event_log row + materialize_labor_entries outbox', async () => {
     const pool = new FakePool()
     seedSchedule(pool)
-    const { ctx, responses } = makeCtx(pool, { event: 'CONFIRM', state_version: 1 })
+    const { ctx, responses } = makeCtx(pool, {
+      event: 'CONFIRM',
+      state_version: 1,
+      entries: [{ worker_id: 'w-1', service_item_code: 'SVC-1', hours: 8, occurred_on: '2026-05-15' }],
+    })
     await handleCrewScheduleEventRoutes(
       { method: 'POST' } as never,
       buildUrl(`/api/schedules/${SCHEDULE_ID}/events`),
@@ -241,6 +274,59 @@ describe('handleCrewScheduleEventRoutes — POST /api/schedules/:id/events', () 
     expect(pool.schedules[0]?.status).toBe('confirmed')
     expect(pool.workflowEvents[0]?.event_type).toBe('CONFIRM')
     expect(pool.outbox.some((r) => r.idempotency_key.startsWith(`crew_schedule:event:${SCHEDULE_ID}:`))).toBe(true)
+    // Gap 1 — the labor-entry materialization is a declared outbox side
+    // effect, keyed per-entity (NOT per-state_version) so a replay upserts
+    // one row. This is the row the worker runner drains.
+    expect(
+      pool.outbox.some(
+        (r) =>
+          r.mutation_type === 'materialize_labor_entries' &&
+          r.idempotency_key === `crew_schedule:materialize_labor:${SCHEDULE_ID}`,
+      ),
+    ).toBe(true)
+  })
+
+  it('DECLINE: draft → declined + notify_foreman_decline outbox (Gap 5)', async () => {
+    const pool = new FakePool()
+    seedSchedule(pool)
+    const { ctx, responses } = makeCtx(pool, { event: 'DECLINE', state_version: 1, reason: 'double-booked' }, 'foreman')
+    await handleCrewScheduleEventRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/schedules/${SCHEDULE_ID}/events`),
+      ctx,
+    )
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    expect(pool.schedules[0]?.status).toBe('declined')
+    expect(pool.schedules[0]?.decline_reason).toBe('double-booked')
+    expect(pool.workflowEvents[0]?.event_type).toBe('DECLINE')
+    expect(
+      pool.outbox.some(
+        (r) =>
+          r.mutation_type === 'notify_foreman_decline' &&
+          r.idempotency_key === `crew_schedule:notify_decline:${SCHEDULE_ID}:2`,
+      ),
+    ).toBe(true)
+  })
+
+  it('REASSIGN: declined → draft, clears decline fields (Gap 5)', async () => {
+    const pool = new FakePool()
+    seedSchedule(pool, {
+      status: 'declined',
+      state_version: 2,
+      declined_at: '2026-05-10T00:00:00.000Z',
+      declined_by: 'w-1',
+      decline_reason: 'sick',
+    })
+    const { ctx, responses } = makeCtx(pool, { event: 'REASSIGN', state_version: 2 }, 'foreman')
+    await handleCrewScheduleEventRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/schedules/${SCHEDULE_ID}/events`),
+      ctx,
+    )
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    expect(pool.schedules[0]?.status).toBe('draft')
+    expect(pool.schedules[0]?.decline_reason).toBeNull()
+    expect(pool.schedules[0]?.state_version).toBe(3)
   })
 
   it('returns 409 on stale state_version', async () => {
@@ -292,5 +378,45 @@ describe('handleCrewScheduleEventRoutes — PATCH /api/schedules/:id', () => {
     const { ctx, responses } = makeCtx(pool, {})
     await handleCrewScheduleEventRoutes({ method: 'PATCH' } as never, buildUrl(`/api/schedules/${SCHEDULE_ID}`), ctx)
     expect(responses[0]?.status).toBe(400)
+  })
+
+  it('reschedule preserves the workflow invariants — state_version + status unchanged (Gap 6)', async () => {
+    // Reschedule is a field edit, NOT a workflow transition: it bumps the
+    // row `version` (optimistic concurrency) but must leave state_version
+    // and status alone.
+    const pool = new FakePool()
+    seedSchedule(pool, { state_version: 3, status: 'draft' })
+    const { ctx, responses } = makeCtx(pool, { scheduled_for: '2026-05-20' })
+    await handleCrewScheduleEventRoutes({ method: 'PATCH' } as never, buildUrl(`/api/schedules/${SCHEDULE_ID}`), ctx)
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    expect(pool.schedules[0]?.state_version).toBe(3) // unchanged
+    expect(pool.schedules[0]?.status).toBe('draft') // unchanged
+    expect(pool.schedules[0]?.version).toBe(2) // bumped
+  })
+
+  it('409s on a stale expected_version (Gap 4)', async () => {
+    // When the row exists but the optimistic version check fails, the
+    // route delegates to ctx.checkVersion → a 409. Simulate the conflict
+    // by having checkVersion report "not ok" (false).
+    const pool = new FakePool()
+    seedSchedule(pool, { version: 5 })
+    pool.attach()
+    const responses: Array<{ status: number; body: unknown }> = []
+    const ctx: CrewScheduleEventRouteCtx = {
+      pool: pool as unknown as Pool,
+      company: { id: 'co-1', slug: 'co', name: 'Co', created_at: '', role: 'admin' },
+      currentUserId: 'u-1',
+      requireRole: () => true,
+      readBody: async () => ({ scheduled_for: '2026-05-20', expected_version: 2 }),
+      sendJson: (status, body) => responses.push({ status, body }),
+      // false => the route's "version conflict already responded" path.
+      checkVersion: async () => false,
+    }
+    await handleCrewScheduleEventRoutes({ method: 'PATCH' } as never, buildUrl(`/api/schedules/${SCHEDULE_ID}`), ctx)
+    // checkVersion(false) means it already emitted the 409 itself and the
+    // route returns without a further sendJson — so no 404 is emitted.
+    expect(responses.find((r) => r.status === 404)).toBeUndefined()
+    // The row was not rescheduled (stale version rejected).
+    expect(pool.schedules[0]?.scheduled_for).toBe('2026-05-15')
   })
 })

@@ -35,30 +35,63 @@
 import { useState } from 'react'
 import type { CSSProperties } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { MShell, MBody, MButton, MButtonStack, MI } from '@/components/m'
+import { MShell, MBody, MButton, MButtonStack, MTopBar, MI } from '@/components/m'
 import { fetchQboAuthUrl, setActiveCompanySlug, suggestedSlugFromError, useCreateCompany } from '@/lib/api'
 
 type Step = 'company' | 'crew' | 'connect' | 'ready'
 const STEP_ORDER: readonly Step[] = ['company', 'crew', 'connect', 'ready'] as const
 
+/** UPPERCASE top-bar title per step (msg__01/02/03 headers). */
+const STEP_TITLES: Record<Step, string> = {
+  company: 'COMPANY',
+  crew: 'YOUR CREW',
+  connect: 'CONNECT',
+  ready: 'READY',
+}
+
 /** Selectable trade for the 3-col company grid (mirrors desktop). */
 const TRADES = ['STUCCO', 'DRYWALL', 'PAINT', 'FRAMING', 'GENERAL', 'OTHER'] as const
 type Trade = (typeof TRADES)[number]
 
-/** Crew-size is a binary toggle in the mobile flow: solo vs multi-crew. */
+/**
+ * Crew-size offers the four design tiers (msg__02). `id` is the value the
+ * user picks; `tier` collapses each tier to the solo/multi branching the
+ * Ready summary + downstream setup already understand (solo for "just me",
+ * multi for any crew). Picking a tier > solo means foremen/crew get invited
+ * next.
+ */
 const CREW_SIZES = [
   {
     id: 'solo' as const,
+    tier: 'solo' as const,
     label: 'JUST ME · SOLO',
-    sub: 'YOU WEAR ALL HATS · SWITCH ANY TIME',
+    sub: "YOU'LL WEAR ALL 4 HATS. SWITCH ANY TIME.",
   },
   {
-    id: 'multi' as const,
-    label: 'MULTI-CREW',
-    sub: 'FOREMEN + CREW · MULTI-SITE',
+    id: '2-5' as const,
+    tier: 'multi' as const,
+    label: '2 - 5 PEOPLE',
+    sub: 'INVITE FOREMEN + CREW NEXT',
+  },
+  {
+    id: '6-15' as const,
+    tier: 'multi' as const,
+    label: '6 - 15 PEOPLE',
+    sub: 'MULTI-CREW · MULTI-SITE',
+  },
+  {
+    id: '15+' as const,
+    tier: 'multi' as const,
+    label: '15+ PEOPLE',
+    sub: "WE'LL ADD ROLES + PERMISSIONS RULES",
   },
 ]
 type CrewSize = (typeof CREW_SIZES)[number]['id']
+/** Collapse a selected crew-size id to the solo/multi branch. */
+function crewTierFor(id: CrewSize | null): 'solo' | 'multi' | null {
+  if (id == null) return null
+  return CREW_SIZES.find((c) => c.id === id)?.tier ?? null
+}
 
 function slugify(name: string): string {
   return name
@@ -163,6 +196,13 @@ export function OwnerOnboardingScreen() {
   return (
     <div className="m-host">
       <MShell>
+        {/* Titled back-arrow top bar per step (msg__01/02/03). Back on the
+            first step exits the flow; later steps step back through it. */}
+        <MTopBar
+          back
+          title={STEP_TITLES[step]}
+          onBack={() => (stepIndex > 0 ? goBack() : navigate(-1))}
+        />
         <MBody>
           <div style={s.frame}>
             <div>
@@ -191,6 +231,7 @@ export function OwnerOnboardingScreen() {
                     setSlug(v)
                     setSlugTouched(true)
                   }}
+                  slugRevealed={slugTouched}
                   trade={trade}
                   onTrade={setTrade}
                   error={companyError}
@@ -208,12 +249,10 @@ export function OwnerOnboardingScreen() {
 
             <Footer
               step={step}
-              stepIndex={stepIndex}
               canCreate={canCreate}
               creating={createCompany.isPending}
               connecting={connecting}
               qboConnected={qboConnected}
-              onBack={goBack}
               onCreate={runCreateCompany}
               onNext={goNext}
               onConnectQbo={connectQbo}
@@ -243,6 +282,7 @@ function CompanyStep({
   onCompanyName,
   slug,
   onSlug,
+  slugRevealed,
   trade,
   onTrade,
   error,
@@ -251,14 +291,15 @@ function CompanyStep({
   onCompanyName: (v: string) => void
   slug: string
   onSlug: (v: string) => void
+  slugRevealed: boolean
   trade: Trade | null
   onTrade: (t: Trade) => void
   error: string | null
 }) {
   return (
     <>
-      <Eyebrow>Step 1 of 4 · Workspace</Eyebrow>
-      <Headline>Set up your shop.</Headline>
+      <Eyebrow>Step 1 / 4</Eyebrow>
+      <Headline>What do we call it?</Headline>
 
       <FieldLabel style={{ marginTop: 22 }}>Company name</FieldLabel>
       <input
@@ -269,14 +310,20 @@ function CompanyStep({
         style={s.bigInput}
       />
 
-      <FieldLabel style={{ marginTop: 16 }}>URL slug</FieldLabel>
-      <input
-        value={slug}
-        onChange={(e) => onSlug(e.currentTarget.value)}
-        placeholder="davis-stucco"
-        aria-label="Company slug"
-        style={s.slugInput}
-      />
+      {/* Slug is derived silently from the name; it only surfaces once a
+          collision (409) forces the user to disambiguate. */}
+      {slugRevealed ? (
+        <>
+          <FieldLabel style={{ marginTop: 16 }}>URL slug</FieldLabel>
+          <input
+            value={slug}
+            onChange={(e) => onSlug(e.currentTarget.value)}
+            placeholder="davis-stucco"
+            aria-label="Company slug"
+            style={s.slugInput}
+          />
+        </>
+      ) : null}
 
       <FieldLabel style={{ marginTop: 18 }}>Trade</FieldLabel>
       <div style={s.tradeGrid}>
@@ -312,9 +359,8 @@ function CompanyStep({
 function CrewStep({ crewSize, onCrewSize }: { crewSize: CrewSize | null; onCrewSize: (id: CrewSize) => void }) {
   return (
     <>
-      <Eyebrow>Step 2 of 4 · Team</Eyebrow>
+      <Eyebrow>Step 2 / 4</Eyebrow>
       <Headline>Just you, or a crew?</Headline>
-      <p style={s.lede}>You can switch any time — this just shapes what we set up first.</p>
 
       <div role="radiogroup" aria-label="Crew size" style={s.crewList}>
         {CREW_SIZES.map((o, i, arr) => {
@@ -344,35 +390,62 @@ function CrewStep({ crewSize, onCrewSize }: { crewSize: CrewSize | null; onCrewS
 }
 
 // ─── 3 · Integrations ────────────────────────────────────────────────────────
+/**
+ * The integration roster (msg__03). Only QBO is wired (it drives the real
+ * `fetchQboAuthUrl` connect); Gusto / Stripe / Xero are surfaced as
+ * coming-soon rows so the step matches the design's four-row list. `ai`
+ * tags the AI-mapped rows the design badges.
+ */
+const INTEGRATIONS: ReadonlyArray<{
+  id: string
+  name: string
+  sub: string
+  ai?: boolean
+}> = [
+  { id: 'qbo', name: 'QUICKBOOKS ONLINE', sub: 'BOOKS + INVOICES', ai: true },
+  { id: 'gusto', name: 'GUSTO', sub: 'PAYROLL + BURDEN', ai: true },
+  { id: 'stripe', name: 'STRIPE', sub: 'COLLECT PAYMENTS' },
+  { id: 'xero', name: 'XERO', sub: 'ALTERNATIVE TO QBO' },
+]
+
 function ConnectStep({ connected, error }: { connected: boolean; error: string | null }) {
   return (
     <>
-      <Eyebrow>Step 3 of 4 · Connect · Optional</Eyebrow>
+      <Eyebrow>Step 3 / 4 · Optional</Eyebrow>
       <Headline>Hook up your books.</Headline>
-      <p style={s.lede}>
-        Connect QuickBooks Online and we pull your pricebook + payroll burden automatically. You can skip this and add
-        it any time from Settings.
-      </p>
+      <p style={s.lede}>We'll pull your pricing book + payroll burden automatically. You can add any of these later.</p>
 
-      <div
-        style={{
-          ...s.connectCard,
-          background: connected ? 'var(--m-accent)' : 'var(--m-card-soft)',
-          color: connected ? 'var(--m-accent-ink)' : 'var(--m-ink)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          <span style={s.connectIcon}>
-            <MI.Layers size={20} />
-          </span>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={s.connectTitle}>QUICKBOOKS ONLINE</div>
-            <div style={s.connectSub}>
-              {connected ? 'CONNECTED · PRICEBOOK PULLED' : 'BOOKS + INVOICES · AI MAPPED'}
+      <div style={s.connectList}>
+        {INTEGRATIONS.map((it, i, arr) => {
+          // QBO is "selected" by default (and confirmed once connected); the
+          // others are coming-soon rows shown with a + affordance.
+          const selected = it.id === 'qbo'
+          const on = selected && connected
+          return (
+            <div
+              key={it.id}
+              style={{
+                ...s.connectRow,
+                background: on ? 'var(--m-accent)' : selected ? 'var(--m-accent-soft)' : 'transparent',
+                color: on ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+                borderBottom: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={s.connectTitle}>{it.name}</span>
+                  {it.ai ? <span style={s.aiBadge}>AI</span> : null}
+                </div>
+                <div style={s.connectSub}>
+                  {selected && connected ? 'CONNECTED · PRICEBOOK PULLED' : it.sub}
+                </div>
+              </div>
+              <span style={s.connectMark} aria-hidden>
+                {selected ? (connected ? <MI.Check size={18} /> : '✓') : '+'}
+              </span>
             </div>
-          </div>
-          {connected ? <MI.Check size={20} /> : null}
-        </div>
+          )
+        })}
       </div>
 
       {error ? <div style={s.error}>{error}</div> : null}
@@ -392,10 +465,11 @@ function ReadyStep({
   crewSize: CrewSize | null
   qboConnected: boolean
 }) {
+  const crewTier = crewTierFor(crewSize)
   const crewLabel =
-    crewSize === 'multi'
+    crewTier === 'multi'
       ? 'MULTI-CREW · FOREMEN + CREW'
-      : crewSize === 'solo'
+      : crewTier === 'solo'
         ? 'SOLO · ALL HATS'
         : 'CREW SIZE · SET LATER'
   const companyLabel = `COMPANY · ${(companyName.trim() || 'YOUR SHOP').toUpperCase()}${trade ? ` · ${trade}` : ''}`
@@ -410,7 +484,7 @@ function ReadyStep({
 
   return (
     <>
-      <Eyebrow>Step 4 of 4 · Ready</Eyebrow>
+      <Eyebrow>Step 4 / 4</Eyebrow>
       <Headline>You're set up.</Headline>
 
       <div style={s.readyList}>
@@ -451,12 +525,10 @@ function ReadyStep({
 // ─── Footer (per-step actions) ───────────────────────────────────────────────
 function Footer({
   step,
-  stepIndex,
   canCreate,
   creating,
   connecting,
   qboConnected,
-  onBack,
   onCreate,
   onNext,
   onConnectQbo,
@@ -466,12 +538,10 @@ function Footer({
   onExplore,
 }: {
   step: Step
-  stepIndex: number
   canCreate: boolean
   creating: boolean
   connecting: boolean
   qboConnected: boolean
-  onBack: () => void
   onCreate: () => void
   onNext: () => void
   onConnectQbo: () => void
@@ -480,30 +550,28 @@ function Footer({
   onFinish: () => void
   onExplore: () => void
 }) {
-  const showBack = stepIndex > 0
-
   return (
     <div>
       <MButtonStack>
         {step === 'company' ? (
           <MButton variant="primary" onClick={onCreate} disabled={!canCreate || creating}>
-            {creating ? 'Creating…' : 'Next · Team'}
+            {creating ? 'Creating…' : 'Next · Crew size'}
           </MButton>
         ) : null}
 
         {step === 'crew' ? (
           <MButton variant="primary" onClick={onNext}>
-            Next · Connect
+            Next · Integrations
           </MButton>
         ) : null}
 
         {step === 'connect' ? (
           <>
             <MButton variant="primary" onClick={qboConnected ? onNext : onConnectQbo} disabled={connecting}>
-              {connecting ? 'Opening QuickBooks…' : qboConnected ? 'Next · Ready' : 'Connect QuickBooks'}
+              {connecting ? 'Opening QuickBooks…' : qboConnected ? 'Next · Ready' : 'Connect QBO'}
             </MButton>
             <MButton variant="ghost" onClick={onSkipConnect}>
-              Skip · connect later
+              Skip
             </MButton>
             {/* Dev / no-OAuth fallback: record intent without a live round-trip. */}
             <MButton variant="quiet" onClick={onMarkConnected}>
@@ -521,12 +589,6 @@ function Footer({
               Explore first
             </MButton>
           </>
-        ) : null}
-
-        {showBack && step !== 'ready' ? (
-          <MButton variant="ghost" onClick={onBack} disabled={creating || connecting}>
-            Back
-          </MButton>
         ) : null}
       </MButtonStack>
     </div>
@@ -626,22 +688,31 @@ const s: Record<string, CSSProperties> = {
   crewRow: { padding: '20px 20px', textAlign: 'left', border: 'none', cursor: 'pointer' },
   crewLabel: { fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 18 },
   crewSub: { fontFamily: 'var(--m-num)', fontSize: 10, marginTop: 5, fontWeight: 600, opacity: 0.75 },
-  connectCard: {
-    marginTop: 22,
-    border: '2px solid var(--m-ink)',
-    padding: '16px 16px 18px',
-  },
-  connectIcon: {
-    width: 40,
-    height: 40,
-    flexShrink: 0,
-    display: 'inline-flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    border: '2px solid currentColor',
-  },
+  connectList: { marginTop: 22, display: 'flex', flexDirection: 'column', border: '2px solid var(--m-ink)' },
+  connectRow: { padding: '16px 16px', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' },
   connectTitle: { fontFamily: 'var(--m-font-display)', fontWeight: 700, fontSize: 16 },
   connectSub: { fontFamily: 'var(--m-num)', fontSize: 10, marginTop: 4, fontWeight: 600, opacity: 0.75 },
+  connectMark: {
+    flexShrink: 0,
+    width: 22,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontFamily: 'var(--m-font-display)',
+    fontWeight: 800,
+    fontSize: 18,
+    opacity: 0.7,
+  },
+  aiBadge: {
+    fontFamily: 'var(--m-num)',
+    fontSize: 9,
+    fontWeight: 700,
+    letterSpacing: '0.06em',
+    background: 'var(--m-ink)',
+    color: 'var(--m-accent)',
+    padding: '2px 5px',
+    flexShrink: 0,
+  },
   readyList: { marginTop: 22, border: '2px solid var(--m-ink)' },
   readyRow: { padding: '16px 18px', display: 'flex', alignItems: 'center', gap: 14 },
   readyMark: {

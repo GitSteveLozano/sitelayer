@@ -216,7 +216,19 @@ async function dispatchHandler(row: OfflineMutation): Promise<void> {
     case 'daily_log_submit': {
       const id = String(row.payload.id ?? '')
       const input = (row.payload.input ?? {}) as Record<string, unknown>
-      await request(`/api/daily-logs/${encodeURIComponent(id)}/submit`, { method: 'POST', json: input })
+      // New machine-driven submits enqueue the canonical { event, state_version }
+      // body → replay through the /events route. Already-enqueued legacy payloads
+      // carry { expected_version } (or nothing) → replay through the deprecated
+      // /submit alias so mutations queued before this change still land.
+      if ('state_version' in input || input.event === 'SUBMIT') {
+        const stateVersion = Number(input.state_version)
+        await request(`/api/daily-logs/${encodeURIComponent(id)}/events`, {
+          method: 'POST',
+          json: { event: 'SUBMIT', state_version: stateVersion },
+        })
+      } else {
+        await request(`/api/daily-logs/${encodeURIComponent(id)}/submit`, { method: 'POST', json: input })
+      }
       return
     }
     case 'daily_log_photo_upload': {

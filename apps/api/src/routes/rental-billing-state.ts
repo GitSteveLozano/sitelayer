@@ -50,6 +50,11 @@ function buildReducerEvent(eventType: RentalBillingHumanEventType, actorUserId: 
   if (eventType === 'RETRY_POST') {
     return { type: 'RETRY_POST' }
   }
+  if (eventType === 'CANCEL_POST') {
+    // Operator escape from a wedged 'posting' run. Clock + actor are injected
+    // here (the reducer stays pure); lands the run in 'failed'.
+    return { type: 'CANCEL_POST', failed_at: nowIso, error: `Push canceled by ${actorUserId}` }
+  }
   return { type: 'VOID' }
 }
 

@@ -11,11 +11,20 @@ import {
 
 const STATE_GEN: fc.Arbitrary<ScaffoldOpsApprovalWorkflowState> = fc.constantFrom(...SCAFFOLD_OPS_APPROVAL_ALL_STATES)
 
-const ANY_EVENT: fc.Arbitrary<ScaffoldOpsApprovalWorkflowEvent> = fc.record({
+const APPROVE_EVENT: fc.Arbitrary<ScaffoldOpsApprovalWorkflowEvent> = fc.record({
   type: fc.constant('APPROVE' as const),
   approved_at: fc.constant('2026-05-01T07:00:00.000Z'),
   approved_by: fc.string({ minLength: 1, maxLength: 32 }),
 })
+
+const SUPERSEDE_EVENT: fc.Arbitrary<ScaffoldOpsApprovalWorkflowEvent> = fc.record({
+  type: fc.constant('SUPERSEDE' as const),
+  superseded_at: fc.constant('2026-05-02T07:00:00.000Z'),
+  superseded_by: fc.string({ minLength: 1, maxLength: 32 }),
+  superseded_by_bom_id: fc.option(fc.string({ minLength: 1, maxLength: 36 }), { nil: null }),
+})
+
+const ANY_EVENT: fc.Arbitrary<ScaffoldOpsApprovalWorkflowEvent> = fc.oneof(APPROVE_EVENT, SUPERSEDE_EVENT)
 
 function emptySnapshot(state: ScaffoldOpsApprovalWorkflowState, version: number): ScaffoldOpsApprovalWorkflowSnapshot {
   return { state, state_version: version }

@@ -85,6 +85,7 @@ type LaborPayrollRunStateRow = {
   posted_at: string | null
   failed_at: string | null
   error_message: string | null
+  auto_posted: boolean
 }
 
 type LaborEntryPushRow = {
@@ -109,6 +110,7 @@ function rowToWorkflowSnapshot(row: LaborPayrollRunStateRow): Record<string, unk
     failed_at: row.failed_at,
     error: row.error_message,
     qbo_timeactivity_ids: row.qbo_payroll_batch_ref,
+    auto_posted: row.auto_posted,
   }
 }
 
@@ -120,7 +122,7 @@ async function applyLaborPayrollWorkerEvent(
 ): Promise<LaborPayrollRunStateRow | null> {
   const lockResult = await client.query<LaborPayrollRunStateRow>(
     `select id, state, state_version, qbo_payroll_batch_ref,
-            approved_at, approved_by_user_id, posted_at, failed_at, error_message
+            approved_at, approved_by_user_id, posted_at, failed_at, error_message, auto_posted
      from labor_payroll_runs
      where company_id = $1 and id = $2 and deleted_at is null
      for update`,
@@ -151,7 +153,7 @@ async function applyLaborPayrollWorkerEvent(
              updated_at = now()
        where company_id = $1 and id = $2
        returning id, state, state_version, qbo_payroll_batch_ref,
-                 approved_at, approved_by_user_id, posted_at, failed_at, error_message`,
+                 approved_at, approved_by_user_id, posted_at, failed_at, error_message, auto_posted`,
       [companyId, runId, nextVersion, postedAt, JSON.stringify(outcome.qbo_timeactivity_ids)],
     )
     const row = updated.rows[0] ?? null
@@ -186,7 +188,7 @@ async function applyLaborPayrollWorkerEvent(
            updated_at = now()
      where company_id = $1 and id = $2
      returning id, state, state_version, qbo_payroll_batch_ref,
-               approved_at, approved_by_user_id, posted_at, failed_at, error_message`,
+               approved_at, approved_by_user_id, posted_at, failed_at, error_message, auto_posted`,
     [companyId, runId, nextVersion, failedAt, errorMessage],
   )
   const row = updated.rows[0] ?? null

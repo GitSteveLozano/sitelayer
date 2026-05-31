@@ -1,108 +1,42 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { API_URL } from '@/lib/api'
 import { MBanner } from '@/components/m'
 import { EmptyState } from '@/components/shell/EmptyState'
-import { readCart, writeCart, type PortalCartLine } from './RentalsPortal'
+import { useRentalsPortalContext } from './RentalsPortalProvider'
+import type { PortalCartLine } from './RentalsPortal'
 
 /**
  * Public cart + reservation submission for the customer rental portal.
  *
- * Reads the cart out of localStorage (same key as the catalog view), lets
- * the customer adjust qty / dates / delivery method, and submits to
- * `POST /portal/rentals/:share_token/reserve`. The server lands a
- * `rental_requests` row + a mutation_outbox entry so operators see the
- * request in the standard sync feed; there's no live confirmation here —
- * the operator review approves it out-of-band.
+ * Renders + dispatches against the ONE lifted `rentalsPortal` machine
+ * (via `useRentalsPortalContext`). The cart, the per-line edits, the
+ * contact draft, and the `/reserve` POST all live on that machine —
+ * this screen owns no business useState. On `RESERVE` the machine's
+ * `reserveRequest` actor POSTs `/portal/rentals/:share_token/reserve`,
+ * which lands a `rental_requests` row + a mutation_outbox entry; the
+ * operator approves out-of-band. When the machine reaches `reserved`
+ * we navigate to the confirm screen (UI nav on the React boundary).
  */
-
-export interface ReserveResponse {
-  id: string
-  status: string
-  created_at: string
-}
-
-async function postReserve(
-  shareToken: string,
-  body: {
-    items: PortalCartLine[]
-    requested_start: string | null
-    requested_end: string | null
-    contact_name: string
-    contact_email: string
-    contact_phone: string
-    notes: string | null
-  },
-): Promise<ReserveResponse> {
-  const url = `${API_URL}/api/portal/rentals/${encodeURIComponent(shareToken)}/reserve`
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json; charset=utf-8' },
-    body: JSON.stringify(body),
-  })
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as { error?: string } | null
-    throw new Error(payload?.error ?? `Reserve failed (${response.status})`)
-  }
-  return (await response.json()) as ReserveResponse
-}
 
 export function RentalsCart() {
   const params = useParams<{ shareToken: string }>()
   const shareToken = params.shareToken ?? ''
   const navigate = useNavigate()
-  const [cart, setCart] = useState<PortalCartLine[]>(() => readCart())
-  const [contactName, setContactName] = useState('')
-  const [contactEmail, setContactEmail] = useState('')
-  const [contactPhone, setContactPhone] = useState('')
-  const [notes, setNotes] = useState('')
-  const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const portal = useRentalsPortalContext()
+  const { cart, contact, range, requestId, reserveError, isReserving, isReserved } = portal
 
+  // When the machine completes the reservation, hop to the confirm
+  // screen with the request id deep-link (resume/refresh fallback). The
+  // confirm screen reads the id from machine context first.
   useEffect(() => {
-    writeCart(cart)
-  }, [cart])
-
-  const range = useMemo(() => {
-    if (cart.length === 0) return { start: null, end: null }
-    const start = cart.reduce((min, l) => (l.start && (!min || l.start < min) ? l.start : min), '')
-    const end = cart.reduce((max, l) => (l.end && (!max || l.end > max) ? l.end : max), '')
-    return { start: start || null, end: end || null }
-  }, [cart])
-
-  function updateLine(index: number, patch: Partial<PortalCartLine>) {
-    setCart((cur) => cur.map((line, i) => (i === index ? { ...line, ...patch } : line)))
-  }
-  function removeLine(index: number) {
-    setCart((cur) => cur.filter((_, i) => i !== index))
-  }
-
-  async function onSubmit() {
-    setError(null)
-    if (cart.length === 0) {
-      setError('Cart is empty.')
-      return
+    if (isReserved && requestId) {
+      navigate(`/portal/rentals/${encodeURIComponent(shareToken)}/confirm?id=${encodeURIComponent(requestId)}`)
     }
-    setSubmitting(true)
-    try {
-      const response = await postReserve(shareToken, {
-        items: cart,
-        requested_start: range.start,
-        requested_end: range.end,
-        contact_name: contactName,
-        contact_email: contactEmail,
-        contact_phone: contactPhone,
-        notes: notes || null,
-      })
-      // Clear the cart so the confirm screen is the only place the
-      // request id is referenced from this device.
-      setCart([])
-      navigate(`/portal/rentals/${encodeURIComponent(shareToken)}/confirm?id=${encodeURIComponent(response.id)}`)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Reserve failed')
-    } finally {
-      setSubmitting(false)
-    }
+  }, [isReserved, requestId, navigate, shareToken])
+
+  function onReserve() {
+    if (cart.length === 0) return
+    portal.reserve()
   }
 
   return (
@@ -145,7 +79,9 @@ export function RentalsCart() {
                     type="number"
                     min="1"
                     value={line.qty}
-                    onChange={(e) => updateLine(i, { qty: Math.max(1, Math.floor(Number(e.target.value || 1))) })}
+                    onChange={(e) =>
+                      portal.updateLine(i, { qty: Math.max(1, Math.floor(Number(e.target.value || 1))) })
+                    }
                     style={{ width: '100%', padding: 6, border: '1px solid #ddd', borderRadius: 4 }}
                   />
                 </label>
@@ -153,7 +89,7 @@ export function RentalsCart() {
                   <span style={{ fontSize: 11, color: '#666' }}>Delivery</span>
                   <select
                     value={line.delivery}
-                    onChange={(e) => updateLine(i, { delivery: e.target.value as PortalCartLine['delivery'] })}
+                    onChange={(e) => portal.updateLine(i, { delivery: e.target.value as PortalCartLine['delivery'] })}
                     style={{ width: '100%', padding: 6 }}
                   >
                     <option value="pickup">Pickup</option>
@@ -165,7 +101,7 @@ export function RentalsCart() {
                   <input
                     type="date"
                     value={line.start}
-                    onChange={(e) => updateLine(i, { start: e.target.value })}
+                    onChange={(e) => portal.updateLine(i, { start: e.target.value })}
                     style={{ width: '100%', padding: 6, border: '1px solid #ddd', borderRadius: 4 }}
                   />
                 </label>
@@ -174,7 +110,7 @@ export function RentalsCart() {
                   <input
                     type="date"
                     value={line.end}
-                    onChange={(e) => updateLine(i, { end: e.target.value })}
+                    onChange={(e) => portal.updateLine(i, { end: e.target.value })}
                     style={{ width: '100%', padding: 6, border: '1px solid #ddd', borderRadius: 4 }}
                   />
                 </label>
@@ -183,7 +119,7 @@ export function RentalsCart() {
                 <span style={{ fontSize: 12, color: '#666' }}>Item id: {line.inventory_item_id.slice(0, 8)}…</span>
                 <button
                   type="button"
-                  onClick={() => removeLine(i)}
+                  onClick={() => portal.removeLine(i)}
                   style={{ background: 'none', border: 'none', color: '#a44', cursor: 'pointer' }}
                 >
                   Remove
@@ -199,54 +135,60 @@ export function RentalsCart() {
         <input
           type="text"
           placeholder="Name"
-          value={contactName}
-          onChange={(e) => setContactName(e.target.value)}
+          value={contact.name}
+          onChange={(e) => portal.setContact('name', e.target.value)}
           style={{ padding: 8, border: '1px solid #ddd', borderRadius: 4 }}
         />
         <input
           type="email"
           placeholder="Email"
-          value={contactEmail}
-          onChange={(e) => setContactEmail(e.target.value)}
+          value={contact.email}
+          onChange={(e) => portal.setContact('email', e.target.value)}
           style={{ padding: 8, border: '1px solid #ddd', borderRadius: 4 }}
         />
         <input
           type="tel"
           placeholder="Phone"
-          value={contactPhone}
-          onChange={(e) => setContactPhone(e.target.value)}
+          value={contact.phone}
+          onChange={(e) => portal.setContact('phone', e.target.value)}
           style={{ padding: 8, border: '1px solid #ddd', borderRadius: 4 }}
         />
         <textarea
           placeholder="Notes (optional)"
-          value={notes}
-          onChange={(e) => setNotes(e.target.value)}
+          value={contact.notes}
+          onChange={(e) => portal.setContact('notes', e.target.value)}
           rows={3}
           style={{ padding: 8, border: '1px solid #ddd', borderRadius: 4 }}
         />
       </div>
 
-      {error ? (
+      {range.start || range.end ? (
+        <p style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
+          Requested window: {range.start ?? '—'} → {range.end ?? '—'}
+        </p>
+      ) : null}
+
+      {reserveError ? (
         <div style={{ marginTop: 16 }}>
-          <MBanner tone="error" title="Could not reserve" body={error} />
+          <MBanner tone="error" title="Could not reserve" body={reserveError} />
         </div>
       ) : null}
 
       <button
         type="button"
-        onClick={onSubmit}
-        disabled={cart.length === 0 || submitting}
+        onClick={onReserve}
+        disabled={cart.length === 0 || isReserving}
         style={{
           marginTop: 24,
           padding: '12px 24px',
-          background: cart.length === 0 || submitting ? '#aaa' : '#222',
+          background: cart.length === 0 || isReserving ? '#aaa' : '#222',
           color: 'white',
           border: 'none',
           borderRadius: 6,
-          cursor: cart.length === 0 || submitting ? 'not-allowed' : 'pointer',
+          cursor: cart.length === 0 || isReserving ? 'not-allowed' : 'pointer',
         }}
       >
-        {submitting ? 'Submitting…' : 'Reserve'}
+        {isReserving ? 'Submitting…' : 'Reserve'}
       </button>
       <p style={{ fontSize: 12, color: '#888', marginTop: 8 }}>
         The company will review your request and confirm by email or phone.

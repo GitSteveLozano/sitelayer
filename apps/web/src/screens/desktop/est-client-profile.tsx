@@ -6,13 +6,15 @@
  * and the shared `components/d` primitives — no new global CSS, only the
  * var(--m-*) tokens. Reads :clientId from the route.
  */
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useCustomers } from '@/lib/api/customers'
 import { useProjects, type ProjectListRow } from '@/lib/api/projects'
-import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, type DColumn } from '@/components/d'
-import { MButton, MPill } from '@/components/m'
+import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, DTabBar, type DColumn } from '@/components/d'
+import { MAvatar, MButton, MPill, avatarToneFor, initialsFor } from '@/components/m'
 import { formatMoney, formatStatusLabel, statusTone } from '../mobile/format.js'
+
+type ClientTab = 'projects' | 'takeoffs' | 'contact'
 
 // Shared project classification — mirrors the owner-clients taxonomy.
 // "Won" = the deal landed; "lost" = declined/archived. Win rate is
@@ -37,6 +39,7 @@ export function EstClientProfile() {
   const params = useParams<{ clientId: string }>()
   const navigate = useNavigate()
   const clientId = params.clientId ?? ''
+  const [tab, setTab] = useState<ClientTab>('projects')
 
   const customersQuery = useCustomers()
   const projectsQuery = useProjects()
@@ -80,7 +83,24 @@ export function EstClientProfile() {
   }, [projects])
 
   const winRate = decided > 0 ? Math.round((wins / decided) * 100) : null
-  const avgMargin = projects.length > 0 ? lifetimeValue / projects.length : 0
+  // Takeoffs KPI — each project on file is a takeoff/bid job for this client.
+  const takeoffCount = projects.length
+
+  // Org / "since" eyebrow attributes from the real customer record. The
+  // customer roster only carries origin (QBO-matched vs Sitelayer-native)
+  // and a created_at, so "since" is the account-creation year.
+  const org = customer
+    ? customer.external_id
+      ? 'QuickBooks'
+      : customer.source && customer.source !== 'sitelayer'
+        ? customer.source
+        : 'Sitelayer'
+    : ''
+  const sinceYear = (() => {
+    if (!customer?.created_at) return null
+    const d = new Date(customer.created_at)
+    return Number.isNaN(d.getTime()) ? null : d.getFullYear()
+  })()
 
   // Whether the customer can even be resolved is decided solely by the
   // customers query — the projects query only feeds the KPI strip + tables,
@@ -142,58 +162,151 @@ export function EstClientProfile() {
     { key: 'value', header: 'Value', numeric: true, render: (r) => formatMoney(r.value) },
   ]
 
+  // TAKEOFFS tab — each project reframed as a takeoff job: Takeoff / Date /
+  // Size / Value / Result (dsg__32). Size has no real column on the project
+  // list payload, so it renders '—' rather than inventing a figure.
+  const takeoffColumns: Array<DColumn<ProjectListRow>> = [
+    { key: 'name', header: 'Takeoff', render: (r) => <span className="d-table-cell-strong">{r.name}</span> },
+    { key: 'date', header: 'Date', render: (r) => formatProjectDate(r.created_at) },
+    { key: 'size', header: 'Size', numeric: true, render: () => '—' },
+    { key: 'value', header: 'Value', numeric: true, render: (r) => formatMoney(r.bid_total) },
+    {
+      key: 'result',
+      header: 'Result',
+      render: (r) => (
+        <MPill tone={statusTone(r.status)} dot>
+          {formatStatusLabel(r.status)}
+        </MPill>
+      ),
+    },
+  ]
+
   return (
     <div className="d-content">
       <div className="d-stack">
-        <div>
-          <DEyebrow>Estimator · Client</DEyebrow>
-          <DH1>{customer.name}</DH1>
+        {/* Client header — avatar tile + org/since eyebrow + name (dsg__32). */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 18 }}>
+          <MAvatar initials={initialsFor(customer.name) || '—'} tone={avatarToneFor(customer.id)} size="lg" />
+          <div>
+            <DEyebrow>
+              {org}
+              {sinceYear ? ` · Since ${sinceYear}` : ''}
+            </DEyebrow>
+            <DH1>{customer.name}</DH1>
+          </div>
         </div>
 
         <DKpiStrip>
-          <DKpi label="Lifetime value" value={formatMoney(lifetimeValue)} meta="All projects" />
+          <DKpi
+            label="Projects"
+            value={String(projects.length)}
+            meta={projects.length === 1 ? '1 project' : 'On file'}
+          />
+          <DKpi label="Lifetime $" value={formatMoney(lifetimeValue)} meta="All projects" />
           <DKpi
             label="Win rate"
             value={winRate === null ? '—' : `${winRate}%`}
             tone="accent"
             meta={decided > 0 ? `${wins}/${decided} decided` : 'No decided bids'}
           />
-          <DKpi
-            label="Projects"
-            value={String(projects.length)}
-            meta={projects.length === 1 ? '1 project' : 'On file'}
-          />
-          <DKpi label="Avg margin" value={formatMoney(avgMargin)} meta="Per project" />
+          <DKpi label="Takeoffs" value={String(takeoffCount)} meta={takeoffCount === 1 ? '1 takeoff' : 'On file'} />
         </DKpiStrip>
 
-        <DataTable<ProjectListRow>
-          title="Project history"
-          action={
-            <MButton size="sm" variant="primary" onClick={() => navigate(`/projects/new?customer_id=${customer.id}`)}>
-              New project
-            </MButton>
-          }
-          columns={columns}
-          rows={projects}
-          rowKey={(r) => r.id}
-          onRowClick={(r) => navigate(`/desktop/projects/${r.id}`)}
-          empty={
-            projectsQuery.isError
-              ? 'Could not load this client’s projects.'
-              : 'No projects yet. Bids and jobs for this client land here once they’re created.'
-          }
+        <DTabBar
+          tabs={[
+            { key: 'projects', label: 'Projects' },
+            { key: 'takeoffs', label: 'Takeoffs' },
+            { key: 'contact', label: 'Contact' },
+          ]}
+          active={tab}
+          onSelect={(k) => setTab(k as ClientTab)}
         />
 
-        {scopes.length > 0 ? (
-          <DataTable<ScopeRow>
-            title="Takeoffs by scope"
-            columns={scopeColumns}
-            rows={scopes}
-            rowKey={(r) => r.code}
-            empty="No scope breakdown yet."
+        {tab === 'projects' ? (
+          <DataTable<ProjectListRow>
+            title="Project history"
+            action={
+              <MButton size="sm" variant="primary" onClick={() => navigate(`/projects/new?customer_id=${customer.id}`)}>
+                New project
+              </MButton>
+            }
+            columns={columns}
+            rows={projects}
+            rowKey={(r) => r.id}
+            onRowClick={(r) => navigate(`/desktop/projects/${r.id}`)}
+            empty={
+              projectsQuery.isError
+                ? 'Could not load this client’s projects.'
+                : 'No projects yet. Bids and jobs for this client land here once they’re created.'
+            }
           />
         ) : null}
+
+        {tab === 'takeoffs' ? (
+          <>
+            <DataTable<ProjectListRow>
+              columns={takeoffColumns}
+              rows={projects}
+              rowKey={(r) => r.id}
+              onRowClick={(r) => navigate(`/desktop/projects/${r.id}`)}
+              empty={
+                projectsQuery.isError
+                  ? 'Could not load this client’s takeoffs.'
+                  : 'No takeoffs yet. They land here once a bid is started for this client.'
+              }
+            />
+            {scopes.length > 0 ? (
+              <DataTable<ScopeRow>
+                title="Takeoffs by scope"
+                columns={scopeColumns}
+                rows={scopes}
+                rowKey={(r) => r.code}
+                empty="No scope breakdown yet."
+              />
+            ) : null}
+          </>
+        ) : null}
+
+        {tab === 'contact' ? (
+          <div className="d-card">
+            <ContactRow label="Org" value={org} />
+            <ContactRow label="Client since" value={sinceYear ? String(sinceYear) : '—'} />
+            <ContactRow label="Source" value={customer.external_id ? 'Synced from QuickBooks' : 'Sitelayer-native'} />
+            <ContactRow label="Projects" value={String(projects.length)} />
+            <ContactRow label="Lifetime $" value={formatMoney(lifetimeValue)} />
+          </div>
+        ) : null}
       </div>
+    </div>
+  )
+}
+
+/** Labeled key/value row for the CONTACT panel — mono micro-label + value. */
+function ContactRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        gap: 16,
+        padding: '12px 0',
+        borderTop: '1px solid var(--m-line, rgba(0,0,0,0.1))',
+      }}
+    >
+      <span
+        style={{
+          fontFamily: 'var(--m-num)',
+          fontSize: 10,
+          fontWeight: 700,
+          letterSpacing: '0.06em',
+          textTransform: 'uppercase',
+          color: 'var(--m-ink-3)',
+        }}
+      >
+        {label}
+      </span>
+      <span className="d-table-cell-strong">{value}</span>
     </div>
   )
 }

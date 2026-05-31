@@ -18,7 +18,8 @@ import type { BootstrapResponse } from '@/lib/api'
 import type { ProjectMessage } from '@/lib/api/messaging'
 import { useMarkThreadRead, useMessageSummary, usePostProjectMessage, useProjectMessages } from '@/lib/api/messaging'
 import { useProjectAssignments } from '@/lib/api/project-assignments'
-import { MAvatar, MButton, MInput, MListInset, MListRow, MPill, MTopBar } from '../../components/m/index.js'
+import { useProjects } from '@/lib/api/projects'
+import { MAvatar, MButton, MI, MInput, MListInset, MListRow, MPill, MTopBar } from '../../components/m/index.js'
 import type { MTone } from '../../components/m/list.js'
 import { avatarToneFor, initialsFor } from '../../components/m/avatar.js'
 
@@ -73,9 +74,18 @@ function attachedBlocker(m: ProjectMessage): string | null {
   if (m.meta?.linked_field_event_id) return 'AUTO-LINKED FROM FIELD INTAKE'
   // Legacy fallback: rows posted before project_messages.meta existed carry no
   // marker, so sniff the body the way the pre-105 UI did.
-  const body = (m.body || '').toLowerCase()
-  if (/out of |blocker|need \d+|ran out|short on/.test(body)) return 'AUTO-LINKED FROM FIELD INTAKE'
+  if (bodyReadsAsBlocker(m.body)) return 'AUTO-LINKED FROM FIELD INTAKE'
   return null
+}
+
+/**
+ * Body-only blocker heuristic (no `meta`). The chat-list summary projection
+ * (ProjectMessageSummary.last_message) carries only the body, not the
+ * structured marker, so the list row reuses just the body sniff to surface the
+ * inline BLOCKER pill the design shows on field-blocked threads.
+ */
+function bodyReadsAsBlocker(body: string | null | undefined): boolean {
+  return /out of |blocker|need \d+|ran out|short on/.test((body || '').toLowerCase())
 }
 
 /**
@@ -126,9 +136,11 @@ export function MobileChatList({ bootstrap }: { bootstrap: BootstrapResponse | n
   return (
     <>
       <MTopBar
-        title="Chats"
-        eyebrow="CROSS-ROLE"
-        sub={`${projects.length} project ${projects.length === 1 ? 'thread' : 'threads'}`}
+        title={`${projects.length} ACTIVE`}
+        eyebrow="PROJECT CHATS"
+        actionIcon={<MI.Plus size={22} />}
+        actionLabel="New project"
+        onAction={() => navigate('/projects/new')}
       />
       {projects.length === 0 ? (
         <div style={{ padding: '24px 16px', color: 'var(--m-ink-3)', fontSize: 13 }}>
@@ -178,11 +190,21 @@ function ChatListRow({
   const unread = summary?.unread_count ?? 0
   const preview = last ? last.body : fallbackPreview
   const time = last ? relativeTime(last.created_at) : relativeTime(fallbackTime)
+  const hasBlocker = bodyReadsAsBlocker(last?.body)
 
   return (
     <MListRow
       leading={<MAvatar initials={initialsFor(name)} tone={avatarToneFor(projectId)} />}
-      headline={name}
+      headline={
+        hasBlocker ? (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            {name}
+            <MPill tone="red">BLOCKER</MPill>
+          </span>
+        ) : (
+          name
+        )
+      }
       supporting={
         <span
           style={{
@@ -234,11 +256,19 @@ export function MobileChatThread() {
   const { projectId } = useParams<{ projectId: string }>()
   const { data, isLoading } = useProjectMessages(projectId)
   const assignments = useProjectAssignments(projectId)
+  const projectsQuery = useProjects({ limit: 100 })
   const post = usePostProjectMessage(projectId ?? '')
   const markRead = useMarkThreadRead(projectId ?? '')
   const [draft, setDraft] = useState('')
 
   const messages = data?.messages ?? []
+
+  // Resolve the project name for the header eyebrow + the participant count for
+  // the headline ("CHAT · N PEOPLE"), matching msg__77. The roster comes from
+  // the project's assignments (foreman + crew); fall back gracefully while the
+  // queries resolve.
+  const project = projectsQuery.data?.projects.find((p) => p.id === projectId)
+  const peopleCount = assignments.data?.assignments.length ?? 0
 
   // Mark the thread read on open and whenever its latest message changes, so
   // the unread badge in the chat list clears once the operator views it. Keyed
@@ -281,9 +311,12 @@ export function MobileChatThread() {
       <MTopBar
         back
         onBack={() => navigate('/chat')}
-        eyebrow="PROJECT CHAT"
-        title="Thread"
+        eyebrow={(project?.name ?? 'PROJECT CHAT').toUpperCase()}
+        title={peopleCount > 0 ? `CHAT · ${peopleCount} ${peopleCount === 1 ? 'PERSON' : 'PEOPLE'}` : 'CHAT'}
         sub={`${messages.length} ${messages.length === 1 ? 'message' : 'messages'}`}
+        actionIcon={<MI.More size={22} />}
+        actionLabel="Thread options"
+        onAction={() => projectId && navigate(`/projects/${projectId}`)}
       />
 
       <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: '14px 16px 8px' }}>
@@ -308,6 +341,28 @@ export function MobileChatThread() {
           alignItems: 'center',
         }}
       >
+        {/* Leading square "+" attach button (msg__77). Attachment upload is
+            not wired yet, so it's a brutalist square affordance kept disabled —
+            present for design parity. */}
+        <button
+          type="button"
+          aria-label="Attach"
+          disabled
+          style={{
+            width: 44,
+            height: 44,
+            flexShrink: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'var(--m-card)',
+            border: '2px solid var(--m-ink)',
+            color: 'var(--m-ink-3)',
+            cursor: 'not-allowed',
+          }}
+        >
+          <MI.Plus size={20} />
+        </button>
         <MInput
           value={draft}
           onChange={(e) => setDraft(e.currentTarget.value)}
@@ -327,7 +382,7 @@ export function MobileChatThread() {
           disabled={post.isPending || draft.trim().length === 0}
           aria-label="Send"
         >
-          Send
+          <MI.ChevRight size={20} />
         </MButton>
       </div>
     </div>

@@ -10,8 +10,19 @@ import { registerWorkflow } from './registry.js'
  * answers "is this project completed yet?". The two coexist:
  *   - lifecycle owns draft → estimating → sent → accepted → in_progress
  *     → done → archived (and a sent → declined branch).
- *   - closeout owns the active → completed flip on /closeout — kept for
- *     the existing margin-shortfall alert + summary lock plumbing.
+ *   - closeout owns the active → completed → post_mortem flip on
+ *     /closeout — kept for the existing margin-shortfall alert + summary
+ *     lock plumbing.
+ *
+ * COLUMN-OWNERSHIP CONTRACT (read alongside project-closeout.ts):
+ *   - This workflow OWNS the `lifecycle_*` columns and NEVER writes
+ *     `status` (the UPDATE below touches only `lifecycle_*`), so the
+ *     closeout `status` projection stays decoupled from lifecycle state.
+ *   - `project_closeout` OWNS `status` / `closed_*` / `summary_locked_at`
+ *     / `state_version` / `post_mortem_acknowledged_*`.
+ *   - CLOSEOUT is gated route-side on the real `lifecycle_state` (only
+ *     `in_progress`/`done` may close out) so a future non-active lifecycle
+ *     state can't be mistaken for closeout-eligible `active`.
  *
  * Once a customer accepts an estimate the lifecycle moves into
  * `accepted` and a foreman can be assigned; START_WORK then transitions
@@ -220,6 +231,18 @@ export function transitionProjectLifecycleWorkflow(
     // Clear the terminal-ish timestamps; the audit trail of the prior
     // COMPLETE/ARCHIVE lives in workflow_event_log keyed on
     // (entity_id, state_version).
+    //
+    // CONTRACT (read alongside the route's PROJECT_LIFECYCLE_COLUMNS):
+    //   lifecycle_completed_at / lifecycle_archived_at mean "completed /
+    //   archived IN THE CURRENT lifecycle pass", NOT "ever". A REOPEN
+    //   intentionally nulls them so the in-row snapshot can never lie
+    //   about the current state (a reopened project is in_progress, not
+    //   done/archived). Any "was this project ever completed?" reader
+    //   must query workflow_event_log for a COMPLETE/ARCHIVE event for
+    //   this entity_id rather than reading the projects row — the row is
+    //   the live snapshot, the log is the history. Audited 2026-05-31:
+    //   the only readers of these columns are the lifecycle route's
+    //   GET snapshot (current-pass semantics, correct).
     completed_at: null,
     archived_at: null,
   }

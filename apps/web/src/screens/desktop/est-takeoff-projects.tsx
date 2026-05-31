@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
 import { DataTable, DEyebrow, DH1, DKpi, DKpiStrip, type DColumn } from '@/components/d'
 import { MButton, MPill } from '@/components/m'
+import { useCompanyTakeoffDrafts } from '@/lib/api/takeoff-drafts'
 import { formatMoney, formatStatusLabel, statusTone } from '../mobile/format.js'
 
 type EstFilter = 'all' | 'takeoff' | 'progress' | 'sent'
@@ -70,6 +71,11 @@ export function EstTakeoffProjects({ bootstrap }: { bootstrap: BootstrapResponse
 
   const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
 
+  // AI Queue tile (design EST 01): count of auto-generated takeoff drafts still
+  // waiting on estimator review — the same company feed the AI Queue screen reads.
+  const reviewDrafts = useCompanyTakeoffDrafts({ reviewRequired: true })
+  const aiQueueCount = reviewDrafts.data?.drafts.length ?? 0
+
   const allRows = useMemo<EstTableRow[]>(() => {
     const mapped = projects.map((p) => ({
       id: p.id,
@@ -89,7 +95,6 @@ export function EstTakeoffProjects({ bootstrap }: { bootstrap: BootstrapResponse
 
   const rows = useMemo(() => allRows.filter((r) => matchesFilter(r.status, filter)), [allRows, filter])
 
-  const takeoffCount = useMemo(() => allRows.filter((r) => isTakeoff(r.status)).length, [allRows])
   const progressCount = useMemo(() => allRows.filter((r) => isInProgress(r.status)).length, [allRows])
   const sentCount = useMemo(() => allRows.filter((r) => isSent(r.status)).length, [allRows])
   const winRate = useMemo(() => {
@@ -131,10 +136,14 @@ export function EstTakeoffProjects({ bootstrap }: { bootstrap: BootstrapResponse
         </div>
 
         <DKpiStrip>
-          <DKpi label="To takeoff" value={String(takeoffCount)} tone="accent" meta="Awaiting measure" />
           <DKpi label="In progress" value={String(progressCount)} meta="Won + on site" />
-          <DKpi label="Sent" value={String(sentCount)} meta="Out for bid" />
-          <DKpi label="Win rate" value={winRate == null ? '—' : `${winRate}%`} meta="Of decided bids" />
+          <DKpi label="AI queue" value={String(aiQueueCount)} tone="accent" meta="Drafts ready to review" />
+          <DKpi
+            label="Sent this month"
+            value={String(sentCount)}
+            meta={winRate == null ? 'Out for bid' : `${winRate}% win rate`}
+            metaTone={winRate == null ? undefined : 'good'}
+          />
         </DKpiStrip>
 
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>

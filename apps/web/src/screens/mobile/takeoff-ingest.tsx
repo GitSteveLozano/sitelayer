@@ -43,7 +43,18 @@ function stepsFor(isDone: boolean, sheetCount: number | null): IngestStep[] {
   return [
     { label: 'PDF UPLOADED', done: true },
     { label: sheetLabel, done: sheetCount != null, active: sheetCount == null && !isDone },
-    { label: 'CROSS-SHEET REFERENCES', done: true, sub: '8 callouts linked' },
+    {
+      label: 'CROSS-SHEET REFERENCES',
+      done: isDone,
+      active: !isDone && sheetCount != null,
+      // No callout-extraction feed exists yet, so keep this honest: it links
+      // detail callouts across the detected sheets once parsing completes.
+      sub: isDone
+        ? sheetCount != null
+          ? `linking callouts across ${sheetCount} sheets`
+          : 'callouts linked'
+        : 'scanning callouts…',
+    },
     {
       label: 'SCALE AUTO-DETECT',
       done: isDone,

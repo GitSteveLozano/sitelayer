@@ -141,7 +141,11 @@ describe('processEstimatePush — idempotent replay (path A)', () => {
     expect(summaries[1]).toMatch(/update mutation_outbox.*set\s+status = 'processing'/i)
     expect(summaries[4]).toMatch(/select qbo_estimate_id, status from estimate_pushes/i)
     expect(summaries[5]).toMatch(/select id, status, state_version, qbo_estimate_id.*for update/i)
-    expect(summaries[6]).toMatch(/update estimate_pushes\s+set status = 'posted'/i)
+    // The worker now routes through the pure reducer and persists the
+    // result via one generic snapshot UPDATE (status = $3, …) instead of
+    // a hand-written `set status = 'posted'`. The reducer-equivalence test
+    // proves the written columns equal transitionEstimatePushWorkflow's output.
+    expect(summaries[6]).toMatch(/update estimate_pushes\s+set status = \$3/i)
     expect(summaries[7]).toMatch(/insert into workflow_event_log.*on conflict \(entity_id, state_version\) do nothing/i)
     expect(summaries[8]).toMatch(/insert into sync_events/i)
     expect(summaries[9]).toMatch(/update mutation_outbox set status = 'applied'/i)

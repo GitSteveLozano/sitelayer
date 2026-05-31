@@ -1,8 +1,8 @@
 import { Link, useParams } from 'react-router-dom'
 import { EmptyState } from '@/components/shell/EmptyState'
+import { useRentalsPortalContext } from './RentalsPortalProvider'
 import {
   readCart as machineReadCart,
-  useRentalsPortal,
   writeCart as machineWriteCart,
   type PortalCartLine as MachinePortalCartLine,
   type PortalCatalogItem as MachinePortalCatalogItem,
@@ -17,19 +17,19 @@ import {
  * `:shareToken` and is included verbatim on every request; the API verifies
  * the HMAC before returning data.
  *
- * State (catalog snapshot, filters, cart, loading/error) lives in the
- * `rentalsPortal` XState machine. Cart persistence is performed inside
- * the machine via a `persistCart` side-effect action that writes to
- * localStorage on every mutation.
+ * State (catalog snapshot, filters, cart, contact, reserve, loading/error)
+ * lives in the ONE lifted `rentalsPortal` XState instance, provided by
+ * `RentalsPortalProvider` and shared with `RentalsCart` / `RentalsConfirm`
+ * via `useRentalsPortalContext`. Cart persistence is performed inside the
+ * machine via a `persistCart` side-effect action (resume convenience).
  *
- * Reservation submit (in `RentalsCart.tsx`) hits
+ * Reservation submit (in `RentalsCart.tsx`) dispatches `RESERVE` on the
+ * same machine; the machine's `reserveRequest` actor hits
  * `POST /portal/rentals/:share_token/reserve` which lands a row in
  * `rental_requests` for the operator to approve.
  *
- * Note: `RentalsCart.tsx` still imports `readCart`, `writeCart`, and
- * `PortalCartLine` from this module, so we re-export the machine's
- * versions for compatibility. The storage key contract between the two
- * screens is preserved.
+ * Note: `readCart`/`writeCart`/`PortalCartLine` are re-exported for any
+ * legacy importer; the storage key remains the resume contract.
  */
 
 export type PortalCatalogItem = MachinePortalCatalogItem
@@ -40,7 +40,7 @@ export const writeCart = machineWriteCart
 export function RentalsPortal() {
   const params = useParams<{ shareToken: string }>()
   const shareToken = params.shareToken ?? ''
-  const portal = useRentalsPortal(shareToken)
+  const portal = useRentalsPortalContext()
 
   if (!shareToken) {
     return <div style={{ padding: 32 }}>Missing share token.</div>

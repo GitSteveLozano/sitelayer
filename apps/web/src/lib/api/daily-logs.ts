@@ -79,6 +79,62 @@ export interface DailyLogSubmitRequest {
 }
 
 // ---------------------------------------------------------------------------
+// Headless WorkflowSnapshot surface (canonical /events + /snapshot contract).
+// Mirrors fetchBillingRun / dispatchBillingRunEvent in billing-runs.ts so the
+// shared XState factory (machines/headless-workflow.ts) can drive daily logs.
+// ---------------------------------------------------------------------------
+
+export type DailyLogHumanEvent = 'SUBMIT'
+
+export interface DailyLogSnapshotContext {
+  id: string
+  project_id: string
+  occurred_on: string
+  foreman_user_id: string
+  status: DailyLogStatus
+  scope_progress: unknown
+  weather: unknown
+  notes: string | null
+  schedule_deviations: unknown
+  crew_summary: unknown
+  photo_keys: string[]
+  submitted_at: string | null
+  version: number
+  state_version: number
+  origin: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface DailyLogSnapshot {
+  state: DailyLogStatus
+  state_version: number
+  next_events: Array<{ type: DailyLogHumanEvent; label: string; disabled_reason?: string }>
+  context: DailyLogSnapshotContext
+}
+
+/** Fetch the canonical WorkflowSnapshot for a daily log. */
+export function fetchDailyLogSnapshot(id: string): Promise<DailyLogSnapshot> {
+  return request<DailyLogSnapshot>(`/api/daily-logs/${encodeURIComponent(id)}/snapshot`)
+}
+
+/**
+ * Plain-function event dispatcher for the headless workflow factory in
+ * machines/headless-workflow.ts. Posts { event, state_version } to the
+ * canonical /events route and returns the fresh snapshot.
+ */
+export function dispatchDailyLogEvent(
+  id: string,
+  event: DailyLogHumanEvent,
+  stateVersion: number,
+): Promise<DailyLogSnapshot> {
+  return request<DailyLogSnapshot>(`/api/daily-logs/${encodeURIComponent(id)}/events`, {
+    method: 'POST',
+    json: { event, state_version: stateVersion },
+  })
+}
+
+// ---------------------------------------------------------------------------
 // Request functions
 // ---------------------------------------------------------------------------
 

@@ -66,6 +66,21 @@ export function ForemanBrief({
   const setProjectId = (id: string) => setPickedId(id)
   const project = useMemo(() => projects.find((p) => p.id === projectId) ?? null, [projects, projectId])
 
+  // Recipient count for the footer reach-bar ("N crew will see this on Scope").
+  // The crew on a project is whoever logged labor there today; this is the
+  // same proxy fm-crew uses until a live roster join is wired.
+  const crewCount = useMemo(() => {
+    if (!projectId) return 0
+    const today = todayIso()
+    const ids = new Set<string>()
+    for (const l of bootstrap?.laborEntries ?? []) {
+      if (l.occurred_on === today && !l.deleted_at && l.project_id === projectId && l.worker_id) {
+        ids.add(l.worker_id)
+      }
+    }
+    return ids.size
+  }, [bootstrap?.laborEntries, projectId])
+
   const [goal, setGoal] = useState('')
   const [steps, setSteps] = useState<ProjectBriefStep[]>([])
   const [materials, setMaterials] = useState<{ description: string; quantity?: string }[]>([])
@@ -347,6 +362,39 @@ export function ForemanBrief({
                         <MI.X size={16} />
                       </button>
                     </div>
+                    {/* Per-step time window + crew — the design shows each step
+                        with a start→end range and a "WHO · …" assignment. */}
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, marginLeft: 96 }}>
+                      <MInput
+                        type="time"
+                        aria-label={`Step ${idx + 1} start time`}
+                        value={step.start_time ?? ''}
+                        onChange={(e) => updateStep(idx, { start_time: e.currentTarget.value || null })}
+                        style={{ flex: 1, minWidth: 0 }}
+                      />
+                      <span aria-hidden style={{ color: 'var(--m-ink-3)', fontWeight: 700 }}>
+                        →
+                      </span>
+                      <MInput
+                        type="time"
+                        aria-label={`Step ${idx + 1} end time`}
+                        value={step.end_time ?? ''}
+                        onChange={(e) => updateStep(idx, { end_time: e.currentTarget.value || null })}
+                        style={{ flex: 1, minWidth: 0 }}
+                      />
+                    </div>
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 6, marginLeft: 96 }}>
+                      <span className={MONO_LABEL} style={{ ...monoLabelStyle, flexShrink: 0 }}>
+                        WHO
+                      </span>
+                      <MInput
+                        aria-label={`Step ${idx + 1} crew`}
+                        value={step.crew ?? ''}
+                        onChange={(e) => updateStep(idx, { crew: e.currentTarget.value || null })}
+                        placeholder="All"
+                        style={{ flex: 1, minWidth: 0 }}
+                      />
+                    </div>
                     {step.materials ? (
                       <div className={MONO_LABEL} style={{ ...monoLabelStyle, marginTop: 4, marginLeft: 96 }}>
                         MATERIALS · {step.materials}
@@ -401,7 +449,11 @@ export function ForemanBrief({
               }}
             >
               <span style={{ width: 8, height: 8, background: 'var(--m-accent)', flexShrink: 0 }} />
-              {project ? `BRIEF FOR ${project.name.toUpperCase()}` : 'PICK A PROJECT TO BRIEF'}
+              {project
+                ? crewCount > 0
+                  ? `${crewCount} CREW WILL SEE THIS ON SCOPE TAB`
+                  : 'CREW WILL SEE THIS ON SCOPE TAB'
+                : 'PICK A PROJECT TO BRIEF'}
             </div>
             <div className="m-btn-row" style={{ marginTop: 12 }}>
               <MButton
@@ -542,6 +594,16 @@ function BriefPreview({
                   >
                     {step.title || `Step ${idx + 1}`}
                   </span>
+                  {stepTimeRange(step) || step.crew ? (
+                    <span
+                      className="num"
+                      style={{ display: 'block', marginTop: 3, fontSize: 11, fontWeight: 600, color: 'var(--m-ink-4)' }}
+                    >
+                      {[stepTimeRange(step), step.crew ? `WHO · ${step.crew.toUpperCase()}` : null]
+                        .filter(Boolean)
+                        .join('  ·  ')}
+                    </span>
+                  ) : null}
                   {step.materials ? (
                     <span
                       className="num"
@@ -570,6 +632,28 @@ function BriefPreview({
                 />
               ))}
             </MListInset>
+            {/* Site-readiness status strip — tells the crew the materials are
+                staged. Location isn't a typed field yet, so we surface the
+                staged status generically (design msg__36). */}
+            <div
+              style={{
+                margin: '16px 20px 0',
+                padding: '10px 12px',
+                background: 'var(--m-green, #1f9d55)',
+                color: '#fffaf2',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                fontFamily: 'var(--m-num)',
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: '0.06em',
+                textTransform: 'uppercase',
+              }}
+            >
+              <span aria-hidden style={{ width: 8, height: 8, background: '#fffaf2', flexShrink: 0 }} />
+              Materials staged
+            </div>
           </>
         ) : null}
 
@@ -671,6 +755,16 @@ function MaterialsList({
 // Mono micro-label — JetBrains Mono, uppercase, tracked. Mirrors the v2
 // `.v2-mono` / eyebrow treatment using the design-system `--m-num` font
 // token so the look stays in sync with styles/m.css.
+/** "7:00 → 9:30" from a step's start/end times, or '' when not both set. */
+function stepTimeRange(step: ProjectBriefStep): string {
+  const start = step.start_time?.trim()
+  const end = step.end_time?.trim()
+  if (start && end) return `${start} → ${end}`
+  if (start) return start
+  if (end) return `→ ${end}`
+  return ''
+}
+
 const MONO_LABEL = 'm-quiet-sm'
 const monoLabelStyle: React.CSSProperties = {
   fontFamily: 'var(--m-num)',

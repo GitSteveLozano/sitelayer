@@ -19,6 +19,9 @@ type StoredRow = {
   body_text: string
   payload: Record<string, unknown>
   created_at: string
+  // Latest workflow_event_log snapshot for the lateral join (null = no
+  // event log → delivery fields degrade to null on the feed).
+  snapshot?: Record<string, unknown> | null
 }
 
 class FakePool {
@@ -69,17 +72,25 @@ class FakePool {
         .filter((r) => (unreadOnly ? r.payload['read_at'] === undefined : true))
         .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0))
         .slice(offset, offset + limit)
-        .map((r) => ({
-          id: r.id,
-          company_id: r.company_id,
-          recipient_clerk_user_id: r.recipient_clerk_user_id,
-          kind: r.kind,
-          subject: r.subject,
-          body_text: r.body_text,
-          payload: r.payload,
-          read_at: typeof r.payload['read_at'] === 'string' ? (r.payload['read_at'] as string) : null,
-          created_at: r.created_at,
-        }))
+        .map((r) => {
+          const snap = r.snapshot ?? null
+          return {
+            id: r.id,
+            company_id: r.company_id,
+            recipient_clerk_user_id: r.recipient_clerk_user_id,
+            kind: r.kind,
+            subject: r.subject,
+            body_text: r.body_text,
+            payload: r.payload,
+            read_at: typeof r.payload['read_at'] === 'string' ? (r.payload['read_at'] as string) : null,
+            created_at: r.created_at,
+            // Mirror the lateral join: snapshot_after->>'field' (text or null).
+            state: snap && typeof snap.state === 'string' ? snap.state : null,
+            channel: snap && typeof snap.channel === 'string' ? snap.channel : null,
+            failure_kind: snap && typeof snap.failure_kind === 'string' ? snap.failure_kind : null,
+            failed_at: snap && typeof snap.failed_at === 'string' ? snap.failed_at : null,
+          }
+        })
       return { rows: filtered, rowCount: filtered.length }
     }
 
@@ -203,6 +214,32 @@ describe('handleNotificationRoutes — GET /api/notifications', () => {
     await handleNotificationRoutes({ method: 'GET' } as never, buildUrl('/api/notifications?unread=1'), ctx)
     const body = responses[0]?.body as { notifications: Array<{ id: string }> }
     expect(body.notifications.map((n) => n.id)).toEqual(['00000000-0000-4000-8000-000000000020'])
+  })
+
+  it('surfaces delivery state/channel/failure_kind from the latest event-log snapshot', async () => {
+    const pool = new FakePool()
+    seed(pool, {
+      id: '00000000-0000-4000-8000-000000000030',
+      snapshot: { state: 'failed_provider', failure_kind: 'provider', failed_at: '2026-05-09T09:00:00.000Z' },
+    })
+    const { ctx, responses } = makeCtx(pool)
+    await handleNotificationRoutes({ method: 'GET' } as never, buildUrl('/api/notifications'), ctx)
+    const body = responses[0]?.body as {
+      notifications: Array<{ state: string | null; failure_kind: string | null; failed_at: string | null }>
+    }
+    expect(body.notifications[0]?.state).toBe('failed_provider')
+    expect(body.notifications[0]?.failure_kind).toBe('provider')
+    expect(body.notifications[0]?.failed_at).toBe('2026-05-09T09:00:00.000Z')
+  })
+
+  it('degrades delivery fields to null for a pre-workflow row with no event log', async () => {
+    const pool = new FakePool()
+    seed(pool, { id: '00000000-0000-4000-8000-000000000031' })
+    const { ctx, responses } = makeCtx(pool)
+    await handleNotificationRoutes({ method: 'GET' } as never, buildUrl('/api/notifications'), ctx)
+    const body = responses[0]?.body as { notifications: Array<{ state: string | null; channel: string | null }> }
+    expect(body.notifications[0]?.state).toBeNull()
+    expect(body.notifications[0]?.channel).toBeNull()
   })
 })
 

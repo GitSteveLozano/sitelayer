@@ -167,7 +167,7 @@ async function loadBootstrap(_pool: Pool, companyId: string, callerUserId: strin
         [companyId],
       ),
       c.query(
-        'select id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, version, created_at, updated_at from projects where company_id = $1 order by updated_at desc',
+        'select id, customer_id, name, customer_name, division_code, status, bid_total, labor_rate, target_sqft_per_hr, bonus_pool, closed_at, summary_locked_at, lifecycle_state, lifecycle_state_version, lifecycle_sent_at, lifecycle_accepted_at, lifecycle_declined_at, lifecycle_decline_reason, lifecycle_started_at, lifecycle_completed_at, lifecycle_archived_at, version, created_at, updated_at from projects where company_id = $1 order by updated_at desc',
         [companyId],
       ),
       c.query('select id, name, role, created_at from workers where company_id = $1 order by name asc', [companyId]),

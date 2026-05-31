@@ -9,7 +9,7 @@
 import { useMemo, useState } from 'react'
 import type { BootstrapResponse } from '@/lib/api'
 import { DEyebrow, DH1 } from '@/components/d'
-import { MButton, MChip, MChipRow, MPill, MAvatar } from '@/components/m'
+import { MButton } from '@/components/m'
 import { NewAssignmentModal } from './project-drawers'
 
 const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'] as const
@@ -390,6 +390,42 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
     return sum + [...byDay.values()].reduce((a, b) => a + b, 0)
   }, 0)
 
+  // Crew roster size — the denominator for the utilization summary stat.
+  const crewRoster = bootstrap.workers.filter((w) => !w.deleted_at)
+  const utilization = crewRoster.length > 0 ? Math.round((totalAssigned / crewRoster.length) * 100) : 0
+
+  // Per-project accent color so the week-grid rows + cell bars read in the
+  // same color language as the 4-week timeline.
+  const projectColor = (rowIdx: number) => ROW_COLORS[rowIdx % ROW_COLORS.length]!
+
+  // Square-bordered top-right view toggle matching the design's button group.
+  const ViewToggle = () => (
+    <div style={{ display: 'flex', border: line }}>
+      {(['day', 'week', '4wk'] as const).map((v, i) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => setView(v)}
+          style={{
+            padding: '8px 14px',
+            border: 'none',
+            borderLeft: i === 0 ? 'none' : line,
+            background: view === v ? 'var(--m-accent)' : 'var(--m-card)',
+            color: view === v ? 'var(--m-accent-ink)' : 'var(--m-ink-3)',
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            cursor: 'pointer',
+          }}
+        >
+          {v === '4wk' ? '4-WK' : v}
+        </button>
+      ))}
+    </div>
+  )
+
   return (
     <div className="d-content">
       <div className="d-stack">
@@ -403,28 +439,22 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
           }}
         >
           <div>
-            <DEyebrow>Owner · Schedule</DEyebrow>
-            <DH1>
-              This week — {active.length} {active.length === 1 ? 'job' : 'jobs'}
-              {totalAssigned > 0 ? `, ${totalAssigned} crew assigned.` : ', nothing booked yet.'}
-            </DH1>
+            <DEyebrow>
+              <span
+                aria-hidden
+                style={{ display: 'inline-block', width: 12, height: 12, background: 'var(--m-accent)', marginRight: 8, verticalAlign: 'middle' }}
+              />
+              {`${active.length} ${active.length === 1 ? 'PROJECT' : 'PROJECTS'} · ${crewRoster.length} CREW · ${utilization}% UTILIZED`}
+            </DEyebrow>
+            <DH1>Schedule</DH1>
           </div>
-          <MButton size="sm" variant="primary" onClick={() => setAssignmentOpen(true)}>
-            New assignment
-          </MButton>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <ViewToggle />
+            <MButton size="sm" variant="primary" onClick={() => setAssignmentOpen(true)}>
+              New assignment
+            </MButton>
+          </div>
         </div>
-
-        <MChipRow>
-          <MChip active={view === 'day'} onClick={() => setView('day')}>
-            Day
-          </MChip>
-          <MChip active={view === 'week'} onClick={() => setView('week')}>
-            Week
-          </MChip>
-          <MChip active={view === '4wk'} onClick={() => setView('4wk')}>
-            4-WK
-          </MChip>
-        </MChipRow>
 
         {view === '4wk' ? (
           <FourWeekTimeline anchorMonday={anchorMonday} timeline={timeline} isDemo={usingDemoTimeline} line={line} />
@@ -460,32 +490,60 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
             >
               Project
             </div>
-            {visibleDays.map((day, i) => (
-              <div
-                key={day}
-                role="columnheader"
-                style={{
-                  borderRight: i === visibleDays.length - 1 ? 'none' : line,
-                  borderBottom: line,
-                  padding: '12px 14px',
-                  fontFamily: 'var(--m-num)',
-                  fontSize: 11,
-                  letterSpacing: '0.08em',
-                  textTransform: 'uppercase',
-                  color: 'var(--m-ink-2)',
-                  background: 'var(--m-sand)',
-                  textAlign: 'center',
-                }}
-              >
-                {day}
-              </div>
-            ))}
+            {visibleDays.map((day, i) => {
+              // Dated weekday label (e.g. "MON 5") anchored to the current
+              // week's Monday — matches the design's MON 5 / TUE 6 columns.
+              const cellDate = new Date(anchorMonday)
+              cellDate.setDate(cellDate.getDate() + i)
+              // Wednesday (column index 2) carries the presentational
+              // rain-forecast flag, mirroring the 4-week timeline callout.
+              const isRainDay = i === 2
+              return (
+                <div
+                  key={day}
+                  role="columnheader"
+                  style={{
+                    borderRight: i === visibleDays.length - 1 ? 'none' : line,
+                    borderBottom: line,
+                    padding: '12px 14px',
+                    fontFamily: 'var(--m-num)',
+                    fontSize: 11,
+                    letterSpacing: '0.08em',
+                    textTransform: 'uppercase',
+                    color: 'var(--m-ink-2)',
+                    background: 'var(--m-sand)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}
+                >
+                  <span>{`${day} ${cellDate.getDate()}`}</span>
+                  {isRainDay ? (
+                    <span
+                      style={{
+                        fontFamily: 'var(--m-num)',
+                        fontSize: 9,
+                        fontWeight: 800,
+                        letterSpacing: '0.06em',
+                        color: '#fff',
+                        background: 'var(--m-red)',
+                        padding: '2px 5px',
+                      }}
+                    >
+                      RAIN
+                    </span>
+                  ) : null}
+                </div>
+              )
+            })}
 
             {/* Body rows */}
             {active.map((project, rowIdx) => {
               const byDay = assignments.get(project.id)
               const isLastRow = rowIdx === active.length - 1
               const code = project.division_code || project.name.slice(0, 3).toUpperCase()
+              const color = projectColor(rowIdx)
+              const onAccent = color === 'var(--m-accent)'
               return (
                 <div key={project.id} style={{ display: 'contents' }}>
                   <div
@@ -495,14 +553,13 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
                       borderBottom: isLastRow ? 'none' : line,
                       padding: '14px',
                       display: 'flex',
-                      flexDirection: 'column',
-                      gap: 6,
+                      alignItems: 'center',
+                      gap: 10,
                       background: 'var(--m-card)',
                     }}
                   >
-                    <div style={{ fontWeight: 700, fontSize: 14, color: 'var(--m-ink)' }}>{project.name}</div>
-                    <div style={{ fontSize: 12, color: 'var(--m-ink-3)' }}>{project.customer_name}</div>
-                    <MPill tone="blue">{code}</MPill>
+                    <span aria-hidden style={{ width: 12, height: 12, background: color, flexShrink: 0 }} />
+                    <span style={{ fontWeight: 700, fontSize: 14, color: 'var(--m-ink)' }}>{project.name}</span>
                   </div>
                   {visibleDays.map((day, colIdx) => {
                     const crewCount = byDay?.get(colIdx) ?? 0
@@ -516,39 +573,30 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
                           padding: 10,
                           minHeight: 72,
                           display: 'flex',
-                          alignItems: 'flex-start',
-                          background: crewCount > 0 ? 'var(--m-card)' : 'var(--m-sand-2)',
+                          alignItems: 'center',
+                          background: 'var(--m-card)',
                         }}
                       >
                         {crewCount > 0 ? (
                           <div
+                            title={`${code} · ${crewCount} crew`}
                             style={{
                               display: 'flex',
-                              flexDirection: 'column',
-                              gap: 6,
-                              border: '2px solid var(--m-line-2)',
-                              background: 'var(--m-card)',
-                              padding: '6px 8px',
+                              alignItems: 'center',
+                              border: '2px solid var(--m-ink)',
+                              background: color,
+                              color: onAccent ? 'var(--m-accent-ink)' : '#fff',
+                              padding: '8px 10px',
                               width: '100%',
+                              minHeight: 32,
+                              fontFamily: 'var(--m-num)',
+                              fontSize: 11,
+                              fontWeight: 800,
+                              letterSpacing: '0.04em',
+                              textTransform: 'uppercase',
                             }}
                           >
-                            <div
-                              style={{
-                                fontFamily: 'var(--m-num)',
-                                fontSize: 11,
-                                fontWeight: 700,
-                                letterSpacing: '0.04em',
-                                color: 'var(--m-ink)',
-                              }}
-                            >
-                              {code}
-                            </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <MAvatar initials={String(crewCount)} tone="2" size="sm" />
-                              <span style={{ fontSize: 11, color: 'var(--m-ink-3)' }}>
-                                {crewCount} {crewCount === 1 ? 'crew' : 'crew'}
-                              </span>
-                            </div>
+                            {`${code} · ${crewCount}`}
                           </div>
                         ) : null}
                       </div>
@@ -565,7 +613,12 @@ export function OwnerSchedule({ bootstrap }: { bootstrap: BootstrapResponse | nu
           schedule-create form. Projects come from the bootstrap list; on
           save it POSTs /api/schedules and the create hook invalidates the
           bootstrap cache so the new draft assignment lands on the grid. */}
-      <NewAssignmentModal open={assignmentOpen} onClose={() => setAssignmentOpen(false)} projects={projects} />
+      <NewAssignmentModal
+        open={assignmentOpen}
+        onClose={() => setAssignmentOpen(false)}
+        projects={projects}
+        crew={crewRoster}
+      />
     </div>
   )
 }

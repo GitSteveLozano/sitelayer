@@ -6,7 +6,7 @@ import type {
   WorkflowSnapshot,
 } from '@sitelayer/workflows'
 import type { JobRentalContractForBilling, JobRentalLineForBilling } from '@sitelayer/domain'
-import { nextRentalBillingEvents } from '@sitelayer/workflows'
+import { nextRentalBillingEvents, rentalBillingRowToSnapshot } from '@sitelayer/workflows'
 import type { ActiveCompany } from '../auth-types.js'
 
 /**
@@ -519,16 +519,10 @@ export function toBillingLine(
 }
 
 export function billingRunRowToSnapshot(row: RentalBillingRunRow): RentalBillingWorkflowSnapshot {
-  return {
-    state: row.status as RentalBillingWorkflowState,
-    state_version: row.state_version,
-    approved_at: row.approved_at,
-    approved_by: row.approved_by,
-    posted_at: row.posted_at,
-    failed_at: row.failed_at,
-    error: row.error,
-    qbo_invoice_id: row.qbo_invoice_id,
-  }
+  // Delegate to the shared workflows-package mapper so the row→snapshot map
+  // is defined once and is identical between the API route and the queue
+  // worker (packages/queue/src/pushers/rental-billing-invoice.ts).
+  return rentalBillingRowToSnapshot(row)
 }
 
 export function billingRunWorkflowSnapshotResponse(

@@ -80,6 +80,9 @@ const ProjectBomsScreen = lazy(() =>
 const ChangeOrdersScreen = lazy(() =>
   import('@/screens/mobile/change-orders').then((m) => ({ default: m.MobileChangeOrders })),
 )
+const ChangeOrderDetailScreen = lazy(() =>
+  import('@/screens/mobile/change-order-detail').then((m) => ({ default: m.MobileChangeOrderDetail })),
+)
 const ProjectLostScreen = lazy(() =>
   import('@/screens/mobile/project-lost').then((m) => ({ default: m.MobileProjectLost })),
 )
@@ -108,6 +111,9 @@ const PhotoMeasureScreen = lazy(() =>
 const PortalEstimateView = lazy(() => import('@/portal/EstimateView').then((m) => ({ default: m.EstimateView })))
 const PortalEstimateAcceptedView = lazy(() =>
   import('@/portal/EstimateAcceptedView').then((m) => ({ default: m.EstimateAcceptedView })),
+)
+const PortalRentalsProvider = lazy(() =>
+  import('@/portal/RentalsPortalProvider').then((m) => ({ default: m.RentalsPortalProvider })),
 )
 const PortalRentalsView = lazy(() => import('@/portal/RentalsPortal').then((m) => ({ default: m.RentalsPortal })))
 const PortalRentalsCart = lazy(() => import('@/portal/RentalsCart').then((m) => ({ default: m.RentalsCart })))
@@ -143,6 +149,9 @@ const WorkerFirstRunScreen = lazy(() =>
 )
 const EstimatorInviteScreen = lazy(() =>
   import('@/screens/mobile/estimator-invite').then((m) => ({ default: m.EstimatorInviteScreen })),
+)
+const InviteTeammateScreen = lazy(() =>
+  import('@/screens/mobile/invite-teammate').then((m) => ({ default: m.InviteTeammateScreen })),
 )
 const EstimatorFirstRunScreen = lazy(() =>
   import('@/screens/mobile/estimator-first-run').then((m) => ({ default: m.EstimatorFirstRunScreen })),
@@ -248,9 +257,15 @@ export default function App() {
                   install prompt either. */}
               <Route path="/portal/estimates/:shareToken" element={<PortalEstimateView />} />
               <Route path="/portal/estimates/:shareToken/accepted" element={<PortalEstimateAcceptedView />} />
-              <Route path="/portal/rentals/:shareToken" element={<PortalRentalsView />} />
-              <Route path="/portal/rentals/:shareToken/cart" element={<PortalRentalsCart />} />
-              <Route path="/portal/rentals/:shareToken/confirm" element={<PortalRentalsConfirm />} />
+              {/* All three rentals-portal screens share ONE lifted
+                  `rentalsPortal` machine via RentalsPortalProvider so the
+                  cart/contact/reserve state is a single statechart, not a
+                  localStorage split-brain. */}
+              <Route path="/portal/rentals/:shareToken" element={<PortalRentalsProvider />}>
+                <Route index element={<PortalRentalsView />} />
+                <Route path="cart" element={<PortalRentalsCart />} />
+                <Route path="confirm" element={<PortalRentalsConfirm />} />
+              </Route>
               <Route path="/demo/takeoff-preview-3d" element={<TakeoffPreviewDemo />} />
 
               {/* Authenticated app -- Clerk-gated. */}
@@ -283,6 +298,7 @@ function AppShellRoutes() {
       <Route path="/projects/:id/takeoff-preview" element={<TakeoffPreviewScreen />} />
       <Route path="/projects/:id/boms" element={<ProjectBomsScreen />} />
       <Route path="/projects/:projectId/change-orders" element={<ChangeOrdersScreen />} />
+      <Route path="/projects/:projectId/change-orders/:coId" element={<ChangeOrderDetailScreen />} />
       <Route path="/projects/:projectId/lost" element={<ProjectLostScreen />} />
       <Route path="/projects/:projectId/recovery" element={<RecoveryPlanScreen />} />
       <Route path="/clients" element={<ClientsListScreen />} />
@@ -321,6 +337,9 @@ function AppShellRoutes() {
       <Route path="/invite/worker" element={<WorkerInviteScreen />} />
       <Route path="/invite/foreman" element={<ForemanInviteScreen />} />
       <Route path="/invite/estimator" element={<EstimatorInviteScreen />} />
+      {/* Owner SEND-invite takeover (design msg__94 / report M01) — the
+          send surface, distinct from the accept-side /invite/* screens. */}
+      <Route path="/invite/teammate" element={<InviteTeammateScreen />} />
       <Route path="/foreman/first-run" element={<ForemanFirstRunScreen />} />
       <Route path="/worker/first-run" element={<WorkerFirstRunScreen />} />
       <Route path="/estimator/first-run" element={<EstimatorFirstRunScreen />} />

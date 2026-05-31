@@ -29,13 +29,13 @@
 import { useMemo } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
-  useDispatchEstimatePushEvent,
-  useEstimatePush,
+  getActiveCompanySlug,
   useEstimatePushes,
   type BootstrapResponse,
   type EstimatePushHumanEvent,
   type EstimatePushState,
 } from '@/lib/api'
+import { useEstimatePush } from '@/machines/estimate-push'
 import {
   useBillingMilestones,
   usePatchBillingMilestone,
@@ -120,8 +120,16 @@ export function MobileInvoiceSent({ bootstrap }: { bootstrap: BootstrapResponse 
   }, [navPushId, pushList.data, projectId])
 
   const pushId = navPushId ?? recoveredPushId
-  const pushQuery = useEstimatePush(pushId)
-  const dispatch = useDispatchEstimatePushEvent(pushId ?? '')
+  // Re-pointed onto the canonical headless XState machine (the hook
+  // mobile/estimate-push.tsx uses) — gains the outOfSync 409 reload the
+  // TanStack path lacked. Push-id resolution above is unchanged; once a
+  // pushId is known it feeds the machine, which re-LOADs when it changes.
+  const {
+    snapshot: machineSnapshot,
+    isLoading: pushLoading,
+    isSubmitting,
+    dispatch,
+  } = useEstimatePush(pushId ?? '', getActiveCompanySlug())
 
   // Real billing milestones for this project (migration 104). Drives the
   // milestone status strip + the manual "Mark paid" control below.
@@ -130,7 +138,7 @@ export function MobileInvoiceSent({ bootstrap }: { bootstrap: BootstrapResponse 
   const payable = nextPayableMilestone(milestones)
   const patchMilestone = usePatchBillingMilestone(projectId ?? '')
 
-  const snapshot = pushQuery.data ?? null
+  const snapshot = pushId ? machineSnapshot : null
   const ctx = snapshot?.context ?? null
 
   // Amount: prefer the real workflow subtotal; fall back to the nav-state
@@ -159,7 +167,7 @@ export function MobileInvoiceSent({ bootstrap }: { bootstrap: BootstrapResponse 
         <MTopBar back title="Invoice" eyebrow={eyebrow} onBack={back} />
         <MBody>
           <div style={{ padding: 24, fontSize: 13, color: 'var(--m-ink-3)' }}>
-            {pushQuery.isError ? 'Failed to load the invoice.' : 'Loading invoice…'}
+            {pushLoading ? 'Loading invoice…' : 'Failed to load the invoice.'}
           </div>
         </MBody>
       </>
@@ -201,8 +209,10 @@ export function MobileInvoiceSent({ bootstrap }: { bootstrap: BootstrapResponse 
   }
 
   const onDispatch = (event: EstimatePushHumanEvent) => {
-    if (dispatch.isPending) return
-    dispatch.mutate({ event, state_version: snapshot.state_version })
+    if (isSubmitting) return
+    // The machine reads state_version off its stored snapshot and handles
+    // the 409 outOfSync reload itself, so the screen no longer threads it.
+    dispatch(event)
   }
 
   return (
@@ -363,10 +373,10 @@ export function MobileInvoiceSent({ bootstrap }: { bootstrap: BootstrapResponse 
               <span key={evt.type} style={{ flex: PRIMARY_EVENTS.has(evt.type) ? 2 : 1, minWidth: 120 }}>
                 <MButton
                   variant={PRIMARY_EVENTS.has(evt.type) ? 'primary' : 'ghost'}
-                  disabled={dispatch.isPending}
+                  disabled={isSubmitting}
                   onClick={() => onDispatch(evt.type)}
                 >
-                  {dispatch.isPending ? 'Working…' : evt.label}
+                  {isSubmitting ? 'Working…' : evt.label}
                 </MButton>
               </span>
             ))

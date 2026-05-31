@@ -24,6 +24,26 @@ export interface TimeAnomaly {
   message: string
 }
 
+/**
+ * Short uppercase chip labels for each anomaly reason code (design msg_68
+ * shows a labeled chip per flag rather than the raw code). Falls back to
+ * the raw code via `anomalyChipLabel` for any code not mapped here so a
+ * future detector reason still renders.
+ */
+export const ANOMALY_LABELS: Record<TimeAnomalyCode, string> = {
+  overlap: 'OT',
+  excessive: 'EXCESS',
+  zero_negative: 'ZERO',
+  missing_break: 'LUNCH SKIP',
+  clockout_before_photo: 'LATE CLOCK-OUT',
+  geofence: 'OFF-SITE',
+  variance: 'VARIANCE',
+}
+
+export function anomalyChipLabel(code: string): string {
+  return ANOMALY_LABELS[code as TimeAnomalyCode] ?? code.replace(/[_-]+/g, ' ').toUpperCase()
+}
+
 /** Additive per-entry anomaly projection on the snapshot context. */
 export interface EntryAnomalies {
   entry_id: string

@@ -62,6 +62,44 @@ describe('transitionRentalBillingWorkflow', () => {
       transitionRentalBillingWorkflow({ state: 'posted', state_version: 4 }, { type: 'POST_REQUESTED' }),
     ).toThrow('not allowed')
   })
+
+  it('CANCEL_POST moves a wedged posting run to failed with the operator marker', () => {
+    const posting = { state: 'posting' as const, state_version: 3, approved_by: 'office-user' }
+    const failed = transitionRentalBillingWorkflow(posting, {
+      type: 'CANCEL_POST',
+      failed_at: '2026-04-29T10:05:00.000Z',
+      error: 'Push canceled by office-user',
+    })
+    expect(failed).toMatchObject({
+      state: 'failed',
+      state_version: 4,
+      failed_at: '2026-04-29T10:05:00.000Z',
+      error: 'Push canceled by office-user',
+      approved_by: 'office-user',
+    })
+  })
+
+  it('CANCEL_POST is illegal from every non-posting state', () => {
+    for (const state of ['generated', 'approved', 'failed', 'posted', 'voided'] as const) {
+      expect(() =>
+        transitionRentalBillingWorkflow(
+          { state, state_version: 1 },
+          { type: 'CANCEL_POST', failed_at: '2026-04-29T10:05:00.000Z', error: 'x' },
+        ),
+      ).toThrow('not allowed')
+    }
+  })
+
+  it('CANCEL_POST → failed then RETRY_POST returns to approved (composes with existing affordances)', () => {
+    const posting = { state: 'posting' as const, state_version: 3 }
+    const failed = transitionRentalBillingWorkflow(posting, {
+      type: 'CANCEL_POST',
+      failed_at: '2026-04-29T10:05:00.000Z',
+      error: 'canceled',
+    })
+    const retried = transitionRentalBillingWorkflow(failed, { type: 'RETRY_POST' })
+    expect(retried).toMatchObject({ state: 'approved', error: null, failed_at: null })
+  })
 })
 
 describe('nextRentalBillingEvents', () => {
@@ -86,8 +124,8 @@ describe('nextRentalBillingEvents', () => {
         .sort(),
     ).toEqual(['RETRY_POST', 'VOID'])
   })
-  it('exposes nothing from posting (worker is acting)', () => {
-    expect(nextRentalBillingEvents('posting')).toEqual([])
+  it('exposes the CANCEL_POST escape hatch from posting', () => {
+    expect(nextRentalBillingEvents('posting').map((e) => e.type)).toEqual(['CANCEL_POST'])
   })
   it('exposes nothing from posted/voided terminal states', () => {
     expect(nextRentalBillingEvents('posted')).toEqual([])
@@ -100,6 +138,7 @@ describe('isHumanRentalBillingEvent', () => {
     expect(isHumanRentalBillingEvent('APPROVE')).toBe(true)
     expect(isHumanRentalBillingEvent('POST_REQUESTED')).toBe(true)
     expect(isHumanRentalBillingEvent('RETRY_POST')).toBe(true)
+    expect(isHumanRentalBillingEvent('CANCEL_POST')).toBe(true)
     expect(isHumanRentalBillingEvent('VOID')).toBe(true)
   })
   it('rejects worker-only events', () => {
@@ -117,6 +156,13 @@ describe('parseRentalBillingEventRequest', () => {
     expect(result.ok).toBe(true)
     if (result.ok) {
       expect(result.value).toEqual({ event: 'APPROVE', state_version: 1 })
+    }
+  })
+  it('accepts a well-formed CANCEL_POST request', () => {
+    const result = parseRentalBillingEventRequest({ event: 'CANCEL_POST', state_version: 3 })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.value).toEqual({ event: 'CANCEL_POST', state_version: 3 })
     }
   })
   it('accepts state_version as a numeric string from offline-replay paths', () => {

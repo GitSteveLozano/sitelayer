@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { Pool } from 'pg'
 import type pino from 'pino'
+import {
+  nextProjectLifecycleEvents,
+  PROJECT_LIFECYCLE_ALL_STATES,
+  type ProjectLifecycleWorkflowState,
+} from '@sitelayer/workflows'
 import { attachMutationTx } from '../mutation-tx.js'
 import { handleProjectLifecycleRoutes, type ProjectLifecycleRouteCtx } from './project-lifecycle.js'
 
@@ -293,4 +298,31 @@ describe('handleProjectLifecycleRoutes — POST /api/projects/:id/lifecycle/even
     expect(responses[0]?.status).toBe(409)
     expect(pool.outbox).toHaveLength(0)
   })
+})
+
+describe('handleProjectLifecycleRoutes — GET /api/projects/:id/lifecycle next_events', () => {
+  // Gap 5 guard: the GET snapshot's next_events must be exactly what the
+  // registered nextProjectLifecycleEvents selector returns for every state —
+  // proving the route no longer hand-copies a divergent table (the old
+  // private workflowNextEvents dropped disabled_reason and was typed as
+  // string).
+  it.each(PROJECT_LIFECYCLE_ALL_STATES as readonly ProjectLifecycleWorkflowState[])(
+    'state %s → next_events deep-equals the registered selector',
+    async (state) => {
+      const pool = new FakePool()
+      seedProject(pool, { lifecycle_state: state })
+      const { ctx, responses } = makeCtx(pool, {})
+
+      const handled = await handleProjectLifecycleRoutes(
+        { method: 'GET' } as never,
+        buildUrl('/api/projects/11111111-1111-4111-8111-111111111111/lifecycle'),
+        ctx,
+      )
+      expect(handled).toBe(true)
+      expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+      const body = responses[0]?.body as { state: string; next_events: unknown }
+      expect(body.state).toBe(state)
+      expect(body.next_events).toEqual(nextProjectLifecycleEvents(state))
+    },
+  )
 })

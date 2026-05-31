@@ -55,6 +55,7 @@ export interface LaborPayrollSnapshot {
     time_review_run_id: string | null
     workflow_engine: string
     workflow_run_id: string | null
+    auto_posted: boolean
     created_at: string
     updated_at: string
   }
@@ -140,20 +141,13 @@ export function useLaborPayrollRun(id: string | null | undefined) {
   })
 }
 
-export function useDispatchLaborPayrollRunEvent(id: string) {
-  const qc = useQueryClient()
-  return useMutation<LaborPayrollSnapshot, Error, { event: LaborPayrollHumanEvent; state_version: number }>({
-    mutationFn: (input) =>
-      request<LaborPayrollSnapshot>(`/api/labor-payroll-runs/${encodeURIComponent(id)}/events`, {
-        method: 'POST',
-        json: input,
-      }),
-    onSuccess: (data) => {
-      qc.setQueryData(KEYS.detail(id), data)
-      qc.invalidateQueries({ queryKey: KEYS.all() })
-    },
-  })
-}
+// NOTE: there is intentionally NO `useDispatchLaborPayrollRunEvent` here.
+// Run-state mutations (APPROVE / POST_REQUESTED / RETRY_POST / VOID) are
+// dispatched ONLY through the `laborPayroll` XState machine
+// (apps/web/src/machines/labor-payroll.ts), which owns the
+// optimistic-state-version token + 409 reconciliation. A second
+// Query-based event-writer would be a split-brain write path that bypasses
+// that reconciliation, so it is deliberately absent.
 
 // ---- payroll exports -------------------------------------------------------
 

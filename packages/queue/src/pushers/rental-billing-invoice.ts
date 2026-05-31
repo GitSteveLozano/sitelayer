@@ -1,3 +1,10 @@
+import {
+  RENTAL_BILLING_WORKFLOW_NAME,
+  RENTAL_BILLING_WORKFLOW_SCHEMA_VERSION,
+  rentalBillingRowToSnapshot,
+  transitionRentalBillingWorkflow,
+  type RentalBillingWorkflowEvent,
+} from '@sitelayer/workflows'
 import { appendWorkflowEvent, markOutboxRowFailedFresh, type QueueClient, type TraceContext } from '../index.js'
 
 // ---------------------------------------------------------------------------
@@ -80,94 +87,74 @@ async function applyWorkerEmittedEvent(
   const current = lockResult.rows[0]
   if (!current) return null
   if (current.status !== 'posting') {
-    // Race: a human VOID landed first, or the run already moved off
-    // 'posting'. Either way the worker must NOT overwrite state — the human
-    // event is authoritative. Return the current row so the caller can mark
-    // the outbox applied without changing state.
+    // Race: a human VOID / CANCEL_POST landed first, or the run already moved
+    // off 'posting'. Either way the worker must NOT overwrite state — the
+    // human event is authoritative. Return the current row so the caller can
+    // mark the outbox applied without changing state.
     return current
   }
   const beforeVersion = current.state_version
-  const nextVersion = beforeVersion + 1
-  if (outcome.kind === 'succeeded') {
-    const postedAt = new Date().toISOString()
-    const updated = await client.query<RentalBillingRunStateRow>(
-      `update rental_billing_runs
-         set status = 'posted',
-             state_version = $3,
-             posted_at = $4,
-             qbo_invoice_id = $5,
-             error = null,
-             failed_at = null,
-             version = version + 1,
-             updated_at = now()
-       where company_id = $1 and id = $2
-       returning id, status, state_version, qbo_invoice_id,
-                 approved_at, approved_by, posted_at, failed_at, error`,
-      [companyId, runId, nextVersion, postedAt, outcome.qbo_invoice_id],
-    )
-    const row = updated.rows[0] ?? null
-    if (row) {
-      await appendWorkflowEvent(client, {
-        companyId,
-        workflowName: 'rental_billing_run',
-        schemaVersion: 1,
-        entityType: 'rental_billing_run',
-        entityId: runId,
-        stateVersion: beforeVersion,
-        eventType: 'POST_SUCCEEDED',
-        eventPayload: { type: 'POST_SUCCEEDED', posted_at: postedAt, qbo_invoice_id: outcome.qbo_invoice_id },
-        snapshotAfter: {
-          state: row.status,
-          state_version: row.state_version,
-          approved_at: row.approved_at,
-          approved_by: row.approved_by,
-          posted_at: row.posted_at,
-          failed_at: row.failed_at,
-          error: row.error,
-          qbo_invoice_id: row.qbo_invoice_id,
-        },
-        ...(trace ? { trace } : {}),
-      })
-    }
-    return row
-  }
-  const failedAt = new Date().toISOString()
-  const errorMessage = outcome.error.slice(0, 1000)
+
+  // Route the worker-emitted transition through the SAME pure reducer the
+  // human event route uses (transitionRentalBillingWorkflow), instead of
+  // hand-writing the posting→posted / posting→failed SQL + state_version
+  // bump. The clock value and QBO id / error string are event PAYLOAD —
+  // the reducer reads them off the event and never calls Date.now(). The
+  // SQL below is now one generic "write this snapshot" UPDATE. This deletes
+  // the worker's independent transition table; divergence from the route is
+  // now impossible because both call the one reducer.
+  const event: RentalBillingWorkflowEvent =
+    outcome.kind === 'succeeded'
+      ? { type: 'POST_SUCCEEDED', posted_at: new Date().toISOString(), qbo_invoice_id: outcome.qbo_invoice_id }
+      : { type: 'POST_FAILED', failed_at: new Date().toISOString(), error: outcome.error.slice(0, 1000) }
+
+  // assertRentalBillingTransition throws if `current` isn't in 'posting'; the
+  // status guard above already prevents that, so a throw here is a real bug
+  // signal that propagates to the per-row catch in
+  // processRentalBillingInvoicePush (which records POST_FAILED + requeues).
+  const nextSnapshot = transitionRentalBillingWorkflow(rentalBillingRowToSnapshot(current), event)
+
   const updated = await client.query<RentalBillingRunStateRow>(
     `update rental_billing_runs
-       set status = 'failed',
-           state_version = $3,
-           failed_at = $4,
-           error = $5,
+       set status = $3,
+           state_version = $4,
+           approved_at = $5,
+           approved_by = $6,
+           posted_at = $7,
+           failed_at = $8,
+           error = $9,
+           qbo_invoice_id = $10,
            version = version + 1,
            updated_at = now()
      where company_id = $1 and id = $2
      returning id, status, state_version, qbo_invoice_id,
                approved_at, approved_by, posted_at, failed_at, error`,
-    [companyId, runId, nextVersion, failedAt, errorMessage],
+    [
+      companyId,
+      runId,
+      nextSnapshot.state,
+      nextSnapshot.state_version,
+      nextSnapshot.approved_at ?? null,
+      nextSnapshot.approved_by ?? null,
+      nextSnapshot.posted_at ?? null,
+      nextSnapshot.failed_at ?? null,
+      nextSnapshot.error ?? null,
+      nextSnapshot.qbo_invoice_id ?? null,
+    ],
   )
   const row = updated.rows[0] ?? null
   if (row) {
     await appendWorkflowEvent(client, {
       companyId,
-      workflowName: 'rental_billing_run',
-      schemaVersion: 1,
+      workflowName: RENTAL_BILLING_WORKFLOW_NAME,
+      schemaVersion: RENTAL_BILLING_WORKFLOW_SCHEMA_VERSION,
       entityType: 'rental_billing_run',
       entityId: runId,
       stateVersion: beforeVersion,
-      eventType: 'POST_FAILED',
-      eventPayload: { type: 'POST_FAILED', failed_at: failedAt, error: errorMessage },
+      eventType: event.type,
+      eventPayload: event as unknown as Record<string, unknown>,
+      snapshotAfter: nextSnapshot as unknown as Record<string, unknown>,
       ...(trace ? { trace } : {}),
-      snapshotAfter: {
-        state: row.status,
-        state_version: row.state_version,
-        approved_at: row.approved_at,
-        approved_by: row.approved_by,
-        posted_at: row.posted_at,
-        failed_at: row.failed_at,
-        error: row.error,
-        qbo_invoice_id: row.qbo_invoice_id,
-      },
     })
   }
   return row

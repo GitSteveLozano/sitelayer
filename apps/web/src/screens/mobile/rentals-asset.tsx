@@ -8,10 +8,21 @@
  * `var(--m-*)` tokens. There is no single-asset endpoint — the asset is
  * located in the inventory list (`useInventoryItems`) by `:assetId`.
  */
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useInventoryItems, type InventoryItem } from '@/lib/api'
-import { MBody, MI, MKpi, MKpiRow, MListInset, MListRow, MPill, MSectionH, MTopBar } from '../../components/m/index.js'
+import {
+  MBody,
+  MButton,
+  MButtonStack,
+  MKpi,
+  MKpiRow,
+  MListInset,
+  MListRow,
+  MPill,
+  MSectionH,
+  MTopBar,
+} from '../../components/m/index.js'
 import { MEmptyState, MSkeletonList } from '../../components/m-states/index.js'
 import { formatMoney } from './format.js'
 
@@ -19,7 +30,6 @@ export function MobileRentalsAsset() {
   const navigate = useNavigate()
   const { assetId } = useParams<{ assetId: string }>()
   const { data, isLoading, error } = useInventoryItems()
-  const [flagged, setFlagged] = useState(false)
 
   const item = useMemo<InventoryItem | undefined>(
     () => data?.inventoryItems.find((i) => i.id === assetId),
@@ -64,6 +74,15 @@ export function MobileRentalsAsset() {
   const dayRate = Number(item.default_rental_rate ?? 0)
   const monogram = (item.code.split(/[-\s]/)[0] || item.code).slice(0, 3).toUpperCase()
 
+  // Dispatch context — there is no /api/dispatch state join yet, so the
+  // day-count is derived from the last movement timestamp (updated_at)
+  // while the asset is out. Renders the design's "OUT · DAY N OF M" pill,
+  // a current-location headline, and a dispatched/due-back detail line.
+  const dispatchedAt = out ? (item.updated_at ?? item.created_at ?? null) : null
+  const daysOut = dispatchedAt ? Math.max(1, daysBetween(dispatchedAt, new Date().toISOString())) : null
+  // Revenue accrued so far on the current dispatch (days_out × day_rate).
+  const revenueToDate = daysOut && dayRate ? daysOut * dayRate : 0
+
   // No movement endpoint is wired for a single asset yet — derive a thin
   // history from what the catalog row carries, else fall through to the
   // empty state. created_at is the only durable timestamp on the item.
@@ -90,6 +109,7 @@ export function MobileRentalsAsset() {
     <>
       <MTopBar back eyebrow={item.code} title={item.description} sub={item.category} onBack={() => navigate(-1)} />
       <MBody>
+        {/* Status pill — day-count when out (msg__70: "OUT · DAY 12 OF 32"). */}
         <div style={{ padding: '14px 16px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
           <span
             className="m-l-leading num"
@@ -99,47 +119,68 @@ export function MobileRentalsAsset() {
             {monogram}
           </span>
           <MPill tone={out ? 'amber' : 'green'} dot>
-            {out ? 'out' : 'in yard'}
+            {out ? (daysOut ? `OUT · DAY ${daysOut}` : 'OUT') : 'IN YARD'}
           </MPill>
-          {flagged ? (
-            <MPill tone="red" dot>
-              flagged
-            </MPill>
+        </div>
+
+        {/* Current-location headline + dispatched/due-back detail line. */}
+        <div style={{ padding: '12px 16px 0' }}>
+          <div
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 800,
+              fontSize: 24,
+              lineHeight: 1.1,
+              letterSpacing: '-0.01em',
+            }}
+          >
+            {out ? 'Currently dispatched.' : 'In the yard.'}
+          </div>
+          {dispatchedAt ? (
+            <div
+              className="num"
+              style={{ marginTop: 8, color: 'var(--m-ink-3)', fontWeight: 600, letterSpacing: '0.04em' }}
+            >
+              DISPATCHED {fmtShort(dispatchedAt)}
+            </div>
           ) : null}
         </div>
 
         <div style={{ padding: '12px 16px 0' }}>
           <MKpiRow cols={2}>
-            <MKpi label="Utilization" value={`${utilizationPct}`} unit="%" meta={out ? 'Deployed' : 'Idle'} />
-            <MKpi label="Day rate" value={formatMoney(dayRate)} meta={`per ${item.unit || 'day'}`} />
+            <MKpi
+              label="Revenue to date"
+              value={formatMoney(revenueToDate)}
+              meta={daysOut ? `${daysOut} days × ${formatMoney(dayRate)}` : `${formatMoney(dayRate)} per ${item.unit || 'day'}`}
+            />
+            <MKpi
+              label="Utilization"
+              value={`${utilizationPct}`}
+              unit="%"
+              meta={out ? 'Deployed' : 'Idle'}
+              metaTone={out ? 'green' : undefined}
+            />
           </MKpiRow>
         </div>
 
+        {/* Quick actions — three full-width stacked CTAs (msg__70). */}
         <MSectionH>Quick actions</MSectionH>
-        <div className="m-qa-grid">
-          <button type="button" className="m-qa" onClick={() => navigate('/rentals/dispatch')}>
-            <span className="m-qa-icon">
-              <MI.Truck size={18} />
-            </span>
-            <span className="m-qa-label">Dispatch</span>
-          </button>
-          <button type="button" className="m-qa" onClick={() => navigate('/rentals/return')}>
-            <span className="m-qa-icon">
-              <MI.Check size={18} />
-            </span>
-            <span className="m-qa-label">Scan / return</span>
-          </button>
-          <button
-            type="button"
-            className="m-qa"
-            onClick={() => setFlagged((f) => !f)}
-            style={flagged ? { color: 'var(--m-red)' } : undefined}
-          >
-            <span className="m-qa-icon">
-              <MI.AlertTri size={18} />
-            </span>
-            <span className="m-qa-label">{flagged ? 'Flagged' : 'Flag for service'}</span>
-          </button>
+        <div style={{ padding: '0 16px' }}>
+          <MButtonStack>
+            <MButton variant="primary" onClick={() => navigate(`/rentals/dispatch?asset=${encodeURIComponent(item.id)}`)}>
+              DISPATCH ELSEWHERE
+            </MButton>
+            <MButton variant="ghost" onClick={() => navigate('/rentals/return')}>
+              RETURN TO YARD
+            </MButton>
+            <MButton
+              variant="ghost"
+              onClick={() => navigate(`/rentals/service/${encodeURIComponent(item.id)}`)}
+              style={{ color: 'var(--m-red)', borderColor: 'var(--m-red)' }}
+            >
+              FLAG FOR SERVICE
+            </MButton>
+          </MButtonStack>
         </div>
 
         <MSectionH>Recent movements</MSectionH>
@@ -171,4 +212,19 @@ function formatDateLabel(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.valueOf())) return iso
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+}
+
+/** Mono short date for the dispatched/due-back detail line, e.g. "4/15". */
+function fmtShort(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.valueOf())) return iso
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
+/** Whole days between two ISO timestamps (>= 0). */
+function daysBetween(fromIso: string, toIso: string): number {
+  const from = new Date(fromIso).valueOf()
+  const to = new Date(toIso).valueOf()
+  if (Number.isNaN(from) || Number.isNaN(to)) return 0
+  return Math.max(0, Math.floor((to - from) / 86_400_000))
 }

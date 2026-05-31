@@ -20,6 +20,15 @@ export { BonusSimulatorScreen } from './bonus-sim'
 export { AuditLogScreen } from './audit-log'
 export { DispatchLanesAdminScreen } from './dispatch-lanes'
 export { NotificationsQueueScreen } from './notifications-queue'
+export {
+  PricingBookScreen,
+  LoadedLaborScreen,
+  WorkingHoursScreen,
+  RolesScreen,
+  CustomRoleScreen,
+  ProfileScreen,
+  HelpScreen,
+} from './owner-settings-mobile'
 
 const ROLE_LABEL: Record<Role, string> = {
   owner: 'Owner / PM',

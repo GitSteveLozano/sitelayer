@@ -1,17 +1,26 @@
 /**
- * Mobile time review entry. Lists pending labor entries grouped by
- * worker for the current company. Per the foreman flow this is the
- * 4:00 PM end-of-day approval surface.
+ * Mobile time review entry — the foreman's 4:00 PM end-of-day approval
+ * surface (design msg_67 / msg_68, "TIME · N PENDING", week-scoped).
  *
- * For Phase 6 we render labor entries from bootstrap that are still
- * pending (status = 'pending' / 'draft' / similar). Approval action
- * shells out to /api/labor-entries/:id PATCH via the existing client.
+ * Headless-first: the run-level decision (sign off / push back) is driven
+ * through the registered `time_review_run` workflow via the `useTimeReview`
+ * XState machine — APPROVE / REJECT / REOPEN are dispatched as run events,
+ * which revives the deterministic lock_labor_entries → labor_payroll chain.
+ * Per-entry clock-in/out/break corrections legitimately stay on
+ * PATCH /api/labor-entries/:id (the inline editor) — a deliberate carve-out
+ * so the workflow doesn't fragment that write path (see the reducer doc in
+ * packages/workflows/src/time-review.ts). When no run exists yet the screen
+ * offers a "Start this week's review" CTA that creates one for the current
+ * review week.
  */
 import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import type { BootstrapResponse, LaborRow, TimeAnomaly } from '@/lib/api'
+import { getActiveCompanySlug } from '@/lib/api/client'
+import { useControlPlaneProbePublish } from '@/lib/control-plane-probe-pub'
+import { useTimeReview } from '@/machines/time-review'
 import { usePatchLaborEntry } from '../../lib/api/labor-entries.js'
-import { useTimeReviewRun, useTimeReviewRuns } from '../../lib/api/time-review.js'
+import { anomalyChipLabel, useCreateTimeReviewRun, useTimeReviewRuns } from '../../lib/api/time-review.js'
 import {
   MAiStripe,
   MAvatar,
@@ -19,6 +28,8 @@ import {
   MBody,
   MButton,
   MButtonRow,
+  MChip,
+  MChipRow,
   MI,
   MInput,
   MKpi,
@@ -33,52 +44,39 @@ import {
   initialsFor,
 } from '../../components/m/index.js'
 import { MEmptyState } from '../../components/m-states/index.js'
-import { formatDecimalHours, formatMoney, timeOfDay, todayIso } from './format.js'
+import { endOfWeek, formatDecimalHours, formatMoney, shortDate, startOfWeek, timeOfDay } from './format.js'
 
 export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const justCreated = searchParams.get('created') === '1'
+  const companySlug = getActiveCompanySlug()
   const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
   const workers = useMemo(() => bootstrap?.workers ?? [], [bootstrap?.workers])
   const projects = useMemo(() => bootstrap?.projects ?? [], [bootstrap?.projects])
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  // Segmented entry-list filter (design msg_67/msg_68): ALL · n, FLAGGED · n,
+  // PER PROJECT (groups the pending rows under a per-project section header).
+  const [listFilter, setListFilter] = useState<'all' | 'flagged' | 'per-project'>('all')
   // Optimistic in-memory edits per labor row. The real /api/labor-entries
-  // PATCH route would receive these on Approve/Adjust; we surface them
-  // here so the inline editor works against the bootstrap state without
-  // forcing a refetch when the foreman is reviewing offline.
+  // PATCH route receives these on the inline editor's Save; we surface them
+  // here so the editor works against the bootstrap state without forcing a
+  // refetch while the foreman is reviewing offline.
   const [edits, setEdits] = useState<Record<string, { in?: string; out?: string; break?: string; note?: string }>>({})
 
-  // Per-row PATCH /api/labor-entries/:id. TanStack mutation (not XState)
-  // matches the codebase convention from CLAUDE.md: data/cache layer is
-  // TanStack, XState is reserved for multi-step orchestration. The hook
-  // invalidates bootstrap + time-review-runs so the row moves from
-  // Pending → Approved without a manual refresh.
+  // Per-row PATCH /api/labor-entries/:id stays on TanStack — it's the
+  // legitimate clock-time correction write path (not the run decision).
   const patchLabor = usePatchLaborEntry()
   const pendingRowId = patchLabor.isPending ? (patchLabor.variables?.id ?? null) : null
 
-  const today = todayIso()
-  const todayLabor = useMemo(() => labor.filter((l) => l.occurred_on === today && !l.deleted_at), [labor, today])
+  // The review week (Monday-anchored) — the design header is "WEEK · …".
+  const weekStart = useMemo(() => startOfWeek(), [])
+  const weekEnd = useMemo(() => endOfWeek(), [])
 
-  const pending = useMemo(() => todayLabor.filter((l) => isPending(l.status)), [todayLabor])
-  const approved = useMemo(() => todayLabor.filter((l) => isApproved(l.status)), [todayLabor])
-
-  const totalHours = todayLabor.reduce((sum, l) => sum + Number(l.hours ?? 0), 0)
-  const laborCost = todayLabor.reduce((sum, l) => {
-    const project = projects.find((p) => p.id === l.project_id)
-    const rate = Number(project?.labor_rate ?? 0)
-    return sum + Number(l.hours ?? 0) * rate
-  }, 0)
-
-  // Deterministic, multi-signal anomaly detection now runs server-side
-  // (apps/api/src/lib/time-anomalies.ts) and rides the time-review-run
-  // snapshot as a per-entry `anomalies: [{ code, message }]` projection.
-  // We latch onto the most recent pending run for the current company,
-  // fetch its snapshot, and map each flagged entry_id back to the
-  // bootstrap labor row + worker so the stripe can list the specific
-  // entries and their reason messages. No run yet → empty list (the
-  // stripe simply doesn't render).
-  const [aiDismissed, setAiDismissed] = useState(false)
+  // Latch onto the most recent pending run for the current company (one
+  // exists once "Start this week's review" has been tapped, or it was
+  // created out-of-band). Selecting it mounts the headless workflow machine.
+  const [activeRunId, setActiveRunId] = useState<string | null>(null)
   const pendingRuns = useTimeReviewRuns({ state: 'pending' })
   const latestRunId = useMemo(() => {
     const runs = pendingRuns.data?.timeReviewRuns ?? []
@@ -87,14 +85,57 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
     const flagged = runs.find((r) => r.anomaly_count > 0)
     return (flagged ?? runs[0])?.id ?? null
   }, [pendingRuns.data])
-  const runSnapshot = useTimeReviewRun(latestRunId)
+  const runId = activeRunId ?? latestRunId ?? ''
 
-  // Per-entry anomalies from the snapshot, joined to the labor row + worker
-  // name we already have in bootstrap. Entries not in this run (or whose
-  // ids don't match a bootstrap row) still render with a generic label.
+  // Headless workflow machine — owns the request lifecycle, optimistic
+  // concurrency (state_version), and the 409 → refresh / outOfSync handling.
+  const tr = useTimeReview(runId, companySlug)
+  // Publish the run state into the control-plane probe (capture modal folds
+  // page_state.time_review_state), mirroring billing-run-detail.tsx.
+  useControlPlaneProbePublish('timeReviewState', tr.snapshot?.state ?? null)
+
+  const createRun = useCreateTimeReviewRun()
+  const handleStartReview = () => {
+    if (createRun.isPending) return
+    createRun.mutate(
+      { period_start: weekStart, period_end: weekEnd },
+      { onSuccess: (snapshot) => setActiveRunId(snapshot.context.id) },
+    )
+  }
+
+  // Display window: the run's covered period if we have a snapshot, else
+  // the computed review week. The labor list is keyed off covered_entry_ids
+  // (the headless source of truth for which entries the run covers); before
+  // a run exists we fall back to the week-window date filter.
+  const ctx = tr.snapshot?.context
+  const coveredIds = useMemo(() => new Set(ctx?.covered_entry_ids ?? []), [ctx?.covered_entry_ids])
+  const periodStart = ctx?.period_start ?? weekStart
+  const periodEnd = ctx?.period_end ?? weekEnd
+
+  const weekLabor = useMemo(() => {
+    if (coveredIds.size > 0) return labor.filter((l) => coveredIds.has(l.id) && !l.deleted_at)
+    return labor.filter((l) => !l.deleted_at && l.occurred_on >= periodStart && l.occurred_on <= periodEnd)
+  }, [labor, coveredIds, periodStart, periodEnd])
+
+  const pending = useMemo(() => weekLabor.filter((l) => isPending(l.status)), [weekLabor])
+  const approved = useMemo(() => weekLabor.filter((l) => isApproved(l.status)), [weekLabor])
+
+  const totalHours = weekLabor.reduce((sum, l) => sum + Number(l.hours ?? 0), 0)
+  const laborCost = weekLabor.reduce((sum, l) => {
+    const project = projects.find((p) => p.id === l.project_id)
+    const rate = Number(project?.labor_rate ?? 0)
+    return sum + Number(l.hours ?? 0) * rate
+  }, 0)
+
+  // Deterministic, multi-signal anomaly detection runs server-side
+  // (apps/api/src/lib/time-anomalies.ts) and rides the run snapshot as a
+  // per-entry `anomalies: [{ code, message }]` projection. Map each flagged
+  // entry_id back to the bootstrap labor row + worker name.
+  const [aiDismissed, setAiDismissed] = useState(false)
+
   type FlaggedEntry = { entryId: string; name: string; hours: number; anomalies: TimeAnomaly[] }
   const flaggedEntries = useMemo<FlaggedEntry[]>(() => {
-    const entryAnomalies = runSnapshot.data?.context.anomalies ?? []
+    const entryAnomalies = ctx?.anomalies ?? []
     return entryAnomalies
       .filter((ea) => ea.anomalies.length > 0)
       .map((ea) => {
@@ -107,52 +148,51 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
           anomalies: ea.anomalies,
         }
       })
-  }, [runSnapshot.data, labor, workers])
+  }, [ctx?.anomalies, labor, workers])
 
-  // Approve-all: walk every pending entry through the same per-row PATCH
-  // the inline editor uses, applying any inline edits the foreman already
-  // made. Per the design this is the full-width primary action; the
-  // foreman is the only approver and one tap signs off the crew's day.
-  const [isApprovingAll, setIsApprovingAll] = useState(false)
-  const [approveAllError, setApproveAllError] = useState<string | null>(null)
-  const handleApproveAll = async () => {
-    if (pending.length === 0 || isApprovingAll) return
-    setIsApprovingAll(true)
-    setApproveAllError(null)
-    try {
-      for (const l of pending) {
-        const e = edits[l.id]
-        const patch: { status: 'approved'; hours?: number } = { status: 'approved' }
-        const adjustedHours = adjustedHoursFromEdit(l, e)
-        if (adjustedHours !== null) patch.hours = adjustedHours
-        await patchLabor.mutateAsync({ id: l.id, patch })
-      }
-      setExpandedId(null)
-      setEdits({})
-    } catch (err) {
-      setApproveAllError(err instanceof Error ? err.message : 'Some entries could not be approved')
-    } finally {
-      setIsApprovingAll(false)
-    }
-  }
-
-  // Per-entry flag set so each crew week row can carry a square anomaly
-  // chip without re-deriving anomalies. Same data source as the AI stripe.
+  // Per-entry flag set so each crew week row can carry its anomaly chips
+  // without re-deriving. Same data source as the AI stripe.
   const flaggedById = useMemo(() => {
     const map = new Map<string, TimeAnomaly[]>()
     for (const fe of flaggedEntries) map.set(fe.entryId, fe.anomalies)
     return map
   }, [flaggedEntries])
 
-  // APPROVE ALL CLEAN: the v2 primary CTA only signs off the entries with
-  // no anomaly flag. Flagged entries stay in the queue for a closer look.
-  const cleanPending = useMemo(() => pending.filter((l) => !flaggedById.has(l.id)), [pending, flaggedById])
+  // Pending rows scoped to the active filter chip. FLAGGED keeps only rows
+  // carrying anomalies; ALL / PER PROJECT show the full pending set (PER
+  // PROJECT just changes how the list is grouped, below).
+  const filteredPending = useMemo(() => {
+    if (listFilter === 'flagged') return pending.filter((l) => (flaggedById.get(l.id)?.length ?? 0) > 0)
+    return pending
+  }, [pending, listFilter, flaggedById])
+
+  // PER PROJECT view: group the filtered pending rows under a project header.
+  const pendingByProject = useMemo(() => {
+    const groups = new Map<string, { name: string; rows: typeof pending }>()
+    for (const l of filteredPending) {
+      const name = projects.find((p) => p.id === l.project_id)?.name ?? 'Unknown project'
+      const cur = groups.get(l.project_id) ?? { name, rows: [] }
+      cur.rows.push(l)
+      groups.set(l.project_id, cur)
+    }
+    return Array.from(groups.values()).sort((a, b) => a.name.localeCompare(b.name))
+  }, [filteredPending, projects])
+
+  // Any pending row carrying more than one anomaly drives the msg_68
+  // "multi-flag stack" banner above the list.
+  const hasMultiFlagRow = useMemo(
+    () => pending.some((l) => (flaggedById.get(l.id)?.length ?? 0) > 1),
+    [pending, flaggedById],
+  )
+
+  const weekRangeLabel = `${shortDate(periodStart)} → ${shortDate(periodEnd)}`
+  const hasRun = Boolean(tr.snapshot)
 
   return (
     <>
       <MTopBar
         title="Time"
-        sub={today}
+        sub={`Week · ${weekRangeLabel}`}
         actionLabel="Add entry"
         actionIcon={<MI.Plus size={20} />}
         onAction={() => navigate('/time/new')}
@@ -209,13 +249,42 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
             {pending.length} pending
           </div>
         </div>
-        {todayLabor.length === 0 ? (
+        {weekLabor.length === 0 ? (
           <MEmptyState
-            title="No hours yet today"
+            title="No hours this week"
             body="Crew clock-ins land here as they happen. End-of-day approvals roll up at 4:00 PM."
+            {...(!hasRun
+              ? {
+                  primaryLabel: createRun.isPending ? 'Starting…' : "Start this week's review",
+                  onPrimary: handleStartReview,
+                }
+              : {})}
           />
         ) : (
           <>
+            {tr.outOfSync ? (
+              <div style={{ padding: '8px 16px 0' }}>
+                <MBanner
+                  tone="warn"
+                  title="Run state moved on the server"
+                  body="Reloaded — pick the next action again."
+                />
+              </div>
+            ) : null}
+            {tr.error && !tr.outOfSync ? (
+              <div style={{ padding: '8px 16px 0' }}>
+                <MBanner
+                  tone="error"
+                  title="Couldn't update the review"
+                  body={tr.error}
+                  action={
+                    <MButton size="sm" variant="ghost" onClick={tr.dismissError}>
+                      Dismiss
+                    </MButton>
+                  }
+                />
+              </div>
+            ) : null}
             <MKpiRow cols={2}>
               <MKpi label="Approved" value={String(approved.length)} meta="ready for payroll" metaTone="green" />
               <MKpi
@@ -225,6 +294,34 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
                 metaTone={pending.length > 0 ? 'amber' : undefined}
               />
             </MKpiRow>
+            {/* Segmented filter chips (design msg_67/msg_68): ALL / FLAGGED /
+                PER PROJECT scope the pending entry list below. */}
+            <MChipRow>
+              <MChip active={listFilter === 'all'} onClick={() => setListFilter('all')} count={pending.length}>
+                All
+              </MChip>
+              <MChip
+                active={listFilter === 'flagged'}
+                onClick={() => setListFilter('flagged')}
+                count={pending.filter((l) => (flaggedById.get(l.id)?.length ?? 0) > 0).length}
+              >
+                Flagged
+              </MChip>
+              <MChip active={listFilter === 'per-project'} outline onClick={() => setListFilter('per-project')}>
+                Per project
+              </MChip>
+            </MChipRow>
+            {/* Multi-flag stack banner (design msg_68) — surfaced when any row
+                carries more than one anomaly, prompting per-flag resolution. */}
+            {hasMultiFlagRow ? (
+              <div style={{ padding: '4px 16px 0' }}>
+                <MBanner
+                  tone="warn"
+                  title="Multi-flag stack"
+                  body="Tap a row with stacked flags to resolve each one."
+                />
+              </div>
+            ) : null}
             {flaggedEntries.length > 0 && !aiDismissed ? (
               <div style={{ padding: '4px 16px 0' }}>
                 <MAiStripe
@@ -273,107 +370,133 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
                 </MAiStripe>
               </div>
             ) : null}
-            {pending.length > 0 ? (
-              <>
-                <MSectionH>Crew week · pending</MSectionH>
-                <MListInset>
-                  {pending.map((l) => {
-                    const w = workers.find((x) => x.id === l.worker_id)
-                    const p = projects.find((x) => x.id === l.project_id)
-                    const isExpanded = expandedId === l.id
-                    const rowFlags = flaggedById.get(l.id) ?? []
-                    return (
-                      <div key={l.id}>
-                        <MListRow
-                          leading={
-                            w ? (
-                              <MAvatar initials={initialsFor(w.name)} tone={avatarToneFor(w.id)} size="sm" />
-                            ) : (
-                              <MI.Users size={18} />
-                            )
-                          }
-                          headline={w?.name ?? 'Unassigned'}
-                          supporting={
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                              <span>{`${p?.name ?? 'Unknown project'} · ${l.service_item_code ?? ''}`}</span>
-                              {/* Square anomaly flag chip — v2 brutalist: no
-                                  border-radius, mono uppercase, red fill. */}
-                              {rowFlags.length > 0 ? (
-                                <span
-                                  style={{
-                                    padding: '2px 6px',
-                                    borderRadius: 0,
-                                    background: 'var(--m-red)',
-                                    color: 'var(--m-card)',
-                                    fontFamily: 'var(--m-num)',
-                                    fontSize: 9,
-                                    fontWeight: 700,
-                                    letterSpacing: '0.06em',
-                                    textTransform: 'uppercase',
-                                  }}
-                                >
-                                  {rowFlags[0]?.code ?? 'Flag'}
-                                  {rowFlags.length > 1 ? ` +${rowFlags.length - 1}` : ''}
-                                </span>
-                              ) : null}
+            {(() => {
+              // Shared pending-row renderer so the flat (ALL / FLAGGED) and
+              // grouped (PER PROJECT) views stay in lockstep.
+              const renderRow = (l: (typeof pending)[number]) => {
+                const w = workers.find((x) => x.id === l.worker_id)
+                const p = projects.find((x) => x.id === l.project_id)
+                const isExpanded = expandedId === l.id
+                const rowFlags = flaggedById.get(l.id) ?? []
+                return (
+                  <div key={l.id}>
+                    <MListRow
+                      leading={
+                        w ? (
+                          <MAvatar initials={initialsFor(w.name)} tone={avatarToneFor(w.id)} size="sm" />
+                        ) : (
+                          <MI.Users size={18} />
+                        )
+                      }
+                      headline={w?.name ?? 'Unassigned'}
+                      supporting={
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                          <span>{`${p?.name ?? 'Unknown project'} · ${l.service_item_code ?? ''}`}</span>
+                          {/* Full anomaly flag stack — one square mono chip
+                              per anomaly (design msg_68), not a single
+                              chip + "+N" collapse. */}
+                          {rowFlags.map((a, i) => (
+                            <span
+                              key={`${l.id}-${a.code}-${i}`}
+                              style={{
+                                padding: '2px 6px',
+                                borderRadius: 0,
+                                background: 'var(--m-red)',
+                                color: 'var(--m-card)',
+                                fontFamily: 'var(--m-num)',
+                                fontSize: 9,
+                                fontWeight: 700,
+                                letterSpacing: '0.06em',
+                                textTransform: 'uppercase',
+                              }}
+                            >
+                              {anomalyChipLabel(a.code)}
                             </span>
+                          ))}
+                        </span>
+                      }
+                      trailing={<span className="num">{formatDecimalHours(Number(l.hours ?? 0), 1)}</span>}
+                      chev
+                      onTap={() => setExpandedId(isExpanded ? null : l.id)}
+                    />
+                    {isExpanded ? (
+                      <PendingInlineEditor
+                        labor={l}
+                        edit={edits[l.id] ?? {}}
+                        isSubmitting={pendingRowId === l.id}
+                        error={patchLabor.error && pendingRowId === null ? patchLabor.error.message : null}
+                        multiFlag={rowFlags.length > 1}
+                        onEdit={(patch) => setEdits((cur) => ({ ...cur, [l.id]: { ...(cur[l.id] ?? {}), ...patch } }))}
+                        onSave={async () => {
+                          // Inline clock-time correction — the deliberate
+                          // carve-out that stays on PATCH /api/labor-entries.
+                          // The run-level sign-off is the footer APPROVE.
+                          const e = edits[l.id]
+                          const patch: { hours?: number } = {}
+                          const adjustedHours = adjustedHoursFromEdit(l, e)
+                          if (adjustedHours !== null) patch.hours = adjustedHours
+                          if (Object.keys(patch).length === 0) {
+                            setExpandedId(null)
+                            return
                           }
-                          trailing={<span className="num">{formatDecimalHours(Number(l.hours ?? 0), 1)}</span>}
-                          chev
-                          onTap={() => setExpandedId(isExpanded ? null : l.id)}
-                        />
-                        {isExpanded ? (
-                          <PendingInlineEditor
-                            labor={l}
-                            edit={edits[l.id] ?? {}}
-                            isSubmitting={pendingRowId === l.id}
-                            error={patchLabor.error && pendingRowId === null ? patchLabor.error.message : null}
-                            onEdit={(patch) =>
-                              setEdits((cur) => ({ ...cur, [l.id]: { ...(cur[l.id] ?? {}), ...patch } }))
-                            }
-                            onApprove={async () => {
-                              const e = edits[l.id]
-                              const patch: { status: 'approved'; hours?: number } = { status: 'approved' }
-                              const adjustedHours = adjustedHoursFromEdit(l, e)
-                              if (adjustedHours !== null) patch.hours = adjustedHours
-                              try {
-                                await patchLabor.mutateAsync({ id: l.id, patch })
-                                setExpandedId(null)
-                                setEdits((cur) => {
-                                  const next = { ...cur }
-                                  delete next[l.id]
-                                  return next
-                                })
-                              } catch {
-                                // patchLabor.error renders inline; keep the
-                                // editor open so the foreman can retry or
-                                // adjust.
-                              }
-                            }}
-                            onReject={async () => {
-                              try {
-                                await patchLabor.mutateAsync({ id: l.id, patch: { status: 'rejected' } })
-                                setExpandedId(null)
-                                setEdits((cur) => {
-                                  const next = { ...cur }
-                                  delete next[l.id]
-                                  return next
-                                })
-                              } catch {
-                                // see above
-                              }
-                            }}
-                          />
-                        ) : null}
+                          try {
+                            await patchLabor.mutateAsync({ id: l.id, patch })
+                            setExpandedId(null)
+                            setEdits((cur) => {
+                              const next = { ...cur }
+                              delete next[l.id]
+                              return next
+                            })
+                          } catch {
+                            // patchLabor.error renders inline; keep the
+                            // editor open so the foreman can retry.
+                          }
+                        }}
+                      />
+                    ) : null}
+                  </div>
+                )
+              }
+
+              if (filteredPending.length === 0) {
+                // Pending rows exist but the active filter hid them all
+                // (e.g. FLAGGED with no flagged rows) — keep the section quiet.
+                if (pending.length === 0) return null
+                return (
+                  <>
+                    <MSectionH>Crew week · pending</MSectionH>
+                    <div className="m-quiet-sm" style={{ padding: '0 16px 8px' }}>
+                      No {listFilter === 'flagged' ? 'flagged ' : ''}entries in this view.
+                    </div>
+                  </>
+                )
+              }
+
+              if (listFilter === 'per-project') {
+                return (
+                  <>
+                    {pendingByProject.map((g) => (
+                      <div key={g.name}>
+                        <MSectionH>{g.name}</MSectionH>
+                        <MListInset>{g.rows.map(renderRow)}</MListInset>
                       </div>
-                    )
-                  })}
-                </MListInset>
-              </>
-            ) : null}
+                    ))}
+                  </>
+                )
+              }
+
+              return (
+                <>
+                  <MSectionH>
+                    {listFilter === 'flagged' ? 'Crew week · flagged' : 'Crew week · pending'}
+                  </MSectionH>
+                  <MListInset>{filteredPending.map(renderRow)}</MListInset>
+                </>
+              )
+            })()}
             {approved.length > 0 ? (
               <>
-                <MSectionH>Approved today</MSectionH>
+                <MSectionH>Approved this week</MSectionH>
                 <MListInset>
                   {approved.slice(0, 8).map((l) => {
                     const w = workers.find((x) => x.id === l.worker_id)
@@ -400,33 +523,63 @@ export function MobileTimeReview({ bootstrap }: { bootstrap: BootstrapResponse |
                 </MListInset>
               </>
             ) : null}
-            {pending.length > 0 ? (
-              <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-                {approveAllError ? (
-                  <MBanner
-                    tone="error"
-                    title="Couldn't approve everyone"
-                    body={approveAllError}
-                    action={
-                      <MButton size="sm" variant="ghost" onClick={() => setApproveAllError(null)}>
-                        Dismiss
-                      </MButton>
-                    }
-                  />
-                ) : null}
+            {/* Footer: run-level decision driven off the workflow snapshot's
+                next_events (do NOT hand-roll the button list). When no run
+                exists yet, offer the create CTA so a snapshot exists to act
+                on. */}
+            <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {!hasRun ? (
+                <MButton variant="primary" onClick={handleStartReview} disabled={createRun.isPending}>
+                  {createRun.isPending ? 'Starting…' : "Start this week's review"}
+                </MButton>
+              ) : (
+                tr.snapshot!.next_events.map((ev) => {
+                  const isApproveAll = ev.type === 'APPROVE'
+                  const label = isApproveAll ? `Approve all clean · ${pending.length}` : ev.label
+                  return (
+                    <MButton
+                      key={ev.type}
+                      variant={isApproveAll ? 'primary' : 'ghost'}
+                      disabled={tr.isSubmitting}
+                      aria-disabled={tr.isSubmitting}
+                      onClick={() => {
+                        if (ev.type === 'APPROVE') {
+                          tr.dispatch({ event: 'APPROVE' })
+                        } else {
+                          // REJECT / REOPEN require a reason at the wire schema.
+                          const reason =
+                            typeof window !== 'undefined'
+                              ? (window.prompt(`${ev.label} — add a reason`) ?? '')
+                              : 'flagged for correction'
+                          if (reason.trim().length === 0) return
+                          tr.dispatch({ event: ev.type as 'REJECT' | 'REOPEN', reason })
+                        }
+                      }}
+                    >
+                      {tr.isSubmitting ? 'Working…' : label}
+                    </MButton>
+                  )
+                })
+              )}
+              {/* Design msg_67 pairs "REVIEW FLAGGED" (outline) with the
+                  "APPROVE ALL CLEAN" primary — flips the list to the flagged
+                  filter and opens the first flagged row for correction. */}
+              {flaggedEntries.length > 0 ? (
                 <MButton
-                  variant="primary"
-                  onClick={() => void handleApproveAll()}
-                  disabled={isApprovingAll || patchLabor.isPending}
-                  aria-disabled={isApprovingAll || patchLabor.isPending}
+                  variant="ghost"
+                  onClick={() => {
+                    setListFilter('flagged')
+                    const first = filteredPending.find((l) => (flaggedById.get(l.id)?.length ?? 0) > 0) ?? null
+                    if (first) setExpandedId(first.id)
+                  }}
                 >
-                  {isApprovingAll ? 'Approving…' : `Approve all clean · ${cleanPending.length}`}
+                  Review flagged · {flaggedEntries.length}
                 </MButton>
-                <MButton variant="ghost" onClick={() => navigate('/clock')}>
-                  Review on desktop
-                </MButton>
-              </div>
-            ) : null}
+              ) : null}
+              <MButton variant="ghost" onClick={() => navigate('/clock')}>
+                Review on desktop
+              </MButton>
+            </div>
           </>
         )}
       </MBody>
@@ -439,23 +592,26 @@ function PendingInlineEditor({
   edit,
   isSubmitting,
   error,
+  multiFlag,
   onEdit,
-  onApprove,
-  onReject,
+  onSave,
 }: {
   labor: LaborRow
   edit: { in?: string; out?: string; break?: string; note?: string }
   isSubmitting: boolean
   error: string | null
+  multiFlag: boolean
   onEdit: (patch: { in?: string; out?: string; break?: string; note?: string }) => void
-  onApprove: () => void | Promise<void>
-  onReject: () => void | Promise<void>
+  onSave: () => void | Promise<void>
 }) {
   const autoDetected = labor.status === 'submitted' || labor.status === 'pending'
   const inTime = edit.in ?? guessInTime(labor)
   const outTime = edit.out ?? guessOutTime(labor)
   return (
     <div style={{ padding: '4px 16px 14px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {multiFlag ? (
+        <div className="m-quiet-sm">Multi-flag stack — review each one before the run is approved.</div>
+      ) : null}
       <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <span className="m-quiet-sm" style={{ width: 60 }}>
           Clock in
@@ -493,14 +649,8 @@ function PendingInlineEditor({
       />
       {error ? <MBanner tone="error" title="Couldn't update" body={error} /> : null}
       <MButtonRow>
-        <MButton size="sm" variant="primary" onClick={() => void onApprove()} disabled={isSubmitting}>
-          {isSubmitting ? 'Saving…' : 'Approve'}
-        </MButton>
-        <MButton size="sm" variant="ghost" onClick={() => void onApprove()} disabled={isSubmitting}>
-          Adjust
-        </MButton>
-        <MButton size="sm" variant="ghost" onClick={() => void onReject()} disabled={isSubmitting}>
-          Reject
+        <MButton size="sm" variant="primary" onClick={() => void onSave()} disabled={isSubmitting}>
+          {isSubmitting ? 'Saving…' : 'Save correction'}
         </MButton>
       </MButtonRow>
     </div>

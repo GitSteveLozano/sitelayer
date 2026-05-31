@@ -38,6 +38,11 @@ const HUMAN_EVENT_GENERATORS: Array<fc.Arbitrary<RentalBillingWorkflowEvent>> = 
   }),
   fc.constant<RentalBillingWorkflowEvent>({ type: 'POST_REQUESTED' }),
   fc.constant<RentalBillingWorkflowEvent>({ type: 'RETRY_POST' }),
+  fc.record({
+    type: fc.constant('CANCEL_POST' as const),
+    failed_at: fc.constant('2026-04-29T00:05:00.000Z'),
+    error: fc.string({ maxLength: 64 }),
+  }),
   fc.constant<RentalBillingWorkflowEvent>({ type: 'VOID' }),
 ]
 
@@ -121,7 +126,13 @@ describe('rental-billing reducer — property invariants', () => {
   })
 
   it('isHumanEvent and worker-only events partition the event set', () => {
-    const allEventTypes: RentalBillingHumanEventType[] = ['APPROVE', 'POST_REQUESTED', 'RETRY_POST', 'VOID']
+    const allEventTypes: RentalBillingHumanEventType[] = [
+      'APPROVE',
+      'POST_REQUESTED',
+      'RETRY_POST',
+      'CANCEL_POST',
+      'VOID',
+    ]
     const workerOnly = ['POST_SUCCEEDED', 'POST_FAILED']
     for (const t of allEventTypes) expect(rentalBillingWorkflow.isHumanEvent(t)).toBe(true)
     for (const t of workerOnly) expect(rentalBillingWorkflow.isHumanEvent(t)).toBe(false)
@@ -141,12 +152,15 @@ describe('rental-billing reducer — property invariants', () => {
     )
   })
 
-  it('every non-terminal state offers at least one human event', () => {
+  it('every non-terminal state offers at least one human event (incl. posting escape hatch)', () => {
     for (const state of RENTAL_BILLING_ALL_STATES) {
       const events = rentalBillingWorkflow.nextEvents(state)
-      if (RENTAL_BILLING_TERMINAL_STATES.includes(state) || state === 'posting') {
+      if (RENTAL_BILLING_TERMINAL_STATES.includes(state)) {
+        // posted / voided are terminal — no affordance.
         expect(events).toEqual([])
       } else {
+        // generated/approved/failed offer their actions; posting now offers
+        // the CANCEL_POST escape hatch instead of being a dead end.
         expect(events.length).toBeGreaterThan(0)
       }
     }
@@ -157,10 +171,14 @@ describe('rental-billing reducer — property invariants', () => {
       const events = rentalBillingWorkflow.nextEvents(state)
       for (const next of events) {
         const snap = emptySnapshot(state, 1)
-        const event: RentalBillingWorkflowEvent =
-          next.type === 'APPROVE'
-            ? { type: 'APPROVE', approved_at: '2026-04-29T00:00:00.000Z', approved_by: 'tester' }
-            : { type: next.type }
+        let event: RentalBillingWorkflowEvent
+        if (next.type === 'APPROVE') {
+          event = { type: 'APPROVE', approved_at: '2026-04-29T00:00:00.000Z', approved_by: 'tester' }
+        } else if (next.type === 'CANCEL_POST') {
+          event = { type: 'CANCEL_POST', failed_at: '2026-04-29T00:05:00.000Z', error: 'canceled' }
+        } else {
+          event = { type: next.type }
+        }
         expect(() => transitionRentalBillingWorkflow(snap, event)).not.toThrow()
       }
     }

@@ -166,12 +166,14 @@ class FakePool {
         actor_user_id: params[1] as string,
         request_id: (params[2] as string | null) ?? null,
         route: (params[3] as string | null) ?? null,
-        build_sha: (params[4] as string | null) ?? null,
-        problem: (params[5] as string | null) ?? null,
-        client: JSON.parse(params[6] as string) as JsonRecord,
-        server_context: JSON.parse(params[7] as string) as JsonRecord,
-        expires_at: (params[8] as string | null) ?? null,
-        redaction_version: params[9] as string,
+        // params[4] = capture_session_id ($5::uuid) — added by the capture
+        // session spine (migration 120); unread here. Indices below shift +1.
+        build_sha: (params[5] as string | null) ?? null,
+        problem: (params[6] as string | null) ?? null,
+        client: JSON.parse(params[7] as string) as JsonRecord,
+        server_context: JSON.parse(params[8] as string) as JsonRecord,
+        expires_at: (params[9] as string | null) ?? null,
+        redaction_version: params[10] as string,
         created_at: '2026-05-21T12:00:00.000Z',
       }
       this.supportPackets.push(row)
@@ -182,7 +184,7 @@ class FakePool {
       this.workItemCounter += 1
       const createdAt = '2026-05-21T12:00:01.000Z'
       const reversibilityWindowSeconds =
-        typeof params[13] === 'number' ? (params[13] as number) : params[13] != null ? Number(params[13]) : 86400
+        typeof params[14] === 'number' ? (params[14] as number) : params[14] != null ? Number(params[14]) : 86400
       const row: WorkItem = {
         id: uuid(200 + this.workItemCounter),
         company_id: params[0] as string,
@@ -193,11 +195,12 @@ class FakePool {
         lane: params[5] as string,
         severity: (params[6] as string | null) ?? null,
         route: (params[7] as string | null) ?? null,
-        entity_type: (params[8] as string | null) ?? null,
-        entity_id: (params[9] as string | null) ?? null,
-        assignee_user_id: (params[10] as string | null) ?? null,
-        created_by_user_id: (params[11] as string | null) ?? null,
-        metadata: JSON.parse(params[12] as string) as JsonRecord,
+        // params[8] = capture_session_id ($9::uuid) — capture session spine (migration 120); indices shift +1 below.
+        entity_type: (params[9] as string | null) ?? null,
+        entity_id: (params[10] as string | null) ?? null,
+        assignee_user_id: (params[11] as string | null) ?? null,
+        created_by_user_id: (params[12] as string | null) ?? null,
+        metadata: JSON.parse(params[13] as string) as JsonRecord,
         reversibility_window_seconds: reversibilityWindowSeconds,
         created_at: createdAt,
         updated_at: createdAt,

@@ -113,6 +113,14 @@ function actorLabel(event: AuditEvent): string {
   return id.length > 14 ? `…${id.slice(-10)}` : id.toUpperCase()
 }
 
+// Absolute clock time for the left timeline column (msg__81 shows "9:14",
+// "9:12", …). Falls back to empty on an unparseable timestamp.
+function clockTime(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+}
+
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime()
   if (Number.isNaN(then)) return ''
@@ -172,9 +180,19 @@ export function MobileActivityLog() {
 
   const projectRows = projects.data?.projects ?? []
 
+  // When scoped to a single project, frame the header the way msg__81 does:
+  // the project name as eyebrow + "ACTIVITY · TODAY" headline. Unscoped, the
+  // standalone screen stays the all-roles company timeline.
+  const scopedProject = projectId ? projectRows.find((p) => p.id === projectId) : null
+
   return (
     <MShell>
-      <MTopBar back title="Activity" eyebrow="ALL ROLES" onBack={() => navigate(-1)} />
+      <MTopBar
+        back
+        title={scopedProject ? 'ACTIVITY · TODAY' : 'Activity'}
+        eyebrow={scopedProject ? scopedProject.name.toUpperCase() : 'ALL ROLES'}
+        onBack={() => navigate(-1)}
+      />
 
       {/* Category chips — ALL / TIME / MONEY / FIELD / BRIEFS. */}
       <MChipRow>
@@ -248,47 +266,48 @@ function ActivityRow({ event }: { event: AuditEvent }) {
         alignItems: 'stretch',
       }}
     >
-      {/* square dot + connector */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: 12, paddingTop: 3 }}>
-        <span style={{ width: 12, height: 12, background: tone, border: '1.5px solid var(--m-ink)', flexShrink: 0 }} />
-        <span style={{ flex: 1, width: 2, background: 'var(--m-line-2)', marginTop: 4 }} />
-      </div>
+      {/* Left timeline column — absolute clock time (msg__81). */}
+      <span
+        style={{
+          flexShrink: 0,
+          width: 44,
+          paddingTop: 2,
+          textAlign: 'right',
+          fontFamily: MONO,
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.02em',
+          color: 'var(--m-ink-3)',
+          fontVariantNumeric: 'tabular-nums',
+        }}
+        title={relativeTime(event.created_at)}
+      >
+        {clockTime(event.created_at)}
+      </span>
+
+      {/* Colored left-edge bar, tone keyed off the action. */}
+      <span style={{ width: 4, alignSelf: 'stretch', background: tone, flexShrink: 0 }} />
 
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: MONO, fontSize: 11, fontWeight: 800, color: 'var(--m-ink)' }}>
+            {actorLabel(event)}
+          </span>
           {roleTag ? <MPill tone={roleTag.tone}>{roleTag.label}</MPill> : null}
-          <div
-            style={{
-              fontFamily: TIGHT,
-              fontSize: 15,
-              fontWeight: 700,
-              letterSpacing: '-0.01em',
-              color: 'var(--m-ink)',
-              lineHeight: 1.2,
-              minWidth: 0,
-            }}
-          >
-            {humanize(event)}
-          </div>
         </div>
         <div
           style={{
             marginTop: 5,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'baseline',
-            gap: 8,
-            fontFamily: MONO,
-            fontSize: 10,
-            fontWeight: 600,
-            letterSpacing: '0.04em',
-            color: 'var(--m-ink-3)',
+            fontFamily: TIGHT,
+            fontSize: 15,
+            fontWeight: 700,
+            letterSpacing: '-0.01em',
+            color: 'var(--m-ink)',
+            lineHeight: 1.2,
+            minWidth: 0,
           }}
         >
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {actorLabel(event)}
-          </span>
-          <span style={{ flexShrink: 0, fontVariantNumeric: 'tabular-nums' }}>{relativeTime(event.created_at)}</span>
+          {humanize(event)}
         </div>
       </div>
     </div>

@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from 'pg'
 import type pino from 'pino'
 import { Sentry } from './instrument.js'
 import { getRequestContext } from '@sitelayer/logger'
+import { buildWorkflowEventLogInsert } from '@sitelayer/workflows'
 import { isAuditableEntity, recordAudit } from './audit.js'
 import { observeAudit } from './metrics.js'
 import { HttpError } from './http-utils.js'
@@ -380,32 +381,31 @@ export async function recordWorkflowEvent(
   // persists.
   const { sentryTrace, baggage } = currentTraceHeaders()
   const requestId = getRequestContext()?.requestId ?? null
+  // Shared INSERT builder — single source of truth for the column list so
+  // the API path and the worker path (queue/index.ts appendWorkflowEvent)
+  // can't desync. This path sources trace context from ambient request
+  // context and uses onConflict:'throw' so a duplicate transition surfaces
+  // as the 409 below (human double-submit), not a silent no-op.
+  const { text, values } = buildWorkflowEventLogInsert(
+    {
+      companyId: args.companyId,
+      workflowName: args.workflowName,
+      schemaVersion: args.schemaVersion,
+      entityType: args.entityType,
+      entityId: args.entityId,
+      stateVersion: args.stateVersion,
+      eventType: args.eventType,
+      eventPayload: args.eventPayload,
+      snapshotAfter: args.snapshotAfter,
+      actorUserId: args.actorUserId ?? null,
+      requestId,
+      sentryTrace,
+      sentryBaggage: baggage,
+    },
+    { onConflict: 'throw' },
+  )
   try {
-    await executor.query(
-      `
-      insert into workflow_event_log (
-        company_id, workflow_name, schema_version, entity_type, entity_id,
-        state_version, event_type, event_payload, snapshot_after,
-        actor_user_id, request_id, sentry_trace, sentry_baggage
-      )
-      values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, $11, $12, $13)
-      `,
-      [
-        args.companyId,
-        args.workflowName,
-        args.schemaVersion,
-        args.entityType,
-        args.entityId,
-        args.stateVersion,
-        args.eventType,
-        JSON.stringify(args.eventPayload),
-        JSON.stringify(args.snapshotAfter),
-        args.actorUserId ?? null,
-        requestId,
-        sentryTrace,
-        baggage,
-      ],
-    )
+    await executor.query(text, values)
   } catch (err) {
     // The (entity_id, workflow_name, state_version) unique key (migration
     // 106) rejects a duplicate write for the SAME transition of the SAME

@@ -34,6 +34,7 @@ import type { Logger } from '@sitelayer/logger'
 import {
   NOTIFICATION_WORKFLOW_NAME,
   NOTIFICATION_WORKFLOW_SCHEMA_VERSION,
+  notificationStateToLegacyStatus,
   transitionNotificationWorkflow,
   type NotificationChannel,
   type NotificationFailureKind,
@@ -198,7 +199,7 @@ async function applyTransition(
   extraParams: ReadonlyArray<unknown>,
 ): Promise<NotificationWorkflowSnapshot> {
   const next = transitionNotificationWorkflow(snapshot, event)
-  const status = workflowStateToLegacyStatus(next.state)
+  const status = notificationStateToLegacyStatus(next.state)
   // $1 = row.id, $2 = next.state (status text), $3 = next.state_version,
   // $4 = current state_version (stale-write guard). Remaining params
   // are positional and slotted into $5...$N by the caller-built fragment.
@@ -212,40 +213,6 @@ async function applyTransition(
   return next
 }
 
-/**
- * The `notifications.status` column predates the workflow and is
- * referenced by legacy queries / dashboards that expect the original
- * three values (`pending`, `sent`, `failed`). The reducer's eight
- * states project onto those three for the column write so existing
- * surfaces don't break:
- *   pending / hydrating                              → 'pending'
- *     (work in flight; the next batch shouldn't claim hydrating because
- *      its row stays under FOR UPDATE inside the same tx)
- *   sending                                          → 'sending'
- *   sent                                             → 'sent'
- *   failed_clerk_not_found / failed_clerk_unreachable /
- *     failed_provider                                → 'failed'
- *   voided                                           → 'voided'
- * The authoritative state vocabulary lives on `workflow_event_log` and
- * is replayable.
- */
-function workflowStateToLegacyStatus(state: NotificationWorkflowState): string {
-  switch (state) {
-    case 'pending':
-    case 'hydrating':
-      return 'pending'
-    case 'sending':
-      return 'sending'
-    case 'sent':
-      return 'sent'
-    case 'failed_clerk_not_found':
-    case 'failed_clerk_unreachable':
-    case 'failed_provider':
-      return 'failed'
-    case 'voided':
-      return 'voided'
-  }
-}
 
 async function markSent(
   client: NotificationDbClient,

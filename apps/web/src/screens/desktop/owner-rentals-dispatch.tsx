@@ -165,19 +165,70 @@ export function OwnerRentalsDispatch({ bootstrap }: { bootstrap: BootstrapRespon
         <div className="d-split">
           <div className="d-card">
             <div style={fieldLabel}>To project</div>
-            <MSelect
-              value={projectId}
-              onChange={(e) => setProjectId(e.currentTarget.value)}
-              style={{ width: '100%', marginTop: 8 }}
+            {/* The picker reads as a large highlighted card once a project is
+                chosen (design: To-project picker is a yellow card with the
+                project name + foreman/customer meta and a dropdown affordance),
+                while the underlying MSelect still drives the selection. */}
+            <div
+              style={{
+                position: 'relative',
+                marginTop: 8,
+                border: '2px solid var(--m-ink)',
+                background: toProject ? 'var(--m-accent)' : 'var(--m-card-soft)',
+                color: toProject ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+              }}
             >
-              <option value="">Pick a project…</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                  {p.customer_name ? ` · ${p.customer_name}` : ''}
-                </option>
-              ))}
-            </MSelect>
+              <div style={{ padding: '16px 18px', minHeight: 56 }}>
+                {toProject ? (
+                  <>
+                    <div style={{ fontSize: 18, fontWeight: 800 }}>{toProject.name}</div>
+                    {toProject.customer_name ? (
+                      <div style={{ ...fieldLabel, color: 'var(--m-accent-ink)', opacity: 0.8, marginTop: 4 }}>
+                        {toProject.customer_name}
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--m-ink-3)' }}>Pick a project…</div>
+                )}
+              </div>
+              <span
+                aria-hidden
+                style={{
+                  position: 'absolute',
+                  right: 16,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  fontSize: 14,
+                  fontWeight: 800,
+                  pointerEvents: 'none',
+                }}
+              >
+                ▾
+              </span>
+              <MSelect
+                value={projectId}
+                onChange={(e) => setProjectId(e.currentTarget.value)}
+                aria-label="To project"
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  width: '100%',
+                  height: '100%',
+                  opacity: 0,
+                  cursor: 'pointer',
+                  border: 'none',
+                }}
+              >
+                <option value="">Pick a project…</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                    {p.customer_name ? ` · ${p.customer_name}` : ''}
+                  </option>
+                ))}
+              </MSelect>
+            </div>
             {projects.length === 0 ? (
               <div style={{ marginTop: 8, fontSize: 13, color: 'var(--m-ink-3)' }}>
                 No active projects to dispatch to.
@@ -260,7 +311,7 @@ export function OwnerRentalsDispatch({ bootstrap }: { bootstrap: BootstrapRespon
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 22 }}>
               <MButton variant="primary" disabled={!canDispatch} onClick={handleDispatch}>
-                {dispatch.isPending ? 'Dispatching…' : 'Confirm dispatch'}
+                {dispatch.isPending ? 'Dispatching…' : 'Confirm · Dispatch now'}
               </MButton>
               <MButton variant="ghost" onClick={() => navigate(`/desktop/rentals/${item.id}`)}>
                 Cancel

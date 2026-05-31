@@ -123,8 +123,11 @@ export function applyEventLog<Snapshot extends { state: string; state_version: n
  * every key on either side that's missing on the other is null.
  *
  * Non-null differences and array/scalar mismatches are still caught.
+ *
+ * Exported for direct table-driven unit testing of the equality rule
+ * (see replay.test.ts); the replay loop above is the only production caller.
  */
-function snapshotsEqual(a: unknown, b: unknown): boolean {
+export function snapshotsEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true
   if (a === null || b === null) return a == null && b == null
   if (typeof a !== typeof b) return false

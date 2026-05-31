@@ -14,6 +14,7 @@ import { createEstimatePushRunner } from './runners/estimate-push.js'
 import { createLockLaborRunner } from './runners/lock-labor.js'
 import { createLaborPayrollRunner } from './runners/labor-payroll.js'
 import { createFieldEventsRunner } from './runners/field-events.js'
+import { createCrewScheduleConfirmRunner } from './runners/crew-schedule-confirm.js'
 import { createTakeoffToBidRunner } from './runners/takeoff-to-bid.js'
 import { createDamageChargesRunner } from './runners/damage-charges.js'
 import { createVoiceToLogRunner } from './runners/voice-to-log.js'
@@ -88,6 +89,7 @@ const estimatePushRunner = createEstimatePushRunner({ pool, logger, qboCircuit }
 const lockLaborRunner = createLockLaborRunner({ pool })
 const laborPayrollRunner = createLaborPayrollRunner({ pool, logger, qboCircuit })
 const fieldEventsRunner = createFieldEventsRunner({ pool, logger })
+const crewScheduleConfirmRunner = createCrewScheduleConfirmRunner({ pool, logger })
 const takeoffToBidRunner = createTakeoffToBidRunner({ pool })
 const damageChargesRunner = createDamageChargesRunner({ pool })
 const voiceToLogRunner = createVoiceToLogRunner({ pool })
@@ -325,6 +327,24 @@ async function heartbeat(): Promise<{ idle: boolean }> {
       await fieldEventsRunner.runAutoEscalation(companyId)
     },
     undefined,
+  )
+
+  await runIfLaneActive(
+    pool,
+    logger,
+    'crew_schedule_confirm',
+    () =>
+      crewScheduleConfirmRunner.drain(companyId).catch((error) => {
+        logger.error({ err: error }, '[worker] crew-schedule confirm drain failed')
+        captureWithEntityContext(error, {
+          scope: 'crew_schedule_confirm',
+          entity_type: 'crew_schedule',
+          company_id: companyId,
+          workflow_name: 'crew_schedule',
+        })
+        return { processed: 0, materialized: 0, notified: 0, skipped: 0, failed: 0 }
+      }),
+    { processed: 0, materialized: 0, notified: 0, skipped: 0, failed: 0 },
   )
 
   const takeoffToBidSummary = await runIfLaneActive(

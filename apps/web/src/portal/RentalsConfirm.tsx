@@ -1,18 +1,23 @@
 import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { useRentalsPortalContext } from './RentalsPortalProvider'
 
 /**
  * Public confirmation view for the customer rental portal.
  *
- * Lands here after the cart has POSTed `/portal/rentals/:share_token/reserve`.
- * The id arrives via `?id=…`. There's no live status follow-up surface today
- * (the operator approves out-of-band); this view exists so the customer
- * has a stable URL that names the reservation reference.
+ * Lands here after the cart dispatched `RESERVE` and the lifted
+ * `rentalsPortal` machine reached `reserved`. The reservation reference
+ * is read from machine context (`requestId`) first; the `?id=` query
+ * param is retained only as a deep-link / hard-refresh fallback (the
+ * machine instance is fresh on a cold load of this URL). There is no
+ * live status follow-up surface today — the operator approves the
+ * `rental_requests` row out-of-band.
  */
 export function RentalsConfirm() {
   const params = useParams<{ shareToken: string }>()
   const shareToken = params.shareToken ?? ''
   const [search] = useSearchParams()
-  const requestId = search.get('id')
+  const { requestId: contextRequestId } = useRentalsPortalContext()
+  const requestId = contextRequestId ?? search.get('id')
 
   return (
     <div className="p-app" style={{ maxWidth: 720, margin: '0 auto', padding: 32, textAlign: 'center' }}>

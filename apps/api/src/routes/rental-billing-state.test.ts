@@ -345,4 +345,48 @@ describe('handleRentalBillingStateRoutes — POST /api/rental-billing-runs/:id/e
     )
     expect(responses[0]?.status).toBe(409)
   })
+
+  it('CANCEL_POST: transitions a wedged posting run → failed with an operator marker, no outbox row', async () => {
+    const pool = new FakePool()
+    seedRun(pool, { status: 'posting', state_version: 3, approved_at: '2026-05-02T00:00:00.000Z', approved_by: 'u-1' })
+    const { ctx, responses } = makeCtx(pool, { event: 'CANCEL_POST', state_version: 3 })
+    await handleRentalBillingStateRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/rental-billing-runs/${RUN_ID}/events`),
+      ctx,
+    )
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    expect(pool.runs[0]?.status).toBe('failed')
+    expect(pool.runs[0]?.state_version).toBe(4)
+    expect(pool.runs[0]?.failed_at).toBeTruthy()
+    expect(pool.runs[0]?.error).toContain('canceled')
+    expect(pool.workflowEvents[0]?.event_type).toBe('CANCEL_POST')
+    // CANCEL_POST emits no QBO push outbox row.
+    expect(pool.outbox.some((r) => r.mutation_type === 'post_qbo_invoice')).toBe(false)
+  })
+
+  it('CANCEL_POST: returns 409 from a non-posting run (illegal transition)', async () => {
+    const pool = new FakePool()
+    seedRun(pool, { status: 'approved', state_version: 2 })
+    const { ctx, responses } = makeCtx(pool, { event: 'CANCEL_POST', state_version: 2 })
+    await handleRentalBillingStateRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/rental-billing-runs/${RUN_ID}/events`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(409)
+    expect(pool.runs[0]?.status).toBe('approved')
+  })
+
+  it('CANCEL_POST: returns 409 on stale state_version', async () => {
+    const pool = new FakePool()
+    seedRun(pool, { status: 'posting', state_version: 7 })
+    const { ctx, responses } = makeCtx(pool, { event: 'CANCEL_POST', state_version: 3 })
+    await handleRentalBillingStateRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/rental-billing-runs/${RUN_ID}/events`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(409)
+  })
 })

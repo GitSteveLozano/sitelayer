@@ -28,6 +28,7 @@ import {
   avatarToneFor,
   initialsFor,
 } from '../../components/m/index.js'
+import { MPermissionState } from '../../components/m-states/index.js'
 import { Sheet } from '../../components/mobile/Sheet.js'
 import { formatRunningHours, timeOfDay, todayIso } from './format.js'
 import { useCrewSchedule } from '../../machines/crew-schedule.js'
@@ -145,13 +146,11 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
         const res = await apiPost<{ clockEvent?: ClockEvent }>(`/api/clock/${kind}`, body, companySlug)
         if (res.clockEvent) {
           setEvents((cur) => [...cur, res.clockEvent!])
-          // Manual punches land on the explicit confirm surfaces. A
-          // hand-punch in routes to the geofence-MISS manual screen (we
-          // can't claim "on site" for a manual punch); the auto-geofence
-          // path uses `/clockin` (auto success) directly via `onAutoIn`.
-          // A punch out routes to the end-of-shift wrap-up.
-          if (kind === 'in') navigate('/clockin/manual')
-          else navigate('/clockout')
+          // The manual clock-IN entry now lives on the pre-punch
+          // `/clockin/manual` form (site picker + reason), so a punch that
+          // reaches here is an out — route it to the end-of-shift wrap-up.
+          // (The auto-geofence path uses `/clockin` directly via onAutoIn.)
+          if (kind === 'out') navigate('/clockout')
         }
       } finally {
         setBusy(null)
@@ -227,6 +226,31 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
 
   const [confirmTarget, setConfirmTarget] = useState<string | null>(null)
 
+  // Today's scheduled assignment for this worker (any status) — drives the
+  // pre-shift "SCHEDULED · 7:00 AM" framing on the off-clock card (msg43).
+  // We surface the scheduled time + the project's scope so the off-clock
+  // state reads as "you have a shift here today", not a generic prompt.
+  const todaysShift = useMemo(() => {
+    if (!bootstrap || !meWorkerId) return null
+    const match = bootstrap.schedules
+      .filter((s) => {
+        if (s.scheduled_for.slice(0, 10) !== today) return false
+        if (s.deleted_at) return false
+        const ids = Array.isArray(s.crew)
+          ? (s.crew as unknown[]).filter((x): x is string => typeof x === 'string')
+          : []
+        return ids.includes(meWorkerId)
+      })
+      .sort((a, b) => (a.scheduled_for < b.scheduled_for ? -1 : 1))[0]
+    if (!match) return null
+    const proj = bootstrap.projects.find((p) => p.id === match.project_id)
+    return {
+      scheduledFor: match.scheduled_for,
+      projectName: proj?.name ?? null,
+      scope: proj?.division_code ?? null,
+    }
+  }, [bootstrap, meWorkerId, today])
+
   // Loop 2 (Field Event Escalation) worker-side: foreman replies arrive
   // here. The drain (apps/worker/src/field-event-notifier.ts) writes a
   // notifications row with kind='worker_issue_resolved' targeted at
@@ -255,16 +279,16 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
           ackingId={markRead.isPending ? (markRead.variables ?? null) : null}
         />
         {geofence.error?.kind === 'permission_denied' ? (
-          <div style={{ marginTop: 8 }}>
-            <MBanner
-              tone="warn"
-              title="Location permission needed"
-              body="Allow location access to clock in automatically when you arrive on site."
-              action={
-                <MButton variant="quiet" size="sm" onClick={() => navigate('/permissions/location')}>
-                  Enable
-                </MButton>
-              }
+          <div style={{ margin: '8px -16px 0' }}>
+            <MPermissionState
+              title="Location is off."
+              body="We can’t auto clock-in or show the crew map without it. You can still log time manually."
+              benefits={['Auto clock-in on arrival', 'Live crew map', 'Out-of-fence alerts']}
+              icon={<MI.MapPin size={30} />}
+              primaryLabel="Open settings"
+              onPrimary={() => navigate('/permissions/location')}
+              secondaryLabel="Clock in manually"
+              onSecondary={() => navigate('/clockin/manual')}
             />
           </div>
         ) : null}
@@ -332,7 +356,13 @@ export function WorkerToday({ bootstrap, companySlug }: { bootstrap: BootstrapRe
                 />
               </div>
             ) : null}
-            <OffClockCard onClockIn={() => handlePunch('in')} busy={busy === 'in'} />
+            <OffClockCard
+              onClockIn={() => navigate('/clockin/manual')}
+              shift={todaysShift}
+              distanceMeters={geofence.sample && !geofence.sample.inside ? geofence.sample.distance_m : null}
+              autoClockInEnabled={geofenceEnabled}
+              onToggleAutoClockIn={fence ? () => setGeofenceEnabled((v) => !v) : undefined}
+            />
           </>
         )}
         <FlagIssueButton onClick={() => navigate('/issue')} />
@@ -363,10 +393,11 @@ interface ConfirmAssignmentSheetProps {
 /**
  * Worker-facing confirm/decline sheet for a single crew schedule. Wired
  * through the headless `useCrewSchedule` xstate machine — DISPATCHing
- * `CONFIRM` flips the row to `confirmed` server-side. Decline is a
- * no-op against the workflow today (the v1 reducer only models
- * draft → confirmed); the user-supplied reason is surfaced as a
- * worker-issue note so the foreman sees it in the schedule view.
+ * `CONFIRM` flips the row to `confirmed` and DISPATCHing `DECLINE`
+ * (carrying the reason) flips it to `declined` server-side. The decline
+ * now emits a `notify_foreman_decline` outbox side effect (drained by
+ * the worker, surfaced in-band to the foreman) — replacing the old
+ * out-of-band /api/worker-issues note.
  */
 function ConfirmAssignmentSheet({ scheduleId, companySlug, projectName, onClose }: ConfirmAssignmentSheetProps) {
   const machine = useCrewSchedule(scheduleId, companySlug)
@@ -379,13 +410,14 @@ function ConfirmAssignmentSheet({ scheduleId, companySlug, projectName, onClose 
     machine.dispatch('CONFIRM')
   }, [machine, submitting])
 
-  // Watch the snapshot — once we transition to confirmed, close.
+  // Watch the snapshot — once we transition to a terminal/handled state, close.
   useEffect(() => {
-    if (machine.snapshot?.state === 'confirmed' && submitting === 'confirm') {
+    const settled = machine.snapshot?.state === 'confirmed' || machine.snapshot?.state === 'declined'
+    if (settled && submitting) {
       setSubmitting(null)
       onClose()
     }
-    if (!machine.isSubmitting && submitting === 'confirm' && machine.snapshot?.state !== 'confirmed') {
+    if (!machine.isSubmitting && submitting && !settled) {
       setSubmitting(null)
     }
   }, [machine.snapshot, machine.isSubmitting, submitting, onClose])
@@ -393,23 +425,12 @@ function ConfirmAssignmentSheet({ scheduleId, companySlug, projectName, onClose 
   const onDecline = useCallback(() => {
     if (submitting) return
     setSubmitting('decline')
-    // The crew_schedule workflow has no DECLINE event in v1 (see
-    // packages/workflows/src/crew-schedule.ts). Persist the reason via
-    // a worker-issue note so foreman sees it on the schedule view; the
-    // v2 reducer should accept DECLINE directly. We use the existing
-    // `other` kind because the worker-issues route allowlist is
-    // `materials_out | crew_short | safety | other`.
-    void apiPost(
-      '/api/worker-issues',
-      {
-        kind: 'other',
-        message: `Declined schedule ${scheduleId}: ${declineReason.trim() || 'no reason given'}`,
-      },
-      companySlug,
-    ).catch(() => undefined)
-    setSubmitting(null)
-    onClose()
-  }, [companySlug, declineReason, onClose, scheduleId, submitting])
+    // DECLINE is now a real workflow transition (draft → declined). The
+    // reason rides on the event; the server enqueues notify_foreman_decline
+    // so the foreman is told in-band. The close-watcher effect above
+    // dismisses the sheet once the snapshot reports `declined`.
+    machine.dispatch('DECLINE', declineReason.trim() || 'no reason given')
+  }, [declineReason, machine, submitting])
 
   return (
     <Sheet open onClose={onClose} title={projectName}>
@@ -520,7 +541,7 @@ function ClockedInCard({
         }}
       >
         <div className="m-topbar-eyebrow" style={{ color: 'var(--m-ink-4)' }}>
-          CURRENTLY CLOCKED IN
+          CLOCKED IN
         </div>
         <div
           className="num"
@@ -642,34 +663,121 @@ function ScopeSummaryCard({
   )
 }
 
-function OffClockCard({ onClockIn, busy }: { onClockIn: () => void; busy: boolean }) {
+/**
+ * Off-clock / pre-shift card — `wk-today` not-clocked-in state (msg43).
+ * When the worker has a scheduled shift today this reframes as
+ * "SCHEDULED · 7:00 AM" with the site + scope headline, a NOT CLOCKED IN
+ * slab, a "WALK TO SITE · 0.4 MI AWAY" distance line (when a live fence
+ * reading is available), an AUTO CLOCK-IN ON ARRIVAL toggle row, and the
+ * CLOCK IN MANUALLY button. With no scheduled shift it falls back to the
+ * generic off-clock prompt.
+ */
+function OffClockCard({
+  onClockIn,
+  shift,
+  distanceMeters,
+  autoClockInEnabled,
+  onToggleAutoClockIn,
+}: {
+  onClockIn: () => void
+  shift: { scheduledFor: string; projectName: string | null; scope: string | null } | null
+  distanceMeters: number | null
+  autoClockInEnabled: boolean
+  onToggleAutoClockIn?: (() => void) | undefined
+}) {
+  const headline =
+    shift && (shift.projectName || shift.scope)
+      ? [shift.projectName, shift.scope].filter(Boolean).join(' · ')
+      : "You're not clocked in"
+  const milesAway = distanceMeters != null ? (distanceMeters / 1609.34).toFixed(1) : null
   return (
-    <div style={{ marginTop: 12, marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 16 }}>
+    <div style={{ marginTop: 12, marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {shift ? (
+        <div>
+          <div className="m-topbar-eyebrow" style={{ color: 'var(--m-ink-4)' }}>
+            SCHEDULED · {timeOfDay(shift.scheduledFor)}
+          </div>
+          <div
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 700,
+              fontSize: 22,
+              letterSpacing: '-0.015em',
+              lineHeight: 1.1,
+              marginTop: 10,
+            }}
+          >
+            {headline}
+          </div>
+        </div>
+      ) : null}
       <div style={{ border: '2px solid var(--m-line)', padding: '24px 20px', textAlign: 'center' }}>
         <div className="m-topbar-eyebrow" style={{ color: 'var(--m-ink-4)' }}>
-          OFF CLOCK
+          NOT CLOCKED IN
         </div>
-        <div
-          style={{
-            fontFamily: 'var(--m-font-display)',
-            fontWeight: 700,
-            fontSize: 22,
-            letterSpacing: '-0.015em',
-            lineHeight: 1.1,
-            margin: '12px 0 8px',
-          }}
-        >
-          You're not clocked in
-        </div>
+        {!shift ? (
+          <div
+            style={{
+              fontFamily: 'var(--m-font-display)',
+              fontWeight: 700,
+              fontSize: 22,
+              letterSpacing: '-0.015em',
+              lineHeight: 1.1,
+              margin: '12px 0 8px',
+            }}
+          >
+            {headline}
+          </div>
+        ) : null}
         <div
           className="m-topbar-eyebrow"
-          style={{ color: 'var(--m-ink-4)', textTransform: 'none', fontSize: 11, lineHeight: 1.4 }}
+          style={{ color: 'var(--m-ink-4)', textTransform: 'none', fontSize: 11, lineHeight: 1.4, marginTop: 12 }}
         >
-          Drive into a site geofence and the app will clock you in automatically.
+          {milesAway != null ? (
+            <span style={{ textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+              Walk to site · {milesAway} mi away
+            </span>
+          ) : (
+            'Drive into a site geofence and the app will clock you in automatically.'
+          )}
         </div>
       </div>
-      <MButton variant="primary" data-size="worker" onClick={onClockIn} disabled={busy}>
-        {busy ? 'Clocking in…' : 'Clock in manually'}
+      {onToggleAutoClockIn ? (
+        <button
+          type="button"
+          onClick={onToggleAutoClockIn}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            border: '2px dashed var(--m-line)',
+            background: 'transparent',
+            padding: '12px 16px',
+            cursor: 'pointer',
+            color: 'inherit',
+            textAlign: 'left',
+          }}
+        >
+          <span
+            aria-hidden
+            style={{
+              width: 14,
+              height: 14,
+              flexShrink: 0,
+              border: '2px solid var(--m-line)',
+              background: autoClockInEnabled ? 'var(--m-accent)' : 'transparent',
+            }}
+          />
+          <span
+            className="m-topbar-eyebrow"
+            style={{ color: 'var(--m-ink-3)', textTransform: 'uppercase', fontSize: 11 }}
+          >
+            Auto clock-in on arrival
+          </span>
+        </button>
+      ) : null}
+      <MButton variant="primary" data-size="worker" onClick={onClockIn}>
+        Clock in manually
       </MButton>
     </div>
   )

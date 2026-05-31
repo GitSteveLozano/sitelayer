@@ -1,4 +1,4 @@
-import { Route, Routes } from 'react-router-dom'
+import { Route, Routes, useNavigate } from 'react-router-dom'
 import {
   AuditLogScreen,
   BonusSimulatorScreen,
@@ -9,9 +9,16 @@ import {
   CatalogPricingProfilesScreen,
   CatalogServiceItemsScreen,
   CatalogWorkersScreen,
+  CustomRoleScreen,
   DispatchLanesAdminScreen,
+  HelpScreen,
+  LoadedLaborScreen,
   NotificationsQueueScreen,
+  PricingBookScreen,
+  ProfileScreen,
+  RolesScreen,
   SettingsScreen,
+  WorkingHoursScreen,
 } from '@/screens/settings'
 import {
   IntegrationsHubScreen,
@@ -30,9 +37,19 @@ import {
 } from '@/screens/inventory-admin'
 
 export default function MoreRoute() {
+  const navigate = useNavigate()
   return (
     <Routes>
       <Route index element={<SettingsScreen />} />
+      {/* M12 mobile settings sub-screens — full-screen detail pages reached
+          from the settings hub, each with its own back-chevron top bar. */}
+      <Route path="pricing-book" element={<PricingBookScreen navigate={navigate} />} />
+      <Route path="loaded-labor" element={<LoadedLaborScreen navigate={navigate} />} />
+      <Route path="working-hours" element={<WorkingHoursScreen navigate={navigate} />} />
+      <Route path="roles" element={<RolesScreen navigate={navigate} />} />
+      <Route path="roles/custom" element={<CustomRoleScreen navigate={navigate} />} />
+      <Route path="profile" element={<ProfileScreen navigate={navigate} />} />
+      <Route path="help" element={<HelpScreen navigate={navigate} />} />
       <Route path="catalog" element={<CatalogHubScreen />} />
       <Route path="catalog/customers" element={<CatalogCustomersScreen />} />
       <Route path="catalog/workers" element={<CatalogWorkersScreen />} />

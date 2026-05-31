@@ -24,7 +24,7 @@ import {
   type DColumn,
 } from '@/components/d'
 import { MButton, MPill, type MTone } from '@/components/m'
-import { formatMoney } from '../mobile/format.js'
+import { formatMoney, formatMoneyCompact } from '../mobile/format.js'
 
 type MoneyTab = 'cashflow' | 'books'
 
@@ -43,6 +43,11 @@ type MoneyModel = {
   inflow: number
   outflow: number
   margin: number
+  /** This-week labor burn (payroll due this week) — sum of hours × rate for
+   *  labor entries whose occurred_on falls in the current Mon–Sun week. */
+  weekPayroll: number
+  /** Year-to-date profit ≈ all active bid value − all labor cost burned YTD. */
+  ytdProfit: number
   trend: number[]
   pending: PendingRow[]
 }
@@ -52,22 +57,36 @@ export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null 
   const [remindersOpen, setRemindersOpen] = useState(false)
   const [tab, setTab] = useState<MoneyTab>('cashflow')
 
+  // OUTSTANDING AR ≈ open (sent-but-unsettled) invoice value across the two
+  // real billing surfaces. Reuses the same composite list the Books tab reads;
+  // React Query dedups the underlying estimate-push / billing-run queries.
+  const { rows: invoiceRows } = useOwnerInvoices(bootstrap)
+  const { outstandingAr, openInvoiceCount } = useMemo(() => {
+    const open = invoiceRows.filter((r) => r.status !== 'posted' && r.status !== 'voided')
+    return {
+      outstandingAr: open.reduce((sum, r) => sum + r.amount, 0),
+      openInvoiceCount: open.length,
+    }
+  }, [invoiceRows])
+
   const monthLabel = new Date().toLocaleDateString('en-US', { month: 'long' }).toUpperCase()
   const netTone = model.net >= 0 ? 'var(--m-green)' : 'var(--m-red)'
   const trendMax = Math.max(1, ...model.trend)
 
+  // Design Pending table: ITEM / DETAIL / DUE / AMOUNT (no Status column).
+  // ITEM folds the project + any invoice marker; DETAIL is the client.
   const columns: Array<DColumn<PendingRow>> = [
-    { key: 'name', header: 'Project', render: (r) => <span className="d-table-cell-strong">{r.name}</span> },
-    { key: 'customer', header: 'Client', render: (r) => r.customer },
-    { key: 'amount', header: 'Amount', numeric: true, render: (r) => formatMoney(r.amount) },
+    { key: 'item', header: 'Item', render: (r) => <span className="d-table-cell-strong">{r.name}</span> },
+    { key: 'detail', header: 'Detail', render: (r) => r.customer || '—' },
     { key: 'due', header: 'Due', render: (r) => formatDue(r.dueAt) },
     {
-      key: 'status',
-      header: 'Status',
+      key: 'amount',
+      header: 'Amount',
+      numeric: true,
       render: (r) => (
-        <MPill tone="blue" dot>
-          {r.status}
-        </MPill>
+        <span className="num" style={{ color: 'var(--m-green)', fontWeight: 700 }}>
+          +{formatMoney(r.amount)}
+        </span>
       ),
     },
   ]
@@ -97,6 +116,8 @@ export function OwnerMoney({ bootstrap }: { bootstrap: BootstrapResponse | null 
             monthLabel={monthLabel}
             netTone={netTone}
             trendMax={trendMax}
+            outstandingAr={outstandingAr}
+            openInvoiceCount={openInvoiceCount}
             columns={columns}
             onSendReminders={() => setRemindersOpen(true)}
           />
@@ -114,6 +135,8 @@ function CashFlowPanel({
   monthLabel,
   netTone,
   trendMax,
+  outstandingAr,
+  openInvoiceCount,
   columns,
   onSendReminders,
 }: {
@@ -121,9 +144,20 @@ function CashFlowPanel({
   monthLabel: string
   netTone: string
   trendMax: number
+  outstandingAr: number
+  openInvoiceCount: number
   columns: Array<DColumn<PendingRow>>
   onSendReminders: () => void
 }) {
+  // Design KPI strip: NET THIS MONTH · OUTSTANDING AR · THIS WEEK PAYROLL ·
+  // YTD PROFIT — all in compact $#K form with a subscript unit glyph.
+  const netC = formatMoneyCompact(Math.abs(model.net))
+  const arC = formatMoneyCompact(outstandingAr)
+  const payrollC = formatMoneyCompact(model.weekPayroll)
+  const ytdC = formatMoneyCompact(model.ytdProfit)
+  const ytdMargin = model.inflow > 0 ? Math.round((model.ytdProfit / model.inflow) * 100) : 0
+  const inC = formatMoneyCompact(model.inflow)
+  const outC = formatMoneyCompact(model.outflow)
   return (
     <>
       <DKpiStrip>
@@ -132,19 +166,27 @@ function CashFlowPanel({
           value={
             <span style={{ color: netTone }}>
               {model.net >= 0 ? '+' : '-'}
-              {formatMoney(Math.abs(model.net))}
+              {netC.value}
             </span>
           }
+          unit={netC.unit}
           tone="accent"
-          meta={model.net >= 0 ? 'In the black' : 'Underwater'}
-          metaTone={model.net >= 0 ? 'good' : 'bad'}
+          meta={`IN ${inC.value}${inC.unit} · OUT ${outC.value}${outC.unit}`}
         />
-        <DKpi label="In" value={formatMoney(model.inflow)} meta="Active bid value" metaTone="good" />
-        <DKpi label="Out" value={formatMoney(model.outflow)} meta="Labor cost burned" metaTone="bad" />
         <DKpi
-          label="Avg margin"
-          value={`${Math.round(model.margin * 100)}%`}
-          meta={model.inflow > 0 ? 'Net ÷ in' : 'No active value'}
+          label="Outstanding AR"
+          value={arC.value}
+          unit={arC.unit}
+          meta={`${openInvoiceCount} ${openInvoiceCount === 1 ? 'invoice' : 'invoices'}`}
+          metaTone={openInvoiceCount > 0 ? 'bad' : 'good'}
+        />
+        <DKpi label="This week payroll" value={payrollC.value} unit={payrollC.unit} meta="Labor due this week" />
+        <DKpi
+          label="YTD profit"
+          value={ytdC.value}
+          unit={ytdC.unit}
+          meta={model.inflow > 0 ? `${ytdMargin}% margin` : 'No active value'}
+          metaTone={model.ytdProfit >= 0 ? 'good' : 'bad'}
         />
       </DKpiStrip>
 
@@ -367,11 +409,12 @@ function formatDue(iso: string): string {
  * The exported `SendModal` from project-drawers.tsx is a single-recipient
  * presentational port (hardcoded "John Marchetti", no recipient-toggle
  * props), so it doesn't fit the bulk per-recipient toggle list the design
- * calls for. This is a minimal local `DModal` that lists each pending
- * recipient with a checkbox toggle (all on by default) and a count in the
- * send button. The actual send is a TODO stub — there is no unified
- * payment-reminder endpoint yet; the toggle list + selection state is real
- * so the UI responds.
+ * calls for. This is a local `DModal` that lists each pending recipient with
+ * a checkbox toggle (all on by default) and a live count in the send button.
+ * Send is wired: `handleSend` posts the selected project ids to
+ * `POST /api/payment-reminders` via `useSendPaymentReminders` and closes on
+ * success. (Selection collapses to one entry per project, since the
+ * reminders endpoint keys off project id.)
  */
 function SendRemindersModal({ open, onClose, pending }: { open: boolean; onClose: () => void; pending: PendingRow[] }) {
   // Selection map keyed by row id; default every recipient on.
@@ -502,7 +545,16 @@ function SendRemindersModal({ open, onClose, pending }: { open: boolean; onClose
 
 function deriveMoney(bootstrap: BootstrapResponse | null): MoneyModel {
   if (!bootstrap) {
-    return { net: 0, inflow: 0, outflow: 0, margin: 0, trend: new Array(12).fill(0), pending: [] }
+    return {
+      net: 0,
+      inflow: 0,
+      outflow: 0,
+      margin: 0,
+      weekPayroll: 0,
+      ytdProfit: 0,
+      trend: new Array(12).fill(0),
+      pending: [],
+    }
   }
 
   const projects = bootstrap.projects ?? []
@@ -516,9 +568,27 @@ function deriveMoney(bootstrap: BootstrapResponse | null): MoneyModel {
 
   const rateById = new Map<string, number>()
   for (const p of projects) rateById.set(p.id, Number(p.labor_rate ?? 0))
-  const outflow = labor
-    .filter((l) => !l.deleted_at)
-    .reduce((sum, l) => sum + Number(l.hours ?? 0) * (rateById.get(l.project_id) ?? 0), 0)
+  const liveLabor = labor.filter((l) => !l.deleted_at)
+  const laborCost = (l: (typeof liveLabor)[number]) => Number(l.hours ?? 0) * (rateById.get(l.project_id) ?? 0)
+  const outflow = liveLabor.reduce((sum, l) => sum + laborCost(l), 0)
+
+  // THIS WEEK PAYROLL ≈ labor cost for entries occurring in the current
+  // Mon–Sun week (mirrors the design's "THIS WEEK PAYROLL" tile).
+  const { start: weekStart, end: weekEnd } = currentWeekBounds()
+  const weekPayroll = liveLabor
+    .filter((l) => withinWeek(l.occurred_on, weekStart, weekEnd))
+    .reduce((sum, l) => sum + laborCost(l), 0)
+
+  // YTD PROFIT ≈ active bid value − labor cost burned since Jan 1 (read-only
+  // approximation feeding the design's "YTD PROFIT" tile).
+  const yearStart = new Date(new Date().getFullYear(), 0, 1)
+  const ytdLabor = liveLabor
+    .filter((l) => {
+      const d = new Date(l.occurred_on)
+      return !Number.isNaN(d.getTime()) && d >= yearStart
+    })
+    .reduce((sum, l) => sum + laborCost(l), 0)
+  const ytdProfit = inflow - ytdLabor
 
   const net = inflow - outflow
   const margin = inflow > 0 ? net / inflow : 0
@@ -539,7 +609,26 @@ function deriveMoney(bootstrap: BootstrapResponse | null): MoneyModel {
       dueAt: addDays(p.created_at, 30),
     }))
 
-  return { net, inflow, outflow, margin, trend, pending }
+  return { net, inflow, outflow, margin, weekPayroll, ytdProfit, trend, pending }
+}
+
+/** Current Monday-anchored week [start, end] as Date objects (local). */
+function currentWeekBounds(): { start: Date; end: Date } {
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const dow = start.getDay() // 0=Sun..6=Sat
+  start.setDate(start.getDate() + (dow === 0 ? -6 : 1 - dow))
+  const end = new Date(start)
+  end.setDate(end.getDate() + 6)
+  end.setHours(23, 59, 59, 999)
+  return { start, end }
+}
+
+function withinWeek(iso: string | undefined, start: Date, end: Date): boolean {
+  if (!iso) return false
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return false
+  return d >= start && d <= end
 }
 
 function buildTrend(net: number): number[] {

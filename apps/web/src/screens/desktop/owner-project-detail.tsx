@@ -17,10 +17,10 @@ import { useNavigate, useParams } from 'react-router-dom'
 import type { BootstrapResponse } from '@/lib/api'
 import type { ProjectRow } from '@/lib/api'
 import { DataTable, DDrawer, DEyebrow, DH1, DKpi, DKpiStrip, DTabBar, type DColumn } from '@/components/d'
-import { MBanner, MButton, MInput, MPill, MTextarea } from '@/components/m'
+import { MBanner, MButton, MChip, MChipRow, MInput, MPill, MTextarea } from '@/components/m'
 import { useProjects } from '@/lib/api/projects'
-import { useProjectTimeline, type ProjectTimelineEvent } from '@/lib/api/projects'
-import { useProjectLaborVariance, type LaborVarianceRow } from '@/lib/api/labor-variance'
+import { useProjectTimeline, useProjectBriefs, type ProjectTimelineEvent } from '@/lib/api/projects'
+import { useProjectLaborVariance } from '@/lib/api/labor-variance'
 import { useProjectCloseoutSummary } from '@/lib/api/closeout-summary'
 import { useDailyLogs, type DailyLog } from '@/lib/api/daily-logs'
 import { useProjectBlueprints, type BlueprintDocument } from '@/lib/api/takeoff'
@@ -28,7 +28,8 @@ import { useProjectChangeOrders, type ChangeOrder } from '@/lib/api/change-order
 import { useCreateProjectBrief, type ProjectBriefStep } from '@/lib/api/project-briefs'
 import { useSendPaymentReminders } from '@/lib/api/payment-reminders'
 import { ChangeOrderDrawer, InvoiceModal, PostMortemDrawer, RecoveryDrawer } from './project-drawers'
-import { formatMoney, formatStatusLabel, shortDate, todayIso } from '../mobile/format.js'
+import { LifecycleBanner } from '@/components/lifecycle/banner'
+import { formatMoney, formatStatusLabel, shortDate, timeOfDay, todayIso } from '../mobile/format.js'
 
 type ProjectOverlay = 'recovery' | 'change-order' | 'post-mortem' | 'invoice' | 'brief' | 'reminders' | null
 
@@ -58,11 +59,15 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
   const fromList = projectsQuery.data?.projects.find((p) => p.id === projectId) ?? null
 
   const name = fromBootstrap?.name ?? fromList?.name ?? null
-  const status = fromBootstrap?.status ?? fromList?.status ?? null
+  // Pipeline state reads off the project_lifecycle workflow (lifecycle_state),
+  // NOT the legacy free-text `status` column. lifecycle_state is the single
+  // source for header label / billing gate / post-mortem gate. Falls back to
+  // 'draft' for a legacy row that predates the column (matches the reducer's
+  // initialState).
+  const lifecycleState = fromBootstrap?.lifecycle_state ?? fromList?.lifecycle_state ?? 'draft'
   // Change Order + Invoice only make sense once a project is actually being
-  // worked/billed — never on a LEAD (pre-contract) project. Allow-list of
-  // billable statuses (robust against the loose `ProjectStatus` string union).
-  const showBilling = ['active', 'in_progress', 'accepted', 'completed', 'done'].includes(status ?? '')
+  // worked/billed — a project becomes billable when the customer accepts.
+  const showBilling = ['accepted', 'in_progress', 'done', 'archived'].includes(lifecycleState)
   const customer = fromBootstrap?.customer_name ?? fromList?.customer_name ?? '—'
   const bidTotal = Number(fromBootstrap?.bid_total ?? fromList?.bid_total ?? 0)
   const laborRate = Number(fromBootstrap?.labor_rate ?? 0)
@@ -124,7 +129,7 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
       <div className="d-stack">
         <div>
           <DEyebrow>
-            {customer} · {status ? formatStatusLabel(status) : '—'} · D{dayCount}/{planDays}
+            {customer} · {formatStatusLabel(lifecycleState)} · D{dayCount}/{planDays}
           </DEyebrow>
           <div style={{ display: 'flex', alignItems: 'baseline', gap: 16, flexWrap: 'wrap' }}>
             <DH1>{name}</DH1>
@@ -157,7 +162,7 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
                 </MButton>
               </>
             ) : null}
-            {status === 'done' || status === 'archived' ? (
+            {lifecycleState === 'done' || lifecycleState === 'archived' ? (
               <MButton variant="ghost" onClick={() => setOverlay('post-mortem')}>
                 Post-mortem
               </MButton>
@@ -193,12 +198,15 @@ export function OwnerProjectDetail({ bootstrap }: { bootstrap: BootstrapResponse
                 bid={bidTotal}
                 division={project?.division_code}
                 projectId={projectId}
+                onOpenTab={setTab}
               />
             )}
-            {tab === 'budget' && <BudgetTab projectId={projectId} spent={spent} bid={bidTotal} pctSpent={pctSpent} />}
-            {tab === 'crew' && <CrewTab labor={labor} workers={workers} />}
+            {tab === 'budget' && (
+              <BudgetTab projectId={projectId} spent={spent} bid={bidTotal} pctSpent={pctSpent} laborRate={laborRate} />
+            )}
+            {tab === 'crew' && <CrewTab labor={labor} workers={workers} laborRate={laborRate} />}
             {tab === 'logs' && <LogsTab projectId={projectId} />}
-            {tab === 'files' && <FilesTab projectId={projectId} />}
+            {tab === 'files' && <FilesTab projectId={projectId} navigate={navigate} />}
             {tab === 'activity' && <ActivityTab projectId={projectId} />}
           </div>
 
@@ -517,32 +525,215 @@ function SendRemindersDrawer({
 }
 
 // ---- Overview ------------------------------------------------------------
+// A swatch palette for the recent-photos grid — the design shows solid
+// colored tiles (the thumbnails aren't fetched on this surface), so we render
+// stable per-key placeholders in the brand palette.
+const PHOTO_SWATCHES = ['#E0A468', '#C97B4A', '#A85C32', '#7E8A5C', '#5B7FA6', '#E8B57A', '#C2693C', '#8C6B4A']
+
+type NeedsYouAction = { id: string; label: string; tone: 'red' | 'amber' | 'accent'; onClick: () => void }
+
 function OverviewTab({
   name,
   customer,
   bid,
   division,
   projectId,
+  onOpenTab,
 }: {
   name: string
   customer: string
   bid: number
   division?: string | null | undefined
   projectId: string
+  onOpenTab: (tab: TabKey) => void
 }) {
   const timeline = useProjectTimeline(projectId)
-  const recent = (timeline.data?.events ?? []).slice(0, 6)
+  const briefs = useProjectBriefs(projectId)
+  const logs = useDailyLogs({ projectId })
+  const changeOrders = useProjectChangeOrders(projectId)
+
+  // Latest brief (the foreman's most-recent pushed plan).
+  const brief = useMemo(() => {
+    const all = briefs.data?.briefs ?? []
+    return [...all].sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))[0] ?? null
+  }, [briefs.data?.briefs])
+  const briefCrewCount = Array.isArray(brief?.crew) ? brief?.crew.length : 0
+
+  // "Needs you" — real pending items that want an owner decision, surfaced
+  // from the project's live data. Each row deep-links to the relevant tab.
+  const needs = useMemo<NeedsYouAction[]>(() => {
+    const out: NeedsYouAction[] = []
+    const draftLogs = (logs.data?.dailyLogs ?? []).filter((l) => l.status === 'draft')
+    for (const l of draftLogs.slice(0, 2)) {
+      out.push({
+        id: `log-${l.id}`,
+        label: `Daily log from ${shortDate(l.occurred_on)} · approve`,
+        tone: 'amber',
+        onClick: () => onOpenTab('logs'),
+      })
+    }
+    const proposed = (changeOrders.data?.change_orders ?? []).filter((c) => /propos|pending|draft|sent/i.test(c.status))
+    for (const co of proposed.slice(0, 2)) {
+      out.push({
+        id: `co-${co.id}`,
+        label: `Change order #${co.number} ${formatStatusLabel(co.status).toLowerCase()} · review`,
+        tone: 'red',
+        onClick: () => onOpenTab('budget'),
+      })
+    }
+    if (!brief) {
+      out.push({
+        id: 'brief',
+        label: 'No brief pushed yet · set the crew up',
+        tone: 'accent',
+        onClick: () => onOpenTab('overview'),
+      })
+    }
+    return out
+  }, [logs.data?.dailyLogs, changeOrders.data?.change_orders, brief, onOpenTab])
+
+  // Recent photos — every photo key across the project's daily logs.
+  const photoKeys = useMemo(() => {
+    const all: string[] = []
+    for (const l of logs.data?.dailyLogs ?? []) {
+      if (Array.isArray(l.photo_keys)) all.push(...l.photo_keys)
+    }
+    return all
+  }, [logs.data?.dailyLogs])
+
   return (
     <>
-      <div className="d-card">
-        <div className="d-eyebrow">Summary</div>
-        <div style={{ marginTop: 10, fontSize: 15, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>
-          {name} — a {formatMoney(bid)} {division ?? ''} job for {customer}.
+      {/* Project-lifecycle workflow banner — the advance-pipeline affordance
+          (server-truth state + next_events buttons) on desktop, dispatching
+          through the same headless useProjectLifecycle XState machine the
+          mobile overview uses. This is the desktop banner's real home
+          (the orphaned screens/projects/detail.tsx was deleted). See
+          docs/DETERMINISTIC_WORKFLOWS.md. */}
+      <div className="d-card" style={{ padding: 0, background: 'transparent', border: 'none' }}>
+        <LifecycleBanner projectId={projectId} />
+      </div>
+
+      <div className="d-split" style={{ gridTemplateColumns: 'minmax(0, 1.1fr) minmax(0, 1fr)' }}>
+        {/* TODAY'S BRIEF card — the foreman's pushed plan, quote + author/crew. */}
+        <div className="d-card">
+          <span
+            style={{
+              display: 'inline-block',
+              fontFamily: 'var(--m-num)',
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              background: 'var(--m-accent)',
+              color: 'var(--m-accent-ink)',
+              padding: '4px 8px',
+            }}
+          >
+            {brief ? `Today's brief · pushed ${timeOfDay(brief.created_at)}` : "Today's brief"}
+          </span>
+          {brief ? (
+            <>
+              <div style={{ marginTop: 14, fontSize: 21, fontWeight: 700, lineHeight: 1.3, color: 'var(--m-ink)' }}>
+                &ldquo;{brief.goal}&rdquo;
+              </div>
+              <div
+                className="num"
+                style={{
+                  marginTop: 14,
+                  fontSize: 11,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  color: 'var(--m-ink-3)',
+                }}
+              >
+                {briefCrewCount > 0 ? `${briefCrewCount} crew on site` : `${name} · ${division ?? ''} for ${customer}`}
+              </div>
+            </>
+          ) : (
+            <div style={{ marginTop: 14, fontSize: 15, color: 'var(--m-ink-2)', lineHeight: 1.5 }}>
+              No brief pushed yet — {name} is a {formatMoney(bid)} {division ?? ''} job for {customer}. Push a brief to
+              set the crew up.
+            </div>
+          )}
+        </div>
+
+        {/* NEEDS YOU — action list, each row a color-barred deep link. */}
+        <div className="d-card">
+          <div className="d-eyebrow">Needs you</div>
+          {needs.length === 0 ? (
+            <div style={{ marginTop: 12, color: 'var(--m-ink-3)', fontSize: 13 }}>
+              Nothing waiting on you right now.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 12 }}>
+              {needs.map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={a.onClick}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 12,
+                    width: '100%',
+                    textAlign: 'left',
+                    padding: '12px 14px',
+                    background: 'var(--m-card-soft)',
+                    border: '1px solid var(--m-line-2)',
+                    borderLeft: `4px solid ${
+                      a.tone === 'red' ? 'var(--m-red)' : a.tone === 'amber' ? 'var(--m-amber)' : 'var(--m-accent)'
+                    }`,
+                    cursor: 'pointer',
+                    font: 'inherit',
+                    color: 'var(--m-ink)',
+                  }}
+                >
+                  <span style={{ fontSize: 14, fontWeight: 600 }}>{a.label}</span>
+                  <span aria-hidden style={{ color: 'var(--m-ink-3)', fontSize: 16 }}>
+                    →
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       </div>
+
+      {/* RECENT PHOTOS — swatch grid, count in the eyebrow. */}
+      <div className="d-card">
+        <div className="d-eyebrow">Recent photos · {photoKeys.length}</div>
+        {photoKeys.length === 0 ? (
+          <div style={{ marginTop: 12, color: 'var(--m-ink-3)', fontSize: 13 }}>
+            No photos yet — they land here from the crew&apos;s daily logs.
+          </div>
+        ) : (
+          <div
+            style={{
+              marginTop: 12,
+              display: 'grid',
+              gridTemplateColumns: 'repeat(8, minmax(0, 1fr))',
+              gap: 10,
+            }}
+          >
+            {photoKeys.slice(0, 8).map((key, i) => (
+              <div
+                key={key}
+                aria-hidden
+                style={{
+                  aspectRatio: '1 / 1',
+                  background: PHOTO_SWATCHES[i % PHOTO_SWATCHES.length],
+                  border: '1px solid var(--m-line-2)',
+                }}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
       <ActivityList
         title="Recent activity"
-        events={recent}
+        events={(timeline.data?.events ?? []).slice(0, 6)}
         pending={timeline.isPending}
         error={timeline.isError}
         compact
@@ -552,49 +743,116 @@ function OverviewTab({
 }
 
 // ---- Budget --------------------------------------------------------------
+/** Burn bar — a 2px-ruled fill on the sand track, tone-coded by burn %. */
+function BurnBar({ pct }: { pct: number }) {
+  const clamped = Math.max(0, Math.min(100, pct))
+  const fill = pct > 100 ? 'var(--m-red)' : pct >= 90 ? 'var(--m-amber)' : 'var(--m-green)'
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 140 }}>
+      <div
+        aria-hidden
+        style={{
+          flex: 1,
+          height: 8,
+          background: 'var(--m-sand-2)',
+          border: '1px solid var(--m-line-2)',
+          overflow: 'hidden',
+        }}
+      >
+        <div style={{ width: `${clamped}%`, height: '100%', background: fill }} />
+      </div>
+      <span
+        className="num"
+        style={{ fontSize: 11, fontWeight: 700, color: 'var(--m-ink-2)', minWidth: 34, textAlign: 'right' }}
+      >
+        {Math.round(pct)}%
+      </span>
+    </div>
+  )
+}
+
+// Per-cost-line row shaped for the design's BID / SPENT / BURN / STATUS table.
+type BudgetLineRow = {
+  code: string
+  division: string | null
+  bidDollars: number
+  spentDollars: number
+  burnPct: number
+  hasEst: boolean
+}
+
 function BudgetTab({
   projectId,
   spent,
   bid,
   pctSpent,
+  laborRate,
 }: {
   projectId: string
   spent: number
   bid: number
   pctSpent: number
+  laborRate: number
 }) {
   const variance = useProjectLaborVariance(projectId)
   const summary = useProjectCloseoutSummary(projectId)
-  const rows = variance.data?.variance ?? []
   const s = summary.data
 
-  const columns: Array<DColumn<LaborVarianceRow>> = [
+  // Convert each variance line into bid$ / spent$ (hours × the project's
+  // labor rate) + a burn % (actual vs estimated hours). Burn drives both the
+  // bar and the OK / WATCH / OVER status pill.
+  const lines = useMemo<BudgetLineRow[]>(() => {
+    return (variance.data?.variance ?? []).map((r) => {
+      const hasEst = r.estimated_hours > 0 || r.estimated_quantity > 0
+      const burnPct = r.estimated_hours > 0 ? (r.actual_hours / r.estimated_hours) * 100 : r.actual_hours > 0 ? 100 : 0
+      return {
+        code: r.service_item_code,
+        division: r.division_code,
+        bidDollars: r.estimated_hours * laborRate,
+        spentDollars: r.actual_hours * laborRate,
+        burnPct,
+        hasEst,
+      }
+    })
+  }, [variance.data?.variance, laborRate])
+
+  const projectedMarginPct = s && s.bid > 0 ? s.margin_pct : bid > 0 ? ((bid - spent) / bid) * 100 : 0
+  const marginDelta = s ? s.margin_pct : 0
+
+  const columns: Array<DColumn<BudgetLineRow>> = [
     {
       key: 'code',
-      header: 'Cost code',
-      render: (r) => <span className="d-table-cell-strong">{r.service_item_code}</span>,
+      header: 'Cost line',
+      render: (r) => (
+        <span className="d-table-cell-strong">
+          {r.code}
+          {r.division ? ` · ${r.division}` : ''}
+        </span>
+      ),
     },
-    { key: 'division', header: 'Division', render: (r) => r.division_code ?? '—' },
+    { key: 'bid', header: 'Bid', numeric: true, render: (r) => formatMoney(r.bidDollars) },
     {
-      key: 'qty',
-      header: 'Actual / Est',
+      key: 'spent',
+      header: 'Spent',
       numeric: true,
-      render: (r) => `${fmtQty(r.actual_quantity)} / ${fmtQty(r.estimated_quantity)} ${r.unit || 'sqft'}`,
+      render: (r) => (
+        <span style={{ color: r.burnPct > 100 ? 'var(--m-red)' : 'var(--m-ink)', fontWeight: 700 }}>
+          {formatMoney(r.spentDollars)}
+        </span>
+      ),
     },
+    { key: 'burn', header: 'Burn', render: (r) => <BurnBar pct={r.burnPct} /> },
     {
-      key: 'variance',
-      header: 'Variance',
-      numeric: true,
+      key: 'status',
+      header: 'Status',
       render: (r) => {
-        const pct = r.hours_variance_pct
-        const abs = Math.abs(pct)
-        const hasEst = r.estimated_quantity > 0 || r.estimated_hours > 0
-        const tone: 'green' | 'amber' | 'red' = abs < 10 ? 'green' : abs <= 25 ? 'amber' : 'red'
-        const sign = pct > 0 ? '+' : pct < 0 ? '−' : ''
-        return hasEst ? (
-          <MPill tone={tone}>{`${sign}${abs.toFixed(0)}%`}</MPill>
-        ) : (
-          <span style={{ color: 'var(--m-ink-3)' }}>no est.</span>
+        if (!r.hasEst) return <span style={{ color: 'var(--m-ink-3)' }}>no est.</span>
+        const tone: 'green' | 'amber' | 'red' = r.burnPct > 100 ? 'red' : r.burnPct >= 90 ? 'amber' : 'green'
+        const label = r.burnPct > 100 ? 'Over' : r.burnPct >= 90 ? 'Watch' : 'OK'
+        return (
+          <MPill tone={tone} dot>
+            {label}
+          </MPill>
         )
       },
     },
@@ -602,39 +860,40 @@ function BudgetTab({
 
   return (
     <>
-      {/* Spend-vs-bid numbers, the bottom line the owner reads first. */}
-      <div className="d-card">
-        <div className="d-eyebrow">Spend vs bid</div>
-        {summary.isPending ? (
-          <div style={{ marginTop: 10, color: 'var(--m-ink-3)' }}>Loading closeout summary…</div>
-        ) : summary.isError || !s ? (
-          <div style={{ marginTop: 10, color: 'var(--m-red)' }}>Could not load closeout summary.</div>
-        ) : (
-          <DKpiStrip>
-            <DKpi label="Bid" value={formatMoney(s.bid || bid)} />
-            <DKpi label="Total actual" value={formatMoney(s.total_actual)} />
-            <DKpi
-              label="Margin"
-              value={formatMoney(s.margin)}
-              meta={s.bid > 0 ? `${s.margin_pct >= 0 ? '+' : '−'}${Math.abs(s.margin_pct).toFixed(1)}%` : undefined}
-              metaTone={s.margin_pct >= 10 ? 'good' : s.margin_pct >= 0 ? undefined : 'bad'}
-            />
-            <DKpi label="Spent" value={formatMoney(spent)} meta={`${pctSpent}% of bid`} />
-          </DKpiStrip>
-        )}
-      </div>
+      {/* Three headline tiles — BID TOTAL · SPENT (% of bid) · PROJECTED MARGIN
+          (highlighted, with vs-bid delta) — matching the design. */}
+      {summary.isPending ? (
+        <div className="d-card" style={{ color: 'var(--m-ink-3)' }}>
+          Loading closeout summary…
+        </div>
+      ) : (
+        <DKpiStrip>
+          <DKpi label="Bid total" value={formatMoney(s?.bid || bid)} />
+          <DKpi label="Spent" value={formatMoney(s?.total_actual ?? spent)} meta={`${pctSpent}% of bid`} />
+          <DKpi
+            label="Projected margin"
+            value={String(Math.round(projectedMarginPct))}
+            unit="%"
+            tone="accent"
+            meta={
+              marginDelta !== 0
+                ? `${marginDelta >= 0 ? '+' : '−'}${Math.abs(marginDelta).toFixed(0)} vs bid`
+                : undefined
+            }
+          />
+        </DKpiStrip>
+      )}
 
-      <DataTable<LaborVarianceRow>
-        title="Spend by cost code"
+      <DataTable<BudgetLineRow>
         columns={columns}
-        rows={rows}
-        rowKey={(r) => r.service_item_code}
+        rows={lines}
+        rowKey={(r) => r.code}
         empty={
           variance.isPending
-            ? 'Loading scope variance…'
+            ? 'Loading cost lines…'
             : variance.isError
-              ? 'Could not load scope variance.'
-              : 'No variance data yet — labor entries with sqft_done populate this once jobs are in progress.'
+              ? 'Could not load cost lines.'
+              : 'No cost lines yet — labor entries with sqft_done populate this once jobs are in progress.'
         }
       />
     </>
@@ -642,39 +901,145 @@ function BudgetTab({
 }
 
 // ---- Crew ----------------------------------------------------------------
-type CrewRow = { id: string; name: string; hours: number }
+type CrewRow = {
+  id: string
+  name: string
+  role: string
+  onTask: string | null
+  hours: number
+  onSite: boolean
+}
+
+/** Initials avatar — a solid near-black square, the design's crew thumbnail. */
+function initials(name: string): string {
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((p) => p[0]?.toUpperCase() ?? '')
+    .join('')
+}
+function CrewAvatar({ name }: { name: string }) {
+  return (
+    <span
+      aria-hidden
+      style={{
+        width: 30,
+        height: 30,
+        flexShrink: 0,
+        background: 'var(--m-ink)',
+        color: 'var(--m-accent)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontFamily: 'var(--m-num)',
+        fontSize: 11,
+        fontWeight: 700,
+      }}
+    >
+      {initials(name) || '—'}
+    </span>
+  )
+}
 
 function CrewTab({
   labor,
   workers,
+  laborRate,
 }: {
   labor: BootstrapResponse['laborEntries']
   workers: BootstrapResponse['workers']
+  laborRate: number
 }) {
   const rows = useMemo<CrewRow[]>(() => {
-    const map = new Map<string, CrewRow>()
+    const map = new Map<string, CrewRow & { lastDate: string }>()
     for (const l of labor) {
       const wid = l.worker_id ?? 'unassigned'
-      const name = workers.find((w) => w.id === wid)?.name ?? 'Unassigned'
-      const cur = map.get(wid) ?? { id: wid, name, hours: 0 }
+      const worker = workers.find((w) => w.id === wid)
+      const name = worker?.name ?? 'Unassigned'
+      const cur = map.get(wid) ?? {
+        id: wid,
+        name,
+        role: worker?.role ?? 'crew',
+        onTask: null,
+        hours: 0,
+        onSite: false,
+        lastDate: '',
+      }
       cur.hours += Number(l.hours ?? 0)
+      // "On task" = the cost code of the most recent labor entry for this crew.
+      const date = l.occurred_on ?? ''
+      if (date >= cur.lastDate) {
+        cur.lastDate = date
+        cur.onTask = l.service_item_code || cur.onTask
+      }
       map.set(wid, cur)
     }
-    return Array.from(map.values()).sort((a, b) => b.hours - a.hours)
+    // Anyone with hours logged in the last 3 days reads as on-site.
+    const cutoff = new Date(Date.now() - 3 * 86400000).toISOString().slice(0, 10)
+    return Array.from(map.values())
+      .map((r) => ({ ...r, onSite: r.lastDate >= cutoff }))
+      .sort((a, b) => b.hours - a.hours)
   }, [labor, workers])
 
+  const onSiteCount = rows.filter((r) => r.onSite).length
+  const totalHours = rows.reduce((sum, r) => sum + r.hours, 0)
+  const laborCost = totalHours * laborRate
+
   const columns: Array<DColumn<CrewRow>> = [
-    { key: 'name', header: 'Crew member', render: (r) => <span className="d-table-cell-strong">{r.name}</span> },
-    { key: 'hours', header: 'Hours', numeric: true, render: (r) => `${r.hours.toFixed(1)}h` },
+    {
+      key: 'name',
+      header: 'Crew',
+      render: (r) => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+          <CrewAvatar name={r.name} />
+          <span className="d-table-cell-strong">{r.name}</span>
+        </span>
+      ),
+    },
+    {
+      key: 'role',
+      header: 'Role',
+      render: (r) => (
+        <span
+          className="num"
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            border: '1.5px solid var(--m-line-2)',
+            padding: '3px 7px',
+            color: 'var(--m-ink-2)',
+          }}
+        >
+          {r.role}
+        </span>
+      ),
+    },
+    { key: 'task', header: 'On task', render: (r) => r.onTask ?? '—' },
+    { key: 'hours', header: 'Week hrs', numeric: true, render: (r) => r.hours.toFixed(1) },
+    {
+      key: 'status',
+      header: 'Status',
+      render: (r) => (
+        <MPill tone={r.onSite ? 'green' : 'amber'} dot>
+          {r.onSite ? 'On' : 'Off'}
+        </MPill>
+      ),
+    },
   ]
   return (
-    <DataTable<CrewRow>
-      title="Assigned crew"
-      columns={columns}
-      rows={rows}
-      rowKey={(r) => r.id}
-      empty="No labor entries logged yet."
-    />
+    <>
+      {/* Three summary tiles — on-site count · week hours · week labor cost. */}
+      <DKpiStrip>
+        <DKpi label="On site now" value={String(onSiteCount)} />
+        <DKpi label="Crew-hrs this week" value={totalHours.toFixed(1)} />
+        <DKpi label="Labor cost wk" value={formatMoney(laborCost)} tone="accent" />
+      </DKpiStrip>
+
+      <DataTable<CrewRow> columns={columns} rows={rows} rowKey={(r) => r.id} empty="No labor entries logged yet." />
+    </>
   )
 }
 
@@ -727,7 +1092,28 @@ function LogsTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Files ---------------------------------------------------------------
-function FilesTab({ projectId }: { projectId: string }) {
+/** File-extension → small type badge (PDF / ZIP / IMG). */
+function fileExtBadge(fileName: string, previewType: string): string {
+  const ext = (fileName.split('.').pop() ?? '').toLowerCase()
+  if (ext === 'pdf') return 'PDF'
+  if (ext === 'zip') return 'ZIP'
+  if (/png|jpg|jpeg|gif|webp|heic/.test(ext)) return 'IMG'
+  if (previewType) return previewType.slice(0, 3).toUpperCase()
+  return 'DOC'
+}
+
+/** Filename heuristic → category TYPE pill (PLANS / CONTRACT / TAKEOFF / …). */
+function fileTypeTag(fileName: string): string {
+  const n = fileName.toLowerCase()
+  if (/contract|signed|agreement/.test(n)) return 'Contract'
+  if (/takeoff|measure/.test(n)) return 'Takeoff'
+  if (/co-|change|change-order/.test(n)) return 'Change order'
+  if (/photo|\.zip$/.test(n)) return 'Photos'
+  if (/draw|plan|sheet|blueprint/.test(n)) return 'Plans'
+  return 'Drawing'
+}
+
+function FilesTab({ projectId, navigate }: { projectId: string; navigate: (path: string) => void }) {
   const query = useProjectBlueprints(projectId)
   const blueprints = (query.data?.blueprints ?? []).filter((b) => !b.deleted_at)
 
@@ -735,16 +1121,68 @@ function FilesTab({ projectId }: { projectId: string }) {
     {
       key: 'file',
       header: 'File',
-      render: (r) => <span className="d-table-cell-strong">{r.file_name || 'Untitled drawing'}</span>,
+      render: (r) => (
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+          <span
+            aria-hidden
+            className="num"
+            style={{
+              width: 30,
+              height: 30,
+              flexShrink: 0,
+              border: '1.5px solid var(--m-line-2)',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: 8,
+              fontWeight: 700,
+              color: 'var(--m-ink-3)',
+            }}
+          >
+            {fileExtBadge(r.file_name, r.preview_type)}
+          </span>
+          <span className="d-table-cell-strong">{r.file_name || 'Untitled drawing'}</span>
+        </span>
+      ),
     },
-    { key: 'type', header: 'Type', render: (r) => (r.preview_type ? r.preview_type.toUpperCase() : '—') },
+    {
+      key: 'type',
+      header: 'Type',
+      render: (r) => (
+        <span
+          className="num"
+          style={{
+            fontSize: 10,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            border: '1.5px solid var(--m-line-2)',
+            padding: '3px 7px',
+            color: 'var(--m-ink-2)',
+          }}
+        >
+          {fileTypeTag(r.file_name)}
+        </span>
+      ),
+    },
     { key: 'added_by', header: 'Added by', render: () => '—' },
-    { key: 'size', header: 'Size', numeric: true, render: (r) => (r.calibration_length ? 'Scaled' : 'Set scale') },
+    {
+      key: 'size',
+      header: 'Size',
+      numeric: true,
+      render: (r) => (r.calibration_length ? 'Scaled' : '—'),
+    },
     { key: 'date', header: 'Date', render: (r) => fmtFileDate(r.created_at) },
   ]
+  const uploadButton = (
+    <MButton size="sm" variant="primary" onClick={() => navigate(`/desktop/canvas/${projectId}`)}>
+      Upload
+    </MButton>
+  )
   return (
     <DataTable<BlueprintDocument>
-      title="Files & drawings"
+      title={`${blueprints.length} ${blueprints.length === 1 ? 'file' : 'files'}`}
+      action={uploadButton}
       columns={columns}
       rows={blueprints}
       rowKey={(r) => r.id}
@@ -760,15 +1198,111 @@ function FilesTab({ projectId }: { projectId: string }) {
 }
 
 // ---- Activity ------------------------------------------------------------
+type ActivityCategory = 'all' | 'money' | 'time' | 'field' | 'briefs' | 'docs'
+
+const ACTIVITY_FILTERS: ReadonlyArray<{ key: ActivityCategory; label: string }> = [
+  { key: 'all', label: 'All' },
+  { key: 'money', label: 'Money' },
+  { key: 'time', label: 'Time' },
+  { key: 'field', label: 'Field' },
+  { key: 'briefs', label: 'Briefs' },
+  { key: 'docs', label: 'Docs' },
+]
+
+// Map a timeline event onto one of the design's activity categories, by the
+// entity type + action verb. Each category carries a left-bar accent color.
+function categorize(ev: ProjectTimelineEvent): Exclude<ActivityCategory, 'all'> {
+  const hay = `${ev.entity_type} ${ev.action}`.toLowerCase()
+  if (/invoice|estimate|payment|bill|change_order|money|qbo/.test(hay)) return 'money'
+  if (/clock|labor|time|payroll|hours/.test(hay)) return 'time'
+  if (/log|issue|field|flag|photo|problem/.test(hay)) return 'field'
+  if (/brief|plan/.test(hay)) return 'briefs'
+  if (/blueprint|file|document|takeoff|measurement/.test(hay)) return 'docs'
+  return 'field'
+}
+const CATEGORY_COLOR: Record<Exclude<ActivityCategory, 'all'>, string> = {
+  money: 'var(--m-green)',
+  time: 'var(--m-ink)',
+  field: 'var(--m-red)',
+  briefs: 'var(--m-accent)',
+  docs: 'var(--m-ink-3)',
+}
+
 function ActivityTab({ projectId }: { projectId: string }) {
   const timeline = useProjectTimeline(projectId)
+  const [cat, setCat] = useState<ActivityCategory>('all')
+  const events = timeline.data?.events ?? []
+  const filtered = useMemo(() => (cat === 'all' ? events : events.filter((e) => categorize(e) === cat)), [events, cat])
+
   return (
-    <ActivityList
-      title="Activity timeline"
-      events={timeline.data?.events ?? []}
-      pending={timeline.isPending}
-      error={timeline.isError}
-    />
+    <div className="d-card">
+      <MChipRow>
+        {ACTIVITY_FILTERS.map((f) => (
+          <MChip key={f.key} active={cat === f.key} onClick={() => setCat(f.key)}>
+            {f.label}
+          </MChip>
+        ))}
+      </MChipRow>
+
+      {timeline.isPending ? (
+        <div style={{ marginTop: 12, color: 'var(--m-ink-3)' }}>Loading activity…</div>
+      ) : timeline.isError ? (
+        <div style={{ marginTop: 12, color: 'var(--m-red)' }}>Could not load activity.</div>
+      ) : filtered.length === 0 ? (
+        <div style={{ marginTop: 12, color: 'var(--m-ink-3)' }}>No activity in this category.</div>
+      ) : (
+        <ul style={{ listStyle: 'none', margin: '12px 0 0', padding: 0 }}>
+          {filtered.map((ev, idx) => {
+            const c = categorize(ev)
+            return (
+              <li
+                key={ev.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 14,
+                  padding: '12px 14px',
+                  borderTop: idx === 0 ? 'none' : '1px solid var(--m-line-2)',
+                  borderLeft: `4px solid ${CATEGORY_COLOR[c]}`,
+                }}
+              >
+                <span
+                  className="num"
+                  style={{
+                    fontSize: 11,
+                    letterSpacing: '0.04em',
+                    textTransform: 'uppercase',
+                    color: 'var(--m-ink-3)',
+                    minWidth: 64,
+                    flexShrink: 0,
+                  }}
+                >
+                  {timeOfDay(ev.created_at)}
+                </span>
+                {ev.actor_role ? (
+                  <span
+                    className="num"
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: '0.06em',
+                      textTransform: 'uppercase',
+                      border: '1.5px solid var(--m-line-2)',
+                      padding: '3px 7px',
+                      color: 'var(--m-ink-2)',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {ev.actor_role}
+                  </span>
+                ) : null}
+                <span style={{ fontSize: 14, fontWeight: 600, minWidth: 0 }}>{formatStatusLabel(ev.action)}</span>
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </div>
   )
 }
 
@@ -1008,12 +1542,6 @@ function Fact({
 }
 
 // ---- helpers -------------------------------------------------------------
-function fmtQty(n: number): string {
-  if (!Number.isFinite(n)) return '0'
-  if (Math.abs(n) >= 10) return Math.round(n).toLocaleString()
-  return n.toFixed(1)
-}
-
 function fmtFileDate(iso: string | undefined): string {
   if (!iso) return '—'
   const d = new Date(iso)

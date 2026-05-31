@@ -44,6 +44,9 @@ export interface PendingAttachment {
 export interface WorkerIssueCreateBody {
   kind: 'materials_out' | 'crew_short' | 'safety' | 'other'
   message: string
+  /** Typed urgency band the auto-escalator keys on (severity='stopped' open
+   *  >15min escalates). Carried as a field, NOT smuggled into `message`. */
+  severity: 'question' | 'slowing' | 'stopped'
   project_id?: string
 }
 

@@ -90,16 +90,36 @@ function parseKind(value: unknown): IssueKind | null {
   return (ALLOWED_KINDS as readonly string[]).includes(value) ? (value as IssueKind) : null
 }
 
+const ALLOWED_SEVERITIES = ['question', 'slowing', 'stopped'] as const
+type IssueSeverity = (typeof ALLOWED_SEVERITIES)[number]
+
+/**
+ * Parse the create-time severity. Falls back to the migration-049 column
+ * default ('slowing') when absent or invalid so the typed column is always
+ * populated — this is what the auto-escalator's `severity='stopped'` filter
+ * keys on (apps/worker/src/field-event-escalation.ts). The previous create
+ * path omitted severity entirely and smuggled it into the message body as a
+ * `[severity:…]` tag, so no UI-created issue ever became 'stopped' on the
+ * column and 15-min auto-escalation could never fire.
+ */
+function parseSeverity(value: unknown): IssueSeverity {
+  if (typeof value === 'string' && (ALLOWED_SEVERITIES as readonly string[]).includes(value)) {
+    return value as IssueSeverity
+  }
+  return 'slowing'
+}
+
 const ISSUE_COLUMNS = `
   id, company_id, project_id, worker_id, reporter_clerk_user_id,
-  kind, message, resolved_at, resolved_by_clerk_user_id, created_at
+  kind, message, severity, state, resolved_at, resolved_by_clerk_user_id, created_at
 `
 
 const WORKFLOW_ISSUE_COLUMNS = `
   id, company_id, project_id, worker_id, reporter_clerk_user_id,
-  kind, message, severity, resolved_at, resolved_by_clerk_user_id,
+  kind, message, severity, state, resolved_at, resolved_by_clerk_user_id,
   resolved_action, resolution_message, state_version,
-  escalated_to_estimator_at, escalation_reason, created_at
+  escalated_to_estimator_at, escalation_reason,
+  dismissed_at, dismissed_by_clerk_user_id, created_at
 `
 
 type WorkflowIssueRow = {
@@ -111,6 +131,7 @@ type WorkflowIssueRow = {
   kind: string
   message: string
   severity: string
+  state: FieldEventWorkflowState
   resolved_at: string | null
   resolved_by_clerk_user_id: string | null
   resolved_action: string | null
@@ -118,30 +139,23 @@ type WorkflowIssueRow = {
   state_version: number
   escalated_to_estimator_at: string | null
   escalation_reason: string | null
+  dismissed_at: string | null
+  dismissed_by_clerk_user_id: string | null
   created_at: string
-}
-
-const DISMISSED_ACTION_SENTINEL = '__dismissed__'
-
-function rowToWorkflowState(row: WorkflowIssueRow): FieldEventWorkflowState {
-  if (row.escalated_to_estimator_at) return 'escalated'
-  if (row.resolved_at && row.resolved_action === DISMISSED_ACTION_SENTINEL) return 'dismissed'
-  if (row.resolved_at) return 'resolved'
-  return 'open'
 }
 
 function rowToSnapshot(row: WorkflowIssueRow): FieldEventWorkflowSnapshot {
   return {
-    state: rowToWorkflowState(row),
+    state: row.state,
     state_version: row.state_version,
     resolved_at: row.resolved_at,
-    resolved_action:
-      (row.resolved_action === DISMISSED_ACTION_SENTINEL
-        ? null
-        : (row.resolved_action as FieldEventResolutionAction | null)) ?? null,
+    resolved_by_user_id: row.resolved_by_clerk_user_id,
+    resolved_action: (row.resolved_action as FieldEventResolutionAction | null) ?? null,
     resolution_message: row.resolution_message,
     escalated_to_estimator_at: row.escalated_to_estimator_at,
     escalation_reason: row.escalation_reason,
+    dismissed_at: row.dismissed_at,
+    dismissed_by_user_id: row.dismissed_by_clerk_user_id,
   }
 }
 
@@ -158,10 +172,12 @@ function buildWorkflowResponse(row: WorkflowIssueRow) {
       message: row.message,
       severity: row.severity,
       resolved_at: row.resolved_at,
-      resolved_action: row.resolved_action === DISMISSED_ACTION_SENTINEL ? null : row.resolved_action,
+      resolved_action: row.resolved_action,
       resolution_message: row.resolution_message,
       escalated_to_estimator_at: row.escalated_to_estimator_at,
       escalation_reason: row.escalation_reason,
+      dismissed_at: row.dismissed_at,
+      dismissed_by_clerk_user_id: row.dismissed_by_clerk_user_id,
       created_at: row.created_at,
     },
     next_events: nextFieldEventEvents(snapshot.state),
@@ -190,6 +206,7 @@ export async function handleWorkerIssueRoutes(
       return true
     }
     const projectId = typeof body.project_id === 'string' && body.project_id.length > 0 ? body.project_id : null
+    const severity = parseSeverity(body.severity)
 
     // Resolve worker_id from the active membership when it exists. A row
     // without a worker mapping is fine — we still want to capture the
@@ -208,10 +225,10 @@ export async function handleWorkerIssueRoutes(
     const insertedRow = await withMutationTx(async (client: PoolClient) => {
       const result = await client.query(
         `insert into worker_issues
-           (company_id, project_id, worker_id, reporter_clerk_user_id, kind, message)
-         values ($1, $2, $3, $4, $5, $6)
+           (company_id, project_id, worker_id, reporter_clerk_user_id, kind, message, severity)
+         values ($1, $2, $3, $4, $5, $6, $7)
          returning ${ISSUE_COLUMNS}`,
-        [ctx.company.id, projectId, workerId, ctx.currentUserId, kind, message],
+        [ctx.company.id, projectId, workerId, ctx.currentUserId, kind, message, severity],
       )
       const row = result.rows[0]
       if (!row) throw new Error('worker_issues insert returned no row')
@@ -469,15 +486,15 @@ export async function handleWorkerIssueRoutes(
           type: 'RESOLVE',
           resolved_at: now,
           resolved_by_user_id: ctx.currentUserId,
-          action: parsed.value.action!,
-          message_to_worker: parsed.value.message_to_worker ?? null,
+          action: parsed.value.action,
+          message_to_worker: parsed.value.message_to_worker,
         }
       } else if (parsed.value.event === 'ESCALATE') {
         event = {
           type: 'ESCALATE',
           escalated_at: now,
           escalator_user_id: ctx.currentUserId,
-          reason: parsed.value.reason!,
+          reason: parsed.value.reason,
         }
       } else if (parsed.value.event === 'DISMISS') {
         event = {
@@ -502,69 +519,42 @@ export async function handleWorkerIssueRoutes(
           current: row,
         }
       }
-      // Persist. Branch by event type so we update only the relevant
-      // columns and preserve the audit trail (reopen clears prior decision).
-      if (event.type === 'RESOLVE') {
-        await client.query(
-          `update worker_issues set
-             resolved_at = $1,
-             resolved_by_clerk_user_id = $2,
-             resolved_action = $3,
-             resolution_message = $4,
-             state_version = $5,
-             escalated_to_estimator_at = NULL,
-             escalation_reason = NULL
-           where id = $6 and company_id = $7`,
-          [
-            event.resolved_at,
-            event.resolved_by_user_id,
-            event.action,
-            event.message_to_worker,
-            nextSnapshot.state_version,
-            issueId,
-            ctx.company.id,
-          ],
-        )
-      } else if (event.type === 'ESCALATE') {
-        await client.query(
-          `update worker_issues set
-             escalated_to_estimator_at = $1,
-             escalation_reason = $2,
-             state_version = $3
-           where id = $4 and company_id = $5`,
-          [event.escalated_at, event.reason, nextSnapshot.state_version, issueId, ctx.company.id],
-        )
-      } else if (event.type === 'DISMISS') {
-        await client.query(
-          `update worker_issues set
-             resolved_at = $1,
-             resolved_by_clerk_user_id = $2,
-             resolved_action = $3,
-             state_version = $4
-           where id = $5 and company_id = $6`,
-          [
-            event.dismissed_at,
-            event.dismissed_by_user_id,
-            DISMISSED_ACTION_SENTINEL,
-            nextSnapshot.state_version,
-            issueId,
-            ctx.company.id,
-          ],
-        )
-      } else {
-        await client.query(
-          `update worker_issues set
-             resolved_at = NULL,
-             resolved_by_clerk_user_id = NULL,
-             resolved_action = NULL,
-             resolution_message = NULL,
-             escalated_to_estimator_at = NULL,
-             escalation_reason = NULL,
-             state_version = $1
-           where id = $2 and company_id = $3`,
-          [nextSnapshot.state_version, issueId, ctx.company.id],
-        )
-      }
+      // Persist the FULL reducer output in one snapshot-driven UPDATE for
+      // every event type. The reducer already field-cleared every per-state
+      // column (RESOLVE/ESCALATE/DISMISS/REOPEN each null the columns the
+      // other branches own), so binding straight from `nextSnapshot` makes
+      // the SQL provably honor the reducer and collapses the four divergent
+      // per-event UPDATE branches that used to drift (e.g. the old DISMISS
+      // branch never cleared escalated_to_estimator_at). `state` is now a
+      // persisted column rather than a derived sentinel.
+      await client.query(
+        `update worker_issues set
+           state = $1,
+           state_version = $2,
+           resolved_at = $3,
+           resolved_by_clerk_user_id = $4,
+           resolved_action = $5,
+           resolution_message = $6,
+           escalated_to_estimator_at = $7,
+           escalation_reason = $8,
+           dismissed_at = $9,
+           dismissed_by_clerk_user_id = $10
+         where id = $11 and company_id = $12`,
+        [
+          nextSnapshot.state,
+          nextSnapshot.state_version,
+          nextSnapshot.resolved_at ?? null,
+          nextSnapshot.resolved_by_user_id ?? null,
+          nextSnapshot.resolved_action ?? null,
+          nextSnapshot.resolution_message ?? null,
+          nextSnapshot.escalated_to_estimator_at ?? null,
+          nextSnapshot.escalation_reason ?? null,
+          nextSnapshot.dismissed_at ?? null,
+          nextSnapshot.dismissed_by_user_id ?? null,
+          issueId,
+          ctx.company.id,
+        ],
+      )
       // Workflow event log
       await recordWorkflowEvent(client, {
         companyId: ctx.company.id,
@@ -665,7 +655,10 @@ export async function handleWorkerIssueRoutes(
     const includeResolved = url.searchParams.get('resolved') === 'true'
     const params: unknown[] = [ctx.company.id]
     let where = 'where company_id = $1'
-    if (!includeResolved) where += ' and resolved_at is null'
+    // Default (triage inbox) shows only `open`. Now that `state` is persisted
+    // we filter on it rather than `resolved_at is null` — a dismissed row
+    // also has resolved_at NULL but must NOT resurface in the open inbox.
+    if (!includeResolved) where += ` and state = 'open'`
     const projectId = url.searchParams.get('project_id')
     if (projectId) {
       params.push(projectId)

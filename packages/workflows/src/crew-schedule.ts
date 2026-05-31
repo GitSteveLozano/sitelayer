@@ -5,46 +5,61 @@ import { registerWorkflow } from './registry.js'
 /**
  * Crew-schedule workflow — third deterministic workflow.
  *
- * Lifts the existing POST /api/schedules/:id/confirm flow into the
- * deterministic-workflow framework. The route already does:
- *   - update crew_schedules set status='confirmed'
- *   - insert N labor_entries for the confirmed crew
- *   - bump project version
- *   - recordMutationLedger
+ * Lifts the POST /api/schedules/:id/confirm flow into the
+ * deterministic-workflow framework and now models the full assignment
+ * lifecycle: creation, confirmation, decline, and re-assignment.
  *
  * Workflowization adds:
  *   - state_version optimistic-concurrency check
  *   - workflow_event_log row per transition (replay corpus)
  *   - confirmed_at + confirmed_by per row
  *
- * The labor_entries insert and project bump remain in the route as
- * after-effects of the CONFIRM event — they're not modeled as
- * outbox-driven side effects because they're synchronous database
- * writes that must succeed in the same tx.
+ * The CONFIRM after-effects (labor_entries insert + project version
+ * bump) are modeled as a declared outbox-driven side effect
+ * (`materialize_labor_entries`), exactly like rental-billing's
+ * `post_qbo_invoice`. The reducer stays pure — it never inserts rows;
+ * the route enqueues one stable-keyed mutation_outbox row on a non-noop
+ * CONFIRM and a dedicated worker runner drains it. This makes the
+ * legacy /confirm and headless /events paths behaviorally equivalent.
  *
- * States: draft → confirmed.
- *   draft → confirmed via CONFIRM event
- *   confirmed is terminal for this v1 reducer
+ * States: draft → confirmed | declined; declined → draft (REASSIGN).
+ *   draft → confirmed via CONFIRM
+ *   draft → declined  via DECLINE
+ *   declined → draft  via REASSIGN (clears decline_* audit fields)
+ *   confirmed is terminal.
+ *
+ * CREATE is a synthetic seed-only event: it is applied exactly once at
+ * row creation against a {state:'draft', state_version:1} seed so the
+ * very first workflow_event_log row is the creation. It does NOT
+ * advance state and is never offered by nextEvents.
  *
  * Future: add CANCEL transition once the UI ships a cancellation
  * affordance (would require re-versioning the reducer to v2).
  */
 
-export type CrewScheduleWorkflowState = 'draft' | 'confirmed'
+export type CrewScheduleWorkflowState = 'draft' | 'confirmed' | 'declined'
 
 export const CREW_SCHEDULE_WORKFLOW_NAME = 'crew_schedule'
 export const CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION = 1
-export const CREW_SCHEDULE_ALL_STATES: readonly CrewScheduleWorkflowState[] = ['draft', 'confirmed']
+export const CREW_SCHEDULE_ALL_STATES: readonly CrewScheduleWorkflowState[] = ['draft', 'confirmed', 'declined']
 export const CREW_SCHEDULE_TERMINAL_STATES: readonly CrewScheduleWorkflowState[] = ['confirmed']
-export const CREW_SCHEDULE_EVENT_TYPES = ['CONFIRM'] as const
+export const CREW_SCHEDULE_EVENT_TYPES = ['CREATE', 'CONFIRM', 'DECLINE', 'REASSIGN'] as const
 
-export type CrewScheduleWorkflowEvent = { type: 'CONFIRM'; confirmed_at: string; confirmed_by: string }
+export type CrewScheduleWorkflowEvent =
+  | { type: 'CREATE'; created_by?: string | null }
+  | { type: 'CONFIRM'; confirmed_at: string; confirmed_by: string }
+  | { type: 'DECLINE'; declined_at: string; declined_by: string; reason: string }
+  | { type: 'REASSIGN' }
 
 export interface CrewScheduleWorkflowSnapshot {
   state: CrewScheduleWorkflowState
   state_version: number
   confirmed_at?: string | null
   confirmed_by?: string | null
+  created_by?: string | null
+  declined_at?: string | null
+  declined_by?: string | null
+  decline_reason?: string | null
 }
 
 function assertCrewScheduleTransition(
@@ -62,8 +77,21 @@ export function transitionCrewScheduleWorkflow(
   event: CrewScheduleWorkflowEvent,
 ): CrewScheduleWorkflowSnapshot {
   const nextVersion = snapshot.state_version + 1
-  // Single event type today; this if-chain stays narrow but mirrors
-  // the rental-billing/estimate-push shape so future events slot in.
+  // CREATE is the synthetic seed-only origin event. It stamps create
+  // metadata and does NOT advance state or state_version — it is only
+  // ever applied against the {state:'draft', state_version:1} seed at
+  // row-creation time, giving the replay corpus a true first row.
+  if (event.type === 'CREATE') {
+    if (snapshot.state !== 'draft' || snapshot.state_version !== 1) {
+      throw new Error(`event CREATE is only legal on a seed snapshot (draft @ state_version 1)`)
+    }
+    return {
+      ...snapshot,
+      state: 'draft',
+      state_version: 1,
+      created_by: event.created_by ?? null,
+    }
+  }
   if (event.type === 'CONFIRM') {
     assertCrewScheduleTransition(snapshot.state, ['draft'], event.type)
     return {
@@ -74,27 +102,56 @@ export function transitionCrewScheduleWorkflow(
       confirmed_by: event.confirmed_by,
     }
   }
+  if (event.type === 'DECLINE') {
+    assertCrewScheduleTransition(snapshot.state, ['draft'], event.type)
+    return {
+      ...snapshot,
+      state: 'declined',
+      state_version: nextVersion,
+      declined_at: event.declined_at,
+      declined_by: event.declined_by,
+      decline_reason: event.reason,
+    }
+  }
+  if (event.type === 'REASSIGN') {
+    assertCrewScheduleTransition(snapshot.state, ['declined'], event.type)
+    return {
+      ...snapshot,
+      state: 'draft',
+      state_version: nextVersion,
+      declined_at: null,
+      declined_by: null,
+      decline_reason: null,
+    }
+  }
   // Exhaustive: any future event must add a branch here. The cast
   // makes TS surface the omission as a compile error.
-  const exhaustive: never = event.type
-  throw new Error(`unhandled crew schedule event ${exhaustive}`)
+  const exhaustive: never = event
+  throw new Error(`unhandled crew schedule event ${JSON.stringify(exhaustive)}`)
 }
 
-export type CrewScheduleHumanEventType = 'CONFIRM'
+// CREATE is dispatched only at row creation (never offered post-hoc),
+// so the human-event type the snapshot/event API surfaces excludes it.
+export type CrewScheduleHumanEventType = 'CONFIRM' | 'DECLINE' | 'REASSIGN'
 
 export function nextCrewScheduleEvents(
   state: CrewScheduleWorkflowState,
 ): Array<WorkflowNextEvent<CrewScheduleHumanEventType>> {
   switch (state) {
     case 'draft':
-      return [{ type: 'CONFIRM', label: 'Confirm crew schedule' }]
+      return [
+        { type: 'CONFIRM', label: 'Confirm crew schedule' },
+        { type: 'DECLINE', label: 'Decline assignment' },
+      ]
+    case 'declined':
+      return [{ type: 'REASSIGN', label: 'Re-assign' }]
     case 'confirmed':
       return []
   }
 }
 
 export function isHumanCrewScheduleEvent(eventType: string): eventType is CrewScheduleHumanEventType {
-  return eventType === 'CONFIRM'
+  return eventType === 'CONFIRM' || eventType === 'DECLINE' || eventType === 'REASSIGN'
 }
 
 export const crewScheduleWorkflow = registerWorkflow<
@@ -112,14 +169,33 @@ export const crewScheduleWorkflow = registerWorkflow<
   reduce: transitionCrewScheduleWorkflow,
   nextEvents: nextCrewScheduleEvents,
   isHumanEvent: isHumanCrewScheduleEvent,
-  // No outbox-driven side effects — labor_entries insert and project
-  // version bump happen in the same API tx, not via the worker.
-  sideEffectTypes: [] as const,
+  // Outbox-driven side effects:
+  //  - materialize_labor_entries: enqueued on a non-noop CONFIRM; the
+  //    worker inserts confirmed labor_entries + bumps projects.version.
+  //  - notify_foreman_decline: enqueued on DECLINE; the worker fans a
+  //    notifications row out to the project foreman (in-band, replacing
+  //    the old worker-issues note).
+  sideEffectTypes: ['materialize_labor_entries', 'notify_foreman_decline'] as const,
 })
 
+/** One per-worker confirmed labor entry to materialize on CONFIRM. Side-effect
+ * data carried on the CONFIRM request body (not reducer state). */
+export const CrewScheduleLaborEntryInputSchema = z.object({
+  worker_id: z.string().nullish(),
+  service_item_code: z.string(),
+  hours: z.number(),
+  sqft_done: z.number().nullish(),
+  occurred_on: z.string(),
+})
+export type CrewScheduleLaborEntryInput = z.infer<typeof CrewScheduleLaborEntryInputSchema>
+
 export const CrewScheduleEventRequestSchema = z.object({
-  event: z.enum(['CONFIRM']),
+  event: z.enum(['CONFIRM', 'DECLINE', 'REASSIGN']),
   state_version: z.number().int().positive(),
+  /** CONFIRM only — per-worker labor entries to materialize via the outbox. */
+  entries: z.array(CrewScheduleLaborEntryInputSchema).optional(),
+  /** DECLINE only — the worker's decline reason. */
+  reason: z.string().optional(),
 })
 
 export type CrewScheduleEventRequest = z.infer<typeof CrewScheduleEventRequestSchema>

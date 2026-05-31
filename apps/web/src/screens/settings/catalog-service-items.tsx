@@ -153,14 +153,32 @@ function ServiceItemForm({
         {!item ? (
           <Field label="Code" value={code} onChange={setCode} placeholder="LBR-FRMR" />
         ) : (
-          <div className="text-[12px] text-ink-3">
-            Code: <span className="font-mono">{item.code}</span> (immutable)
-          </div>
+          <>
+            {/* CURRENT COST KPI header (msg__85) — the big-number current rate
+                + unit, derived from the item's stored default_rate. */}
+            <div className="flex items-baseline gap-2">
+              <span className="font-display text-[44px] font-extrabold leading-none tracking-tight">
+                {item.default_rate == null ? '$—' : `$${Number(item.default_rate).toFixed(2)}`}
+              </span>
+              <span className="text-[11px] font-mono uppercase tracking-[0.06em] bg-accent text-ink px-1.5 py-0.5">
+                / {item.unit || 'ea'}
+              </span>
+            </div>
+            <div className="text-[10px] font-mono uppercase tracking-[0.06em] text-ink-3">Current cost</div>
+            <div className="text-[12px] text-ink-3">
+              Code: <span className="font-mono">{item.code}</span> (immutable)
+            </div>
+          </>
         )}
         <Field label="Name" value={name} onChange={setName} placeholder="Foreman labor" />
         <Select label="Category" value={category} onChange={setCategory} options={CATEGORIES} />
         <Select label="Unit" value={unit} onChange={setUnit} options={UNITS} />
-        <Field label="Default rate (optional)" value={String(rate ?? '')} onChange={setRate} placeholder="0.00" />
+        <Field
+          label={item ? 'New cost' : 'Default rate (optional)'}
+          value={String(rate ?? '')}
+          onChange={setRate}
+          placeholder="0.00"
+        />
         {error ? <div className="text-[12px] text-warn">{error}</div> : null}
         <div className={item ? 'grid grid-cols-2 gap-2' : ''}>
           <MobileButton

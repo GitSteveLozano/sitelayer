@@ -24,6 +24,19 @@ export interface ProjectListRow {
   site_lat?: string | null
   site_lng?: string | null
   site_radius_m?: number | null
+  // project_lifecycle workflow state — surfaced by the list query
+  // (projects-query.ts) so list/header chrome renders per-state without
+  // a second fetch. The legacy `status` above is a free-text label, NOT
+  // the pipeline state. Optional for back-compat with narrowed payloads.
+  lifecycle_state?: string
+  lifecycle_state_version?: number
+  lifecycle_sent_at?: string | null
+  lifecycle_accepted_at?: string | null
+  lifecycle_declined_at?: string | null
+  lifecycle_decline_reason?: string | null
+  lifecycle_started_at?: string | null
+  lifecycle_completed_at?: string | null
+  lifecycle_archived_at?: string | null
 }
 
 export interface ProjectDetail extends ProjectListRow {
@@ -196,12 +209,12 @@ export function useProjectSummary(
  * render the closeout affordance from a single read instead of
  * reconstructing the state from `status='completed'` checks.
  *
- * Round-trips with the existing POST /api/projects/:id/closeout fire-and-
- * forget mutation; that POST has no snapshot return today, so callers
- * should invalidate this query after a successful closeout.
+ * Mutations go through the canonical POST /api/projects/:id/closeout/events
+ * with { event, state_version }; the route returns the fresh
+ * WorkflowSnapshot directly (no follow-up GET needed).
  */
-export type ProjectCloseoutState = 'active' | 'completed'
-export type ProjectCloseoutHumanEvent = 'CLOSEOUT'
+export type ProjectCloseoutState = 'active' | 'completed' | 'post_mortem'
+export type ProjectCloseoutHumanEvent = 'CLOSEOUT' | 'ACKNOWLEDGE_POST_MORTEM'
 
 export interface ProjectCloseoutSnapshot {
   state: ProjectCloseoutState
@@ -214,6 +227,8 @@ export interface ProjectCloseoutSnapshot {
     closed_at: string | null
     closed_by: string | null
     summary_locked_at: string | null
+    post_mortem_acknowledged_at: string | null
+    post_mortem_acknowledged_by: string | null
     workflow_engine: string
     workflow_run_id: string | null
     version: number
@@ -227,28 +242,21 @@ export function fetchProjectCloseout(projectId: string): Promise<ProjectCloseout
 }
 
 /**
- * Dispatch a closeout workflow event. Posts to the legacy
- * POST /api/projects/:id/closeout route (it predates the
- * deterministic-workflow event/state_version contract) using the
- * snapshot's `context.version` for optimistic concurrency, then
- * re-reads the snapshot so callers receive the post-transition
- * envelope shape that the XState machine consumes.
- *
- * The POST is idempotent on the server, so a double-click is safe.
+ * Dispatch a closeout workflow event through the canonical
+ * POST /api/projects/:id/closeout/events route with { event, state_version }.
+ * Gates on `state_version` (not the row `version`) and returns the fresh
+ * WorkflowSnapshot directly — a stale `state_version` or illegal transition
+ * returns 409, which the XState machine reloads-and-retries.
  */
 export async function submitProjectCloseoutEvent(
   projectId: string,
   event: ProjectCloseoutHumanEvent,
-  expectedVersion: number,
+  stateVersion: number,
 ): Promise<ProjectCloseoutSnapshot> {
-  if (event !== 'CLOSEOUT') {
-    throw new Error(`unsupported project closeout event: ${event}`)
-  }
-  await request<unknown>(`/api/projects/${encodeURIComponent(projectId)}/closeout`, {
+  return request<ProjectCloseoutSnapshot>(`/api/projects/${encodeURIComponent(projectId)}/closeout/events`, {
     method: 'POST',
-    json: { expected_version: expectedVersion },
+    json: { event, state_version: stateVersion },
   })
-  return fetchProjectCloseout(projectId)
 }
 
 export function useProjectCloseout(

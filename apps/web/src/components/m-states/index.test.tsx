@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { MEmptyState, MErrorState, MOfflineHeader, MPermissionState, MSkeletonList, MSkeletonRow } from './index'
+import {
+  MEmptyState,
+  MErrorState,
+  MOfflineHeader,
+  MPermissionState,
+  MSkeletonList,
+  MSkeletonRow,
+  MUpdateState,
+} from './index'
 
 afterEach(cleanup)
 
@@ -129,5 +137,55 @@ describe('MPermissionState', () => {
   it('renders a custom icon when provided', () => {
     render(<MPermissionState title="Camera" body="x" icon={<span data-testid="cam-icon">cam</span>} />)
     expect(screen.getByTestId('cam-icon')).toBeTruthy()
+  })
+
+  it('renders the WHEN ENABLED benefits list when benefits are provided', () => {
+    render(
+      <MPermissionState
+        title="Location is off."
+        body="x"
+        benefits={['Auto clock-in on arrival', 'Live crew map', 'Out-of-fence alerts']}
+      />,
+    )
+    expect(screen.getByText('When enabled')).toBeTruthy()
+    expect(screen.getByText('Auto clock-in on arrival')).toBeTruthy()
+    expect(screen.getByText('Live crew map')).toBeTruthy()
+    expect(screen.getByText('Out-of-fence alerts')).toBeTruthy()
+  })
+
+  it('omits the benefits box when no benefits are passed', () => {
+    render(<MPermissionState title="Location is off." body="x" />)
+    expect(screen.queryByText('When enabled')).toBeNull()
+  })
+})
+
+describe('MUpdateState', () => {
+  it('renders the eyebrow, headline, body, and WHAT’S NEW list', () => {
+    render(
+      <MUpdateState
+        title="Sitelayer got an update."
+        body="Reload to keep using. Your work is safe."
+        changes={['AI auto-takeoff drafts', 'Faster offline sync']}
+      />,
+    )
+    expect(screen.getByText('● New version')).toBeTruthy()
+    expect(screen.getByText('Sitelayer got an update.')).toBeTruthy()
+    expect(screen.getByText("What's new")).toBeTruthy()
+    expect(screen.getByText('AI auto-takeoff drafts')).toBeTruthy()
+  })
+
+  it('fires the reload (primary) and later (secondary) callbacks', () => {
+    const onPrimary = vi.fn()
+    const onSecondary = vi.fn()
+    render(<MUpdateState title="Update" body="x" onPrimary={onPrimary} onSecondary={onSecondary} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Reload app' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Later' }))
+    expect(onPrimary).toHaveBeenCalledTimes(1)
+    expect(onSecondary).toHaveBeenCalledTimes(1)
+  })
+
+  it('omits the WHAT’S NEW box when no changes are passed', () => {
+    render(<MUpdateState title="Update" body="x" />)
+    expect(screen.queryByText("What's new")).toBeNull()
   })
 })

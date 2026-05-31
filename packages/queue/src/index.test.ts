@@ -294,7 +294,12 @@ describe('processRentalBillingInvoicePush', () => {
     expect(sql[1]).toMatch(/update mutation_outbox/i)
     expect(sql[1]).toMatch(/'processing'/)
     expect(sql[6]).toMatch(/update rental_billing_runs/)
-    expect(sql[6]).toMatch(/'posted'/)
+    // The run-state UPDATE is now reducer-driven and fully parameterised
+    // (status = $3, …) — the worker no longer hand-writes a `'posted'`
+    // literal. The posted state lands in the bound values, computed by
+    // transitionRentalBillingWorkflow, not in the SQL text.
+    expect(sql[6]).toMatch(/set status = \$3/)
+    expect(client.calls[6]?.values?.[2]).toBe('posted')
     expect(sql[7]).toMatch(/insert into workflow_event_log/i)
     expect(sql[9]).toMatch(/update mutation_outbox/)
     expect(sql[9]).toMatch(/applied/)
@@ -457,7 +462,10 @@ describe('processRentalBillingInvoicePush', () => {
     // 13 outbox-failed, 14 commit.
     expect(sql[5]).toMatch(/^rollback$/i)
     expect(sql[8]).toMatch(/update rental_billing_runs/)
-    expect(sql[8]).toMatch(/'failed'/)
+    // Reducer-driven, parameterised UPDATE (status = $3, …); the `failed`
+    // state is bound, not a SQL literal.
+    expect(sql[8]).toMatch(/set status = \$3/)
+    expect(client.calls[8]?.values?.[2]).toBe('failed')
     expect(sql[9]).toMatch(/insert into workflow_event_log/i)
     expect(sql[13]).toMatch(/update mutation_outbox/)
     expect(sql[13]).toMatch(/'failed'/)

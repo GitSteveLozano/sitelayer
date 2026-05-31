@@ -65,6 +65,41 @@ export interface EstimatePushWorkflowSnapshot {
   qbo_estimate_id?: string | null
 }
 
+/**
+ * Map a persisted `estimate_pushes` row (status column + transition
+ * stamps) onto the reducer's snapshot shape. Shared by the API event
+ * route and the worker pusher so both produce byte-identical
+ * `EstimatePushWorkflowSnapshot`s — there is exactly one DB-row →
+ * snapshot mapping in the codebase.
+ */
+export interface EstimatePushRowLike {
+  status: string
+  state_version: number
+  reviewed_at?: string | null
+  reviewed_by?: string | null
+  approved_at?: string | null
+  approved_by?: string | null
+  posted_at?: string | null
+  failed_at?: string | null
+  error?: string | null
+  qbo_estimate_id?: string | null
+}
+
+export function estimatePushRowToSnapshot(row: EstimatePushRowLike): EstimatePushWorkflowSnapshot {
+  return {
+    state: row.status as EstimatePushWorkflowState,
+    state_version: row.state_version,
+    reviewed_at: row.reviewed_at ?? null,
+    reviewed_by: row.reviewed_by ?? null,
+    approved_at: row.approved_at ?? null,
+    approved_by: row.approved_by ?? null,
+    posted_at: row.posted_at ?? null,
+    failed_at: row.failed_at ?? null,
+    error: row.error ?? null,
+    qbo_estimate_id: row.qbo_estimate_id ?? null,
+  }
+}
+
 function assertEstimatePushTransition(
   state: EstimatePushWorkflowState,
   allowed: readonly EstimatePushWorkflowState[],

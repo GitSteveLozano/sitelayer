@@ -22,6 +22,9 @@ type IssueRow = {
   reporter_clerk_user_id: string
   kind: string
   message: string
+  /** Typed urgency band. Present on the list DTO since worker-issues.ts
+   *  ISSUE_COLUMNS selects it; the message-tag fallback covers legacy rows. */
+  severity?: 'question' | 'slowing' | 'stopped' | null
   resolved_at: string | null
   resolved_by_clerk_user_id: string | null
   created_at: string
@@ -270,10 +273,11 @@ function isPhotoLog(i: IssueRow): boolean {
   return /^\[photo_log\]/.test(i.message)
 }
 
-/** Pulls a `[severity:...]` tag from the message body if `wk-issue` set
- *  one. Until the worker_issues schema gets a `severity` column this is
- *  the bridge — see worker-issue.tsx for the writer side. */
+/** Reads the typed `severity` column off the list DTO, falling back to the
+ *  legacy `[severity:...]` message tag for rows created before the column was
+ *  wired (worker-issue.tsx now sends severity as a field). */
 function severityFromMessage(i: IssueRow): 'question' | 'slowing' | 'stopped' | null {
+  if (i.severity) return i.severity
   const m = i.message.match(/\[severity:(question|slowing|stopped)\]/)
   return (m?.[1] as 'question' | 'slowing' | 'stopped' | undefined) ?? null
 }

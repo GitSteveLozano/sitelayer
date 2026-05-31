@@ -11,7 +11,18 @@
  * the centered-card layout and owner-dashboard.tsx for the --m-* token style.
  */
 import { useState } from 'react'
+import { fetchQboAuthUrl, setActiveCompanySlug, suggestedSlugFromError, useCreateCompany } from '@/lib/api'
 import { OnboardingShell } from './onboarding-shell.js'
+
+/** Derive a URL-safe company slug from the typed name (mirrors mobile onboarding). */
+function slugify(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64)
+}
 
 type Step = 'sign-in' | 'company' | 'team' | 'connect' | 'ready'
 
@@ -44,15 +55,25 @@ export interface DesktopOnboardingProps {
 export function DesktopOnboarding({ onComplete }: DesktopOnboardingProps) {
   const [step, setStep] = useState<Step>('sign-in')
 
+  const createCompany = useCreateCompany()
+
   // Company step state.
   const [companyName, setCompanyName] = useState('')
   const [trade, setTrade] = useState<Trade | null>(null)
+  const [companyError, setCompanyError] = useState<string | null>(null)
+  // Whether the company has already been persisted (so backing up + re-advancing
+  // doesn't double-create).
+  const [created, setCreated] = useState(false)
 
   // Team step state.
   const [crewSize, setCrewSize] = useState<CrewSize | null>(null)
 
-  // Connect step state — set of selected optional integrations.
-  const [connected, setConnected] = useState<Set<IntegrationId>>(new Set())
+  // Connect step state — set of selected optional integrations. QBO is
+  // pre-selected on entry (the recommended connection) to match the design's
+  // accent/checked QuickBooks row.
+  const [connected, setConnected] = useState<Set<IntegrationId>>(new Set(['qbo']))
+  const [connecting, setConnecting] = useState(false)
+  const [connectError, setConnectError] = useState<string | null>(null)
 
   const toggleIntegration = (id: IntegrationId) => {
     setConnected((prev) => {
@@ -61,6 +82,53 @@ export function DesktopOnboarding({ onComplete }: DesktopOnboardingProps) {
       else next.add(id)
       return next
     })
+  }
+
+  // Company → persist via POST /api/companies, pin the active slug, then advance.
+  // Mirrors the mobile owner-onboarding contract: a 409 with a server-suggested
+  // slug retries silently against the suggestion; backing up won't double-create.
+  const createCompanyAndAdvance = async () => {
+    setCompanyError(null)
+    const name = companyName.trim()
+    if (created || name.length === 0) {
+      setStep('team')
+      return
+    }
+    const trySlug = async (slug: string): Promise<void> => {
+      try {
+        const result = await createCompany.mutateAsync({ slug, name, seed_defaults: true })
+        setActiveCompanySlug(result.company.slug)
+        setCreated(true)
+        setStep('team')
+      } catch (e) {
+        const suggestion = suggestedSlugFromError(e)
+        if (suggestion && suggestion !== slug) {
+          await trySlug(suggestion)
+          return
+        }
+        setCompanyError(e instanceof Error ? e.message : 'Failed to create company')
+      }
+    }
+    await trySlug(slugify(name))
+  }
+
+  // Connect → if QBO is selected, hand off to the server-side OAuth start;
+  // otherwise just advance. No live QBO creds in this tier degrades to a
+  // skippable "connect later" message rather than dead-ending.
+  const connectAndAdvance = async () => {
+    if (!connected.has('qbo')) {
+      setStep('ready')
+      return
+    }
+    setConnectError(null)
+    setConnecting(true)
+    try {
+      const { authUrl } = await fetchQboAuthUrl()
+      window.location.assign(authUrl)
+    } catch (e) {
+      setConnectError(e instanceof Error ? e.message : 'QuickBooks connect is unavailable right now.')
+      setConnecting(false)
+    }
   }
 
   if (step === 'sign-in') {
@@ -74,9 +142,10 @@ export function DesktopOnboarding({ onComplete }: DesktopOnboardingProps) {
         total={4}
         eyebrow="STEP 1 · WORKSPACE"
         title="Set up your shop."
-        primaryLabel="NEXT · TEAM"
+        primaryLabel={createCompany.isPending ? 'CREATING…' : 'NEXT · TEAM'}
         secondaryLabel="BACK"
-        onPrimary={() => setStep('team')}
+        primaryDisabled={createCompany.isPending || companyName.trim().length === 0}
+        onPrimary={createCompanyAndAdvance}
         onSecondary={() => setStep('sign-in')}
       >
         <CompanyStep
@@ -84,6 +153,7 @@ export function DesktopOnboarding({ onComplete }: DesktopOnboardingProps) {
           onCompanyNameChange={setCompanyName}
           trade={trade}
           onTradeChange={setTrade}
+          error={companyError}
         />
       </OnboardingShell>
     )
@@ -113,17 +183,13 @@ export function DesktopOnboarding({ onComplete }: DesktopOnboardingProps) {
         total={4}
         eyebrow="STEP 3 · CONNECT · OPTIONAL"
         title="Hook up your books."
-        primaryLabel={connected.size > 0 ? 'NEXT · READY' : 'CONNECT QBO'}
+        primaryLabel={connected.has('qbo') ? 'CONNECT QBO' : 'NEXT · READY'}
         secondaryLabel="SKIP"
-        onPrimary={() => {
-          // CONNECT QBO is a no-op stub when nothing is selected: select QBO
-          // and advance. With selections, it's a plain "next".
-          if (connected.size === 0) toggleIntegration('qbo')
-          setStep('ready')
-        }}
+        primaryDisabled={connecting}
+        onPrimary={connectAndAdvance}
         onSecondary={() => setStep('ready')}
       >
-        <ConnectStep connected={connected} onToggle={toggleIntegration} />
+        <ConnectStep connected={connected} onToggle={toggleIntegration} error={connectError} />
       </OnboardingShell>
     )
   }
@@ -238,11 +304,13 @@ function CompanyStep({
   onCompanyNameChange,
   trade,
   onTradeChange,
+  error,
 }: {
   companyName: string
   onCompanyNameChange: (v: string) => void
   trade: Trade | null
   onTradeChange: (t: Trade) => void
+  error?: string | null
 }) {
   return (
     <>
@@ -305,6 +373,8 @@ function CompanyStep({
           )
         })}
       </div>
+
+      {error ? <StepError>{error}</StepError> : null}
     </>
   )
 }
@@ -357,9 +427,11 @@ function TeamStep({
 function ConnectStep({
   connected,
   onToggle,
+  error,
 }: {
   connected: Set<IntegrationId>
   onToggle: (id: IntegrationId) => void
+  error?: string | null
 }) {
   return (
     <>
@@ -424,6 +496,8 @@ function ConnectStep({
           )
         })}
       </div>
+
+      {error ? <StepError>{error}</StepError> : null}
     </>
   )
 }
@@ -464,7 +538,7 @@ function ReadyStep({
             display: 'flex',
             alignItems: 'center',
             gap: 14,
-            borderBottom: i < arr.length - 1 ? '1px solid var(--m-line-2)' : 'none',
+            borderBottom: i < arr.length - 1 ? '2px solid var(--m-ink)' : 'none',
             background: t.active ? 'var(--m-accent)' : 'transparent',
           }}
         >
@@ -504,6 +578,28 @@ function ReadyStep({
 }
 
 // ─── shared bits ─────────────────────────────────────────────────────────────
+/** Inline brutalist error line shown beneath a step's inputs. */
+function StepError({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      role="alert"
+      style={{
+        marginTop: 14,
+        padding: '10px 14px',
+        border: '2px solid var(--m-red)',
+        color: 'var(--m-red)',
+        fontFamily: 'var(--m-num)',
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: '0.04em',
+        textTransform: 'uppercase',
+      }}
+    >
+      {children}
+    </div>
+  )
+}
+
 function FieldLabel({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) {
   return (
     <div

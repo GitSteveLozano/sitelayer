@@ -28,9 +28,11 @@ export {
   RENTAL_BILLING_TERMINAL_STATES,
   RENTAL_BILLING_WORKFLOW_NAME,
   RENTAL_BILLING_WORKFLOW_SCHEMA_VERSION,
+  rentalBillingRowToSnapshot,
   rentalBillingWorkflow,
   transitionRentalBillingWorkflow,
   type RentalBillingEventParseResult,
+  type RentalBillingRowLike,
   type RentalBillingEventRequest,
   type RentalBillingHumanEventType,
   type RentalBillingWorkflowEvent,
@@ -46,7 +48,14 @@ export {
   type WorkflowDefinition,
 } from './registry.js'
 
-export { applyEventLog, type WorkflowEventLogEntry, type ReplayResult } from './replay.js'
+export { applyEventLog, snapshotsEqual, type WorkflowEventLogEntry, type ReplayResult } from './replay.js'
+
+export {
+  buildWorkflowEventLogInsert,
+  WORKFLOW_EVENT_LOG_COLUMNS,
+  type WorkflowEventLogInsertArgs,
+  type WorkflowEventLogInsertOptions,
+} from './event-log-insert.js'
 
 export {
   applyEventSequence,
@@ -63,6 +72,7 @@ export {
   CREW_SCHEDULE_WORKFLOW_NAME,
   CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
   CrewScheduleEventRequestSchema,
+  CrewScheduleLaborEntryInputSchema,
   crewScheduleWorkflow,
   isHumanCrewScheduleEvent,
   nextCrewScheduleEvents,
@@ -71,6 +81,7 @@ export {
   type CrewScheduleEventParseResult,
   type CrewScheduleEventRequest,
   type CrewScheduleHumanEventType,
+  type CrewScheduleLaborEntryInput,
   type CrewScheduleWorkflowEvent,
   type CrewScheduleWorkflowSnapshot,
   type CrewScheduleWorkflowState,
@@ -124,6 +135,7 @@ export {
   ESTIMATE_PUSH_WORKFLOW_NAME,
   ESTIMATE_PUSH_WORKFLOW_SCHEMA_VERSION,
   EstimatePushEventRequestSchema,
+  estimatePushRowToSnapshot,
   estimatePushWorkflow,
   isHumanEstimatePushEvent,
   nextEstimatePushEvents,
@@ -132,10 +144,31 @@ export {
   type EstimatePushEventParseResult,
   type EstimatePushEventRequest,
   type EstimatePushHumanEventType,
+  type EstimatePushRowLike,
   type EstimatePushWorkflowEvent,
   type EstimatePushWorkflowSnapshot,
   type EstimatePushWorkflowState,
 } from './estimate-push.js'
+
+export {
+  ESTIMATE_SHARE_ALL_STATES,
+  ESTIMATE_SHARE_EVENT_TYPES,
+  ESTIMATE_SHARE_TERMINAL_STATES,
+  ESTIMATE_SHARE_WORKFLOW_NAME,
+  ESTIMATE_SHARE_WORKFLOW_SCHEMA_VERSION,
+  EstimateShareEventRequestSchema,
+  estimateShareWorkflow,
+  isHumanEstimateShareEvent,
+  nextEstimateShareEvents,
+  parseEstimateShareEventRequest,
+  transitionEstimateShareWorkflow,
+  type EstimateShareEventParseResult,
+  type EstimateShareEventRequest,
+  type EstimateShareHumanEventType,
+  type EstimateShareWorkflowEvent,
+  type EstimateShareWorkflowSnapshot,
+  type EstimateShareWorkflowState,
+} from './estimate-share.js'
 
 export {
   TIME_REVIEW_ALL_STATES,
@@ -260,6 +293,27 @@ export {
 } from './damage-charge-settlement.js'
 
 export {
+  ASSET_DEPLOYMENT_ALL_STATES,
+  ASSET_DEPLOYMENT_EVENT_TYPES,
+  ASSET_DEPLOYMENT_TERMINAL_STATES,
+  ASSET_DEPLOYMENT_WORKFLOW_NAME,
+  ASSET_DEPLOYMENT_WORKFLOW_SCHEMA_VERSION,
+  AssetDeploymentEventRequestSchema,
+  assetDeploymentWorkflow,
+  isHumanAssetDeploymentEvent,
+  nextAssetDeploymentEvents,
+  parseAssetDeploymentEventRequest,
+  transitionAssetDeploymentWorkflow,
+  type AssetDeploymentEventParseResult,
+  type AssetDeploymentEventRequest,
+  type AssetDeploymentEventType,
+  type AssetDeploymentHumanEventType,
+  type AssetDeploymentWorkflowEvent,
+  type AssetDeploymentWorkflowSnapshot,
+  type AssetDeploymentWorkflowState,
+} from './asset-deployment.js'
+
+export {
   RENTAL_REQUEST_APPROVAL_ALL_STATES,
   RENTAL_REQUEST_APPROVAL_EVENT_TYPES,
   RENTAL_REQUEST_APPROVAL_TERMINAL_STATES,
@@ -278,6 +332,29 @@ export {
   type RentalRequestApprovalWorkflowSnapshot,
   type RentalRequestApprovalWorkflowState,
 } from './rental-request-approval.js'
+
+export {
+  TENANT_PROVISION_ALL_STATES,
+  TENANT_PROVISION_EVENT_TYPES,
+  TENANT_PROVISION_HUMAN_EVENT_TYPES,
+  TENANT_PROVISION_TERMINAL_STATES,
+  TENANT_PROVISION_WORKFLOW_NAME,
+  TENANT_PROVISION_WORKFLOW_SCHEMA_VERSION,
+  TenantProvisionEventRequestSchema,
+  tenantProvisionWorkflow,
+  isHumanTenantProvisionEvent,
+  nextTenantProvisionEvents,
+  parseTenantProvisionEventRequest,
+  transitionTenantProvisionWorkflow,
+  type TenantProvisionEventParseResult,
+  type TenantProvisionEventRequest,
+  type TenantProvisionHumanEventType,
+  type TenantProvisionInvite,
+  type TenantProvisionSeedRequest,
+  type TenantProvisionWorkflowEvent,
+  type TenantProvisionWorkflowSnapshot,
+  type TenantProvisionWorkflowState,
+} from './tenant-provision.js'
 
 export {
   QBO_SYNC_RUN_ALL_STATES,
@@ -351,6 +428,7 @@ export {
   NotificationEventRequestSchema,
   isHumanNotificationEvent,
   nextNotificationEvents,
+  notificationStateToLegacyStatus,
   notificationWorkflow,
   parseNotificationEventRequest,
   transitionNotificationWorkflow,

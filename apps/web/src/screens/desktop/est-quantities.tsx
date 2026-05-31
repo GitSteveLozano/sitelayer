@@ -25,7 +25,7 @@ import {
 } from '@/lib/api/estimate'
 import { DataTable, DEyebrow, DH1, type DColumn } from '@/components/d'
 import { MButton, MPill, MSelect } from '@/components/m'
-import { PdfPreviewModal } from './project-drawers'
+import { PdfPreviewModal, SendModal } from './project-drawers'
 import { ProjectRatesModal } from './est-project-rates'
 import { formatMoney } from '../mobile/format.js'
 
@@ -172,6 +172,11 @@ export function EstQuantities() {
   const [summaryError, setSummaryError] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [sendError, setSendError] = useState<string | null>(null)
+  // Send-to-client composer modal (design dsg__56 · SEND TO CLIENT MODAL).
+  // The estimator composes recipient/message/signed-link here, then SEND
+  // snapshots the estimate into an estimate_push and hops to the lifecycle
+  // screen (the same createEstimatePush flow the button used directly).
+  const [sendOpen, setSendOpen] = useState(false)
   // PDF preview/generate (design DEstQuantities · PREVIEW PDF / GENERATE PDF).
   // Reuses the existing presentational PdfPreviewModal from project-drawers.
   const [pdfPreviewOpen, setPdfPreviewOpen] = useState(false)
@@ -213,6 +218,18 @@ export function EstQuantities() {
   // Whether any line came from an assembly explosion — drives the "Assembly"
   // column visibility so flat-only estimates keep their original 6-col layout.
   const hasAssemblies = useMemo(() => lines.some((l) => Boolean(l.assembly_id)), [lines])
+
+  // Total source-sheet span across the priced scope (the design's "NN SHEETS"
+  // status eyebrow above the Quantities table). Sums the per-line sheet stub
+  // over the non-child rows. // TODO: real per-line sheet provenance — see
+  // QtyRow.sheets.
+  const totalSheets = useMemo(
+    () => rows.filter((r) => r.group !== 'child').reduce((acc, r) => acc + r.sheets, 0),
+    [rows],
+  )
+  // Recipient for the SEND TO CLIENT composer — the project's QBO-matched
+  // customer name (email isn't in the customer model yet, so it's omitted).
+  const clientName = summary?.project.customer_name?.trim() || 'Client'
 
   // Live sell total: prefer the machine snapshot (updates as edits save),
   // fall back to the summary metric before the snapshot loads.
@@ -328,7 +345,11 @@ export function EstQuantities() {
     },
   ]
 
-  const handleSend = async () => {
+  // Confirm from the SEND TO CLIENT composer: snapshot the estimate into an
+  // estimate_push and hop to the lifecycle screen. (The recipient/message/
+  // signed-link the estimator composed are the human-facing send intent; the
+  // estimate-push API does not yet accept them as a payload — see SendModal.)
+  const runSend = async () => {
     if (!projectId) return
     setSending(true)
     setSendError(null)
@@ -341,6 +362,12 @@ export function EstQuantities() {
     } finally {
       setSending(false)
     }
+  }
+
+  // The aside / PDF-modal "Send to client" buttons open the composer first.
+  const openSend = () => {
+    setSendError(null)
+    setSendOpen(true)
   }
 
   // GENERATE PDF — open the real estimate PDF (GET /api/projects/:id/estimate.pdf)
@@ -397,17 +424,29 @@ export function EstQuantities() {
 
         <div className="d-split">
           {/* MAIN — quantities table from the estimate lines/scope. */}
-          <DataTable<QtyRow>
-            title={builder.isSaving ? 'Quantities · saving…' : 'Quantities'}
-            columns={columns}
-            rows={rows}
-            rowKey={(r) => r.id}
-            empty={
-              builder.isLoading
-                ? 'Loading line items…'
-                : 'No line items yet. Run takeoff first, then recompute the estimate.'
-            }
-          />
+          <div style={{ display: 'grid', gap: 12 }}>
+            {/* Status eyebrow above the table (design: "NN SHEETS · ALL
+                VERIFIED ✓"). Only shown once there are priced lines. */}
+            {lines.length > 0 ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <DEyebrow>
+                  {totalSheets} sheet{totalSheets === 1 ? '' : 's'}
+                </DEyebrow>
+                <MPill tone="green">All verified ✓</MPill>
+              </div>
+            ) : null}
+            <DataTable<QtyRow>
+              title={builder.isSaving ? 'Quantities · saving…' : 'Quantities'}
+              columns={columns}
+              rows={rows}
+              rowKey={(r) => r.id}
+              empty={
+                builder.isLoading
+                  ? 'Loading line items…'
+                  : 'No line items yet. Run takeoff first, then recompute the estimate.'
+              }
+            />
+          </div>
 
           {/* ASIDE — price & send, sticky. */}
           <aside
@@ -601,15 +640,41 @@ export function EstQuantities() {
               </MButton>
             </div>
 
-            <MButton variant="primary" onClick={handleSend} disabled={sendDisabled}>
+            <MButton variant="primary" onClick={openSend} disabled={sendDisabled}>
               {sendLabel}
             </MButton>
           </aside>
         </div>
       </div>
 
-      {/* In-app PDF preview (reuses the presentational PdfPreviewModal). */}
-      <PdfPreviewModal open={pdfPreviewOpen} onClose={() => setPdfPreviewOpen(false)} />
+      {/* In-app PDF preview — content-mode rail drives the preview, DOWNLOAD
+          opens the estimate PDF, SEND TO CLIENT opens the composer. */}
+      <PdfPreviewModal
+        open={pdfPreviewOpen}
+        onClose={() => setPdfPreviewOpen(false)}
+        projectLabel={summary?.project.name}
+        sheetCount={totalSheets || undefined}
+        onDownload={() => handleGeneratePdf()}
+        onSendToClient={() => {
+          setPdfPreviewOpen(false)
+          openSend()
+        }}
+      />
+
+      {/* SEND TO CLIENT composer (design dsg__56). Confirm runs the push. */}
+      <SendModal
+        open={sendOpen}
+        onClose={() => {
+          if (!sending) setSendOpen(false)
+        }}
+        clientName={clientName}
+        sellTotal={liveTotal}
+        lineCount={lines.length}
+        projectLabel={summary?.project.name}
+        sending={sending}
+        error={sendError}
+        onSend={runSend}
+      />
 
       {/* Per-project rate overrides — recomputes the estimate on save. */}
       <ProjectRatesModal

@@ -149,10 +149,14 @@ export function WorkerIssue({ bootstrap, companySlug }: { bootstrap: BootstrapRe
   const handleSend = () => {
     if (!category) return
     const trimmed = message.trim() || `${category.label}: ${category.sub}`
-    const tags = [`[${category.designKind}]`, `[severity:${severity}]`].filter(Boolean).join(' ')
+    // Severity now rides the typed `severity` field (the auto-escalator keys
+    // on the column). Only the designKind stays as a message tag until the
+    // `kind` CHECK is widened to carry it directly.
+    const tags = `[${category.designKind}]`
     const body: WorkerIssueCreateBody = {
       kind: category.kind,
       message: `${tags} ${trimmed}`.trim(),
+      severity,
       ...(projectId ? { project_id: projectId } : {}),
     }
     const attachments: PendingAttachment[] = []

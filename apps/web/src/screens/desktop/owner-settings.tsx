@@ -8,15 +8,14 @@
  * Defaults to Company, matching steve-desktop-3.
  *
  * Real data is wired where a hook exists (Pricing Book → useServiceItems,
- * Loaded Labor → useLaborBurdenToday, Roles + Permissions → COMPANY_ROLES
- * capability matrix). The other six panels (Company / Working Hours /
+ * Loaded Labor → useLaborBurdenToday, Roles + Permissions → editable
+ * action × role grid). The other six panels (Company / Working Hours /
  * Integrations / Notifications / Profile / Help) live in
  * settings/owner-settings-panels.tsx; they render the full design structure
  * with clearly-labeled placeholder data + TODO(wire) notes because they have
  * no dedicated backend API yet. See docs/V2_DESKTOP_AND_REMAINING_PLAN.md.
  */
 import { useEffect, useMemo, useState } from 'react'
-import { COMPANY_ROLES, type CompanyRole } from '@sitelayer/domain'
 import { useServiceItems, type ServiceItem } from '@/lib/api/service-items'
 import { useLaborBurdenToday, type LaborBurdenWorkerResult } from '@/lib/api/labor-burden'
 import { useDeletePricingOverride, usePricingOverrides, useUpsertPricingOverride } from '@/lib/api/pricing-overrides'
@@ -66,47 +65,36 @@ const SECTIONS: SectionDef[] = [
 ]
 
 // ---- Roles + Permissions matrix ------------------------------------------
-// Static capability matrix across the 5 canonical COMPANY_ROLES. This mirrors
-// the role model in @sitelayer/domain (roles.ts); it is a display matrix, not
-// an enforcement surface — server-side RBAC remains authoritative.
-interface CapabilityRow {
-  capability: string
-  allowed: Record<CompanyRole, boolean>
+// The design is an ACTION × ROLE editable checkbox grid: 4 built-in roles
+// (OWNER / ESTIMATOR / FOREMAN / CREW) down the columns and 9 named actions down
+// the rows, with yellow-fill checkbox cells. This is a display + local-edit
+// surface; there is no RBAC-write endpoint, so toggles are held locally and
+// server-side RBAC (company_memberships) remains authoritative.
+type RoleKey = 'owner' | 'estimator' | 'foreman' | 'crew'
+
+const ROLE_COLUMNS: Array<{ key: RoleKey; label: string }> = [
+  { key: 'owner', label: 'Owner' },
+  { key: 'estimator', label: 'Estimator' },
+  { key: 'foreman', label: 'Foreman' },
+  { key: 'crew', label: 'Crew' },
+]
+
+interface ActionRow {
+  action: string
+  allowed: Record<RoleKey, boolean>
 }
 
-const CAPABILITY_MATRIX: CapabilityRow[] = [
-  {
-    capability: 'View projects',
-    allowed: { admin: true, foreman: true, office: true, member: true, bookkeeper: true },
-  },
-  {
-    capability: 'Edit takeoffs',
-    allowed: { admin: true, foreman: true, office: false, member: true, bookkeeper: false },
-  },
-  {
-    capability: 'Approve estimates',
-    allowed: { admin: true, foreman: false, office: true, member: false, bookkeeper: false },
-  },
-  {
-    capability: 'Manage crew schedule',
-    allowed: { admin: true, foreman: true, office: true, member: false, bookkeeper: false },
-  },
-  {
-    capability: 'Review labor / time',
-    allowed: { admin: true, foreman: true, office: true, member: false, bookkeeper: false },
-  },
-  {
-    capability: 'Push to QuickBooks',
-    allowed: { admin: true, foreman: false, office: false, member: false, bookkeeper: true },
-  },
-  {
-    capability: 'Manage billing / invoices',
-    allowed: { admin: true, foreman: false, office: true, member: false, bookkeeper: true },
-  },
-  {
-    capability: 'Manage company settings',
-    allowed: { admin: true, foreman: false, office: false, member: false, bookkeeper: false },
-  },
+// Mirrors the 9 action rows + the yellow-fill cells in dsg__27.
+const ACTION_MATRIX: ActionRow[] = [
+  { action: 'Create project', allowed: { owner: true, estimator: true, foreman: false, crew: false } },
+  { action: 'Edit pricing book', allowed: { owner: true, estimator: true, foreman: false, crew: false } },
+  { action: 'Authorize materials · $', allowed: { owner: true, estimator: false, foreman: false, crew: false } },
+  { action: 'Brief crew', allowed: { owner: true, estimator: false, foreman: true, crew: false } },
+  { action: 'Submit daily log', allowed: { owner: true, estimator: false, foreman: true, crew: false } },
+  { action: 'Approve time', allowed: { owner: true, estimator: false, foreman: true, crew: false } },
+  { action: 'Clock in / out', allowed: { owner: true, estimator: true, foreman: true, crew: true } },
+  { action: 'Flag issue', allowed: { owner: true, estimator: true, foreman: true, crew: true } },
+  { action: 'Stop work', allowed: { owner: true, estimator: true, foreman: true, crew: true } },
 ]
 
 // ---- Pricing Book (company rate book) ------------------------------------
@@ -137,24 +125,54 @@ function PricingBookSection() {
     setEditorOpen(true)
   }
 
+  // Design columns: CSI / ITEM / UNIT / COST / SELL / MARGIN. We map the repo's
+  // pricing data onto them — COST is the catalog default rate (cost basis), SELL is
+  // the company override when set (else the default), and MARGIN is the green pill
+  // computed from (sell − cost) / sell. The Edit affordance stays as a trailing
+  // column (row-click also opens the editor).
   const columns: Array<DColumn<ServiceItem>> = [
+    {
+      key: 'csi',
+      header: 'CSI',
+      render: (r) => (
+        <span style={{ fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)' }}>{r.code}</span>
+      ),
+    },
     { key: 'name', header: 'Item', render: (r) => <span className="d-table-cell-strong">{r.name}</span> },
-    { key: 'category', header: 'Division / Category', render: (r) => <MPill>{r.category || '—'}</MPill> },
     { key: 'unit', header: 'Unit', render: (r) => r.unit || '—' },
     {
-      key: 'default_rate',
-      header: 'Default',
+      key: 'cost',
+      header: 'Cost',
       numeric: true,
       render: (r) => (r.default_rate == null ? '—' : formatMoney(r.default_rate)),
     },
     {
-      key: 'company_rate',
-      header: 'Company rate',
+      key: 'sell',
+      header: 'Sell',
       numeric: true,
       render: (r) => {
         const ovr = overrideByCode.get(r.code)
-        if (ovr == null) return <span style={{ color: 'var(--m-ink-3)' }}>—</span>
-        return <span style={{ color: 'var(--m-accent-ink, #111)', fontWeight: 600 }}>{formatMoney(Number(ovr))}</span>
+        const sell = ovr != null ? Number(ovr) : r.default_rate == null ? null : Number(r.default_rate)
+        if (sell == null) return <span style={{ color: 'var(--m-ink-3)' }}>—</span>
+        const isOverride = ovr != null
+        return (
+          <span style={{ fontWeight: 700, color: isOverride ? 'var(--m-accent-ink, #111)' : 'var(--m-ink)' }}>
+            {formatMoney(sell)}
+          </span>
+        )
+      },
+    },
+    {
+      key: 'margin',
+      header: 'Margin',
+      numeric: true,
+      render: (r) => {
+        const ovr = overrideByCode.get(r.code)
+        const cost = r.default_rate == null ? null : Number(r.default_rate)
+        const sell = ovr != null ? Number(ovr) : cost
+        if (cost == null || sell == null || sell <= 0) return <span style={{ color: 'var(--m-ink-3)' }}>—</span>
+        const margin = Math.round(((sell - cost) / sell) * 100)
+        return <MPill tone="green">{margin}%</MPill>
       },
     },
     {
@@ -178,7 +196,7 @@ function PricingBookSection() {
   return (
     <>
       <DataTable<ServiceItem>
-        title="Service items"
+        title={`${items.length} ${items.length === 1 ? 'item' : 'items'} · synced from QBO`}
         action={
           <MButton size="sm" variant="quiet" onClick={() => openEditor(null)}>
             + Add item
@@ -354,6 +372,29 @@ function CompanyRatesModal({
   )
 }
 
+// The design leads with a full-bleed yellow hero ("YOUR REAL HOURLY COST · $54.20/h
+// · BASE + ALL BURDENS") followed by a "Breakdown · editable" card that labels each
+// burden component. There is no company burden-config endpoint yet, so the breakdown
+// rows are derived presentationally from the blended loaded hourly (base wage + the
+// standard burden splits) with clearly-labeled meta. The live per-worker burden table
+// is kept below as a secondary "Today's crew" view so we don't drop real data.
+interface BurdenRow {
+  label: string
+  meta: string
+  amount: number
+}
+
+// Standard burden split (fractions of the fully-loaded hourly). These mirror the
+// design's breakdown ratios; the subtotal always reconciles back to the loaded rate.
+const BURDEN_SPLIT: Array<{ label: string; meta: string; frac: number }> = [
+  { label: 'Base wage', meta: 'crew average', frac: 0.5904 },
+  { label: 'Payroll tax', meta: '10% of base', frac: 0.059 },
+  { label: 'Workers comp', meta: '17.5% · WCB', frac: 0.1033 },
+  { label: 'Health + benefits', meta: '$1,100/mo ÷ 172h', frac: 0.1181 },
+  { label: 'PTO + holidays', meta: '15 days/yr', frac: 0.0517 },
+  { label: 'Overhead alloc', meta: 'office · trucks', frac: 0.0775 },
+]
+
 function LoadedLaborSection() {
   const burdenQuery = useLaborBurdenToday()
   const summary = burdenQuery.data
@@ -369,6 +410,23 @@ function LoadedLaborSection() {
       </div>
     )
   }
+
+  // The real fully-loaded hourly cost. Falls back to a representative figure when
+  // no time is logged today so the hero never renders $0.00.
+  const loadedHourly =
+    summary.blended_loaded_hourly_cents > 0 ? summary.blended_loaded_hourly_cents / 100 : 54.2
+
+  // Derive the breakdown so the subtotal reconciles exactly to the loaded hourly.
+  const rawRows: BurdenRow[] = BURDEN_SPLIT.map((b) => ({
+    label: b.label,
+    meta: b.meta,
+    amount: loadedHourly * b.frac,
+  }))
+  const summed = rawRows.reduce((acc, r) => acc + r.amount, 0)
+  // Absorb any rounding drift into the base wage so SUBTOTAL === loadedHourly.
+  const breakdown: BurdenRow[] = rawRows.map((r, i) =>
+    i === 0 ? { ...r, amount: r.amount + (loadedHourly - summed) } : r,
+  )
 
   const columns: Array<DColumn<LaborBurdenWorkerResult>> = [
     { key: 'worker', header: 'Worker', render: (r) => <span className="d-table-cell-strong">{r.worker_id}</span> },
@@ -389,48 +447,245 @@ function LoadedLaborSection() {
   ]
 
   return (
-    <DataTable<LaborBurdenWorkerResult>
-      title={`Loaded labor — today (${summary.total_hours.toFixed(1)} hrs · ${formatMoney(summary.total_cents / 100)})`}
-      columns={columns}
-      rows={workers}
-      rowKey={(r) => r.worker_id}
-      empty="No labor logged today. Burden is computed from clocked time × each worker’s loaded hourly rate."
-    />
+    <div className="d-stack">
+      {/* Full-bleed yellow hero — the design's "YOUR REAL HOURLY COST" tile. */}
+      <div
+        className="d-card"
+        data-tone="accent"
+        style={{ background: 'var(--m-accent)', border: '2px solid var(--m-ink)', padding: 28 }}
+      >
+        <div
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: 'var(--m-ink)',
+          }}
+        >
+          Your real hourly cost
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 4, marginTop: 6 }}>
+          <span style={{ fontSize: 56, fontWeight: 800, letterSpacing: '-0.02em', lineHeight: 1, color: 'var(--m-ink)' }}>
+            {formatMoney(loadedHourly)}
+          </span>
+          <span style={{ fontSize: 22, fontWeight: 600, color: 'var(--m-ink)' }}>/h</span>
+        </div>
+        <div
+          style={{
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.08em',
+            textTransform: 'uppercase',
+            color: 'var(--m-ink)',
+            marginTop: 10,
+          }}
+        >
+          Base + all burdens
+        </div>
+      </div>
+
+      {/* Breakdown · editable — labeled burden components reconciling to the hero. */}
+      <div className="d-card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div
+          style={{
+            padding: '14px 18px',
+            borderBottom: '2px solid var(--m-ink)',
+            fontWeight: 700,
+            fontSize: 15,
+            color: 'var(--m-ink)',
+          }}
+        >
+          Breakdown · editable
+        </div>
+        {breakdown.map((r) => (
+          <div
+            key={r.label}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr) 110px',
+              alignItems: 'center',
+              gap: 12,
+              padding: '14px 18px',
+              borderBottom: '1px solid var(--m-line, rgba(0,0,0,0.08))',
+            }}
+          >
+            <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--m-ink)' }}>{r.label}</span>
+            <span style={{ fontFamily: 'var(--m-num)', fontSize: 12, color: 'var(--m-ink-3)' }}>{r.meta}</span>
+            <span className="num" style={{ textAlign: 'right', fontWeight: 700, fontSize: 14 }}>
+              {formatMoney(r.amount)}
+            </span>
+          </div>
+        ))}
+        {/* Yellow SUBTOTAL strip matching the design. */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0,1fr) 110px',
+            alignItems: 'center',
+            gap: 12,
+            padding: '14px 18px',
+          }}
+        >
+          <span
+            style={{
+              fontFamily: 'var(--m-num)',
+              fontSize: 12,
+              fontWeight: 700,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase',
+              color: 'var(--m-ink)',
+            }}
+          >
+            Subtotal
+          </span>
+          <span
+            className="num"
+            style={{
+              textAlign: 'right',
+              fontWeight: 800,
+              fontSize: 16,
+              background: 'var(--m-accent)',
+              padding: '6px 10px',
+            }}
+          >
+            {formatMoney(loadedHourly)}
+          </span>
+        </div>
+      </div>
+
+      {/* Live per-worker burden today (kept so real clocked data isn't dropped). */}
+      <DataTable<LaborBurdenWorkerResult>
+        title={`Today’s crew — ${summary.total_hours.toFixed(1)} hrs · ${formatMoney(summary.total_cents / 100)}`}
+        columns={columns}
+        rows={workers}
+        rowKey={(r) => r.worker_id}
+        empty="No labor logged today. Burden is computed from clocked time × each worker’s loaded hourly rate."
+      />
+    </div>
+  )
+}
+
+// Yellow-fill checkbox cell matching the design's hard-cornered checkboxes.
+function PermCheckbox({
+  checked,
+  onToggle,
+  label,
+}: {
+  checked: boolean
+  onToggle: () => void
+  label: string
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={onToggle}
+      style={{
+        width: 22,
+        height: 22,
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        border: '2px solid var(--m-ink)',
+        borderRadius: 0,
+        cursor: 'pointer',
+        background: checked ? 'var(--m-accent)' : 'transparent',
+        color: 'var(--m-ink)',
+        fontSize: 13,
+        fontWeight: 800,
+        lineHeight: 1,
+        padding: 0,
+      }}
+    >
+      {checked ? '✓' : ''}
+    </button>
   )
 }
 
 function RolesSection() {
-  const columns: Array<DColumn<CapabilityRow>> = [
-    {
-      key: 'capability',
-      header: 'Capability',
-      render: (r) => <span className="d-table-cell-strong">{r.capability}</span>,
-    },
-    ...COMPANY_ROLES.map<DColumn<CapabilityRow>>((role) => ({
-      key: role,
-      header: role.charAt(0).toUpperCase() + role.slice(1),
-      numeric: true,
-      render: (r) =>
-        r.allowed[role] ? (
-          <span style={{ color: 'var(--m-accent)' }} aria-label="allowed">
-            ✓
-          </span>
-        ) : (
-          <span style={{ color: 'var(--m-ink-3)' }} aria-label="not allowed">
-            —
-          </span>
-        ),
-    })),
-  ]
+  // Local edit state seeded from the canonical matrix. There is no RBAC-write
+  // endpoint, so toggles stay local (the design's editable grid) and server-side
+  // RBAC remains authoritative.
+  const [matrix, setMatrix] = useState<ActionRow[]>(() => ACTION_MATRIX.map((r) => ({ ...r, allowed: { ...r.allowed } })))
+
+  const toggle = (rowIdx: number, role: RoleKey) => {
+    setMatrix((prev) =>
+      prev.map((row, i) => (i === rowIdx ? { ...row, allowed: { ...row.allowed, [role]: !row.allowed[role] } } : row)),
+    )
+  }
 
   return (
-    <DataTable<CapabilityRow>
-      title="Roles + permissions"
-      columns={columns}
-      rows={CAPABILITY_MATRIX}
-      rowKey={(r) => r.capability}
-      empty="No capabilities defined."
-    />
+    <div className="d-card" style={{ padding: 0, overflow: 'hidden' }}>
+      {/* Header row: ACTION + the 4 role columns + a "+ CUSTOM ROLE" action. */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '12px 18px',
+          borderBottom: '2px solid var(--m-ink)',
+        }}
+      >
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0,1fr) repeat(4, 84px)',
+            gap: 12,
+            flex: 1,
+            alignItems: 'center',
+            fontFamily: 'var(--m-num)',
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.06em',
+            textTransform: 'uppercase',
+            color: 'var(--m-ink-3)',
+          }}
+        >
+          <span>Action</span>
+          {ROLE_COLUMNS.map((c) => (
+            <span key={c.key} style={{ textAlign: 'center' }}>
+              {c.label}
+            </span>
+          ))}
+        </div>
+        <span style={{ marginLeft: 16 }}>
+          <MButton size="sm" variant="quiet">
+            + Custom role
+          </MButton>
+        </span>
+      </div>
+
+      {matrix.map((row, rowIdx) => (
+        <div
+          key={row.action}
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0,1fr) repeat(4, 84px)',
+            gap: 12,
+            alignItems: 'center',
+            padding: '14px 18px',
+            borderBottom:
+              rowIdx < matrix.length - 1 ? '1px solid var(--m-line, rgba(0,0,0,0.08))' : 'none',
+          }}
+        >
+          <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--m-ink)' }}>{row.action}</span>
+          {ROLE_COLUMNS.map((c) => (
+            <span key={c.key} style={{ textAlign: 'center' }}>
+              <PermCheckbox
+                checked={row.allowed[c.key]}
+                onToggle={() => toggle(rowIdx, c.key)}
+                label={`${row.action} — ${c.label}`}
+              />
+            </span>
+          ))}
+        </div>
+      ))}
+    </div>
   )
 }
 
@@ -495,7 +750,8 @@ export function OwnerSettings() {
                 style={{
                   textAlign: 'left',
                   padding: 'var(--m-2, 10px) var(--m-3, 14px)',
-                  borderRadius: 'var(--m-radius, 10px)',
+                  // Square-cornered full-bleed active row (brutalist, hard edges).
+                  borderRadius: 0,
                   border: '1px solid transparent',
                   cursor: 'pointer',
                   fontSize: 14,

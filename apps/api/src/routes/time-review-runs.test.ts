@@ -408,6 +408,30 @@ describe('handleTimeReviewRunRoutes — POST /api/time-review-runs/:id/events', 
     expect(pool.outbox.find((r) => r.mutation_type === 'lock_labor_entries')).toBeUndefined()
   })
 
+  it('REOPEN: approved → pending; emits the unlock lock_labor_entries row keyed on the fresh state_version', async () => {
+    const pool = new FakePool()
+    seedPending(pool)
+    // Move the seeded run to approved@v2 so REOPEN is the valid transition.
+    pool.runs[0]!.state = 'approved'
+    pool.runs[0]!.state_version = 2
+    pool.runs[0]!.approved_at = '2026-05-08T00:00:00Z'
+    const { ctx, responses } = makeCtx(pool, { event: 'REOPEN', state_version: 2, reason: 'missed correction' })
+    await handleTimeReviewRunRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/time-review-runs/${RUN_ID}/events`),
+      ctx,
+    )
+    expect(responses[0]?.status, JSON.stringify(responses[0]?.body)).toBe(200)
+    expect(pool.runs[0]?.state).toBe('pending')
+    // REOPEN clears the decision fields (mig 027 decision_chk requires it).
+    expect(pool.runs[0]?.approved_at).toBeNull()
+    const unlockRow = pool.outbox.find((r) => r.mutation_type === 'lock_labor_entries')
+    expect(unlockRow).toBeDefined()
+    // Per-state_version key on the post-REOPEN version (v3), distinct from
+    // the APPROVE row at v2, so a subsequent re-APPROVE re-fires fresh.
+    expect(unlockRow?.idempotency_key).toBe(`time_review:lock:${RUN_ID}:3`)
+  })
+
   it('returns 409 on stale state_version without writing the lock outbox row', async () => {
     const pool = new FakePool()
     seedPending(pool)

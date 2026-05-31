@@ -121,7 +121,7 @@ export type WorkflowCommand =
     }
 ```
 
-The normal interaction loop should be:
+The normal interaction loop is:
 
 1. Backend loads the persisted workflow row.
 2. Backend returns a `WorkflowSnapshot`.
@@ -130,6 +130,8 @@ The normal interaction loop should be:
 5. UI sends `{ event, stateVersion, payload }` to the API.
 6. Backend checks the version, applies the pure transition, persists the result,
    records any command/outbox intent, and returns the next snapshot.
+
+**This loop is now codified as one primitive** — `dispatchWorkflowEvent(client, {...})` in `apps/api/src/workflow-dispatch.ts` — instead of being a convention each route re-hand-rolls. It runs the load → version-check → pure-reduce → persist → `recordWorkflowEvent` (always) → optional outbox steps in order, returning a discriminated `{ kind: 'ok' | 'not_found' | 'version_conflict' | 'illegal_transition' }` the route maps to 200/404/409. `toWorkflowSnapshot(definition, snapshot)` builds the GET response so `next_events` is always computed from the registered reducer's `nextEvents(state)`, never hand-listed — the UI can't invent a transition the machine doesn't allow. New workflow event routes MUST use the primitive rather than re-implementing the steps (forgetting `recordWorkflowEvent` was exactly how `routes/rentals.ts` half-wired `rental`). The matching thin client renderer is `apps/web/src/machines/headless-workflow.ts` (`createHeadlessWorkflowMachine`).
 
 This lets the UI become a human-friendly visualization of the same statechart
 that a Temporal workflow would eventually coordinate.
@@ -277,7 +279,7 @@ The pieces below let us freeze business behavior for stable customers without fr
 
 Every reducer self-registers via `registerWorkflow({ name, schemaVersion, initialState, terminalStates, allStates, allEventTypes, reduce, nextEvents, isHumanEvent, sideEffectTypes })`. Cross-cutting tooling (replay harness, event-log writers, golden tests, future Temporal worker) operates against this one surface, not per-reducer imports.
 
-The registry refuses double-registration with a different `schemaVersion`. Bumping `schemaVersion` is the explicit signal that the reducer's transition table has changed.
+The registry is idempotent on re-registration of the **same** `name@schemaVersion` (hot-reload safe). Registering a **different** `schemaVersion` of the same workflow stores it side-by-side rather than rejecting it; bumping `schemaVersion` is the explicit signal that the transition table changed, and old event-log rows keep replaying through their original reducer via `getWorkflow(name, persistedSchemaVersion)`. `getWorkflow(name)` with no version returns the highest-version reducer (the path new events take).
 
 Currently registered: `rental_billing_run` (v1), `estimate_push` (v1), `crew_schedule` (v1), `project_closeout` (v1), `time_review_run` (v1), `labor_payroll_run` (v1), `project_lifecycle` (v1), `field_event` (v1), `rental` (v1).
 
@@ -327,9 +329,11 @@ Inline `toMatchInlineSnapshot` for the full `nextEvents(state)` map. Drift in UI
 
 `POST_SUCCEEDED` and `POST_FAILED` are dispatched by the worker, not a human, so they never hit `recordWorkflowEvent` in `mutation-tx.ts`. The queue package's `appendWorkflowEvent` handles the worker side: every `applyWorkerEmittedEvent` (rental-billing) and `applyEstimatePushWorkerEvent` (estimate-push) appends one row to `workflow_event_log` in the same tx as the state update. `on conflict (entity_id, state_version) do nothing` makes worker retries safe — duplicate writes for the same transition are silently absorbed by the unique constraint.
 
+**One INSERT, two call sites.** The API writer (`recordWorkflowEvent`, `mutation-tx.ts`) and the worker writer (`appendWorkflowEvent`, `packages/queue/src/index.ts`) both build the `workflow_event_log` INSERT through the single shared helper `buildWorkflowEventLogInsert(args, { onConflict })` (`packages/workflows/src/event-log-insert.ts`). The column list lives there once, so adding a column can't silently desync the two writers (and the replay corpus that depends on them). The two writers differ only in what the helper is told: the **API path** sources trace context from ambient request context (`currentTraceHeaders()`/`getRequestContext()`) and passes `onConflict: 'throw'` so a duplicate transition becomes a 409 (human double-submit); the **worker path** reads trace off the claimed outbox row (`args.trace`) and passes `onConflict: 'do_nothing'` for idempotent drains. Because the API path persists ambient trace columns while the seed/test path (`test-replay.ts:applyEventSequence`) omits them, the two writers produce rows that differ in the trace columns — replay equality (`snapshotsEqual`) ignores those columns, so this is intentional, not full-row equivalence.
+
 ### CLI Replay Tool — `scripts/replay-workflow.ts`
 
-Ops-facing companion to the in-process replay harness. Reads `workflow_event_log` for one entity, runs `applyEventLog`, and compares the reducer output to the live row in `rental_billing_runs` or `estimate_pushes`:
+Ops-facing companion to the in-process replay harness. Reads `workflow_event_log` for one entity, runs `applyEventLog`, and compares the reducer output to the live entity row. Its `ENTITY_TABLE` maps every registered workflow to its persisted table and the snapshot-field→DB-column aliases (e.g. `project_lifecycle` stores everything under `lifecycle_*` on the shared `projects` table; `labor_payroll_runs.approved_by_user_id` is the reducer's `approved_by`); the script `import '@sitelayer/workflows'` for the side-effect so every reducer self-registers, and prints an advisory warning if a registered workflow lacks an `ENTITY_TABLE` mapping. `scripts/replay-workflow-sweep.sh` sweeps the non-terminal rows of every mapped workflow:
 
 ```sh
 DATABASE_URL=postgres://... npx tsx scripts/replay-workflow.ts \
@@ -361,7 +365,7 @@ The `schema_version` column already exists on `workflow_event_log`; multi-versio
 | `labor_payroll_run`  | Live in API + worker (worker uses stub QBO TimeActivity push unless `QBO_LIVE_LABOR_PAYROLL=1`); financial hub list/detail screens shipped in #285/#292 | v1     | generated, approved, posting, posted, failed, voided                     | `post_qbo_time_activities`                                |
 | `project_lifecycle`  | Live in API + web (`useProjectLifecycle` XState mounted on project detail in #276/#281)                                                                 | v1     | draft, estimating, sent, accepted, declined, in_progress, done, archived | `notify_foreman_assignment`                               |
 | `field_event`        | Live in API + worker; "Flag a problem" → foreman triage → estimator escalation                                                                          | v1     | open, resolved, escalated, dismissed                                     | `notify_worker_resolution`, `notify_estimator_escalation` |
-| `rental`             | Phase 1 — reducer registered (replay sweep wired) but `routes/rentals.ts` writes have not yet been switched over to dispatch through the event API      | v1     | active, returned, invoiced_pending, closed                               | none                                                      |
+| `rental`             | Live — human RETURN/CLOSE wired through the reducer; canonical GET snapshot + POST `/api/rentals/:id/events` surface added (`routes/rental-events.ts`); worker `rental-invoice` runner emits the cadence INVOICE_QUEUED/INVOICE_POSTED so `invoiced_pending` is reachable in the event log; replay sweep mapped | v1     | active, returned, invoiced_pending, closed                               | none                                                      |
 
 Implicit state machines that have not yet been lifted into deterministic workflows (they still live as `set status = '...'` in scattered handlers):
 

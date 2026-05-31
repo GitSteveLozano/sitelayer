@@ -225,4 +225,65 @@ describe('createHeadlessWorkflowMachine', () => {
       expect(load).toHaveBeenCalledTimes(2)
     })
   })
+
+  // Golden affordance map: the frontend analog of nextEvents-per-state.
+  // A regression that silently drops a UI action (e.g. DISPATCH no longer
+  // reachable from idle) becomes a snapshot diff.
+  describe('affordance golden map', () => {
+    it('exposes a stable accepted-event set per reachable state', async () => {
+      const { machine } = buildMachine()
+      const actor = startActor(machine)
+      const map: Record<string, string[]> = {}
+      const ALL = ['LOAD', 'DISPATCH', 'DISMISS_ERROR'] as const
+      function record(stateValue: string) {
+        const s = actor.getSnapshot()
+        map[stateValue] = ALL.filter((type) =>
+          type === 'DISPATCH' ? s.can({ type, event: 'APPROVE' }) : s.can({ type }),
+        )
+          .slice()
+          .sort()
+      }
+      record('loading')
+      await settle()
+      record('idle')
+      expect(map).toMatchInlineSnapshot(`
+        {
+          "idle": [
+            "DISMISS_ERROR",
+            "DISPATCH",
+            "LOAD",
+          ],
+          "loading": [],
+        }
+      `)
+    })
+  })
+
+  // The bridge must NEVER mirror the business state/next_events onto its
+  // own context — it stores the server snapshot verbatim. Assert the
+  // stored object is reference-identical to the actor output it was
+  // assigned, proving no copy/transform happens.
+  describe('never mirrors business state (reference identity)', () => {
+    it('stores the loaded snapshot object by reference', async () => {
+      const loaded: DemoSnapshot = { state_version: 1, tag: 'initial' }
+      const { machine } = buildMachine({ load: async () => loaded })
+      const actor = startActor(machine)
+      await settle()
+      expect(actor.getSnapshot().context.snapshot).toBe(loaded)
+    })
+
+    it('stores the submit-result snapshot object by reference', async () => {
+      const loaded: DemoSnapshot = { state_version: 1, tag: 'initial' }
+      const submitted: DemoSnapshot = { state_version: 2, tag: 'after-submit' }
+      const { machine } = buildMachine({
+        load: async () => loaded,
+        submit: async () => submitted,
+      })
+      const actor = startActor(machine)
+      await settle()
+      actor.send({ type: 'DISPATCH', event: 'APPROVE' })
+      await settle()
+      expect(actor.getSnapshot().context.snapshot).toBe(submitted)
+    })
+  })
 })

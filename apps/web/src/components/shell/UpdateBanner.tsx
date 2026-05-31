@@ -1,21 +1,29 @@
 import { useEffect, useState } from 'react'
 import { registerServiceWorker } from '@/pwa/register'
+import { MUpdateState } from '@/components/m-states'
 
 /**
- * Service-worker update banner — sits under OfflineBanner. When the
- * background SW detects a new build, this component flips visible
- * with a "tap to update" affordance. Clicking calls the registered
- * `updateSW(true)` which activates the new SW + reloads.
+ * Service-worker update takeover. When the background SW detects a new build,
+ * this flips into a full-screen "NEW VERSION" takeover (design msg__06): an
+ * accent (#FFD400) hero with a "● NEW VERSION" mono eyebrow, the bold
+ * "Sitelayer got an update." headline, a "WHAT'S NEW" list, and RELOAD APP /
+ * LATER actions. RELOAD APP calls the registered `updateSW(true)` which
+ * activates the waiting SW + reloads; LATER dismisses until the next check.
  *
- * v2 brutalist (aligned to V2StateStale): full-fill ACCENT strip, square
- * pulsing ink block, mono "NEW VERSION" eyebrow over the reload prompt.
- * All colors are `--m-*` tokens so the worker dark theme inverts cleanly.
+ * v2 brutalist via MUpdateState (square corners, hard ink borders, mono labels,
+ * full-fill accent hero). All colors are `--m-*` tokens so the worker dark
+ * theme inverts cleanly.
  *
- * Production-only — `registerServiceWorker` no-ops outside of
- * PROD bundles, so dev still hot-reloads via Vite.
+ * Production-only — `registerServiceWorker` no-ops outside of PROD bundles, so
+ * dev still hot-reloads via Vite.
  */
+
+/** Curated "what's new" copy mirroring the design's WHAT'S NEW list. */
+const WHATS_NEW = ['AI auto-takeoff drafts', 'Cross-sheet reference jumps', 'Faster offline sync'] as const
+
 export function UpdateBanner() {
   const [needsRefresh, setNeedsRefresh] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
   const [updating, setUpdating] = useState(false)
   const [updateSW, setUpdateSW] = useState<((reloadPage?: boolean) => Promise<void>) | null>(null)
 
@@ -23,14 +31,17 @@ export function UpdateBanner() {
     if (typeof window === 'undefined') return
     if (!import.meta.env.PROD) return
     const update = registerServiceWorker({
-      onNeedRefresh: () => setNeedsRefresh(true),
+      onNeedRefresh: () => {
+        setNeedsRefresh(true)
+        setDismissed(false)
+      },
     })
     setUpdateSW(() => update)
   }, [])
 
-  if (!needsRefresh) return null
+  if (!needsRefresh || dismissed) return null
 
-  const onTap = async () => {
+  const onReload = async () => {
     if (updating) return
     setUpdating(true)
     try {
@@ -40,50 +51,33 @@ export function UpdateBanner() {
       if (updateSW) await updateSW(true)
     } catch {
       // Fall back to a manual reload — the new SW will activate when
-      // every tab is closed, and the banner will re-show after that.
+      // every tab is closed, and the takeover re-shows after that.
       window.location.reload()
     }
   }
 
   return (
-    <button
-      type="button"
-      onClick={onTap}
-      role="status"
-      aria-live="polite"
-      className="block w-full text-left"
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Update available"
       style={{
-        padding: '12px 20px',
-        background: 'var(--m-accent)',
-        color: 'var(--m-accent-ink)',
-        borderBottom: '2px solid var(--m-ink)',
-        borderTop: '2px solid var(--m-ink)',
-        cursor: 'pointer',
+        position: 'fixed',
+        inset: 0,
+        zIndex: 90,
+        background: 'var(--m-sand)',
+        overflowY: 'auto',
       }}
     >
-      <span className="inline-flex items-center gap-2.5">
-        <span
-          aria-hidden="true"
-          style={{
-            width: 12,
-            height: 12,
-            background: 'var(--m-ink)',
-            animation: 'm-pulse 1s infinite',
-            flexShrink: 0,
-          }}
-        />
-        <span
-          style={{
-            fontFamily: 'var(--m-num)',
-            fontSize: 11,
-            fontWeight: 700,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-          }}
-        >
-          {updating ? 'Updating…' : 'New version · tap to reload'}
-        </span>
-      </span>
-    </button>
+      <MUpdateState
+        title="Sitelayer got an update."
+        body="Reload to keep using. Your work is safe."
+        changes={WHATS_NEW}
+        primaryLabel={updating ? 'Reloading…' : 'Reload app'}
+        onPrimary={onReload}
+        secondaryLabel="Later"
+        onSecondary={() => setDismissed(true)}
+      />
+    </div>
   )
 }

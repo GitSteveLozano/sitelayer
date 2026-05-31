@@ -24,6 +24,7 @@ import {
   MBody,
   MButton,
   MButtonRow,
+  MChip,
   MKpi,
   MInput,
   MListInset,
@@ -42,6 +43,21 @@ import {
 import { formatMoney } from './format.js'
 
 type Tone = 'green' | 'blue' | 'amber' | 'red' | undefined
+
+/**
+ * SCHEDULE IMPACT segmented control options (design msg 57). Each maps to
+ * the schedule_impact_days the composer posts. NONE = 0, +1-2 DAYS = 2,
+ * +1 WEEK = 7. The selected segment is the source of truth for
+ * schedule_impact_days — there is no free-text day input.
+ */
+const SCHEDULE_SEGMENTS: ReadonlyArray<{ label: string; days: number }> = [
+  { label: 'None', days: 0 },
+  { label: '+1–2 days', days: 2 },
+  { label: '+1 week', days: 7 },
+]
+
+/** Stepper increment for the value-delta +/- buttons (design msg 57). */
+const VALUE_STEP = 250
 
 /** Square status pill tone in the brutalist DRAFT/SENT/ACCEPTED idiom. */
 function statusTone(status: ChangeOrderStatus): Tone {
@@ -69,13 +85,19 @@ export function MobileChangeOrders() {
   const [composing, setComposing] = useState(false)
   const [description, setDescription] = useState('')
   const [valueDelta, setValueDelta] = useState('')
-  const [scheduleDays, setScheduleDays] = useState('')
+  // SCHEDULE IMPACT is a segmented control (design msg 57): the selected
+  // segment index drives schedule_impact_days. Default = NONE (0 days).
+  const [scheduleSegment, setScheduleSegment] = useState(0)
 
   const changeOrders = query.data?.change_orders ?? []
   const acceptedDelta = query.data?.accepted_value_delta ?? 0
   // Newest first. created_at is an ISO string; lexical compare is fine, but
   // fall back to the monotonically-increasing CO number for ties.
   const ordered = [...changeOrders].sort((a, b) => b.created_at.localeCompare(a.created_at) || b.number - a.number)
+
+  // Live preview of the value-delta big-number (design msg 57). Empty /
+  // non-numeric input previews as $0 so the hero never reads "$NaN".
+  const previewDelta = Number.isFinite(Number(valueDelta)) && valueDelta.trim() !== '' ? Number(valueDelta) : 0
 
   const errorMessage =
     createMutation.error instanceof Error
@@ -88,7 +110,15 @@ export function MobileChangeOrders() {
     setComposing(false)
     setDescription('')
     setValueDelta('')
-    setScheduleDays('')
+    setScheduleSegment(0)
+  }
+
+  // +/- stepper: nudge the numeric value-delta by VALUE_STEP, clamping the
+  // empty string to 0 first so a fresh composer steps cleanly.
+  function stepValue(direction: 1 | -1) {
+    const current = Number(valueDelta)
+    const base = Number.isFinite(current) ? current : 0
+    setValueDelta(String(base + direction * VALUE_STEP))
   }
 
   function submitCreate() {
@@ -96,12 +126,12 @@ export function MobileChangeOrders() {
     if (!desc) return
     const delta = Number(valueDelta)
     if (!Number.isFinite(delta)) return
-    const days = scheduleDays.trim() === '' ? undefined : Number(scheduleDays)
+    const days = SCHEDULE_SEGMENTS[scheduleSegment]?.days ?? 0
     createMutation.mutate(
       {
         description: desc,
         value_delta: delta,
-        ...(days !== undefined && Number.isFinite(days) ? { schedule_impact_days: days } : {}),
+        ...(days > 0 ? { schedule_impact_days: days } : {}),
       },
       { onSuccess: resetComposer },
     )
@@ -169,21 +199,53 @@ export function MobileChangeOrders() {
                   aria-required="true"
                 />
               </Field>
-              <Field label="Value delta ($)">
-                <MInput
-                  inputMode="numeric"
-                  value={valueDelta}
-                  onChange={(e) => setValueDelta(e.currentTarget.value)}
-                  placeholder="2500 (negative = credit)"
-                />
+              {/* VALUE DELTA — large green live-preview big-number with a
+                  −/+ stepper pair (design msg 57). The raw input stays
+                  editable beneath so a precise figure can be typed; the
+                  stepper nudges it by VALUE_STEP. */}
+              <Field label="Value delta">
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                  <div
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      fontFamily: 'var(--m-font-display)',
+                      fontWeight: 800,
+                      fontSize: 40,
+                      lineHeight: 1,
+                      letterSpacing: '-0.02em',
+                      color: previewDelta < 0 ? 'var(--m-red)' : 'var(--m-green)',
+                    }}
+                  >
+                    {previewDelta < 0 ? '−' : '+'}
+                    {formatMoney(Math.abs(previewDelta))}
+                  </div>
+                  <MButton size="sm" variant="ghost" aria-label="Decrease value" onClick={() => stepValue(-1)}>
+                    −
+                  </MButton>
+                  <MButton size="sm" variant="primary" aria-label="Increase value" onClick={() => stepValue(1)}>
+                    +
+                  </MButton>
+                </div>
+                <div style={{ marginTop: 8 }}>
+                  <MInput
+                    inputMode="numeric"
+                    value={valueDelta}
+                    onChange={(e) => setValueDelta(e.currentTarget.value)}
+                    placeholder="2500 (negative = credit)"
+                  />
+                </div>
               </Field>
-              <Field label="Schedule impact (days)">
-                <MInput
-                  inputMode="numeric"
-                  value={scheduleDays}
-                  onChange={(e) => setScheduleDays(e.currentTarget.value)}
-                  placeholder="0"
-                />
+              {/* SCHEDULE IMPACT — segmented control (design msg 57):
+                  NONE / +1–2 DAYS / +1 WEEK, mapped to schedule_impact_days. */}
+              <Field label="Schedule impact">
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  {SCHEDULE_SEGMENTS.map((seg, i) => (
+                    <MChip key={seg.label} active={scheduleSegment === i} onClick={() => setScheduleSegment(i)}>
+                      {seg.label}
+                    </MChip>
+                  ))}
+                </div>
               </Field>
               <MButtonRow>
                 <MButton
@@ -226,7 +288,13 @@ export function MobileChangeOrders() {
         ) : (
           <MListInset>
             {ordered.map((co) => (
-              <CoRow key={co.id} co={co} busy={eventMutation.isPending} onEvent={(ev) => dispatch(co, ev)} />
+              <CoRow
+                key={co.id}
+                co={co}
+                busy={eventMutation.isPending}
+                onEvent={(ev) => dispatch(co, ev)}
+                onOpen={() => navigate(`/projects/${projectId}/change-orders/${co.id}`)}
+              />
             ))}
           </MListInset>
         )}
@@ -239,10 +307,12 @@ function CoRow({
   co,
   busy,
   onEvent,
+  onOpen,
 }: {
   co: ChangeOrder
   busy: boolean
   onEvent: (event: 'SEND' | 'ACCEPT' | 'REJECT' | 'VOID') => void
+  onOpen: () => void
 }) {
   const positive = co.value_delta >= 0
   const coLabel = `CO-${String(co.number).padStart(4, '0')}`
@@ -268,6 +338,11 @@ function CoRow({
         {formatMoney(Math.abs(co.value_delta))}
         {co.schedule_impact_days ? ` · ${co.schedule_impact_days > 0 ? '+' : ''}${co.schedule_impact_days}d` : ''}
       </span>
+      <MButtonRow>
+        <MButton size="sm" variant="ghost" onClick={onOpen}>
+          Open
+        </MButton>
+      </MButtonRow>
       <CoActions status={co.status} busy={busy} onEvent={onEvent} />
     </div>
   )

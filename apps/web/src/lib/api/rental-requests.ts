@@ -6,6 +6,10 @@
  * file is read-only list + approve/decline mutations for admins/office.
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type {
+  RentalRequestApprovalHumanEventType,
+  RentalRequestApprovalWorkflowState,
+} from '@sitelayer/workflows'
 import { request } from './client'
 
 export type RentalRequestStatus = 'pending' | 'approved' | 'declined' | 'all'
@@ -107,6 +111,72 @@ export function useDeclineRentalRequest() {
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['rental-requests'] })
+    },
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Headless rental_request_approval workflow surface.
+//
+// Counterpart to GET /api/rental-requests/:id (snapshot) and
+// POST /api/rental-requests/:id/events (versioned dispatch) added to
+// apps/api/src/routes/rental-requests.ts. The queue renders
+// snapshot.next_events straight from the reducer and threads
+// state_version on every dispatch — same shape as
+// lib/api/damage-charge-settlement.ts. The legacy approve/decline hooks
+// above stay for back-compat but the queue now uses these.
+// ---------------------------------------------------------------------------
+
+export type RentalRequestApprovalState = RentalRequestApprovalWorkflowState
+export type RentalRequestApprovalEvent = RentalRequestApprovalHumanEventType
+
+export interface RentalRequestSnapshot {
+  state: RentalRequestApprovalState
+  state_version: number
+  next_events: Array<{ type: RentalRequestApprovalEvent; label: string }>
+  context: RentalRequest
+}
+
+export function fetchRentalRequestSnapshot(id: string): Promise<RentalRequestSnapshot> {
+  return request<RentalRequestSnapshot>(`${RENTAL_REQUESTS_BASE}/${encodeURIComponent(id)}`)
+}
+
+export function dispatchRentalRequestEvent(
+  id: string,
+  event: RentalRequestApprovalEvent,
+  stateVersion: number,
+  declineReason?: string | null,
+): Promise<RentalRequestSnapshot> {
+  return request<RentalRequestSnapshot>(`${RENTAL_REQUESTS_BASE}/${encodeURIComponent(id)}/events`, {
+    method: 'POST',
+    json:
+      declineReason != null && declineReason !== ''
+        ? { event, state_version: stateVersion, decline_reason: declineReason }
+        : { event, state_version: stateVersion },
+  })
+}
+
+export function useRentalRequestSnapshot(id: string | null | undefined) {
+  return useQuery<RentalRequestSnapshot>({
+    queryKey: ['rental-request-snapshot', id ?? ''],
+    queryFn: () => fetchRentalRequestSnapshot(id!),
+    enabled: Boolean(id),
+  })
+}
+
+export function useDispatchRentalRequestEvent(id: string) {
+  const qc = useQueryClient()
+  return useMutation<
+    RentalRequestSnapshot,
+    Error,
+    { event: RentalRequestApprovalEvent; state_version: number; decline_reason?: string | null }
+  >({
+    mutationFn: ({ event, state_version, decline_reason }) =>
+      dispatchRentalRequestEvent(id, event, state_version, decline_reason ?? null),
+    onSuccess: (data) => {
+      qc.setQueryData(['rental-request-snapshot', id], data)
+      qc.invalidateQueries({ queryKey: ['rental-requests'] })
+      qc.invalidateQueries({ queryKey: ['rentals'] })
     },
   })
 }

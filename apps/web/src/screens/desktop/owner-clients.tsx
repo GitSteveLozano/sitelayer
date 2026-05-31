@@ -35,14 +35,6 @@ type ClientRow = {
   decided: number
   activeProjects: number
   hot: boolean
-  lastProjectAt: string | null
-}
-
-function formatLastProject(iso: string | null): string {
-  if (!iso) return '—'
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return '—'
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 export function OwnerClients() {
@@ -77,7 +69,6 @@ export function OwnerClients() {
       let wins = 0
       let decided = 0
       let activeProjects = 0
-      let lastProjectAt: string | null = null
       for (const p of ps) {
         lifetimeValue += Number(p.bid_total) || 0
         if (isWon(p.status)) {
@@ -87,7 +78,6 @@ export function OwnerClients() {
           decided += 1
         }
         if (isActiveStatus(p.status)) activeProjects += 1
-        if (!lastProjectAt || p.created_at > lastProjectAt) lastProjectAt = p.created_at
       }
       totalLifetime += lifetimeValue
       totalWins += wins
@@ -107,7 +97,6 @@ export function OwnerClients() {
         decided,
         activeProjects,
         hot: false, // filled in below once the value threshold is known
-        lastProjectAt,
       }
     })
 
@@ -135,24 +124,20 @@ export function OwnerClients() {
       render: (r) => (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
           <span className="d-table-cell-strong">{r.name}</span>
-          {r.hot ? <MPill tone="red">HOT</MPill> : null}
+          {r.hot ? <MPill tone="accent">HOT</MPill> : null}
         </span>
       ),
     },
-    {
-      key: 'org',
-      header: 'Org',
-      render: (r) => <MPill tone={r.org === 'QuickBooks' ? 'green' : undefined}>{r.org}</MPill>,
-    },
+    // ORG renders as plain descriptive copy (not a status pill) per dsg__37.
+    { key: 'org', header: 'Org', render: (r) => r.org },
     { key: 'projects', header: 'Projects', numeric: true, render: (r) => r.projectCount },
-    { key: 'lifetime', header: 'Lifetime value', numeric: true, render: (r) => formatMoney(r.lifetimeValue) },
     {
       key: 'winRate',
       header: 'Win rate',
       numeric: true,
       render: (r) => (r.decided > 0 ? `${Math.round((r.wins / r.decided) * 100)}%` : '—'),
     },
-    { key: 'last', header: 'Last project', render: (r) => formatLastProject(r.lastProjectAt) },
+    { key: 'lifetime', header: 'Lifetime $', numeric: true, render: (r) => formatMoney(r.lifetimeValue) },
   ]
 
   const addClientButton = (
@@ -198,7 +183,7 @@ export function OwnerClients() {
           // CLIENTS · EMPTY STATE — DEmptyState + ADD CLIENT (design DClientsEmpty).
           <DEmptyState
             title="No clients yet"
-            body="New accounts land here once they're added. Add your first client to get started."
+            body="Add your first client, or they'll appear here automatically when you create a project or send a bid."
             action={addClientButton}
           />
         ) : (

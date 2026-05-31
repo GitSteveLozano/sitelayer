@@ -22,6 +22,13 @@ export interface NotificationRow {
   payload: Record<string, unknown>
   read_at: string | null
   created_at: string
+  // Delivery-state fields from the latest workflow_event_log snapshot
+  // (null for pre-workflow rows). Recipient-scoped — see
+  // apps/api/src/routes/notifications.ts GET /api/notifications.
+  state?: string | null
+  channel?: string | null
+  failure_kind?: string | null
+  failed_at?: string | null
 }
 
 export interface NotificationListResponse {
@@ -82,6 +89,24 @@ const POLL_MS = 30_000
  */
 export function useUnreadNotifications(kind?: string, options?: Partial<UseQueryOptions<NotificationListResponse>>) {
   const params: NotificationListParams = { unread: true, ...(kind ? { kind } : {}) }
+  return useQuery<NotificationListResponse>({
+    queryKey: notificationQueryKeys.list(params),
+    queryFn: () => fetchNotifications(params),
+    refetchInterval: POLL_MS,
+    refetchIntervalInBackground: false,
+    ...options,
+  })
+}
+
+/**
+ * Poll the recipient's full notification feed (read + unread) for the
+ * topbar bell panel. Same 30 s cadence as the unread poll; the caller
+ * derives the unread-count dot from `read_at == null`.
+ */
+export function useNotificationFeed(
+  params: NotificationListParams = {},
+  options?: Partial<UseQueryOptions<NotificationListResponse>>,
+) {
   return useQuery<NotificationListResponse>({
     queryKey: notificationQueryKeys.list(params),
     queryFn: () => fetchNotifications(params),

@@ -31,6 +31,22 @@ export type ProjectRow = {
   site_lat?: string | null
   site_lng?: string | null
   site_radius_m?: number | null
+  // project_lifecycle workflow state — the single pipeline source for all
+  // state-dependent rendering (header/gates/hero/stepper). The legacy
+  // `status` column above is a free-text classification label for analytics,
+  // NOT a state machine. Surfaced from the list + bootstrap queries
+  // (apps/api/src/projects-query.ts + routes/system.ts) so list/header
+  // chrome can render per-state without a second fetch. Optional so a
+  // legacy/narrowed payload that predates the column still type-checks.
+  lifecycle_state?: string
+  lifecycle_state_version?: number
+  lifecycle_sent_at?: string | null
+  lifecycle_accepted_at?: string | null
+  lifecycle_declined_at?: string | null
+  lifecycle_decline_reason?: string | null
+  lifecycle_started_at?: string | null
+  lifecycle_completed_at?: string | null
+  lifecycle_archived_at?: string | null
   version: number
   created_at: string
   updated_at: string

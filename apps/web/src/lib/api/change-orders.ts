@@ -38,6 +38,11 @@ export function fetchProjectChangeOrders(projectId: string): Promise<ChangeOrder
   return request<ChangeOrdersResponse>(`/api/projects/${encodeURIComponent(projectId)}/change-orders`)
 }
 
+/** GET the canonical headless snapshot for a single change order. */
+export function fetchChangeOrderSnapshot(id: string): Promise<ChangeOrderSnapshot> {
+  return request<ChangeOrderSnapshot>(`/api/change-orders/${encodeURIComponent(id)}`)
+}
+
 export function createChangeOrder(projectId: string, input: CreateChangeOrderInput): Promise<ChangeOrderSnapshot> {
   return request<ChangeOrderSnapshot>(`/api/projects/${encodeURIComponent(projectId)}/change-orders`, {
     method: 'POST',
@@ -65,6 +70,18 @@ export function useProjectChangeOrders(
     queryKey: KEYS.byProject(projectId ?? ''),
     queryFn: () => fetchProjectChangeOrders(projectId!),
     enabled: Boolean(projectId),
+    ...options,
+  })
+}
+
+export function useChangeOrderSnapshot(
+  id: string | null | undefined,
+  options?: Partial<UseQueryOptions<ChangeOrderSnapshot>>,
+) {
+  return useQuery<ChangeOrderSnapshot>({
+    queryKey: KEYS.detail(id ?? ''),
+    queryFn: () => fetchChangeOrderSnapshot(id!),
+    enabled: Boolean(id),
     ...options,
   })
 }

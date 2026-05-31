@@ -534,6 +534,11 @@ export function EstCanvas() {
   // applies unchanged).
   const boxStartRef = useRef<TakeoffPoint | null>(null)
   const [boxRect, setBoxRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
+  // Marquee (SELECT mode): drag a rubber-band rectangle to lasso every committed
+  // measurement it encloses (design dsg__49 "MARQUEE BULK SELECT"). Distinct from
+  // the RECT draw-tool box above so the two never interfere.
+  const marqueeStartRef = useRef<TakeoffPoint | null>(null)
+  const [marqueeRect, setMarqueeRect] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(null)
   const onPointerDownCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
     // Middle-button, RIGHT-button (PlanSwift-style drag-to-move the plan, per
     // Cavy's request), Space-hold, or the Hand tool pans instead of drawing.
@@ -556,6 +561,17 @@ export function EstCanvas() {
       }
       return
     }
+    if (mode === 'select') {
+      // Begin a marquee. A real drag lassos enclosed measurements on pointer-up;
+      // a zero-drag falls through to onCanvasTap (clears the selection).
+      const p = clientToBoard(e.clientX, e.clientY)
+      if (p) {
+        e.currentTarget.setPointerCapture?.(e.pointerId)
+        marqueeStartRef.current = p
+        setMarqueeRect({ x0: p.x, y0: p.y, x1: p.x, y1: p.y })
+      }
+      return
+    }
     onCanvasTap(e)
   }
   const onPointerMoveCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
@@ -565,11 +581,47 @@ export function EstCanvas() {
       if (p) setBoxRect({ x0: boxStart.x, y0: boxStart.y, x1: p.x, y1: p.y })
       return
     }
+    const marqueeStart = marqueeStartRef.current
+    if (marqueeStart) {
+      const p = clientToBoard(e.clientX, e.clientY)
+      if (p) setMarqueeRect({ x0: marqueeStart.x, y0: marqueeStart.y, x1: p.x, y1: p.y })
+      return
+    }
     const start = panStartRef.current
     if (!start) return
     setPan({ x: start.panX + (e.clientX - start.x), y: start.panY + (e.clientY - start.y) })
   }
   const onPointerUpCanvas = (e: ReactPointerEvent<SVGSVGElement>) => {
+    if (marqueeStartRef.current) {
+      marqueeStartRef.current = null
+      e.currentTarget.releasePointerCapture?.(e.pointerId)
+      const r = marqueeRect
+      setMarqueeRect(null)
+      if (r) {
+        const x0 = Math.min(r.x0, r.x1)
+        const y0 = Math.min(r.y0, r.y1)
+        const x1 = Math.max(r.x0, r.x1)
+        const y1 = Math.max(r.y0, r.y1)
+        // A real drag lassos every committed measurement fully inside the box;
+        // a negligible drag is a click → clear the current selection.
+        if (x1 - x0 > 0.5 && y1 - y0 > 0.5) {
+          const inside = new Set<string>()
+          for (const m of blueprintMeasurements) {
+            const geo = m.geometry as MeasurementGeometry
+            const pts = geo.points ?? []
+            if (pts.length > 0 && pts.every((p) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1)) {
+              inside.add(m.id)
+            }
+          }
+          setBulkSelected(inside)
+          setSelectedMeasurementId(inside.size === 1 ? (Array.from(inside)[0] ?? null) : null)
+        } else {
+          setBulkSelected(new Set())
+          setSelectedMeasurementId(null)
+        }
+      }
+      return
+    }
     if (boxStartRef.current) {
       boxStartRef.current = null
       e.currentTarget.releasePointerCapture?.(e.pointerId)
@@ -735,6 +787,35 @@ export function EstCanvas() {
   )
   const bulkTotal = useMemo(() => round2(bulkRows.reduce((s, m) => s + (Number(m.quantity) || 0), 0)), [bulkRows])
 
+  // Provisional drawing-scale ratio for the SCALE overlay (design dsg__46
+  // "= 1:48 ● PROVISIONAL"). While the estimator draws the reference line and
+  // types its real-world length, derive the paper:world ratio N in "1:N" form
+  // from the line's length in page points (1pt = 1/72") vs the typed feet.
+  // Returns null until both endpoints + a positive length are present, or when
+  // the page size is unknown.
+  const provisionalRatio = useMemo<number | null>(() => {
+    if (scalePoints.length < 2 || !pageSize) return null
+    const [a, b] = scalePoints as [TakeoffPoint, TakeoffPoint]
+    const feet = Number(scaleLength)
+    if (!Number.isFinite(feet) || feet <= 0) return null
+    // Board space (0–100) maps anisotropically onto the page: board-x → width,
+    // board-y → height. Convert the drawn line into page points, then inches.
+    const dxPts = ((b.x - a.x) / 100) * pageSize.width
+    const dyPts = ((b.y - a.y) / 100) * pageSize.height
+    const paperInches = Math.hypot(dxPts, dyPts) / 72
+    if (paperInches <= 0) return null
+    const ratio = (feet * 12) / paperInches
+    return Number.isFinite(ratio) && ratio > 0 ? Math.round(ratio) : null
+  }, [scalePoints, scaleLength, pageSize])
+
+  // Per-page calibration status for the floating SHEETS panel (design dsg__06 /
+  // dsg__46). A page is VERIFIED once it carries a saved calibration; the page
+  // actively being calibrated reads SETTING; the rest are UNCAL.
+  const pageScaleStatus = (p: BlueprintPage): { label: string; tone: 'green' | 'amber' | 'ink' } => {
+    if (mode === 'scale' && p.id === activePage?.id) return { label: 'SETTING…', tone: 'amber' }
+    return p.calibration_set_at ? { label: '✓ VERIFIED', tone: 'green' } : { label: 'UNCAL', tone: 'ink' }
+  }
+
   // Item command-palette: filter the scope items by the typed query.
   const paletteItems = useMemo(() => {
     const q = itemQuery.trim().toLowerCase()
@@ -755,6 +836,13 @@ export function EstCanvas() {
       setSelectedMeasurementId(next.size === 1 ? (Array.from(next)[0] ?? null) : null)
       return next
     })
+  }
+
+  // In SELECT mode a pointer-down that lands on a measurement must NOT start a
+  // canvas marquee — let the shape's own click toggle it instead. Stopping
+  // propagation here keeps click-to-toggle and drag-to-marquee from colliding.
+  const onShapePointerDown = (e: ReactPointerEvent<SVGElement>) => {
+    if (mode === 'select') e.stopPropagation()
   }
 
   const clearSelection = () => {
@@ -1011,7 +1099,12 @@ export function EstCanvas() {
                 const polyStroke = isDed ? 'var(--m-red)' : strokeSel
                 const labelFill = isDed ? 'var(--m-red)' : 'var(--m-accent)'
                 return (
-                  <g key={m.id} onClick={onClick} style={{ cursor: interactive ? 'pointer' : undefined }}>
+                  <g
+                    key={m.id}
+                    onClick={onClick}
+                    onPointerDown={onShapePointerDown}
+                    style={{ cursor: interactive ? 'pointer' : undefined }}
+                  >
                     <polygon
                       points={geo.points.map((p) => `${p.x},${p.y}`).join(' ')}
                       fill={polyFill}
@@ -1033,6 +1126,7 @@ export function EstCanvas() {
                   <polyline
                     key={m.id}
                     onClick={onClick}
+                    onPointerDown={onShapePointerDown}
                     style={{ cursor: interactive ? 'pointer' : undefined }}
                     points={geo.points.map((p) => `${p.x},${p.y}`).join(' ')}
                     fill="none"
@@ -1043,7 +1137,12 @@ export function EstCanvas() {
               }
               if (geo.kind === 'count' && geo.points) {
                 return (
-                  <g key={m.id} onClick={onClick} style={{ cursor: interactive ? 'pointer' : undefined }}>
+                  <g
+                    key={m.id}
+                    onClick={onClick}
+                    onPointerDown={onShapePointerDown}
+                    style={{ cursor: interactive ? 'pointer' : undefined }}
+                  >
                     {geo.points.map((p, i) => (
                       <circle
                         key={i}
@@ -1078,6 +1177,29 @@ export function EstCanvas() {
                       stroke={deduct ? 'var(--m-red)' : 'var(--m-amber)'}
                       strokeWidth={0.4}
                       strokeDasharray="0.8 0.8"
+                      pointerEvents="none"
+                    />
+                  )
+                })()
+              : null}
+            {/* Live marquee rubber-band while dragging in SELECT mode (dsg__49):
+                a dashed yellow rectangle that lassos enclosed measurements. */}
+            {marqueeRect
+              ? (() => {
+                  const x0 = Math.min(marqueeRect.x0, marqueeRect.x1)
+                  const y0 = Math.min(marqueeRect.y0, marqueeRect.y1)
+                  const w = Math.abs(marqueeRect.x1 - marqueeRect.x0)
+                  const h = Math.abs(marqueeRect.y1 - marqueeRect.y0)
+                  return (
+                    <rect
+                      x={x0}
+                      y={y0}
+                      width={w}
+                      height={h}
+                      fill="rgba(255,212,0,0.08)"
+                      stroke="var(--m-accent)"
+                      strokeWidth={0.4}
+                      strokeDasharray="1.2 0.8"
                       pointerEvents="none"
                     />
                   )
@@ -1903,19 +2025,35 @@ export function EstCanvas() {
                 <span style={{ fontSize: 16, color: 'var(--m-ink-3)', fontWeight: 700 }}>FT</span>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontFamily: 'var(--m-num)', fontSize: 10, color: 'var(--m-ink-3)', fontWeight: 600 }}>
-                  {scalePoints.length}/2 PTS
-                </div>
+                {/* Provisional drawing-scale ratio (= 1:N · PROVISIONAL), shown
+                    once a line + length are present — matches design dsg__46. */}
+                {provisionalRatio != null ? (
+                  <div
+                    style={{
+                      fontFamily: 'var(--m-font-display)',
+                      fontSize: 16,
+                      fontWeight: 800,
+                      color: 'var(--m-ink)',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    = 1:{provisionalRatio}
+                  </div>
+                ) : (
+                  <div style={{ fontFamily: 'var(--m-num)', fontSize: 10, color: 'var(--m-ink-3)', fontWeight: 600 }}>
+                    {scalePoints.length}/2 PTS
+                  </div>
+                )}
                 <div
                   style={{
                     fontFamily: 'var(--m-num)',
                     fontSize: 10,
-                    color: scalePoints.length >= 2 ? 'var(--m-green)' : 'var(--m-ink-3)',
+                    color: scalePoints.length >= 2 ? 'var(--m-amber)' : 'var(--m-ink-3)',
                     fontWeight: 700,
                     marginTop: 3,
                   }}
                 >
-                  {scalePoints.length >= 2 ? '● READY' : '○ DRAW LINE'}
+                  {scalePoints.length >= 2 ? '● PROVISIONAL' : '○ DRAW LINE'}
                 </div>
               </div>
             </div>
@@ -2160,6 +2298,54 @@ export function EstCanvas() {
               {b.l}
             </button>
           ))}
+        </div>
+      ) : null}
+
+      {/* ---- Floating SHEETS panel (bottom-right) ----
+          Quick sheet/page switcher mirroring the design's "SHEETS · 22" panel
+          (dsg__06). In SCALE mode it becomes the "SHEETS · SCALE" status panel
+          (dsg__46), surfacing each page's calibration state. Only shown when the
+          active blueprint actually has pages. */}
+      {activeBlueprint && pages.length > 0 ? (
+        <div style={floatBox({ bottom: 110, right: 16, width: 200, maxHeight: 240, overflow: 'auto' })}>
+          <div style={floatHead}>Sheets · {mode === 'scale' ? 'Scale' : pages.length}</div>
+          <div style={{ padding: 8, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {pages.map((p) => {
+              const isActive = p.id === activePage?.id
+              const st = pageScaleStatus(p)
+              const statusColor =
+                st.tone === 'green' ? 'var(--m-green)' : st.tone === 'amber' ? 'var(--m-amber)' : 'var(--m-ink-3)'
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => setPageId(p.id)}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    padding: '6px 10px',
+                    border: '2px solid var(--m-ink)',
+                    background: isActive ? 'var(--m-accent)' : 'var(--m-card)',
+                    color: isActive ? 'var(--m-accent-ink)' : 'var(--m-ink)',
+                    fontFamily: 'var(--m-num)',
+                    fontSize: 11,
+                    fontWeight: 700,
+                    letterSpacing: '0.04em',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <span>{`pg ${p.page_number}`}</span>
+                  {mode === 'scale' ? (
+                    <span style={{ fontSize: 9, color: isActive ? 'var(--m-accent-ink)' : statusColor }}>
+                      {st.label}
+                    </span>
+                  ) : null}
+                </button>
+              )
+            })}
+          </div>
         </div>
       ) : null}
 

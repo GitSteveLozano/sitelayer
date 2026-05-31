@@ -5,6 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@sitelayer/domain': fileURLToPath(new URL('../domain/src/index.ts', import.meta.url)),
+      '@sitelayer/workflows': fileURLToPath(new URL('../workflows/src/index.ts', import.meta.url)),
     },
   },
 })

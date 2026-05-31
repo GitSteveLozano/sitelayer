@@ -71,9 +71,16 @@ export async function fetchOperatorContextChatResponse(
  * `status: 'responded'` is terminal — once received, the subscription
  * closes itself; the widget machine flips the staged message to
  * 'responded' and appends the agent reply.
+ *
+ * `status: 'partial'` (with `body_delta`) is RESERVED for a future
+ * streaming-token rollout. No server publish site emits it today, and
+ * the widget machine does not model it (a `partial` delta is a no-op).
+ * Kept on the wire type so adding token streaming later is purely
+ * additive.
  */
 export type ChatResponseDelta = {
   audit_event_id: string
+  /** `'responded'` is terminal/emitted-today; `'partial'` is reserved (see above). */
   status: 'responded' | 'partial'
   response_audit_event_id?: string
   body?: string | null

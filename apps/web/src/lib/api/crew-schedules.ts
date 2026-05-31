@@ -8,8 +8,19 @@
 import { useMutation, useQuery, useQueryClient, type UseQueryOptions } from '@tanstack/react-query'
 import { ApiError, request } from './client'
 
-export type CrewScheduleState = 'draft' | 'confirmed'
-export type CrewScheduleHumanEvent = 'CONFIRM'
+export type CrewScheduleState = 'draft' | 'confirmed' | 'declined'
+// Widened to match the reducer's human-event set (Gap 5). The XState
+// machine is event-name agnostic, so DISPATCH accepts any of these.
+export type CrewScheduleHumanEvent = 'CONFIRM' | 'DECLINE' | 'REASSIGN'
+
+/** One per-worker labor entry to materialize on CONFIRM (side-effect data). */
+export interface CrewScheduleLaborEntryInput {
+  worker_id?: string | null
+  service_item_code: string
+  hours: number
+  sqft_done?: number | null
+  occurred_on: string
+}
 
 /** Wire-format snapshot returned by GET /api/schedules/:id and POST .../events. */
 export interface CrewScheduleSnapshot {
@@ -23,6 +34,10 @@ export interface CrewScheduleSnapshot {
     status: CrewScheduleState
     confirmed_at: string | null
     confirmed_by: string | null
+    created_by?: string | null
+    declined_at?: string | null
+    declined_by?: string | null
+    decline_reason?: string | null
     version: number
     created_at: string
     start_time: string | null
@@ -39,6 +54,10 @@ export interface CrewScheduleEventRequest {
   confirmed_at?: string
   /** Optional actor user id; server defaults to current user when omitted. */
   confirmed_by?: string
+  /** CONFIRM only — per-worker labor entries materialized via the outbox. */
+  entries?: CrewScheduleLaborEntryInput[]
+  /** DECLINE only — the worker's decline reason. */
+  reason?: string
 }
 
 export interface CrewSchedulePatchRequest {
@@ -98,6 +117,37 @@ export function useDispatchCrewScheduleEvent(id: string) {
     onSuccess: (snapshot) => {
       void qc.invalidateQueries({ queryKey: ['schedules'] })
       qc.setQueryData(KEYS.detail(id), snapshot)
+    },
+    onError: (err) => {
+      if (
+        err instanceof ApiError &&
+        err.status === 409 &&
+        err.body &&
+        typeof err.body === 'object' &&
+        'snapshot' in err.body
+      ) {
+        const snapshot = (err.body as { snapshot?: CrewScheduleSnapshot }).snapshot
+        if (snapshot) qc.setQueryData(KEYS.detail(id), snapshot)
+      }
+    },
+  })
+}
+
+/**
+ * Reschedule (drag-to-move) mutation hook. Reschedule is a FIELD EDIT,
+ * not a workflow state transition (it does not change draft/confirmed),
+ * so it correctly lives on PATCH /api/schedules/:id rather than /events
+ * (Gap 4). Invalidates the schedule list + bootstrap caches; on a 409
+ * (stale version) the server returns the authoritative snapshot which we
+ * prime into the detail cache so the UI can reconcile.
+ */
+export function useRescheduleCrewSchedule(id: string) {
+  const qc = useQueryClient()
+  return useMutation<unknown, ApiError, CrewSchedulePatchRequest>({
+    mutationFn: (input) => patchCrewSchedule(id, input),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['schedules'] })
+      void qc.invalidateQueries({ queryKey: ['bootstrap'] })
     },
     onError: (err) => {
       if (

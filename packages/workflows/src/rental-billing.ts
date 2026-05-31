@@ -21,6 +21,7 @@ export const RENTAL_BILLING_EVENT_TYPES = [
   'POST_SUCCEEDED',
   'POST_FAILED',
   'RETRY_POST',
+  'CANCEL_POST',
   'VOID',
 ] as const
 
@@ -30,6 +31,14 @@ export type RentalBillingWorkflowEvent =
   | { type: 'POST_SUCCEEDED'; posted_at: string; qbo_invoice_id: string }
   | { type: 'POST_FAILED'; failed_at: string; error: string }
   | { type: 'RETRY_POST' }
+  // Human escape hatch from a wedged 'posting' run (e.g. a permanently
+  // failing QBO push that never emits a terminal worker event). Lands the
+  // run in 'failed' — NOT 'voided' — so the operator can inspect, then
+  // RETRY_POST (replays the same idempotency-keyed outbox row, which the
+  // worker's qbo_invoice_id check makes safe) or VOID. Deliberately distinct
+  // from VOID so we never create a "void a live push" path that could orphan
+  // a real QBO invoice mid-creation.
+  | { type: 'CANCEL_POST'; failed_at: string; error: string }
   | { type: 'VOID' }
 
 export interface RentalBillingWorkflowSnapshot {
@@ -41,6 +50,36 @@ export interface RentalBillingWorkflowSnapshot {
   failed_at?: string | null
   error?: string | null
   qbo_invoice_id?: string | null
+}
+
+/**
+ * The persisted-row shape the reducer needs. Both the API route and the
+ * queue worker map their `rental_billing_runs` DB rows through this single
+ * helper so the row→snapshot map is shared, not duplicated. The persisted
+ * column is `status`; the reducer calls it `state`.
+ */
+export type RentalBillingRowLike = {
+  status: string
+  state_version: number
+  approved_at?: string | null
+  approved_by?: string | null
+  posted_at?: string | null
+  failed_at?: string | null
+  error?: string | null
+  qbo_invoice_id?: string | null
+}
+
+export function rentalBillingRowToSnapshot(row: RentalBillingRowLike): RentalBillingWorkflowSnapshot {
+  return {
+    state: row.status as RentalBillingWorkflowState,
+    state_version: row.state_version,
+    approved_at: row.approved_at ?? null,
+    approved_by: row.approved_by ?? null,
+    posted_at: row.posted_at ?? null,
+    failed_at: row.failed_at ?? null,
+    error: row.error ?? null,
+    qbo_invoice_id: row.qbo_invoice_id ?? null,
+  }
 }
 
 function assertRentalBillingTransition(
@@ -118,6 +157,22 @@ export function transitionRentalBillingWorkflow(
       failed_at: null,
     }
   }
+  if (event.type === 'CANCEL_POST') {
+    // Operator-acknowledged escape from a stuck push. Only legal from
+    // 'posting'; lands in 'failed' with the operator-supplied marker so the
+    // existing failed → RETRY_POST | VOID affordances apply. Emits no
+    // outbox row (it is the absence of a push). The worker's
+    // status !== 'posting' early-return cedes any later push result to this
+    // human event; the row lock serializes the race.
+    assertRentalBillingTransition(snapshot.state, ['posting'], event.type)
+    return {
+      ...snapshot,
+      state: 'failed',
+      state_version: nextVersion,
+      failed_at: event.failed_at,
+      error: event.error,
+    }
+  }
   assertRentalBillingTransition(snapshot.state, ['generated', 'approved', 'failed'], event.type)
   return {
     ...snapshot,
@@ -126,7 +181,7 @@ export function transitionRentalBillingWorkflow(
   }
 }
 
-export type RentalBillingHumanEventType = 'APPROVE' | 'POST_REQUESTED' | 'RETRY_POST' | 'VOID'
+export type RentalBillingHumanEventType = 'APPROVE' | 'POST_REQUESTED' | 'RETRY_POST' | 'CANCEL_POST' | 'VOID'
 
 export function nextRentalBillingEvents(
   state: RentalBillingWorkflowState,
@@ -148,6 +203,7 @@ export function nextRentalBillingEvents(
         { type: 'VOID', label: 'Void' },
       ]
     case 'posting':
+      return [{ type: 'CANCEL_POST', label: 'Cancel stuck QuickBooks post' }]
     case 'posted':
     case 'voided':
       return []
@@ -155,7 +211,13 @@ export function nextRentalBillingEvents(
 }
 
 export function isHumanRentalBillingEvent(eventType: string): eventType is RentalBillingHumanEventType {
-  return eventType === 'APPROVE' || eventType === 'POST_REQUESTED' || eventType === 'RETRY_POST' || eventType === 'VOID'
+  return (
+    eventType === 'APPROVE' ||
+    eventType === 'POST_REQUESTED' ||
+    eventType === 'RETRY_POST' ||
+    eventType === 'CANCEL_POST' ||
+    eventType === 'VOID'
+  )
 }
 
 // Wire-format request schema for POST /api/rental-billing-runs/:id/events.
@@ -163,7 +225,7 @@ export function isHumanRentalBillingEvent(eventType: string): eventType is Renta
 //   { event: <human-event-type>, state_version: <positive integer> }
 // and use Zod to parse so the route never sees an unvalidated body.
 export const RentalBillingEventRequestSchema = z.object({
-  event: z.enum(['APPROVE', 'POST_REQUESTED', 'RETRY_POST', 'VOID']),
+  event: z.enum(['APPROVE', 'POST_REQUESTED', 'RETRY_POST', 'CANCEL_POST', 'VOID']),
   state_version: z.number().int().positive(),
 })
 

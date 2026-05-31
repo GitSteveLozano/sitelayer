@@ -59,6 +59,8 @@ export interface FieldEventSnapshotContext {
   resolution_message: string | null
   escalated_to_estimator_at: string | null
   escalation_reason: string | null
+  dismissed_at: string | null
+  dismissed_by_clerk_user_id: string | null
   created_at: string
 }
 

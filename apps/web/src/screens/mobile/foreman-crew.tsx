@@ -6,9 +6,9 @@
  * /api/clock/timeline event per worker. For Phase 8 we render from
  * bootstrap labor counts as a proxy until the timeline call is wired.
  */
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import type { BootstrapResponse, WorkerRow } from '@/lib/api'
+import { apiGet, type BootstrapResponse, type WorkerRow } from '@/lib/api'
 import {
   MAvatar,
   MBanner,
@@ -31,31 +31,43 @@ import { formatDecimalHours, todayIso } from './format.js'
 
 type GroupBy = 'site' | 'person' | 'map'
 type StatusFilter = 'all' | 'on_site' | 'on_break' | 'off_clock'
-type WorkerStatus = 'on_site' | 'on_break' | 'off_clock'
+type WorkerStatus = 'on_site' | 'on_break' | 'off_clock' | 'blocked'
 
 /** Returns the live status dot color/label for a worker.
+ *  blocked (red): worker has an open field event/blocker — takes priority
  *  on_site (green): 0 < hours <= 8 today
  *  on_break (amber): hours > 8 today (proxy for "still here past a shift")
  *  off_clock (gray): no hours today */
-function statusFor(hours: number): WorkerStatus {
+function statusFor(hours: number, blocked = false): WorkerStatus {
+  if (blocked) return 'blocked'
   if (hours <= 0) return 'off_clock'
   if (hours > 8) return 'on_break'
   return 'on_site'
 }
 
-const STATUS_TONE: Record<WorkerStatus, 'green' | 'amber' | undefined> = {
+const STATUS_TONE: Record<WorkerStatus, 'green' | 'amber' | 'red' | undefined> = {
   on_site: 'green',
   on_break: 'amber',
   off_clock: undefined,
+  blocked: 'red',
 }
 
 const STATUS_LABEL: Record<WorkerStatus, string> = {
   on_site: 'on site',
   on_break: 'on break',
   off_clock: 'off-clock',
+  blocked: 'blocked',
 }
 
-export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null }) {
+type OpenIssueRow = { worker_id: string | null; resolved_at: string | null }
+
+export function ForemanCrew({
+  bootstrap,
+  companySlug,
+}: {
+  bootstrap: BootstrapResponse | null
+  companySlug?: string
+}) {
   const navigate = useNavigate()
   const [grp, setGrp] = useState<GroupBy>('site')
   const [filter, setFilter] = useState<StatusFilter>('all')
@@ -64,6 +76,31 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
   const workers = useMemo(() => bootstrap?.workers ?? [], [bootstrap?.workers])
   const labor = useMemo(() => bootstrap?.laborEntries ?? [], [bootstrap?.laborEntries])
   const today = todayIso()
+
+  // Open field events → blocked workers. A worker with an unresolved blocker
+  // surfaces a red BLOCKED pill (design msg__37), prioritized over the
+  // hours-derived status. The endpoint scopes to the company; failures fall
+  // back to no blockers so the screen still renders.
+  const [blockedWorkers, setBlockedWorkers] = useState<Set<string>>(() => new Set())
+  useEffect(() => {
+    if (!companySlug) return
+    let cancelled = false
+    apiGet<{ worker_issues: OpenIssueRow[] }>('/api/worker-issues', companySlug)
+      .then((r) => {
+        if (cancelled) return
+        const ids = new Set<string>()
+        for (const i of r.worker_issues ?? []) {
+          if (!i.resolved_at && i.worker_id) ids.add(i.worker_id)
+        }
+        setBlockedWorkers(ids)
+      })
+      .catch(() => {
+        if (!cancelled) setBlockedWorkers(new Set())
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [companySlug])
 
   const todayHoursByWorker = useMemo(() => {
     const map = new Map<string, number>()
@@ -75,14 +112,24 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
     return map
   }, [labor, today])
 
-  const onSiteCount = workers.filter((w) => statusFor(todayHoursByWorker.get(w.id) ?? 0) === 'on_site').length
-  const onBreakCount = workers.filter((w) => statusFor(todayHoursByWorker.get(w.id) ?? 0) === 'on_break').length
-  const offClock = workers.length - onSiteCount - onBreakCount
+  const statusOf = (w: WorkerRow): WorkerStatus =>
+    statusFor(todayHoursByWorker.get(w.id) ?? 0, blockedWorkers.has(w.id))
+
+  const onSiteCount = workers.filter((w) => statusOf(w) === 'on_site').length
+  const onBreakCount = workers.filter((w) => statusOf(w) === 'on_break').length
+  const blockedCount = workers.filter((w) => statusOf(w) === 'blocked').length
+  const offClock = workers.length - onSiteCount - onBreakCount - blockedCount
 
   const visibleWorkers = useMemo(() => {
     if (filter === 'all') return workers
-    return workers.filter((w) => statusFor(todayHoursByWorker.get(w.id) ?? 0) === filter)
-  }, [workers, todayHoursByWorker, filter])
+    return workers.filter((w) => {
+      const s = statusFor(todayHoursByWorker.get(w.id) ?? 0, blockedWorkers.has(w.id))
+      // The status filters are hours-based; a blocked worker still matches the
+      // hours bucket they'd otherwise be in so they don't vanish from the list.
+      if (s === 'blocked') return statusFor(todayHoursByWorker.get(w.id) ?? 0) === filter
+      return s === filter
+    })
+  }, [workers, todayHoursByWorker, blockedWorkers, filter])
 
   return (
     <>
@@ -93,7 +140,7 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
         actionLabel="Add"
       />
       <MBody>
-        {onBreakCount > 0 || offClock > 0 ? (
+        {blockedCount > 0 || onBreakCount > 0 || offClock > 0 ? (
           <div
             style={{
               padding: '10px 20px',
@@ -108,6 +155,7 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
               gap: 14,
             }}
           >
+            {blockedCount > 0 ? <span style={{ color: 'var(--m-red)' }}>{blockedCount} blocked</span> : null}
             {onBreakCount > 0 ? <span style={{ color: 'var(--m-amber)' }}>{onBreakCount} on break</span> : null}
             {offClock > 0 ? <span>{offClock} off-clock</span> : null}
           </div>
@@ -153,7 +201,7 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
             <MListInset>
               {visibleWorkers.map((w) => {
                 const hrs = todayHoursByWorker.get(w.id) ?? 0
-                const status = statusFor(hrs)
+                const status = statusFor(hrs, blockedWorkers.has(w.id))
                 const tone = STATUS_TONE[status]
                 return (
                   <CrewPersonRow
@@ -205,13 +253,18 @@ export function ForemanCrew({ bootstrap }: { bootstrap: BootstrapResponse | null
                           Briefed by you · {p.division_code}
                         </div>
                       </div>
-                      <span className="num" style={{ fontWeight: 700, color: 'var(--m-ink-3)' }}>
-                        {formatDecimalHours(hrs, 1)}
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <span className="num" style={{ fontWeight: 700, color: 'var(--m-ink-3)' }}>
+                          {formatDecimalHours(hrs, 1)}
+                        </span>
+                        <MButton size="sm" variant="ghost" onClick={() => navigate(`/brief/${p.id}`)}>
+                          Edit brief
+                        </MButton>
+                      </div>
                     </div>
                     {onSiteWorkers.map((w, j) => {
                       const whrs = todayHoursByWorker.get(w.id) ?? 0
-                      const status = statusFor(whrs)
+                      const status = statusFor(whrs, blockedWorkers.has(w.id))
                       const tone = STATUS_TONE[status]
                       return (
                         <div
@@ -286,7 +339,7 @@ function CrewPersonRow({
   avatarTone: '2' | '3' | '4' | '5' | undefined
   hours: number
   statusLabel: string
-  pillTone: 'green' | 'amber' | undefined
+  pillTone: 'green' | 'amber' | 'red' | undefined
   onLongPress: () => void
 }) {
   // Long-press detection — 600ms hold without significant movement

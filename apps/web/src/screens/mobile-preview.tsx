@@ -273,12 +273,14 @@ export function MPreviewView() {
           </PhoneFrame>
           <PhoneFrame>
             <MShell>
-              <MTopBar title="EST-2026-184" />
+              <MTopBar back title="Something broke" />
               <MErrorState
-                title="Couldn't load estimate"
-                body="We hit a snag pulling EST-2026-184 from QuickBooks. The estimate is saved — just the live sync failed."
+                title="Couldn't load."
+                body="The server didn't answer. Your changes are safe locally."
+                code="SLR_504 · GATEWAY TIMEOUT"
+                detail="3:24 PM · projects/hillcrest/photos"
                 primaryLabel="Try again"
-                secondaryLabel="Open offline copy"
+                secondaryLabel="Send error report"
               />
             </MShell>
           </PhoneFrame>
@@ -316,12 +318,13 @@ export function MPreviewView() {
           </PhoneFrame>
           <PhoneFrame>
             <MShell>
-              <MTopBar title="Permissions" />
+              <MTopBar back title="Permission needed" />
               <MPermissionState
-                title="Location is off"
-                body="Sitelayer uses geofences to verify clock-in. Without location, your hours need a foreman to manually approve each one."
+                title="Location is off."
+                body="We can’t auto clock-in or show the crew map without it. You can still log time manually."
+                benefits={['Auto clock-in on arrival', 'Live crew map', 'Out-of-fence alerts']}
                 primaryLabel="Open settings"
-                secondaryLabel="Continue without location"
+                secondaryLabel="Clock in manually"
                 icon={<MI.MapPin size={26} />}
               />
             </MShell>

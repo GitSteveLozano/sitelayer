@@ -77,6 +77,7 @@ type IssueRow = {
   kind?: string
   message?: string
   severity?: string
+  state?: string
   resolved_at?: string | null
   resolved_by_clerk_user_id?: string | null
   resolved_action?: string | null
@@ -84,6 +85,8 @@ type IssueRow = {
   state_version?: number
   escalated_to_estimator_at?: string | null
   escalation_reason?: string | null
+  dismissed_at?: string | null
+  dismissed_by_clerk_user_id?: string | null
   created_at?: string
 }
 type AttachmentRow = {
@@ -164,6 +167,7 @@ class FakePool {
         kind: row.kind ?? 'materials_out',
         message: row.message ?? 'test',
         severity: row.severity ?? 'stopped',
+        state: row.state ?? 'open',
         resolved_at: row.resolved_at ?? null,
         resolved_by_clerk_user_id: row.resolved_by_clerk_user_id ?? null,
         resolved_action: row.resolved_action ?? null,
@@ -171,53 +175,98 @@ class FakePool {
         state_version: row.state_version ?? 1,
         escalated_to_estimator_at: row.escalated_to_estimator_at ?? null,
         escalation_reason: row.escalation_reason ?? null,
+        dismissed_at: row.dismissed_at ?? null,
+        dismissed_by_clerk_user_id: row.dismissed_by_clerk_user_id ?? null,
         created_at: row.created_at ?? 'now',
       }
       return { rows: [full], rowCount: 1 }
     }
 
-    // PATCH workflow transition: UPDATE worker_issues SET ... — mutate the
-    // stored row in place. The route uses distinct column sets per event
-    // type, but every variant ends with `where id = $N and company_id =
-    // $N+1`, so locate the row from the trailing two params.
-    if (/^update\s+worker_issues\s+set/i.test(sql)) {
-      const companyId = params[params.length - 1] as string
-      const issueId = params[params.length - 2] as string
+    // PATCH workflow transition: one snapshot-driven UPDATE for every event
+    // type. Positional binding from the route is:
+    //   state=$1, state_version=$2, resolved_at=$3, resolved_by_clerk_user_id=$4,
+    //   resolved_action=$5, resolution_message=$6, escalated_to_estimator_at=$7,
+    //   escalation_reason=$8, dismissed_at=$9, dismissed_by_clerk_user_id=$10
+    //   where id=$11 and company_id=$12
+    if (/^update\s+worker_issues\s+set\s+state\s*=\s*\$1/i.test(sql)) {
+      const issueId = params[10] as string
+      const companyId = params[11] as string
       const row = this.issues.find((r) => r.company_id === companyId && r.id === issueId)
       if (!row) return { rows: [], rowCount: 0 }
-      // Re-derive the new column values from the SQL + params. Rather than
-      // parse the SQL, mirror the route's per-event UPDATE shapes.
-      if (/resolved_action\s*=\s*\$3,\s*resolution_message/i.test(sql)) {
-        // RESOLVE: resolved_at,$1 by,$2 action,$3 message,$4 version,$5
-        row.resolved_at = params[0] as string
-        row.resolved_by_clerk_user_id = params[1] as string
-        row.resolved_action = params[2] as string
-        row.resolution_message = params[3] as string
-        row.state_version = params[4] as number
-        row.escalated_to_estimator_at = null
-        row.escalation_reason = null
-      } else if (/escalated_to_estimator_at\s*=\s*\$1/i.test(sql)) {
-        // ESCALATE: escalated_at,$1 reason,$2 version,$3
-        row.escalated_to_estimator_at = params[0] as string
-        row.escalation_reason = params[1] as string
-        row.state_version = params[2] as number
-      } else if (/resolved_action\s*=\s*\$3,\s*state_version/i.test(sql)) {
-        // DISMISS: dismissed_at,$1 by,$2 sentinel,$3 version,$4
-        row.resolved_at = params[0] as string
-        row.resolved_by_clerk_user_id = params[1] as string
-        row.resolved_action = params[2] as string
-        row.state_version = params[3] as number
-      } else {
-        // REOPEN: clears decision columns; version,$1
-        row.resolved_at = null
-        row.resolved_by_clerk_user_id = null
-        row.resolved_action = null
-        row.resolution_message = null
-        row.escalated_to_estimator_at = null
-        row.escalation_reason = null
-        row.state_version = params[0] as number
-      }
+      row.state = params[0] as string
+      row.state_version = params[1] as number
+      row.resolved_at = (params[2] as string | null) ?? null
+      row.resolved_by_clerk_user_id = (params[3] as string | null) ?? null
+      row.resolved_action = (params[4] as string | null) ?? null
+      row.resolution_message = (params[5] as string | null) ?? null
+      row.escalated_to_estimator_at = (params[6] as string | null) ?? null
+      row.escalation_reason = (params[7] as string | null) ?? null
+      row.dismissed_at = (params[8] as string | null) ?? null
+      row.dismissed_by_clerk_user_id = (params[9] as string | null) ?? null
       return { rows: [], rowCount: 1 }
+    }
+
+    // Create-path INSERT — returns the freshly-created row (ISSUE_COLUMNS).
+    if (/^insert\s+into\s+worker_issues/i.test(sql)) {
+      const [companyId, projectId, workerId, reporter, kind, message, severity] = params as [
+        string,
+        string | null,
+        string | null,
+        string,
+        string,
+        string,
+        string,
+      ]
+      this.idCounter += 1
+      const row: IssueRow = {
+        id: `wi-${this.idCounter}`,
+        company_id: companyId,
+        project_id: projectId,
+        worker_id: workerId,
+        reporter_clerk_user_id: reporter,
+        kind,
+        message,
+        severity,
+        state: 'open',
+        resolved_at: null,
+        resolved_by_clerk_user_id: null,
+        state_version: 1,
+        created_at: 'now',
+      }
+      this.issues.push(row)
+      return {
+        rows: [
+          {
+            id: row.id,
+            company_id: row.company_id,
+            project_id: row.project_id ?? null,
+            worker_id: row.worker_id ?? null,
+            reporter_clerk_user_id: row.reporter_clerk_user_id ?? null,
+            kind: row.kind,
+            message: row.message,
+            severity: row.severity,
+            state: row.state,
+            resolved_at: null,
+            resolved_by_clerk_user_id: null,
+            created_at: row.created_at,
+          },
+        ],
+        rowCount: 1,
+      }
+    }
+
+    // Worker lookup during create (oldest worker for the company).
+    if (/^select\s+id\s+from\s+workers/i.test(sql)) {
+      return { rows: [{ id: 'worker-1' }], rowCount: 1 }
+    }
+
+    // Recipient fan-out during create — no memberships seeded; empty list
+    // routes to a single broadcast notification row.
+    if (/^select\s+cm\.clerk_user_id\s+from\s+company_memberships/i.test(sql)) {
+      return { rows: [], rowCount: 0 }
+    }
+    if (/^insert\s+into\s+notifications/i.test(sql)) {
+      return { rows: [{ id: 'notif-1' }], rowCount: 1 }
     }
 
     // recordWorkflowEvent insert — capture for assertions.
@@ -760,7 +809,7 @@ describe('PATCH /api/worker-issues/:id (field-event workflow)', () => {
     expect(pool.issues[0]!.escalation_reason).toBe('Need a change order to swap the spec')
   })
 
-  it('DISMISS moves open → dismissed with no notification side effect', async () => {
+  it('DISMISS moves open → dismissed, persists dismissed columns (not resolved_*), no side effect', async () => {
     seedOpenIssue()
     const res = await jsonRequest('PATCH', `/api/worker-issues/${ISSUE_ID}`, {
       event: 'DISMISS',
@@ -772,6 +821,66 @@ describe('PATCH /api/worker-issues/:id (field-event workflow)', () => {
     expect(body.state_version).toBe(2)
     // DISMISS emits no worker/estimator notification.
     expect(pool.outbox).toHaveLength(0)
+    // The dismiss is recorded in the dedicated columns, NOT overloaded onto
+    // resolved_* via the retired '__dismissed__' sentinel.
+    const persisted = pool.issues[0]!
+    expect(persisted.state).toBe('dismissed')
+    expect(persisted.dismissed_at).toBeTruthy()
+    expect(persisted.dismissed_by_clerk_user_id).toBe('u-1')
+    expect(persisted.resolved_at).toBeNull()
+    expect(persisted.resolved_action).toBeNull()
+  })
+
+  it('REOPEN moves dismissed → open and clears the dismissed columns', async () => {
+    seedOpenIssue({
+      state: 'dismissed',
+      state_version: 4,
+      dismissed_at: '2026-05-09T15:00:00.000Z',
+      dismissed_by_clerk_user_id: 'foreman-9',
+    })
+    const res = await jsonRequest('PATCH', `/api/worker-issues/${ISSUE_ID}`, {
+      event: 'REOPEN',
+      state_version: 4,
+    })
+    expect(res.status, JSON.stringify(res.body)).toBe(200)
+    const body = res.body as { state: string; state_version: number; next_events: Array<{ type: string }> }
+    expect(body.state).toBe('open')
+    expect(body.state_version).toBe(5)
+    expect(body.next_events.map((e) => e.type).sort()).toEqual(['DISMISS', 'ESCALATE', 'RESOLVE'])
+    const persisted = pool.issues[0]!
+    expect(persisted.dismissed_at).toBeNull()
+    expect(persisted.dismissed_by_clerk_user_id).toBeNull()
+  })
+
+  it('escalated → REOPEN → DISMISS leaves no stale escalation columns (Gap 4 field-clear)', async () => {
+    // A row that was escalated, then reopened, then dismissed must NOT carry
+    // its prior escalated_to_estimator_at — the old per-event DISMISS UPDATE
+    // never cleared it, so such a row would mis-derive back to 'escalated'.
+    seedOpenIssue({
+      state: 'escalated',
+      state_version: 2,
+      escalated_to_estimator_at: '2026-05-09T14:00:00.000Z',
+      escalation_reason: 'need estimator',
+    })
+    const reopen = await jsonRequest('PATCH', `/api/worker-issues/${ISSUE_ID}`, {
+      event: 'REOPEN',
+      state_version: 2,
+    })
+    expect(reopen.status, JSON.stringify(reopen.body)).toBe(200)
+    expect((reopen.body as { state: string }).state).toBe('open')
+    expect(pool.issues[0]!.escalated_to_estimator_at).toBeNull()
+
+    const dismiss = await jsonRequest('PATCH', `/api/worker-issues/${ISSUE_ID}`, {
+      event: 'DISMISS',
+      state_version: 3,
+    })
+    expect(dismiss.status, JSON.stringify(dismiss.body)).toBe(200)
+    const body = dismiss.body as { state: string }
+    expect(body.state).toBe('dismissed')
+    const persisted = pool.issues[0]!
+    expect(persisted.state).toBe('dismissed')
+    expect(persisted.escalated_to_estimator_at).toBeNull()
+    expect(persisted.escalation_reason).toBeNull()
   })
 
   it('returns 409 on a stale state_version and echoes the current snapshot', async () => {
@@ -808,5 +917,61 @@ describe('PATCH /api/worker-issues/:id (field-event workflow)', () => {
       state_version: 1,
     })
     expect(res.status).toBe(404)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// POST /api/worker-issues create path — severity is now a typed column, not a
+// message tag. This is the regression net for the live bug where the create
+// INSERT omitted severity (defaulting every UI-created row to 'slowing'), so
+// the auto-escalator's `severity='stopped'` filter matched zero rows and the
+// 15-min auto-escalation could never fire.
+// ---------------------------------------------------------------------------
+
+describe('POST /api/worker-issues (severity column)', () => {
+  function postJson(body: unknown): Promise<{ status: number; body: unknown }> {
+    const payload = Buffer.from(JSON.stringify(body))
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        {
+          hostname: '127.0.0.1',
+          port,
+          method: 'POST',
+          path: '/api/worker-issues',
+          headers: { 'content-type': 'application/json', 'content-length': String(payload.length) },
+        },
+        (res) => {
+          const buf: Buffer[] = []
+          res.on('data', (c) => buf.push(c as Buffer))
+          res.on('end', () => {
+            const text = Buffer.concat(buf).toString('utf8')
+            let parsed: unknown = text
+            try {
+              parsed = JSON.parse(text)
+            } catch {
+              // leave as text
+            }
+            resolve({ status: res.statusCode ?? 0, body: parsed })
+          })
+        },
+      )
+      req.on('error', reject)
+      req.end(payload)
+    })
+  }
+
+  it('persists severity="stopped" on the typed column', async () => {
+    const res = await postJson({ kind: 'safety', message: 'Crew is stopped', severity: 'stopped' })
+    expect(res.status, JSON.stringify(res.body)).toBe(201)
+    expect(pool.issues).toHaveLength(1)
+    expect(pool.issues[0]!.severity).toBe('stopped')
+    // And not smuggled into the message body.
+    expect(pool.issues[0]!.message).not.toMatch(/\[severity:/)
+  })
+
+  it('defaults severity to "slowing" when absent or invalid', async () => {
+    const res = await postJson({ kind: 'other', message: 'no severity given' })
+    expect(res.status, JSON.stringify(res.body)).toBe(201)
+    expect(pool.issues[0]!.severity).toBe('slowing')
   })
 })

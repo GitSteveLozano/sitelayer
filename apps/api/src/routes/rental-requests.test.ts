@@ -119,6 +119,12 @@ class FakePool {
       const row = this.rentalRequests.find((r) => r.id === id && r.company_id === companyId) ?? null
       return { rows: row ? [{ ...row }] : [], rowCount: row ? 1 : 0 }
     }
+    // Per-row snapshot select (GET /:id) — no alias, no `for update`, `limit 1`.
+    if (/select[\s\S]+from rental_requests\s+where id = \$1 and company_id = \$2/i.test(sql) && /limit 1/i.test(sql)) {
+      const [id, companyId] = params as [string, string]
+      const row = this.rentalRequests.find((r) => r.id === id && r.company_id === companyId) ?? null
+      return { rows: row ? [{ ...row }] : [], rowCount: row ? 1 : 0 }
+    }
     // Post-#325 follow-up: status + state_version are now parametric
     // because the route dispatches through the rental_request_approval
     // reducer. Match the UPDATEs by the distinctive SET column shape
@@ -455,5 +461,144 @@ describe('handleRentalRequestRoutes — POST /:id/decline', () => {
     const { ctx, responses } = makeCtx(pool)
     await handleRentalRequestRoutes({ method: 'POST' } as never, buildUrl('/api/rental-requests/req-1/decline'), ctx)
     expect(responses[0]?.status).toBe(409)
+  })
+})
+
+const UUID = '11111111-1111-4111-8111-111111111111'
+
+describe('handleRentalRequestRoutes — GET /:id snapshot', () => {
+  it('returns the WorkflowSnapshot envelope with reducer-computed next_events', async () => {
+    const pool = new FakePool()
+    seedRequest(pool, { id: UUID })
+    const { ctx, responses } = makeCtx(pool)
+    const handled = await handleRentalRequestRoutes(
+      { method: 'GET' } as never,
+      buildUrl(`/api/rental-requests/${UUID}`),
+      ctx,
+    )
+    expect(handled).toBe(true)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as {
+      state: string
+      state_version: number
+      context: { status: string }
+      next_events: Array<{ type: string }>
+    }
+    expect(body.state).toBe('pending')
+    expect(body.state_version).toBe(1)
+    expect(body.context.status).toBe('pending')
+    expect(body.next_events.map((e) => e.type)).toEqual(['APPROVE', 'DECLINE'])
+  })
+
+  it('terminal (approved) request renders no next_events', async () => {
+    const pool = new FakePool()
+    seedRequest(pool, { id: UUID, status: 'approved', state_version: 2 })
+    const { ctx, responses } = makeCtx(pool)
+    await handleRentalRequestRoutes({ method: 'GET' } as never, buildUrl(`/api/rental-requests/${UUID}`), ctx)
+    expect(responses[0]?.status).toBe(200)
+    const body = responses[0]?.body as { state: string; next_events: unknown[] }
+    expect(body.state).toBe('approved')
+    expect(body.next_events).toEqual([])
+  })
+
+  it('404 when the request does not exist', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool)
+    await handleRentalRequestRoutes({ method: 'GET' } as never, buildUrl(`/api/rental-requests/${UUID}`), ctx)
+    expect(responses[0]?.status).toBe(404)
+  })
+
+  it('400 when the id is not a uuid', async () => {
+    const pool = new FakePool()
+    const { ctx, responses } = makeCtx(pool)
+    await handleRentalRequestRoutes({ method: 'GET' } as never, buildUrl('/api/rental-requests/not-a-uuid'), ctx)
+    expect(responses[0]?.status).toBe(400)
+  })
+})
+
+describe('handleRentalRequestRoutes — POST /:id/events (versioned dispatch)', () => {
+  it('APPROVE moves pending→approved, creates rentals, enqueues outbox, bumps state_version', async () => {
+    const pool = new FakePool()
+    seedCatalogItem(pool)
+    seedRequest(pool, { id: UUID })
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({ event: 'APPROVE', state_version: 1 })
+    await handleRentalRequestRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/rental-requests/${UUID}/events`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(200)
+    expect(pool.rentals).toHaveLength(1)
+    // The create_rental_from_request audit-anchor outbox row was enqueued.
+    const outboxParams = pool.outbox.map((o) => (o.params as unknown[]).map((p) => String(p)).join('|'))
+    expect(outboxParams.some((p) => p.includes('create_rental_from_request'))).toBe(true)
+    const updated = pool.rentalRequests[0]!
+    expect(updated.status).toBe('approved')
+    expect(updated.state_version).toBe(2)
+    const body = responses[0]?.body as { state: string; state_version: number; next_events: unknown[] }
+    expect(body.state).toBe('approved')
+    expect(body.state_version).toBe(2)
+    expect(body.next_events).toEqual([])
+  })
+
+  it('DECLINE moves pending→declined with reason', async () => {
+    const pool = new FakePool()
+    seedRequest(pool, { id: UUID })
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({ event: 'DECLINE', state_version: 1, decline_reason: 'no stock' })
+    await handleRentalRequestRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/rental-requests/${UUID}/events`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(200)
+    const updated = pool.rentalRequests[0]!
+    expect(updated.status).toBe('declined')
+    expect(updated.decline_reason).toBe('no stock')
+    expect(updated.state_version).toBe(2)
+  })
+
+  it('409 on a stale state_version', async () => {
+    const pool = new FakePool()
+    seedRequest(pool, { id: UUID, state_version: 3 })
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({ event: 'APPROVE', state_version: 1 })
+    await handleRentalRequestRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/rental-requests/${UUID}/events`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(409)
+    const body = responses[0]?.body as { error: string; snapshot: { state_version: number } }
+    expect(body.snapshot.state_version).toBe(3)
+    expect(pool.rentals).toHaveLength(0)
+  })
+
+  it('409 on an illegal transition (APPROVE from declined)', async () => {
+    const pool = new FakePool()
+    seedRequest(pool, { id: UUID, status: 'declined', state_version: 2 })
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({ event: 'APPROVE', state_version: 2 })
+    await handleRentalRequestRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/rental-requests/${UUID}/events`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(409)
+    expect(pool.rentals).toHaveLength(0)
+  })
+
+  it('400 on an invalid event body', async () => {
+    const pool = new FakePool()
+    seedRequest(pool, { id: UUID })
+    const { ctx, responses, reads } = makeCtx(pool)
+    reads.push({ event: 'BOGUS', state_version: 1 })
+    await handleRentalRequestRoutes(
+      { method: 'POST' } as never,
+      buildUrl(`/api/rental-requests/${UUID}/events`),
+      ctx,
+    )
+    expect(responses[0]?.status).toBe(400)
   })
 })

@@ -23,7 +23,7 @@ import { useNavigate } from 'react-router-dom'
 import { useQueries } from '@tanstack/react-query'
 import type { BootstrapResponse } from '@/lib/api'
 import { DEmptyState, DEyebrow, DH1 } from '@/components/d'
-import { MBanner, MButton, MButtonRow, MPill } from '@/components/m'
+import { MBanner, MButton, MButtonRow } from '@/components/m'
 import type { MTone } from '@/components/m'
 import { useActiveGuardrails, useGuardrailAction, type Guardrail } from '@/lib/api/guardrails'
 import { useAppendWorkRequestEvent, useWorkRequests, type ContextWorkItem } from '@/lib/api/work-requests'
@@ -224,12 +224,34 @@ export function OwnerApprovals({ bootstrap }: { bootstrap: BootstrapResponse | n
                 }}
               >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 200 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <MPill tone={row.pillTone}>{row.pill}</MPill>
-                    {row.urgent ? <MPill tone="red">URGENT</MPill> : null}
+                  {/* Single mono micro-label eyebrow: type · requester/project ·
+                      urgency dot — the design's 'ANA · HILLCREST · ● URGENT' line. */}
+                  <div
+                    style={{
+                      fontFamily: 'var(--m-num)',
+                      fontSize: 10,
+                      fontWeight: 700,
+                      letterSpacing: '0.06em',
+                      textTransform: 'uppercase',
+                      color: 'var(--m-ink-3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      flexWrap: 'wrap',
+                    }}
+                  >
+                    <span>
+                      {row.pill}
+                      {' · '}
+                      {row.requestedBy}
+                    </span>
+                    {row.urgent ? (
+                      <span style={{ color: 'var(--m-red)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        <span className="m-dot" style={{ background: 'var(--m-red)' }} /> URGENT
+                      </span>
+                    ) : null}
                   </div>
                   <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--m-ink)' }}>{row.item}</div>
-                  <div style={{ fontSize: 12, color: 'var(--m-ink-3)' }}>{row.requestedBy}</div>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
@@ -240,11 +262,17 @@ export function OwnerApprovals({ bootstrap }: { bootstrap: BootstrapResponse | n
                     <MButton size="sm" variant="primary" disabled={busy} onClick={() => onApprove(row)}>
                       Approve
                     </MButton>
-                    <MButton size="sm" variant="ghost" disabled={busy} onClick={() => onDeny(row)}>
-                      Deny
-                    </MButton>
-                    <MButton size="sm" variant="quiet" disabled={busy} onClick={() => onReply(row)}>
+                    <MButton size="sm" variant="ghost" disabled={busy} onClick={() => onReply(row)}>
                       Reply
+                    </MButton>
+                    <MButton
+                      size="sm"
+                      variant="ghost"
+                      disabled={busy}
+                      onClick={() => onDeny(row)}
+                      style={{ color: 'var(--m-red)', borderColor: 'var(--m-red)' }}
+                    >
+                      Deny
                     </MButton>
                   </MButtonRow>
                 </div>
