@@ -5,18 +5,18 @@
 # whichever role a magic-link resolves to, the operator opens onto something
 # populated and compelling:
 #
-#   OWNER     (e2e-admin)  → 5 active jobs incl. one AT-RISK with a triggered
+#   OWNER     (user_3EVVTX1t2kaMZ3gxmJYWBMO17ZJ)  → 5 active jobs incl. one AT-RISK with a triggered
 #                            guardrail (the backdated stop-work issue), a posted
 #                            invoice, an approvals queue (a `generated` billing
 #                            run + a `reviewed` estimate), a sent change order,
 #                            scope-vs-bid money + overrunning material spend.
-#   ESTIMATOR (e2e-office) → takeoff drafts incl. two AI-queue items (one
+#   ESTIMATOR (user_3EVVTb6fEte710ks9woAU1jJowJ) → takeoff drafts incl. two AI-queue items (one
 #                            auto-takeoff, one auto-count) + the LA item library
 #                            and exterior-cladding assemblies seeded for free by
 #                            seedCompanyDefaults.
-#   FOREMAN   (e2e-foreman)→ today's confirmed crew schedule, a stop-work
+#   FOREMAN   (user_3EVVTfJCwYPnVdCFQqE45Q9yrR3)→ today's confirmed crew schedule, a stop-work
 #                            blocker, one submitted + one draft daily log.
-#   CREW      (e2e-member) → scheduled on today's job + clocked-in right now
+#   CREW      (user_3EVVTkWfjImRPoZ9KrmvxZaFC4l) → scheduled on today's job + clocked-in right now
 #                            (an `in` clock event with no `out`).
 #
 # Authored against the seeder schema in scripts/seed-scenario.ts (incl. the
@@ -44,12 +44,12 @@ company:
 # The magic-link role grants. company_memberships is what gives a role access;
 # getCompany() returns null without a row here. office collapses to admin on
 # read (packages/domain/src/roles.ts), so the ESTIMATOR link can map to either
-# e2e-office or e2e-admin — both are seeded.
+# user_3EVVTb6fEte710ks9woAU1jJowJ or user_3EVVTX1t2kaMZ3gxmJYWBMO17ZJ — both are seeded.
 members:
-  - { clerk_user_id: e2e-admin, role: admin } # OWNER
-  - { clerk_user_id: e2e-office, role: office } # ESTIMATOR
-  - { clerk_user_id: e2e-foreman, role: foreman } # FOREMAN
-  - { clerk_user_id: e2e-member, role: member } # CREW
+  - { clerk_user_id: user_3EVVTX1t2kaMZ3gxmJYWBMO17ZJ, role: admin } # OWNER
+  - { clerk_user_id: user_3EVVTb6fEte710ks9woAU1jJowJ, role: office } # ESTIMATOR
+  - { clerk_user_id: user_3EVVTfJCwYPnVdCFQqE45Q9yrR3, role: foreman } # FOREMAN
+  - { clerk_user_id: user_3EVVTkWfjImRPoZ9KrmvxZaFC4l, role: member } # CREW
   - { clerk_user_id: e2e-bookkeeper, role: bookkeeper }
 
 customers:
@@ -60,9 +60,9 @@ customers:
   - { ref: cust-sunset, name: Sunset Plaza LLC }
 
 workers:
-  - { ref: foreman-lead, name: Marco Diaz, role: foreman, clerk_user_id: e2e-foreman }
-  - { ref: est-lead, name: Dana Reyes, role: office, clerk_user_id: e2e-office }
-  - { ref: crew-1, name: Luis Romero, role: crew, clerk_user_id: e2e-member }
+  - { ref: foreman-lead, name: Marco Diaz, role: foreman, clerk_user_id: user_3EVVTfJCwYPnVdCFQqE45Q9yrR3 }
+  - { ref: est-lead, name: Dana Reyes, role: office, clerk_user_id: user_3EVVTb6fEte710ks9woAU1jJowJ }
+  - { ref: crew-1, name: Luis Romero, role: crew, clerk_user_id: user_3EVVTkWfjImRPoZ9KrmvxZaFC4l }
   - { ref: crew-2, name: Sam Carter, role: crew }
   - { ref: crew-3, name: Priya Nair, role: crew }
 
@@ -147,7 +147,7 @@ rentals:
     period_start: '2026-05-01'
     period_end: '2026-05-25'
     billing_event_log:
-      - { type: APPROVE, approved_at: '2026-05-01T10:00:00.000Z', approved_by: e2e-admin }
+      - { type: APPROVE, approved_at: '2026-05-01T10:00:00.000Z', approved_by: user_3EVVTX1t2kaMZ3gxmJYWBMO17ZJ }
       - { type: POST_REQUESTED }
       - { type: POST_SUCCEEDED, posted_at: '2026-05-01T10:05:00.000Z', qbo_invoice_id: 'DEMO-INV-1041' }
   # generated => sits in the OWNER approvals queue awaiting APPROVE (no event log).
@@ -168,7 +168,7 @@ estimates:
     customer_ref: cust-oakwood
     subtotal: 96000.00
     push_event_log:
-      - { type: REVIEW, reviewed_at: '2026-05-20T09:00:00.000Z', reviewed_by: e2e-office }
+      - { type: REVIEW, reviewed_at: '2026-05-20T09:00:00.000Z', reviewed_by: user_3EVVTb6fEte710ks9woAU1jJowJ }
 
 # ---- AT-RISK guardrail: a stop-work issue backdated past the 15-min
 #      auto-escalation threshold on the Riverside job (FOREMAN's blocker too) ----
@@ -176,7 +176,7 @@ worker_issues:
   - ref: riverside-stopped
     project_ref: riverside
     worker_ref: foreman-lead
-    reporter_clerk_user_id: e2e-foreman
+    reporter_clerk_user_id: user_3EVVTfJCwYPnVdCFQqE45Q9yrR3
     kind: materials_out
     severity: stopped
     message: 'Crew stopped — EIFS mesh shipment short on the east elevation'
@@ -244,9 +244,9 @@ change_orders:
     description: 'Add rear elevation stone veneer (client request)'
     value_delta: 14500.00
     schedule_impact_days: 5
-    created_by: e2e-admin
+    created_by: user_3EVVTX1t2kaMZ3gxmJYWBMO17ZJ
     co_event_log:
-      - { type: SEND, actor_user_id: e2e-admin, occurred_at: '2026-05-22T14:00:00.000Z' }
+      - { type: SEND, actor_user_id: user_3EVVTX1t2kaMZ3gxmJYWBMO17ZJ, occurred_at: '2026-05-22T14:00:00.000Z' }
 
 # ---- FOREMAN: today's confirmed crew (3 crew) ----
 crew_schedules:
@@ -254,7 +254,7 @@ crew_schedules:
     project_ref: sunset
     scheduled_for_offset_days: 0
     status: confirmed
-    confirmed_by: e2e-foreman
+    confirmed_by: user_3EVVTfJCwYPnVdCFQqE45Q9yrR3
     crew:
       - { worker_ref: crew-1 }
       - { worker_ref: crew-2 }
@@ -264,14 +264,14 @@ crew_schedules:
 daily_logs:
   - {
       project_ref: maple,
-      foreman_user_id: e2e-foreman,
+      foreman_user_id: user_3EVVTfJCwYPnVdCFQqE45Q9yrR3,
       occurred_on_offset_days: -1,
       status: submitted,
       notes: 'Finished south elevation basecoat; mesh embedded clean. 3 crew on site.',
     }
   - {
       project_ref: sunset,
-      foreman_user_id: e2e-foreman,
+      foreman_user_id: user_3EVVTfJCwYPnVdCFQqE45Q9yrR3,
       occurred_on_offset_days: 0,
       status: draft,
       notes: 'Started east wall EPS. Waiting on inspector before finish coat.',
@@ -282,7 +282,7 @@ clock_events:
   - {
       worker_ref: crew-1,
       project_ref: sunset,
-      clerk_user_id: e2e-member,
+      clerk_user_id: user_3EVVTkWfjImRPoZ9KrmvxZaFC4l,
       event_type: 'in',
       occurred_at_offset_minutes: -150,
     }
