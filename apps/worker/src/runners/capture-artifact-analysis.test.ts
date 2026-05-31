@@ -126,6 +126,19 @@ describe('createCaptureArtifactAnalysisRunner', () => {
     })
     expect(JSON.stringify(payload)).not.toContain('storage_key')
     expect(insert?.params[4]).toBe('capture_artifact:analysis:artifact-1')
+
+    const readiness = clients[0]?.calls.find(
+      (call) => call.sql.includes('update context_work_items') && call.sql.includes('capture_artifact_analysis'),
+    )
+    expect(readiness?.params).toEqual([
+      'co-1',
+      'work-1',
+      'off',
+      'off',
+      ['transcript', 'text', 'rrweb', 'canvas_geometry'],
+      false,
+      false,
+    ])
   })
 
   it('marks oversized artifacts skipped without downloading bytes', async () => {
@@ -249,8 +262,7 @@ describe('createCaptureArtifactAnalysisRunner', () => {
       derived_artifact: {
         id: 'derived-transcript-1',
         kind: 'transcript',
-        download_path:
-          '/api/capture-sessions/00000000-0000-4000-8000-000000000123/artifacts/derived-transcript-1/file',
+        download_path: '/api/capture-sessions/00000000-0000-4000-8000-000000000123/artifacts/derived-transcript-1/file',
       },
     })
     expect(JSON.stringify(payload.analysis)).not.toContain('storage_key')

@@ -151,8 +151,9 @@ export async function handleRentalBillingStateRoutes(
         // re-running the reducer. The same pattern is repeated in every
         // workflow event route (time-review-runs, labor-payroll-runs,
         // estimate-pushes, project-lifecycle, crew-schedule-events). The
-        // workflow_event_log UNIQUE (entity_id, state_version) is a
-        // belt-and-braces backstop in case a future caller forgets it.
+        // workflow_event_log UNIQUE (entity_id, workflow_name, state_version)
+        // (migration 106) is a belt-and-braces backstop in case a future
+        // caller forgets it.
         if (current.state_version !== stateVersion) {
           return { kind: 'version_conflict' as const, run: current }
         }

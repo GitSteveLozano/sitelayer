@@ -124,7 +124,7 @@ describe('rental-invoice runner — worker cadence dispatch', () => {
     expect(queued?.params[5]).toBe(5)
     expect(posted?.params[5]).toBe(6)
     // The conflict guard must be the idempotent worker variant.
-    expect(queued?.sql.toLowerCase()).toContain('on conflict (entity_id, state_version) do nothing')
+    expect(queued?.sql.toLowerCase()).toContain('on conflict (entity_id, workflow_name, state_version) do nothing')
   })
 
   it('emits NO cadence events for an ACTIVE rental', async () => {

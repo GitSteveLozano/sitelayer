@@ -307,3 +307,86 @@ takeoff_drafts:
     kind: count
     review_required: true
     result_json: { summary: { window_count: 38, confidence: 0.79 } }
+
+# ---- META / LEARNING LOOP: captured walkthrough feedback already turned into work ----
+capture_sessions:
+  - ref: steve-ai-takeoff-target-feedback
+    actor_user_id: user_3EVVTb6fEte710ks9woAU1jJowJ
+    mode: feedback
+    status: stopped
+    route_path: /desktop/estimator/ai-takeoff
+    device_kind: desktop
+    platform: web
+    viewport: 1440x900
+    app_build_sha: steve-demo-seed
+    consent_version: pilot-feedback-v1
+    consent_authority: scenario_seed
+    consent_scope:
+      audio: true
+      dom_replay: false
+      route_path: /desktop/estimator/ai-takeoff
+    metadata:
+      demo_story: estimator noticed that Add target is visible but not wired into capture
+      capture_persona: steve
+    events:
+      - event_type: portal.feedback.recording_started
+        event_class: portal_feedback
+        seq: 0
+        route_path: /desktop/estimator/ai-takeoff
+        payload: { note_length: 0 }
+      - event_type: ui.dead_control
+        event_class: user_action
+        seq: 1
+        route_path: /desktop/estimator/ai-takeoff
+        entity_type: takeoff_draft
+        entity_ref: hill-ai-takeoff
+        payload:
+          control: add_target
+          expected: target should be included in the AI capture request
+          observed: target selector is presentational
+      - event_type: portal.feedback.recording_stopped
+        event_class: portal_feedback
+        seq: 2
+        route_path: /desktop/estimator/ai-takeoff
+        payload: { note_length: 96, artifact_kind: audio }
+    artifacts:
+      - ref: steve-ai-takeoff-target-feedback-transcript
+        kind: transcript
+        uri: scenario://steve-demo/captures/steve-ai-takeoff-target-feedback/transcript.txt
+        content_type: text/plain
+        byte_size: 196
+        pii_level: internal
+        access_policy: support_only
+        metadata:
+          source: scenario_transcript
+          excerpt: Add target is on the AI takeoff screen, but it does not feed the capture call.
+    work_item:
+      ref: steve-ai-takeoff-target-feedback
+      title: AI takeoff Add target is presentational
+      summary: Seeded demo capture showing the estimator clicked Add target on the AI takeoff screen; the target/sheet selector is presentational and does not feed the capture call.
+      lane: both
+      severity: high
+      route: /desktop/estimator/ai-takeoff
+      entity_type: takeoff_draft
+      entity_ref: hill-ai-takeoff
+      created_by_user_id: user_3EVVTb6fEte710ks9woAU1jJowJ
+      metadata:
+        demo_story: captured walkthrough feedback becomes a context work item
+        statechart_gap: UI control exists without a reducer/API event
+      handoff_events:
+        - event_type: agent.artifact_attached
+          actor_kind: system
+          actor_ref: capture-artifact-analysis
+          source_system: sitelayer-worker
+          metadata:
+            source: capture_artifact_analysis
+            analyzer: scenario-transcript-v1
+            artifact_kind: transcript
+          payload:
+            artifact_kind: transcript
+            capture_session_ref: steve-ai-takeoff-target-feedback
+            analysis:
+              status: attached
+              analyzer: scenario-transcript-v1
+              summary: Transcript artifact captured the dead Add target control.
+              excerpt: Add target is on the AI takeoff screen, but it does not feed the capture call.

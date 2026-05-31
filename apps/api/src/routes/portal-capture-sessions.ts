@@ -2,9 +2,27 @@ import type http from 'node:http'
 import { getRequestContext } from '@sitelayer/logger'
 import type { Pool } from 'pg'
 import { CaptureArtifactUploadError, parseCaptureArtifactMultipart } from '../capture-artifact-upload.js'
+import type { ActiveCompany } from '../auth-types.js'
+import type { Identity } from '../auth.js'
+import {
+  WORK_ITEM_SEVERITIES,
+  appendContextHandoffEventTx,
+  createContextWorkItemTx,
+  getContextWorkItemWithEvents,
+  type ContextHandoffEventRow,
+  type ContextWorkItemDetail,
+  type ContextWorkItemRow,
+  type WorkItemSeverity,
+} from '../context-handoff.js'
 import { isValidUuid } from '../http-utils.js'
-import { withMutationTx } from '../mutation-tx.js'
-import type { BlueprintStorage } from '../storage.js'
+import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
+import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
+import {
+  buildSupportServerContext,
+  insertSupportPacket,
+  supportJsonRecord,
+  type JsonRecord,
+} from './support-packets.js'
 
 const MODES = ['trace', 'feedback', 'desktop', 'native', 'manual_upload'] as const
 const MAX_EVENTS = 100
@@ -14,6 +32,8 @@ export type PortalCaptureRouteCtx = {
   pool: Pool
   storage?: BlueprintStorage | undefined
   maxArtifactBytes?: number | undefined
+  tier?: string | undefined
+  buildSha?: string | undefined
   readBody: () => Promise<Record<string, unknown>>
   sendJson: (status: number, body: unknown) => void
 }
@@ -53,6 +73,13 @@ type CaptureSessionRow = {
   retention_expires_at: string | null
 }
 
+type CaptureFinalizeSnapshot = {
+  session: CaptureSessionRow
+  event_count: number
+  artifact_count: number
+  private_artifact_count: number
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -90,6 +117,16 @@ function enumValue<T extends readonly string[]>(value: unknown, allowed: T, fall
   return allowed.includes(value as T[number]) ? (value as T[number]) : fallback
 }
 
+function parsedEnumValue<T extends readonly string[]>(value: unknown, allowed: T): T[number] | null {
+  if (typeof value !== 'string') return null
+  return allowed.includes(value as T[number]) ? (value as T[number]) : null
+}
+
+function parseOptionalAllowed<T extends readonly string[]>(value: unknown, allowed: T): T[number] | null {
+  if (value === undefined || value === null) return null
+  return parsedEnumValue(value, allowed)
+}
+
 function parseMode(value: unknown): (typeof MODES)[number] | null {
   if (value === undefined) return 'trace'
   return typeof value === 'string' && MODES.includes(value as (typeof MODES)[number])
@@ -103,6 +140,141 @@ function requiresExplicitConsent(mode: (typeof MODES)[number]): boolean {
 
 function responseRow(row: CaptureSessionRow): CaptureSessionRow {
   return row
+}
+
+function portalActorUserId(actor: PortalCaptureActor): string {
+  return `portal_guest:${actor.authority}:${actor.actorRef}`
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && 'code' in error && (error as { code?: unknown }).code === '23505'
+  )
+}
+
+function finalizedPortalWorkItemResponse(
+  detail: ContextWorkItemDetail,
+  idempotentReplay: boolean,
+): {
+  work_item: ContextWorkItemDetail['work_item']
+  support_packet: { id: string; expires_at: string | null }
+  event: ContextHandoffEventRow | null
+  idempotent_replay?: true
+} {
+  return {
+    work_item: detail.work_item,
+    support_packet: detail.work_item.support_packet
+      ? {
+          id: detail.work_item.support_packet.id,
+          expires_at: detail.work_item.support_packet.expires_at,
+        }
+      : {
+          id: detail.work_item.support_packet_id,
+          expires_at: null,
+        },
+    event: detail.events[0] ?? null,
+    ...(idempotentReplay ? { idempotent_replay: true as const } : {}),
+  }
+}
+
+async function getFinalizedPortalCaptureWorkItem(companyId: string, captureSessionId: string) {
+  const result = await withCompanyClient(companyId, (client) =>
+    client.query<{ id: string }>(
+      `select id
+         from context_work_items
+        where company_id = $1
+          and capture_session_id = $2::uuid
+          and metadata ->> 'source' = 'capture_session_finalize'
+        order by created_at asc
+        limit 1`,
+      [companyId, captureSessionId],
+    ),
+  )
+  const workItemId = result.rows[0]?.id
+  return workItemId ? getContextWorkItemWithEvents(companyId, workItemId) : null
+}
+
+async function fetchPortalCaptureFinalizeSnapshot(actor: PortalCaptureActor, captureSessionId: string) {
+  const [session, eventCount, artifactSummary] = await Promise.all([
+    withCompanyClient(actor.companyId, (client) =>
+      client.query<CaptureSessionRow>(
+        `select *
+           from capture_sessions
+          where company_id = $1
+            and id = $2::uuid
+            and consent_actor_kind = 'portal_guest'
+            and consent_actor_ref = $3
+          limit 1`,
+        [actor.companyId, captureSessionId, actor.actorRef],
+      ),
+    ),
+    withCompanyClient(actor.companyId, (client) =>
+      client.query<{ count: string }>(
+        `select count(*)::text as count
+           from capture_session_events
+          where company_id = $1 and capture_session_id = $2::uuid`,
+        [actor.companyId, captureSessionId],
+      ),
+    ),
+    withCompanyClient(actor.companyId, (client) =>
+      client.query<{ artifact_count: string; private_artifact_count: string }>(
+        `select count(*)::text as artifact_count,
+                count(*) filter (where pii_level in ('private', 'restricted'))::text as private_artifact_count
+           from capture_artifacts
+          where company_id = $1
+            and capture_session_id = $2::uuid
+            and deleted_at is null`,
+        [actor.companyId, captureSessionId],
+      ),
+    ),
+  ])
+  const row = session.rows[0]
+  if (!row) return null
+  return {
+    session: row,
+    event_count: Number(eventCount.rows[0]?.count ?? 0),
+    artifact_count: Number(artifactSummary.rows[0]?.artifact_count ?? 0),
+    private_artifact_count: Number(artifactSummary.rows[0]?.private_artifact_count ?? 0),
+  } satisfies CaptureFinalizeSnapshot
+}
+
+async function loadPortalCompany(pool: Pool, companyId: string): Promise<ActiveCompany> {
+  const result = await pool.query<{ id: string; slug: string; name: string; created_at: string }>(
+    `select id::text as id, slug, name, created_at::text as created_at
+       from companies
+      where id = $1
+      limit 1`,
+    [companyId],
+  )
+  const row = result.rows[0]
+  return {
+    id: row?.id ?? companyId,
+    slug: row?.slug ?? 'portal',
+    name: row?.name ?? 'Portal company',
+    created_at: row?.created_at ?? '',
+    role: 'member',
+  }
+}
+
+function finalizeTitle(body: Record<string, unknown>, snapshot: CaptureFinalizeSnapshot): string {
+  const explicit = optionalText(body.title, 240)
+  if (explicit) return explicit
+  const route = snapshot.session.route_path ? ` on ${snapshot.session.route_path}` : ''
+  return `Review portal ${snapshot.session.mode} capture${route}`
+}
+
+function finalizeSummary(body: Record<string, unknown>, snapshot: CaptureFinalizeSnapshot): string {
+  const explicit = optionalText(body.summary ?? body.problem, 4000)
+  if (explicit) return explicit
+  return [
+    `Portal capture session ${snapshot.session.id} finalized from ${snapshot.session.mode} mode.`,
+    `${snapshot.event_count} event(s) and ${snapshot.artifact_count} artifact(s) were attached.`,
+    snapshot.private_artifact_count > 0
+      ? `${snapshot.private_artifact_count} artifact(s) require private/restricted handling.`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
 }
 
 export async function startPortalCaptureSession(ctx: PortalCaptureRouteCtx, actor: PortalCaptureActor): Promise<void> {
@@ -336,7 +508,8 @@ export async function uploadPortalCaptureArtifact(
   }
 
   const durationMS = optionalNonNegativeInteger(Number(upload.fields.duration_ms))
-  const retentionExpiresAt = optionalTimestampText(upload.fields.retention_expires_at) ?? session.retention_expires_at ?? null
+  const retentionExpiresAt =
+    optionalTimestampText(upload.fields.retention_expires_at) ?? session.retention_expires_at ?? null
   const inserted = await withMutationTx(actor.companyId, async (client) => {
     const result = await client.query<{ id: string }>(
       `insert into capture_artifacts (
@@ -359,7 +532,11 @@ export async function uploadPortalCaptureArtifact(
         upload.contentHash,
         durationMS,
         enumValue(upload.fields.pii_level, ['low', 'internal', 'private', 'restricted'] as const, 'private'),
-        enumValue(upload.fields.access_policy, ['support_only', 'operator_only', 'tenant_visible'] as const, 'support_only'),
+        enumValue(
+          upload.fields.access_policy,
+          ['support_only', 'operator_only', 'tenant_visible'] as const,
+          'support_only',
+        ),
         JSON.stringify({
           ...jsonRecord(parseMetadataField(upload.fields.metadata)),
           ...(actor.metadata ?? {}),
@@ -389,6 +566,338 @@ export async function uploadPortalCaptureArtifact(
       content_hash: upload.contentHash,
       redaction_version: CAPTURE_REDACTION_VERSION,
     },
+  })
+}
+
+export async function finalizePortalCaptureSession(
+  ctx: PortalCaptureRouteCtx,
+  actor: PortalCaptureActor,
+  pathCaptureSessionId: string,
+): Promise<void> {
+  const body = await ctx.readBody()
+  const id = optionalText(pathCaptureSessionId, 80)
+  if (!id || !isValidUuid(id)) {
+    ctx.sendJson(400, { error: 'capture_session_id must be a uuid' })
+    return
+  }
+
+  const existing = await getFinalizedPortalCaptureWorkItem(actor.companyId, id)
+  if (existing) {
+    ctx.sendJson(200, finalizedPortalWorkItemResponse(existing, true))
+    return
+  }
+
+  const snapshot = await fetchPortalCaptureFinalizeSnapshot(actor, id)
+  if (!snapshot) {
+    ctx.sendJson(404, { error: 'capture session not found for this portal link' })
+    return
+  }
+  if (snapshot.session.status === 'discarded' || snapshot.session.status === 'redacted') {
+    ctx.sendJson(409, { error: `capture session is ${snapshot.session.status}` })
+    return
+  }
+
+  if (body.lane !== undefined && body.lane !== null && body.lane !== 'triage') {
+    ctx.sendJson(400, { error: 'public portal capture finalization always uses triage lane' })
+    return
+  }
+  const severity = parseOptionalAllowed(body.severity, WORK_ITEM_SEVERITIES) as WorkItemSeverity | null
+  if (body.severity !== undefined && body.severity !== null && !severity) {
+    ctx.sendJson(400, { error: `severity must be one of ${WORK_ITEM_SEVERITIES.join(', ')}` })
+    return
+  }
+
+  const actorUserId = portalActorUserId(actor)
+  const company = await loadPortalCompany(ctx.pool, actor.companyId)
+  const identity: Identity = { userId: actorUserId, source: 'default' }
+  const requestId = getRequestContext()?.requestId ?? null
+  const route = optionalText(body.route_path ?? body.route, 500) ?? snapshot.session.route_path
+  const title = finalizeTitle(body, snapshot)
+  const summary = finalizeSummary(body, snapshot)
+  const clientRequestId = optionalText(body.client_request_id, 160) ?? `portal_capture_session_finalize:${id}`
+  const category = optionalText(body.category, 120) ?? 'portal_capture_session'
+  const buildSha = snapshot.session.app_build_sha ?? ctx.buildSha ?? null
+  const rawClient: JsonRecord = {
+    capture_session_id: id,
+    path: route ? { route } : null,
+    portal: {
+      surface: actor.surface,
+      authority: actor.authority,
+      actor_ref: actor.actorRef,
+      ...(actor.metadata ?? {}),
+    },
+    capture_session: {
+      id,
+      mode: snapshot.session.mode,
+      status: snapshot.session.status,
+      route_path: snapshot.session.route_path,
+      event_count: snapshot.event_count,
+      artifact_count: snapshot.artifact_count,
+      private_artifact_count: snapshot.private_artifact_count,
+      redaction_version: snapshot.session.redaction_version,
+      consent_version: snapshot.session.consent_version,
+      consent_authority: snapshot.session.consent_authority ?? null,
+    },
+    finalization: {
+      category,
+      title,
+      summary,
+      lane: 'triage',
+      severity,
+    },
+  }
+  const client = supportJsonRecord(rawClient)
+  const serverContext = await buildSupportServerContext({
+    pool: ctx.pool,
+    company,
+    identity,
+    tier: ctx.tier ?? 'portal',
+    buildSha: buildSha ?? '',
+    client: rawClient,
+  })
+  const retentionDays = Math.max(1, Math.min(90, Number(process.env.SUPPORT_PACKET_RETENTION_DAYS ?? 30)))
+  const expiresAt = new Date(Date.now() + retentionDays * 24 * 60 * 60 * 1000).toISOString()
+
+  let result: {
+    packet: { id: string; expires_at: string | null }
+    item: ContextWorkItemRow
+    event: ContextHandoffEventRow
+  }
+  try {
+    result = await withMutationTx(actor.companyId, async (clientTx) => {
+      const packet = await insertSupportPacket(clientTx, {
+        companyId: actor.companyId,
+        actorUserId,
+        requestId,
+        route,
+        captureSessionId: id,
+        buildSha,
+        problem: summary,
+        client,
+        serverContext: serverContext as JsonRecord,
+        expiresAt,
+        redactionVersion: 'support-packet-v1',
+      })
+      const item = await createContextWorkItemTx(clientTx, {
+        companyId: actor.companyId,
+        supportPacketId: packet.id,
+        title,
+        summary,
+        status: 'new',
+        lane: 'triage',
+        severity,
+        route,
+        captureSessionId: id,
+        createdByUserId: actorUserId,
+        metadata: {
+          category,
+          source: 'capture_session_finalize',
+          capture_session_id: id,
+          client_request_id: clientRequestId,
+          portal_surface: actor.surface,
+          portal_authority: actor.authority,
+          portal_actor_ref: actor.actorRef,
+          support_packet_expires_at: packet.expires_at ?? expiresAt,
+          event_count: snapshot.event_count,
+          artifact_count: snapshot.artifact_count,
+          private_artifact_count: snapshot.private_artifact_count,
+        },
+      })
+      const event = await appendContextHandoffEventTx(clientTx, {
+        companyId: actor.companyId,
+        workItemId: item.id,
+        eventType: 'work_item.created',
+        actorKind: 'external',
+        actorRef: actorUserId,
+        payload: {
+          title: item.title,
+          summary: item.summary,
+          status: item.status,
+          lane: item.lane,
+          severity: item.severity,
+          route: item.route,
+          capture_session_id: id,
+          support_packet_id: packet.id,
+          event_count: snapshot.event_count,
+          artifact_count: snapshot.artifact_count,
+          portal_surface: actor.surface,
+        },
+        metadata: {
+          category,
+          source: 'capture_session_finalize',
+          capture_session_id: id,
+          evidence_refs: [{ type: 'support_debug_packet', id: packet.id }],
+          portal_surface: actor.surface,
+          portal_authority: actor.authority,
+        },
+        idempotencyKey: `capture_session:finalize:${id}:work_item_created`,
+        captureSessionId: id,
+        buildSha,
+      })
+      await clientTx.query(
+        `update capture_sessions
+            set status = case when status = 'open' then 'stopped' else status end,
+                stopped_at = case when status = 'open' then now() else stopped_at end,
+                last_seen_at = now(),
+                metadata = metadata || $3::jsonb
+          where id = $1
+            and company_id = $2
+            and consent_actor_kind = 'portal_guest'
+            and consent_actor_ref = $4`,
+        [
+          id,
+          actor.companyId,
+          JSON.stringify({
+            finalized_at: new Date().toISOString(),
+            finalized_by: 'portal_guest',
+            finalized_support_packet_id: packet.id,
+            finalized_work_item_id: item.id,
+          }),
+          actor.actorRef,
+        ],
+      )
+      return { packet, item, event }
+    })
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      const replay = await getFinalizedPortalCaptureWorkItem(actor.companyId, id)
+      if (replay) {
+        ctx.sendJson(200, finalizedPortalWorkItemResponse(replay, true))
+        return
+      }
+    }
+    throw error
+  }
+
+  ctx.sendJson(201, {
+    work_item: result.item,
+    support_packet: {
+      id: result.packet.id,
+      expires_at: result.packet.expires_at ?? expiresAt,
+    },
+    event: result.event,
+  })
+}
+
+export async function discardPortalCaptureSession(
+  ctx: PortalCaptureRouteCtx,
+  actor: PortalCaptureActor,
+  pathCaptureSessionId: string,
+): Promise<void> {
+  const id = optionalText(pathCaptureSessionId, 80)
+  if (!id || !isValidUuid(id)) {
+    ctx.sendJson(400, { error: 'capture_session_id must be a uuid' })
+    return
+  }
+
+  const finalized = await getFinalizedPortalCaptureWorkItem(actor.companyId, id)
+  if (finalized) {
+    ctx.sendJson(409, { error: 'capture session already finalized' })
+    return
+  }
+
+  let foundSession = false
+  let blockedStatus: string | null = null
+  let artifactObjectKeys: string[] = []
+  const row = await withMutationTx(actor.companyId, async (client) => {
+    const exists = await client.query<{ id: string; status: string }>(
+      `select id, status
+         from capture_sessions
+        where id = $1
+          and company_id = $2
+          and consent_actor_kind = 'portal_guest'
+          and consent_actor_ref = $3
+        limit 1`,
+      [id, actor.companyId, actor.actorRef],
+    )
+    const session = exists.rows[0]
+    if (!session) return null
+    foundSession = true
+    if (session.status === 'redacted') {
+      blockedStatus = session.status
+      return null
+    }
+
+    const updated = await client.query<CaptureSessionRow>(
+      `update capture_sessions
+          set status = 'discarded',
+              discarded_at = coalesce(discarded_at, now()),
+              last_seen_at = now(),
+              metadata = metadata || $4::jsonb
+        where id = $1
+          and company_id = $2
+          and consent_actor_kind = 'portal_guest'
+          and consent_actor_ref = $3
+        returning *`,
+      [
+        id,
+        actor.companyId,
+        actor.actorRef,
+        JSON.stringify({
+          discarded_at: new Date().toISOString(),
+          discarded_by: 'portal_guest',
+          portal_surface: actor.surface,
+        }),
+      ],
+    )
+    const captureSession = updated.rows[0] ?? null
+    if (!captureSession) return null
+
+    const keys = await client.query<{ storage_key: string | null }>(
+      `select storage_key
+         from capture_artifacts
+        where capture_session_id = $1
+          and company_id = $2
+          and deleted_at is null
+          and storage_key is not null`,
+      [id, actor.companyId],
+    )
+    artifactObjectKeys = keys.rows
+      .map((artifact) => artifact.storage_key)
+      .filter((key): key is string => {
+        if (!key) return false
+        try {
+          assertKeyInCompany(actor.companyId, key)
+          return true
+        } catch {
+          return false
+        }
+      })
+    await client.query(
+      `update capture_artifacts
+          set deleted_at = coalesce(deleted_at, now())
+        where capture_session_id = $1
+          and company_id = $2
+          and deleted_at is null`,
+      [id, actor.companyId],
+    )
+    return captureSession
+  })
+
+  if (!foundSession) {
+    ctx.sendJson(404, { error: 'capture session not found for this portal link' })
+    return
+  }
+  if (blockedStatus) {
+    ctx.sendJson(409, { error: `capture session is ${blockedStatus}` })
+    return
+  }
+  if (!row) {
+    ctx.sendJson(404, { error: 'capture session not found for this portal link' })
+    return
+  }
+
+  const deletedObjects = ctx.storage
+    ? await Promise.allSettled(artifactObjectKeys.map((key) => ctx.storage!.deleteObject(key)))
+    : []
+  ctx.sendJson(200, {
+    capture_session: responseRow(row),
+    ...(artifactObjectKeys.length
+      ? {
+          deleted_artifact_objects: deletedObjects.filter((result) => result.status === 'fulfilled').length,
+          artifact_object_delete_errors: deletedObjects.filter((result) => result.status === 'rejected').length,
+        }
+      : {}),
   })
 }
 

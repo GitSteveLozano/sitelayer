@@ -145,8 +145,9 @@ function snapshotFromRow(row: PendingNotificationRow): NotificationWorkflowSnaps
  * worker mirrors `apps/api/src/mutation-tx.ts:recordWorkflowEvent`
  * inline rather than importing from apps/api (which would invert the
  * dep graph). `state_version` is the version BEFORE the transition —
- * the per-(entity_id, state_version) unique constraint then naturally
- * rejects duplicate writes for the same transition.
+ * the per-(entity_id, workflow_name, state_version) unique constraint
+ * (migration 106) then naturally rejects duplicate writes for the same
+ * transition.
  */
 async function recordWorkflowEvent(
   client: NotificationDbClient,
@@ -162,7 +163,7 @@ async function recordWorkflowEvent(
        state_version, event_type, event_payload, snapshot_after, actor_user_id
      )
      values ($1, $2, $3, 'notification', $4, $5, $6, $7::jsonb, $8::jsonb, null)
-     on conflict (entity_id, state_version) do nothing`,
+     on conflict (entity_id, workflow_name, state_version) do nothing`,
     [
       companyId,
       NOTIFICATION_WORKFLOW_NAME,

@@ -24,8 +24,9 @@ import { SignatureCapture } from './SignatureCapture'
  */
 export function EstimateView() {
   const { shareToken } = useParams<{ shareToken: string }>()
+  const token = shareToken ?? ''
   const navigate = useNavigate()
-  const signature = usePortalEstimateSignature(shareToken ?? '')
+  const signature = usePortalEstimateSignature(token)
 
   // The machine signals when it's time to navigate into the accepted
   // view. Doing the navigation here (instead of inside an XState
@@ -39,7 +40,7 @@ export function EstimateView() {
 
   if (signature.loadError) {
     return (
-      <Shell title="Estimate">
+      <Shell title="Estimate" shareToken={token}>
         <MBanner tone="error" title={signature.loadError.message} />
       </Shell>
     )
@@ -48,7 +49,7 @@ export function EstimateView() {
   const view = signature.view
   if (!view) {
     return (
-      <Shell title="Estimate">
+      <Shell title="Estimate" shareToken={token}>
         <div style={{ padding: 24, textAlign: 'center', color: 'var(--m-ink-3, var(--p-slate-ink-3))', fontSize: 14 }}>
           Loading…
         </div>
@@ -58,7 +59,7 @@ export function EstimateView() {
 
   if (view.status === 'declined') {
     return (
-      <Shell title={view.project_name} sub={`From ${view.company_name}`}>
+      <Shell title={view.project_name} sub={`From ${view.company_name}`} shareToken={token}>
         <MBanner
           tone="warn"
           title="You declined this estimate."
@@ -71,7 +72,7 @@ export function EstimateView() {
 
   if (view.status === 'expired') {
     return (
-      <Shell title={view.project_name} sub={`From ${view.company_name}`}>
+      <Shell title={view.project_name} sub={`From ${view.company_name}`} shareToken={token}>
         <MBanner tone="warn" title="This link has expired." body="Contact the sender for a fresh link." />
       </Shell>
     )
@@ -90,7 +91,7 @@ export function EstimateView() {
         : null)
 
   return (
-    <Shell title={view.project_name} sub={`From ${view.company_name}`}>
+    <Shell title={view.project_name} sub={`From ${view.company_name}`} shareToken={token}>
       <ReadOnlySnapshot view={view} />
 
       {signature.mode === 'idle' ? (
@@ -262,7 +263,17 @@ function ReadOnlySnapshot({ view }: { view: PortalEstimateView }) {
   )
 }
 
-function Shell({ title, sub, children }: { title: string; sub?: string; children: React.ReactNode }) {
+function Shell({
+  title,
+  sub,
+  shareToken,
+  children,
+}: {
+  title: string
+  sub?: string
+  shareToken: string
+  children: React.ReactNode
+}) {
   // Force the light theme regardless of OS preference; the operator's
   // mobile shell switches to dark on some screens, but customer-facing
   // surfaces stay strictly light per the spec.
@@ -277,9 +288,9 @@ function Shell({ title, sub, children }: { title: string; sub?: string; children
           {children}
         </div>
       </MBody>
-      {/* Invited-guest issue-report pill (observability T2). Renders null unless
-          VITE_TRACE_BEACON_URL is set AND an invite token is present — inert by default. */}
-      <IssueReporter />
+      {/* Invited-guest issue-report pill. Renders null unless an invite token
+          is present so public share links stay inert by default. */}
+      <IssueReporter surface="estimate_portal" shareToken={shareToken} />
     </div>
   )
 }

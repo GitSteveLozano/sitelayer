@@ -42,8 +42,12 @@ export interface WorkflowEventLogInsertOptions {
   /**
    * 'throw' → omit the conflict clause so a duplicate raises a unique
    *           violation the caller maps to 409 (human/API path).
-   * 'do_nothing' → append `on conflict (entity_id, state_version) do nothing`
-   *           for idempotent worker retries.
+   * 'do_nothing' → append `on conflict (entity_id, workflow_name, state_version)
+   *           do nothing` for idempotent worker retries. The inferred unique
+   *           key is the workflow-scoped one from migration 106
+   *           (workflow_event_log_entity_workflow_version_key); within a single
+   *           workflow_name the (entity_id, state_version) pair is still unique,
+   *           so a retried transition is still deduped.
    */
   onConflict: 'throw' | 'do_nothing'
 }
@@ -77,7 +81,7 @@ export function buildWorkflowEventLogInsert(
   opts: WorkflowEventLogInsertOptions,
 ): { text: string; values: unknown[] } {
   const conflictClause =
-    opts.onConflict === 'do_nothing' ? '\n    on conflict (entity_id, state_version) do nothing' : ''
+    opts.onConflict === 'do_nothing' ? '\n    on conflict (entity_id, workflow_name, state_version) do nothing' : ''
   const text = `
     insert into workflow_event_log (
       ${WORKFLOW_EVENT_LOG_COLUMNS.join(', ')}

@@ -4,6 +4,8 @@ import { HttpError } from '../http-utils.js'
 import { recordMutationLedger, withMutationTx } from '../mutation-tx.js'
 import {
   appendPortalCaptureEvents,
+  discardPortalCaptureSession,
+  finalizePortalCaptureSession,
   startPortalCaptureSession,
   uploadPortalCaptureArtifact,
 } from './portal-capture-sessions.js'
@@ -29,6 +31,8 @@ export type PublicEstimateShareCtx = {
   shareSecret: string
   storage?: Parameters<typeof uploadPortalCaptureArtifact>[1]['storage']
   maxArtifactBytes?: number
+  tier?: string
+  buildSha?: string
   /** Resolve the inbound IP for audit (X-Forwarded-For first hop). */
   resolveClientIp: () => string | null
   /** Same JSON body parser used by authenticated routes. */
@@ -126,7 +130,9 @@ export async function handlePublicEstimateShareRoutes(
   }
 
   // POST /api/portal/estimates/:token/capture-sessions/:id/events
-  const captureEventsMatch = url.pathname.match(/^\/api\/portal\/estimates\/([^/]+)\/capture-sessions\/([^/]+)\/events$/)
+  const captureEventsMatch = url.pathname.match(
+    /^\/api\/portal\/estimates\/([^/]+)\/capture-sessions\/([^/]+)\/events$/,
+  )
   if (req.method === 'POST' && captureEventsMatch) {
     const token = decodeURIComponent(captureEventsMatch[1] ?? '')
     const captureSessionId = decodeURIComponent(captureEventsMatch[2] ?? '')
@@ -170,6 +176,72 @@ export async function handlePublicEstimateShareRoutes(
     }
     await uploadPortalCaptureArtifact(
       req,
+      ctx,
+      {
+        companyId: lookup.row.company_id,
+        actorRef: lookup.row.id,
+        authority: 'signed_estimate_share_token',
+        surface: 'estimate_portal',
+        metadata: {
+          estimate_share_link_id: lookup.row.id,
+          project_id: lookup.row.project_id,
+        },
+        consentScope: {
+          estimate_share_link_id: lookup.row.id,
+          project_id: lookup.row.project_id,
+        },
+      },
+      captureSessionId,
+    )
+    return true
+  }
+
+  // POST /api/portal/estimates/:token/capture-sessions/:id/finalize
+  const captureFinalizeMatch = url.pathname.match(
+    /^\/api\/portal\/estimates\/([^/]+)\/capture-sessions\/([^/]+)\/finalize$/,
+  )
+  if (req.method === 'POST' && captureFinalizeMatch) {
+    const token = decodeURIComponent(captureFinalizeMatch[1] ?? '')
+    const captureSessionId = decodeURIComponent(captureFinalizeMatch[2] ?? '')
+    const lookup = await loadShareByToken(ctx.pool, ctx.shareSecret, token)
+    if (!lookup.ok) {
+      ctx.sendJson(lookup.status, { error: lookup.error })
+      return true
+    }
+    await finalizePortalCaptureSession(
+      ctx,
+      {
+        companyId: lookup.row.company_id,
+        actorRef: lookup.row.id,
+        authority: 'signed_estimate_share_token',
+        surface: 'estimate_portal',
+        metadata: {
+          estimate_share_link_id: lookup.row.id,
+          project_id: lookup.row.project_id,
+        },
+        consentScope: {
+          estimate_share_link_id: lookup.row.id,
+          project_id: lookup.row.project_id,
+        },
+      },
+      captureSessionId,
+    )
+    return true
+  }
+
+  // POST /api/portal/estimates/:token/capture-sessions/:id/discard
+  const captureDiscardMatch = url.pathname.match(
+    /^\/api\/portal\/estimates\/([^/]+)\/capture-sessions\/([^/]+)\/discard$/,
+  )
+  if (req.method === 'POST' && captureDiscardMatch) {
+    const token = decodeURIComponent(captureDiscardMatch[1] ?? '')
+    const captureSessionId = decodeURIComponent(captureDiscardMatch[2] ?? '')
+    const lookup = await loadShareByToken(ctx.pool, ctx.shareSecret, token)
+    if (!lookup.ok) {
+      ctx.sendJson(lookup.status, { error: lookup.error })
+      return true
+    }
+    await discardPortalCaptureSession(
       ctx,
       {
         companyId: lookup.row.company_id,

@@ -1,6 +1,7 @@
 import { createContext, useContext, type ReactNode } from 'react'
 import { Outlet, useParams } from 'react-router-dom'
 import { useRentalsPortal, type RentalsPortalHookResult } from '@/machines/rentals-portal'
+import { IssueReporter } from './IssueReporter'
 
 /**
  * Lifts the single `rentalsPortal` XState instance to a parent route so
@@ -26,7 +27,12 @@ export function RentalsPortalProvider({ children }: { children?: ReactNode }) {
     return <div style={{ padding: 32 }}>Missing share token.</div>
   }
 
-  return <RentalsPortalContext.Provider value={portal}>{children ?? <Outlet />}</RentalsPortalContext.Provider>
+  return (
+    <RentalsPortalContext.Provider value={portal}>
+      {children ?? <Outlet />}
+      <IssueReporter surface="rental_portal" shareToken={shareToken} />
+    </RentalsPortalContext.Provider>
+  )
 }
 
 export function useRentalsPortalContext(): RentalsPortalHookResult {

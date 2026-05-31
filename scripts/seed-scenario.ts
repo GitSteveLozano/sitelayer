@@ -116,6 +116,24 @@
  *     count: 500
  *     service_item_code: EPS
  *
+ *   capture_sessions:           # exercises the capture -> context work loop
+ *     - ref: walkthrough-gap
+ *       actor_user_id: e2e-admin
+ *       mode: feedback
+ *       route_path: /desktop/estimator/ai-takeoff
+ *       consent_version: pilot-feedback-v1
+ *       events:
+ *         - event_type: ui.dead_control
+ *           event_class: feedback
+ *       artifacts:
+ *         - kind: transcript
+ *           uri: scenario://walkthrough-gap/transcript.txt
+ *           content_type: text/plain
+ *       work_item:
+ *         title: Verify captured feedback turns into work
+ *         summary: Seeded scenario item linked to a capture session.
+ *         lane: both
+ *
  *   damage_charges:             # exercises damage_charge_settlement workflow
  *     - ref: damage-frame-bent
  *       project_ref: project-alpha
@@ -413,6 +431,100 @@ interface ScenarioYaml {
     result_json?: Record<string, unknown>
     measurements?: Array<{ service_item_code: string; quantity: number; unit?: string }>
   }>
+  capture_sessions?: Array<{
+    ref: string
+    actor_user_id?: string
+    mode?: string
+    status?: string
+    route_path?: string
+    device_kind?: string
+    platform?: string
+    viewport?: string
+    app_build_sha?: string
+    consent_version?: string
+    consent_actor_kind?: string
+    consent_actor_ref?: string
+    consent_authority?: string
+    consent_scope?: Record<string, unknown>
+    metadata?: Record<string, unknown>
+    started_at?: string
+    started_offset_minutes?: number
+    stopped_at?: string
+    stopped_offset_minutes?: number
+    discarded_at?: string
+    discarded_offset_minutes?: number
+    retention_expires_at?: string
+    retention_offset_days?: number
+    events?: Array<{
+      event_type: string
+      event_class?: string
+      route_path?: string
+      workflow_id?: string
+      entity_type?: string
+      entity_id?: string
+      entity_ref?: string
+      client_event_id?: string
+      seq?: number
+      request_id?: string
+      payload?: Record<string, unknown>
+      occurred_at?: string
+      occurred_offset_minutes?: number
+    }>
+    artifacts?: Array<{
+      ref?: string
+      kind: string
+      storage_key?: string
+      uri?: string
+      content_type?: string
+      byte_size?: number
+      content_hash?: string
+      duration_ms?: number
+      pii_level?: string
+      access_policy?: string
+      metadata?: Record<string, unknown>
+      retention_expires_at?: string
+      retention_offset_days?: number
+      created_at?: string
+      created_offset_minutes?: number
+      deleted_at?: string
+      redaction_version?: string
+    }>
+    work_item?: {
+      ref?: string
+      support_packet_ref?: string
+      title: string
+      summary?: string
+      status?: string
+      lane?: string
+      severity?: string
+      route?: string
+      entity_type?: string
+      entity_id?: string
+      entity_ref?: string
+      assignee_user_id?: string
+      created_by_user_id?: string
+      metadata?: Record<string, unknown>
+      reversibility_window_seconds?: number
+      created_at?: string
+      created_offset_minutes?: number
+      resolved_at?: string
+      handoff_events?: Array<{
+        event_type: string
+        actor_kind?: string
+        actor_user_id?: string
+        actor_ref?: string
+        source_system?: string
+        payload?: Record<string, unknown>
+        metadata?: Record<string, unknown>
+        idempotency_key?: string
+        request_id?: string
+        build_sha?: string
+        redaction_version?: string
+        occurred_at?: string
+        occurred_offset_minutes?: number
+      }>
+    }
+  }>
 }
 
 // ---------- Deterministic UUIDs ----------
@@ -506,6 +618,7 @@ interface RefMaps {
   changeOrders: Map<string, string>
   crewSchedules: Map<string, string>
   takeoffDrafts: Map<string, string>
+  captureSessions: Map<string, string>
 }
 
 function newRefMaps(): RefMaps {
@@ -525,6 +638,7 @@ function newRefMaps(): RefMaps {
     changeOrders: new Map(),
     crewSchedules: new Map(),
     takeoffDrafts: new Map(),
+    captureSessions: new Map(),
   }
 }
 
@@ -1645,6 +1759,500 @@ async function ensureTakeoffDraftsRich(
   }
 }
 
+// ---------- Demo sections: capture sessions -> support packet -> context work ----------
+
+function resolveTimestamp(
+  literal: string | undefined,
+  offsetMinutes: number | undefined,
+  fallbackOffsetMinutes: number,
+): string {
+  if (literal) return literal
+  const d = new Date()
+  d.setUTCMinutes(d.getUTCMinutes() + (offsetMinutes ?? fallbackOffsetMinutes))
+  return d.toISOString()
+}
+
+function resolveOptionalTimestamp(literal: string | undefined, offsetMinutes: number | undefined): string | null {
+  if (literal) return literal
+  if (offsetMinutes === undefined) return null
+  const d = new Date()
+  d.setUTCMinutes(d.getUTCMinutes() + offsetMinutes)
+  return d.toISOString()
+}
+
+function resolveRetentionTimestamp(literal: string | undefined, offsetDays: number | undefined): string | null {
+  if (literal) return literal
+  if (offsetDays === undefined) return null
+  const d = new Date()
+  d.setUTCDate(d.getUTCDate() + offsetDays)
+  return d.toISOString()
+}
+
+function entityIdFromRef(entityType: string | undefined, entityRef: string | undefined, refs: RefMaps): string | null {
+  if (!entityRef) return null
+  if (!entityType) throw new Error(`entity_ref "${entityRef}" requires entity_type`)
+
+  const normalized = entityType.trim()
+  switch (normalized) {
+    case 'customer':
+      return mustResolve('customer', entityRef, refs.customers)
+    case 'worker':
+      return mustResolve('worker', entityRef, refs.workers)
+    case 'inventory_item':
+    case 'inventory':
+      return mustResolve('inventory', entityRef, refs.inventory)
+    case 'project':
+      return mustResolve('project', entityRef, refs.projects)
+    case 'rental_contract':
+      return mustResolve('rental_contract', entityRef, refs.rentalContracts)
+    case 'rental_billing_run':
+      return mustResolve('rental_billing_run', entityRef, refs.rentalBillingRuns)
+    case 'estimate_push':
+    case 'estimate':
+      return mustResolve('estimate_push', entityRef, refs.estimates)
+    case 'worker_issue':
+      return mustResolve('worker_issue', entityRef, refs.workerIssues)
+    case 'damage_charge':
+      return mustResolve('damage_charge', entityRef, refs.damageCharges)
+    case 'rental_request':
+      return mustResolve('rental_request', entityRef, refs.rentalRequests)
+    case 'qbo_sync_run':
+      return mustResolve('qbo_sync_run', entityRef, refs.qboSyncRuns)
+    case 'bom':
+      return mustResolve('bom', entityRef, refs.boms)
+    case 'change_order':
+      return mustResolve('change_order', entityRef, refs.changeOrders)
+    case 'crew_schedule':
+      return mustResolve('crew_schedule', entityRef, refs.crewSchedules)
+    case 'takeoff_draft':
+      return mustResolve('takeoff_draft', entityRef, refs.takeoffDrafts)
+    case 'capture_session':
+      return mustResolve('capture_session', entityRef, refs.captureSessions)
+    default:
+      throw new Error(`scenario references unsupported entity_type "${entityType}" for entity_ref "${entityRef}"`)
+  }
+}
+
+function resolveEntityId(
+  refs: RefMaps,
+  entityType: string | undefined,
+  entityId: string | undefined,
+  entityRef: string | undefined,
+): string | null {
+  return entityId ?? entityIdFromRef(entityType, entityRef, refs)
+}
+
+async function ensureCaptureSessions(
+  client: PoolClient,
+  companyId: string,
+  sessions: ScenarioYaml['capture_sessions'],
+  refs: RefMaps,
+  scenarioSlug: string,
+): Promise<void> {
+  if (!sessions) return
+  for (const session of sessions) {
+    const sessionId = refUuid('capture_session', session.ref)
+    refs.captureSessions.set(session.ref, sessionId)
+    const actorUserId = session.actor_user_id ?? 'scenario-seed'
+    const mode = session.mode ?? 'feedback'
+    const status = session.status ?? 'stopped'
+    const startedAt = resolveTimestamp(session.started_at, session.started_offset_minutes, -20)
+    const stoppedAt =
+      status === 'stopped' || status === 'failed' || status === 'redacted'
+        ? resolveTimestamp(session.stopped_at, session.stopped_offset_minutes, -5)
+        : resolveOptionalTimestamp(session.stopped_at, session.stopped_offset_minutes)
+    const discardedAt =
+      status === 'discarded'
+        ? resolveTimestamp(session.discarded_at, session.discarded_offset_minutes, -5)
+        : resolveOptionalTimestamp(session.discarded_at, session.discarded_offset_minutes)
+    const retentionExpiresAt = resolveRetentionTimestamp(
+      session.retention_expires_at,
+      session.retention_offset_days ?? 30,
+    )
+    const consentVersion = session.consent_version ?? (mode === 'trace' ? '' : 'scenario-feedback-v1')
+    const consentActorKind = session.consent_actor_kind ?? (consentVersion ? 'user' : null)
+    const consentActorRef = session.consent_actor_ref ?? (consentVersion ? actorUserId : null)
+    const consentAuthority = session.consent_authority ?? (consentVersion ? 'scenario_seed' : null)
+    const consentedAt = consentVersion ? startedAt : null
+    const lastSeenAt = stoppedAt ?? discardedAt ?? startedAt
+    const routePath = session.route_path ?? null
+    const appBuildSha = session.app_build_sha ?? 'seed-scenario'
+    const sessionMetadata = {
+      source: 'seed_scenario',
+      scenario: scenarioSlug,
+      ref: session.ref,
+      ...(session.metadata ?? {}),
+    }
+
+    await client.query(
+      `insert into capture_sessions (
+         id, company_id, actor_user_id, mode, status, route_path, device_kind,
+         platform, viewport, app_build_sha, consent_version, redaction_version,
+         metadata, started_at, last_seen_at, stopped_at, discarded_at,
+         retention_expires_at, consent_actor_kind, consent_actor_ref,
+         consent_authority, consent_scope, consented_at
+       )
+       values (
+         $1, $2, $3, $4, $5, $6, $7,
+         $8, $9, $10, $11, 'capture-session-v1',
+         $12::jsonb, $13::timestamptz, $14::timestamptz, $15::timestamptz, $16::timestamptz,
+         $17::timestamptz, $18, $19,
+         $20, $21::jsonb, $22::timestamptz
+       )
+       on conflict (id) do nothing`,
+      [
+        sessionId,
+        companyId,
+        actorUserId,
+        mode,
+        status,
+        routePath,
+        session.device_kind ?? null,
+        session.platform ?? null,
+        session.viewport ?? null,
+        appBuildSha,
+        consentVersion,
+        JSON.stringify(sessionMetadata),
+        startedAt,
+        lastSeenAt,
+        stoppedAt,
+        discardedAt,
+        retentionExpiresAt,
+        consentActorKind,
+        consentActorRef,
+        consentAuthority,
+        JSON.stringify({
+          mode,
+          route_path: routePath,
+          ...(session.consent_scope ?? {}),
+        }),
+        consentedAt,
+      ],
+    )
+
+    for (let i = 0; i < (session.events ?? []).length; i++) {
+      const ev = session.events![i]!
+      const eventId = refUuid('capture_session_event', `${session.ref}:${i}`)
+      const occurredAt = resolveTimestamp(ev.occurred_at, ev.occurred_offset_minutes, -20 + i)
+      await client.query(
+        `insert into capture_session_events (
+           id, company_id, capture_session_id, seq, client_event_id, event_type,
+           event_class, route_path, workflow_id, entity_type, entity_id,
+           request_id, payload, redaction_version, occurred_at
+         )
+         values (
+           $1, $2, $3, $4, $5, $6,
+           $7, $8, $9, $10, $11,
+           $12, $13::jsonb, 'capture-session-v1', $14::timestamptz
+         )
+         on conflict (id) do nothing`,
+        [
+          eventId,
+          companyId,
+          sessionId,
+          ev.seq ?? i,
+          ev.client_event_id ?? `${session.ref}:${i}`,
+          ev.event_type,
+          ev.event_class ?? 'scenario',
+          ev.route_path ?? routePath,
+          ev.workflow_id ?? null,
+          ev.entity_type ?? null,
+          resolveEntityId(refs, ev.entity_type, ev.entity_id, ev.entity_ref),
+          ev.request_id ?? null,
+          JSON.stringify(ev.payload ?? {}),
+          occurredAt,
+        ],
+      )
+    }
+
+    for (let i = 0; i < (session.artifacts ?? []).length; i++) {
+      const artifact = session.artifacts![i]!
+      const artifactRef = artifact.ref ?? `${session.ref}:${i}`
+      const artifactId = refUuid('capture_artifact', artifactRef)
+      const createdAt = resolveTimestamp(artifact.created_at, artifact.created_offset_minutes, -10 + i)
+      const artifactRetention =
+        resolveRetentionTimestamp(artifact.retention_expires_at, artifact.retention_offset_days ?? undefined) ??
+        retentionExpiresAt
+      await client.query(
+        `insert into capture_artifacts (
+           id, company_id, capture_session_id, kind, storage_key, uri, content_type,
+           byte_size, content_hash, duration_ms, pii_level, access_policy,
+           metadata, created_at, deleted_at, retention_expires_at, redaction_version
+         )
+         values (
+           $1, $2, $3, $4, $5, $6, $7,
+           $8, $9, $10, $11, $12,
+           $13::jsonb, $14::timestamptz, $15::timestamptz, $16::timestamptz, $17
+         )
+         on conflict (id) do nothing`,
+        [
+          artifactId,
+          companyId,
+          sessionId,
+          artifact.kind,
+          artifact.storage_key ?? null,
+          artifact.uri ?? (artifact.storage_key ? null : `scenario://${scenarioSlug}/capture/${artifactRef}`),
+          artifact.content_type ?? null,
+          artifact.byte_size ?? null,
+          artifact.content_hash ?? null,
+          artifact.duration_ms ?? null,
+          artifact.pii_level ?? 'internal',
+          artifact.access_policy ?? 'support_only',
+          JSON.stringify({
+            source: 'seed_scenario',
+            scenario: scenarioSlug,
+            ref: artifactRef,
+            ...(artifact.metadata ?? {}),
+          }),
+          createdAt,
+          artifact.deleted_at ?? null,
+          artifactRetention,
+          artifact.redaction_version ?? 'capture-session-v1',
+        ],
+      )
+    }
+
+    if (session.work_item) {
+      const itemSpec = session.work_item
+      const eventCount = session.events?.length ?? 0
+      const artifactCount = session.artifacts?.length ?? 0
+      const supportPacketId = refUuid('support_debug_packet', itemSpec.support_packet_ref ?? `${session.ref}:packet`)
+      const workItemId = refUuid('context_work_item', itemSpec.ref ?? `${session.ref}:work-item`)
+      const itemRoute = itemSpec.route ?? routePath
+      const itemCreatedAt = resolveTimestamp(itemSpec.created_at, itemSpec.created_offset_minutes, -4)
+      const itemCreatedBy = itemSpec.created_by_user_id ?? actorUserId
+      const entityType = itemSpec.entity_type ?? null
+      const entityId = resolveEntityId(refs, itemSpec.entity_type, itemSpec.entity_id, itemSpec.entity_ref)
+      const summary =
+        itemSpec.summary ??
+        `Seeded capture session ${sessionId} finalized from ${mode} mode with ${eventCount} event(s) and ${artifactCount} artifact(s).`
+      await client.query(
+        `insert into support_debug_packets (
+           id, company_id, actor_user_id, request_id, route, capture_session_id,
+           build_sha, problem, client, server_context, created_at, expires_at,
+           redaction_version
+         )
+         values (
+           $1, $2, $3, null, $4, $5::uuid,
+           $6, $7, $8::jsonb, $9::jsonb, $10::timestamptz, $11::timestamptz,
+           'support-packet-v1'
+         )
+         on conflict (id) do nothing`,
+        [
+          supportPacketId,
+          companyId,
+          itemCreatedBy,
+          itemRoute,
+          sessionId,
+          appBuildSha,
+          summary,
+          JSON.stringify({
+            source: 'seed_scenario',
+            scenario: scenarioSlug,
+            capture_session_id: sessionId,
+            capture_session: {
+              id: sessionId,
+              mode,
+              status,
+              route_path: routePath,
+              event_count: eventCount,
+              artifact_count: artifactCount,
+              consent_version: consentVersion,
+              consent_authority: consentAuthority,
+            },
+            finalization: {
+              category: 'capture_session',
+              title: itemSpec.title,
+              summary,
+              lane: itemSpec.lane ?? 'triage',
+              severity: itemSpec.severity ?? 'normal',
+            },
+          }),
+          JSON.stringify({
+            source: 'seed_scenario',
+            scenario: scenarioSlug,
+            seeded_tables: [
+              'capture_sessions',
+              'capture_session_events',
+              'capture_artifacts',
+              'support_debug_packets',
+              'context_work_items',
+              'context_handoff_events',
+            ],
+          }),
+          itemCreatedAt,
+          retentionExpiresAt,
+        ],
+      )
+
+      await client.query(
+        `insert into context_work_items (
+           id, company_id, support_packet_id, title, summary, status, lane,
+           severity, route, capture_session_id, entity_type, entity_id,
+           assignee_user_id, created_by_user_id, created_at, updated_at,
+           resolved_at, metadata, reversibility_window_seconds
+         )
+         values (
+           $1, $2, $3, $4, $5, $6, $7,
+           $8, $9, $10::uuid, $11, $12,
+           $13, $14, $15::timestamptz, $15::timestamptz,
+           $16::timestamptz, $17::jsonb, $18
+         )
+         on conflict (id) do nothing`,
+        [
+          workItemId,
+          companyId,
+          supportPacketId,
+          itemSpec.title,
+          summary,
+          itemSpec.status ?? 'new',
+          itemSpec.lane ?? 'triage',
+          itemSpec.severity ?? 'normal',
+          itemRoute,
+          sessionId,
+          entityType,
+          entityId,
+          itemSpec.assignee_user_id ?? null,
+          itemCreatedBy,
+          itemCreatedAt,
+          itemSpec.resolved_at ?? null,
+          JSON.stringify({
+            ...(itemSpec.metadata ?? {}),
+            category: 'capture_session',
+            source: 'capture_session_finalize',
+            scenario: scenarioSlug,
+            capture_session_id: sessionId,
+            client_request_id: `capture_session_finalize:${sessionId}`,
+            support_packet_expires_at: retentionExpiresAt,
+            event_count: eventCount,
+            artifact_count: artifactCount,
+            private_artifact_count: (session.artifacts ?? []).filter((a) =>
+              ['private', 'restricted'].includes(a.pii_level ?? ''),
+            ).length,
+          }),
+          itemSpec.reversibility_window_seconds ?? 86400,
+        ],
+      )
+
+      await insertScenarioHandoffEvent(client, {
+        companyId,
+        workItemId,
+        captureSessionId: sessionId,
+        eventId: refUuid('context_handoff_event', `${session.ref}:work-item-created`),
+        eventType: 'work_item.created',
+        actorKind: 'user',
+        actorUserId: itemCreatedBy,
+        actorRef: null,
+        sourceSystem: 'seed-scenario',
+        payload: {
+          title: itemSpec.title,
+          summary,
+          status: itemSpec.status ?? 'new',
+          lane: itemSpec.lane ?? 'triage',
+          severity: itemSpec.severity ?? 'normal',
+          route: itemRoute,
+          capture_session_id: sessionId,
+          support_packet_id: supportPacketId,
+          event_count: eventCount,
+          artifact_count: artifactCount,
+        },
+        metadata: {
+          category: 'capture_session',
+          source: 'capture_session_finalize',
+          scenario: scenarioSlug,
+          capture_session_id: sessionId,
+          evidence_refs: [{ type: 'support_debug_packet', id: supportPacketId }],
+        },
+        idempotencyKey: `capture_session:finalize:${sessionId}:work_item_created`,
+        requestId: null,
+        buildSha: appBuildSha,
+        redactionVersion: 'context-handoff-v1',
+        occurredAt: itemCreatedAt,
+      })
+
+      for (let i = 0; i < (itemSpec.handoff_events ?? []).length; i++) {
+        const ev = itemSpec.handoff_events![i]!
+        await insertScenarioHandoffEvent(client, {
+          companyId,
+          workItemId,
+          captureSessionId: sessionId,
+          eventId: refUuid('context_handoff_event', `${session.ref}:handoff:${i}`),
+          eventType: ev.event_type,
+          actorKind: ev.actor_kind ?? 'system',
+          actorUserId: ev.actor_user_id ?? null,
+          actorRef: ev.actor_ref ?? null,
+          sourceSystem: ev.source_system ?? 'seed-scenario',
+          payload: ev.payload ?? {},
+          metadata: {
+            source: 'seed_scenario',
+            scenario: scenarioSlug,
+            ...(ev.metadata ?? {}),
+          },
+          idempotencyKey: ev.idempotency_key ?? `seed_scenario:${sessionId}:handoff:${i}`,
+          requestId: ev.request_id ?? null,
+          buildSha: ev.build_sha ?? appBuildSha,
+          redactionVersion: ev.redaction_version ?? 'context-handoff-v1',
+          occurredAt: resolveTimestamp(ev.occurred_at, ev.occurred_offset_minutes, -3 + i),
+        })
+      }
+    }
+  }
+}
+
+async function insertScenarioHandoffEvent(
+  client: PoolClient,
+  args: {
+    companyId: string
+    workItemId: string
+    captureSessionId: string
+    eventId: string
+    eventType: string
+    actorKind: string
+    actorUserId: string | null
+    actorRef: string | null
+    sourceSystem: string
+    payload: Record<string, unknown>
+    metadata: Record<string, unknown>
+    idempotencyKey: string
+    requestId: string | null
+    buildSha: string | null
+    redactionVersion: string
+    occurredAt: string
+  },
+): Promise<void> {
+  await client.query(
+    `insert into context_handoff_events (
+       id, company_id, work_item_id, event_type, actor_kind, actor_user_id,
+       actor_ref, source_system, payload, metadata, idempotency_key,
+       request_id, capture_session_id, build_sha, redaction_version, occurred_at
+     )
+     values (
+       $1, $2, $3, $4, $5, $6,
+       $7, $8, $9::jsonb, $10::jsonb, $11,
+       $12, $13::uuid, $14, $15, $16::timestamptz
+     )
+     on conflict (id) do nothing`,
+    [
+      args.eventId,
+      args.companyId,
+      args.workItemId,
+      args.eventType,
+      args.actorKind,
+      args.actorUserId,
+      args.actorRef,
+      args.sourceSystem,
+      JSON.stringify(args.payload),
+      JSON.stringify(args.metadata),
+      args.idempotencyKey,
+      args.requestId,
+      args.captureSessionId,
+      args.buildSha,
+      args.redactionVersion,
+      args.occurredAt,
+    ],
+  )
+}
+
 // ---------- Helpers ----------
 
 function mustResolve(scope: string, ref: string, map: Map<string, string>): string {
@@ -1672,6 +2280,7 @@ interface SeedSummary {
   change_orders: Array<{ ref: string; id: string }>
   crew_schedules: Array<{ ref: string; id: string }>
   takeoff_drafts: Array<{ ref: string; id: string }>
+  capture_sessions: Array<{ ref: string; id: string }>
 }
 
 function summarize(scenario: ScenarioYaml, companyId: string, refs: RefMaps): SeedSummary {
@@ -1696,6 +2305,7 @@ function summarize(scenario: ScenarioYaml, companyId: string, refs: RefMaps): Se
     change_orders: Array.from(refs.changeOrders.entries()).map(([ref, id]) => ({ ref, id })),
     crew_schedules: Array.from(refs.crewSchedules.entries()).map(([ref, id]) => ({ ref, id })),
     takeoff_drafts: Array.from(refs.takeoffDrafts.entries()).map(([ref, id]) => ({ ref, id })),
+    capture_sessions: Array.from(refs.captureSessions.entries()).map(([ref, id]) => ({ ref, id })),
   }
 }
 
@@ -1747,6 +2357,7 @@ export async function seedScenario(scenarioPath: string): Promise<SeedSummary> {
       await ensureChangeOrders(client, companyId, scenario.change_orders, refs)
       await ensureCrewSchedules(client, companyId, scenario.crew_schedules, refs)
       await ensureDailyLogs(client, companyId, scenario.daily_logs, refs)
+      await ensureCaptureSessions(client, companyId, scenario.capture_sessions, refs, scenario.company.slug)
       await client.query('commit')
       return summarize(scenario, companyId, refs)
     } catch (err) {

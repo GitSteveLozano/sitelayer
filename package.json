@@ -17,6 +17,7 @@
     "seed:dev": "tsx apps/api/scripts/seed-dev.ts",
     "seed:e2e": "tsx apps/api/scripts/seed-e2e-fixtures.ts",
     "seed:scenario": "tsx scripts/seed-scenario.ts",
+    "seed:demo": "tsx scripts/seed-scenario.ts scenarios/steve-demo.yaml",
     "probe:workflows": "tsx apps/api/scripts/probe-workflows.ts",
     "probe:estimate-push:smoke": "playwright test -c e2e/probe-estimate-push-smoke.config.ts",
     "takeoff-preview:smoke": "playwright test -c e2e/takeoff-preview-smoke.config.ts",

@@ -114,7 +114,7 @@ export async function applyEventSequence<
          actor_user_id, applied_at
        )
        values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10, coalesce($11::timestamptz, now()))
-       on conflict (entity_id, state_version) do nothing`,
+       on conflict (entity_id, workflow_name, state_version) do nothing`,
       [
         args.companyId,
         definition.name,

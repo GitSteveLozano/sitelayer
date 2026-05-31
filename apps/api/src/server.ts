@@ -643,6 +643,8 @@ const server = http.createServer(async (req, res) => {
                 shareSecret: estimateShareSecret,
                 storage,
                 maxArtifactBytes: Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
+                tier: appConfig.tier,
+                buildSha,
                 resolveClientIp: () => {
                   const xff = req.headers['x-forwarded-for']
                   if (typeof xff === 'string' && xff.length > 0) return xff.split(',')[0]!.trim()
@@ -660,6 +662,8 @@ const server = http.createServer(async (req, res) => {
                 readBody: () => readBody(req),
                 storage,
                 maxArtifactBytes: Number(process.env.MAX_CAPTURE_ARTIFACT_BYTES ?? 50 * 1024 * 1024),
+                tier: appConfig.tier,
+                buildSha,
               })
               if (portalRentalHandled) return
 

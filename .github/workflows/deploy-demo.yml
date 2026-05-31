@@ -77,29 +77,40 @@ jobs:
       # APP_TIER=prod and the `steve-demo` slug passes COMPANY_SLUG_PATTERN.
       # Runs AFTER the deploy so migrations have already created the gap tables.
       #
-      # DATABASE_URL / SSL come from the same operator-written shared env file
-      # the demo containers use (/app/previews/.env.demo.shared) — the seed
-      # writes to the same DB the stack reads, with no duplicated GitHub secret.
+      # Node work runs inside the API container. The preview runner does not
+      # need npm on PATH, and the command uses the generated stack env at
+      # /app/previews/demo/.env so it writes to the same DB the stack reads.
       - name: Seed demo data
         if: success()
         env:
-          APP_TIER: demo
-          PREVIEW_SHARED_ENV: /app/previews/.env.demo.shared
+          PREVIEW_TARGET_DIR: /app/previews/demo
+          PREVIEW_PROJECT: sitelayer-demo
         run: |
           set -euo pipefail
-          if [ ! -f "$PREVIEW_SHARED_ENV" ]; then
-            echo "ERROR: shared demo env missing at $PREVIEW_SHARED_ENV — cannot seed" >&2
+          if [ ! -f "$PREVIEW_TARGET_DIR/.env" ]; then
+            echo "ERROR: generated demo stack env missing at $PREVIEW_TARGET_DIR/.env — cannot seed" >&2
             exit 1
           fi
-          # Pull DATABASE_URL (+ optional SSL toggle) from the shared env file
-          # without exporting the entire file into this step's environment.
-          DATABASE_URL="$(grep -E '^DATABASE_URL=' "$PREVIEW_SHARED_ENV" | head -1 | cut -d= -f2-)"
-          DATABASE_SSL_REJECT_UNAUTHORIZED="$(grep -E '^DATABASE_SSL_REJECT_UNAUTHORIZED=' "$PREVIEW_SHARED_ENV" | head -1 | cut -d= -f2- || true)"
-          if [ -z "$DATABASE_URL" ]; then
-            echo "ERROR: DATABASE_URL not found in $PREVIEW_SHARED_ENV" >&2
+          cd "$PREVIEW_TARGET_DIR"
+          if ! grep -q '^DATABASE_URL=' .env; then
+            echo "ERROR: DATABASE_URL not found in $PREVIEW_TARGET_DIR/.env" >&2
             exit 1
           fi
-          export DATABASE_URL
-          export DATABASE_SSL_REJECT_UNAUTHORIZED="${DATABASE_SSL_REJECT_UNAUTHORIZED:-false}"
-          npm ci
-          npm run seed:demo
+
+          migration_files="$(
+            find docker/postgres/init -maxdepth 1 -type f -name '*.sql' \
+              ! -name '087_constrained_role_for_rls_probe.sql' \
+              | sort | tr '\n' ' '
+          )"
+          env \
+            PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" \
+            ENV_FILE="$PREVIEW_TARGET_DIR/.env" \
+            MIGRATION_FILES="$migration_files" \
+            scripts/migrate-db.sh
+          env \
+            PSQL_DOCKER_IMAGE="${PSQL_DOCKER_IMAGE:-postgres:18-alpine}" \
+            ENV_FILE="$PREVIEW_TARGET_DIR/.env" \
+            scripts/check-db-schema.sh
+
+          docker compose --env-file .env -f docker-compose.preview.yml -p "$PREVIEW_PROJECT" run --rm --no-deps api \
+            sh -lc 'npm install --no-audit --no-fund --prefer-offline && npm run seed:demo'

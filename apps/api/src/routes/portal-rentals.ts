@@ -6,6 +6,8 @@ import { HttpError } from '../http-utils.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import {
   appendPortalCaptureEvents,
+  discardPortalCaptureSession,
+  finalizePortalCaptureSession,
   startPortalCaptureSession,
   uploadPortalCaptureArtifact,
 } from './portal-capture-sessions.js'
@@ -34,6 +36,8 @@ export type PortalRentalsRouteCtx = {
   readBody: () => Promise<Record<string, unknown>>
   storage?: Parameters<typeof uploadPortalCaptureArtifact>[1]['storage']
   maxArtifactBytes?: number
+  tier?: string
+  buildSha?: string
 }
 
 type ShareLinkRow = {
@@ -178,7 +182,7 @@ export async function handlePortalRentalRoutes(
       // insert keeps the audit trail without requiring a fake actor.
       const row = result.rows[0]
       if (!row) throw new HttpError(500, 'rental request insert returned no row')
-    await client.query(
+      await client.query(
         `
         insert into mutation_outbox (
           company_id, device_id, actor_user_id, entity_type, entity_id, mutation_type, payload,
@@ -281,6 +285,72 @@ export async function handlePortalRentalRoutes(
     }
     await uploadPortalCaptureArtifact(
       req,
+      ctx,
+      {
+        companyId: resolution.link.company_id,
+        actorRef: resolution.link.id,
+        authority: 'signed_rental_share_token',
+        surface: 'rental_portal',
+        metadata: {
+          rental_share_link_id: resolution.link.id,
+          customer_id: resolution.link.customer_id,
+        },
+        consentScope: {
+          rental_share_link_id: resolution.link.id,
+          customer_id: resolution.link.customer_id,
+        },
+      },
+      captureSessionId,
+    )
+    return true
+  }
+
+  // POST /api/portal/rentals/:share_token/capture-sessions/:id/finalize
+  const captureFinalizeMatch = url.pathname.match(
+    /^\/api\/portal\/rentals\/([^/]+)\/capture-sessions\/([^/]+)\/finalize$/,
+  )
+  if (req.method === 'POST' && captureFinalizeMatch) {
+    const shareToken = decodeURIComponent(captureFinalizeMatch[1]!)
+    const captureSessionId = decodeURIComponent(captureFinalizeMatch[2]!)
+    const resolution = await resolveShareLink(ctx.pool, shareToken)
+    if (!resolution.ok) {
+      ctx.sendJson(resolution.status, { error: resolution.error })
+      return true
+    }
+    await finalizePortalCaptureSession(
+      ctx,
+      {
+        companyId: resolution.link.company_id,
+        actorRef: resolution.link.id,
+        authority: 'signed_rental_share_token',
+        surface: 'rental_portal',
+        metadata: {
+          rental_share_link_id: resolution.link.id,
+          customer_id: resolution.link.customer_id,
+        },
+        consentScope: {
+          rental_share_link_id: resolution.link.id,
+          customer_id: resolution.link.customer_id,
+        },
+      },
+      captureSessionId,
+    )
+    return true
+  }
+
+  // POST /api/portal/rentals/:share_token/capture-sessions/:id/discard
+  const captureDiscardMatch = url.pathname.match(
+    /^\/api\/portal\/rentals\/([^/]+)\/capture-sessions\/([^/]+)\/discard$/,
+  )
+  if (req.method === 'POST' && captureDiscardMatch) {
+    const shareToken = decodeURIComponent(captureDiscardMatch[1]!)
+    const captureSessionId = decodeURIComponent(captureDiscardMatch[2]!)
+    const resolution = await resolveShareLink(ctx.pool, shareToken)
+    if (!resolution.ok) {
+      ctx.sendJson(resolution.status, { error: resolution.error })
+      return true
+    }
+    await discardPortalCaptureSession(
       ctx,
       {
         companyId: resolution.link.company_id,

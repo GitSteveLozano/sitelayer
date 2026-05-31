@@ -35,6 +35,7 @@ import {
 } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import { getActiveCompanySlug, queryKeys, request, type BootstrapResponse, type SessionResponse } from '@/lib/api'
+import { ControlPlaneProbe } from '@/components/ControlPlaneProbe'
 import { useNotificationFeed, useMarkNotificationRead, type NotificationRow } from '@/lib/api/notifications'
 import { usePendingApprovalsSummary } from '@/lib/api/approvals'
 import { useInventoryItems } from '@/lib/api/rentals'
@@ -347,6 +348,8 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
   const entityCrumb = resolveEntityCrumb(location.pathname, projectName, clientName)
   const sectionCrumb = ingestCrumb ?? dynamicRentalsCrumb ?? entityCrumb ?? CRUMB[location.pathname] ?? 'Sitelayer'
   const crumb = location.pathname === '/desktop' ? `${dateCrumb} · ${sectionCrumb}` : sectionCrumb
+  const probeRoute = useMemo(() => parseDesktopProbeRoute(location.pathname), [location.pathname])
+  const activeProjectName = probeRoute.projectId ? (projectName.get(probeRoute.projectId) ?? null) : null
   const pendingApprovals = usePendingApprovalsSummary(projectName)
   const navSections = useMemo<DNavSection[]>(
     () =>
@@ -378,14 +381,14 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
     queryFn: () => request<SessionResponse>('/api/session', { companySlug: companySlug ?? undefined }),
     enabled: Boolean(companySlug),
   })
+  const session = sessionQuery.data ?? null
+  const sessionRole =
+    session?.memberships?.find((membership) => membership.slug === companySlug)?.role ?? session?.user?.role ?? null
   const persona = useMemo<Role>(() => {
-    const session = sessionQuery.data ?? null
-    const sessionRole =
-      session?.memberships?.find((membership) => membership.slug === companySlug)?.role ?? session?.user?.role ?? null
     if (sessionRole === null) return 'owner'
     const companyRole = normalizeMobileShellRole(sessionRole)
     return companyRole === 'admin' || companyRole === 'office' ? 'owner' : membershipRoleToPersona(companyRole)
-  }, [sessionQuery.data, companySlug])
+  }, [sessionRole])
 
   // ⌘K command palette — fuzzy over projects/clients/items + nav targets.
   const q = cmdkQuery.trim().toLowerCase()
@@ -758,6 +761,16 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
         ))}
       </DMenu>
       <RoleContext.Provider value={persona}>
+        <ControlPlaneProbe
+          companySlug={companySlug ?? ''}
+          projectId={probeRoute.projectId}
+          currentTab={probeRoute.currentTab}
+          userRole={sessionRole}
+          activeProjectName={activeProjectName}
+          projectState={null}
+          timeReviewState={null}
+          billingReviewState={null}
+        />
         <Routes>
           <Route index element={<OwnerDashboard bootstrap={bootstrap} />} />
           <Route path="projects" element={<OwnerProjects bootstrap={bootstrap} />} />
@@ -807,6 +820,16 @@ export function DesktopWorkspace({ bootstrap: bootstrapProp = null }: { bootstra
       </RoleContext.Provider>
     </DShell>
   )
+}
+
+function parseDesktopProbeRoute(pathname: string): { projectId: string | null; currentTab: string | null } {
+  const segments = pathname.split('/').filter(Boolean)
+  const [, section, id] = segments
+  const projectSections = new Set(['projects', 'estimate', 'ingest', 'scale', 'canvas', 'ai-takeoff', 'ai-count'])
+  return {
+    currentTab: section ?? null,
+    projectId: section && projectSections.has(section) && id ? id : null,
+  }
 }
 
 function PlusIcon() {

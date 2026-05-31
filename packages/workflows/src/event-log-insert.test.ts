@@ -47,7 +47,7 @@ describe('buildWorkflowEventLogInsert', () => {
 
   it("appends the conflict clause for onConflict:'do_nothing'", () => {
     const { text } = buildWorkflowEventLogInsert(ARGS, { onConflict: 'do_nothing' })
-    expect(text).toContain('on conflict (entity_id, state_version) do nothing')
+    expect(text).toContain('on conflict (entity_id, workflow_name, state_version) do nothing')
   })
 
   it("omits the conflict clause for onConflict:'throw'", () => {

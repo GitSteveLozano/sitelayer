@@ -162,6 +162,7 @@ async function analyzeCaptureArtifacts(
           ? await analyzeAudioArtifact(client, storage, companyId, row, bytes, audioMode)
           : analyzeBytes(row, bytes)
         await appendAnalysisEvent(client, companyId, row, analysis)
+        await refreshAnalysisReadiness(client, companyId, row.work_item_id, { audioMode, videoMode })
         if (analysis.status === 'skipped') summary.skipped += 1
         else summary.analyzed += 1
       } catch {
@@ -176,6 +177,79 @@ async function analyzeCaptureArtifacts(
   } finally {
     client.release()
   }
+}
+
+async function refreshAnalysisReadiness(
+  client: { query: (sql: string, params?: ReadonlyArray<unknown>) => Promise<unknown> },
+  companyId: string,
+  workItemId: string,
+  modes: {
+    audioMode: (typeof AUDIO_ANALYSIS_MODES)[number]
+    videoMode: (typeof VIDEO_ANALYSIS_MODES)[number]
+  },
+) {
+  await client.query(
+    `with eligible as (
+       select a.id
+         from capture_artifacts a
+         join context_work_items w
+           on w.company_id = a.company_id
+          and w.capture_session_id = a.capture_session_id
+          and w.metadata ->> 'source' = 'capture_session_finalize'
+        where a.company_id = $1
+          and w.id = $2
+          and a.deleted_at is null
+          and a.storage_key is not null
+          and not (a.metadata ? 'derived_from_artifact_id')
+          and (
+            a.kind = any($5::text[])
+            or a.content_type like 'text/%'
+            or a.content_type = 'application/json'
+            or ($6::boolean and (a.kind = 'audio' or a.content_type like 'audio/%'))
+            or ($7::boolean and (a.kind = 'video' or a.content_type like 'video/%'))
+          )
+     ),
+     processed as (
+       select e.id
+         from eligible e
+         join context_handoff_events h
+           on h.company_id = $1
+          and h.work_item_id = $2
+          and h.idempotency_key = 'capture_artifact:analysis:' || e.id::text
+     ),
+     counts as (
+       select count(*)::int as eligible_count,
+              (select count(*)::int from processed) as processed_count
+         from eligible
+     )
+     update context_work_items
+        set metadata = metadata || jsonb_build_object(
+              'capture_artifact_analysis',
+              jsonb_build_object(
+                'status',
+                case when counts.eligible_count <= counts.processed_count then 'ready' else 'pending' end,
+                'eligible_artifact_count', counts.eligible_count,
+                'processed_artifact_count', counts.processed_count,
+                'pending_artifact_count', greatest(counts.eligible_count - counts.processed_count, 0),
+                'audio_mode', $3,
+                'video_mode', $4,
+                'updated_at', now()
+              )
+            ),
+            updated_at = now()
+       from counts
+      where context_work_items.company_id = $1
+        and context_work_items.id = $2`,
+    [
+      companyId,
+      workItemId,
+      modes.audioMode,
+      modes.videoMode,
+      Array.from(ANALYZABLE_KINDS),
+      modes.audioMode !== 'off',
+      modes.videoMode !== 'off',
+    ],
+  )
 }
 
 async function appendAnalysisEvent(

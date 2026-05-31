@@ -20,13 +20,13 @@ the agent/scratch `dev` tier and the ephemeral per-PR previews:
 
 ## Hierarchy
 
-| URL                                            | Tier      | Database             | Lifecycle                        |
-| ---------------------------------------------- | --------- | -------------------- | -------------------------------- |
-| `https://sitelayer.sandolab.xyz`               | `prod`    | `sitelayer_prod`     | Permanent. Real customers.       |
-| `https://demo.preview.sitelayer.sandolab.xyz`  | `demo`    | `sitelayer_demo`     | Permanent. Tracks `demo` branch. |
-| `https://dev.sitelayer.sandolab.xyz`           | `dev`     | `sitelayer_dev`      | Permanent. Tracks `dev` branch.  |
-| `https://main.preview.sitelayer.sandolab.xyz`  | `preview` | `sitelayer_preview`† | Permanent smoke. Tracks `main`.  |
-| `https://pr-N.preview.sitelayer.sandolab.xyz`  | `preview` | `sitelayer_preview`† | Per PR; dropped on close.        |
+| URL                                           | Tier      | Database             | Lifecycle                        |
+| --------------------------------------------- | --------- | -------------------- | -------------------------------- |
+| `https://sitelayer.sandolab.xyz`              | `prod`    | `sitelayer_prod`     | Permanent. Real customers.       |
+| `https://demo.preview.sitelayer.sandolab.xyz` | `demo`    | `sitelayer_demo`     | Permanent. Tracks `demo` branch. |
+| `https://dev.sitelayer.sandolab.xyz`          | `dev`     | `sitelayer_dev`      | Permanent. Tracks `dev` branch.  |
+| `https://main.preview.sitelayer.sandolab.xyz` | `preview` | `sitelayer_preview`† | Permanent smoke. Tracks `main`.  |
+| `https://pr-N.preview.sitelayer.sandolab.xyz` | `preview` | `sitelayer_preview`† | Per PR; dropped on close.        |
 
 † Each preview slug owns an isolated schema `sitelayer_<slug>` inside the shared DB.
 
@@ -59,10 +59,8 @@ the preview/dev tiers use; parameterized by `PREVIEW_SLUG` / `PREVIEW_HOST` /
 resolver, and the health check at `https://demo.preview.sitelayer.sandolab.xyz/health`
 — is identical to the dev/preview path.
 
-The Traefik router rule resolves to `Host(\`demo.preview.sitelayer.sandolab.xyz\`)`
-because that host is supplied as `PREVIEW_HOST`. No DNS change is needed: the
-hostname already resolves via the existing `*.preview.sitelayer.sandolab.xyz`
-wildcard pointed at the preview droplet `159.203.53.218`.
+The Traefik router rule resolves to `Host(\`demo.preview.sitelayer.sandolab.xyz\`)`because that host is supplied as`PREVIEW_HOST`. No DNS change is needed: the
+hostname already resolves via the existing `\*.preview.sitelayer.sandolab.xyz`wildcard pointed at the preview droplet`159.203.53.218`.
 
 ## Database story
 
@@ -123,6 +121,9 @@ Required values to fill in (the others can be left as the example):
 
 - `DATABASE_URL` — least-privilege `sitelayer_demo_app` role connection string
   for `sitelayer_demo` (doctl databases user list `sitelayer-db`)
+- `DEMO_ACCESS_CODE` — shared access code required by `/api/demo/sign-in-link`.
+- `DEMO_APP_ORIGIN` — demo origin for Clerk ticket redirects; the deploy wrapper
+  writes the generated value too, but keep this set for manual API runs.
 - `CLERK_SECRET_KEY` — the Clerk **test** instance secret (`sk_test_…`), for
   minting prospect sign-in tokens. Never commit it.
 - `DO_SPACES_*` — only if you've created the `sitelayer-blueprints-demo` bucket.
@@ -170,4 +171,7 @@ Web app should load and display the "DEMO - sample data, public showcase" ribbon
 - `docs/steve-handoff/demo-design/` — the demo-design research + build units
   (R1 tier, R2 auth, R3 edge/DNS, R4 seed, R5 security)
 - `packages/config/src/index.ts` — tier guard + ribbon definitions
+
+```
+
 ```

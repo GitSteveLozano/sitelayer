@@ -146,7 +146,9 @@ describe('processEstimatePush — idempotent replay (path A)', () => {
     // a hand-written `set status = 'posted'`. The reducer-equivalence test
     // proves the written columns equal transitionEstimatePushWorkflow's output.
     expect(summaries[6]).toMatch(/update estimate_pushes\s+set status = \$3/i)
-    expect(summaries[7]).toMatch(/insert into workflow_event_log.*on conflict \(entity_id, state_version\) do nothing/i)
+    expect(summaries[7]).toMatch(
+      /insert into workflow_event_log.*on conflict \(entity_id, workflow_name, state_version\) do nothing/i,
+    )
     expect(summaries[8]).toMatch(/insert into sync_events/i)
     expect(summaries[9]).toMatch(/update mutation_outbox set status = 'applied'/i)
   })

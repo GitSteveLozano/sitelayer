@@ -53,7 +53,9 @@ export function isAudioCaptureSupported(deps: AudioCaptureRecorderDeps = {}): bo
   return Boolean(mediaDevices?.getUserMedia && Recorder)
 }
 
-export function preferredAudioMimeType(Recorder: MediaRecorderConstructor | null = defaultMediaRecorder()): string | null {
+export function preferredAudioMimeType(
+  Recorder: MediaRecorderConstructor | null = defaultMediaRecorder(),
+): string | null {
   if (!Recorder?.isTypeSupported) return null
   return AUDIO_MIME_PREFERENCES.find((mime) => Recorder.isTypeSupported?.(mime)) ?? null
 }
@@ -139,6 +141,8 @@ export class AudioCaptureRecorder {
   cancel(): void {
     const error = new Error('Audio recording cancelled.')
     const reject = this.rejectStop
+    const stopPromise = this.stopPromise
+    void stopPromise?.catch(() => undefined)
     this.cleanup()
     reject?.(error)
   }

@@ -36,7 +36,7 @@ export interface RentalInvoiceSummary {
  * Strictly gated: only fires when the pre-invoice status was `returned`, so
  * the reducer's `assertRentalTransition` (INVOICE_QUEUED only legal from
  * `returned`) never throws on an `active` rental. `appendWorkflowEvent` uses
- * `on conflict (entity_id, state_version) do nothing`, and the row's
+ * `on conflict (entity_id, workflow_name, state_version) do nothing`, and the row's
  * `state_version` is persisted, so a re-run of the same cadence tick is an
  * idempotent no-op rather than a duplicate or a swallowed event.
  */
