@@ -11,6 +11,7 @@ import { createRentalInvoiceRunner } from './runners/rental-invoice.js'
 import { createNotificationRunner } from './runners/notification.js'
 import { createRentalBillingPushRunner } from './runners/rental-billing-push.js'
 import { createEstimatePushRunner } from './runners/estimate-push.js'
+import { createQboPullRunner } from './runners/qbo-pull.js'
 import { createLockLaborRunner } from './runners/lock-labor.js'
 import { createLaborPayrollRunner } from './runners/labor-payroll.js'
 import { createFieldEventsRunner } from './runners/field-events.js'
@@ -88,6 +89,7 @@ const notificationRunner = createNotificationRunner({ pool, logger })
 const rentalInvoiceRunner = createRentalInvoiceRunner({ pool, logger })
 const rentalBillingPushRunner = createRentalBillingPushRunner({ pool, logger, qboCircuit })
 const estimatePushRunner = createEstimatePushRunner({ pool, logger, qboCircuit })
+const qboPullRunner = createQboPullRunner({ pool, logger, qboCircuit })
 const lockLaborRunner = createLockLaborRunner({ pool })
 const laborPayrollRunner = createLaborPayrollRunner({ pool, logger, qboCircuit })
 const fieldEventsRunner = createFieldEventsRunner({ pool, logger })
@@ -264,6 +266,27 @@ async function heartbeat(): Promise<{ idle: boolean }> {
         return { processed: 0, posted: 0, failed: 0, skipped: 0 }
       }),
     { processed: 0, posted: 0, failed: 0, skipped: 0 },
+  )
+
+  const qboPullSummary = await runIfLaneActive(
+    pool,
+    logger,
+    'qbo_pull',
+    () =>
+      qboPullRunner(companyId).catch((error) => {
+        if (error instanceof CircuitOpenError) {
+          logger.info({ key: error.key }, '[worker] qbo pull skipped — circuit open')
+          return { processed: 0, pulled: 0, failed: 0, skipped: 0 }
+        }
+        logger.error({ err: error }, '[worker] qbo pull drain failed')
+        captureWithEntityContext(error, {
+          scope: 'qbo_pull',
+          entity_type: 'integration_connection',
+          company_id: companyId,
+        })
+        return { processed: 0, pulled: 0, failed: 0, skipped: 0 }
+      }),
+    { processed: 0, pulled: 0, failed: 0, skipped: 0 },
   )
 
   const lockLaborSummary = await runIfLaneActive(
@@ -648,6 +671,10 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     estimate_push_posted: estimatePushSummary.posted,
     estimate_push_failed: estimatePushSummary.failed,
     estimate_push_skipped: estimatePushSummary.skipped,
+    qbo_pull_processed: qboPullSummary.processed,
+    qbo_pull_pulled: qboPullSummary.pulled,
+    qbo_pull_failed: qboPullSummary.failed,
+    qbo_pull_skipped: qboPullSummary.skipped,
     lock_labor_entries_processed: lockLaborSummary.processed,
     lock_labor_entries_locked: lockLaborSummary.locked,
     lock_labor_entries_unlocked: lockLaborSummary.unlocked,
@@ -713,6 +740,7 @@ async function heartbeat(): Promise<{ idle: boolean }> {
     rentalSummary.processed > 0 ||
     rentalBillingPushSummary.processed > 0 ||
     estimatePushSummary.processed > 0 ||
+    qboPullSummary.processed > 0 ||
     lockLaborSummary.processed > 0 ||
     takeoffToBidSummary.processed > 0 ||
     voiceToLogSummary.processed > 0 ||

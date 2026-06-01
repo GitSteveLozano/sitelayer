@@ -891,6 +891,69 @@ returning id, provider, provider_account_id, sync_cursor, last_synced_at, retry_
     return true
   }
 
+  // POST /api/integrations/qbo/pull — enqueue the worker-backed reference
+  // backfill (customers + items + classes). The operator-facing "Backfill
+  // from QBO" trigger. Unlike the inline POST /api/integrations/qbo/sync
+  // (which pulls synchronously inside the request thread), this enqueues a
+  // single mutation_outbox row with a per-connection idempotency key and lets
+  // the leased, circuit-broken, lane-gated worker runner (processQboPull)
+  // drain it. The legacy inline /sync stays for one release.
+  if (req.method === 'POST' && url.pathname === '/api/integrations/qbo/pull') {
+    if (!requireRole(['admin', 'office'])) return true
+    // Ensure a connection row exists so entity_id resolves. The upsert here
+    // is a no-op when a connection already exists (status preserved when
+    // omitted) and creates a placeholder otherwise — mirroring the /sync
+    // ensure-a-connection-row step.
+    const connectionPre = await upsertIntegrationConnection(pool, company.id, 'qbo', {})
+    const connectionId: string = (connectionPre as { id?: string }).id ?? ''
+    if (!connectionId) {
+      sendJson(500, { error: 'failed to resolve qbo connection' })
+      return true
+    }
+    const idempotencyKey = `integration_connection:qbo:pull:${connectionId}`
+    const { sentryTrace, baggage } = currentTraceHeaders()
+    const reqCtx = getRequestContext()
+    const requestId = reqCtx?.requestId ?? null
+    const captureSessionId = reqCtx?.captureSessionId ?? null
+    await withMutationTx(company.id, async (client) => {
+      // Stable-per-connection idempotency key + a re-arm upsert: a second
+      // "Backfill" click while a pull is queued/processing is a no-op insert,
+      // but a finished pull (applied / failed / dead) is re-armed back to
+      // 'pending' with a fresh next_attempt_at so it runs again. Without the
+      // re-arm the UNIQUE(company_id, idempotency_key) would make every
+      // re-click after the first completed pull a silent forever no-op.
+      await client.query(
+        `
+        insert into mutation_outbox (
+          company_id, device_id, actor_user_id, entity_type, entity_id, mutation_type, payload, idempotency_key, status,
+          sentry_trace, sentry_baggage, request_id, capture_session_id
+        )
+        values ($1, 'server', $2, 'integration_connection', $3, 'pull_qbo_reference', '{}'::jsonb, $4, 'pending', $5, $6, $7, $8)
+        on conflict (company_id, idempotency_key) do update
+          set status = 'pending',
+              next_attempt_at = now(),
+              error = null,
+              sentry_trace = excluded.sentry_trace,
+              sentry_baggage = excluded.sentry_baggage,
+              request_id = excluded.request_id,
+              capture_session_id = excluded.capture_session_id
+          where mutation_outbox.status in ('applied', 'failed', 'dead')
+        `,
+        [company.id, currentUserId, connectionId, idempotencyKey, sentryTrace, baggage, requestId, captureSessionId],
+      )
+      await recordSyncEvent(
+        company.id,
+        'integration_connection',
+        connectionId,
+        { action: 'pull_enqueued', provider: 'qbo', mutation_type: 'pull_qbo_reference' },
+        connectionId,
+        { executor: client },
+      )
+    })
+    sendJson(200, { enqueued: true, mutation_type: 'pull_qbo_reference' })
+    return true
+  }
+
   // ---------------------------------------------------------------------------
   // qbo_sync_run workflow surface — headless ADR-5 contract (see
   // docs/DETERMINISTIC_WORKFLOWS.md). The UI reads `state` + `next_events`

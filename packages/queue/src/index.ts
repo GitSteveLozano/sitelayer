@@ -150,6 +150,14 @@ export {
   type EstimatePushSummary,
 } from './pushers/estimate-push.js'
 
+export {
+  processQboPull,
+  type QboPullInput,
+  type QboPullResult,
+  type QboPullFn,
+  type QboPullSummary,
+} from './pushers/qbo-pull.js'
+
 export interface QueueClient {
   query<T extends QueryResultRow = QueryResultRow>(text: string, values?: unknown[]): Promise<QueryResult<T>>
 }
@@ -223,6 +231,12 @@ export const DEDICATED_HANDLER_MUTATION_TYPES = [
   // materialize_labor_entries row, so the race is on the hot path.
   'materialize_labor_entries',
   'notify_foreman_decline',
+  // QBO reference-data pull (customers + items + classes backfill) —
+  // drained by apps/worker/src/runners/qbo-pull.ts (processQboPull). Without
+  // this entry the generic drain (processOutboxBatch) would claim the row and
+  // mark it 'applied' WITHOUT performing the pull — a silent data-drop, the
+  // exact footgun this exclusion list warns about.
+  'pull_qbo_reference',
 ] as const
 
 /**
