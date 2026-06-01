@@ -41,7 +41,7 @@ describe('crew-schedule — applyEventLog replay', () => {
   })
 
   it('corpus: [CREATE, CONFIRM] replays to confirmed', () => {
-    const seed: CrewScheduleWorkflowSnapshot = { state: 'draft', state_version: 1 }
+    const seed: CrewScheduleWorkflowSnapshot = { state: 'draft', state_version: 0 }
     const createEvent = { type: 'CREATE' as const, created_by: 'office-1' }
     const created = transitionCrewScheduleWorkflow(seed, createEvent)
     const confirmEvent = { type: 'CONFIRM' as const, confirmed_at: '2026-04-29T15:00:00.000Z', confirmed_by: 'fm-1' }
@@ -52,8 +52,9 @@ describe('crew-schedule — applyEventLog replay', () => {
         workflow_name: NAME,
         schema_version: SCHEMA,
         entity_id: ENTITY,
-        // CREATE is the seed-only origin row; it does not advance state_version.
-        state_version: 1,
+        // CREATE is the genesis row: dispatched against the draft@0 seed
+        // (state_version 0) and advancing to draft@1.
+        state_version: 0,
         event_payload: createEvent,
         snapshot_after: created as unknown as WorkflowEventLogEntry['snapshot_after'],
       },
@@ -74,7 +75,7 @@ describe('crew-schedule — applyEventLog replay', () => {
   })
 
   it('corpus: [CREATE, DECLINE, REASSIGN, CONFIRM] replays to confirmed', () => {
-    const seed: CrewScheduleWorkflowSnapshot = { state: 'draft', state_version: 1 }
+    const seed: CrewScheduleWorkflowSnapshot = { state: 'draft', state_version: 0 }
     const createEvent = { type: 'CREATE' as const, created_by: 'office-1' }
     const created = transitionCrewScheduleWorkflow(seed, createEvent)
     const declineEvent = {
@@ -94,7 +95,8 @@ describe('crew-schedule — applyEventLog replay', () => {
         workflow_name: NAME,
         schema_version: SCHEMA,
         entity_id: ENTITY,
-        state_version: 1,
+        // Genesis CREATE: draft@0 seed → draft@1.
+        state_version: 0,
         event_payload: createEvent,
         snapshot_after: created as unknown as WorkflowEventLogEntry['snapshot_after'],
       },

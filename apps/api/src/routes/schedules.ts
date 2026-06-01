@@ -85,12 +85,26 @@ export async function handleScheduleRoutes(
       return true
     }
     const body = parsed.value
+    // P0.2 — new crew assignments auto-confirm by default. A `draft` row is
+    // dropped by the confirmed-only read surfaces (the foreman's today/active
+    // views), so a freshly-created assignment would silently never appear.
+    // Defaulting to `confirmed` makes it land in those views immediately;
+    // passing an explicit `status:'draft'` still parks the row for the office
+    // to confirm later.
+    const effectiveStatus = body.status ?? 'confirmed'
     const schedule = await withMutationTx(async (client: PoolClient) => {
+      // Always insert + log the genesis as draft@1. When auto-confirming we
+      // then walk the CONFIRM transition through the reducer below (rather
+      // than inserting `confirmed` directly), so the row and its event log
+      // stay consistent: CREATE@0 → CONFIRM@1, the row ends at confirmed@2,
+      // and the same materialize_labor_entries outbox the /confirm route
+      // enqueues is emitted. A direct `confirmed` insert would orphan the
+      // CREATE event at draft@1 and diverge on replay.
       const result = await client.query(
         `
         insert into crew_schedules (company_id, project_id, scheduled_for, crew, status, version,
                                     created_by, start_time, end_time, takeoff_measurement_id)
-        values ($1, $2, $3, $4::jsonb, coalesce($5, 'draft'), 1, $6, $7, $8, $9)
+        values ($1, $2, $3, $4::jsonb, 'draft', 1, $5, $6, $7, $8)
         returning id, project_id, scheduled_for, crew, status, version, state_version, created_by,
                   deleted_at, created_at, start_time, end_time, takeoff_measurement_id
         `,
@@ -99,7 +113,6 @@ export async function handleScheduleRoutes(
           body.project_id,
           body.scheduled_for,
           JSON.stringify(body.crew ?? []),
-          body.status ?? 'draft',
           ctx.currentUserId,
           body.start_time ?? null,
           body.end_time ?? null,
@@ -108,14 +121,16 @@ export async function handleScheduleRoutes(
       )
       const row = result.rows[0]
       if (!row) throw new HttpError(500, 'crew schedule insert returned no row')
-      // Gap 2 — model creation as the synthetic seed-only CREATE event so the
+      // Gap 2 — model creation as the synthetic genesis CREATE event so the
       // very first workflow_event_log row is the creation, giving the replay
-      // corpus a true origin. CREATE does not advance state/state_version; it
-      // stamps created_by against the {draft, state_version:1} seed. The event
-      // is logged at state_version 1 (the seed version, before the transition).
+      // corpus a true origin. CREATE advances the {draft, state_version:0}
+      // pre-seed origin to draft@1; it is logged at state_version 0 (the
+      // version before the transition), distinct from the first human
+      // transition's state_version 1 so the (entity_id, workflow_name,
+      // state_version) unique key never collides.
       const createEvent = { type: 'CREATE' as const, created_by: ctx.currentUserId }
       const seededSnapshot = transitionCrewScheduleWorkflow(
-        { state: 'draft', state_version: 1, created_by: ctx.currentUserId },
+        { state: 'draft', state_version: 0, created_by: ctx.currentUserId },
         createEvent,
       )
       await recordWorkflowEvent(client, {
@@ -124,7 +139,7 @@ export async function handleScheduleRoutes(
         schemaVersion: CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
         entityType: 'crew_schedule',
         entityId: row.id,
-        stateVersion: 1,
+        stateVersion: 0,
         eventType: 'CREATE',
         eventPayload: createEvent,
         snapshotAfter: seededSnapshot,
@@ -138,7 +153,82 @@ export async function handleScheduleRoutes(
         row,
         syncPayload: { action: 'create', schedule: row },
       })
-      return row
+
+      if (effectiveStatus !== 'confirmed') {
+        return row
+      }
+
+      // Auto-confirm at birth: walk the same CONFIRM transition the legacy
+      // /confirm route uses (draft@1 → confirmed@2) so the row, its event
+      // log, and the worker-drained side effect stay identical to the
+      // two-step create-then-confirm flow. No per-worker labor entries are
+      // supplied at creation time, so the materializer inserts none (it
+      // still bumps projects.version) — equivalent to confirming with an
+      // empty `entries` body.
+      const confirmEvent = {
+        type: 'CONFIRM' as const,
+        confirmed_at: new Date().toISOString(),
+        confirmed_by: ctx.currentUserId,
+      }
+      const beforeStateVersion: number = row.state_version
+      const confirmedSnapshot: CrewScheduleWorkflowSnapshot = transitionCrewScheduleWorkflow(
+        { state: 'draft', state_version: beforeStateVersion, confirmed_at: null, confirmed_by: null },
+        confirmEvent,
+      )
+      const confirmedResult = await client.query(
+        `update crew_schedules
+           set status = $3,
+               state_version = $4,
+               confirmed_at = $5,
+               confirmed_by = $6,
+               version = version + 1
+         where company_id = $1 and id = $2
+         returning id, project_id, scheduled_for, crew, status, version, state_version, created_by,
+                   deleted_at, created_at, start_time, end_time, takeoff_measurement_id`,
+        [
+          ctx.company.id,
+          row.id,
+          confirmedSnapshot.state,
+          confirmedSnapshot.state_version,
+          confirmedSnapshot.confirmed_at,
+          confirmedSnapshot.confirmed_by,
+        ],
+      )
+      const confirmedRow = confirmedResult.rows[0]
+      if (!confirmedRow) throw new HttpError(500, 'crew schedule confirm returned no row')
+      await recordWorkflowEvent(client, {
+        companyId: ctx.company.id,
+        workflowName: CREW_SCHEDULE_WORKFLOW_NAME,
+        schemaVersion: CREW_SCHEDULE_WORKFLOW_SCHEMA_VERSION,
+        entityType: 'crew_schedule',
+        entityId: row.id,
+        stateVersion: beforeStateVersion,
+        eventType: 'CONFIRM',
+        eventPayload: confirmEvent,
+        snapshotAfter: confirmedSnapshot,
+        actorUserId: ctx.currentUserId,
+      })
+      const confirmOutcome = workflowEventOutcome('CONFIRM')
+      if (confirmOutcome) observeWorkflowEvent(CREW_SCHEDULE_WORKFLOW_NAME, confirmOutcome)
+      await recordMutationLedger(client, {
+        companyId: ctx.company.id,
+        entityType: 'crew_schedule',
+        entityId: row.id,
+        action: 'materialize_labor_entries',
+        mutationType: 'materialize_labor_entries',
+        row: confirmedRow,
+        syncPayload: { action: 'confirm', schedule: confirmedRow },
+        outboxPayload: {
+          schedule_id: confirmedRow.id,
+          project_id: confirmedRow.project_id,
+          scheduled_for: confirmedRow.scheduled_for,
+          crew: confirmedRow.crew,
+          confirmed_by: confirmedSnapshot.confirmed_by ?? ctx.currentUserId,
+          entries: [],
+        },
+        idempotencyKey: `crew_schedule:materialize_labor:${confirmedRow.id}`,
+      })
+      return confirmedRow
     })
     ctx.sendJson(201, schedule)
     return true

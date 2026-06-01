@@ -38,20 +38,25 @@ describe('transitionCrewScheduleWorkflow — happy path', () => {
     ).toThrow(/not allowed/)
   })
 
-  it('CREATE stamps created_by on a seed snapshot and does not advance state', () => {
+  it('CREATE stamps created_by and advances the genesis seed (0 → draft@1)', () => {
     const seeded = transitionCrewScheduleWorkflow(
-      { state: 'draft', state_version: 1 },
+      { state: 'draft', state_version: 0 },
       { type: 'CREATE', created_by: 'office-user' },
     )
     expect(seeded).toEqual({ state: 'draft', state_version: 1, created_by: 'office-user' })
   })
 
-  it('rejects CREATE from any non-seed snapshot', () => {
+  it('rejects CREATE from any non-genesis snapshot', () => {
+    // The seed is draft@0; draft@1 (a row that already exists) and any
+    // confirmed/declined snapshot are not legal CREATE origins.
+    expect(() =>
+      transitionCrewScheduleWorkflow({ state: 'draft', state_version: 1 }, { type: 'CREATE', created_by: 'x' }),
+    ).toThrow(/genesis snapshot/)
     expect(() =>
       transitionCrewScheduleWorkflow({ state: 'draft', state_version: 2 }, { type: 'CREATE', created_by: 'x' }),
-    ).toThrow(/seed snapshot/)
+    ).toThrow(/genesis snapshot/)
     expect(() => transitionCrewScheduleWorkflow({ state: 'confirmed', state_version: 2 }, { type: 'CREATE' })).toThrow(
-      /seed snapshot/,
+      /genesis snapshot/,
     )
   })
 
@@ -101,9 +106,10 @@ describe('transitionCrewScheduleWorkflow — happy path', () => {
 
 describe('crew-schedule reducer — property invariants', () => {
   const STATE_GEN: fc.Arbitrary<CrewScheduleWorkflowState> = fc.constantFrom(...CREW_SCHEDULE_ALL_STATES)
-  // The state-advancing human events (CREATE is the seed-only exception
-  // that does NOT advance state_version, so it is excluded from the
-  // increment invariant below and generated separately).
+  // The state-advancing human events. CREATE is excluded: although it now
+  // advances (genesis 0 → draft@1), it is only ever legal on the {draft,
+  // state_version:0} genesis seed, so it can't be generated against the
+  // arbitrary (state, version≥1) snapshots the invariants below sample.
   const EVENT_GEN: fc.Arbitrary<CrewScheduleWorkflowEvent> = fc.oneof(
     fc.record({
       type: fc.constant('CONFIRM' as const),

@@ -28,10 +28,14 @@ import { registerWorkflow } from './registry.js'
  *   declined → draft  via REASSIGN (clears decline_* audit fields)
  *   confirmed is terminal.
  *
- * CREATE is a synthetic seed-only event: it is applied exactly once at
- * row creation against a {state:'draft', state_version:1} seed so the
- * very first workflow_event_log row is the creation. It does NOT
- * advance state and is never offered by nextEvents.
+ * CREATE is the synthetic genesis event: it is applied exactly once at
+ * row creation against a {state:'draft', state_version:0} pre-seed origin
+ * and ADVANCES to draft@1, so the very first workflow_event_log row is the
+ * creation. Logging it at the pre-transition version (0) keeps it distinct
+ * from the first human transition (dispatched against version 1) under the
+ * (entity_id, workflow_name, state_version) unique key — otherwise a
+ * non-advancing CREATE@1 would collide with CONFIRM@1. CREATE is never
+ * offered by nextEvents.
  *
  * Future: add CANCEL transition once the UI ships a cancellation
  * affordance (would require re-versioning the reducer to v2).
@@ -77,18 +81,21 @@ export function transitionCrewScheduleWorkflow(
   event: CrewScheduleWorkflowEvent,
 ): CrewScheduleWorkflowSnapshot {
   const nextVersion = snapshot.state_version + 1
-  // CREATE is the synthetic seed-only origin event. It stamps create
-  // metadata and does NOT advance state or state_version — it is only
-  // ever applied against the {state:'draft', state_version:1} seed at
-  // row-creation time, giving the replay corpus a true first row.
+  // CREATE is the synthetic genesis event. It stamps create metadata and
+  // ADVANCES the {state:'draft', state_version:0} pre-seed origin to
+  // draft@1 at row-creation time, giving the replay corpus a true first
+  // row. Advancing (rather than the old non-advancing CREATE@1) keeps the
+  // genesis event's recorded state_version (0) distinct from the first
+  // human transition's (1), so the (entity_id, workflow_name,
+  // state_version) unique key never collides.
   if (event.type === 'CREATE') {
-    if (snapshot.state !== 'draft' || snapshot.state_version !== 1) {
-      throw new Error(`event CREATE is only legal on a seed snapshot (draft @ state_version 1)`)
+    if (snapshot.state !== 'draft' || snapshot.state_version !== 0) {
+      throw new Error(`event CREATE is only legal on a genesis snapshot (draft @ state_version 0)`)
     }
     return {
       ...snapshot,
       state: 'draft',
-      state_version: 1,
+      state_version: nextVersion,
       created_by: event.created_by ?? null,
     }
   }
