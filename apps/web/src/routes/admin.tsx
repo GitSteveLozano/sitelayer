@@ -7,10 +7,10 @@ import { request } from '@/lib/api/client'
  * mounted at /admin/* in App.tsx behind Clerk auth; the API enforces the
  * superadmin gate, so a non-admin just sees a 403 here.
  *
- * Read-only by design: Companies (cross-tenant list), Workflows (the
- * deterministic-workflow registry), and Scenarios (the checked-in fixtures +
- * a live preview of the @sitelayer/scenario apply plan). Mutations
- * (impersonation, scenario apply) are API-gated and land in a later iteration.
+ * Companies (cross-tenant list), Workflows (the deterministic-workflow
+ * registry), and Scenarios (the checked-in fixtures + a live apply-plan preview
+ * and an Apply / spin-up-demo action — POST is gated + blocked in prod). All
+ * /api/admin/* calls are API-gated; impersonation start is driven elsewhere.
  */
 
 interface AdminCompany {
@@ -47,6 +47,13 @@ interface PlanPreview {
   company_slug: string
   op_count: number
   ops: PlanPreviewOp[]
+}
+
+interface ScenarioApplyResult {
+  slug: string
+  company_slug: string
+  company_id: string
+  applied: boolean
 }
 
 type TabKey = 'companies' | 'workflows' | 'scenarios'
@@ -201,11 +208,40 @@ function WorkflowsTab() {
 
 function ScenariosTab() {
   const [selected, setSelected] = useState<string | null>(null)
+  const [target, setTarget] = useState('')
+  const [applying, setApplying] = useState(false)
+  const [applyResult, setApplyResult] = useState<ScenarioApplyResult | null>(null)
+  const [applyError, setApplyError] = useState<string | null>(null)
   const list = useLoad<{ scenarios: ScenarioSummary[] }>(true, '/api/admin/scenarios')
   const plan = useLoad<{ plan: PlanPreview }>(
     !!selected,
     selected ? `/api/admin/scenarios/${encodeURIComponent(selected)}/plan` : '',
   )
+
+  useEffect(() => {
+    setApplyResult(null)
+    setApplyError(null)
+    setTarget('')
+  }, [selected])
+
+  async function doApply() {
+    if (!selected) return
+    setApplying(true)
+    setApplyResult(null)
+    setApplyError(null)
+    try {
+      const body = target.trim() ? { target: target.trim() } : {}
+      const res = await request<ScenarioApplyResult>(`/api/admin/scenarios/${encodeURIComponent(selected)}/apply`, {
+        method: 'POST',
+        json: body,
+      })
+      setApplyResult(res)
+    } catch (err) {
+      setApplyError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setApplying(false)
+    }
+  }
 
   if (list.loading || list.error) return <Status loading={list.loading} error={list.error} />
   const scenarios = list.data?.scenarios ?? []
@@ -241,6 +277,49 @@ function ScenariosTab() {
                 </li>
               ))}
             </ol>
+            <div style={{ marginTop: 12, borderTop: '1px solid #e5e7eb', paddingTop: 12 }}>
+              <p style={{ ...styles.muted, marginBottom: 6 }}>
+                Apply to the dev/demo DB (optionally as a fresh company). Blocked in prod.
+              </p>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  placeholder="fresh company slug (optional)"
+                  style={{
+                    border: '1px solid #d1d5db',
+                    borderRadius: 6,
+                    padding: '6px 8px',
+                    fontSize: 13,
+                    flex: '0 0 220px',
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={applying}
+                  onClick={() => void doApply()}
+                  style={{
+                    background: applying ? '#9ca3af' : '#2563eb',
+                    color: '#fff',
+                    border: 'none',
+                    borderRadius: 6,
+                    padding: '6px 14px',
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: applying ? 'default' : 'pointer',
+                  }}
+                >
+                  {applying ? 'Applying…' : 'Apply'}
+                </button>
+              </div>
+              {applyError && <div style={{ ...styles.err, marginTop: 8 }}>{applyError}</div>}
+              {applyResult && (
+                <p style={{ color: '#15803d', fontSize: 13, marginTop: 8 }}>
+                  ✓ Seeded <span style={styles.code}>{applyResult.company_slug}</span> ·{' '}
+                  {applyResult.company_id.slice(0, 8)}…
+                </p>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -258,7 +337,7 @@ export default function AdminRoute() {
   return (
     <div style={styles.wrap}>
       <h1 style={styles.h1}>Site Admin</h1>
-      <p style={styles.sub}>Cross-tenant superadmin console. Read-only.</p>
+      <p style={styles.sub}>Cross-tenant superadmin console.</p>
       <div style={styles.tabs}>
         {tabs.map((t) => (
           <button
