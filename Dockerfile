@@ -34,16 +34,18 @@ ENV SENTRY_RELEASE=$SENTRY_RELEASE
 ENV GIT_SHA=$GIT_SHA
 ENV APP_BUILD_SHA=$GIT_SHA
 
-COPY package*.json tsconfig.base.json ./
+# Manifests first, so the npm ci layer is cached across source-only changes
+# (the common case). COPY --parents (dockerfile 1.7) preserves the
+# apps/<x>/ + packages/<x>/ structure for the glob — robust, no fragile
+# per-package list to drift (a missing list entry is what crashed the
+# e4672585 prod deploy). The --mount cache keeps npm's download store warm.
+COPY --parents package*.json tsconfig.base.json apps/*/package.json packages/*/package.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+
+# Source after install: a code change busts only the build layer, not npm ci.
 COPY apps ./apps
 COPY packages ./packages
 COPY scripts ./scripts
-
-# Cache npm's download store across builds (persists in the buildx builder /
-# local cache). Keeps the COPY-everything ordering (no fragile per-package
-# list to drift — that omission is what crashed the e4672585 prod deploy),
-# but makes the npm ci re-resolve fast on the fleet builder.
-RUN --mount=type=cache,target=/root/.npm npm ci
 RUN npm run build
 RUN --mount=type=secret,id=sentry_auth_token \
     SENTRY_AUTH_TOKEN="$(cat /run/secrets/sentry_auth_token 2>/dev/null || true)" && \
