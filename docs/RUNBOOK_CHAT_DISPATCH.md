@@ -49,13 +49,20 @@ All three are required for end-to-end function. Sitelayer's existing audit-row w
 
 ## Wiring sequence (sitelayer prod)
 
-Per `CLAUDE.md` deploy procedure rules 1 and 2 (secrets live in GitHub
-Actions `production` environment + rendered to `/app/sitelayer/.env`
-on the droplet):
+> **DEPLOY MODEL UPDATED 2026-06-01.** Prod runtime secrets now live in
+> `/app/sitelayer/.env` on the droplet (the GitHub Actions deploy was
+> removed in `70b9584b`; the prod deploy script reuses the on-droplet
+> `.env`). Add the three keys to `/app/sitelayer/.env` directly and bounce
+> the affected container; register them in `ops/env/production.env.json` so
+> a future re-render stays correct.
 
-### 1. Add the three secrets to GitHub Actions
+Per `CLAUDE.md` deploy procedure rules 1 and 2 (prod runtime secrets live
+in `/app/sitelayer/.env` on the droplet, names/scope manifested in
+`ops/env/production.env.json`):
 
-In **GitHub Settings → Environments → production**, add:
+### 1. Add the three keys to `/app/sitelayer/.env` on the prod droplet
+
+SSH to the droplet (as `sitelayer`), back up `.env`, and add:
 
 ```
 MESH_API_URL                     = http://mesh-hetzner:8713
@@ -64,13 +71,12 @@ SITELAYER_CHAT_WEBHOOK_TOKEN     = <generate via: openssl rand -hex 32>
 ```
 
 The webhook token must NOT have been used anywhere else; it's a fresh
-secret. Capture the value to your password manager before pasting —
-GitHub Secrets are write-only once set.
+secret. Capture the value to your password manager.
 
-### 2. Register the secrets in `ops/env/production.env.json`
+### 2. Register the names in `ops/env/production.env.json`
 
-The deploy workflow `.github/workflows/deploy-droplet.yml` reads this
-map to know which secrets to render. Add three entries:
+So a future `render-production-env.mjs` run stays correct, add three
+entries to the manifest:
 
 ```json
 {
@@ -82,11 +88,15 @@ map to know which secrets to render. Add three entries:
 
 (Exact format matches what's already there — check existing entries.)
 
-### 3. Map the secrets in `deploy-droplet.yml`
+### 3. Recreate the API/worker containers
 
-In the env-render step, ensure all three values are exported into
-`.env.staged` before the SSH-and-deploy step. The existing pattern
-already handles this for every key in `production.env.json`.
+After editing `/app/sitelayer/.env`, recreate the services that read these
+keys so the new env is picked up:
+
+```sh
+cd /app/sitelayer && GIT_SHA=$(cat .last_successful_deployed_sha) \
+  docker compose -f docker-compose.prod.yml up -d --no-deps --force-recreate api worker
+```
 
 ### 4. Distribute the webhook token to the fleet
 
@@ -121,9 +131,11 @@ it on the webhook POST. Add to the runner-credential rotation flow:
 
 ### 5. Deploy + smoke-test
 
-Push to `main` → `.github/workflows/deploy-droplet.yml` runs.
+If a fresh build/image is also needed, re-deploy from the fleet with
+`scripts/deploy.sh prod` (otherwise the container-recreate in step 3 is
+sufficient for an env-only change).
 
-After deploy completes:
+After deploy / recreate completes:
 
 ```sh
 # 1. Verify the .env has the three keys (do NOT print the token)
@@ -154,11 +166,11 @@ immediately after any of:
 
 1. Generate a new token: `openssl rand -hex 32`
 2. **In ONE atomic deploy turn**, update:
-   - GitHub Actions `production` secret `SITELAYER_CHAT_WEBHOOK_TOKEN`
+   - `SITELAYER_CHAT_WEBHOOK_TOKEN` in `/app/sitelayer/.env` on the prod droplet
    - `~/.config/mesh/env` on every worker host (the value must be
      identical across hosts; mismatch breaks webhook auth)
    - `~/.config/mesh/env` on mesh-hetzner authority
-3. Push to `main` to trigger sitelayer deploy
+3. Recreate the sitelayer api/worker containers (or `scripts/deploy.sh prod` from the fleet if a rebuild is also needed)
 4. `systemctl --user restart mesh-worker.service` on every worker host
 5. `hetzner 'systemctl --user restart mesh'`
 6. Send a test chat message; confirm the reply lands.

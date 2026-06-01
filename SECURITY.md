@@ -33,7 +33,7 @@ Out of scope:
 - **Initial assessment + severity classification:** within 3 business days.
 - **Patch timeline:** critical issues are patched and deployed within 7 days; high-severity within 30 days; medium/low on the next regular release.
 
-You will receive at least one update per week until the issue is resolved. Production deploys go through `.github/workflows/deploy-droplet.yml` — see [`CLAUDE.md`](./CLAUDE.md) "Deploy procedure".
+You will receive at least one update per week until the issue is resolved. Production deploys run from the fleet via `scripts/deploy.sh prod` (the GitHub Actions deploy workflows were removed 2026-06-01) — see [`CLAUDE.md`](./CLAUDE.md) "Deploy procedure".
 
 ## Credit
 

@@ -60,6 +60,118 @@ if ! git branch -r --contains "$FULL_SHA" 2>/dev/null | grep -q .; then
   exit 1
 fi
 
+# --- green-Quality CI gate ---------------------------------------------------
+# Re-couples the deploy to CI: prod ships ONLY a SHA whose `Quality` workflow
+# (.github/workflows/quality.yml) is completed+green on GitHub. This runs
+# BEFORE the expensive build/push so a red SHA is rejected immediately.
+#
+# Deploy-SHA reuse: we gate $FULL_SHA (the same commit the droplet checks out
+# below — EXPECTED_GIT_SHA is $GIT_SHA, the short form of $FULL_SHA).
+#
+# Resolution order (fail CLOSED — an inconclusive answer never proceeds):
+#   1. Quality workflow run for the SHA (actions/runs?head_sha=...). The
+#      workflow `name:` is literally "Quality"; this rolls up every job.
+#   2. Per-job check-runs (commits/<sha>/check-runs). GitHub surfaces the
+#      Quality jobs by their job *id* (lint-and-typecheck / build / test /
+#      test-integration / e2e — confirmed against quality.yml, which gives
+#      those jobs no `name:` so the id is the check-run name). Require all of
+#      them completed+success.
+#   3. Legacy combined commit status (commits/<sha>/status) — only relevant
+#      if Quality were ever reported as a classic status context instead of
+#      Actions check runs.
+#
+# Break-glass: FORCE_DEPLOY_UNCHECKED=1 skips the gate (loud warning).
+# If gh is missing / unauthenticated / unreachable we also require
+# FORCE_DEPLOY_UNCHECKED=1 (fail closed, not open).
+QUALITY_REPO="${QUALITY_REPO:-GitSteveLozano/sitelayer}"
+QUALITY_WORKFLOW_NAME="${QUALITY_WORKFLOW_NAME:-Quality}"
+# Job ids from quality.yml (these are the check-run names GitHub reports).
+QUALITY_JOBS=(lint-and-typecheck build test test-integration e2e)
+
+if [ "${FORCE_DEPLOY_UNCHECKED:-0}" = "1" ]; then
+  echo "############################################################"
+  echo "## WARNING: FORCE_DEPLOY_UNCHECKED=1 — Quality CI gate SKIPPED."
+  echo "## Shipping UNVERIFIED SHA $FULL_SHA ($GIT_SHA) to prod."
+  echo "## CI may be red, pending, or never ran for this commit."
+  echo "############################################################"
+else
+  if ! command -v gh >/dev/null 2>&1; then
+    echo "ERROR: gh (GitHub CLI) not found — cannot verify the Quality CI gate for $GIT_SHA."
+    echo "       Install/auth gh, or set FORCE_DEPLOY_UNCHECKED=1 to deploy without the check."
+    exit 1
+  fi
+  if ! gh auth status >/dev/null 2>&1; then
+    echo "ERROR: gh is not authenticated — cannot verify the Quality CI gate for $GIT_SHA."
+    echo "       Run 'gh auth login', or set FORCE_DEPLOY_UNCHECKED=1 to deploy without the check."
+    exit 1
+  fi
+
+  echo "==> Checking Quality CI is green for $GIT_SHA on $QUALITY_REPO ..."
+  quality_state="unknown"   # unknown | success | not_green
+
+  # (1) Primary: the Quality workflow run rolled-up conclusion for this SHA.
+  #     Pick the most recent run named "$QUALITY_WORKFLOW_NAME"; emit
+  #     "<status> <conclusion>" (or "none none" if no such run). gh's --jq
+  #     runs the filter server-side response, no external jq needed.
+  wf_summary="$(gh api "repos/$QUALITY_REPO/actions/runs?head_sha=$FULL_SHA&per_page=100" \
+    --jq '[.workflow_runs[] | select(.name=="'"$QUALITY_WORKFLOW_NAME"'")]
+          | sort_by(.run_started_at) | last
+          | if . == null then "none none" else "\(.status) \(.conclusion)" end' \
+    2>/dev/null || true)"
+  case "$wf_summary" in
+    "completed success") quality_state="success" ;;
+    ""|"none none")      ;;  # no Quality run for this SHA / API empty — try fallbacks
+    *)                   quality_state="not_green"
+                         echo "    Quality workflow run: $wf_summary" ;;
+  esac
+
+  # (2) Fallback: per-job check-runs. Require every known Quality job to be
+  #     completed+success. Only consulted if the workflow-run path was
+  #     inconclusive (no run found / API empty).
+  if [ "$quality_state" = "unknown" ]; then
+    job_filter="$(printf '"%s",' "${QUALITY_JOBS[@]}")"; job_filter="[${job_filter%,}]"
+    cr_summary="$(gh api "repos/$QUALITY_REPO/commits/$FULL_SHA/check-runs?per_page=100" \
+      --jq "[.check_runs[] | select(.name as \$n | $job_filter | index(\$n))] as \$q
+            | \"\(\$q|length) \([ \$q[] | select(.status==\"completed\" and .conclusion==\"success\") ]|length)\"" \
+      2>/dev/null || true)"
+    if [ -n "$cr_summary" ]; then
+      matched="${cr_summary%% *}"; green="${cr_summary##* }"
+      if [ "$matched" -gt 0 ] && [ "$matched" = "$green" ]; then
+        quality_state="success"
+      elif [ "$matched" -gt 0 ]; then
+        quality_state="not_green"
+        echo "    Quality check-runs: $green/$matched green (need all)."
+      fi
+    fi
+  fi
+
+  # (3) Fallback: legacy combined commit status (classic status contexts).
+  if [ "$quality_state" = "unknown" ]; then
+    st_summary="$(gh api "repos/$QUALITY_REPO/commits/$FULL_SHA/status" \
+      --jq '"\(.state) \(.total_count)"' 2>/dev/null || true)"
+    case "$st_summary" in
+      "success "*) [ "${st_summary##* }" != "0" ] && quality_state="success" ;;
+      "")          ;;  # API unreachable
+      *)           [ "${st_summary##* }" != "0" ] && quality_state="not_green"
+                   [ "${st_summary##* }" != "0" ] && echo "    Combined status: $st_summary" ;;
+    esac
+  fi
+
+  if [ "$quality_state" = "success" ]; then
+    echo "==> Quality CI is green for $GIT_SHA."
+  elif [ "$quality_state" = "not_green" ]; then
+    echo "ERROR: Quality CI is NOT green for $GIT_SHA on $QUALITY_REPO (failed/pending)."
+    echo "       Fix CI and redeploy the green SHA, or set FORCE_DEPLOY_UNCHECKED=1 to override."
+    exit 1
+  else
+    echo "ERROR: could not find a Quality CI result for $GIT_SHA on $QUALITY_REPO"
+    echo "       (no Quality workflow run, check-runs, or commit status — CI may not have run,"
+    echo "        or gh could not reach the API). Push + let Quality run, or set"
+    echo "        FORCE_DEPLOY_UNCHECKED=1 to override."
+    exit 1
+  fi
+fi
+
 echo "==> Deploying $GIT_SHA -> prod ($DEPLOY_USER@$DEPLOY_HOST)"
 START=$(date +%s)
 

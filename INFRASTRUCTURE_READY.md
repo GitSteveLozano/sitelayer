@@ -131,7 +131,7 @@ dig sitelayer.sandolab.xyz  # Should resolve to 159.203.51.158
 
 ## Environment Variables
 
-Production values live in the GitHub Actions `production` environment and are rendered from `ops/env/production.env.json` during deploy. `/app/sitelayer/.env` on the droplet is the generated artifact, owned by the `sitelayer` deployment user with mode `600`.
+Production runtime env lives in `/app/sitelayer/.env` on the droplet (owned by the `sitelayer` user, mode `600`), originally rendered from `ops/env/production.env.json` by `scripts/render-production-env.mjs`. Under the local-fleet deploy model (2026-06-01) the prod deploy script reuses this on-droplet file rather than re-rendering it each deploy, so it is the live source of truth.
 
 Bootstrap/break-glass shape:
 
@@ -177,9 +177,10 @@ SENTRY_WORKER_DSN=
 SENTRY_ENVIRONMENT=production
 SENTRY_TRACES_SAMPLE_RATE=0.1
 
-# Browser VITE_* values are build-time Docker args in deploy-droplet.yml, not
-# runtime web-container env. Changing VITE_API_URL, VITE_CLERK_PUBLISHABLE_KEY,
-# or VITE_SENTRY_DSN requires a new image build/deploy.
+# Browser VITE_* values are build-time Docker args passed by
+# scripts/deploy-production-local.sh, not runtime web-container env. Changing
+# VITE_API_URL, VITE_CLERK_PUBLISHABLE_KEY, or VITE_SENTRY_DSN requires a new
+# image build/deploy (scripts/deploy.sh prod from the fleet).
 
 # Domain
 DOMAIN=sitelayer.sandolab.xyz
@@ -203,7 +204,7 @@ enabled, and production uses a scoped read/write key.
      "org_slug": "{{org.slug}}"
    }
    ```
-3. Runtime API auth reads `CLERK_JWT_KEY`; webhook verification reads `CLERK_WEBHOOK_SECRET`; the browser publishable key is baked at image build via the deploy workflow.
+3. Runtime API auth reads `CLERK_JWT_KEY`; webhook verification reads `CLERK_WEBHOOK_SECRET`; the browser publishable key is baked at image build by `scripts/deploy-production-local.sh`.
 
 ### 3. Intuit QBO app (credentials captured; live sync validation pending)
 
@@ -214,7 +215,7 @@ enabled, and production uses a scoped read/write key.
 ### 4. Sentry projects (done; plan/quota review pending)
 
 1. API and worker DSNs live in runtime `.env` as `SENTRY_DSN` / `SENTRY_WORKER_DSN`.
-2. Web DSN is a build-time value passed as `VITE_SENTRY_DSN` by the deploy workflow.
+2. Web DSN is a build-time value passed as `VITE_SENTRY_DSN` by `scripts/deploy-production-local.sh`.
 3. Confirm active plan/quota in the Sentry billing UI during the quarterly cost review.
 
 ### 5. UptimeRobot / timer monitors (baseline done)
@@ -245,7 +246,8 @@ curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh get-docker.sh
 sudo apt install -y git curl postgresql-client
 
-# Production is now managed by GitHub Actions via the self-hosted preview runner.
+# Production is deployed from the fleet via scripts/deploy.sh prod (the GitHub
+# Actions deploy workflows were removed in 70b9584b, 2026-06-01).
 # The runtime env lives at /app/sitelayer/.env and is owned by sitelayer:600.
 sudo ls -l /app/sitelayer/.env
 ```
@@ -304,7 +306,7 @@ _(Plus free tier: Clerk, Sentry, UptimeRobot, Intuit)_
 - ✅ Database created (5 min, automated)
 - ✅ Firewall configured (1 min, automated)
 - ✅ `/app/sitelayer/.env` on droplet
-- ✅ GitHub Actions `DEPLOY_HOST` and `DEPLOY_SSH_KEY`
+- ✅ Fleet deploy access: `DEPLOY_HOST` / `DEPLOY_SSH_KEY` for `scripts/deploy.sh prod` (was GitHub Actions secrets pre-2026-06-01)
 - ✅ Separate Postgres database/user for prod
 - ✅ Separate Postgres database/user for dev
 - ✅ Local blueprint storage volume

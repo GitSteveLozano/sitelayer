@@ -1,8 +1,23 @@
 # Sitelayer Deployment Guide
 
+> **DEPLOY MODEL UPDATED 2026-06-01.** Deploys are now local-fleet via
+> `scripts/deploy.sh <prod|dev|demo>`, run from a fleet box — NOT GitHub
+> Actions. The GitHub Actions deploy workflows (`deploy-droplet.yml`,
+> `deploy-dev.yml`, `deploy-demo.yml`, `deploy-preview.yml`, plus
+> `preview-gc.yml` / `registry-gc.yml`) were all removed in commit
+> `70b9584b`. `quality.yml` (lint/build/test) stays as the passive CI net.
+> Where this doc says "the GitHub Actions workflow" / "push to `main`",
+> read it as "`scripts/deploy.sh prod` from the fleet". Prod runtime
+> secrets now live in `/app/sitelayer/.env` on the droplet (rendered once
+> from `ops/env/production.env.json` and **reused** by each local deploy —
+> the deploy script no longer re-uploads `.env`). Adopted policy: `main`
+> branch-protected (PR + green `Quality` + no force-push) and a
+> green-`Quality` gate landing in `deploy-production-local.sh` — until then
+> confirm `Quality` is green for the deploy SHA before deploying.
+
 ## Overview
 
-Sitelayer is deployed to a DigitalOcean Droplet using Docker Compose. The GitHub Actions workflow automatically builds one immutable runtime image, pushes it to DigitalOcean Container Registry, and deploys production on push to `main`.
+Sitelayer is deployed to a DigitalOcean Droplet using Docker Compose. `scripts/deploy.sh prod` (via `scripts/deploy-production-local.sh`) builds one immutable runtime image on the fleet, pushes it to DigitalOcean Container Registry, and deploys production over SSH to the droplet.
 
 ## Initial Droplet Setup
 
@@ -59,7 +74,7 @@ usermod -aG docker sitelayer
 
 Docker daemon access can build and run privileged containers. Treat the deployment SSH key as production-root-equivalent even though direct root login is not used.
 
-> **SECURITY NOTE (2026-04-24):** Membership in `docker` is functionally root because the Docker socket lets a caller mount any host path into a privileged container. We accept this on the production droplet today because the GitHub Actions deploy workflow (`.github/workflows/deploy-droplet.yml`) SSHes in as `sitelayer` and runs `docker compose ...` directly. Removing `sitelayer` from `docker` would also require either (a) a `/etc/sudoers.d/sitelayer-docker` granting `NOPASSWD: /usr/bin/docker, /usr/bin/docker-compose` and a deploy-script change to prepend `sudo`, or (b) a rootless-Docker reinstall. Tracked separately; do not silently fix during unrelated work. Until then: rotate `DEPLOY_SSH_KEY` if it ever leaves the GitHub secrets store and prefer non-root inside containers (see Dockerfile `USER node`).
+> **SECURITY NOTE (2026-04-24, deploy-path updated 2026-06-01):** Membership in `docker` is functionally root because the Docker socket lets a caller mount any host path into a privileged container. We accept this on the production droplet today because the deploy path (`scripts/deploy-production-local.sh`, run from a fleet box) SSHes in as `sitelayer` and runs `docker compose ...` directly. Removing `sitelayer` from `docker` would also require either (a) a `/etc/sudoers.d/sitelayer-docker` granting `NOPASSWD: /usr/bin/docker, /usr/bin/docker-compose` and a deploy-script change to prepend `sudo`, or (b) a rootless-Docker reinstall. Tracked separately; do not silently fix during unrelated work. Until then: protect the deploy SSH key on the fleet box and prefer non-root inside containers (see Dockerfile `USER node`).
 
 ### 4. Configure SSH Access for Deployment User
 
@@ -90,18 +105,17 @@ git clone https://github.com/GitSteveLozano/sitelayer.git .
 
 ### 6. Environment Configuration
 
-Production runtime env is sourced from the GitHub Actions `production` environment, rendered by `scripts/render-production-env.mjs` using `ops/env/production.env.json`, uploaded during deploy, backed up on the droplet, and promoted to `/app/sitelayer/.env`.
+Production runtime env lives in `/app/sitelayer/.env` on the droplet (mode `600`), originally rendered by `scripts/render-production-env.mjs` from `ops/env/production.env.json`. Under the local-fleet model (2026-06-01) the prod deploy script **reuses** this existing `.env` rather than re-rendering/re-uploading it each deploy — so the on-droplet file is the live runtime source.
 
-Do not hand-edit `/app/sitelayer/.env` for normal operations. Update GitHub environment secrets/variables instead, then rerun the production deploy. Keep `/app/sitelayer/.env` as the generated artifact and break-glass inspection point only.
+To change a secret: update its entry in `ops/env/production.env.json`, then re-render `/app/sitelayer/.env` on the droplet (or edit the value in place for an existing key) and bounce the affected container. `.env.example` documents names only; never commit secret values.
 
 Current production env contract:
 
-- Runtime source of truth: GitHub repository → Settings → Environments → `production` → secrets and variables.
-- Contract and defaults: `ops/env/production.env.json`.
-- Renderer: `node scripts/render-production-env.mjs --output <file>`.
-- Deploy artifact: `/app/sitelayer/.env`, mode `600`, backed up as `.env.bak.<timestamp>` before each deploy.
-- Phase-2 render enforcement: set GitHub environment variable `PRODUCTION_ENV_RENDER_ENFORCE=1` after all render warnings are clean.
-- API boot enforcement: set GitHub environment variable `SITELAYER_ENV_ENFORCE=1` after the API validator logs are clean.
+- Runtime source of truth: `/app/sitelayer/.env` on the prod droplet (mode `600`).
+- Name/scope manifest + defaults: `ops/env/production.env.json`.
+- Renderer (one-time seed / explicit re-render): `node scripts/render-production-env.mjs --output <file>` — reads values from the process env.
+- Render enforcement: `PRODUCTION_ENV_RENDER_ENFORCE=1` when rendering, after all render warnings are clean.
+- API boot enforcement: set `SITELAYER_ENV_ENFORCE=1` in `/app/sitelayer/.env` after the API validator logs are clean.
 
 For bootstrap or break-glass only, `/app/sitelayer/.env` has this shape. `DATABASE_URL`, production auth, `API_METRICS_TOKEN`, and Spaces credentials are required for the current production profile.
 
@@ -185,8 +199,8 @@ ENV_FILE=/app/sitelayer/.env scripts/migrate-db.sh
 ENV_FILE=/app/sitelayer/.env scripts/check-db-schema.sh
 ```
 
-The production GitHub Actions deploy builds images, takes a pre-migration
-logical backup, then runs both commands before replacing containers. The runner
+The production deploy (`scripts/deploy-production-local.sh`) builds images, takes a pre-migration
+logical backup, then runs both commands before replacing containers. The migrate step
 records each migration in `schema_migrations` with a checksum and holds a
 transaction-scoped advisory lock so overlapping deploys cannot apply migrations
 concurrently. Do not edit a committed migration after it has run in any shared
@@ -218,42 +232,41 @@ APP_IMAGE=registry.digitalocean.com/sitelayer/sitelayer:<git-sha> \
   docker compose -f docker-compose.prod.yml up -d
 ```
 
-Or via GitHub Actions (automatic on push to `main`).
+Or via `scripts/deploy.sh prod` from the fleet (the normal path).
 
-## GitHub Actions Deployment
+## Local-Fleet Deployment (replaces the removed GitHub Actions deploy)
 
-### 1. Configure GitHub Secrets
+### 1. Fleet box prerequisites
 
-Add the following secrets to your GitHub repository settings:
+The fleet box that runs `scripts/deploy.sh prod` needs:
 
-- `DEPLOY_HOST`: Droplet IP or domain (e.g., `165.245.230.3` or `sitelayer.sandolab.xyz`)
-- `DEPLOY_SSH_KEY`: Private SSH key content from `~/.ssh/sitelayer_deploy` (the deployment user's key)
-- `DIGITALOCEAN_ACCESS_TOKEN`: token with registry read/write access for pushing immutable images and minting short-lived registry pull credentials
-
-The workflow uses the `sitelayer` deployment user and does not expose the root SSH key. Because the user can access Docker, the deployment key is still root-equivalent and must be protected accordingly.
+- `docker` + `docker buildx` (BuildKit) for the cached image build.
+- `doctl` authenticated for the DO registry (`doctl registry login`) and with registry read/write.
+- SSH access to the prod droplet as the `sitelayer` deploy user (key authorized on the droplet). Because that user can access Docker, the deploy key is root-equivalent and must be protected accordingly.
+- `DEPLOY_HOST` / `DEPLOY_USER` / `SITELAYER_REGISTRY` may be overridden via env; defaults target `sitelayer@165.245.230.3` and `registry.digitalocean.com/sitelayer/sitelayer`.
 
 ### 2. Trigger Deployment
 
-Push to `main` to trigger automatic production deployment:
+Commit + push the SHA to an origin branch first (the droplet fetches it from GitHub), confirm `Quality` is green for that SHA, then from the fleet:
 
 ```bash
-git push origin main
+scripts/deploy.sh prod
+# or directly: scripts/deploy-production-local.sh
+# code-only (skip backup+migrate): SKIP_MIGRATIONS=1 scripts/deploy.sh prod
 ```
 
-The GitHub Actions workflow will:
+`scripts/deploy-production-local.sh` will:
 
-1. Check out the code
-2. Build `registry.digitalocean.com/sitelayer/sitelayer:<git-sha>`
-3. Push both `<git-sha>` and `main` image tags to DigitalOcean Container Registry
-4. Mint short-lived read-only registry pull credentials for the droplet
-5. SSH into the droplet
-6. Pull latest repo metadata from GitHub
-7. Pull the exact image tag built for this commit
-8. Run a pre-migration logical backup with `scripts/backup-postgres.sh`
-9. Run `scripts/migrate-db.sh`
-10. Run `scripts/check-db-schema.sh`
-11. Start services with `APP_IMAGE=<sha-image> docker compose up -d --remove-orphans`
-12. Verify public HTTPS health, `/api/version`, web root, metrics gating, and container state
+1. Verify the working tree is clean and `HEAD` is on an origin branch.
+2. Build `registry.digitalocean.com/sitelayer/sitelayer:<git-sha>` with the BuildKit layer cache and push both `<git-sha>` and `:main` tags.
+3. Prune old SHA tags (keep `:main` + newest 10) and start async registry GC.
+4. SSH into the droplet under a flock (`/tmp/sitelayer-production-deploy.lock`).
+5. `git fetch` + checkout the exact built SHA on the droplet.
+6. Pull the exact image tag built for this commit.
+7. Run a pre-migration logical backup with `scripts/backup-postgres.sh`.
+8. Run `scripts/migrate-db.sh` then `scripts/check-db-schema.sh` (unless `SKIP_MIGRATIONS=1`).
+9. Start services with `docker compose -f docker-compose.prod.yml up -d --remove-orphans`.
+10. Poll HTTPS `/health`, run `scripts/verify-prod-deploy.sh`, and write `.last_previous_deployed_sha` / `.last_successful_deployed_sha` / `.last_successful_app_image`.
 
 ## Tier Isolation
 
@@ -533,8 +546,8 @@ To enable on the prod droplet:
    `AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… aws --endpoint-url https://nyc3.digitaloceanspaces.com s3 ls`.
 2. Add `DO_SPACES_OFFREGION_KEY`, `DO_SPACES_OFFREGION_SECRET`,
    `DO_SPACES_OFFREGION_BUCKET`, and `DO_SPACES_OFFREGION_ENDPOINT` to
-   the GitHub Actions `production` environment so the next deploy renders
-   them into `/app/sitelayer/.env` via `ops/env/production.env.json`.
+   `/app/sitelayer/.env` on the prod droplet (and their entries in
+   `ops/env/production.env.json`), then bounce the affected service.
 3. Copy unit files:
    `sudo cp /app/sitelayer/ops/systemd/sitelayer-offregion-backup.{service,timer} /etc/systemd/system/`
 4. `sudo systemctl daemon-reload && sudo systemctl enable --now sitelayer-offregion-backup.timer`
@@ -580,7 +593,7 @@ GIT_SHA=$(cat .last_successful_deployed_sha) docker compose -f docker-compose.pr
 - [x] Database schema applied successfully
 - [x] API responding on health check endpoint
 - [x] Frontend loading without errors
-- [x] QBO integration credentials configured — _Status as of 2026-05-11:_ OAuth client + sandbox creds wired through GitHub `production` env; `scripts/qbo-sandbox-smoke.sh` exists and has been exercised. `QBO_LIVE_RENTAL_INVOICE` / `QBO_LIVE_ESTIMATE_PUSH` / `QBO_LIVE_LABOR_PAYROLL` remain at `0` pending the first real-customer sandbox/prod validation pass.
+- [x] QBO integration credentials configured — _Status as of 2026-05-11:_ OAuth client + sandbox creds wired into `/app/sitelayer/.env` on the prod droplet; `scripts/qbo-sandbox-smoke.sh` exists and has been exercised. `QBO_LIVE_RENTAL_INVOICE` / `QBO_LIVE_ESTIMATE_PUSH` / `QBO_LIVE_LABOR_PAYROLL` remain at `0` pending the first real-customer sandbox/prod validation pass.
 - [x] Clerk authentication working
 - [x] DO Spaces credentials configured
 - [x] Local blueprint storage volume configured as fallback

@@ -186,9 +186,12 @@ ssh sitelayer@10.118.0.4 \
 
 ## Mitigation
 
-1. **Mesh URL/token wrong:** update GitHub production environment values and
-   redeploy so `/app/sitelayer/.env` is rendered from source of truth. Do not
-   patch the container manually except for break-glass recovery.
+1. **Mesh URL/token wrong:** update the value in `/app/sitelayer/.env` on the
+   prod droplet (and its `ops/env/production.env.json` manifest entry), then
+   recreate the affected container (`scripts/deploy.sh prod` from the fleet if
+   a rebuild is needed). Under the local-fleet model (2026-06-01) the droplet
+   `.env` is the source of truth — the GitHub Actions deploy was removed in
+   `70b9584b`.
 
 2. **Callback token mismatch:** for new dispatches, replay with the scoped
    callback token that was delivered to Mesh in

@@ -41,7 +41,6 @@ Mechanical proof of the single-app invariant:
 
 - `Dockerfile` only `COPY`s `apps/web/dist`.
 - `docker-compose.prod.yml`, `.preview.yml`, `.yml` all run `@sitelayer/web`.
-- `.github/workflows/deploy-pages.yml` builds `@sitelayer/web`.
 - Root `package.json` build chain enumerates `@sitelayer/web` only.
 - `.github/dependabot.yml` tracks `apps/web/` only.
 
@@ -108,7 +107,18 @@ Current Mesh runtime dependencies recorded for `sitelayer` as of 2026-04-24:
 
 These are deployment verification/runtime records. Treat production-critical rows as required evidence when changing infra, deploy, storage, auth, or observability.
 
-Preview state is documented in this repo and Mesh runtime dependencies. Runtime-dep rows were reconciled on 2026-04-24 for:
+> **STALE 2026-06-01 — pending a mesh runtime-dep reconcile for project `282`.**
+> The 2026-04-24 rows above (and the preview rows below) encode a
+> GitHub-Actions + Traefik-preview topology the repo has moved past: deploys
+> are now local-fleet via `scripts/deploy.sh` (Actions deploy workflows
+> removed in `70b9584b`), the `env_file/production-env` source is the
+> droplet-rendered `/app/sitelayer/.env`, and the `docker_container/preview-router-traefik`
+> / self-hosted-runner rows no longer match reality. The mesh-side upsert
+> requires the mesh MCP and an operator — do NOT fabricate replacement rows
+> here. Until reconciled, treat these rows as historical, not current
+> evidence.
+
+Preview state is documented in this repo and Mesh runtime dependencies. Runtime-dep rows were reconciled on 2026-04-24 for (see STALE note above):
 
 - `postgres/sitelayer-preview-db`
 - `env_file/preview-shared-env`
@@ -117,9 +127,11 @@ Preview state is documented in this repo and Mesh runtime dependencies. Runtime-
 - `port/preview-http-https`
 - `build_cmd/preview-docker-build`
 
-GitHub preview automation: self-hosted runner `sitelayer-preview` is registered on the preview droplet. Service `actions.runner.GitSteveLozano-sitelayer.sitelayer-preview.service` is active/enabled and runner logs show `Listening for Jobs`. Current `taylorSando` API access still cannot list repo runners (`403`), so use host service status/logs as verification unless repo runner-management permission is added.
-
-Runner package state: `/home/sitelayer/actions-runner` exists on `sitelayer-preview` with actions runner `2.333.1` unpacked and configured.
+Preview/dev/demo automation (2026-06-01): these stacks deploy from the fleet
+via `scripts/deploy.sh dev|demo` → `scripts/deploy-preview.sh` on the preview
+droplet (source-mounted watch-mode), NOT a self-hosted GitHub Actions runner.
+The historical `sitelayer-preview` self-hosted runner is no longer part of any
+deploy path now that the Actions deploy workflows are removed.
 
 ## Operating Rules (post-MVP, operate mode)
 
@@ -131,15 +143,39 @@ paired with _why_ it exists (often a real footgun) and _how to apply_ it.
 
 ### Deploy procedure
 
-1. **The only deploy path is `.github/workflows/deploy-droplet.yml`. No
-   manual SSH deploys.** _Why:_ the workflow is what exports
-   `APP_BUILD_SHA`, runs migrations against an ephemeral Postgres 18 first,
-   and writes `.last_successful_deployed_sha` on the droplet — which
-   `scripts/rollback-droplet.sh` reads. A manual `docker compose up -d` on
-   the droplet skips the build-sha export and breaks the rollback drill.
-   _How to apply:_ push to `main` and let the workflow run. For rollback,
-   `scripts/rollback-droplet.sh TARGET_SHA=...` — never edit a migration to
-   "fix forward in place".
+> **DEPLOY MODEL UPDATED 2026-06-01.** Deploys are now local-fleet via
+> `scripts/deploy.sh <prod|dev|demo>`, run from a fleet box (e.g.
+> taylor-pc-ubuntu) — NOT GitHub Actions. The GitHub Actions deploy
+> workflows (`deploy-droplet.yml`, `deploy-dev.yml`, `deploy-demo.yml`,
+> `deploy-preview.yml`, plus `preview-gc.yml` / `registry-gc.yml`) were all
+> removed in commit `70b9584b`. `quality.yml` stays as the passive CI net
+> (lint/build/test) and is what the planned green-gate will consume.
+>
+> **Adopted operating model:** `main` is production truth and is being
+> GitHub-branch-protected (require PR + the `Quality` status check, no
+> force-push). A green-`Quality` gate is being added to
+> `scripts/deploy-production-local.sh` by a follow-on agent. **Until that
+> gate lands, a human or agent MUST confirm `Quality` is green for the
+> deploy SHA before running a prod deploy.** `demo` is an `APP_TIER=demo`
+> environment deployed from a chosen ref (currently `dev`, later `main` or
+> a release tag), not a long-lived code branch.
+
+1. **The deploy path is `scripts/deploy.sh <prod|dev|demo>` from the
+   fleet — no GitHub Actions, no ad-hoc SSH `docker compose up -d`.**
+   _Why:_ for prod, `deploy.sh prod` execs `scripts/deploy-production-local.sh`,
+   which BuildKit-cache-builds the image, pushes it to the DO registry
+   (`registry.digitalocean.com/sitelayer/sitelayer:<git-sha>` + `:main`),
+   then SSHes (flock-locked `/tmp/sitelayer-production-deploy.lock`) to the
+   prod droplet to check out the matching SHA, pull the exact image, take a
+   pre-migration `pg_dump` backup, run `migrate-db.sh` + `check-db-schema.sh`,
+   swap containers, health-check, and write `.last_previous_deployed_sha` /
+   `.last_successful_deployed_sha` (which `scripts/rollback-droplet.sh`
+   reads). A manual `docker compose up -d` on the droplet skips the SHA
+   markers and breaks the rollback drill. _How to apply:_ commit + push the
+   SHA to an origin branch first (the droplet fetches it from GitHub), then
+   `scripts/deploy.sh prod`. For rollback, `sudo TARGET_SHA=... bash
+   scripts/rollback-droplet.sh` on the droplet — never edit a migration to
+   "fix forward in place". `SKIP_MIGRATIONS=1` does a code-only deploy.
 
 2. **Migrations in `docker/postgres/init/*.sql` are immutable once
    committed.** _Why:_ they're checksummed and tracked in
@@ -149,26 +185,30 @@ paired with _why_ it exists (often a real footgun) and _how to apply_ it.
    the precedent — additive, never destructive.
 
 3. **When restarting a single container, re-export `GIT_SHA` /
-   `APP_BUILD_SHA` first; otherwise use the deploy workflow.** _Why:_
-   `docker compose -f docker-compose.prod.yml restart api` loses the
+   `APP_BUILD_SHA` first; otherwise re-run `scripts/deploy.sh prod`.**
+   _Why:_ `docker compose -f docker-compose.prod.yml restart api` loses the
    build-sha env var, so the next health check sees a mismatched commit
    and rollback can't tell which image is actually running. _How to
    apply:_ `GIT_SHA=$(cat .last_successful_deployed_sha) docker compose -f
 docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
    are private only — never expose them publicly.
 
-4. **The persistent dev environment (`dev.sitelayer.sandolab.xyz`) is
-   driven by push to the `dev` branch via
-   `.github/workflows/deploy-dev.yml`.** _Why:_ PR previews share
-   `sitelayer_preview` and get an ephemeral schema, which is the wrong
-   shape for iterating on a migration (immutable in `main`) or running a
-   persistent demo/agent sandbox. The dev stack targets the dedicated
-   `sitelayer_dev` database against its `public` schema, with
-   `scripts/reset-dev-db.sh` as the "rebuild from scratch" lever. _How
-   to apply:_ work on `dev` for in-flight schema design; once a
-   migration file is right, open a PR against `main`. Don't promote
-   `dev → main` blindly — `dev` is a scratch lane, not a release
-   candidate. See [`docs/DEV_ENVIRONMENT.md`](./docs/DEV_ENVIRONMENT.md).
+4. **The persistent dev (`dev.sitelayer.sandolab.xyz`) and demo
+   (`demo.preview.sitelayer.sandolab.xyz`) environments deploy via
+   `scripts/deploy.sh dev` / `scripts/deploy.sh demo` to the preview
+   droplet in source-mounted watch-mode (`deploy-preview.sh`, tsx + vite
+   HMR — no image build).** _Why:_ PR previews share `sitelayer_preview`
+   and get an ephemeral schema, which is the wrong shape for iterating on a
+   migration (immutable in `main`) or running a persistent demo/agent
+   sandbox. The dev stack targets the dedicated `sitelayer_dev` database
+   against its `public` schema, with `scripts/reset-dev-db.sh` as the
+   "rebuild from scratch" lever; demo targets `sitelayer_demo` and re-runs
+   the idempotent demo seed on every deploy. _How to apply:_ work on `dev`
+   for in-flight schema design; once a migration file is right, open a PR
+   against `main` (the SHA must be on an origin branch before deploy so the
+   droplet can fetch it). `demo` is now an environment, not a code branch —
+   pick the ref you deploy from (`dev` today). See
+   [`docs/DEV_ENVIRONMENT.md`](./docs/DEV_ENVIRONMENT.md).
 
 ### Env management
 
@@ -181,17 +221,24 @@ docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
    `*_URL` / `*_BUCKET` to the tier name. The `tier_origin` column on new
    tables is the row-level analog — keep tagging writes.
 
-2. **Secrets live in the GitHub Actions `production` environment, never
-   in any committed file or shell history.** _Why:_ rotation is the only
-   operational lever for a leaked key; if the secret was ever in
-   `.env.prod` on disk, rotation requires a droplet wipe-and-redeploy
-   instead of a workflow re-run. _How to apply:_ new secret → add to the
-   `production` environment in GitHub Settings, add it to
-   `ops/env/production.env.json`, and map it in `deploy-droplet.yml`.
-   `/app/sitelayer/.env` is a rendered artifact, not the source of truth.
-   `.env.example` documents _names only_. Preview env lives at
-   `/app/previews/.env.shared` on the preview droplet (shared schema per PR),
-   not a copy of prod values.
+2. **Prod runtime secrets live in `/app/sitelayer/.env` on the prod
+   droplet (mode `600`), rendered by `scripts/render-production-env.mjs`
+   from `ops/env/production.env.json` — never in any committed file or
+   shell history.** _Why:_ rotation is the only operational lever for a
+   leaked key, and under the local-fleet model the prod deploy
+   (`deploy-production-local.sh`) deliberately **reuses** the existing
+   droplet `.env` rather than re-rendering it on every deploy (the script
+   aborts if `/app/sitelayer/.env` is missing). So the rendered `.env` on
+   the droplet IS the live source; `production.env.json` defines the
+   name/scope manifest, and `render-production-env.mjs` reads values from
+   the process env to produce the file (one-time seed / explicit re-render).
+   _How to apply:_ to add a secret, add its entry to
+   `ops/env/production.env.json`, then re-render `/app/sitelayer/.env` on
+   the droplet (or edit it in place for an existing value) and bounce the
+   affected container. **Never commit secrets;** `.env.example` documents
+   _names only_. Preview/dev/demo env lives at
+   `/app/previews/.env.{shared,dev.shared,demo.shared}` on the preview
+   droplet, not a copy of prod values.
 
 3. **Any `QBO_LIVE_*` flag flip needs a worker restart and a sandbox
    smoke first — not a full deploy.** _Why:_ `QBO_LIVE_RENTAL_INVOICE=1`
@@ -277,8 +324,9 @@ docker-compose.prod.yml up -d <service>`. Caddy binds 80/443; 3000/3001
    the first request. The dispatcher checks `BLUEPRINT_VISION_MODE=live`
    AND a non-empty `ANTHROPIC_API_KEY` together — either missing falls
    back to the deterministic dry-run stub. _How to apply:_ set both env
-   vars in the `production` GitHub environment (never commit the key;
-   `.env.example` only documents placeholders), and verify live behaviour
+   vars in `/app/sitelayer/.env` on the prod droplet (manifest entry in
+   `ops/env/production.env.json`; never commit the key; `.env.example` only
+   documents placeholders), and verify live behaviour
    against a single sheet PDF before flipping the mode for the fleet.
    The live path requires the multipart form (`blueprint_file` part) so
    the PDF streams straight into Spaces; the JSON-body variant of the
@@ -347,7 +395,7 @@ and both have unit-test coverage (`apps/api/src/auth.test.ts`,
 
 ## Current Infrastructure Snapshot
 
-**Verified with `doctl` and production smoke checks on 2026-04-25.** (Schema has since advanced to migration 096, 2026-05-26; the droplet / managed-Postgres / Spaces topology below is unchanged.)
+**Verified with `doctl` and production smoke checks on 2026-04-25.** (Schema has since advanced past migration 136, 2026-06-01; the droplet / managed-Postgres / Spaces topology below is unchanged. **Deploy-path rows updated 2026-06-01: deploys are now local-fleet via `scripts/deploy.sh`, NOT GitHub Actions — see Deploy procedure above.**)
 
 | Resource                         | Current State                                                                                                                                                                                                                                             |
 | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -357,12 +405,12 @@ and both have unit-test coverage (`apps/api/src/auth.test.ts`,
 | Managed Postgres                 | `sitelayer-db`, ID `9948c96b-b6b6-45ad-adf7-d20e4c206c66`, Postgres 18, `db-s-1vcpu-1gb`, Toronto `tor1`, online                                                                                                                                          |
 | Managed Postgres databases       | `defaultdb`, `sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev`                                                                                                                                                                                       |
 | Managed Postgres trusted sources | Droplet `566798325` (`sitelayer`) and droplet `566806040` (`sitelayer-preview`)                                                                                                                                                                           |
-| Production deploy path           | GitHub Actions runs on the self-hosted `sitelayer-preview` runner, renders `ops/env/production.env.json` from the `production` environment, SSHs to `sitelayer@10.118.0.4`, deploys `/app/sitelayer` with Docker Compose, `.env` at `/app/sitelayer/.env` |
-| Preview deploy path              | `docker-compose.preview.yml` behind Traefik on `sitelayer-preview`; shared env at `/app/previews/.env.shared`; smoke stack at `main.preview.sitelayer.sandolab.xyz`                                                                                       |
-| Dev deploy path                  | Same droplet/Traefik as preview but `PREVIEW_TIER=dev`; shared env at `/app/previews/.env.dev.shared`; tracks `dev` branch via `.github/workflows/deploy-dev.yml`; URL `https://dev.sitelayer.sandolab.xyz`; backed by dedicated `sitelayer_dev` DB       |
+| Production deploy path           | Local-fleet (2026-06-01): `scripts/deploy.sh prod` → `scripts/deploy-production-local.sh` from a fleet box — BuildKit-cached image build, push to DO registry (`:<git-sha>` + `:main`), flock-locked SSH to the prod droplet (`sitelayer@165.245.230.3` / reserved `159.203.51.158`) to checkout the SHA, pull, `pg_dump` backup, `migrate-db.sh` + `check-db-schema.sh`, container swap, health check, write `.last_*_deployed_sha`. Runtime `.env` REUSED at `/app/sitelayer/.env` (mode `600`). NOT GitHub Actions. |
+| Preview deploy path              | `docker-compose.preview.yml` behind Traefik on `sitelayer-preview` (`159.203.53.218`); per-PR isolated `sitelayer_<slug>` schema in `sitelayer_preview`; shared env at `/app/previews/.env.shared`. Deployed by running `scripts/deploy-preview.sh` on the preview droplet (the Actions preview workflow was removed in `70b9584b`).                                       |
+| Dev deploy path                  | `scripts/deploy.sh dev` from the fleet → `deploy-preview.sh` on the preview droplet with `PREVIEW_TIER=dev`, source-mounted watch-mode; shared env at `/app/previews/.env.dev.shared`; deploys from the `dev` branch SHA; URL `https://dev.sitelayer.sandolab.xyz`; backed by dedicated `sitelayer_dev` DB. (`demo` is the same shape via `scripts/deploy.sh demo` against `sitelayer_demo`, re-seeded each deploy.)                       |
 | Public edge                      | Containerized Caddy on ports 80/443; automatic Let's Encrypt TLS for `sitelayer.sandolab.xyz`; HTTP redirects to HTTPS                                                                                                                                    |
 | Backups                          | DO managed Postgres automatic backups exist; logical Postgres backup, Postgres off-host copy, blueprint-volume fallback copy, restore-drill, and timer-monitor timers are active                                                                          |
-| Object storage                   | DO Spaces bucket `sitelayer-blueprints-prod` in `tor1`, versioning enabled, scoped prod read/write key in GitHub production secrets and rendered to `/app/sitelayer/.env`                                                                                 |
+| Object storage                   | DO Spaces bucket `sitelayer-blueprints-prod` in `tor1`, versioning enabled, scoped prod read/write key in `/app/sitelayer/.env` on the droplet (rendered from the `ops/env/production.env.json` manifest)                                                 |
 | Container registry               | DO Container Registry `sitelayer` in `tor1`; production deploy promotes `registry.digitalocean.com/sitelayer/sitelayer:<git-sha>`                                                                                                                         |
 | Optional integrations            | QBO credentials can stay blank until live sync validation; Sentry can stay blank but is wired for api/worker/web when DSNs are present. Prod API boot requires auth config, `API_METRICS_TOKEN`, Spaces credentials, and `DATABASE_URL`                   |
 
@@ -615,7 +663,7 @@ Each deterministic workflow has a registered reducer in `packages/workflows/src/
 | `labor_payroll_run`        | Live in API + worker (stub QBO TimeActivity push unless `QBO_LIVE_LABOR_PAYROLL=1`); financial hub list/detail screens shipped in #285/#292          | v1     | generated, approved, posting, posted, failed, voided                                                         | `post_qbo_time_activities`                                |
 | `project_lifecycle`        | Live in API + web (`useProjectLifecycle` XState mounted on project detail in #276/#281)                                                              | v1     | draft, estimating, sent, accepted, declined, in_progress, done, archived                                     | `notify_foreman_assignment`                               |
 | `field_event`              | Live in API + worker; "Flag a problem" → foreman triage → estimator escalation                                                                       | v1     | open, resolved, escalated, dismissed                                                                         | `notify_worker_resolution`, `notify_estimator_escalation` |
-| `rental`                   | Phase 1 — reducer registered (replay sweep wired) but `routes/rentals.ts` writes have not yet been switched over to dispatch through the event API   | v1     | active, returned, invoiced_pending, closed                                                                   | none                                                      |
+| `rental`                   | Live in API (partial): `routes/rentals.ts` now dispatches the RETURN and CLOSE transitions through the reducer + `workflow_event_log` (`applyRentalWorkflowTransition`); replay sweep wired. Phase 2 still pending = worker cadence path (INVOICE_QUEUED / INVOICE_POSTED). The `rental.ts` file header comment is itself stale. | v1     | active, returned, invoiced_pending, closed                                                                   | none                                                      |
 | `daily_log`                | Live in API; SUBMIT through reducer + workflow_event_log + idempotency key (migration 082)                                                           | v1     | draft, submitted                                                                                             | none                                                      |
 | `notification`             | Live in worker; runner routes terminal transitions through reducer; procedural backoff stays in `next_attempt_at` (migration 081)                    | v1     | pending, hydrating, sending, sent, voided, failed_clerk_not_found, failed_clerk_unreachable, failed_provider | send via email / SMS / web-push channel adapters          |
 | `shipment`                 | Live in API; estimate → fulfillment workflow with reducer + event log                                                                                | v1     | planned, picking, shipped, delivered, returning, closed, voided                                              | none                                                      |
@@ -835,7 +883,7 @@ Each deterministic workflow has a registered reducer in `packages/workflows/src/
 - [x] DigitalOcean Container Registry — `sitelayer` Starter registry in `tor1` for immutable runtime images
 - [x] DigitalOcean managed Postgres 18 (`sitelayer_prod`, `sitelayer_preview`, `sitelayer_dev`)
 - [x] Clerk app + OAuth credentials (env vars wired; enforcement gated on `CLERK_JWT_KEY` + `AUTH_ALLOW_HEADER_FALLBACK`)
-- [x] `.env.example` scaffold; production source of truth is GitHub Actions `production`; deploy renders `/app/sitelayer/.env` (mode `600`)
+- [x] `.env.example` scaffold; prod runtime source of truth is `/app/sitelayer/.env` (mode `600`) on the droplet, rendered by `scripts/render-production-env.mjs` from the `ops/env/production.env.json` manifest and reused across local-fleet deploys
 - [x] Docker Compose: api + web + postgres + worker + MinIO (local), prod and preview variants
 
 ### Phase 2 — Initial Deployment (DONE)

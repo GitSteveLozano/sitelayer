@@ -4,13 +4,24 @@
 **Operator:** Taylor (single-maintainer).
 **Scope:** every credential below in the order listed. Each section: what it grants → where it lives → rotation commands → verification.
 
-Production source of truth: GitHub Actions environment `production` in repo `GitSteveLozano/sitelayer`.
-Production rendered env artifact: `/app/sitelayer/.env` on droplet `sitelayer` (`566798325`, reserved IP `159.203.51.158`, MagicDNS-equivalent `sitelayer.sandolab.xyz`).
+> **DEPLOY MODEL UPDATED 2026-06-01.** Deploys are now local-fleet via
+> `scripts/deploy.sh <prod|dev|demo>` — the GitHub Actions deploy workflows
+> (`deploy-droplet.yml` etc.) were removed in commit `70b9584b`, and the
+> prod deploy script **reuses** the existing `/app/sitelayer/.env` rather
+> than re-uploading a freshly-rendered one. So `/app/sitelayer/.env` on the
+> droplet is now the live production source of truth — rotate secrets by
+> patching that file in place (the `doctl compute ssh` + `sed` flows below
+> already do this) and bouncing the affected container. The steps that say
+> `gh workflow run deploy-droplet.yml` no longer apply; re-deploy from the
+> fleet with `scripts/deploy.sh prod` if a code/image-time rotation needs a
+> new build.
+
+Production source of truth: `/app/sitelayer/.env` on droplet `sitelayer` (`566798325`, reserved IP `159.203.51.158`, hostname `sitelayer.sandolab.xyz`). `ops/env/production.env.json` is the name/scope manifest used by `scripts/render-production-env.mjs` for the initial render.
 Preview env file: `/app/previews/.env.shared` on droplet `sitelayer-preview` (`566806040`, reserved IP `159.203.53.218`).
 Local dev secrets: `~/.env.local`.
 GitHub repo: `GitSteveLozano/sitelayer`.
 
-The production contract is `ops/env/production.env.json`; the deploy workflow renders it with `scripts/render-production-env.mjs`, uploads it to the droplet, backs up the previous artifact, and promotes the new file atomically. Rotate production secrets in GitHub first, then deploy. Only hand-edit `/app/sitelayer/.env` for break-glass rollback, and copy that fix back into GitHub immediately.
+The production contract is `ops/env/production.env.json`. To rotate a production secret, patch `/app/sitelayer/.env` on the droplet in place (back up first, then recreate the affected container), and update the manifest entry in `ops/env/production.env.json` so a future re-render stays correct. `.env.example` documents names only; never commit secret values.
 
 A successful deploy after rotation must end with `curl -fsS https://sitelayer.sandolab.xyz/health` returning 200 and `docker compose -f /app/sitelayer/docker-compose.prod.yml ps` showing `api`, `worker`, `web`, `caddy` all healthy.
 
@@ -22,26 +33,26 @@ For incident-time triage (revoke first, rotate second) see `docs/INCIDENT_RESPON
 
 | Secret                       | Stored                                                              | Mint via                                                   | If leaked → see |
 | ---------------------------- | ------------------------------------------------------------------- | ---------------------------------------------------------- | --------------- |
-| `DEPLOY_SSH_KEY`             | GitHub repo secret + `/home/sitelayer/.ssh/authorized_keys` on prod | `ssh-keygen -t ed25519` on trusted local                   | § 6             |
-| `PREVIEW_SSH_KEY`            | Legacy/manual only; current preview workflow does not consume it    | `ssh-keygen -t ed25519` on trusted local                   | § 7             |
-| `DEPLOY_HOST`                | GitHub repo secret (hostname/IP, not really a secret)               | n/a — private VPC IP / DO reserved IP / hostname           | § 8             |
-| `DIGITALOCEAN_ACCESS_TOKEN`  | GitHub repo secret                                                  | DO Console → API → Tokens                                  | § 10            |
+| Deploy SSH key               | Fleet box `~/.ssh/` + `/home/sitelayer/.ssh/authorized_keys` on prod | `ssh-keygen -t ed25519` on the fleet box                   | § 6             |
+| Preview/dev/demo SSH key     | Fleet box `~/.ssh/` + preview droplet `authorized_keys`             | `ssh-keygen -t ed25519` on the fleet box                   | § 7             |
+| `DEPLOY_HOST`                | `scripts/deploy-production-local.sh` default / env (hostname/IP)    | n/a — private VPC IP / DO reserved IP / hostname           | § 8             |
+| `DIGITALOCEAN_ACCESS_TOKEN`  | `doctl` auth on the fleet box (`~/.config/doctl`)                   | DO Console → API → Tokens                                  | § 10            |
 | `CLERK_SECRET_KEY`           | Reserved; not used by current API auth path                         | Clerk dashboard → Configure → API Keys                     | § 1             |
-| `CLERK_JWT_KEY`              | GitHub production secret → rendered `/app/sitelayer/.env`           | Clerk dashboard → API Keys → JWT public key (rotates rare) | § 1             |
-| `CLERK_WEBHOOK_SECRET`       | GitHub production secret → rendered `/app/sitelayer/.env`           | Clerk dashboard → Webhooks                                 | § 1             |
-| `VITE_CLERK_PUBLISHABLE_KEY` | GitHub production variable/secret baked into web image              | Clerk dashboard → Frontend API                             | § 1             |
-| `QBO_CLIENT_ID`              | GitHub production variable → rendered `/app/sitelayer/.env`         | Intuit dev portal → app → Keys & OAuth                     | § 3             |
-| `QBO_CLIENT_SECRET`          | GitHub production secret → rendered `/app/sitelayer/.env`           | Intuit dev portal → Regenerate Client Secret               | § 3             |
-| `QBO_STATE_SECRET`           | GitHub production secret → rendered `/app/sitelayer/.env`           | `openssl rand -base64 32`                                  | § 3             |
-| `SENTRY_AUTH_TOKEN`          | `~/.env.local` + GitHub Actions secret                              | `sandolabs.sentry.io/settings/auth-tokens/`                | § 2             |
-| `SENTRY_DSN`                 | GitHub production secret → rendered `/app/sitelayer/.env`           | Sentry project → Client Keys (Public DSN)                  | § 2             |
-| `SENTRY_WORKER_DSN`          | GitHub production secret → rendered `/app/sitelayer/.env`           | Sentry project → Client Keys (Public DSN)                  | § 2             |
-| `VITE_SENTRY_DSN`            | GitHub production variable/secret baked into web image              | Same DSN as `SENTRY_DSN` (web project)                     | § 2             |
-| `DATABASE_URL`               | GitHub production secret → rendered `/app/sitelayer/.env`           | DO managed Postgres → Connection Details → Reset password  | § 9             |
-| `DEBUG_TRACE_TOKEN`          | GitHub production secret → rendered `/app/sitelayer/.env`           | `openssl rand -base64 32`                                  | § 5             |
-| `API_METRICS_TOKEN`          | GitHub production secret → rendered `/app/sitelayer/.env` + Grafana | `openssl rand -base64 32`                                  | § 5             |
-| `DO_SPACES_KEY` / `_SECRET`  | GitHub production secret → rendered `/app/sitelayer/.env`           | DO Console → API → Spaces Keys                             | § 4             |
-| `DO_SPACES_BUCKET`           | GitHub production variable → rendered `/app/sitelayer/.env`         | DO Console → Spaces                                        | § 4             |
+| `CLERK_JWT_KEY`              | `/app/sitelayer/.env` on the prod droplet           | Clerk dashboard → API Keys → JWT public key (rotates rare) | § 1             |
+| `CLERK_WEBHOOK_SECRET`       | `/app/sitelayer/.env` on the prod droplet           | Clerk dashboard → Webhooks                                 | § 1             |
+| `VITE_CLERK_PUBLISHABLE_KEY` | Fleet build env (build-arg); baked into web image              | Clerk dashboard → Frontend API                             | § 1             |
+| `QBO_CLIENT_ID`              | `/app/sitelayer/.env` on the prod droplet         | Intuit dev portal → app → Keys & OAuth                     | § 3             |
+| `QBO_CLIENT_SECRET`          | `/app/sitelayer/.env` on the prod droplet           | Intuit dev portal → Regenerate Client Secret               | § 3             |
+| `QBO_STATE_SECRET`           | `/app/sitelayer/.env` on the prod droplet           | `openssl rand -base64 32`                                  | § 3             |
+| `SENTRY_AUTH_TOKEN`          | `~/.env.local` on the fleet box (build-time secret)                 | `sandolabs.sentry.io/settings/auth-tokens/`                | § 2             |
+| `SENTRY_DSN`                 | `/app/sitelayer/.env` on the prod droplet           | Sentry project → Client Keys (Public DSN)                  | § 2             |
+| `SENTRY_WORKER_DSN`          | `/app/sitelayer/.env` on the prod droplet           | Sentry project → Client Keys (Public DSN)                  | § 2             |
+| `VITE_SENTRY_DSN`            | Fleet build env (build-arg); baked into web image              | Same DSN as `SENTRY_DSN` (web project)                     | § 2             |
+| `DATABASE_URL`               | `/app/sitelayer/.env` on the prod droplet           | DO managed Postgres → Connection Details → Reset password  | § 9             |
+| `DEBUG_TRACE_TOKEN`          | `/app/sitelayer/.env` on the prod droplet           | `openssl rand -base64 32`                                  | § 5             |
+| `API_METRICS_TOKEN`          | `/app/sitelayer/.env` on the prod droplet + Grafana | `openssl rand -base64 32`                                  | § 5             |
+| `DO_SPACES_KEY` / `_SECRET`  | `/app/sitelayer/.env` on the prod droplet           | DO Console → API → Spaces Keys                             | § 4             |
+| `DO_SPACES_BUCKET`           | `/app/sitelayer/.env` on the prod droplet         | DO Console → Spaces                                        | § 4             |
 
 ---
 
@@ -80,30 +91,26 @@ curl -fsS -H "Authorization: Bearer $FRESH_CLERK_JWT" https://sitelayer.sandolab
 
 `CLERK_SECRET_KEY` is currently reserved for future Clerk Backend API calls; the current API auth path does not use it. Do not rotate it as an auth fix unless Backend API usage is added.
 
-**Frontend publishable key (`VITE_CLERK_PUBLISHABLE_KEY`)** is baked into the web bundle at image build time. It is _not_ a secret in the strict sense — it is shipped to every browser — but rotating it requires a new immutable image and deploy. Update the GitHub Actions variable/secret used for the build, then push or manually dispatch the deploy workflow.
+**Frontend publishable key (`VITE_CLERK_PUBLISHABLE_KEY`)** is baked into the web bundle at image build time. It is _not_ a secret in the strict sense — it is shipped to every browser — but rotating it requires a new immutable image and deploy. Set the build value (e.g. in `ops/env/production.build.env` on the fleet, or as a `VITE_CLERK_PUBLISHABLE_KEY` build-arg env), then re-deploy from the fleet with `scripts/deploy.sh prod` so a fresh image is built.
 
 ---
 
 ## 2. Sentry auth token — `SENTRY_AUTH_TOKEN`
 
-**Grants:** sourcemap upload during Vite build (`scripts/sentry-upload-sourcemaps.sh`), release tagging.
-**Stored in:** `~/.env.local` and GitHub Actions secret `SENTRY_AUTH_TOKEN` (if used by quality.yml or release builds).
+**Grants:** sourcemap upload during the Vite build (`scripts/sentry-upload-sourcemaps.sh`), release tagging. Consumed at build time on the fleet (passed into `docker buildx build` as the `sentry_auth_token` build secret when `SENTRY_AUTH_TOKEN` is set — see `scripts/deploy-production-local.sh`).
+**Stored in:** `~/.env.local` on the fleet box (and optionally `ops/env/production.build.env`).
 
 ```bash
 # 1. https://sandolabs.sentry.io/settings/auth-tokens/ → "Create New Token"
 #    Scopes: project:releases, org:read. Copy once.
 
-# 2. Replace local.
+# 2. Replace local (the fleet build reads it from the environment).
 sed -i "s|^SENTRY_AUTH_TOKEN=.*|SENTRY_AUTH_TOKEN=sntrys_NEW|" ~/.env.local
 
-# 3. Replace GitHub Actions secret (if present — check first).
-gh secret list -R GitSteveLozano/sitelayer | grep SENTRY_AUTH_TOKEN
-gh secret set SENTRY_AUTH_TOKEN -R GitSteveLozano/sitelayer --body "sntrys_NEW"
+# 3. Verify by re-deploying from the fleet and watching the build upload sourcemaps.
+scripts/deploy.sh prod
 
-# 4. Verify by triggering a no-op push to main and watching the deploy upload sourcemaps.
-gh run watch -R GitSteveLozano/sitelayer
-
-# 5. In Sentry dashboard → revoke old token.
+# 4. In Sentry dashboard → revoke old token.
 ```
 
 **`SENTRY_DSN` / `SENTRY_WORKER_DSN` / `VITE_SENTRY_DSN`** are public DSNs for the api, worker, and web projects. They are not auth-bearing on their own (rate-limited per-DSN, project-scoped). `SENTRY_WORKER_DSN` is optional; when blank, the worker falls back to `SENTRY_DSN`. Rotate DSNs only if you suspect nuisance event submission: Sentry project → Settings → Client Keys → "+ Generate New Key", then patch runtime `.env` for server DSNs and update the build variable/secret for `VITE_SENTRY_DSN`. `VITE_SENTRY_DSN` is build-time-baked, so it requires a new immutable image and deploy.
@@ -197,13 +204,13 @@ Same pattern for `DEBUG_TRACE_TOKEN`. Both are random-bearers — no external sy
 
 ---
 
-## 6. `DEPLOY_SSH_KEY` — GitHub Actions deploy key
+## 6. Deploy SSH key — fleet → prod droplet
 
-**Grants:** SSH as `sitelayer` on the production droplet. The production deploy normally reaches it from the preview runner over the private VPC address; public or reserved IP access is only for operator break-glass paths. Because the user is in the `docker` group, this is **production-root-equivalent**. Treat with extreme care.
-**Stored in:** GitHub Actions secret `DEPLOY_SSH_KEY` only. Public half on droplet at `/home/sitelayer/.ssh/authorized_keys`.
+**Grants:** SSH as `sitelayer` on the production droplet, used by `scripts/deploy-production-local.sh` from the fleet box. Because the user is in the `docker` group, this is **production-root-equivalent**. Treat with extreme care.
+**Stored in:** the SSH key on the fleet box that runs the deploy (e.g. `~/.ssh/`). Public half on the droplet at `/home/sitelayer/.ssh/authorized_keys`. (No longer a GitHub Actions secret — the Actions deploy was removed 2026-06-01.)
 
 ```bash
-# 1. Generate new keypair on a trusted local machine (NOT in the deploy runner).
+# 1. Generate new keypair on the trusted fleet box.
 ssh-keygen -t ed25519 -f /tmp/sitelayer_deploy_$(date -u +%Y%m%d) -C "sitelayer-deploy" -N ""
 
 # 2. Append new pubkey on droplet (DO NOT remove old yet).
@@ -211,31 +218,32 @@ doctl compute ssh sitelayer --ssh-command="
   sudo -u sitelayer bash -c 'cat >> /home/sitelayer/.ssh/authorized_keys' <<< \"$(cat /tmp/sitelayer_deploy_*.pub)\"
 "
 
-# 3. Replace GH secret with new private key.
-gh secret set DEPLOY_SSH_KEY -R GitSteveLozano/sitelayer < /tmp/sitelayer_deploy_$(date -u +%Y%m%d)
+# 3. Install the new private key on the fleet box and confirm SSH lands.
+install -m600 /tmp/sitelayer_deploy_$(date -u +%Y%m%d) ~/.ssh/sitelayer_deploy
+ssh sitelayer@165.245.230.3 true && echo "ssh ok"
 
-# 4. Trigger a dry-run deploy and confirm it lands.
-gh workflow run deploy-droplet.yml -R GitSteveLozano/sitelayer
-gh run watch -R GitSteveLozano/sitelayer
+# 4. Run a deploy from the fleet and confirm it lands.
+scripts/deploy.sh prod
+curl -fsS https://sitelayer.sandolab.xyz/api/version
 
 # 5. Once green, prune the old pubkey line from authorized_keys.
 doctl compute ssh sitelayer --ssh-command="
   sudo -u sitelayer sed -i '/<old-key-fingerprint-comment>/d' /home/sitelayer/.ssh/authorized_keys
 "
 
-# 6. Shred local copies.
+# 6. Shred the temp copy.
 shred -u /tmp/sitelayer_deploy_*
 ```
 
-If the key ever leaves the GH secrets store, treat it as **breach** — immediate rotation, audit `/var/log/auth.log` on the droplet, rotate every other prod secret in this doc.
+If the key ever leaves the fleet box, treat it as **breach** — immediate rotation, audit `/var/log/auth.log` on the droplet, rotate every other prod secret in this doc.
 
 ---
 
-## 7. `PREVIEW_SSH_KEY` — legacy/manual preview key
+## 7. Preview/dev/demo SSH key — fleet → preview droplet
 
-The current `.github/workflows/deploy-preview.yml` runs on the `sitelayer-preview` self-hosted runner and does not consume `PREVIEW_SSH_KEY`. Keep this section only for a manually managed preview SSH key if one exists.
+Dev/demo deploys (`scripts/deploy.sh dev|demo`) and PR previews SSH to the preview droplet as `sitelayer`. This key lives on the fleet box; the legacy GitHub Actions `PREVIEW_SSH_KEY` secret and the self-hosted preview runner are no longer in the deploy path (removed 2026-06-01).
 
-**Grants:** SSH as `sitelayer@159.203.53.218` (preview droplet `566806040`). Same `docker`-group blast radius as `DEPLOY_SSH_KEY`, scoped to preview only. Public half on droplet at `/home/sitelayer/.ssh/authorized_keys`.
+**Grants:** SSH as `sitelayer@159.203.53.218` (preview droplet `566806040`). Same `docker`-group blast radius as the prod deploy key, scoped to the preview droplet only. Public half on droplet at `/home/sitelayer/.ssh/authorized_keys`.
 
 ```bash
 # 1. Generate new keypair on a trusted local machine.
@@ -255,23 +263,19 @@ doctl compute ssh sitelayer-preview --ssh-command="
 shred -u /tmp/sitelayer_preview_*
 ```
 
-The preview droplet also hosts the self-hosted GH Actions runner that runs the production deploy workflow. **Compromise of this key potentially exposes prod through the runner**, so treat at the same severity as `DEPLOY_SSH_KEY`.
+Treat this key at high severity: a compromised preview droplet shares a private VPC with prod and holds non-prod customer-shaped data. (Historically the preview droplet also hosted the self-hosted GH Actions deploy runner; that runner is no longer in the deploy path.)
 
 ---
 
 ## 8. `DEPLOY_HOST` — hostname/IP (not really a secret)
 
-**Grants:** nothing on their own — these are just IPs/hostnames the deploy workflows read. Listed here for completeness so the rotation checklist accounts for every `gh secret` row.
+**Grants:** nothing on its own — just the IP/hostname the deploy script targets. Listed for completeness.
 
-**Stored in:** GitHub Actions secret `DEPLOY_HOST` (prefer the prod droplet private VPC address from the preview runner; public/reserved IP or `sitelayer.sandolab.xyz` only if firewall policy allows it). Preview deploy hosts are derived from slug + `preview.sitelayer.sandolab.xyz`; there is no current `PREVIEW_HOST` GitHub secret.
+**Stored in:** the `DEPLOY_HOST` env (or the default in `scripts/deploy-production-local.sh`, currently `165.245.230.3`). Preview/dev/demo hosts are derived from slug + `preview.sitelayer.sandolab.xyz` / set in `scripts/deploy.sh`.
 
-**When to update:** only if the droplet IP changes (resize, reprovision, reserved-IP swap). Then:
+**When to update:** only if the droplet IP changes (resize, reprovision, reserved-IP swap). Then update the `DEPLOY_HOST` default/env on the fleet (prefer the reserved IP `159.203.51.158`, which survives droplet replacement).
 
-```bash
-gh secret set DEPLOY_HOST -R GitSteveLozano/sitelayer --body "<new>"
-```
-
-If exposed → no action required. They are public-DNS-discoverable already.
+If exposed → no action required. It is public-DNS-discoverable already.
 
 ---
 
@@ -315,20 +319,20 @@ If leaked, follow `docs/INCIDENT_RESPONSE.md` § 8 first (revoke), then this sec
 
 ## 10. `DIGITALOCEAN_ACCESS_TOKEN` — registry/deploy automation token
 
-**Grants:** DigitalOcean API access for the production deploy workflow to authenticate `doctl`, mint registry Docker credentials, and push/pull immutable images in the `sitelayer` registry.
-**Stored in:** GitHub Actions secret `DIGITALOCEAN_ACCESS_TOKEN`.
+**Grants:** DigitalOcean API access used by `doctl` on the fleet box (`doctl registry login`) to mint registry Docker credentials and push/pull immutable images in the `sitelayer` registry, plus the registry-tag pruning the prod deploy script runs.
+**Stored in:** the `doctl` auth context on the fleet box (`~/.config/doctl`).
 
 ```bash
 # 1. DO Console → API → Tokens → Generate New Token.
 #    Scope it to the minimum project/registry permissions DigitalOcean supports
 #    for registry push/pull and deploy automation.
 
-# 2. Replace GitHub secret.
-gh secret set DIGITALOCEAN_ACCESS_TOKEN -R GitSteveLozano/sitelayer --body "dop_v1_NEW"
+# 2. Re-auth doctl on the fleet box with the new token.
+doctl auth init   # paste the new dop_v1_... token
+doctl registry login
 
-# 3. Trigger and verify deploy.
-gh workflow run deploy-droplet.yml -R GitSteveLozano/sitelayer
-gh run watch -R GitSteveLozano/sitelayer
+# 3. Re-deploy from the fleet and verify.
+scripts/deploy.sh prod
 curl -fsS https://sitelayer.sandolab.xyz/api/version
 
 # 4. Revoke the old token in the DO Console.
@@ -345,7 +349,7 @@ Title: Sitelayer secret rotation
 Duration: 60 min
 Body:
   Run docs/SECRET_ROTATION.md sections 1-10 in order.
-  Pre-flight: gh secret list -R GitSteveLozano/sitelayer
+  Pre-flight: on the prod droplet, grep -c '=' /app/sitelayer/.env and back it up
   Post-flight: curl -fsS https://sitelayer.sandolab.xyz/health
   Log result in mesh: mcp__mesh__add_planning_note project=sitelayer
 ```

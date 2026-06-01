@@ -2,6 +2,17 @@
 
 **As of:** 2026-05-26 · Source: Steve's ProService Bid-Intelligence spec (5 layers + 7 agents) and the PlanSwift/Avontus/ConstructionClock merged-platform doc, both mapped against the current code.
 
+> **Update 2026-06-01 — foundation pieces have LANDED on `main`** (verified
+> against the cited migrations/files): the PlanSwift Phase-2 assembly-explode
+> + formula engine (`docker/postgres/init/109_assembly_explode_and_formulas.sql`
+> + `110_seed_cladding_assemblies.sql`, `packages/domain/src/assembly.ts`,
+> `packages/formula-evaluator/`) — so the "assemblies" credited as solid below
+> are now backed by the explode-on-recompute path; the worker QBO pull lane
+> (`135_qbo_pull_lane.sql`); teammate invites (`134_company_invites.sql`);
+> RBAC custom roles (`136_custom_roles.sql`); and the PDFium blueprint render
+> foundation (`apps/web/src/lib/pdf/renderer/`). The gap analysis below was
+> written before those merges.
+
 There are **two threads**:
 
 - **Thread 1 — Bid Intelligence (the "AI edge no competitor can replicate").** Steve's strategic vision. **Mostly not built**, but the foundation it needs already exists, so a few pieces are surprisingly cheap. This is also the "lead-gen into sitelayer" funnel Steve described.
