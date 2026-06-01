@@ -58,6 +58,10 @@ export type AuditInput = {
   after?: unknown
   actorUserId?: string | null
   actorRole?: string | null
+  /** The real impersonator during an audited impersonation session. Defaults
+   *  from the request context (set in server.ts from the Clerk `act` claim) so
+   *  callers don't have to thread it. */
+  impersonatedBy?: string | null
   sentryTrace?: string | null
 }
 
@@ -70,14 +74,17 @@ export async function recordAudit(executor: AuditExecutor, input: AuditInput): P
   const ctx = getRequestContext()
   const actor = input.actorUserId ?? ctx?.actorUserId ?? ctx?.userId ?? 'system'
   const requestId = ctx?.requestId ?? null
+  // Impersonation tag: explicit input wins, else inherit the session's
+  // impersonator from the request context (set once in server.ts).
+  const impersonatedBy = input.impersonatedBy ?? ctx?.impersonatedBy ?? null
 
   await executor.query(
     `
     insert into audit_events (
       company_id, actor_user_id, actor_role, entity_type, entity_id, action,
-      before, after, request_id, sentry_trace
+      before, after, request_id, sentry_trace, impersonated_by
     )
-    values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10)
+    values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9, $10, $11)
     `,
     [
       input.companyId,
@@ -90,6 +97,7 @@ export async function recordAudit(executor: AuditExecutor, input: AuditInput): P
       input.after === undefined ? null : JSON.stringify(input.after),
       requestId,
       input.sentryTrace ?? null,
+      impersonatedBy,
     ],
   )
 }

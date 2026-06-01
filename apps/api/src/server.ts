@@ -715,6 +715,15 @@ const server = http.createServer(async (req, res) => {
                 throw err
               }
               requestContext.actorUserId = identity.userId
+              // Impersonation: a Clerk actor-token session carries the real admin
+              // in identity.actorUserId. Stamp it on the request context so
+              // recordAudit() auto-tags impersonated_by on every audited mutation
+              // this session makes — no per-route change needed.
+              if (identity.actorUserId) {
+                requestContext.impersonatedBy = identity.actorUserId
+                scope.setTag('impersonated_by', identity.actorUserId)
+                scope.setTag('auth_mode', identity.mode ?? 'impersonate')
+              }
               scope.setUser({ id: identity.userId })
               scope.setTag('auth_source', identity.source)
 

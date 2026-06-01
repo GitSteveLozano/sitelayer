@@ -7,6 +7,9 @@ export interface RequestContext {
   companyId?: string
   userId?: string
   actorUserId?: string
+  /** The real impersonator (Clerk `act` sub) during an audited impersonation
+   *  session. recordAudit() stamps audit_events.impersonated_by from this. */
+  impersonatedBy?: string
   actorRole?: string
   captureSessionId?: string
   route?: string
