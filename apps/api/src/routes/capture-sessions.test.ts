@@ -269,12 +269,16 @@ class FakeCapturePool {
 
     if (normalized.includes('from capture_artifacts') && normalized.includes('private_artifact_count')) {
       const [companyId, id] = params as [string, string]
-      const rows = this.artifacts.filter((a) => a.company_id === companyId && a.capture_session_id === id && !a.deleted_at)
+      const rows = this.artifacts.filter(
+        (a) => a.company_id === companyId && a.capture_session_id === id && !a.deleted_at,
+      )
       return {
         rows: [
           {
             artifact_count: String(rows.length),
-            private_artifact_count: String(rows.filter((a) => a.pii_level === 'private' || a.pii_level === 'restricted').length),
+            private_artifact_count: String(
+              rows.filter((a) => a.pii_level === 'private' || a.pii_level === 'restricted').length,
+            ),
           },
         ],
         rowCount: 1,
@@ -606,7 +610,9 @@ async function callRoute(
   return { handled, responses }
 }
 
-function multipart(parts: Array<{ name: string; value?: string; filename?: string; contentType?: string; body?: Buffer }>) {
+function multipart(
+  parts: Array<{ name: string; value?: string; filename?: string; contentType?: string; body?: Buffer }>,
+) {
   const boundary = '----capture-session-route-test'
   const chunks: Buffer[] = []
   for (const part of parts) {
@@ -985,7 +991,7 @@ describe('capture session routes', () => {
     expect(pool.workItems[0]?.metadata).toMatchObject({
       source: 'capture_session_finalize',
       capture_session_id: '[redacted]',
-      event_count: 1,
+      event_count: 2,
       artifact_count: 1,
       private_artifact_count: 1,
     })
@@ -993,9 +999,14 @@ describe('capture session routes', () => {
       capture_session_id: SESSION_ID,
       capture_session: {
         summary: { id: SESSION_ID, mode: 'feedback' },
-        recent_events: [{ event_type: 'ui.click' }],
         artifacts: [{ kind: 'transcript', redaction_version: 'capture-session-v1' }],
       },
+    })
+    expect((pool.supportPackets[0]?.server_context as JsonRecord).capture_session).toMatchObject({
+      recent_events: expect.arrayContaining([
+        expect.objectContaining({ event_type: 'ui.click' }),
+        expect.objectContaining({ event_type: 'session.stopped' }),
+      ]),
     })
 
     const replay = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/finalize`, {})
@@ -1006,8 +1017,67 @@ describe('capture session routes', () => {
         work_item: { id: pool.workItems[0]?.id },
       },
     })
+    const lateArtifact = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/artifacts`, {
+      artifacts: [{ kind: 'transcript', uri: 's3://capture/late.txt' }],
+    })
+    expect(lateArtifact.responses[0]).toEqual({
+      status: 409,
+      body: { error: 'capture session has already been finalized' },
+    })
+    const lateUpload = await callMultipartRoute(pool, `/api/capture-sessions/${SESSION_ID}/artifacts/upload`, [
+      { name: 'kind', value: 'audio' },
+      { name: 'file', filename: 'late.webm', contentType: 'audio/webm', body: Buffer.from('late audio') },
+    ])
+    expect(lateUpload.responses[0]).toEqual({
+      status: 409,
+      body: { error: 'capture session has already been finalized' },
+    })
     expect(pool.supportPackets).toHaveLength(1)
     expect(pool.workItems).toHaveLength(1)
+    expect(pool.artifacts).toHaveLength(1)
+    expect(pool.events.map((event) => event.event_type)).toEqual(['ui.click', 'session.stopped', 'session.finalized'])
+  })
+
+  it('can promote trusted authenticated feedback captures to agent routing behind an env flag', async () => {
+    const previous = process.env.CAPTURE_AUTH_AUTO_DISPATCH
+    process.env.CAPTURE_AUTH_AUTO_DISPATCH = '1'
+    try {
+      const pool = new FakeCapturePool()
+      await callRoute(pool, 'POST', '/api/capture-sessions', {
+        capture_session_id: SESSION_ID,
+        mode: 'feedback',
+        route_path: '/desktop/takeoff',
+        consent_version: 'pilot-v1',
+      })
+      await callRoute(pool, 'PATCH', `/api/capture-sessions/${SESSION_ID}`, { status: 'stopped' })
+
+      const finalized = await callRoute(pool, 'POST', `/api/capture-sessions/${SESSION_ID}/finalize`, {
+        title: 'Captured internal feedback',
+        summary: 'Trusted internal user recorded a workflow issue.',
+      })
+
+      expect(finalized.responses[0]).toMatchObject({
+        status: 201,
+        body: {
+          work_item: {
+            title: 'Captured internal feedback',
+            lane: 'both',
+            capture_session_id: SESSION_ID,
+          },
+        },
+      })
+      expect(pool.workItems[0]?.metadata).toMatchObject({
+        capture_auto_dispatch: true,
+        capture_routing_policy: 'trusted_authenticated_capture',
+        requested_lane: 'triage',
+      })
+      expect(pool.handoffEvents[0]?.payload).toMatchObject({
+        capture_auto_dispatch: true,
+      })
+    } finally {
+      if (previous === undefined) delete process.env.CAPTURE_AUTH_AUTO_DISPATCH
+      else process.env.CAPTURE_AUTH_AUTO_DISPATCH = previous
+    }
   })
 
   it('refuses to finalize discarded sessions', async () => {

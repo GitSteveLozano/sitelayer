@@ -194,6 +194,61 @@ async function getFinalizedPortalCaptureWorkItem(companyId: string, captureSessi
   return workItemId ? getContextWorkItemWithEvents(companyId, workItemId) : null
 }
 
+async function isPortalCaptureSessionFinalized(companyId: string, captureSessionId: string): Promise<boolean> {
+  const result = await withCompanyClient(companyId, (client) =>
+    client.query<{ id: string }>(
+      `select id
+         from context_work_items
+        where company_id = $1
+          and capture_session_id = $2::uuid
+          and metadata ->> 'source' = 'capture_session_finalize'
+        limit 1`,
+      [companyId, captureSessionId],
+    ),
+  )
+  return Boolean(result.rows[0])
+}
+
+async function appendPortalCaptureLifecycleEventTx(
+  executor: { query: (sql: string, params?: ReadonlyArray<unknown>) => Promise<unknown> },
+  companyId: string,
+  captureSessionId: string,
+  args: {
+    eventType: string
+    routePath?: string | null
+    requestId?: string | null
+    payload?: Record<string, unknown>
+  },
+): Promise<void> {
+  await executor.query(
+    `insert into capture_session_events (
+       company_id, capture_session_id, seq, client_event_id, event_type,
+       event_class, route_path, workflow_id, entity_type, entity_id,
+       request_id, payload, occurred_at
+     ) values (
+       $1, $2, $3, $4, $5,
+       $6, $7, $8, $9, $10,
+       $11, $12::jsonb, coalesce($13::timestamptz, now())
+     )
+     on conflict (company_id, capture_session_id, client_event_id) where client_event_id is not null do nothing`,
+    [
+      companyId,
+      captureSessionId,
+      0,
+      `capture_session:${args.eventType}:${captureSessionId}`,
+      args.eventType,
+      'lifecycle',
+      args.routePath ?? null,
+      'capture_session',
+      'capture_session',
+      captureSessionId,
+      args.requestId ?? null,
+      JSON.stringify(args.payload ?? {}),
+      null,
+    ],
+  )
+}
+
 async function fetchPortalCaptureFinalizeSnapshot(actor: PortalCaptureActor, captureSessionId: string) {
   const [session, eventCount, artifactSummary] = await Promise.all([
     withCompanyClient(actor.companyId, (client) =>
@@ -495,6 +550,10 @@ export async function uploadPortalCaptureArtifact(
     ctx.sendJson(409, { error: `capture session is ${session.status}` })
     return
   }
+  if (await isPortalCaptureSessionFinalized(actor.companyId, id)) {
+    ctx.sendJson(409, { error: 'capture session has already been finalized' })
+    return
+  }
 
   let upload
   try {
@@ -756,6 +815,22 @@ export async function finalizePortalCaptureSession(
           actor.actorRef,
         ],
       )
+      await appendPortalCaptureLifecycleEventTx(clientTx, actor.companyId, id, {
+        eventType: 'session.finalized',
+        routePath: route,
+        requestId,
+        payload: {
+          status: 'finalized',
+          work_item_id: item.id,
+          support_packet_id: packet.id,
+          lane: item.lane,
+          severity: item.severity,
+          event_count: snapshot.event_count,
+          artifact_count: snapshot.artifact_count,
+          portal_surface: actor.surface,
+          portal_authority: actor.authority,
+        },
+      })
       return { packet, item, event }
     })
   } catch (error) {
@@ -871,6 +946,16 @@ export async function discardPortalCaptureSession(
           and deleted_at is null`,
       [id, actor.companyId],
     )
+    await appendPortalCaptureLifecycleEventTx(client, actor.companyId, id, {
+      eventType: 'session.discarded',
+      routePath: captureSession.route_path,
+      requestId: getRequestContext()?.requestId ?? null,
+      payload: {
+        status: 'discarded',
+        portal_surface: actor.surface,
+        portal_authority: actor.authority,
+      },
+    })
     return captureSession
   })
 

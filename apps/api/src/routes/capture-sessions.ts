@@ -19,7 +19,12 @@ import {
 import { isValidUuid } from '../http-utils.js'
 import { withCompanyClient, withMutationTx } from '../mutation-tx.js'
 import { assertKeyInCompany, type BlueprintStorage } from '../storage.js'
-import { buildSupportServerContext, insertSupportPacket, supportJsonRecord, type JsonRecord } from './support-packets.js'
+import {
+  buildSupportServerContext,
+  insertSupportPacket,
+  supportJsonRecord,
+  type JsonRecord,
+} from './support-packets.js'
 
 export type CaptureSessionRouteCtx = {
   pool: Pool
@@ -44,6 +49,7 @@ const STATUSES = ['open', 'stopped', 'discarded', 'failed', 'redacted'] as const
 const MAX_EVENTS = 100
 const MAX_ARTIFACTS = 25
 const CAPTURE_REDACTION_VERSION = 'capture-session-v1'
+const TRUSTED_CAPTURE_AUTO_DISPATCH_ROLES: readonly CompanyRole[] = ['admin', 'foreman', 'office', 'bookkeeper']
 
 type CaptureSessionRow = {
   id: string
@@ -204,6 +210,63 @@ async function getFinalizedCaptureWorkItem(companyId: string, captureSessionId: 
   return workItemId ? getContextWorkItemWithEvents(companyId, workItemId) : null
 }
 
+async function isCaptureSessionFinalizedTx(
+  executor: { query: (sql: string, params?: ReadonlyArray<unknown>) => Promise<{ rows: Array<{ id: string }> }> },
+  companyId: string,
+  captureSessionId: string,
+): Promise<boolean> {
+  const result = await executor.query(
+    `select id
+       from context_work_items
+      where company_id = $1
+        and capture_session_id = $2::uuid
+        and metadata ->> 'source' = 'capture_session_finalize'
+      limit 1`,
+    [companyId, captureSessionId],
+  )
+  return Boolean(result.rows[0])
+}
+
+async function appendCaptureLifecycleEventTx(
+  executor: { query: (sql: string, params?: ReadonlyArray<unknown>) => Promise<unknown> },
+  companyId: string,
+  captureSessionId: string,
+  args: {
+    eventType: string
+    routePath?: string | null
+    requestId?: string | null
+    payload?: Record<string, unknown>
+  },
+): Promise<void> {
+  await executor.query(
+    `insert into capture_session_events (
+       company_id, capture_session_id, seq, client_event_id, event_type,
+       event_class, route_path, workflow_id, entity_type, entity_id,
+       request_id, payload, occurred_at
+     ) values (
+       $1, $2, $3, $4, $5,
+       $6, $7, $8, $9, $10,
+       $11, $12::jsonb, coalesce($13::timestamptz, now())
+     )
+     on conflict (company_id, capture_session_id, client_event_id) where client_event_id is not null do nothing`,
+    [
+      companyId,
+      captureSessionId,
+      0,
+      `capture_session:${args.eventType}:${captureSessionId}`,
+      args.eventType,
+      'lifecycle',
+      args.routePath ?? null,
+      'capture_session',
+      'capture_session',
+      captureSessionId,
+      args.requestId ?? null,
+      JSON.stringify(args.payload ?? {}),
+      null,
+    ],
+  )
+}
+
 async function fetchCaptureFinalizeSnapshot(companyId: string, captureSessionId: string) {
   const [session, eventCount, artifactSummary] = await Promise.all([
     withCompanyClient(companyId, (c) =>
@@ -255,10 +318,27 @@ function finalizeSummary(body: Record<string, unknown>, snapshot: CaptureFinaliz
   return [
     `Capture session ${snapshot.session.id} finalized from ${snapshot.session.mode} mode.`,
     `${snapshot.event_count} event(s) and ${snapshot.artifact_count} artifact(s) were attached.`,
-    snapshot.private_artifact_count > 0 ? `${snapshot.private_artifact_count} artifact(s) require private/restricted handling.` : '',
+    snapshot.private_artifact_count > 0
+      ? `${snapshot.private_artifact_count} artifact(s) require private/restricted handling.`
+      : '',
   ]
     .filter(Boolean)
     .join(' ')
+}
+
+function shouldAutoDispatchTrustedCapture(
+  ctx: CaptureSessionRouteCtx,
+  snapshot: CaptureFinalizeSnapshot,
+  category: string,
+  requestedLane: WorkItemLane,
+): boolean {
+  if (process.env.CAPTURE_AUTH_AUTO_DISPATCH !== '1') return false
+  if (requestedLane !== 'triage') return false
+  if (!TRUSTED_CAPTURE_AUTO_DISPATCH_ROLES.includes(ctx.company.role)) return false
+  if (snapshot.session.consent_authority !== 'authenticated_company_user') return false
+  if (!['feedback', 'desktop', 'native'].includes(snapshot.session.mode)) return false
+  if (category === 'portal_capture_session') return false
+  return true
 }
 
 async function upsertCaptureSession(ctx: CaptureSessionRouteCtx) {
@@ -403,6 +483,19 @@ async function patchCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
         [id, ctx.company.id],
       )
     }
+    if (updated && status) {
+      await appendCaptureLifecycleEventTx(c, ctx.company.id, id, {
+        eventType: `session.${status}`,
+        routePath: updated.route_path,
+        requestId: getRequestContext()?.requestId ?? null,
+        payload: {
+          status,
+          route_path: updated.route_path,
+          discarded: status === 'discarded',
+          redacted: status === 'redacted',
+        },
+      })
+    }
     return updated
   })
   if (!row) {
@@ -433,6 +526,7 @@ async function appendCaptureSessionEvents(ctx: CaptureSessionRouteCtx, id: strin
   let inserted = 0
   let foundSession = false
   let blockedStatus: string | null = null
+  let finalized = false
   await withMutationTx(ctx.company.id, async (c) => {
     const exists = await c.query<{ id: string; status: string; retention_expires_at: string | null }>(
       `select id, status, retention_expires_at from capture_sessions where id = $1 and company_id = $2 limit 1`,
@@ -506,6 +600,7 @@ async function appendCaptureArtifacts(ctx: CaptureSessionRouteCtx, id: string) {
   let inserted = 0
   let foundSession = false
   let blockedStatus: string | null = null
+  let finalized = false
   await withMutationTx(ctx.company.id, async (c) => {
     const exists = await c.query<{ id: string; status: string; retention_expires_at: string | null }>(
       `select id, status, retention_expires_at from capture_sessions where id = $1 and company_id = $2 limit 1`,
@@ -518,6 +613,8 @@ async function appendCaptureArtifacts(ctx: CaptureSessionRouteCtx, id: string) {
       blockedStatus = session.status
       return
     }
+    finalized = await isCaptureSessionFinalizedTx(c, ctx.company.id, id)
+    if (finalized) return
     for (const raw of rawArtifacts) {
       if (!isRecord(raw)) continue
       const kind = optionalText(raw.kind, 80)
@@ -574,6 +671,10 @@ async function appendCaptureArtifacts(ctx: CaptureSessionRouteCtx, id: string) {
     ctx.sendJson(409, { error: `capture session is ${blockedStatus}` })
     return
   }
+  if (finalized) {
+    ctx.sendJson(409, { error: 'capture session has already been finalized' })
+    return
+  }
   ctx.sendJson(202, { accepted: inserted })
 }
 
@@ -604,6 +705,11 @@ async function uploadCaptureArtifact(req: http.IncomingMessage, ctx: CaptureSess
     ctx.sendJson(409, { error: `capture session is ${session.status}` })
     return
   }
+  const finalized = await withCompanyClient(ctx.company.id, (c) => isCaptureSessionFinalizedTx(c, ctx.company.id, id))
+  if (finalized) {
+    ctx.sendJson(409, { error: 'capture session has already been finalized' })
+    return
+  }
 
   let upload
   try {
@@ -617,7 +723,8 @@ async function uploadCaptureArtifact(req: http.IncomingMessage, ctx: CaptureSess
   }
 
   const durationMS = optionalNonNegativeInteger(Number(upload.fields.duration_ms))
-  const retentionExpiresAt = optionalTimestampText(upload.fields.retention_expires_at) ?? session.retention_expires_at ?? null
+  const retentionExpiresAt =
+    optionalTimestampText(upload.fields.retention_expires_at) ?? session.retention_expires_at ?? null
   const result = await withMutationTx(ctx.company.id, async (c) => {
     const inserted = await c.query<{ id: string }>(
       `insert into capture_artifacts (
@@ -641,7 +748,11 @@ async function uploadCaptureArtifact(req: http.IncomingMessage, ctx: CaptureSess
         upload.contentHash,
         durationMS,
         enumValue(upload.fields.pii_level, ['low', 'internal', 'private', 'restricted'] as const, 'private'),
-        enumValue(upload.fields.access_policy, ['support_only', 'operator_only', 'tenant_visible'] as const, 'support_only'),
+        enumValue(
+          upload.fields.access_policy,
+          ['support_only', 'operator_only', 'tenant_visible'] as const,
+          'support_only',
+        ),
         JSON.stringify({
           ...parseMetadataField(upload.fields.metadata),
           file_name: upload.fileName,
@@ -762,7 +873,7 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
     return
   }
 
-  const lane = (parseOptionalAllowed(body.lane, WORK_ITEM_LANES) ?? 'triage') as WorkItemLane
+  const requestedLane = (parseOptionalAllowed(body.lane, WORK_ITEM_LANES) ?? 'triage') as WorkItemLane
   if (body.lane !== undefined && body.lane !== null && !parseOptionalAllowed(body.lane, WORK_ITEM_LANES)) {
     ctx.sendJson(400, { error: `lane must be one of ${WORK_ITEM_LANES.join(', ')}` })
     return
@@ -779,6 +890,8 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
   const summary = finalizeSummary(body, snapshot)
   const clientRequestId = optionalText(body.client_request_id, 160) ?? `capture_session_finalize:${id}`
   const category = optionalText(body.category, 120) ?? 'capture_session'
+  const autoDispatch = shouldAutoDispatchTrustedCapture(ctx, snapshot, category, requestedLane)
+  const lane: WorkItemLane = autoDispatch ? 'both' : requestedLane
   const rawClient: JsonRecord = {
     capture_session_id: id,
     path: route ? { route } : null,
@@ -798,8 +911,10 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
       category,
       title,
       summary,
+      requested_lane: requestedLane,
       lane,
       severity,
+      capture_auto_dispatch: autoDispatch,
     },
   }
   const client = supportJsonRecord(rawClient)
@@ -854,6 +969,9 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
           event_count: snapshot.event_count,
           artifact_count: snapshot.artifact_count,
           private_artifact_count: snapshot.private_artifact_count,
+          capture_auto_dispatch: autoDispatch,
+          capture_routing_policy: autoDispatch ? 'trusted_authenticated_capture' : 'default_triage',
+          requested_lane: requestedLane,
         },
       })
       const event = await appendContextHandoffEventTx(c, {
@@ -873,11 +991,14 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
           support_packet_id: packet.id,
           event_count: snapshot.event_count,
           artifact_count: snapshot.artifact_count,
+          capture_auto_dispatch: autoDispatch,
         },
         metadata: {
           category,
           source: 'capture_session_finalize',
           capture_session_id: id,
+          capture_auto_dispatch: autoDispatch,
+          capture_routing_policy: autoDispatch ? 'trusted_authenticated_capture' : 'default_triage',
           evidence_refs: [{ type: 'support_debug_packet', id: packet.id }],
         },
         idempotencyKey: `capture_session:finalize:${id}:work_item_created`,
@@ -901,6 +1022,21 @@ async function finalizeCaptureSession(ctx: CaptureSessionRouteCtx, id: string) {
           }),
         ],
       )
+      await appendCaptureLifecycleEventTx(c, ctx.company.id, id, {
+        eventType: 'session.finalized',
+        routePath: route,
+        requestId,
+        payload: {
+          status: 'finalized',
+          work_item_id: item.id,
+          support_packet_id: packet.id,
+          lane: item.lane,
+          severity: item.severity,
+          event_count: snapshot.event_count,
+          artifact_count: snapshot.artifact_count,
+          capture_auto_dispatch: autoDispatch,
+        },
+      })
       return { packet, item, event }
     })
   } catch (error) {

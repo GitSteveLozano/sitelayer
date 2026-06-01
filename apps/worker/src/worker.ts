@@ -120,6 +120,7 @@ const captureArtifactRetentionGc = createCaptureArtifactRetentionGcRunner({
 const captureArtifactAnalysis = createCaptureArtifactAnalysisRunner({
   pool,
   storage: objectGcStorage,
+  logger,
 })
 const queuePruneRunner = createQueuePruneRunner({ pool, logger })
 const contextWorkDispatchRunner = createContextWorkDispatchRunner({ pool })
