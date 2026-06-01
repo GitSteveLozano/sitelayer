@@ -176,6 +176,16 @@ export default defineConfig({
       process.env.SENTRY_SOURCEMAPS === '1' ||
       Boolean(process.env.SENTRY_AUTH_TOKEN) ||
       Boolean(process.env.SENTRY_RELEASE),
+    // Vite 8 / Rolldown computes a much broader entry modulepreload graph than
+    // Rollup did — it eagerly preloaded ~13 route-level util chunks (cn, auth,
+    // queue, daily-logs, crud-factory, keys, instrument, capture-session, ...)
+    // that belong on the lazy path. That blew the 160KB initial-eager budget
+    // (field-device first-load weight). Trim the preload set to the heavy
+    // vendor chunks so the route utils load on-demand, matching the Rollup
+    // behavior the budget was tuned against.
+    modulePreload: {
+      resolveDependencies: (_filename, deps) => deps.filter((dep) => dep.includes('vendor-')),
+    },
     rollupOptions: {
       output: {
         manualChunks,
